@@ -3791,6 +3791,18 @@
     "group_delete": "Supprimer tous les recadrages...",
     "group_bake_note": "Appliquer l’intersection des recadrages activés à la géométrie du splat ? Les volumes de recadrage appliqués seront supprimés ; les recadrages désactivés restent modifiables. L’ensemble de l’action peut être annulé en une seule étape.",
     "group_delete_note": "Supprimer tous les volumes de recadrage de ce groupe, y compris ceux qui sont désactivés ? La géométrie du splat reste inchangée. L’ensemble de l’action peut être annulé en une seule étape.",
-    "group_changed": "La scène a changé pendant la confirmation. Rouvrez le menu du groupe de recadrages et réessayez."
+    "group_changed": "La scène a changé pendant la confirmation. Rouvrez le menu du groupe de recadrages et réessayez.",
+    "group_owner_missing": "Le splat auquel appartient le groupe de recadrages n’existe plus.",
+    "group_editing_unavailable": "La modification du groupe de recadrages est indisponible.",
+    "group_crop_locked": "Un recadrage de ce groupe est verrouillé.",
+    "group_remove_failed": "Les volumes de recadrage n’ont pas pu être supprimés.",
+    "group_bake_unavailable": "Activez le groupe de recadrages et rendez la géométrie du splat modifiable avant d’appliquer les recadrages.",
+    "group_payload_missing": "Un volume de recadrage ne contient aucun paramètre valide.",
+    "group_no_active": "Aucun recadrage activé à appliquer.",
+    "group_invalid_transform": "La transformation d’un recadrage est singulière ou contient des valeurs non finies.",
+    "group_invalid_volume": "Un volume de recadrage est invalide.",
+    "group_bake_failed": "Impossible d’appliquer le groupe de recadrages à la géométrie.",
+    "group_delete_history": "Supprimer le groupe de recadrages",
+    "group_bake_history": "Appliquer le groupe de recadrages à la géométrie"
   }
 }

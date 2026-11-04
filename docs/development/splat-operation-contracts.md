@@ -228,9 +228,10 @@ stack. Camera, sequencing, postprocess and Mesh-to-Splat workflows have separate
 contracts. Retained crop editing leaves source geometry intact; explicit geometry
 actions such as bake modify it.
 
-Crop controls, confirmation text and the Finish Crop Editing action are localized
-in all ten shipped languages. Locale validation checks matching keys and
-compatible placeholders.
+Crop controls, confirmation text, group-operation errors, history labels and the
+Finish Crop Editing action are localized in all ten shipped languages. Exception
+details remain available in diagnostic errors. Locale validation checks matching
+keys and compatible placeholders.
 
 ## Verification
 

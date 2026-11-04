@@ -3791,6 +3791,18 @@
     "group_delete": "Alle bijsnijdingen verwijderen...",
     "group_bake_note": "De doorsnede van de ingeschakelde bijsnijdingen toepassen op de splat-geometrie? Toegepaste bijsnijdvolumes worden verwijderd; uitgeschakelde bijsnijdingen blijven bewerkbaar. De volledige actie kan in één stap ongedaan worden gemaakt.",
     "group_delete_note": "Alle bijsnijdvolumes in deze groep verwijderen, ook de uitgeschakelde? De splat-geometrie blijft ongewijzigd. De volledige actie kan in één stap ongedaan worden gemaakt.",
-    "group_changed": "De scène is tijdens de bevestiging gewijzigd. Open het menu van de bijsnijdgroep opnieuw en probeer het nog eens."
+    "group_changed": "De scène is tijdens de bevestiging gewijzigd. Open het menu van de bijsnijdgroep opnieuw en probeer het nog eens.",
+    "group_owner_missing": "De splat waartoe de bijsnijdgroep behoort, bestaat niet meer.",
+    "group_editing_unavailable": "De bijsnijdgroep kan momenteel niet worden bewerkt.",
+    "group_crop_locked": "Een bijsnijding in deze groep is vergrendeld.",
+    "group_remove_failed": "De bijsnijdvolumes konden niet worden verwijderd.",
+    "group_bake_unavailable": "Schakel de bijsnijdgroep in en maak de splat-geometrie bewerkbaar voordat u de bijsnijdingen toepast.",
+    "group_payload_missing": "Een bijsnijdvolume bevat geen geldige parameters.",
+    "group_no_active": "Er zijn geen ingeschakelde bijsnijdingen om toe te passen.",
+    "group_invalid_transform": "Een bijsnijdtransformatie is singulier of bevat niet-eindige waarden.",
+    "group_invalid_volume": "Een bijsnijdvolume is ongeldig.",
+    "group_bake_failed": "De bijsnijdgroep kan niet op de geometrie worden toegepast.",
+    "group_delete_history": "Bijsnijdgroep verwijderen",
+    "group_bake_history": "Bijsnijdgroep toepassen op geometrie"
   }
 }

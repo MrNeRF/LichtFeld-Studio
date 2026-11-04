@@ -3791,6 +3791,18 @@
     "group_delete": "Alle Zuschnitte löschen...",
     "group_bake_note": "Die Schnittmenge der aktivierten Zuschnitte auf die Splat-Geometrie anwenden? Angewendete Zuschneidevolumen werden entfernt; deaktivierte Zuschnitte bleiben bearbeitbar. Die gesamte Aktion kann in einem Schritt rückgängig gemacht werden.",
     "group_delete_note": "Alle Zuschneidevolumen dieser Gruppe löschen, einschließlich der deaktivierten? Die Splat-Geometrie bleibt unverändert. Die gesamte Aktion kann in einem Schritt rückgängig gemacht werden.",
-    "group_changed": "Die Szene hat sich während der Bestätigung geändert. Öffnen Sie das Menü der Zuschnittgruppe erneut und versuchen Sie es noch einmal."
+    "group_changed": "Die Szene hat sich während der Bestätigung geändert. Öffnen Sie das Menü der Zuschnittgruppe erneut und versuchen Sie es noch einmal.",
+    "group_owner_missing": "Das Splat, dem die Zuschnittgruppe gehört, existiert nicht mehr.",
+    "group_editing_unavailable": "Die Zuschnittgruppe kann derzeit nicht bearbeitet werden.",
+    "group_crop_locked": "Ein Zuschnitt in dieser Gruppe ist gesperrt.",
+    "group_remove_failed": "Die Zuschneidevolumen konnten nicht entfernt werden.",
+    "group_bake_unavailable": "Aktivieren Sie die Zuschnittgruppe und machen Sie die Splat-Geometrie bearbeitbar, bevor Sie die Zuschnitte anwenden.",
+    "group_payload_missing": "Ein Zuschneidevolumen enthält keine gültigen Parameter.",
+    "group_no_active": "Es gibt keine aktivierten Zuschnitte zum Anwenden.",
+    "group_invalid_transform": "Eine Zuschnitttransformation ist singulär oder enthält nicht endliche Werte.",
+    "group_invalid_volume": "Ein Zuschneidevolumen ist ungültig.",
+    "group_bake_failed": "Die Zuschnittgruppe kann nicht auf die Geometrie angewendet werden.",
+    "group_delete_history": "Zuschnittgruppe löschen",
+    "group_bake_history": "Zuschnittgruppe auf Geometrie anwenden"
   }
 }

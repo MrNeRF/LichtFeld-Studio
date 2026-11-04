@@ -3791,6 +3791,18 @@
     "group_delete": "Usuń wszystkie przycięcia...",
     "group_bake_note": "Zastosować część wspólną włączonych przycięć do geometrii splata? Zastosowane obszary przycinania zostaną usunięte, a wyłączone przycięcia nadal będzie można edytować. Całą operację można cofnąć jednym krokiem.",
     "group_delete_note": "Usunąć wszystkie obszary przycinania w tej grupie, również te wyłączone? Geometria splata pozostanie bez zmian. Całą operację można cofnąć jednym krokiem.",
-    "group_changed": "Scena zmieniła się podczas potwierdzania. Otwórz ponownie menu grupy przycięć i spróbuj jeszcze raz."
+    "group_changed": "Scena zmieniła się podczas potwierdzania. Otwórz ponownie menu grupy przycięć i spróbuj jeszcze raz.",
+    "group_owner_missing": "Splat, do którego należy grupa przycięć, już nie istnieje.",
+    "group_editing_unavailable": "Edycja grupy przycięć jest niedostępna.",
+    "group_crop_locked": "Jedno z przycięć w tej grupie jest zablokowane.",
+    "group_remove_failed": "Nie udało się usunąć obszarów przycinania.",
+    "group_bake_unavailable": "Przed zastosowaniem przycięć włącz grupę i udostępnij geometrię splata do edycji.",
+    "group_payload_missing": "Obszar przycinania nie zawiera prawidłowych parametrów.",
+    "group_no_active": "Brak włączonych przycięć do zastosowania.",
+    "group_invalid_transform": "Transformacja przycięcia jest osobliwa lub zawiera wartości nieskończone albo nieokreślone.",
+    "group_invalid_volume": "Obszar przycinania jest nieprawidłowy.",
+    "group_bake_failed": "Nie można zastosować grupy przycięć do geometrii.",
+    "group_delete_history": "Usuń grupę przycięć",
+    "group_bake_history": "Zastosuj grupę przycięć do geometrii"
   }
 }

@@ -5060,20 +5060,20 @@ namespace lfs::vis {
         bool isSplatCropVolume(const core::SceneNode& node) {
             return node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID || node.type == core::NodeType::CROP_POLYGON;
         }
-        lfs::Error cropGroupError(lfs::ErrorCode code, std::string message) {
-            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+        lfs::Error cropGroupError(lfs::ErrorCode code, std::string message, std::string detail = {}) {
+            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = detail.empty() ? std::move(message) : std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()});
         }
-        lfs::Result<void> cropGroupFailure(lfs::ErrorCode code, std::string message) {
-            return lfs::Result<void>::failure(cropGroupError(code, std::move(message)));
+        lfs::Result<void> cropGroupFailure(lfs::ErrorCode code, std::string message, std::string detail = {}) {
+            return lfs::Result<void>::failure(cropGroupError(code, std::move(message), std::move(detail)));
         }
         lfs::Result<core::NodeId> cropGroupOwner(SceneManager& manager, const core::Uuid& uuid) {
             auto& scene = manager.getScene();
             const auto* owner = scene.getNodeByUuid(uuid);
             const auto* editor = services().editorOrNull();
             if (!owner || owner->type != core::NodeType::SPLAT)
-                return cropGroupError(lfs::ErrorCode::NotFound, "The crop group owner no longer exists.");
+                return cropGroupError(lfs::ErrorCode::NotFound, LOC("splat_inspector.group_owner_missing"));
             if (scene.isNodeEffectivelyLocked(owner->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-                return cropGroupError(lfs::ErrorCode::PermissionDenied, "Crop group editing is unavailable.");
+                return cropGroupError(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_editing_unavailable"));
             return owner->id;
         }
         std::vector<core::NodeId> cropGroupMembers(const core::Scene& scene, core::NodeId owner) {
@@ -5096,7 +5096,7 @@ namespace lfs::vis {
         auto before = op::SceneGraphMetadataEntry::captureNodes(*this, {owner->name});
         auto after = before;
         after[0].crop_effects_enabled = enabled;
-        auto entry = std::make_unique<op::SceneGraphMetadataEntry>(*this, enabled ? "Enable Crop Group" : "Disable Crop Group",
+        auto entry = std::make_unique<op::SceneGraphMetadataEntry>(*this, enabled ? LOC("splat_inspector.group_enable") : LOC("splat_inspector.group_disable"),
                                                                    std::vector<op::SceneGraphNodeMetadataDiff>{{std::move(before[0]), std::move(after[0])}});
         owner->crop_effects_enabled = enabled;
         scene_.notifyMutation(core::Scene::MutationType::VISIBILITY_CHANGED);
@@ -5115,11 +5115,11 @@ namespace lfs::vis {
             return {};
         for (const auto member : members)
             if (scene_.isNodeEffectivelyLocked(member))
-                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, "A crop in this group is locked.");
-        op::TransactionGuard transaction("Delete Crop Group");
+                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_crop_locked"));
+        op::TransactionGuard transaction(LOC("splat_inspector.group_delete_history"));
         const auto removed = removeNodesByIdsWithResult(members, false);
         if (!removed)
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, "The crop group could not be removed.");
+            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_remove_failed"));
         if (auto result = setSplatCropGroupEnabled(uuid, true); !result)
             return lfs::Result<void>::failure(result.error());
         transaction.commit();
@@ -5132,24 +5132,24 @@ namespace lfs::vis {
             return lfs::Result<void>::failure(id.error());
         auto* owner = scene_.getNodeById(*id);
         if (!owner->crop_effects_enabled || !owner->model || !canApplyCropToNode(*id))
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, "Enable the crop group and editable splat geometry before applying it.");
+            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_bake_unavailable"));
         std::vector<core::NodeId> active;
         for (const auto member : cropGroupMembers(scene_, *id)) {
             const auto* node = scene_.getNodeById(member);
             if ((node->type == core::NodeType::CROPBOX && !node->cropbox) ||
                 (node->type == core::NodeType::ELLIPSOID && !node->ellipsoid) ||
                 (node->type == core::NodeType::CROP_POLYGON && !node->crop_polygon))
-                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, "A crop volume has no valid payload.");
+                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_payload_missing"));
             const bool enabled = node->cropbox ? node->cropbox->enabled : node->ellipsoid ? node->ellipsoid->enabled
                                                                                           : node->crop_polygon && node->crop_polygon->enabled;
             if (!enabled)
                 continue;
             if (scene_.isNodeEffectivelyLocked(member))
-                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, "An active crop in this group is locked.");
+                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_crop_locked"));
             active.push_back(member);
         }
         if (active.empty())
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, "There are no enabled crops to apply.");
+            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_no_active"));
         // Compute on detached storage: invalid geometry or allocation failure cannot
         // leave a partially applied sequence of box/ellipsoid/polygon operations.
         try {
@@ -5160,17 +5160,17 @@ namespace lfs::vis {
                 const auto world = scene_coords::nodeDataWorldTransform(scene_, member);
                 const float determinant = glm::determinant(world);
                 if (!std::isfinite(determinant) || determinant == 0.f)
-                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, "A crop transform is singular or non-finite.");
+                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
                 const auto world_to_local = glm::inverse(world) * model_world;
                 for (int col = 0; col < 4; ++col)
                     for (int row = 0; row < 4; ++row)
                         if (!std::isfinite(world_to_local[col][row]))
-                            return cropGroupFailure(lfs::ErrorCode::InvalidArgument, "A crop transform is non-finite.");
+                            return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
                 const auto finite = [](const glm::vec3& value) { return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z); };
                 if ((node->cropbox && (!finite(node->cropbox->min) || !finite(node->cropbox->max) || glm::any(glm::lessThanEqual(node->cropbox->max, node->cropbox->min)))) ||
                     (node->ellipsoid && (!finite(node->ellipsoid->radii) || glm::any(glm::lessThanEqual(node->ellipsoid->radii, glm::vec3(0))))) ||
                     (node->crop_polygon && (!core::crop_polygon::isValidOutline(node->crop_polygon->vertices) || !core::crop_polygon::isValidHalfDepth(node->crop_polygon->half_depth))))
-                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, "A crop volume is invalid.");
+                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_volume"));
                 if (node->cropbox) {
                     lfs::geometry::BoundingBox bounds;
                     bounds.setBounds(node->cropbox->min, node->cropbox->max);
@@ -5182,8 +5182,8 @@ namespace lfs::vis {
                     (void)core::soft_crop_by_polygon(prepared, world_to_local, *node->crop_polygon);
                 }
             }
-            op::TransactionGuard transaction("Apply Crop Group to Geometry");
-            auto snapshot = std::make_unique<op::SceneSnapshot>(*this, "Apply Crop Group to Geometry");
+            op::TransactionGuard transaction(LOC("splat_inspector.group_bake_history"));
+            auto snapshot = std::make_unique<op::SceneSnapshot>(*this, LOC("splat_inspector.group_bake_history"));
             snapshot->captureTopology();
             const auto visible_before = owner->model->visible_count();
             if (prepared.has_deleted_mask())
@@ -5194,7 +5194,7 @@ namespace lfs::vis {
             op::pushSceneSnapshotIfChanged(std::move(snapshot));
             const auto removed = removeNodesByIdsWithResult(active, false);
             if (!removed)
-                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, "The applied crop volumes could not be removed.");
+                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_remove_failed"));
             selection_.invalidateNodeMask();
             scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (auto* rm = services().renderingOrNull())
@@ -5203,7 +5203,7 @@ namespace lfs::vis {
             return {};
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): translate the detached preparation/transaction exception into the caller-visible Result; the transaction guard rolls back recorded mutations.
-            return cropGroupFailure(lfs::ErrorCode::Internal, std::string("Cannot apply crop group: ") + error.what());
+            return cropGroupFailure(lfs::ErrorCode::Internal, LOC("splat_inspector.group_bake_failed"), error.what());
         }
     }
 

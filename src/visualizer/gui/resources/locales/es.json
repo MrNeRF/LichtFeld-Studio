@@ -3791,6 +3791,18 @@
     "group_delete": "Eliminar todos los recortes...",
     "group_bake_note": "¿Aplicar la intersección de los recortes activados a la geometría del splat? Se eliminarán los volúmenes de recorte aplicados; los recortes desactivados seguirán siendo editables. Toda la acción se puede deshacer en un solo paso.",
     "group_delete_note": "¿Eliminar todos los volúmenes de recorte de este grupo, incluidos los desactivados? La geometría del splat no cambiará. Toda la acción se puede deshacer en un solo paso.",
-    "group_changed": "La escena ha cambiado durante la confirmación. Vuelve a abrir el menú del grupo de recortes e inténtalo de nuevo."
+    "group_changed": "La escena ha cambiado durante la confirmación. Vuelve a abrir el menú del grupo de recortes e inténtalo de nuevo.",
+    "group_owner_missing": "El splat al que pertenece el grupo de recortes ya no existe.",
+    "group_editing_unavailable": "La edición del grupo de recortes no está disponible.",
+    "group_crop_locked": "Un recorte de este grupo está bloqueado.",
+    "group_remove_failed": "No se pudieron eliminar los volúmenes de recorte.",
+    "group_bake_unavailable": "Activa el grupo de recortes y permite editar la geometría del splat antes de aplicar los recortes.",
+    "group_payload_missing": "Un volumen de recorte no contiene parámetros válidos.",
+    "group_no_active": "No hay recortes activados que aplicar.",
+    "group_invalid_transform": "La transformación de un recorte es singular o contiene valores no finitos.",
+    "group_invalid_volume": "Un volumen de recorte no es válido.",
+    "group_bake_failed": "No se puede aplicar el grupo de recortes a la geometría.",
+    "group_delete_history": "Eliminar grupo de recortes",
+    "group_bake_history": "Aplicar grupo de recortes a la geometría"
   }
 }

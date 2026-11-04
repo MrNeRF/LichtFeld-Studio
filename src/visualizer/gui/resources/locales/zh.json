@@ -3791,6 +3791,18 @@
     "group_delete": "删除所有裁剪...",
     "group_bake_note": "将已启用裁剪的交集应用到 Splat 几何体吗？应用后的裁剪体积将被移除，已禁用的裁剪仍可编辑。整个操作可以一次撤销。",
     "group_delete_note": "删除此组中的所有裁剪体积，包括已禁用的裁剪吗？Splat 几何体保持不变。整个操作可以一次撤销。",
-    "group_changed": "确认期间场景发生了变化。请重新打开裁剪组菜单并重试。"
+    "group_changed": "确认期间场景发生了变化。请重新打开裁剪组菜单并重试。",
+    "group_owner_missing": "此裁剪组所属的 Splat 已不存在。",
+    "group_editing_unavailable": "当前无法编辑裁剪组。",
+    "group_crop_locked": "此组中的某个裁剪已锁定。",
+    "group_remove_failed": "无法移除裁剪体积。",
+    "group_bake_unavailable": "应用裁剪前，请启用裁剪组并将 Splat 几何体设为可编辑。",
+    "group_payload_missing": "某个裁剪体积没有有效参数。",
+    "group_no_active": "没有可应用的已启用裁剪。",
+    "group_invalid_transform": "某个裁剪变换为奇异变换或包含非有限值。",
+    "group_invalid_volume": "某个裁剪体积无效。",
+    "group_bake_failed": "无法将裁剪组应用到几何体。",
+    "group_delete_history": "删除裁剪组",
+    "group_bake_history": "将裁剪组应用到几何体"
   }
 }

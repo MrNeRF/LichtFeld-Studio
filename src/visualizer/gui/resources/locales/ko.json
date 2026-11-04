@@ -3791,6 +3791,18 @@
     "group_delete": "모든 자르기 삭제...",
     "group_bake_note": "활성화된 자르기의 교집합을 스플랫 지오메트리에 적용할까요? 적용된 자르기 볼륨은 삭제되며 비활성화된 자르기는 계속 편집할 수 있습니다. 전체 작업을 한 번에 실행 취소할 수 있습니다.",
     "group_delete_note": "비활성화된 항목을 포함하여 이 그룹의 모든 자르기 볼륨을 삭제할까요? 스플랫 지오메트리는 변경되지 않습니다. 전체 작업을 한 번에 실행 취소할 수 있습니다.",
-    "group_changed": "확인하는 동안 장면이 변경되었습니다. 자르기 그룹 메뉴를 다시 열고 시도하세요."
+    "group_changed": "확인하는 동안 장면이 변경되었습니다. 자르기 그룹 메뉴를 다시 열고 시도하세요.",
+    "group_owner_missing": "자르기 그룹이 속한 스플랫이 더 이상 존재하지 않습니다.",
+    "group_editing_unavailable": "현재 자르기 그룹을 편집할 수 없습니다.",
+    "group_crop_locked": "이 그룹의 자르기가 잠겨 있습니다.",
+    "group_remove_failed": "자르기 볼륨을 삭제하지 못했습니다.",
+    "group_bake_unavailable": "자르기를 적용하기 전에 그룹을 활성화하고 스플랫 지오메트리를 편집할 수 있도록 설정하세요.",
+    "group_payload_missing": "자르기 볼륨에 유효한 매개변수가 없습니다.",
+    "group_no_active": "적용할 활성 자르기가 없습니다.",
+    "group_invalid_transform": "자르기 변환이 특이 행렬이거나 유한하지 않은 값을 포함합니다.",
+    "group_invalid_volume": "자르기 볼륨이 유효하지 않습니다.",
+    "group_bake_failed": "자르기 그룹을 지오메트리에 적용할 수 없습니다.",
+    "group_delete_history": "자르기 그룹 삭제",
+    "group_bake_history": "자르기 그룹을 지오메트리에 적용"
   }
 }
