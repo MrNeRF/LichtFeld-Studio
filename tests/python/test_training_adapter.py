@@ -148,6 +148,11 @@ def test_headless_training_hook_outcome(tmp_path, gpu_available, outcome):
         from pathlib import Path
         import lichtfeld as lf
         steps = []
+        if os.environ["LFS_TEST_OUTCOME"] == "completed":
+            # First-use adapter setup must launch uv with a valid environment
+            # block, including non-ASCII paths. This creates no downloaded packages.
+            runtime = Path(lf.packages.init())
+            assert (runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")).is_file()
         @lf.on_post_step
         def step(context):
             steps.append(dict(context))
@@ -164,7 +169,7 @@ def test_headless_training_hook_outcome(tmp_path, gpu_available, outcome):
         blocked.write_text("Block the terminal project save", encoding="utf-8")
         checkpoint = blocked / "project.licht"
     proof = tmp_path / "hooks.json"
-    environment = {**os.environ, "LFS_HOME": str(tmp_path / "runtime"),
+    environment = {**os.environ, "LFS_HOME": str(tmp_path / "runtime-\u00e0-\u6e2c"),
                    "LFS_TEST_OUTCOME": outcome, "LFS_TEST_HOOK_OUTPUT": str(proof)}
     for name in ("LFS_TRAINING_PUBLISHER", "LFS_BLENDER_JOB", "PYTHONHOME", "PYTHONPATH"):
         environment.pop(name, None)
