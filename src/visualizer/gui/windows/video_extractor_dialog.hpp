@@ -305,6 +305,9 @@ namespace lfs::gui {
         TimelineDragTarget timeline_drag_target_ = TimelineDragTarget::None;
 
         std::optional<std::jthread> extraction_thread_;
+        std::mutex review_mutex_;
+        std::vector<io::VideoFrameExtractor::WrittenFrame> review_frames_;
+        std::filesystem::path review_weights_;
 
         std::unique_ptr<lfs::vis::gui::RmlPanelHost> host_;
         EventListener listener_;

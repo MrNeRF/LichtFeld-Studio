@@ -18,6 +18,8 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
+#include "gui/assisted_masking.hpp"
+#include "gui/async_task_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -362,6 +364,7 @@ namespace lfs::python {
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
+        nb::object g_open_image_preview_callback;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -4849,6 +4852,52 @@ namespace lfs::python {
             },
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
+
+        m.def("on_open_image_preview", [](nb::object callback) {
+            g_open_image_preview_callback = callback;
+            core::events::cmd::OpenImagePreview::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
+                    try {
+                        std::vector<std::string> paths;
+                        for (const auto& path : event.paths)
+                            paths.push_back(core::path_to_utf8(path));
+                        g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("OpenImagePreview callback error: {}", error.what());
+                    }
+                }
+            }); }, nb::arg("callback"), "Register the preview callback for extracted images.");
+
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            if (!gui)
+                throw std::runtime_error("The editor is not available");
+            return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
+                .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
+                .refine_request = refine_request, .refine_candidate = refine_candidate}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", "UI thread: queue native SAM point/box inference; proposals never modify dataset masks.");
+        m.def("sam_preview_poll", [] {
+            require_ui_texture_creation_thread();
+            nb::dict result;
+            auto* gui = get_gui_manager();
+            if (!gui)
+                return result;
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            result["request"] = state.request;
+            result["revision"] = state.revision;
+            result["phase"] = state.phase;
+            result["error"] = state.error;
+            result["scores"] = state.scores;
+            std::vector<std::string> paths;
+            for (const auto& path : state.overlays)
+                paths.push_back(core::path_to_utf8(path));
+            result["overlays"] = paths;
+            return result; }, "UI thread: inspect the current disposable SAM proposal.");
+        m.def("sam_preview_close", [] {
+            require_ui_texture_creation_thread();
+            if (auto* gui = get_gui_manager())
+                gui->asyncTasks().assistedMasking().close(); }, "UI thread: cancel the SAM session and retire GPU resources asynchronously.");
 
         m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
             lfs::python::require_ui_texture_creation_thread();

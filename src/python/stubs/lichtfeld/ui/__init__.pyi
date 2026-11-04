@@ -2474,6 +2474,22 @@ def release_texture(texture_id: int) -> None:
 def release_rml_texture(source: str) -> bool:
     """Release a cached RmlUi texture by source URL"""
 
+def on_open_image_preview(callback: object) -> None:
+    """Register the preview callback for extracted images."""
+
+def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '') -> int:
+    """
+    UI thread: queue native SAM point/box inference; proposals never modify dataset masks.
+    """
+
+def sam_preview_poll() -> dict:
+    """UI thread: inspect the current disposable SAM proposal."""
+
+def sam_preview_close() -> None:
+    """
+    UI thread: cancel the SAM session and retire GPU resources asynchronously.
+    """
+
 def preview_texture_status(source: str, document: rml.RmlDocument | None = None) -> str:
     """
     UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.

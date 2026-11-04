@@ -32,6 +32,16 @@ If automatic detection cannot localize an operator, the result shows a warning w
 
 Seed boxes, background points, multiple foreground points, and off-center or elliptical circles are available through the CLI.
 
+## Assisted frame preview
+
+After extracting a single video, choose **Review frames · SAM** to open the frames written by that extraction in Image Preview. The action also remains available for successfully written frames after stopping extraction. Image Preview offers the same tools through its **SAM2.1** button when opened on dataset images.
+
+Use **Object +** and **Background −** to place foreground and background points, or drag a **Box** around the subject. Choose **Generate**, inspect the three candidates, then select a candidate and add more prompts before choosing **Refine selected**. Candidate scores are SAM's predicted quality, not verified accuracy. Points and boxes belong to the original image, including when the preview is zoomed or rotated. **Navigate** returns to normal pan gestures.
+
+These are temporary proposals: generating or selecting one does not change dataset masks. Prompts are kept per image while browsing the current preview. **Undo prompt**, **Clear prompts**, and **Cancel** act on this working session; Cancel retains prompts and releases the model asynchronously. Close SAM before starting training. Escape first cancels a box gesture or exits SAM mode.
+
+The assisted preview currently reviews one frame at a time. Automatic operator tracking remains available through the extraction options described above; the preview does not yet publish or propagate its edited proposals. It uses the extractor's selected model file, or the existing verified SAM2.1 model cache when no file was selected.
+
 ## Command line
 
 Extract and mask a video at one frame per second:

@@ -32,9 +32,30 @@
       <button type="button" class="btn" id="btn-thumbnails"></button>
       <button type="button" class="btn" id="btn-info"></button>
       <button type="button" class="btn" id="btn-picker"></button>
+      <button type="button" class="btn" id="btn-sam"></button>
       <button type="button" class="btn" id="btn-refresh"></button>
       <button type="button" class="btn" id="btn-help"></button>
     </div>
+  </div>
+  <div id="sam-controls" class="hidden">
+    <div class="sam-tool-row">
+      <button type="button" class="btn" id="sam-positive"></button>
+      <button type="button" class="btn" id="sam-negative"></button>
+      <button type="button" class="btn" id="sam-box"></button>
+      <button type="button" class="btn" id="sam-pan"></button>
+      <button type="button" class="btn" id="sam-undo"></button>
+      <button type="button" class="btn" id="sam-clear"></button>
+    </div>
+    <div class="sam-tool-row">
+      <button type="button" class="btn" id="sam-generate"></button>
+      <button type="button" class="btn" id="sam-refine"></button>
+      <button type="button" class="btn" id="sam-candidate-0"></button>
+      <button type="button" class="btn" id="sam-candidate-1"></button>
+      <button type="button" class="btn" id="sam-candidate-2"></button>
+      <button type="button" class="btn" id="sam-cancel"></button>
+      <span id="sam-status" role="status"></span>
+    </div>
+    <div id="sam-hint"></div>
   </div>
   <div id="sampled-color-controls" class="hidden">
     <span id="sampled-color-value"></span>
@@ -77,6 +98,8 @@
         <div id="main-image-a" class="image-layer"></div>
         <div id="main-image-b" class="image-layer hidden"></div>
         <div id="mask-overlay"></div>
+        <div id="sam-overlay" class="image-layer hidden"></div>
+        <div id="sam-markers"></div>
         <div id="no-image-text"><span id="preview-state-text"></span></div>
       </div>
       <button type="button" class="nav-arrow" id="nav-prev" title="@tr:image_preview.previous">&#x25C0;</button>

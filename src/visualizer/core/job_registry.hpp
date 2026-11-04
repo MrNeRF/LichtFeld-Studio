@@ -29,6 +29,7 @@ namespace lfs::vis {
         DatasetEmbed,
         Collision,
         AprilTagScan,
+        AssistedMask,
     };
 
     enum class JobStatus : std::uint8_t {

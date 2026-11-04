@@ -99,6 +99,7 @@ namespace {
             {"btn-info", "Informazioni"},
             {"btn-thumbnails", "Miniature"},
             {"btn-picker", "Contagocce"},
+            {"btn-sam", "SAM2.1"},
             {"btn-refresh", "Aggiorna"},
             {"btn-help", "Aiuto"},
             {"btn-apply-render-color", "Applica allo sfondo del rendering"},
@@ -112,7 +113,7 @@ namespace {
             auto* toolbar = doc->GetElementById("preview-toolbar");
             Rml::ElementList buttons;
             toolbar->QuerySelectorAll(buttons, "button");
-            ASSERT_EQ(buttons.size(), 15u);
+            ASSERT_EQ(buttons.size(), 16u);
             for (auto* button : buttons) {
                 checkWithin(button, toolbar);
                 EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
@@ -121,7 +122,7 @@ namespace {
             }
             Rml::ElementList text_buttons;
             toolbar->QuerySelectorAll(text_buttons, ".btn");
-            ASSERT_EQ(text_buttons.size(), 7u);
+            ASSERT_EQ(text_buttons.size(), 8u);
             for (auto* button : text_buttons)
                 EXPECT_GT(button->GetBox().GetSize(Rml::BoxArea::Border).x, 30 * GetParam());
             auto* viewport = doc->GetElementById("image-viewport");
@@ -153,6 +154,42 @@ namespace {
                   renderer.loaded_sources.end());
         EXPECT_NE(std::find(renderer.loaded_sources.begin(), renderer.loaded_sources.end(), "preview://pending"),
                   renderer.loaded_sources.end());
+    }
+
+    TEST_P(ImagePreviewLayoutTest, SamControlsWrapWithoutCoveringTheCanvas) {
+        auto* controls = doc->GetElementById("sam-controls");
+        controls->SetClass("hidden", false);
+        doc->GetElementById("sam-markers")->SetInnerRML("<div id='test-sam-box' class='sam-box'></div>");
+        const std::map<std::string, std::string> sam_labels{
+            {"sam-positive", "Oggetto +"},
+            {"sam-negative", "Sfondo -"},
+            {"sam-box", "Riquadro"},
+            {"sam-pan", "Naviga"},
+            {"sam-undo", "Annulla prompt"},
+            {"sam-clear", "Pulisci prompt"},
+            {"sam-generate", "Genera"},
+            {"sam-refine", "Affina selezionata"},
+            {"sam-cancel", "Annulla"},
+            {"sam-candidate-0", "1 · 0.97"},
+            {"sam-candidate-1", "2 · 0.88"},
+            {"sam-candidate-2", "3 · 0.80"},
+            {"sam-status", "Scegli una proposta o affinala"},
+            {"sam-hint", "Immagine originale, solo proposte. Le maschere del dataset restano invariate."}};
+        for (const auto& [id, text] : sam_labels)
+            doc->GetElementById(id)->SetInnerRML(text);
+        for (int width : {600, 760, 1200}) {
+            SCOPED_TRACE(width);
+            resize(width);
+            EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
+            Rml::ElementList buttons;
+            controls->QuerySelectorAll(buttons, "button");
+            ASSERT_EQ(buttons.size(), 12u);
+            for (auto* button : buttons) {
+                checkWithin(button, controls);
+                EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
+            }
+            EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
+        }
     }
 
     TEST_P(ImagePreviewLayoutTest, ThumbnailRowsKeepTheirStrideWhenScrolling) {

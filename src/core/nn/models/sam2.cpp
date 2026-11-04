@@ -208,6 +208,18 @@ namespace lfs::core::nn::models {
         return model;
     }
 
+    std::size_t Sam2::weights_bytes() const {
+        std::size_t bytes = 0;
+        for (const auto* weights : {&weights_, &encoder_weights_}) {
+            for (const auto& [name, tensor] : *weights) {
+                (void)name;
+                if (tensor.is_valid())
+                    bytes += tensor.bytes();
+            }
+        }
+        return bytes;
+    }
+
     void Sam2::set_encoder_dtype(const DataType dtype) {
         LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32, "SAM2 encoder dtype must be float16 or float32");
         encoder_compute_ = dtype;

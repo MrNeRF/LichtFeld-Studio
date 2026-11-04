@@ -985,7 +985,17 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
+    std::string_view TrainerManager::getActionBlockedReason(const TrainingAction action) const {
+        if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
+            viewer_->jobs().anyRunning(JobType::AssistedMask))
+            return "Close the SAM preview before starting training";
+        return state_machine_.getActionBlockedReason(action);
+    }
+
     bool TrainerManager::canPerform(const TrainingAction action) const {
+        if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
+            viewer_->jobs().anyRunning(JobType::AssistedMask))
+            return false;
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
         }
