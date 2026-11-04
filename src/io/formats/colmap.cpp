@@ -1915,6 +1915,12 @@ namespace lfs::io {
         return tokens;
     }
 
+    bool has_image_extension(const std::string& name) {
+        const auto dot_pos = name.rfind('.');
+        return dot_pos != std::string::npos && dot_pos + 1 < name.size() &&
+               std::isalpha(static_cast<unsigned char>(name[dot_pos + 1]));
+    }
+
     bool parse_image_metadata_line(const std::string& line, ImageData& img) {
         std::istringstream iss(line);
         if (!(iss >> img.image_id >> img.qvec[0] >> img.qvec[1] >> img.qvec[2] >> img.qvec[3] >> img.tvec[0] >> img.tvec[1] >> img.tvec[2] >> img.camera_id)) {
@@ -1922,15 +1928,7 @@ namespace lfs::io {
         }
 
         iss >> std::ws;
-        if (!std::getline(iss, img.name) || img.name.empty()) {
-            return false;
-        }
-
-        const auto dot_pos = img.name.rfind('.');
-        if (dot_pos == std::string::npos || dot_pos == img.name.size() - 1) {
-            return false;
-        }
-        if (!std::isalpha(static_cast<unsigned char>(img.name[dot_pos + 1]))) {
+        if (!std::getline(iss, img.name) || !has_image_extension(img.name)) {
             return false;
         }
 
@@ -1948,18 +1946,23 @@ namespace lfs::io {
             return false;
         }
 
+        // Points2D lines (X Y POINT3D_ID ...) read as numbers too; a header has integer ids and an image name.
+        const auto is_id = [](const std::string& token) {
+            return !token.empty() && std::ranges::all_of(token, [](const unsigned char c) { return std::isdigit(c); });
+        };
         std::istringstream iss(line);
-        uint32_t image_id = 0;
+        std::string image_id;
         float qvec[4]{};
         float tvec[3]{};
-        uint32_t camera_id = 0;
+        std::string camera_id;
         std::string name;
         if (!(iss >> image_id >> qvec[0] >> qvec[1] >> qvec[2] >> qvec[3] >>
-              tvec[0] >> tvec[1] >> tvec[2] >> camera_id)) {
+              tvec[0] >> tvec[1] >> tvec[2] >> camera_id) ||
+            !is_id(image_id) || !is_id(camera_id)) {
             return false;
         }
         iss >> std::ws;
-        return static_cast<bool>(std::getline(iss, name)) && !name.empty();
+        return static_cast<bool>(std::getline(iss, name)) && has_image_extension(name);
     }
 
     bool read_next_short_metadata_line_or_skip(std::ifstream& file,

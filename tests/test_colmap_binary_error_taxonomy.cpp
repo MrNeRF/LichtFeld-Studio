@@ -227,6 +227,54 @@ namespace {
         }));
     }
 
+    TEST_F(ColmapBinaryErrorTaxonomyTest, TextModelPoints2DLinesAreNotSkippedImages) {
+        write_text(temp_dir_ / "cameras.txt", "1 PINHOLE 1 1 1 1 0.5 0.5\n");
+        write_text(temp_dir_ / "images.txt",
+                   "# Image list with two lines of data per image:\n"
+                   "1 1 0 0 0 0 0 0 1 a.png\n"
+                   "310.25 25.5 7 317.75 26.25 8 324.5 18.75 9 12.5 4.25 -1\n"
+                   "2 1 0 0 0 0 0 1 1 b.png\n"
+                   "310 25 7 317 26 8 324 18 9 12 4 -1\n"
+                   "3 1 0 0 0 0 0 2 1 c.png\n"
+                   "\n"
+                   "4 1 0 0 0 0 0 3 1 d.png\n"
+                   "5 1 0 0 0 0 0 4 1 e.png\n");
+        for (const char* name : {"a.png", "b.png", "c.png", "d.png", "e.png"}) {
+            write_png(temp_dir_ / "images" / name);
+        }
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir_;
+        WarningCapture capture;
+        const auto result = lfs::training::loadTrainingData(params);
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 5u);
+        EXPECT_TRUE(std::ranges::none_of(result->warnings, [](const auto& warning) {
+            return warning.find("image(s) with an invalid pose") != std::string::npos;
+        }));
+        EXPECT_TRUE(std::ranges::none_of(capture.messages(), [](const auto& message) {
+            return message.find("COLMAP import skipped") != std::string::npos;
+        }));
+    }
+
+    TEST_F(ColmapBinaryErrorTaxonomyTest, TextModelStillReportsAnInvalidPoseAfterAHeader) {
+        write_text(temp_dir_ / "cameras.txt", "1 PINHOLE 1 1 1 1 0.5 0.5\n");
+        write_text(temp_dir_ / "images.txt",
+                   "1 1 0 0 0 0 0 0 1 a.png\n"
+                   "2 2 0 0 0 0 0 1 1 b.png\n");
+        write_png(temp_dir_ / "images" / "a.png");
+        write_png(temp_dir_ / "images" / "b.png");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir_;
+        const auto result = lfs::training::loadTrainingData(params);
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+        EXPECT_TRUE(std::ranges::any_of(result->warnings, [](const auto& warning) {
+            return warning.find("image(s) with an invalid pose") != std::string::npos;
+        }));
+    }
+
     TEST_F(ColmapBinaryErrorTaxonomyTest, ValidTrackFilteredLoadEmitsNoWarning) {
         std::vector<char> images;
         append_pod(images, uint64_t{1});
