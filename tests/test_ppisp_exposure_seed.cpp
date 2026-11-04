@@ -264,6 +264,18 @@ namespace lfs::training {
             trainer.params_.optimization.ppisp_holdout_appearance = mode;
             return trainer.applyPPISPForEval(rgb, camera);
         }
+        // Two cameras (ids 1 and 2, one frame each) with a controller pool, as after a finished run.
+        static std::pair<PPISP&, PPISPControllerPool&> configure_with_controllers(Trainer& trainer) {
+            trainer.params_.optimization.use_exposure_correction = true;
+            trainer.params_.optimization.ppisp_use_controller = true;
+            trainer.params_.optimization.ppisp_freeze_from_sidecar = true;
+            trainer.ppisp_ = std::make_unique<PPISP>(100);
+            trainer.ppisp_->register_frame(10, 1);
+            trainer.ppisp_->register_frame(20, 2);
+            trainer.ppisp_->finalize();
+            trainer.ppisp_controller_pool_ = std::make_unique<PPISPControllerPool>(2, 100);
+            return {*trainer.ppisp_, *trainer.ppisp_controller_pool_};
+        }
     };
 } // namespace lfs::training
 
@@ -353,4 +365,49 @@ TEST(PPISPHoldoutAppearanceTest, CaptureOrderMatchesReferenceMetadata) {
         ASSERT_TRUE(output);
         output << selections.dump(2) << '\n';
     }
+}
+
+TEST(PPISPHoldoutAppearanceTest, HeldOutViewUsesItsOwnCameraController) {
+    using namespace lfs::training;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    const auto held_out = std::make_shared<lfs::core::Camera>(
+        Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), 16.0f, 16.0f, 8.0f, 8.0f, Tensor(), Tensor(),
+        lfs::core::CameraModelType::PINHOLE, "held_out.png", "held_out.png", std::filesystem::path{}, 16, 16,
+        /*uid=*/30, /*camera_id=*/2);
+    lfs::core::Scene scene;
+    scene.addCamera("held_out.png", scene.addDataset("dataset"), held_out);
+    Trainer trainer(scene);
+    auto [ppisp, pool] = TrainerHoldoutAppearanceTestAccess::configure_with_controllers(trainer);
+    std::vector<float> pixels(3 * 16 * 16);
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = static_cast<float>(i % 97) / 97.0f;
+    const auto rgb = Tensor::from_vector(pixels, {3, 16, 16}, Device::CUDA);
+    const int first = ppisp.camera_index(1);
+    const int second = ppisp.camera_index(2);
+    ASSERT_NE(first, second);
+
+    // Train the second camera's controller away from the first one's.
+    pool.allocate_buffers(16, 16);
+    for (int step = 0; step < 20; ++step) {
+        const auto predicted = pool.predict(second, rgb.unsqueeze(0), 1.0f);
+        pool.backward(second, Tensor::ones(predicted.shape(), Device::CUDA));
+        pool.optimizer_step(second);
+        pool.zero_grad();
+    }
+    const auto through = [&](const int camera_idx) {
+        const auto controller_params = pool.predict(camera_idx, rgb.unsqueeze(0), 1.0f);
+        return ppisp.apply_with_controller_params(rgb, controller_params, camera_idx).cpu().to_vector();
+    };
+    const auto own = through(second);
+    const auto other = through(first);
+    ASSERT_EQ(own.size(), other.size());
+    ASSERT_NE(std::memcmp(own.data(), other.data(), own.size() * sizeof(float)), 0);
+
+    const auto actual = TrainerHoldoutAppearanceTestAccess::evaluate(
+                            trainer, rgb, *held_out, lfs::core::param::PPISPHoldoutAppearance::Mean)
+                            .cpu()
+                            .to_vector();
+    ASSERT_EQ(actual.size(), own.size());
+    EXPECT_EQ(std::memcmp(actual.data(), own.data(), own.size() * sizeof(float)), 0);
 }
