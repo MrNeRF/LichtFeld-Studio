@@ -12,10 +12,12 @@ import lichtfeld as lf
 
 from . import probe, runner
 from .pipeline import Request
-from .project_bridge import build_hooks
+from .project_bridge import build_hooks, finalize_now
 
 _runner = runner.PipelineRunner()
-TOOL_NAMES = ("video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel")
+_finalizer = runner.FinalizeRunner(lambda package, on_progress, should_cancel: finalize_now(
+    Path(package), on_progress=on_progress, should_cancel=should_cancel))
+TOOL_NAMES = ("video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel", "video_to_splat_finalize")
 
 
 def video_to_splat_start(source: str, project: str, mode: str = "auto", preset: str = "balanced",
@@ -45,7 +47,9 @@ def video_to_splat_start(source: str, project: str, mode: str = "auto", preset: 
 def video_to_splat_status() -> dict:
     """Progress of the current or last run: active, stage, fraction, message, done, error, cancelled,
     frames, registered, mode, project, work_dir, package_dir."""
-    return _runner.status()
+    status = _runner.status()
+    status.update({"finalize_" + k: v for k, v in _finalizer.status().items()})
+    return status
 
 
 def video_to_splat_cancel() -> dict:
@@ -53,10 +57,22 @@ def video_to_splat_cancel() -> dict:
     return _runner.cancel()
 
 
+def video_to_splat_finalize(package: str = "") -> dict:
+    """Write the download package for the splat currently in the scene: splat.ply/.spz/.sog/.glb through the
+    exporters, dense.ply from the Gaussians, mesh.ply (COLMAP Poisson), mesh.glb and mesh.usdz with vertex
+    colors, and package.json listing what was written. ``package`` defaults to the last run's package folder.
+    This also runs by itself when a pipeline's training ends. Poll video_to_splat_status: finalize_*."""
+    target = package or _runner.status().get("package_dir") or ""
+    if not target:
+        return {"started": False, "error": "No package folder: pass one or run the pipeline first."}
+    return _finalizer.start(str(target))
+
+
 def register_mcp_tools() -> None:
     lf.mcp.register_tool(video_to_splat_start, "video_to_splat_start", video_to_splat_start.__doc__ or "")
     lf.mcp.register_tool(video_to_splat_status, "video_to_splat_status", video_to_splat_status.__doc__ or "")
     lf.mcp.register_tool(video_to_splat_cancel, "video_to_splat_cancel", video_to_splat_cancel.__doc__ or "")
+    lf.mcp.register_tool(video_to_splat_finalize, "video_to_splat_finalize", video_to_splat_finalize.__doc__ or "")
 
 
 def unregister_mcp_tools() -> None:

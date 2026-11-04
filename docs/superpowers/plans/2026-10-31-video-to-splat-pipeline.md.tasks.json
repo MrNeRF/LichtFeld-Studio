@@ -109,7 +109,14 @@
       "status": "completed",
       "blockedBy": [14],
       "description": "**Goal:** sparse.ply, cameras.json and an opt-in dense mesh in package/.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/sfm.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_video_to_splat_planning.py -q\", \"acceptanceCriteria\": [\"sparse.ply and cameras.json after every run\", \"dense chain runs in order; a failing tool is recorded, the splat is still built\"]}\n```"
+    },
+    {
+      "id": 17,
+      "subject": "Task 17: Finish the download package when training ends",
+      "status": "completed",
+      "blockedBy": [16],
+      "description": "**Goal:** Splat exports, dense cloud and mesh in PLY/GLB/USDZ when training ends.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/mesh_export.py\", \"src/python/lfs_plugins/video_to_splat/finalize.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_mesh_export.py tests/python/test_video_to_splat_finalize.py -q\", \"acceptanceCriteria\": [\"training end writes the full package\", \"GLB opens in the app\", \"failures recorded, rest still written\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-03T20:40:00Z"
+  "lastUpdated": "2026-11-03T21:30:00Z"
 }

@@ -53,7 +53,13 @@ COLMAP, creates the project and starts training.
    does not support, the mesh is skipped with the reason in `pipeline.json` and the splat is still built.
 5. Training starts automatically. For 360 video the GUT rasterizer is switched on first, because the
    standard rasterizer only accepts pinhole cameras; note that most third-party viewers cannot display
-   GUT-trained splats. Export with the usual exporters.
+   GUT-trained splats.
+6. When training ends (or is stopped), the download package is completed in `package/` next to the project:
+   the splat as `splat.ply`, `splat.spz`, `splat.sog` and `splat.glb`; `dense.ply`, the Gaussians as a colored,
+   oriented point cloud; `mesh.ply`, COLMAP's Poisson reconstruction of that cloud; and `mesh.glb` and
+   `mesh.usdz`, the same mesh with vertex colors for game engines and iPhone AR. `package.json` lists what
+   was written and why anything was skipped. The MCP tool `plugin_video_to_splat_finalize` writes the same
+   package for whatever splat is in the scene, at any time.
 
 **Extract frames only** opens the frame extractor on the same video for a manual workflow.
 
@@ -89,7 +95,11 @@ D:/projects/room/
   dataset/sparse/0/{cameras,images,points3D}.bin
   package/sparse.ply                  sparse points with colors
   package/cameras.json                intrinsics and poses of the registered frames
-  package/dense.ply, mesh.ply, textured/   only when the mesh was built
+  package/splat.{ply,spz,sog,glb}     the trained splat, written when training ends
+  package/dense.ply                   the Gaussians as a colored point cloud with normals
+  package/mesh.ply, mesh.glb, mesh.usdz   Poisson mesh of that cloud, with vertex colors
+  package/textured/                   COLMAP's texture atlas, only when the dense chain ran
+  package/package.json                what was written, what was skipped and why
   pipeline.json                       finished stages and their results
 ```
 
@@ -114,6 +124,7 @@ without the dialog. Python tools appear with a `plugin_` prefix in `tools/list`,
 | `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu`, `mask_people`, `build_mesh` | `{started, project, work_dir}` or `{started: false, error}` |
 | `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir, package_dir}` |
 | `video_to_splat_cancel` | none | `{cancelling}` |
+| `video_to_splat_finalize` | `package` (folder; defaults to the last run's) | `{started, package}`; progress and results under `finalize_*` in the status |
 
 One run at a time; a start while another run is active is refused. Training is left running when the run
 finishes, so the usual `training_*` tools and `lichtfeld://runtime/jobs/training.main` take over from there.

@@ -129,7 +129,8 @@ def test_mcp_tools_register_and_validate(lf_stub, tmp_path, monkeypatch):
     stub, state = lf_stub
     mcp_tools = import_module("lfs_plugins.video_to_splat.mcp_tools")
     mcp_tools.register_mcp_tools()
-    assert set(state.tools) == {"video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel"}
+    assert set(state.tools) == {"video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel",
+                                "video_to_splat_finalize"}
 
     run = ScriptedRun()
     monkeypatch.setattr(mcp_tools, "_runner", runner.PipelineRunner(run=run))
@@ -172,3 +173,37 @@ def test_plugin_register_adds_the_mcp_tools(lf_stub):
     assert "video_to_splat_start" in state.tools
     package.unregister()
     assert state.tools == {}
+
+
+def test_finalize_runner_reports_files_and_refuses_overlap(tmp_path):
+    release = threading.Event()
+    seen = []
+
+    def fake_finalize(package, on_progress, should_cancel):
+        seen.append(package)
+        on_progress("Writing dense.ply")
+        assert release.wait(5)
+        return SimpleNamespace(files={"mesh.glb": {"source": "mesh.ply", "bytes": 10}}, skipped={"splat.sog": "busy"})
+
+    r = runner.FinalizeRunner(fake_finalize)
+    assert r.start(str(tmp_path / "package"))["started"] is True
+    assert r.start(str(tmp_path / "package"))["started"] is False
+    release.set()
+    r.wait(5)
+    status = r.status()
+    assert status["done"] is True and status["files"]["mesh.glb"]["bytes"] == 10 and status["skipped"] == {"splat.sog": "busy"}
+    assert status["message"] == "Writing dense.ply" and seen == [str(tmp_path / "package")]
+
+
+def test_mcp_finalize_tool_defaults_to_the_last_package(lf_stub, tmp_path, monkeypatch):
+    stub, state = lf_stub
+    mcp_tools = import_module("lfs_plugins.video_to_splat.mcp_tools")
+    calls = []
+    monkeypatch.setattr(mcp_tools, "_finalizer", runner.FinalizeRunner(
+        lambda package, on_progress, should_cancel: calls.append(package) or SimpleNamespace(files={}, skipped={})))
+    assert mcp_tools.video_to_splat_finalize()["started"] is False  # nothing ran yet
+    monkeypatch.setattr(mcp_tools._runner, "status", lambda: {"package_dir": str(tmp_path / "pkg")})
+    assert mcp_tools.video_to_splat_finalize()["started"] is True
+    mcp_tools._finalizer.wait(5)
+    assert calls == [str(tmp_path / "pkg")]
+    assert "finalize_done" in mcp_tools.video_to_splat_status()

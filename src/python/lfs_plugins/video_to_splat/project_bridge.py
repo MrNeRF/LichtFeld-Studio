@@ -10,13 +10,13 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, Optional, TypeVar
 
 import lichtfeld as lf
 
 from ..environment import value as env_value
 from ..process_runner import run_cancellable_process
-from . import masking, toolchain
+from . import finalize, masking, toolchain
 from .pipeline import ExtractParams, Hooks, PipelineError
 from .toolchain import Resolved
 
@@ -199,8 +199,91 @@ def create_project_and_wait(project: Path, dataset: Path, images_folder: str, *,
         time.sleep(poll_seconds)
 
 
-def start_training(mode: str, masked: bool = False, *, timeout: float = TRAINING_START_TIMEOUT,
-                   dispatch_timeout: float = TRAINING_DISPATCH_TIMEOUT, poll_seconds: float = 0.25) -> None:
+EXPORT_TIMEOUT = 1800.0
+_pending_package: Optional[Path] = None   # the package to finalize when the current training ends
+_training_end_registered = False
+_finalize_threads: list[threading.Thread] = []
+
+
+def splat_tensors() -> Optional[dict]:
+    """The first splat node of the scene as numpy arrays (UI thread), or None without a scene."""
+
+    def read() -> Optional[dict]:
+        scene = lf.get_scene()
+        if scene is None:
+            return None
+        for node in scene.get_nodes():
+            data = node.splat_data()
+            if data is None:
+                continue
+            return {"name": node.name, "means": data.get_means().cpu().numpy(),
+                    "scales": data.get_scaling().cpu().numpy(), "rotations": data.get_rotation().cpu().numpy(),
+                    "colors": data.get_colors_rgb().cpu().numpy(), "opacity": data.get_opacity().cpu().numpy(),
+                    "sh_degree": int(getattr(data, "active_sh_degree", 0))}
+        return None
+
+    return ask_on_ui_thread(read)
+
+
+def export_splat(code: int, path: Path, *, timeout: float = EXPORT_TIMEOUT, poll_seconds: float = 0.25) -> Optional[str]:
+    """Export the scene's splat nodes through lf.export_scene (asynchronous) and wait for the result."""
+    names = ask_on_ui_thread(lambda: [n.name for n in lf.get_scene().get_nodes() if n.splat_data() is not None]
+                             if lf.get_scene() is not None else [])
+    if not names:
+        return tr("video_to_splat.export_no_splat")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ask_on_ui_thread(lambda: lf.export_scene(code, str(path), names, 3))
+    deadline = time.monotonic() + timeout
+    while True:
+        state = ask_on_ui_thread(lf.ui.get_export_state)
+        if not state.get("active", False):
+            return str(state.get("error") or "") or None
+        if time.monotonic() > deadline:
+            return tr("video_to_splat.export_timeout")
+        time.sleep(poll_seconds)
+
+
+def finalize_hooks(colmap: Optional[Path] = None) -> finalize.FinalizeHooks:
+    if colmap is None:
+        try:
+            colmap = resolve_colmap(lambda _m: None).path
+        except PipelineError:
+            colmap = None
+    return finalize.FinalizeHooks(splat_tensors=splat_tensors, export_splat=export_splat, run=run_process,
+                                  colmap=colmap)
+
+
+def finalize_now(package: Path, on_progress: Callable[[str], None] = lambda _m: None,
+                 should_cancel: Callable[[], bool] = lambda: False) -> finalize.FinalizeResult:
+    tensors = splat_tensors()
+    name = (tensors or {}).get("name") or "scene"
+    return finalize.finalize_package(package, finalize_hooks(), on_progress=on_progress, should_cancel=should_cancel,
+                                     name=str(name))
+
+
+def _on_training_end(*_args, **_kwargs) -> None:
+    """Trainer callback (lf.on_training_end passes one payload object): finish the package on a worker
+    thread, never on the trainer's."""
+    global _pending_package
+    package, _pending_package = _pending_package, None
+    if package is None:
+        return
+    thread = threading.Thread(target=lambda: finalize_now(package), daemon=True, name="VideoToSplatFinalize")
+    _finalize_threads.append(thread)
+    thread.start()
+
+
+def schedule_finalize_on_training_end(package: Path) -> None:
+    global _pending_package, _training_end_registered
+    _pending_package = package
+    if not _training_end_registered:
+        lf.on_training_end(_on_training_end)
+        _training_end_registered = True
+
+
+def start_training(mode: str, masked: bool = False, package: Optional[Path] = None, *,
+                   timeout: float = TRAINING_START_TIMEOUT, dispatch_timeout: float = TRAINING_DISPATCH_TIMEOUT,
+                   poll_seconds: float = 0.25) -> None:
     """Start training on the UI thread and block until the trainer runs.
 
     Equirectangular cameras can only be rasterised with GUT; the trainer refuses them otherwise
@@ -217,6 +300,8 @@ def start_training(mode: str, masked: bool = False, *, timeout: float = TRAINING
             params.mask_mode = lf.MaskMode.IGNORE
         lf.start_training()
 
+    if package is not None:
+        schedule_finalize_on_training_end(Path(package))
     ask_on_ui_thread(start)
     began = time.monotonic()
     seen_starting = False

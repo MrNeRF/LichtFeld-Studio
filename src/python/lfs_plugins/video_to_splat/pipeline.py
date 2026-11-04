@@ -113,7 +113,7 @@ class Hooks:
     extract: Callable[[ExtractParams, Callable[[int, int, int], None], Callable[[], bool]], dict]
     run: Callable[[list[str], Callable[[str], None], Callable[[], bool]], CompletedProcess]
     create_project: Callable[[Path, Path, str], None]
-    train: Callable[[str, bool], None]  # receives the camera mode and whether people masks exist
+    train: Callable[[str, bool, Path], None]  # camera mode, whether people masks exist, package folder
     confirm_weak: Callable[[float, int, int], bool]
     free_bytes: Callable[[Path], int] = lambda path: shutil.disk_usage(path).free
     # (images, masks_dir, on_progress(current, total), should_cancel, carry_state) -> {outcome, masked, reason}
@@ -521,7 +521,7 @@ def _run_colmap_and_train(request: Request, hooks: Hooks, state: State, done: se
     if "train" not in done:
         report("train", 0.0, _tr("video_to_splat.progress.starting_training", "Starting training"))
         masked = any(entry.get("applied") for entry in state.completed if entry["name"] == "mask")
-        hooks.train(mode, bool(masked))
+        hooks.train(mode, bool(masked), package)
         state.mark("train")
         state.save(request.work_dir)
     report("train", 1.0, _tr("video_to_splat.progress.done", "Done: {registered}/{total} frames registered",

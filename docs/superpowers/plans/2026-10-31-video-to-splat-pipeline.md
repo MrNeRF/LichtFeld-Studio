@@ -2832,6 +2832,21 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 17: Finish the download package when training ends
+
+**Goal:** Every output the cloud service hands back, without waiting on a GPU feature: splat exports, dense cloud, mesh in PLY/GLB/USDZ.
+
+**Files:** `video_to_splat/mesh_export.py` (Gaussian cloud, PLY reader, GLB and USDZ writers), `video_to_splat/finalize.py` (the package step), `project_bridge.py` (training-end hook, exporter polling), `runner.py` + `mcp_tools.py` (`video_to_splat_finalize`), tests.
+
+**Acceptance Criteria:**
+- [x] The training-end hook writes splat.ply/spz/sog/glb, dense.ply, mesh.ply, mesh.glb, mesh.usdz and package.json without manual steps.
+- [x] The GLB is a valid glTF 2.0 binary the app's loader opens; the USDZ is a stored zip with 64-byte-aligned members.
+- [x] A failed exporter or mesher is recorded in package.json and the other files are still written.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_mesh_export.py tests/python/test_video_to_splat_finalize.py -q`
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.

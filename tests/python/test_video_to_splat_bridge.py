@@ -60,6 +60,14 @@ def lf_stub(monkeypatch, tmp_path):
     stub.start_training = lambda: setattr(state, "started", state.started + 1)
     stub.trainer_state = lambda: state.trainer_states.pop(0) if len(state.trainer_states) > 1 else state.trainer_states[0]
     stub.MaskMode = SimpleNamespace(IGNORE="IGNORE", NONE="NONE")
+    state.training_end_callbacks = []
+    stub.on_training_end = lambda cb: state.training_end_callbacks.append(cb) or cb
+    state.export_states = []
+    stub.ui.get_export_state = lambda: state.export_states.pop(0) if len(state.export_states) > 1 else state.export_states[0]
+    state.exports = []
+    stub.export_scene = lambda code, path, names, sh_degree, **kw: state.exports.append((code, path, list(names)))
+    stub.get_scene = lambda: state.scene
+    state.scene = None
     stub.packages = SimpleNamespace(install=lambda name: state.installed.append(name) or "ok")
     stub.optimization_params = lambda: state.optimization
     stub.is_training_active = lambda: False
@@ -289,3 +297,60 @@ def test_mask_people_reports_setup_failures_as_skipped(lf_stub, tmp_path, monkey
     monkeypatch.setattr(bridge, "download_file", failing_download)
     result = bridge.mask_people([tmp_path / "a.jpg"], tmp_path / "masks", lambda c, t: None, lambda: False, True)
     assert result["outcome"] == "skipped" and "offline" in result["reason"]
+
+
+class _Tensor:
+    def __init__(self, values):
+        self._values = values
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._values
+
+
+def _scene_with_splat(state, name="Model"):
+    data = SimpleNamespace(get_means=lambda: _Tensor([[0, 0, 0]]), get_scaling=lambda: _Tensor([[1, 1, 0.1]]),
+                           get_rotation=lambda: _Tensor([[1, 0, 0, 0]]), get_colors_rgb=lambda: _Tensor([[1, 0, 0]]),
+                           get_opacity=lambda: _Tensor([0.9]), active_sh_degree=2)
+    camera = SimpleNamespace(name="cam", splat_data=lambda: None)
+    splat = SimpleNamespace(name=name, splat_data=lambda: data)
+    state.scene = SimpleNamespace(get_nodes=lambda: [camera, splat])
+
+
+def test_splat_tensors_reads_the_first_splat_node(lf_stub):
+    bridge, state = lf_stub
+    assert bridge.splat_tensors() is None
+    _scene_with_splat(state)
+    tensors = bridge.splat_tensors()
+    assert tensors["name"] == "Model" and tensors["means"] == [[0, 0, 0]] and tensors["sh_degree"] == 2
+
+
+def test_export_splat_waits_for_the_asynchronous_exporter(lf_stub, tmp_path):
+    bridge, state = lf_stub
+    _scene_with_splat(state)
+    state.export_states[:] = [{"active": True}, {"active": True}, {"active": False, "error": ""}]
+    assert bridge.export_splat(2, tmp_path / "pkg" / "splat.spz", poll_seconds=0) is None
+    assert state.exports == [(2, str(tmp_path / "pkg" / "splat.spz"), ["Model"])]
+    state.export_states[:] = [{"active": False, "error": "disk full"}]
+    assert bridge.export_splat(0, tmp_path / "pkg" / "splat.ply", poll_seconds=0) == "disk full"
+    state.scene = None
+    assert bridge.export_splat(0, tmp_path / "x.ply", poll_seconds=0) == "video_to_splat.export_no_splat"
+
+
+def test_start_training_schedules_the_package_for_training_end(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    finalized = []
+    monkeypatch.setattr(bridge, "finalize_now", lambda package, *a, **k: finalized.append(package))
+    bridge.start_training("perspective", False, tmp_path / "package", poll_seconds=0)
+    bridge.start_training("perspective", False, tmp_path / "package2", poll_seconds=0)
+    assert len(state.training_end_callbacks) == 1  # registered once, the latest package wins
+    state.training_end_callbacks[0]({"iteration": 30000, "loss": 0.1})  # one payload object, as lf passes it
+    for thread in bridge._finalize_threads:
+        thread.join(5)
+    assert finalized == [tmp_path / "package2"]
+    state.training_end_callbacks[0]({"iteration": 30000})  # nothing pending: no second run
+    for thread in bridge._finalize_threads:
+        thread.join(5)
+    assert finalized == [tmp_path / "package2"]

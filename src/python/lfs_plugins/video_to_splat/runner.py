@@ -76,3 +76,61 @@ class PipelineRunner:
             return True
         thread.join(timeout)
         return not thread.is_alive()
+
+
+class FinalizeRunner:
+    """One package finalization at a time on a worker thread, for the MCP tool."""
+
+    def __init__(self, finalize_fn: Callable):
+        self._finalize = finalize_fn
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._cancel = threading.Event()
+        self._status: dict = {"active": False, "done": False, "error": "", "message": "", "package": "",
+                              "files": {}, "skipped": {}}
+
+    def start(self, package: str) -> dict:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return {"started": False, "error": "A package finalization is already running.",
+                        "package": self._status["package"]}
+            self._cancel = threading.Event()
+            self._status = {"active": True, "done": False, "error": "", "message": "", "package": package,
+                            "files": {}, "skipped": {}}
+            cancel = self._cancel
+
+            def on_progress(message: str) -> None:
+                with self._lock:
+                    self._status["message"] = message
+
+            def worker() -> None:
+                outcome: dict = {}
+                try:
+                    result = self._finalize(package, on_progress, cancel.is_set)
+                    outcome.update(files=dict(result.files), skipped=dict(result.skipped))
+                except Exception as exc:  # noqa: BLE001 - report, never kill the host
+                    outcome["error"] = f"{type(exc).__name__}: {exc}"
+                with self._lock:
+                    self._status.update(outcome, active=False, done=True)
+
+            self._thread = threading.Thread(target=worker, daemon=True, name="VideoToSplatFinalizeRunner")
+            self._thread.start()
+            return {"started": True, "package": package}
+
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._status)
+
+    def cancel(self) -> dict:
+        with self._lock:
+            active = self._thread is not None and self._thread.is_alive()
+            if active:
+                self._cancel.set()
+            return {"cancelling": active}
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()

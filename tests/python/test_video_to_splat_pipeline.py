@@ -103,10 +103,11 @@ class Fakes:
         self.calls.append("create_project")
         self.create_args = (project, dataset, images_folder)
 
-    def train(self, mode, masked):
+    def train(self, mode, masked, package):
         self.calls.append("train")
         self.train_mode = mode
         self.train_masked = masked
+        self.train_package = package
 
     def mask_people(self, images, masks_dir, on_progress, should_cancel, carry_state):
         self.calls.append("mask_people")
@@ -205,6 +206,7 @@ def test_full_run_order_and_state(tmp_path, clip):
     assert fakes.create_args == (project, tmp_path / "proj" / "dataset", "images")
     assert fakes.train_mode == "equirectangular"
     assert fakes.train_masked is True  # masks were written, so training must run in ignore mode
+    assert fakes.train_package == work_dir(project) / "package"  # finalized there when training ends
 
 
 def test_rerun_skips_completed_stages(tmp_path, clip):
