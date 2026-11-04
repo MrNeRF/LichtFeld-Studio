@@ -14,10 +14,15 @@
 
 namespace {
     class PreviewLayoutRenderer final : public Rml::RenderInterface {
+    public:
+        std::vector<Rml::String> loaded_sources;
+
+    private:
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
         void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
         void ReleaseGeometry(Rml::CompiledGeometryHandle) override {}
-        Rml::TextureHandle LoadTexture(Rml::Vector2i& size, const Rml::String&) override {
+        Rml::TextureHandle LoadTexture(Rml::Vector2i& size, const Rml::String& source) override {
+            loaded_sources.push_back(source);
             size = {16, 16};
             return 1;
         }
@@ -124,6 +129,30 @@ namespace {
             EXPECT_GT(viewport->GetClientHeight(), 250 * GetParam());
             checkWithin(doc->GetElementById("status-bar"), doc);
         }
+    }
+
+    TEST_P(ImagePreviewLayoutTest, StagingLayerLoadsBehindReadyImageWithoutDisplayNone) {
+        resize(900);
+        auto* ready = doc->GetElementById("main-image-a");
+        auto* pending = doc->GetElementById("main-image-b");
+        ASSERT_NE(ready, nullptr);
+        ASSERT_NE(pending, nullptr);
+        ready->SetClass("preview-active", true);
+        pending->SetClass("hidden", false);
+        for (auto* layer : {ready, pending}) {
+            layer->SetProperty("width", "400dp");
+            layer->SetProperty("height", "300dp");
+        }
+        ASSERT_TRUE(ready->SetProperty("decorator", "image(preview://ready)"));
+        ASSERT_TRUE(pending->SetProperty("decorator", "image(preview://pending)"));
+        context->Update();
+        context->Render();
+        EXPECT_TRUE(ready->IsVisible(true));
+        EXPECT_TRUE(pending->IsVisible(true));
+        EXPECT_NE(std::find(renderer.loaded_sources.begin(), renderer.loaded_sources.end(), "preview://ready"),
+                  renderer.loaded_sources.end());
+        EXPECT_NE(std::find(renderer.loaded_sources.begin(), renderer.loaded_sources.end(), "preview://pending"),
+                  renderer.loaded_sources.end());
     }
 
     TEST_P(ImagePreviewLayoutTest, ThumbnailRowsKeepTheirStrideWhenScrolling) {

@@ -75,6 +75,7 @@
     <div id="image-container">
       <div id="image-viewport">
         <div id="main-image-a" class="image-layer"></div>
+        <div id="main-image-b" class="image-layer hidden"></div>
         <div id="mask-overlay"></div>
         <div id="no-image-text"><span id="preview-state-text"></span></div>
       </div>

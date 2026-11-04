@@ -70,7 +70,7 @@ class ImagePreviewPanel(Panel):
         self._metadata_validated = set()
         self._action_error = ""
         self._preview_state = "loading"
-        self._requested_preview = ""
+        self._reset_preview()
         self._refresh_revision = 0
         self._requested_at = 0.0
         self._displayed_index = -1
@@ -190,7 +190,7 @@ class ImagePreviewPanel(Panel):
         self._doc = doc
         self._layout_show_info = None
         self._layout_show_filmstrip = None
-        self._requested_preview = ""
+        self._reset_preview()
         self._displayed_index = -1
         self._preview_state = "loading" if self._image_paths else "empty"
         self._ensure_selection_visible = True
@@ -255,7 +255,7 @@ class ImagePreviewPanel(Panel):
         self._subscribe_reactive_state()
 
     def on_update(self, doc):
-        previous_state = self._preview_state
+        previous_state = (self._preview_state, self._preview_load_failed)
         self._service_sample()
         self._service_metadata()
         if not self._color_picker_active and not self._fit_to_window and self._image_paths and self._hover_image:
@@ -269,7 +269,7 @@ class ImagePreviewPanel(Panel):
             self._dirty = True
 
         needs_redraw = False
-        if self._preview_state == "loading" and not self._dirty:
+        if (self._preview_state == "loading" or self._preview_pending) and not self._dirty:
             self._update_main_image(doc, bool(self._image_paths))
             needs_redraw = True
         if self._layout_pending and not self._dirty:
@@ -278,7 +278,7 @@ class ImagePreviewPanel(Panel):
             self._update_status(doc, bool(self._image_paths))
             needs_redraw = True
 
-        if self._preview_state != previous_state:
+        if (self._preview_state, self._preview_load_failed) != previous_state:
             self._dirty = True
 
         if self._dirty:
@@ -296,6 +296,7 @@ class ImagePreviewPanel(Panel):
         self._handle = None
         self._doc = None
         self._filmstrip_range = None
+        self._reset_preview()
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
@@ -333,6 +334,19 @@ class ImagePreviewPanel(Panel):
         if self._handle:
             w.request_model_update(self._handle)
 
+    def _request_async_update(self):
+        self._request_model_update()
+        lf.ui.request_redraw(0.03)
+
+    def _reset_preview(self):
+        self._requested_preview = ""
+        self._ready_preview = ""
+        self._preview_identity = None
+        self._preview_max_width = 0
+        self._preview_pending = False
+        self._preview_load_failed = False
+        self._active_image_layer = "main-image-a"
+
     def _mark_dirty(self):
         self._dirty = True
         self._request_model_update()
@@ -340,6 +354,7 @@ class ImagePreviewPanel(Panel):
     def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
              start_index: int, camera_uids: list[int] | None = None,
              camera_nodes: dict[int, tuple[int, str]] | None = None):
+        self._reset_preview()
         if not image_paths:
             return
 
@@ -551,7 +566,7 @@ class ImagePreviewPanel(Panel):
             wanted.extend((self._image_paths[i], True) for i in range(lo, hi))
         cached = {str(path): (self._path_stat_cache.get(str(path)), self._image_info_cache.get(str(path)))
                   for path, full in wanted if full}
-        result, pending = self._metadata.tick(wanted, getattr(lf.ui, "get_image_info", None), cached)
+        result, pending = self._metadata.tick(wanted, lf.ui.get_image_info, cached)
         if result:
             path, stat, info = result
             key = str(path)
@@ -566,10 +581,7 @@ class ImagePreviewPanel(Panel):
             self._mark_dirty()
         if pending:
             # Worker never calls RmlUI. A bounded UI poll also works in native windows.
-            self._request_model_update()
-            redraw = getattr(lf.ui, "request_redraw", None)
-            if redraw:
-                redraw(0.03)
+            self._request_async_update()
 
     @staticmethod
     def _format_aspect_ratio(w: int, h: int) -> str:
@@ -634,7 +646,7 @@ class ImagePreviewPanel(Panel):
         except (TypeError, ValueError):
             return
 
-        is_filmstrip = self._doc and (getattr(scroll_el, "id", "") == "filmstrip"
+        is_filmstrip = self._doc and (scroll_el.id == "filmstrip"
                                       or scroll_el is self._doc.get_element_by_id("filmstrip"))
         if is_filmstrip:
             self._on_filmstrip_interaction(event)
@@ -682,9 +694,9 @@ class ImagePreviewPanel(Panel):
         button = int(event.get_parameter("button", "0"))
         if button != 0:
             return
-        target = event.target() if hasattr(event, "target") else None
+        target = event.target()
         while target is not None:
-            if getattr(target, "tag_name", "") in ("button", "input", "select"):
+            if target.tag_name in ("button", "input", "select"):
                 return
             target = target.parent()
 
@@ -788,11 +800,14 @@ class ImagePreviewPanel(Panel):
         img_el.remove_property("margin-top")
 
     def _get_main_preview_max_width(self, doc, path: Path) -> int:
+        if not self._fit_to_window:
+            return max(self._get_image_info(path)[:2])
         viewport = doc.get_element_by_id("image-viewport") if doc else None
         layout = self._get_image_layout(path, viewport)
         if not layout:
             return 512
-        # Request display-sized pixels even outside Fit; 100% naturally reaches source resolution.
+        # Fit starts display-sized. Leaving Fit requests the source once, not a new
+        # decode for every zoom step. The current source retains its largest request.
         source_max = max(layout["width"], layout["height"])
         target = min(source_max, source_max * layout["scale"] * layout["dp_ratio"] * 1.25)
         return max(512, (int(target) + 255) // 256 * 256)
@@ -837,7 +852,6 @@ class ImagePreviewPanel(Panel):
             self._handle.dirty("panel_label")
 
     def _update_main_image(self, doc, has_images: bool):
-        layer = doc.get_element_by_id("main-image-a")
         mask = doc.get_element_by_id("mask-overlay")
         message = doc.get_element_by_id("no-image-text")
         self._displayed_index = -1
@@ -847,33 +861,72 @@ class ImagePreviewPanel(Panel):
         validated = path is None or not self._metadata_required or str(path) in self._metadata_validated
         if path and validated and dimensions[0] > 0 and dimensions[1] > 0:
             uid = self._current_camera_uid()
-            url = self._make_preview_url(path, uid, preview_mw=self._get_main_preview_max_width(doc, path))
+            # All source/geometry/revision parameters except decode resolution.
+            identity = self._make_preview_url(path, uid)
+            if identity != self._preview_identity:
+                self._reset_preview()
+                self._preview_identity = identity
+                self._sample_request = None
+                self._sampled_color = None
+            self._preview_max_width = max(self._preview_max_width, self._get_main_preview_max_width(doc, path))
+            url = self._make_preview_url(path, uid, preview_mw=self._preview_max_width)
             if url != self._requested_preview:
                 self._requested_preview, self._requested_at = url, time.monotonic()
-            if layer:
-                layer.set_attribute("class", "image-layer")
-                self._set_decorator(layer, "main-image-a", f"image({url})")
-                self._apply_zoom(layer, path)
-            query = getattr(lf.ui, "preview_texture_status", None)
-            state = query(url, doc) if query else "ready"
+                self._preview_load_failed = False
+            target = self._active_image_layer
+            if self._ready_preview and url != self._ready_preview:
+                target = "main-image-b" if target == "main-image-a" else "main-image-a"
+            # The staging layer is rendered behind the ready layer. Hiding it with
+            # display:none would prevent RmlUi from requesting its texture.
+            for layer_id in ("main-image-a", "main-image-b"):
+                layer = doc.get_element_by_id(layer_id)
+                if not layer:
+                    continue
+                active = layer_id == self._active_image_layer and bool(self._ready_preview)
+                staging = layer_id == target and not self._preview_load_failed
+                source = self._ready_preview if active else url if staging else ""
+                layer.set_attribute("class", "image-layer preview-active" if active else
+                                    "image-layer" if source else "image-layer hidden")
+                self._set_decorator(layer, layer_id, f"image({source})" if source else "none")
+                if source:
+                    self._apply_zoom(layer, path)
+            state = "error" if self._preview_load_failed else lf.ui.preview_texture_status(url, doc)
             if state == "ready":
-                self._preview_state = "ready"
-                self._displayed_index = self._current_index
+                self._ready_preview = url
+                self._active_image_layer = target
+                self._preview_pending = False
+                for layer_id in ("main-image-a", "main-image-b"):
+                    layer = doc.get_element_by_id(layer_id)
+                    if layer:
+                        layer.set_attribute("class", "image-layer preview-active" if layer_id == target else "image-layer hidden")
+                        if layer_id != target:
+                            self._set_decorator(layer, layer_id, "none")
             elif state == "error" or (state == "unknown" and time.monotonic() - self._requested_at > 5):
-                self._preview_state = "error"
+                if url == self._ready_preview:
+                    self._ready_preview = ""
+                self._preview_load_failed = True
+                self._preview_pending = False
+                if target != self._active_image_layer or not self._ready_preview:
+                    layer = doc.get_element_by_id(target)
+                    if layer:
+                        layer.set_attribute("class", "image-layer hidden")
+                        self._set_decorator(layer, target, "none")
             else:
-                self._preview_state = "loading"
+                self._preview_pending = True
+            self._preview_state = "ready" if self._ready_preview else "error" if self._preview_load_failed else "loading"
+            if self._ready_preview:
+                self._displayed_index = self._current_index
         else:
-            if layer:
-                layer.set_attribute("class", "image-layer hidden")
-                self._set_decorator(layer, "main-image-a", "none")
+            self._reset_preview()
+            for layer_id in ("main-image-a", "main-image-b"):
+                layer = doc.get_element_by_id(layer_id)
+                if layer:
+                    layer.set_attribute("class", "image-layer hidden")
+                    self._set_decorator(layer, layer_id, "none")
             if path:
                 self._preview_state = "error" if validated and str(path) in self._image_info_cache else "loading"
-        if self._preview_state == "loading":
-            self._request_model_update()
-            redraw = getattr(lf.ui, "request_redraw", None)
-            if redraw:
-                redraw(0.03)
+        if self._preview_state == "loading" or self._preview_pending:
+            self._request_async_update()
         if message:
             keys = {"empty": "image_preview.no_images_loaded", "loading": "image_preview.loading",
                     "error": "image_preview.load_failed"}
@@ -887,7 +940,7 @@ class ImagePreviewPanel(Panel):
             if show_mask:
                 mask_path = self._mask_paths[self._current_index]
                 # The URL is versioned just like the source, avoiding stale masks after replacement.
-                mask_url = self._make_preview_url(mask_path, -1, preview_mw=self._get_main_preview_max_width(doc, path), dimensions=dimensions, mask_overlay=True)
+                mask_url = self._make_preview_url(mask_path, -1, preview_mw=self._preview_max_width, dimensions=dimensions, mask_overlay=True)
                 self._set_decorator(mask, "mask-overlay", f"image({mask_url})")
                 self._apply_zoom(mask, path)
             else:
@@ -921,7 +974,7 @@ class ImagePreviewPanel(Panel):
             # after a successful scroll. Follow navigation until the user scrolls.
             self._ensure_selection_visible = True
         self._filmstrip_viewport_height = height
-        top = max(0.0, float(getattr(filmstrip, "scroll_top", 0.0)))
+        top = max(0.0, float(filmstrip.scroll_top))
         actual_top = top
         item_top = self._current_index * THUMB_ROW_DP * ratio
         item_bottom = item_top + THUMB_ROW_DP * ratio
@@ -1200,7 +1253,8 @@ class ImagePreviewPanel(Panel):
                 available = self._can_apply_color(destination)
                 self._set_disabled(button, not available)
                 button.set_attribute("title", "" if available else tr("training_panel.parameters_unavailable"))
-        _set_text(doc, "preview-message", self._action_error)
+        _set_text(doc, "preview-message", self._action_error or
+                  (lf.ui.tr("image_preview.load_failed") if self._preview_load_failed and self._ready_preview else ""))
 
     def _can_apply_color(self, destination):
         if self._sampled_color is None:
@@ -1311,10 +1365,7 @@ class ImagePreviewPanel(Panel):
             return
         path, revision, future = self._sample_request
         if not future.done():
-            self._request_model_update()
-            redraw = getattr(lf.ui, "request_redraw", None)
-            if redraw:
-                redraw(0.03)
+            self._request_async_update()
             return
         self._sample_request = None
         self._mark_dirty()
@@ -1342,22 +1393,22 @@ class ImagePreviewPanel(Panel):
     # -- Keyboard --
 
     def _on_keydown(self, event):
-        target = event.target() if hasattr(event, "target") else None
+        target = event.target()
         while target is not None:
-            if getattr(target, "tag_name", "").lower() in ("input", "textarea", "select"):
+            if target.tag_name.lower() in ("input", "textarea", "select"):
                 return
             if target.has_attribute("contenteditable"):
                 return
             target = target.parent()
-        if hasattr(event, "get_bool_parameter") and any(
+        if any(
                 event.get_bool_parameter(name, False)
                 for name in ("ctrl_key", "alt_key", "meta_key", "command_key")):
             return
         key = int(event.get_parameter("key_identifier", "0"))
 
-        if key == KI_SPACE and hasattr(event, "target"):
+        if key == KI_SPACE:
             target = event.target()
-            if target is not None and getattr(target, "tag_name", "") == "button":
+            if target is not None and target.tag_name == "button":
                 return
 
         if key == KI_LEFT or key == KI_UP:
@@ -1471,9 +1522,7 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
     lf.ui.set_panel_enabled("lfs.image_preview", True)
     panel = _instance
     if panel is None:
-        get_panel_object = getattr(lf.ui, "get_panel_object", None)
-        if get_panel_object is not None:
-            panel = get_panel_object("lfs.image_preview")
+        panel = lf.ui.get_panel_object("lfs.image_preview")
     pending = _pending_open
     if panel and pending is not None:
         _pending_open = None

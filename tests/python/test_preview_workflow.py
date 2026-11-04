@@ -242,15 +242,15 @@ def test_refresh_retries_the_same_file_and_thumbnail_revision(panel_modules):
     assert "refresh=1" in records[-1][0]["decorator"]
 
 
-def test_zoomed_out_inspection_uses_display_sized_decode(panel_modules):
+def test_leaving_fit_requests_source_resolution_at_every_zoom(panel_modules):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
     panel._get_image_info = lambda _: (8000, 6000, 3)
     panel._fit_to_window = False
-    panel._zoom = 0.1
     doc = _DocumentStub({"image-viewport": Element()})
-    size = panel._get_main_preview_max_width(doc, module.Path("large.png"))
-    assert 800 <= size <= 1280
+    for zoom in (0.1, 0.5, 1.0, 2.0):
+        panel._zoom = zoom
+        assert panel._get_main_preview_max_width(doc, module.Path("large.png")) == 8000
 
 
 @pytest.mark.parametrize("ratio", [1.0, 1.5, 2.0])
