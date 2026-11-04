@@ -30,6 +30,11 @@ class FrameMaskEditor:
         self.scores = []
         self.candidate = 0
         self.refinement = None
+        self.refinement_signature = None
+        self.submitted_signature = None
+        self.selected = None
+        self.point_drag = None
+        self.show_proposal = True
         self.drag_start = None
         self.drag_end = None
 
@@ -48,12 +53,22 @@ class FrameMaskEditor:
         self.candidate = 0
         self.drag_start = None
         self.drag_end = None
+        self.point_drag = None
+
+    @property
+    def signature(self):
+        return (tuple(self.draft.points), self.draft.box) if self.draft else None
+
+    @property
+    def can_refine(self):
+        return bool(self.refinement and self.signature != self.refinement_signature)
 
     def bind(self, path, revision):
         key = (str(path), revision) if path and revision else None
         if key == self.key:
             return False
         self.key = key
+        self.selected = None
         self.invalidate()
         if key and (key[0] not in self.drafts or self.drafts[key[0]].revision != revision):
             self.drafts[key[0]] = MaskDraft(revision)
@@ -64,6 +79,33 @@ class FrameMaskEditor:
             self.draft.remember()
             self.draft.points.append((x, y, label))
             self.invalidate(keep_refinement=True)
+            self.selected = len(self.draft.points) - 1
+
+    def remove_selected(self):
+        if not self.draft or self.selected is None:
+            return
+        self.draft.remember()
+        if self.selected == "box":
+            self.draft.box = None
+        else:
+            self.draft.points.pop(self.selected)
+        self.selected = None
+        self.invalidate()
+
+    def move_selected(self, x, y):
+        if self.draft and isinstance(self.selected, int):
+            old = self.draft.points[self.selected]
+            if old[:2] != (x, y):
+                self.draft.remember()
+                self.draft.points[self.selected] = (x, y, old[2])
+                self.invalidate()
+
+    def flip_selected(self):
+        if self.draft and isinstance(self.selected, int):
+            self.draft.remember()
+            x, y, label = self.draft.points[self.selected]
+            self.draft.points[self.selected] = (x, y, 1 - label)
+            self.invalidate()
 
     def set_box(self, start, end):
         if not self.draft:
@@ -75,11 +117,13 @@ class FrameMaskEditor:
         self.draft.remember()
         self.draft.box = (x0, y0, x1, y1)
         self.invalidate(keep_refinement=True)
+        self.selected = "box"
 
     def undo(self):
         if self.draft and self.draft.history:
             self.draft.points, self.draft.box = self.draft.history.pop()
-            self.invalidate(keep_refinement=True)
+            self.selected = None
+            self.invalidate()
 
     def clear(self):
         if self.draft:
@@ -87,6 +131,7 @@ class FrameMaskEditor:
             self.draft.points = []
             self.draft.box = None
         self.invalidate()
+        self.selected = None
 
     def accept(self, snapshot):
         if (not self.key or not self.request or snapshot.get("request") != self.request
@@ -101,6 +146,7 @@ class FrameMaskEditor:
             self.scores = list(snapshot.get("scores", ()))
             self.candidate = min(self.candidate, max(0, len(self.overlays) - 1))
             self.refinement = (self.request, self.candidate)
+            self.refinement_signature = self.submitted_signature
             changed = True
         return changed
 

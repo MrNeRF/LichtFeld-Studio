@@ -252,6 +252,13 @@ namespace lfs::core::nn::models {
         }
         const std::size_t elem = dtype_size(like.dtype());
         const std::size_t count = (bytes + elem - 1) / elem;
+        // This scratch buffer survives arena.begin(). An arena view would be
+        // overwritten by later activations when a subsequent prediction reuses it.
+        struct RestoreArena {
+            ActivationArena* previous = ActivationArena::current();
+            ~RestoreArena() { ActivationArena::bind(previous); }
+        } restore;
+        ActivationArena::bind(nullptr);
         workspace_ = Tensor::empty(shape_of({count}), like.device(), like.dtype());
         workspace_.set_stream(like.stream());
         return workspace_;

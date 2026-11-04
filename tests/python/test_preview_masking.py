@@ -87,6 +87,108 @@ def test_cancel_preserves_prompts_and_rejects_late_results(panel_modules, monkey
     assert not value.accept({"request": 12, "revision": "revision-a", "phase": "ready"})
 
 
+def test_delete_move_and_change_label_have_local_undo_and_discard_old_mask_prior(panel_modules):
+    module, _ = panel_modules
+    value = editor(module)
+    value.point(0.2, 0.4, 1)
+    value.point(0.7, 0.8, 0)
+    value.refinement = (9, 0)
+    value.selected = 0
+    value.move_selected(0.3, 0.5)
+    assert value.draft.points == [(0.3, 0.5, 1), (0.7, 0.8, 0)]
+    assert value.refinement is None
+    value.flip_selected()
+    assert value.draft.points[0] == (0.3, 0.5, 0)
+    value.remove_selected()
+    assert value.draft.points == [(0.7, 0.8, 0)]
+    assert value.selected is None
+    value.undo()
+    assert value.draft.points == [(0.3, 0.5, 0), (0.7, 0.8, 0)]
+    value.undo()
+    value.undo()
+    assert value.draft.points == [(0.2, 0.4, 1), (0.7, 0.8, 0)]
+
+
+def test_box_can_be_removed_without_deleting_the_points(panel_modules):
+    module, _ = panel_modules
+    value = editor(module)
+    value.point(0.2, 0.4, 1)
+    value.set_box((0.1, 0.1), (0.8, 0.9))
+    assert value.selected == "box"
+    value.remove_selected()
+    assert value.draft.points == [(0.2, 0.4, 1)]
+    assert value.draft.box is None
+    value.undo()
+    assert value.draft.box == (0.1, 0.1, 0.8, 0.9)
+
+
+def test_refinement_only_uses_a_prior_after_prompt_changes(panel_modules):
+    module, _ = panel_modules
+    value = editor(module)
+    value.point(0.3, 0.5, 1)
+    value.request = 9
+    value.submitted_signature = value.signature
+    value.accept({"request": 9, "revision": "revision-a", "phase": "ready",
+                  "overlays": ["one.png"], "scores": [0.9]})
+    assert not value.can_refine
+    value.point(0.8, 0.8, 0)
+    assert value.can_refine
+    value.remove_selected()
+    assert not value.can_refine, "deletion must not retain a mask prior containing the deleted constraint"
+
+
+def test_delete_key_does_not_remove_a_prompt_while_typing(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.2, 0.4, 1)
+    panel._on_keydown(event(Element("input"), key_identifier=module.KI_DELETE))
+    assert len(value.draft.points) == 1
+    panel._on_keydown(event(key_identifier=module.KI_DELETE))
+    assert not value.draft.points
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("rotation", [0, 1, 2, 3])
+def test_select_drag_and_right_click_remove_existing_point(panel_modules, monkeypatch, scale, rotation):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._image_info_cache["frame.png"] = (400, 200, 3)
+    panel._displayed_index = panel._current_index = 0
+    panel._rotation_quadrants = rotation
+    panel._mask_editor = value = editor(module)
+    value.point(0.25, 0.40, 1)
+    value.selected = None
+    viewport = Element()
+    viewport.client_width, viewport.client_height = 900, 700
+    viewport.absolute_left, viewport.absolute_top = 130, 75
+    panel._doc = _DocumentStub({"image-viewport": viewport})
+    monkeypatch.setattr(module.lf.ui, "get_ui_scale", lambda: scale)
+    layout = panel._get_image_layout(panel._image_paths[0], viewport)
+
+    def mouse(x, y, button=0):
+        vx, vy = module.source_to_view(layout, rotation, x * 399, y * 199)
+        return event(mouse_x=viewport.absolute_left + vx * scale,
+                     mouse_y=viewport.absolute_top + vy * scale, button=button)
+
+    panel._on_img_mousedown(mouse(0.25, 0.40))
+    assert value.selected == 0
+    assert len(value.draft.points) == 1, "clicking a marker must not add another point"
+    panel._sam_tool("edit")
+    panel._on_img_mousedown(mouse(0.25, 0.40))
+    panel._on_img_mousemove(mouse(0.6, 0.55))
+    panel._on_img_mousemove(mouse(0.65, 0.6))
+    assert len(value.draft.history) == 1, "a drag must create only one undo entry"
+    panel._on_img_mouseup(mouse(0.65, 0.6))
+    assert value.draft.points[0][:2] == pytest.approx((0.65, 0.6))
+    assert len(value.draft.history) == 2
+    panel._on_img_mousedown(mouse(0.65, 0.6, button=1))
+    assert not value.draft.points
+    value.undo()
+    assert value.draft.points[0][:2] == pytest.approx((0.65, 0.6))
+
+
 @pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
 @pytest.mark.parametrize("rotation", [0, 1, 2, 3])
 def test_sam_pointer_uses_original_pixels_after_fit_rotation_and_hidpi(panel_modules, monkeypatch, scale, rotation):

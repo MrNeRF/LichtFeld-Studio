@@ -179,7 +179,7 @@
 }
 
 #sam-controls {
-    padding: 4dp 8dp;
+    padding: 10dp;
     flex-shrink: 0;
     border-bottom-width: 1dp;
     border-bottom-color: #454545;
@@ -194,6 +194,9 @@
 }
 #sam-controls button {
     box-sizing: border-box;
+    display: inline-block;
+    flex: 0 0 auto;
+    min-width: 28dp;
     height: 28dp;
     line-height: 26dp;
     padding: 0dp 8dp;
@@ -201,15 +204,19 @@
 #sam-controls button[aria-pressed="true"] {
     background-color: #365675;
 }
-#sam-hint { color: #b8b8b8; font-size: 12dp; }
-#sam-status { margin-left: 6dp; }
+.sam-note { color: #b8b8b8; font-size: 12dp; margin: 6dp 0 10dp; }
+#sam-selection, #sam-status { font-size: 12dp; margin: 6dp 0; }
+#sidebar.sam-sidebar { width: 260dp; }
 #sam-overlay, #sam-markers { pointer-events: none; }
+#sam-overlay { z-index: 2; }
 #image-container.sam-prompt { cursor: crosshair; }
 #sam-markers {
     position: absolute;
+    z-index: 3;
     left: 0; top: 0; right: 0; bottom: 0;
 }
 .sam-point {
+    box-sizing: border-box;
     position: absolute;
     width: 18dp; height: 18dp;
     margin-left: -9dp; margin-top: -9dp;
@@ -222,7 +229,9 @@
 }
 .sam-point-1 { background-color: #238344; }
 .sam-point-0 { background-color: #ae3030; }
+.sam-point-selected { border-width: 3dp; border-color: #ffd074; line-height: 12dp; }
 .sam-box { position: absolute; border-width: 2dp; border-color: #ffa050; }
+.sam-box-selected { border-color: #ffd074; }
 
 #no-image-text {
     font-size: 12dp;
