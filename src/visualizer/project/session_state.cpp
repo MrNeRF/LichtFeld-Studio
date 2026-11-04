@@ -743,6 +743,7 @@ namespace lfs::vis::project {
                 required_field("show_center_markers", &RenderSettings::show_center_markers),
                 required_field("show_camera_frustums", &RenderSettings::show_camera_frustums),
                 required_field("camera_frustum_scale", &RenderSettings::camera_frustum_scale),
+                optional_field("hide_disabled_camera_frustums", &RenderSettings::hide_disabled_camera_frustums),
                 vec3_field("train_camera_color", &RenderSettings::train_camera_color),
                 vec3_field("eval_camera_color", &RenderSettings::eval_camera_color),
                 required_field("show_pivot", &RenderSettings::show_pivot),

@@ -99,6 +99,11 @@ PANEL_SPECS = {
         "rendering_panel.section_simplify", "FLOATING", 13, "rmlui/splat_simplify.rml", "CONTENT", (420, 0),
         update_policy="dirty",
     ),
+    "camera_selection": _PanelSpec(
+        "lfs_plugins.camera_selection_panel", "CameraSelectionPanel", "lfs.camera_selection",
+        "scene.camera_selection", "FLOATING", 15, "rmlui/camera_selection.rml", "CONTENT", (420, 0),
+        update_policy="dirty",
+    ),
     "mesh2splat": _PanelSpec(
         "lfs_plugins.mesh2splat_panel", "Mesh2SplatPanel", "native.mesh2splat",
         "Mesh to Splat", "FLOATING", 12, "rmlui/mesh2splat_panel.rml", "CONTENT",
@@ -272,6 +277,7 @@ def _build_builtin_panel_steps(lf):
         tools_mod.register()
         _register_lazy_panel(lf, "splat_simplify")
         _register_lazy_panel(lf, "collision")
+        _register_lazy_panel(lf, "camera_selection")
 
     def menus():
         from . import file_menu, edit_menu, tools_menu, view_menu, help_menu

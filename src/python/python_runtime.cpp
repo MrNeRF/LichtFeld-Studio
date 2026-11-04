@@ -439,6 +439,9 @@ namespace lfs::python {
         std::function<float()> g_splat_simplify_progress;
         std::function<std::string()> g_splat_simplify_stage;
         std::function<std::string()> g_splat_simplify_error;
+        std::mutex g_camera_selection_operation_mutex;
+        std::string g_camera_selection_operation;
+        uint64_t g_camera_selection_group_id = 0;
     } // namespace
 
     void set_splat_simplify_callbacks(SplatSimplifyStartFn start,
@@ -469,6 +472,26 @@ namespace lfs::python {
     float invoke_splat_simplify_progress() { return g_splat_simplify_progress ? g_splat_simplify_progress() : 0.0f; }
     std::string invoke_splat_simplify_stage() { return g_splat_simplify_stage ? g_splat_simplify_stage() : std::string{}; }
     std::string invoke_splat_simplify_error() { return g_splat_simplify_error ? g_splat_simplify_error() : std::string{}; }
+
+    void set_camera_selection_operation(std::string operation) {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        g_camera_selection_operation = std::move(operation);
+    }
+
+    std::string get_camera_selection_operation() {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        return g_camera_selection_operation;
+    }
+
+    void set_camera_selection_group_id(const uint64_t group_id) {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        g_camera_selection_group_id = group_id;
+    }
+
+    uint64_t get_camera_selection_group_id() {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        return g_camera_selection_group_id;
+    }
 
     namespace {
         GetSelectedCameraUidCallback g_get_selected_camera_cb = nullptr;

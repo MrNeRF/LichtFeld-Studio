@@ -66,6 +66,7 @@ namespace lfs::vis {
         p.show_center_markers = s.show_center_markers;
         p.show_camera_frustums = s.show_camera_frustums;
         p.camera_frustum_scale = s.camera_frustum_scale;
+        p.hide_disabled_camera_frustums = s.hide_disabled_camera_frustums;
         p.train_camera_color = detail::to_array(s.train_camera_color);
         p.eval_camera_color = detail::to_array(s.eval_camera_color);
         p.show_pivot = s.show_pivot;
@@ -167,6 +168,7 @@ namespace lfs::vis {
         s.show_center_markers = p.show_center_markers;
         s.show_camera_frustums = p.show_camera_frustums;
         s.camera_frustum_scale = p.camera_frustum_scale;
+        s.hide_disabled_camera_frustums = p.hide_disabled_camera_frustums;
         s.train_camera_color = detail::to_vec3(p.train_camera_color);
         s.eval_camera_color = detail::to_vec3(p.eval_camera_color);
         s.show_pivot = p.show_pivot;

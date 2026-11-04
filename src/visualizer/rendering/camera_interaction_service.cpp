@@ -51,18 +51,35 @@ namespace lfs::vis {
             camera_snapshot_ = cameras;
         }
 
-        const lfs::rendering::CameraFrustumPickRequest request{
-            .mouse_pos = mouse_pos,
-            .viewport_pos = panel->viewport_pos,
-            .viewport_size = panel->viewport_size,
-            .viewport = panel->viewport_data,
-            .scale = settings.camera_frustum_scale,
-            .scene_transforms = scene_transforms_};
-
-        const auto pick_result = engine->pickCameraFrustum(*cameras, request);
+        const auto pick = [&](const auto& pick_cameras, const auto& transforms) {
+            const lfs::rendering::CameraFrustumPickRequest request{
+                .mouse_pos = mouse_pos,
+                .viewport_pos = panel->viewport_pos,
+                .viewport_size = panel->viewport_size,
+                .viewport = panel->viewport_data,
+                .scale = settings.camera_frustum_scale,
+                .scene_transforms = transforms};
+            return engine->pickCameraFrustum(pick_cameras, request);
+        };
 
         int cam_id = -1;
-        if (pick_result) {
+        if (settings.hide_disabled_camera_frustums) {
+            const auto disabled = scene.getTrainingDisabledCameraUids();
+            std::vector<std::shared_ptr<const lfs::core::Camera>> enabled_cameras;
+            std::vector<glm::mat4> enabled_transforms;
+            enabled_cameras.reserve(cameras->size());
+            enabled_transforms.reserve(scene_transforms_.size());
+            for (size_t index = 0; index < cameras->size() && index < scene_transforms_.size(); ++index) {
+                if (!disabled.contains((*cameras)[index]->uid())) {
+                    enabled_cameras.push_back((*cameras)[index]);
+                    enabled_transforms.push_back(scene_transforms_[index]);
+                }
+            }
+            if (enabled_cameras.empty())
+                return -1;
+            if (const auto pick_result = pick(enabled_cameras, enabled_transforms))
+                cam_id = *pick_result;
+        } else if (const auto pick_result = pick(*cameras, scene_transforms_)) {
             cam_id = *pick_result;
         }
 

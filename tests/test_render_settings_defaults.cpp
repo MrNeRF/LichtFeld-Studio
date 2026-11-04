@@ -20,6 +20,24 @@ TEST(RenderSettingsDefaults, CameraFrustumsAreDisabledByDefault) {
     EXPECT_FLOAT_EQ(proxy_settings.camera_frustum_scale, 0.25f);
 }
 
+TEST(RenderSettingsProxy, HideDisabledCameraFrustumsRoundTrips) {
+    lfs::vis::RenderSettings settings;
+    settings.hide_disabled_camera_frustums = true;
+
+    const auto proxy = lfs::vis::to_proxy(settings);
+    EXPECT_TRUE(proxy.hide_disabled_camera_frustums);
+
+    lfs::vis::RenderSettings roundtrip;
+    lfs::vis::apply_proxy(roundtrip, proxy);
+    EXPECT_TRUE(roundtrip.hide_disabled_camera_frustums);
+
+    const auto project_json = lfs::vis::project::renderSettingsToProjectJson(settings);
+    EXPECT_TRUE(project_json.at("hide_disabled_camera_frustums").get<bool>());
+    const auto restored = lfs::vis::project::renderSettingsFromProjectJson(project_json);
+    ASSERT_TRUE(restored);
+    EXPECT_TRUE(restored->hide_disabled_camera_frustums);
+}
+
 TEST(RenderSettingsDefaults, SceneReconstructionIsDisabledByDefault) {
     const lfs::vis::RenderSettings render_settings;
     const lfs::vis::RenderSettingsProxy proxy_settings;

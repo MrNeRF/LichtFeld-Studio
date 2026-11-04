@@ -34,6 +34,12 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_camera_selection_tests test_camera_selection_algorithms.cpp)
+target_compile_features(lichtfeld_camera_selection_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
+add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
+set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)

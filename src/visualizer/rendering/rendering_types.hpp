@@ -359,6 +359,7 @@ namespace lfs::vis {
         // Camera frustums
         bool show_camera_frustums = false; // Master toggle for camera frustum rendering
         float camera_frustum_scale = 0.25f;
+        bool hide_disabled_camera_frustums = false;
         glm::vec3 train_camera_color = glm::vec3(1.0f, 1.0f, 1.0f);
         glm::vec3 eval_camera_color = glm::vec3(1.0f, 0.0f, 0.0f);
 
