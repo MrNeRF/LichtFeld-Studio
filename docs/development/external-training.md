@@ -153,6 +153,14 @@ count. Heartbeats can probe the native control snapshot, so a pause appears even
 when no optimizer step or new splat snapshot is produced. Terminal outcomes win
 against an overlapping status probe.
 
+The preview worker schedules UI status updates only when visible state changes,
+coalesced to at most twice per second. Unchanged metadata and heartbeat-only
+updates do not wake the UI. Scene-generation events detect project replacement
+or removal independently, including while a paused trainer's status is unchanged.
+New snapshots and finite camera-installation batches use the native UI scheduler,
+which already wakes the event loop. CPU contracts cover idle/coalesced scheduling;
+GPU rendering checks remain separate opt-in tests.
+
 Discovery selects the newest responsive registration per trainer process before
 filtering terminal states. A completed latest run therefore cannot expose older
 registrations as active trainers. Paused runs remain available. Retained previews

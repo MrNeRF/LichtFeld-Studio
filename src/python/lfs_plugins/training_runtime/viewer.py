@@ -31,7 +31,8 @@ class Viewer:
         self.prepared_arrays = None
         self.retired_arrays = queue.SimpleQueue()
         self.status_pending = False
-        self.last_status_at = 0
+        self.last_status_signature = None
+        self.next_status_at = 0.0
         self.copy_busy = False
         self.copy_error = ""
         self.ui_max_ms = 0.0
@@ -70,7 +71,7 @@ class Viewer:
         reference = weakref.ref(self)
         def scene_changed(_generation):
             owner = reference()
-            if owner is not None and owner.stop.is_set() and owner.node_uuid and not owner.status_pending:
+            if owner is not None and owner.node_uuid and not owner.status_pending:
                 owner.status_pending = True
                 def check_retained():
                     try:
@@ -80,7 +81,6 @@ class Viewer:
                     finally:
                         owner.status_pending = False
                 lf.ui.schedule_on_ui_thread(check_retained)
-                lf.ui.request_redraw()
         self._scene_watch = weakref.finalize(self, RuntimeState.scene_generation.subscribe(scene_changed))
         self.thread = threading.Thread(target=self._watch, daemon=True)
         self.thread.start()
@@ -148,57 +148,15 @@ class Viewer:
             contiguous(viewer_model_transform(geometry)))
 
     def _watch(self):
-        import lichtfeld as lf
         try:
             while not self.stop.wait(0.02):
                 while not self.retired_arrays.empty():
                     self.retired_arrays.get_nowait()
-                if self.node_uuid and not self.status_pending and time.monotonic() - self.last_status_at >= .5:
-                    self.status_pending = True
-                    self.last_status_at = time.monotonic()
-                    lf.ui.schedule_on_ui_thread(self._update_status)
-                    lf.ui.request_redraw()
+                self._schedule_status_change()
                 frame = self.reader.take()
                 if frame is None:
                     continue
-                def apply(frame=frame):
-                    error = None
-                    started = time.perf_counter()
-                    try:
-                        if self.stop.is_set():
-                            return
-                        current = lf.get_scene()
-                        node = current.get_node(self.name)
-                        if node is None or str(node.uuid) != self.node_uuid:
-                            self.close()
-                            raise RuntimeError("The viewer node was removed or the project changed. Reconnect this viewer.")
-                        self.node_id = current.install_prepared_viewer(self.name, frame["data"])
-                        self.node_uuid = str(current.get_node(self.name).uuid)
-                        self.generation = frame["record"]["id"]
-                        self.shown_iteration = frame["record"].get("iteration", 0)
-                        if self.display_arrays is not None:
-                            self.retired_arrays.put(self.display_arrays)
-                        self.display_arrays = self.prepared_arrays
-                        self.display_snapshot = {"snapshot": dict(frame["record"]["shared"]),
-                                                 "model_count": frame.get("model_count")}
-                        self.display_geometry = frame.get("geometry")
-                        self.display_bounds = self.prepared_bounds
-                        if self.auto_focus and not self.has_focused:
-                            self.frame_preview()
-                            self.has_focused = True
-                        with self.camera_lock:
-                            cameras, self.prepared_cameras = self.prepared_cameras, None
-                        if cameras is not None:
-                            self._install_cameras(cameras)
-                        self._update_status()
-                        lf.ui.request_redraw()
-                    except Exception as failure:
-                        error = str(failure)
-                    finally:
-                        self.ui_max_ms = max(self.ui_max_ms, (time.perf_counter() - started) * 1000)
-                        self.reader.acknowledge(frame["record"]["id"], error, geometry_ref=frame["geometry_ref"])
-                lf.ui.schedule_on_ui_thread(apply)
-                lf.ui.request_redraw()
+                self._schedule_frame(frame)
         except Exception as error:
             self.reader.error = str(error)
             self.close()
@@ -206,6 +164,69 @@ class Viewer:
             while not self.retired_arrays.empty():
                 self.retired_arrays.get_nowait()
             self.prepared_arrays = None
+
+    def _schedule_status_change(self):
+        """The watcher polls metadata, but unchanged/heartbeat-only updates never wake the UI."""
+        if not self.node_uuid or self.status_pending:
+            return
+        status = self.reader.status
+        fields = ("state", "pid", "iteration", "iterations", "count", "label", "project", "dataset",
+                  "saved_project", "error", "geometry_error", "liveness", "preview_capture_seconds",
+                  "preview_publish_seconds")
+        signature = (tuple(status.get(key) for key in fields), self.reader.error,
+                     self.copy_busy, self.copy_error, self.camera_error)
+        if signature == self.last_status_signature:
+            return
+        now = time.monotonic()
+        if now < self.next_status_at:
+            return
+        import lichtfeld as lf
+        self.status_pending = True
+        self.last_status_signature = signature
+        self.next_status_at = now + .5
+        # The native scheduler already wakes the event loop for queued work.
+        lf.ui.schedule_on_ui_thread(self._update_status)
+
+    def _schedule_frame(self, frame):
+        import lichtfeld as lf
+        lf.ui.schedule_on_ui_thread(lambda: self._apply_frame(frame))
+
+    def _apply_frame(self, frame):
+        import lichtfeld as lf
+        error = None
+        started = time.perf_counter()
+        try:
+            if self.stop.is_set():
+                return
+            current = lf.get_scene()
+            node = current.get_node(self.name)
+            if node is None or str(node.uuid) != self.node_uuid:
+                self.close()
+                raise RuntimeError("The viewer node was removed or the project changed. Reconnect this viewer.")
+            self.node_id = current.install_prepared_viewer(self.name, frame["data"])
+            self.node_uuid = str(current.get_node(self.name).uuid)
+            self.generation = frame["record"]["id"]
+            self.shown_iteration = frame["record"].get("iteration", 0)
+            if self.display_arrays is not None:
+                self.retired_arrays.put(self.display_arrays)
+            self.display_arrays = self.prepared_arrays
+            self.display_snapshot = {"snapshot": dict(frame["record"]["shared"]),
+                                     "model_count": frame.get("model_count")}
+            self.display_geometry = frame.get("geometry")
+            self.display_bounds = self.prepared_bounds
+            if self.auto_focus and not self.has_focused:
+                self.frame_preview()
+                self.has_focused = True
+            with self.camera_lock:
+                cameras, self.prepared_cameras = self.prepared_cameras, None
+            if cameras is not None:
+                self._install_cameras(cameras)
+            self._update_status()
+        except Exception as failure:
+            error = str(failure)
+        finally:
+            self.ui_max_ms = max(self.ui_max_ms, (time.perf_counter() - started) * 1000)
+            self.reader.acknowledge(frame["record"]["id"], error, geometry_ref=frame["geometry_ref"])
 
     def _retire(self, payload):
         _retirement.submit(payload.release)
@@ -238,15 +259,16 @@ class Viewer:
                         if removed: continue
                         removing = False
                     if index >= count:
-                        self._retire(payload)
-                        lf.ui.request_redraw()
-                        return
+                        break
                     current.install_external_camera(self.name,self.node_uuid,payload,index)
                     index += 1
                     self.camera_count = index
                     group = current.get_node(self.name + " cameras")
                     if group is not None and group.visible != self.cameras_visible: group.visible = self.cameras_visible
-                lf.ui.schedule_on_ui_thread(chunk)
+                if not removing and index >= count:
+                    self._retire(payload)
+                else:
+                    lf.ui.schedule_on_ui_thread(chunk)
                 lf.ui.request_redraw()
             except Exception as error:
                 self.camera_error = str(error)
@@ -287,7 +309,7 @@ class Viewer:
                 self._retire_display()
                 return
             status = self.reader.status
-            current.update_external_viewer(self.name, "preview error" if self.reader.error else status.get("state", "connecting"),
+            current.update_external_viewer(self.name, "preview error" if self.reader.error or status.get("error") else status.get("state", "connecting"),
                 status.get("pid", 0), status.get("iteration", 0), status.get("iterations", 0),
                 self.shown_iteration, not self.stop.is_set())
         finally:

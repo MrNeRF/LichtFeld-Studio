@@ -22,6 +22,9 @@ permissions:
   contents: read
 jobs:
   contracts:
+    env:
+      CUDA_VISIBLE_DEVICES: '-1'
+      NVIDIA_VISIBLE_DEVICES: void
     strategy:
       fail-fast: false
       matrix:
