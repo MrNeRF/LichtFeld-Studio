@@ -733,6 +733,8 @@ namespace lfs::training {
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
+        // PPISP camera index of a view: its training frame's camera, else its own camera when PPISP knows it, else 0.
+        [[nodiscard]] int ppisp_camera_index(int camera_uid, int camera_id) const;
         void log_eval_appearance() const;
         void evaluate_at(int iteration, std::stop_token stop_token = {});
         bool service_evaluation_controls(int iteration, std::stop_token stop_token);

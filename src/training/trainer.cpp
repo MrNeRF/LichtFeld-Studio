@@ -10062,9 +10062,7 @@ namespace lfs::training {
 
         auto* const pool = controller_pool_for_save(get_current_iteration());
         if (pool && params.optimization.ppisp_use_controller) {
-            const bool is_training_camera = ppisp_->is_known_frame(cam.uid());
-            const int camera_idx =
-                is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(cam.uid())) : 0;
+            const int camera_idx = ppisp_camera_index(cam.uid(), cam.camera_id());
             const int controller_idx =
                 (camera_idx >= 0 && camera_idx < pool->num_cameras()) ? camera_idx : 0;
             std::lock_guard<std::mutex> controller_lock(pool->predict_mutex());
@@ -10111,6 +10109,14 @@ namespace lfs::training {
         return ppisp_->apply_with_exposure(rgb_chw, camera_id, exposure);
     }
 
+    int Trainer::ppisp_camera_index(const int camera_uid, const int camera_id) const {
+        if (ppisp_->is_known_frame(camera_uid)) {
+            return ppisp_->camera_index(ppisp_->camera_for_frame(camera_uid));
+        }
+        // A held-out view of a training camera takes that camera's ISP and controller.
+        return ppisp_->is_known_camera(camera_id) ? ppisp_->camera_index(camera_id) : 0;
+    }
+
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
                                                      const PPISPViewportOverrides& overrides,
                                                      const bool use_controller) const {
@@ -10123,7 +10129,13 @@ namespace lfs::training {
         const auto rgb_chw = is_chw ? rgb : rgb.permute({2, 0, 1}).contiguous();
         const bool is_training_camera = ppisp_->is_known_frame(camera_uid);
         const bool has_controller = ppisp_controller_pool_ && params.optimization.ppisp_use_controller;
-        const int camera_idx = is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(camera_uid)) : 0;
+        int camera_id = -1;
+        if (!is_training_camera && scene_) {
+            if (const auto camera = std::as_const(*scene_).getCameraByUid(camera_uid)) {
+                camera_id = camera->camera_id();
+            }
+        }
+        const int camera_idx = ppisp_camera_index(camera_uid, camera_id);
 
         lfs::core::Tensor result;
 
