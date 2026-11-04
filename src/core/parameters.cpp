@@ -1695,14 +1695,14 @@ namespace lfs::core {
             DatasetConfig dataset;
 
             // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
-            dataset.data_path = utf8_to_path(j["data_path"].get<std::string>());
-            dataset.images = j["images"].get<std::string>();
-            dataset.resize_factor = j["resize_factor"].get<int>();
-            dataset.max_width = j["max_width"].get<int>();
+            dataset.data_path = utf8_to_path(j.at("data_path").get<std::string>());
+            dataset.images = j.at("images").get<std::string>();
+            dataset.resize_factor = j.at("resize_factor").get<int>();
+            dataset.max_width = j.at("max_width").get<int>();
             if (j.contains("min_track_length")) {
                 dataset.min_track_length = j["min_track_length"].get<int>();
             }
-            dataset.test_every = j["test_every"].get<int>();
+            dataset.test_every = j.at("test_every").get<int>();
             if (j.contains("timelapse_images")) {
                 dataset.timelapse_images =
                     j["timelapse_images"]
@@ -1712,7 +1712,7 @@ namespace lfs::core {
                 dataset.timelapse_every =
                     j["timelapse_every"].get<int>();
             }
-            dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
+            dataset.output_path = utf8_to_path(j.at("output_folder").get<std::string>());
 
             if (j.contains("output_name")) {
                 dataset.output_name = j["output_name"].get<std::string>();

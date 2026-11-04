@@ -1049,3 +1049,15 @@ TEST_F(TrainingParametersTest, BuiltinCapacityResetDoesNotReuseEditedCapacity) {
                   optimization_meta("max_cap"), active)),
               original);
 }
+
+TEST_F(TrainingParametersTest, DatasetConfigFromJsonRejectsMissingRequiredKeys) {
+    const auto complete = lfs::core::param::DatasetConfig{}.to_json();
+    const auto restored = lfs::core::param::DatasetConfig::from_json(complete);
+    EXPECT_EQ(restored.to_json(), complete);
+
+    for (const auto* key : {"data_path", "images", "resize_factor", "max_width", "test_every", "output_folder"}) {
+        auto json = complete;
+        json.erase(key);
+        EXPECT_THROW((void)lfs::core::param::DatasetConfig::from_json(json), nlohmann::json::exception) << key;
+    }
+}
