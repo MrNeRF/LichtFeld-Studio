@@ -24,8 +24,9 @@ from . import sfm
 from .text import _tr
 from .toolchain import Resolved
 
-STAGE_NAMES = ["toolchain", "extract", "features", "match", "map", "create_project", "train"]
+STAGE_NAMES = ["toolchain", "extract", "features", "match", "map", "level", "create_project", "train"]
 COLMAP_STAGES = ("features", "match", "map")
+TOOL_STAGES = COLMAP_STAGES + ("level",)  # every stage that needs the COLMAP binary
 STATE_FILE = "pipeline.json"
 EXTRACTION_REPORT = "extraction_metadata.json"
 DATASET_DIR = "dataset"
@@ -69,12 +70,17 @@ class Request:
     preset: str = probe_mod.DEFAULT_PRESET
     use_gpu: bool = True
 
+    @property
+    def is_photo_set(self) -> bool:
+        """``video`` may also be a folder of photos; then the extract stage copies them instead."""
+        return self.video.is_dir()
+
     def fingerprint(self) -> str:
-        raw = json.dumps(
-            {"video": str(self.video), "mtime": _mtime(self.video), "mode": self.mode_override,
-             "preset": self.preset, "gpu": self.use_gpu},
-            sort_keys=True,
-        )
+        facts = {"video": str(self.video), "mtime": _mtime(self.video), "mode": self.mode_override,
+                 "preset": self.preset, "gpu": self.use_gpu}
+        if self.is_photo_set:
+            facts["photos"] = [p.name for p in probe_mod.list_photos(self.video)]
+        raw = json.dumps(facts, sort_keys=True)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @property
@@ -165,6 +171,15 @@ def _move_extraction_report(images: Path, dataset: Path) -> None:
         os.replace(report, dataset / EXTRACTION_REPORT)
 
 
+def _remove_database(database: Path) -> None:
+    """Delete database.db and the SQLite side files a crashed COLMAP leaves next to it."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        try:
+            os.remove(str(database) + suffix)
+        except FileNotFoundError:
+            pass
+
+
 def _stage_shortfall(stage: str, database: Path) -> Optional[str]:
     """A user-facing message when a COLMAP stage exited 0 but left nothing behind, else None."""
     if stage == "features" and sfm.count_images_with_features(database) == 0:
@@ -174,6 +189,19 @@ def _stage_shortfall(stage: str, database: Path) -> Optional[str]:
         return _tr("video_to_splat.error.no_matches",
                    "COLMAP found no matches between frames. Move slower or choose the High preset.")
     return None
+
+
+def _import_photos(source: Path, images: Path, on_progress: Callable[[int, int], None]) -> int:
+    """Bring a photo set into the dataset folder: hard links where the filesystem allows, copies otherwise."""
+    photos = probe_mod.list_photos(source)
+    for index, photo in enumerate(photos, start=1):
+        target = images / photo.name
+        try:
+            os.link(photo, target)
+        except OSError:
+            shutil.copy2(photo, target)
+        on_progress(index, len(photos))
+    return len(photos)
 
 
 def _count_frames(images: Path) -> int:
@@ -204,7 +232,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
 
     # toolchain: COLMAP is needed whenever a COLMAP stage still has to run, even on resume.
     colmap: Optional[Resolved] = None
-    colmap_pending = any(stage not in done for stage in COLMAP_STAGES)
+    colmap_pending = any(stage not in done for stage in TOOL_STAGES)
     if "toolchain" not in done or colmap_pending:
         report("toolchain", 0.0, _tr("video_to_splat.progress.locating_colmap", "Locating COLMAP"))
         colmap = hooks.resolve_colmap(lambda msg: report("toolchain", 0.0, msg))
@@ -213,7 +241,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
             state.save(request.work_dir)
     check_cancel()
 
-    info = hooks.probe(str(request.video))
+    info = probe_mod.probe_photo_folder(request.video) if request.is_photo_set else hooks.probe(str(request.video))
     mode = probe_mod.decide_mode(info, request.mode_override)
     state.mode = mode
 
@@ -228,6 +256,26 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         if images.exists():
             shutil.rmtree(images)
         images.mkdir(parents=True, exist_ok=True)
+        if request.is_photo_set:
+            report("extract", 0.0, _tr("video_to_splat.progress.copying_photos", "Copying photos"))
+
+            def photo_progress(current: int, total: int) -> None:
+                report("extract", current / total if total else 0.0,
+                       _tr("video_to_splat.progress.copy_photo", "Photo {current}/{total}",
+                           current=current, total=total))
+
+            frames = _import_photos(request.video, images, photo_progress)
+            if frames < MIN_FRAMES:
+                raise PipelineError(_tr(
+                    "video_to_splat.error.too_few_photos",
+                    "Only {frames} photos were found; at least {minimum} are needed.",
+                    frames=frames, minimum=MIN_FRAMES))
+            state.frames = frames
+            state.mark("extract", frames=frames)
+            state.save(request.work_dir)
+            check_cancel()
+            return _run_colmap_and_train(request, hooks, state, done, preset, mode, colmap, images, database,
+                                         sparse, tail, log, report, check_cancel, should_cancel)
         params = ExtractParams(video=request.video, dataset=request.dataset, fps=preset.fps,
                                scale=probe_mod.plan_frame_scale(int(info.get("width", 0) or 0), preset.max_width),
                                rotation=0)
@@ -261,6 +309,16 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         _move_extraction_report(images, request.dataset)
         state.frames = state.frames or _count_frames(images)
     check_cancel()
+    return _run_colmap_and_train(request, hooks, state, done, preset, mode, colmap, images, database, sparse,
+                                 tail, log, report, check_cancel, should_cancel)
+
+
+def _run_colmap_and_train(request: Request, hooks: Hooks, state: State, done: set[str], preset, mode: str,
+                          colmap: Optional[Resolved], images: Path, database: Path, sparse: Path, tail: list[str],
+                          log: Callable[[str], None], report: Callable[[str, float, str], None],
+                          check_cancel: Callable[[], None], should_cancel: Callable[[], bool]) -> State:
+    """Stages after the frames exist: COLMAP, leveling, project creation, training."""
+    colmap_pending = any(stage not in done for stage in TOOL_STAGES)
 
     # COLMAP stages. A stage that exits 0 but leaves the database empty is rerun on the CPU once: the official
     # CUDA build has no kernels for older GPUs and fails every image without a nonzero exit code.
@@ -273,8 +331,8 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
             while True:
                 cmd = sfm.plan_commands(colmap=colmap.path, dataset=request.dataset, mode=mode,
                                         overlap=preset.overlap, use_gpu=use_gpu)[COLMAP_STAGES.index(stage)]
-                if stage == "features" and database.exists():
-                    database.unlink()
+                if stage == "features":
+                    _remove_database(database)
                 if stage == "match":
                     sfm.clear_matches(database)
                 if stage == "map":
@@ -300,7 +358,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
                 if shortfall is None:
                     break
                 if not use_gpu:
-                    raise PipelineError(shortfall)
+                    raise PipelineError(shortfall + "\n" + "\n".join(tail[-10:]))
                 use_gpu = False
                 state.use_gpu = False
                 state.save(request.work_dir)
@@ -333,6 +391,36 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         shutil.move(str(model_dir), str(canonical))
         state.model_dir = str(canonical)
     state.save(request.work_dir)
+
+    # Gravity-align the model so the floor is level in the viewer. Cosmetic: a failure keeps the model as is.
+    if "level" not in done:
+        assert colmap is not None
+        report("level", 0.0, _tr("video_to_splat.progress.leveling", "Leveling the scene"))
+        leveled = sparse / sfm.LEVELED_DIR
+        if leveled.exists():
+            shutil.rmtree(leveled)
+        leveled.mkdir(parents=True, exist_ok=True)
+        level_cmd = sfm.plan_level_command(colmap=colmap.path, dataset=request.dataset, mode=mode)
+
+        def on_level_output(line: str) -> None:
+            log(line)
+            report("level", 0.0, _tr("video_to_splat.progress.colmap", "COLMAP {tool}", tool=level_cmd[1]))
+
+        try:
+            completed = hooks.run(level_cmd, on_level_output, should_cancel)
+        except ProcessCancelled:
+            shutil.rmtree(leveled, ignore_errors=True)
+            raise PipelineCancelled()
+        applied = completed.returncode == 0 and sfm.read_registered_image_count(leveled / "images.bin") == registered
+        if applied:
+            shutil.rmtree(canonical)
+            shutil.move(str(leveled), str(canonical))
+        else:
+            log(_tr("video_to_splat.progress.level_skipped", "Leveling skipped; the scene keeps its orientation"))
+            shutil.rmtree(leveled, ignore_errors=True)
+        state.mark("level", applied=applied)
+        state.save(request.work_dir)
+        check_cancel()
 
     if "create_project" not in done:
         report("create_project", 0.0, _tr("video_to_splat.progress.creating_project", "Creating project"))

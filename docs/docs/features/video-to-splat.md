@@ -22,7 +22,8 @@ COLMAP, creates the project and starts training.
 ## Workflow
 
 1. **File → New Project from Video…**, or drop a video onto the window, or type a video path into the New
-   Project source field.
+   Project source field. **File → New Project from Photos…** does the same for a folder of JPEG or PNG photos
+   without camera poses; the frame extraction step is skipped and the photos are linked into the project.
 2. Choose **360 video**: Auto detects a 2:1 aspect ratio or spherical metadata; override when needed.
 3. Choose a **Quality** preset:
 
@@ -33,8 +34,12 @@ COLMAP, creates the project and starts training.
    | High | 3 | source | 25 |
 
 4. Press **Create**. The dialog stays open and shows the current stage: locating COLMAP, extracting frames,
-   detecting features, matching frames, solving cameras, creating the project, starting training. Cancel stops
-   COLMAP and keeps what finished.
+   detecting features, matching frames, solving cameras, leveling the scene, creating the project, starting
+   training. Cancel stops COLMAP and keeps what finished.
+
+   Leveling runs COLMAP's `model_orientation_aligner` so the floor is horizontal in the viewer: Manhattan-world
+   vanishing points for ordinary video, the mean camera orientation for 360 footage (lines are curves in an
+   equirectangular image). It is cosmetic; when it fails the model keeps its original orientation.
 5. Training starts automatically. For 360 video the GUT rasterizer is switched on first, because the
    standard rasterizer only accepts pinhole cameras; note that most third-party viewers cannot display
    GUT-trained splats. Export with the usual exporters.
@@ -45,6 +50,9 @@ COLMAP, creates the project and starts training.
 
 Stitched equirectangular MP4 or MOV from any 360 camera (export with direction lock on), or ordinary perspective
 video. Raw `.insv` dual-fisheye files are not supported; stitch them in the camera maker's software first.
+
+A folder of photos works the same way: JPEG or PNG files directly inside the folder, at least 20, in shooting
+order by name. 2:1 photos are treated as equirectangular.
 
 Frames are extracted at the preset's rate, keeping the sharpest frame of each interval, scaled down to the
 preset's maximum width and saved as JPEG. Fewer than 20 frames stops the run before COLMAP with a hint to use a
@@ -71,7 +79,7 @@ D:/projects/room/
 ```
 
 `pipeline.json` records each finished stage with the request fingerprint (video path and modification time,
-360 mode, preset). Pressing Create again on the same project name with the same video and settings resumes from
+360 mode, preset; for a photo folder also the list of file names). Pressing Create again on the same project name with the same video and settings resumes from
 the first unfinished stage; changing the preset or the video starts over.
 
 ## Checking a build end to end
@@ -79,3 +87,18 @@ the first unfinished stage; changing the preset or the video starts over.
 `scripts/video_to_splat_smoke.py` runs the whole chain inside the app's Python editor on a clip named by
 `LFS_V2S_VIDEO` and fails when fewer than 90 percent of the frames register. It is opt-in because it needs COLMAP,
 a GPU and real footage.
+
+## Automation
+
+The plugin registers three MCP tools on the app's endpoint, so an agent or script can run the whole chain
+without the dialog. Python tools appear with a `plugin_` prefix in `tools/list`, so call
+`plugin_video_to_splat_start` and friends:
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu` | `{started, project, work_dir}` or `{started: false, error}` |
+| `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir}` |
+| `video_to_splat_cancel` | none | `{cancelling}` |
+
+One run at a time; a start while another run is active is refused. Training is left running when the run
+finishes, so the usual `training_*` tools and `lichtfeld://runtime/jobs/training.main` take over from there.

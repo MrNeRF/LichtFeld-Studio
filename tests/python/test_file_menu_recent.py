@@ -1301,3 +1301,10 @@ def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch, path
          {"discard_changes": True, "replace": True,
           "stop_training": False, "_user_batch": True})
     ]
+
+
+def test_new_project_from_photos_follows_the_video_entry(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    labels = [entry.get("label") for entry in file_menu.FileMenu().menu_items()]
+    video = labels.index("tr:menu.file.new_project_from_video")
+    assert labels[video + 1] == "tr:menu.file.new_project_from_photos"

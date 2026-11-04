@@ -28,7 +28,7 @@
       </div>
     </div>
 
-    <div class="impdlg-control-group" data-if="source_is_video">
+    <div class="impdlg-control-group" data-if="source_is_pipeline">
       <span class="impdlg-field-label text-muted">@tr:video_to_splat.mode</span>
       <div class="impdlg-control-main">
         <select class="impdlg-input" data-value="video_mode">
@@ -38,7 +38,7 @@
         </select>
       </div>
     </div>
-    <div class="impdlg-control-group" data-if="source_is_video">
+    <div class="impdlg-control-group" data-if="source_is_pipeline">
       <span class="impdlg-field-label text-muted">@tr:video_to_splat.preset</span>
       <div class="impdlg-control-main">
         <select class="impdlg-input" data-value="video_preset">
@@ -48,7 +48,7 @@
         </select>
       </div>
     </div>
-    <div class="impdlg-control-group" data-if="source_is_video && pipeline_running">
+    <div class="impdlg-control-group" data-if="source_is_pipeline && pipeline_running">
       <span class="impdlg-field-label text-muted">{{pipeline_stage}}</span>
       <div class="impdlg-control-main">
         <div class="impdlg-control-row">
@@ -61,6 +61,9 @@
     <div class="impdlg-control-row" data-if="source_is_video && !pipeline_running">
       <span class="impdlg-note text-muted">@tr:video_to_splat.hint</span>
       <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="extract_only">@tr:video_to_splat.extract_only</button>
+    </div>
+    <div class="impdlg-control-row" data-if="source_is_photos && !pipeline_running">
+      <span class="impdlg-note text-muted">@tr:video_to_splat.photos_hint</span>
     </div>
 
     <span class="impdlg-status status-error" data-if="create_hint != ''">{{create_hint}}</span>

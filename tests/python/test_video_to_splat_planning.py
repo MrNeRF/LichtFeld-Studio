@@ -133,3 +133,44 @@ def test_stage_checks_tolerate_missing_or_empty_database(tmp_path):
     (tmp_path / "garbage.db").write_bytes(b"not a database")
     assert sfm.count_images_with_features(tmp_path / "garbage.db") == 0
     assert sfm.count_verified_pairs(tmp_path / "garbage.db") == 0
+
+
+def test_plan_level_command_picks_the_method_by_camera_model(tmp_path):
+    cmd = sfm.plan_level_command(colmap=Path("colmap.exe"), dataset=tmp_path, mode="equirectangular")
+    assert cmd[1] == "model_orientation_aligner"
+    assert cmd[cmd.index("--input_path") + 1] == str(tmp_path / "sparse" / "0")
+    assert cmd[cmd.index("--output_path") + 1] == str(tmp_path / "sparse" / "leveled")
+    assert cmd[cmd.index("--image_path") + 1] == str(tmp_path / "images")
+    # Line-based vanishing points mean nothing on an equirectangular projection; use the camera orientations.
+    assert cmd[cmd.index("--method") + 1] == "IMAGE-ORIENTATION"
+    perspective = sfm.plan_level_command(colmap=Path("colmap.exe"), dataset=tmp_path, mode="perspective")
+    assert perspective[perspective.index("--method") + 1] == "MANHATTAN-WORLD"
+
+
+def _jpeg(width: int, height: int) -> bytes:
+    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\0" + b"\0" * 9
+    sof0 = b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, height, width, 1) + b"\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof0 + b"\xff\xd9"
+
+
+def test_image_size_reads_png_and_jpeg_headers(tmp_path):
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+                    + struct.pack(">IIBBBBB", 640, 320, 8, 2, 0, 0, 0) + b"\0\0\0\0")
+    jpg = tmp_path / "b.jpg"
+    jpg.write_bytes(_jpeg(1920, 960))
+    assert probe.image_size(png) == (640, 320)
+    assert probe.image_size(jpg) == (1920, 960)
+    (tmp_path / "c.jpg").write_bytes(b"garbage")
+    assert probe.image_size(tmp_path / "c.jpg") == (0, 0)
+    assert probe.image_size(tmp_path / "missing.jpg") == (0, 0)
+
+
+def test_probe_photo_folder_lists_images_in_name_order(tmp_path):
+    for name in ("b.JPG", "a.jpeg", "c.png", "d.txt", "e.mp4"):
+        (tmp_path / name).write_bytes(_jpeg(100, 50) if name != "c.png" else b"\x89PNG")
+    assert [p.name for p in probe.list_photos(tmp_path)] == ["a.jpeg", "b.JPG", "c.png"]
+    info = probe.probe_photo_folder(tmp_path)
+    assert info["count"] == 3 and (info["width"], info["height"]) == (100, 50) and info["spherical"] is False
+    assert probe.decide_mode(info) == "equirectangular"
+    assert probe.probe_photo_folder(tmp_path / "missing") == {"width": 0, "height": 0, "spherical": False, "count": 0}

@@ -344,3 +344,89 @@ def test_video_options_bound_in_model(panel_env):
     panel._pipeline_fraction = 0.25
     assert bound["pipeline_stage"]() == "video_to_splat.stage.match"
     assert bound["pipeline_percent"]() == 25
+
+
+def _photo_folder(tmp_path, count=30):
+    import struct
+    folder = tmp_path / "shoot"
+    folder.mkdir(exist_ok=True)
+    ihdr = struct.pack(">IIBBBBB", 5760, 2880, 8, 2, 0, 0, 0)
+    for i in range(count):
+        (folder / f"IMG_{i:04d}.png").write_bytes(b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\0" * 4)
+    return folder
+
+
+def _probe(panel, state):
+    """Run the source probe worker and apply its result on the fake UI thread."""
+    import time
+    panel._source_probe_due = 0.0
+    panel._start_source_probe()
+    deadline = time.monotonic() + 5
+    while not state.scheduled and time.monotonic() < deadline:
+        time.sleep(0.01)
+    _drain(state)
+
+
+def test_photo_folder_sets_photos_kind(panel_env, tmp_path):
+    module, panel, state = panel_env
+    folder = _photo_folder(tmp_path)
+    panel.show(str(folder))
+    assert panel._source_kind == "checking"
+    _probe(panel, state)
+    assert panel._source_kind == "photos"
+    assert panel._name == "shoot"
+    assert panel._can_create() is True
+    assert panel._source_is_pipeline() is True and panel._source_kind != "video"
+
+
+def test_folder_without_photos_is_invalid(panel_env, tmp_path):
+    module, panel, state = panel_env
+    folder = tmp_path / "empty"
+    folder.mkdir()
+    (folder / "notes.txt").write_text("x")
+    panel.show(str(folder))
+    _probe(panel, state)
+    assert panel._source_kind == "invalid"
+    assert panel._can_create() is False
+
+
+def test_do_create_with_photos_starts_pipeline(panel_env, monkeypatch, tmp_path):
+    module, panel, state = panel_env
+    folder = _photo_folder(tmp_path)
+    panel.show(str(folder))
+    _probe(panel, state)
+    panel._set_video_preset("high")
+    started = threading.Event()
+    captured = {}
+
+    def fake_run(request, hooks, *, on_progress, should_cancel):
+        captured["request"] = request
+        started.set()
+        return None
+
+    monkeypatch.setattr(module.v2s_pipeline, "run", fake_run)
+    monkeypatch.setattr(module.v2s_bridge, "build_hooks", lambda: object())
+    panel._on_do_create()
+    assert started.wait(5)
+    _wait_for_thread(panel)
+    assert captured["request"].video == folder
+    assert captured["request"].is_photo_set
+    assert captured["request"].preset == "high"
+    assert captured["request"].project.name == "shoot.licht"
+    assert all(call[0] != "create" for call in state.calls)
+
+
+def test_photos_operator_opens_dialog_on_chosen_folder(panel_env, monkeypatch, tmp_path):
+    module, panel, state = panel_env
+    from lfs_plugins.video_to_splat.operators import NewProjectFromPhotosOperator, NewProjectFromVideoOperator
+
+    folder = _photo_folder(tmp_path)
+    opened = []
+    monkeypatch.setattr(module, "open_new_project_panel", opened.append)
+    monkeypatch.setattr(state.lf.ui, "open_folder_dialog", lambda title, start="": str(folder), raising=False)
+    assert NewProjectFromPhotosOperator().execute(None) == {"FINISHED"}
+    assert opened == [str(folder)]
+    assert NewProjectFromPhotosOperator.label == "menu.file.new_project_from_photos"
+    monkeypatch.setattr(state.lf.ui, "open_folder_dialog", lambda title, start="": "", raising=False)
+    assert NewProjectFromPhotosOperator().execute(None) == {"CANCELLED"}
+    assert NewProjectFromVideoOperator.label == "menu.file.new_project_from_video"

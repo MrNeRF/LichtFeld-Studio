@@ -292,7 +292,8 @@
     "file.checkpoint": "检查点…",
     "tools.developer": "开发者",
     "tools.system_console": "系统控制台",
-    "file.new_project_from_video": "New Project from Video..."
+    "file.new_project_from_video": "New Project from Video...",
+    "file.new_project_from_photos": "New Project from Photos..."
   },
   "window": {
     "export": "导出",
@@ -1674,8 +1675,13 @@
     "error.colmap_failed": "COLMAP {tool} failed with exit code {code}.",
     "error.no_model": "COLMAP produced no reconstruction. The footage may lack overlap or texture.",
     "progress.cpu_fallback": "COLMAP {tool} found nothing on the GPU; retrying on the CPU",
+    "progress.copying_photos": "Copying photos",
+    "progress.copy_photo": "Photo {current}/{total}",
+    "progress.leveling": "Leveling the scene",
+    "progress.level_skipped": "Leveling skipped; the scene keeps its orientation",
     "error.no_features": "COLMAP found no features in the extracted frames. The frames may be too dark or uniform.",
     "error.no_matches": "COLMAP found no matches between frames. Move slower or choose the High preset.",
+    "error.too_few_photos": "Only {frames} photos were found; at least {minimum} are needed.",
     "error.not_colmap": "'{path}' did not report a COLMAP version. Is it a COLMAP executable?",
     "error.colmap_too_old": "COLMAP {found} at '{path}' is too old. Version {minimum} or later is needed for 360 cameras.",
     "error.hash_mismatch": "The downloaded COLMAP archive failed its SHA-256 check and was discarded. Try again, or install COLMAP manually and set its path in preferences.",
@@ -1696,6 +1702,7 @@
     "preset_high": "High (3 fps, full size)",
     "extract_only": "Extract frames only",
     "hint": "Create extracts frames, solves cameras with COLMAP, and starts training.",
+    "photos_hint": "Create solves cameras with COLMAP from the photos and starts training.",
     "cancelling": "Cancelling...",
     "training_busy": "Stop the current training before building a splat from video.",
     "download_title": "Download COLMAP?",
@@ -1717,6 +1724,7 @@
     "stage.features": "Detecting features",
     "stage.match": "Matching frames",
     "stage.map": "Solving cameras",
+    "stage.level": "Leveling scene",
     "stage.create_project": "Creating project",
     "stage.train": "Starting training"
   },

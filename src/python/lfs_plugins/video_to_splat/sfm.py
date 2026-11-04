@@ -64,6 +64,27 @@ def plan_commands(*, colmap: Path, dataset: Path, mode: Mode, overlap: int, use_
     return [feature, match, mapper]
 
 
+LEVELED_DIR = "leveled"
+
+
+def plan_level_command(*, colmap: Path, dataset: Path, mode: Mode) -> list[str]:
+    """argv for model_orientation_aligner: gravity-align sparse/0 into sparse/leveled.
+
+    MANHATTAN-WORLD finds vanishing points from line segments, which an equirectangular projection bends
+    into curves, so 360 footage uses the mean camera orientation instead (the camera is held upright)."""
+    images, _database, sparse = dataset_paths(dataset)
+    method = "IMAGE-ORIENTATION" if mode == "equirectangular" else "MANHATTAN-WORLD"
+    return [
+        str(colmap), "model_orientation_aligner",
+        "--image_path", str(images),
+        "--input_path", str(sparse / "0"),
+        "--output_path", str(sparse / LEVELED_DIR),
+        "--method", method,
+        "--max_image_size", "1024",
+        "--log_target", "stderr",
+    ]
+
+
 def _count_rows_with_data(database: Path, table: str) -> int:
     """Rows of ``table`` whose ``rows`` column is positive; 0 for a missing or unreadable database."""
     if not database.is_file():

@@ -2760,6 +2760,49 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 12: Accept a folder of photos as the source
+
+**Goal:** Build a splat from JPEG/PNG photos without poses, the way the cloud service accepts photo sets.
+
+**Files:** `video_to_splat/probe.py` (photo listing, header-only image size), `pipeline.py` (photo import in the extract stage), `import_panels.py` (`photos` source kind), `operators.py` + `file_menu.py` (`New Project from Photos…`), `new_project_panel.rml`, locales, tests.
+
+**Acceptance Criteria:**
+- [x] A folder with at least 20 photos runs COLMAP, creates the project and starts training; fewer stops with a clear message.
+- [x] 2:1 photos are solved as equirectangular; the dialog shows the same 360 and preset options as for video.
+- [x] The fingerprint changes when photos are added or removed.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_new_project_panel_video.py -q`
+
+---
+
+### Task 13: Level the reconstruction
+
+**Goal:** A horizontal floor in the viewer without manual rotation.
+
+**Files:** `sfm.py` (`plan_level_command`), `pipeline.py` (`level` stage after `map`), locales (`stage.level`, progress keys), tests.
+
+**Acceptance Criteria:**
+- [x] `model_orientation_aligner` runs with IMAGE-ORIENTATION for equirectangular and MANHATTAN-WORLD for perspective cameras.
+- [x] A failed or inconsistent alignment keeps the mapped model and the run continues.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_video_to_splat_planning.py -q`
+
+---
+
+### Task 14: MCP tools for unattended runs
+
+**Goal:** Start, watch and cancel a run from an agent or script without the dialog.
+
+**Files:** `video_to_splat/runner.py`, `video_to_splat/mcp_tools.py`, `video_to_splat/__init__.py`, `tests/python/test_video_to_splat_runner.py`, docs.
+
+**Acceptance Criteria:**
+- [x] `video_to_splat_start` validates source, mode and preset, refuses while training or another run is active, and adds `.licht` when missing.
+- [x] `video_to_splat_status` reports stage, fraction, message, result counts and errors; `video_to_splat_cancel` stops COLMAP.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_runner.py -q`, then `tools/list` on the running app shows the three tools.
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.

@@ -930,6 +930,10 @@ class FileMenu:
                 "lfs_plugins.video_to_splat.operators.NewProjectFromVideoOperator",
                 label=lf.ui.tr("menu.file.new_project_from_video"),
             ),
+            menu_operator(
+                "lfs_plugins.video_to_splat.operators.NewProjectFromPhotosOperator",
+                label=lf.ui.tr("menu.file.new_project_from_photos"),
+            ),
             menu_operator(OpenProjectOperator),
             menu_submenu(
                 lf.ui.tr("menu.file.open_recent"),

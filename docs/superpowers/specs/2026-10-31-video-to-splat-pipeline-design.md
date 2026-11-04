@@ -167,3 +167,17 @@ Quality presets map only to frame rate, maximum image width and matcher overlap:
 - Equirectangular COLMAP model id 17 handling: `src/io/formats/colmap.cpp`
 - Existing download-with-consent pattern: `src/preprocessing/preprocess.cpp` (`ensure_cached_model`)
 - Existing subprocess runner: `src/python/lfs_plugins/installer.py`
+
+## Version 2 addendum (2026-11-03)
+
+Decisions taken after version 1 shipped and ran on a real Ricoh Theta clip (120/120 frames registered).
+
+| Question | Decision |
+| --- | --- |
+| Photo sets (freegaussian's "photos to splat") | In: the `video` request field may be a folder of JPEG/PNG photos. The extract stage links the photos into `dataset/images` and the rest of the chain is unchanged. The New Project dialog recognises a folder of photos that is not a dataset; `File → New Project from Photos…` picks one. |
+| Leveling | In, as a `level` stage after `map`: COLMAP `model_orientation_aligner`, IMAGE-ORIENTATION for equirectangular cameras (Manhattan-world vanishing points need straight lines), MANHATTAN-WORLD for perspective video. Cosmetic: a failure keeps the model as mapped. Metric scale stays out: stitched MP4s carry no usable IMU track. |
+| Automation | In, as Python MCP tools (`video_to_splat_start/status/cancel`) over a `PipelineRunner` that owns one background run. This covers the "upload and come back later" part of the cloud workflow; the native runtime job and `--video` CLI flag stay on the roadmap. |
+| Robustness learned from the real clip | The blur filter uses the extractor's window mode (sharpest frame per interval); COLMAP stages are verified through the database and rerun on the CPU when the GPU build produced nothing; the extractor's report is moved out of the images folder; GUT is enabled for equirectangular training and the trainer start is awaited. |
+| People masking | Still out. The app's ONNX path (`preprocess.cpp`) converts a pinned LPIPS network into its own runtime; there is no general segmentation runtime to run a person model through, and `lf.packages` would have to install onnxruntime plus a model download at run time. Separate spec. |
+| Textured mesh, dense point cloud | Still out. COLMAP's `patch_match_stereo` needs its CUDA kernels, which the official build lacks for the GPUs this was verified on; `poisson_mesher`/`mesh_texturer` have nothing to work on without it. Separate spec once dense stereo can be verified. |
+| Sharing, embedding, accounts, e-mail | Out by definition: the clone is a local one-click pipeline, and the gallery already publishes results. |

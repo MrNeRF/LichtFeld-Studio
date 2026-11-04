@@ -16,12 +16,16 @@ from .types import Panel
 from .panels import panel_class
 from .ui import RuntimeState
 from .video_to_splat import pipeline as v2s_pipeline
+from .video_to_splat import probe as v2s_probe
 from .video_to_splat import project_bridge as v2s_bridge
 from .video_to_splat.probe import DEFAULT_PRESET, PRESETS
 
 # Mirrors lfs::io::video::kSupportedVideoExtensions.
 _VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
 _VIDEO_STAGE_KEYS = {stage: f"video_to_splat.stage.{stage}" for stage in v2s_pipeline.STAGE_NAMES}
+# Source kinds the video-to-splat pipeline builds: a video file or a folder of photos.
+_PIPELINE_KINDS = {"video", "photos"}
+_CREATABLE_KINDS = {"blank", "dataset", "splat"} | _PIPELINE_KINDS
 
 _new_project_panel = None
 _resume_checkpoint_panel = None
@@ -232,6 +236,8 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_func("panel_label", lambda: lf.ui.tr("new_project.title"))
         model.bind_func("source_is_dataset", lambda: self._source_kind == "dataset")
         model.bind_func("source_is_video", lambda: self._source_kind == "video")
+        model.bind_func("source_is_photos", lambda: self._source_kind == "photos")
+        model.bind_func("source_is_pipeline", self._source_is_pipeline)
         model.bind("video_mode", lambda: self._video_mode, self._set_video_mode)
         model.bind("video_preset", lambda: self._video_preset, self._set_video_preset)
         model.bind_func("pipeline_running", lambda: self._pipeline_running)
@@ -375,6 +381,8 @@ class NewProjectPanel(_ImportDialogPanel):
             "source_path",
             "source_is_dataset",
             "source_is_video",
+            "source_is_photos",
+            "source_is_pipeline",
             "embed_dataset_visible",
             "images_path",
             "sparse_path",
@@ -477,6 +485,8 @@ class NewProjectPanel(_ImportDialogPanel):
                                   _directory_has_colmap_file(str(info.sparse_path)))
                 elif path and Path(path).is_file() and self._is_splat_path(path):
                     kind = "splat"
+                elif path and Path(path).is_dir() and v2s_probe.list_photos(Path(path)):
+                    kind = "photos"  # plain photos without poses: the pipeline solves them
             except Exception:
                 kind = "invalid"
             base = name.strip() or "untitled"
@@ -620,10 +630,13 @@ class NewProjectPanel(_ImportDialogPanel):
     def _can_create(self) -> bool:
         return (
             self._name_is_valid()
-            and self._source_kind in {"blank", "dataset", "splat", "video"}
+            and self._source_kind in _CREATABLE_KINDS
             and not self._images_missing()
             and not self._pipeline_running
         )
+
+    def _source_is_pipeline(self) -> bool:
+        return self._source_kind in _PIPELINE_KINDS
 
     def _images_missing(self) -> bool:
         """A COLMAP model whose images folder holds no images, as a reconstruction kept beside its photos."""
@@ -935,7 +948,7 @@ class NewProjectPanel(_ImportDialogPanel):
         def _commit(stop_training: bool, overwrite: bool) -> None:
             if (
                 not self._name_is_valid()
-                or self._source_kind not in {"blank", "dataset", "splat", "video"}
+                or self._source_kind not in _CREATABLE_KINDS
                 or self._target_path() != target
             ):
                 self._dirty_model()
@@ -943,7 +956,7 @@ class NewProjectPanel(_ImportDialogPanel):
             if self._destination_exists() and not overwrite:
                 self._confirm_overwrite(lambda: _commit(stop_training, True))
                 return
-            if source_kind == "video":
+            if source_kind in _PIPELINE_KINDS:
                 # The dialog stays open to show stage progress; the pipeline creates the project itself.
                 self._start_video_pipeline(Path(source_path), target)
                 return
@@ -1004,10 +1017,10 @@ class NewProjectPanel(_ImportDialogPanel):
             confirm_discard_work_then(
                 lf.ui.tr("new_project.title"),
                 lambda stop_training: _commit(stop_training, overwrite),
-                ask_stop_training=source_kind != "video",
+                ask_stop_training=source_kind not in _PIPELINE_KINDS,
             )
 
-        if source_kind == "video" and lf.is_training_active():
+        if source_kind in _PIPELINE_KINDS and lf.is_training_active():
             # COLMAP and the trainer must not share the GPU; the user stops training first.
             lf.ui.message_dialog(lf.ui.tr("video_to_splat.title"), lf.ui.tr("video_to_splat.training_busy"), "warning")
             return

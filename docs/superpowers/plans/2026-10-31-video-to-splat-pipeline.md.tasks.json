@@ -74,7 +74,28 @@
       "status": "completed",
       "blockedBy": [9, 10],
       "description": "**Goal:** Prove the chain on a real 360 clip, tune presets if under 90% registration, record result for the PR.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/probe.py\", \"src/python/lfs_plugins/video_to_splat/sfm.py\"], \"verifyCommand\": \"scripts/video_to_splat_smoke.py (in-app)\", \"acceptanceCriteria\": [\">= 90% frames registered on a slow indoor clip\", \"training starts automatically\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Accept a folder of photos as the source",
+      "status": "completed",
+      "blockedBy": [11],
+      "description": "**Goal:** Build a splat from JPEG/PNG photos without poses, the way the cloud service accepts photo sets.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/probe.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\", \"src/python/lfs_plugins/import_panels.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_new_project_panel_video.py -q\", \"acceptanceCriteria\": [\"20+ photos run COLMAP and start training\", \"2:1 photos solved as equirectangular\", \"fingerprint tracks the photo list\"]}\n```"
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: Level the reconstruction",
+      "status": "completed",
+      "blockedBy": [11],
+      "description": "**Goal:** Gravity-align the sparse model with COLMAP's model_orientation_aligner after mapping.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/sfm.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_video_to_splat_planning.py -q\", \"acceptanceCriteria\": [\"IMAGE-ORIENTATION for equirectangular, MANHATTAN-WORLD for perspective\", \"a failed alignment keeps the mapped model\"]}\n```"
+    },
+    {
+      "id": 14,
+      "subject": "Task 14: MCP tools for unattended runs",
+      "status": "completed",
+      "blockedBy": [11],
+      "description": "**Goal:** Start, watch and cancel a run from an agent without the dialog.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/runner.py\", \"src/python/lfs_plugins/video_to_splat/mcp_tools.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_runner.py -q\", \"acceptanceCriteria\": [\"start validates inputs and refuses while busy\", \"status reports stage and result\", \"cancel stops COLMAP\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-01T15:40:00Z"
+  "lastUpdated": "2026-11-03T19:30:00Z"
 }
