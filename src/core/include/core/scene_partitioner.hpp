@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <array>
 #include <cstddef>
@@ -63,7 +64,7 @@ namespace lfs::core {
     };
 
     // Snapshot of the SfM evidence needed by the partitioner. The matrix is the
-    // row-major world-to-camera transform; no image pixels are loaded.
+    // row-major world-to-camera transform; no image raster data is loaded.
     struct TileCameraEvidence {
         int uid = -1;
         std::string image_name;
@@ -74,6 +75,9 @@ namespace lfs::core {
         int width = 0, height = 0;
         bool pinhole = false;
         std::vector<glm::vec3> observations;
+        // Native image pixels, in the same order as observations. May be empty
+        // for synthetic evidence or datasets without 2D SfM coordinates.
+        std::vector<glm::vec2> observation_pixels;
     };
 
     // Planning estimates from sampled SfM data. Work units compare tiles under
@@ -85,6 +89,9 @@ namespace lfs::core {
         int estimated_selected_cameras = 0;
         int occupied_cells = 0;
         int covered_cells = 0;
+        int image_evidence_views = 0;
+        int observed_image_cells = 0;
+        float mean_image_coverage = 0.0f;
         float mean_image_megapixels = 0.0f;
         double estimated_work_units = 0.0;
     };
@@ -95,6 +102,18 @@ namespace lfs::core {
         int max_width = 0;
     };
 
+    // A conservative image-space support mask. Unknown pixels retain weight 1;
+    // only regions with strong out-of-tile SfM evidence are downweighted.
+    struct TileVisibilityMask {
+        int width = 0;
+        int height = 0;
+        std::vector<float> weights;
+    };
+
+    [[nodiscard]] LFS_CORE_API TileVisibilityMask estimate_tile_visibility_mask(
+        const TileSpec& tile, const TileCameraEvidence& camera,
+        int width = 64, int height = 64);
+
     [[nodiscard]] LFS_CORE_API std::vector<TileCameraEvidence> collect_tile_camera_evidence(
         const std::vector<std::shared_ptr<Camera>>& cameras);
     [[nodiscard]] LFS_CORE_API std::vector<TileSpec> generate_adaptive_tiles(
@@ -103,8 +122,24 @@ namespace lfs::core {
         const std::vector<TileCameraEvidence>& cameras,
         std::vector<TilePlanDiagnostics>* diagnostics = nullptr,
         AdaptiveTileOptions options = {});
+
+    inline constexpr float TILE_AIRSPACE_VIEW_THRESHOLD = 0.25f;
+
+    struct TileCameraSelectionDiagnostics {
+        int evidence_views = 0;
+        int track_supported_views = 0;
+        int airspace_supported_views = 0;
+        std::vector<int> supported_uids;
+        int observed_cells = 0;
+        int covered_cells = 0;
+        int multi_view_cells = 0;
+        int multi_view_covered_cells = 0;
+        bool sparse_fallback = false;
+    };
+
     [[nodiscard]] LFS_CORE_API std::vector<int> select_tile_camera_uids(
-        const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras);
+        const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras,
+        TileCameraSelectionDiagnostics* diagnostics = nullptr);
     [[nodiscard]] LFS_CORE_API std::vector<int> select_tile_initial_point_indices(
         const PointCloud& points, const TileSpec& tile,
         const std::vector<TileCameraEvidence>& selected_cameras);

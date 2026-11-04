@@ -825,6 +825,7 @@ namespace {
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
             ::args::ValueFlag<std::string> tile_plan(training_group, "path", "Use edited tile boxes from a JSON plan instead of recomputing the grid", {"tile-plan"});
             ::args::ValueFlag<std::string> tile_camera_uids(training_group, "path", "Internal: camera UID allowlist for one tile job", {"tile-camera-uids"});
+            ::args::ValueFlag<std::string> tile_exposure_gains(training_group, "path", "Internal: global per-image exposure gains shared by tile jobs", {"tile-exposure-gains"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -1448,6 +1449,13 @@ namespace {
                     return std::unexpected("--tile-camera-uids file does not exist");
                 if (params.auto_tile_grid || params.auto_tile_count || params.auto_tile_size > 0.0f)
                     return std::unexpected("--tile-camera-uids is for one tile job only");
+            }
+            if (tile_exposure_gains) {
+                params.tile_exposure_gains_path = absolute_input_path(::args::get(tile_exposure_gains));
+                if (!lfs::core::native_fs::exists(*params.tile_exposure_gains_path))
+                    return std::unexpected("--tile-exposure-gains file does not exist");
+                if (!params.tile_camera_uids_path)
+                    return std::unexpected("--tile-exposure-gains needs --tile-camera-uids");
             }
             if ((params.auto_tile_grid || params.auto_tile_count > 0 || params.auto_tile_size > 0.0f) &&
                 (params.cropbox || params.resume_checkpoint || params.resume_project))

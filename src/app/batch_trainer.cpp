@@ -13,6 +13,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/scene_partitioner.hpp"
+#include "core/tile_exposure.hpp"
 #include "core/camera.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -1374,7 +1375,7 @@ namespace lfs::app {
             std::vector<glm::vec3> centers;
             centers.reserve(scene->cameras.size());
             for (const auto& camera : scene->cameras) {
-                if (!camera) continue;
+                if (!camera || !camera->has_image()) continue;
                 const auto position = camera->cam_position().cpu().contiguous();
                 if (position.numel() >= 3) {
                     const auto* p = position.ptr<float>();
@@ -1425,8 +1426,7 @@ namespace lfs::app {
                 ? lfs::core::generate_adaptive_tiles(bounds, params.auto_tile_count,
                       params.tile_overlap, outer_bounds, points, camera_evidence,
                       &planning_diagnostics,
-                      {.all_cameras_for_training = params.tile_outside_loss_weight > 0.0f,
-                       .resize_factor = params.dataset.resize_factor,
+                      {.resize_factor = params.dataset.resize_factor,
                        .max_width = params.dataset.max_width})
                 : lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
             }
@@ -1450,6 +1450,8 @@ namespace lfs::app {
 
         std::vector<std::vector<int>> tile_cameras;
         tile_cameras.reserve(tiles.size());
+        std::vector<lfs::core::TileCameraSelectionDiagnostics> camera_selection_diagnostics;
+        camera_selection_diagnostics.reserve(tiles.size());
         std::unordered_map<int, const lfs::core::TileCameraEvidence*> views_by_uid;
         for (const auto& view : camera_evidence)
             if (!views_by_uid.emplace(view.uid, &view).second) {
@@ -1457,20 +1459,63 @@ namespace lfs::app {
                 return 1;
             }
         for (const auto& tile : tiles) {
-            if (params.tile_outside_loss_weight > 0.0f) {
-                std::vector<int> all;
-                all.reserve(camera_evidence.size());
-                for (const auto& view : camera_evidence) all.push_back(view.uid);
-                tile_cameras.push_back(std::move(all));
-            } else {
-                tile_cameras.push_back(lfs::core::select_tile_camera_uids(tile, camera_evidence));
-            }
+            lfs::core::TileCameraSelectionDiagnostics diagnostics;
+            tile_cameras.push_back(lfs::core::select_tile_camera_uids(
+                tile, camera_evidence, &diagnostics));
+            camera_selection_diagnostics.push_back(diagnostics);
         }
+        lfs::core::TileExposureCalibration exposure;
+        size_t exposure_samples = 0;
+        try {
+            LOG_INFO("Estimating global tile exposure from shared SfM tracks");
+            const auto samples = lfs::core::sample_tile_exposure(
+                camera_evidence, 2048, [] { return g_interrupt_count.load() > 0; });
+            if (g_interrupt_count.load() > 0) return 1;
+            exposure_samples = samples.size();
+            std::vector<int> camera_uids;
+            camera_uids.reserve(camera_evidence.size());
+            for (const auto& view : camera_evidence) camera_uids.push_back(view.uid);
+            exposure = lfs::core::estimate_tile_exposure(samples, camera_uids);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Cannot estimate global tile exposure: {}", error.what());
+            return 1;
+        }
+        if (exposure.connected_cameras < 2)
+            LOG_WARN("Insufficient shared SfM image evidence for exposure calibration; using unchanged images");
+        else
+            LOG_INFO("Global exposure calibrated {} of {} images from {} shared points and {} reliable view pairs",
+                     exposure.connected_cameras, exposure.cameras.size(),
+                     exposure.shared_points, exposure.reliable_edges);
+        json exposure_file = {
+            {"version", 1},
+            {"dataset", path_to_utf8(dataset)},
+            {"method", "sfm_shared_track_log_luminance"},
+            {"domain", "encoded_rgb"},
+            {"sampled_observations", exposure_samples},
+            {"shared_points", exposure.shared_points},
+            {"reliable_view_pairs", exposure.reliable_edges},
+            {"connected_cameras", exposure.connected_cameras},
+            {"cameras", json::array()}};
+        for (const auto& gain : exposure.cameras) {
+            const auto found = views_by_uid.find(gain.camera_uid);
+            if (found == views_by_uid.end()) {
+                LOG_ERROR("Exposure calibration returned unknown camera UID {}", gain.camera_uid);
+                return 1;
+            }
+            exposure_file["cameras"].push_back({
+                {"uid", gain.camera_uid},
+                {"image", found->second->image_name},
+                {"gain", gain.gain},
+                {"shared_points", gain.shared_points}});
+        }
+        const path exposure_path = output / "tile_exposure.json";
+        if (!write_batch_report(exposure_path, exposure_file.dump(2) + "\n")) return 1;
         // The parent needs only UID/name metadata after planning. Release loaded
         // camera payloads before starting a separate training process.
         for (auto& view : camera_evidence) {
             view.source.reset();
             std::vector<glm::vec3>().swap(view.observations);
+            std::vector<glm::vec2>().swap(view.observation_pixels);
         }
         json manifest;
         manifest["dataset"] = path_to_utf8(dataset);
@@ -1479,8 +1524,13 @@ namespace lfs::app {
         manifest["crop_after_training"] = params.auto_tile_crop;
         manifest["merge_exports"] = params.auto_tile_merge;
         manifest["partition_mode"] = params.auto_tile_count > 0 ? "adaptive" : "grid";
-        manifest["camera_selection"] = params.tile_outside_loss_weight > 0.0f
-            ? "all_cameras_for_outside_loss" : "sfm_tracks_and_pinhole_box_coverage";
+        manifest["camera_selection"] = "sfm_image_support_tile_coverage_and_projected_airspace";
+        manifest["airspace_view_threshold"] = lfs::core::TILE_AIRSPACE_VIEW_THRESHOLD;
+        manifest["exposure_calibration"] = {
+            {"path", "tile_exposure.json"},
+            {"connected_cameras", exposure.connected_cameras},
+            {"shared_points", exposure.shared_points},
+            {"reliable_view_pairs", exposure.reliable_edges}};
         if (!planning_diagnostics.empty())
             manifest["planning_work_units"] = "relative SfM-point and image-resolution proxy";
         manifest["tiles"] = json::array();
@@ -1494,6 +1544,16 @@ namespace lfs::app {
                           {"rotation_degrees", {tile.rotation_degrees.x,
                                                  tile.rotation_degrees.y,
                                                  tile.rotation_degrees.z}}};
+            const auto& selection = camera_selection_diagnostics[index];
+            entry["camera_selection"] = {
+                {"evidence_views", selection.evidence_views},
+                {"track_supported_views", selection.track_supported_views},
+                {"airspace_supported_views", selection.airspace_supported_views},
+                {"observed_cells", selection.observed_cells},
+                {"covered_cells", selection.covered_cells},
+                {"multi_view_cells", selection.multi_view_cells},
+                {"multi_view_covered_cells", selection.multi_view_covered_cells},
+                {"sparse_fallback", selection.sparse_fallback}};
             if (index < planning_diagnostics.size()) {
                 const auto& d = planning_diagnostics[index];
                 entry["planning"] = {{"sampled_points", d.sampled_points},
@@ -1502,6 +1562,9 @@ namespace lfs::app {
                                      {"estimated_selected_cameras", d.estimated_selected_cameras},
                                      {"occupied_cells", d.occupied_cells},
                                      {"covered_cells", d.covered_cells},
+                                     {"image_evidence_views", d.image_evidence_views},
+                                     {"observed_image_cells", d.observed_image_cells},
+                                     {"mean_image_coverage", d.mean_image_coverage},
                                      {"mean_image_megapixels", d.mean_image_megapixels},
                                      {"estimated_work_units", d.estimated_work_units}};
             }
@@ -1541,6 +1604,7 @@ namespace lfs::app {
             job.extra_args = {"--cropbox=" + box, "--cropbox-loss-weight",
                               std::format("{}", params.tile_outside_loss_weight),
                               "--tile-camera-uids", path_to_utf8(camera_path),
+                              "--tile-exposure-gains", path_to_utf8(exposure_path),
                               "--output-name", tile.name, "--export", "ply"};
             if (params.auto_tile_crop)
                 job.extra_args.push_back("--crop");

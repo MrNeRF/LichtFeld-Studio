@@ -629,6 +629,7 @@ namespace lfs::core {
             float tile_outside_loss_weight = 0.0f;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
             std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
+            std::optional<std::filesystem::path> tile_exposure_gains_path = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

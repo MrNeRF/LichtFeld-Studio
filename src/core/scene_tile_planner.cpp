@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <bitset>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -23,6 +24,8 @@
 
 namespace lfs::core {
 namespace {
+    constexpr float SPARSE_VIEW_COVERAGE = 0.02f;
+
     glm::mat3 tile_rotation(const glm::vec3& degrees) {
         return glm::mat3(glm::eulerAngleXYZ(glm::radians(degrees.x),
             glm::radians(degrees.y), glm::radians(degrees.z)));
@@ -31,6 +34,22 @@ namespace {
     bool contains(const glm::vec3& p, const glm::vec3& low, const glm::vec3& high) {
         return p.x >= low.x && p.x <= high.x && p.y >= low.y && p.y <= high.y &&
                p.z >= low.z && p.z <= high.z;
+    }
+
+    glm::vec2 project_observation_pixel(const TileCameraEvidence& view,
+                                        const glm::vec3& world) {
+        const float invalid = std::numeric_limits<float>::quiet_NaN();
+        if (!view.pinhole || view.fx <= 0.0f || view.fy <= 0.0f)
+            return {invalid, invalid};
+        const glm::vec3 delta = world - view.center;
+        const auto& m = view.world_to_camera;
+        const glm::vec3 camera{m[0]*delta.x + m[1]*delta.y + m[2]*delta.z,
+                               m[4]*delta.x + m[5]*delta.y + m[6]*delta.z,
+                               m[8]*delta.x + m[9]*delta.y + m[10]*delta.z};
+        if (!std::isfinite(camera.z) || camera.z <= 1e-4f)
+            return {invalid, invalid};
+        return {view.fx * camera.x / camera.z + view.cx,
+                view.fy * camera.y / camera.z + view.cy};
     }
 
     float projected_coverage(const TileCameraEvidence& view, const glm::vec3& center,
@@ -159,6 +178,7 @@ namespace {
         const TileCameraEvidence* view;
         glm::vec3 local_center;
         std::vector<glm::vec3> local_observations;
+        std::vector<glm::vec2> observation_pixels;
         double effective_pixels = 0.0;
     };
 
@@ -167,6 +187,7 @@ namespace {
         const SceneBounds& outer_bounds;
         const std::vector<glm::vec2>& samples;
         const std::vector<PlanningCamera>& cameras;
+        const std::vector<TileCameraEvidence>& selection_cameras;
         glm::mat3 rotation;
         glm::mat3 inverse_rotation;
         float overlap_ratio;
@@ -220,6 +241,14 @@ namespace {
         const glm::vec3 center = (tile.min + tile.max) * 0.5f;
         const glm::vec3 half = (tile.max - tile.min) * 0.5f;
         const glm::vec3 local_center = context.inverse_rotation * center;
+        TileCameraSelectionDiagnostics camera_diagnostics;
+        const auto selected_uids = select_tile_camera_uids(
+            tile, context.selection_cameras, &camera_diagnostics);
+        result.supporting_uids = camera_diagnostics.supported_uids;
+        result.diagnostics.supporting_cameras =
+            camera_diagnostics.track_supported_views + camera_diagnostics.airspace_supported_views;
+        result.diagnostics.estimated_selected_cameras = context.all_cameras_for_training
+            ? static_cast<int>(context.cameras.size()) : static_cast<int>(selected_uids.size());
         const float crop_epsilon = std::max(rect.high.x - rect.low.x,
                                             rect.high.y - rect.low.y) * 1e-5f;
         for (const auto& point : context.samples) {
@@ -240,8 +269,11 @@ namespace {
         double all_pixels = 0.0;
         int valid_images = 0;
         int valid_selected_images = 0;
-        std::vector<bool> selected(context.cameras.size(), false);
         std::vector<std::array<bool, 16>> camera_cells(context.cameras.size());
+        constexpr int image_grid_side = 16;
+        std::vector<std::array<std::uint64_t, 4>> image_masks(
+            context.cameras.size(), std::array<std::uint64_t, 4>{});
+        std::vector<int> image_observation_counts(context.cameras.size(), 0);
         for (size_t view_index = 0; view_index < context.cameras.size(); ++view_index) {
             const auto& planning_camera = context.cameras[view_index];
             const auto& view = *planning_camera.view;
@@ -249,12 +281,12 @@ namespace {
                 all_pixels += planning_camera.effective_pixels;
                 ++valid_images;
             }
-            int in_tile = 0;
-            int sampled_total = 0;
             std::array<bool, 16> seen_cells{};
             // Planning uses bounded SfM samples; the final allowlist uses full tracks.
-            for (const glm::vec3& point : planning_camera.local_observations) {
-                ++sampled_total;
+            for (size_t observation_index = 0;
+                 observation_index < planning_camera.local_observations.size();
+                 ++observation_index) {
+                const glm::vec3& point = planning_camera.local_observations[observation_index];
                 if (point.x >= rect.low.x &&
                     (point.x < rect.high.x || rect.high.x == context.bounds.max.x) &&
                     point.y >= rect.low.y &&
@@ -262,44 +294,32 @@ namespace {
                     point.z >= context.bounds.min.z && point.z <= context.bounds.max.z)
                     seen_cells[spatial_cell({point.x, point.y}, rect)] = true;
                 if (contains(point, local_center - half, local_center + half)) {
-                    ++in_tile;
+                    const glm::vec2 pixel = planning_camera.observation_pixels[observation_index];
+                    if (view.width > 0 && view.height > 0 &&
+                        std::isfinite(pixel.x) && std::isfinite(pixel.y) &&
+                        pixel.x >= 0.0f && pixel.x < view.width &&
+                        pixel.y >= 0.0f && pixel.y < view.height) {
+                        const int x = std::clamp(static_cast<int>(image_grid_side * pixel.x / view.width),
+                                                 0, image_grid_side - 1);
+                        const int y = std::clamp(static_cast<int>(image_grid_side * pixel.y / view.height),
+                                                 0, image_grid_side - 1);
+                        const int cell = y * image_grid_side + x;
+                        image_masks[view_index][cell / 64] |= std::uint64_t{1} << (cell % 64);
+                        ++image_observation_counts[view_index];
+                    }
                 }
             }
             camera_cells[view_index] = seen_cells;
-            const int track_threshold = static_cast<int>(std::clamp(
-                std::ceil(static_cast<float>(sampled_total) * 0.05f), 2.0f, 64.0f));
-            const bool supports = in_tile >= track_threshold ||
-                projected_coverage(view, center, context.inverse_rotation, half) >= 0.02f;
-            if (supports) {
-                ++result.diagnostics.supporting_cameras;
-                result.supporting_uids.push_back(view.uid);
-            }
-            selected[view_index] = context.all_cameras_for_training || supports || !view.pinhole;
         }
-        const size_t minimum_views = std::min<size_t>(8, context.cameras.size());
-        size_t selected_count = static_cast<size_t>(std::count(selected.begin(), selected.end(), true));
-        if (selected_count < minimum_views) {
-            std::vector<std::pair<float, size_t>> nearest;
-            nearest.reserve(context.cameras.size());
-            for (size_t i = 0; i < context.cameras.size(); ++i)
-                nearest.emplace_back(glm::length(context.cameras[i].local_center - local_center), i);
-            std::sort(nearest.begin(), nearest.end(), [&](const auto& a, const auto& b) {
-                return a.first == b.first
-                    ? context.cameras[a.second].view->uid < context.cameras[b.second].view->uid
-                    : a.first < b.first;
-            });
-            for (const auto& candidate : nearest) {
-                const size_t index = candidate.second;
-                if (!selected[index]) {
-                    selected[index] = true;
-                    ++selected_count;
-                }
-                if (selected_count >= minimum_views) break;
+        for (size_t i = 0; i < context.cameras.size(); ++i) {
+            if (!context.all_cameras_for_training &&
+                !std::binary_search(selected_uids.begin(), selected_uids.end(),
+                                    context.cameras[i].view->uid)) continue;
+            if (image_observation_counts[i] >= 3) {
+                ++result.diagnostics.image_evidence_views;
+                for (const std::uint64_t word : image_masks[i])
+                    result.diagnostics.observed_image_cells += std::popcount(word);
             }
-        }
-        for (size_t i = 0; i < selected.size(); ++i) {
-            if (!selected[i]) continue;
-            ++result.diagnostics.estimated_selected_cameras;
             for (int cell = 0; cell < 16; ++cell)
                 observed_by_cameras[cell] += camera_cells[i][cell];
             if (context.cameras[i].effective_pixels > 0.0) {
@@ -316,6 +336,10 @@ namespace {
             ? selected_pixels / valid_selected_images
             : valid_images > 0 ? all_pixels / valid_images : 1'000'000.0;
         result.diagnostics.mean_image_megapixels = static_cast<float>(mean_pixels / 1'000'000.0);
+        if (result.diagnostics.image_evidence_views > 0)
+            result.diagnostics.mean_image_coverage = static_cast<float>(
+                result.diagnostics.observed_image_cells /
+                (256.0 * result.diagnostics.image_evidence_views));
         // This is a relative planning proxy, not a runtime or VRAM prediction.
         const double point_floor = std::max<size_t>(1, context.samples.size()) * 0.05;
         const size_t estimated_points = context.all_cameras_for_training
@@ -323,10 +347,6 @@ namespace {
         result.diagnostics.estimated_work_units =
             (estimated_points + point_floor) *
             result.diagnostics.mean_image_megapixels;
-        std::sort(result.supporting_uids.begin(), result.supporting_uids.end());
-        result.supporting_uids.erase(std::unique(result.supporting_uids.begin(),
-                                                result.supporting_uids.end()),
-                                     result.supporting_uids.end());
         return result;
     }
 
@@ -367,7 +387,7 @@ std::vector<TileCameraEvidence> collect_tile_camera_evidence(
     std::vector<TileCameraEvidence> result;
     result.reserve(cameras.size());
     for (const auto& camera : cameras) {
-        if (!camera) continue;
+        if (!camera || !camera->has_image()) continue;
         TileCameraEvidence view;
         view.uid = camera->uid();
         view.image_name = camera->image_name();
@@ -389,10 +409,13 @@ std::vector<TileCameraEvidence> collect_tile_camera_evidence(
         const auto& observations = camera->sfm_observations();
         const size_t step = std::max<size_t>(1, (observations.size() + 2047) / 2048);
         view.observations.reserve(std::min<size_t>(observations.size(), 2048));
+        view.observation_pixels.reserve(std::min<size_t>(observations.size(), 2048));
         for (size_t i = 0; i < observations.size(); i += step) {
             const auto& p = observations[i];
-            if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z))
+            if (std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z)) {
                 view.observations.emplace_back(p.x, p.y, p.z);
+                view.observation_pixels.emplace_back(p.u, p.v);
+            }
         }
         result.push_back(std::move(view));
     }
@@ -482,10 +505,20 @@ std::vector<TileSpec> generate_adaptive_tiles(
     }
     std::vector<PlanningCamera> planning_cameras;
     planning_cameras.reserve(cameras.size());
+    std::vector<TileCameraEvidence> selection_cameras;
+    selection_cameras.reserve(cameras.size());
     for (const auto& view : cameras) {
         PlanningCamera camera{};
         camera.view = &view;
         camera.local_center = inv * view.center;
+        TileCameraEvidence sampled_view;
+        sampled_view.uid = view.uid;
+        sampled_view.center = view.center;
+        sampled_view.world_to_camera = view.world_to_camera;
+        sampled_view.fx = view.fx; sampled_view.fy = view.fy;
+        sampled_view.cx = view.cx; sampled_view.cy = view.cy;
+        sampled_view.width = view.width; sampled_view.height = view.height;
+        sampled_view.pinhole = view.pinhole;
         if (view.width > 0 && view.height > 0) {
             const auto [width, height] = resized_image_dimensions(
                 view.width, view.height, options.resize_factor, options.max_width);
@@ -493,14 +526,23 @@ std::vector<TileSpec> generate_adaptive_tiles(
         }
         const size_t step = std::max<size_t>(1, (view.observations.size() + 127) / 128);
         camera.local_observations.reserve(std::min<size_t>(view.observations.size(), 128));
+        camera.observation_pixels.reserve(std::min<size_t>(view.observations.size(), 128));
         for (size_t i = 0; i < view.observations.size(); i += step) {
             const glm::vec3 local = inv * view.observations[i];
-            if (std::isfinite(local.x) && std::isfinite(local.y) && std::isfinite(local.z))
+            if (std::isfinite(local.x) && std::isfinite(local.y) && std::isfinite(local.z)) {
                 camera.local_observations.push_back(local);
+                const glm::vec2 pixel = i < view.observation_pixels.size()
+                    ? view.observation_pixels[i]
+                    : project_observation_pixel(view, view.observations[i]);
+                camera.observation_pixels.push_back(pixel);
+                sampled_view.observations.push_back(view.observations[i]);
+                sampled_view.observation_pixels.push_back(pixel);
+            }
         }
         planning_cameras.push_back(std::move(camera));
+        selection_cameras.push_back(std::move(sampled_view));
     }
-    const PlanContext context{bounds, outer_bounds, samples, planning_cameras, R, inv,
+    const PlanContext context{bounds, outer_bounds, samples, planning_cameras, selection_cameras, R, inv,
                               overlap_ratio, options.all_cameras_for_training};
     std::vector<Rect> leaves{{{bounds.min.x, bounds.min.y}, {bounds.max.x, bounds.max.y}}};
     std::vector<PlanEstimate> estimates{estimate_rect(leaves.front(), context)};
@@ -586,6 +628,12 @@ std::vector<TileSpec> generate_adaptive_tiles(
                 };
                 const float min_coverage = std::min(coverage(left_estimate),
                                                     coverage(right_estimate));
+                const auto& left_diag = left_estimate.diagnostics;
+                const auto& right_diag = right_estimate.diagnostics;
+                const bool has_image_evidence =
+                    estimates[leaf_index].diagnostics.image_evidence_views > 0;
+                const float min_image_coverage = std::min(left_diag.mean_image_coverage,
+                                                          right_diag.mean_image_coverage);
                 const int tier = min_support >= 2 &&
                                  (shared_count >= 1 || options.all_cameras_for_training) ? 1 : 0;
                 const auto aspect = [](const Rect& rect) {
@@ -603,8 +651,15 @@ std::vector<TileSpec> generate_adaptive_tiles(
                 // Compact cells reduce overlap and avoid full-scene slivers.
                 const double shape_penalty = 1.0 + 0.2 *
                     std::max(0.0, child_aspect - parent_aspect);
+                // Sparse image-cell occupancy is a view-space support proxy,
+                // rather than a dense visibility mask or a pixel-loss estimate.
+                const double image_retention = has_image_evidence
+                    ? std::clamp(static_cast<double>(min_image_coverage) /
+                        estimates[leaf_index].diagnostics.mean_image_coverage, 0.0, 1.0)
+                    : 1.0;
+                const double image_penalty = 1.0 + 0.5 * (1.0 - image_retention);
                 const double score = work * (1.0 + 0.5 * (1.0 - min_coverage)) *
-                                     shape_penalty;
+                                     image_penalty * shape_penalty;
                 const size_t left_points = left_estimate.diagnostics.sampled_points;
                 const size_t right_points = right_estimate.diagnostics.sampled_points;
                 const size_t imbalance = left_points > right_points
@@ -663,42 +718,284 @@ std::vector<TileSpec> generate_adaptive_tiles(
 }
 
 std::vector<int> select_tile_camera_uids(
-    const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras) {
-    const glm::mat3 inv = glm::transpose(tile_rotation(tile.rotation_degrees));
-    const glm::vec3 center = (tile.min + tile.max)*0.5f;
-    const glm::vec3 half = (tile.max - tile.min)*0.5f;
-    std::vector<int> selected;
+    const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras,
+    TileCameraSelectionDiagnostics* diagnostics) {
+    if (diagnostics) *diagnostics = {};
+    if (cameras.empty()) return {};
+    const glm::mat3 inverse = glm::transpose(tile_rotation(tile.rotation_degrees));
+    const glm::vec3 center = (tile.min + tile.max) * 0.5f;
+    const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+    if (half.x <= 0.0f || half.y <= 0.0f || half.z <= 0.0f ||
+        !std::isfinite(half.x) || !std::isfinite(half.y) || !std::isfinite(half.z))
+        throw std::invalid_argument("Camera selection needs a non-empty tile");
+
+    constexpr int image_side = 16;
+    constexpr int spatial_cells = 32; // 4 x 4 x 2 in the tile's local frame
+    struct ViewSupport {
+        int uid = -1;
+        int inside_tracks = 0;
+        int image_cells = 0;
+        std::bitset<spatial_cells> cells;
+        float projected_area = 0.0f;
+        float distance = 0.0f;
+        double score = 0.0;
+    };
+    std::vector<ViewSupport> support;
+    support.reserve(cameras.size());
+    int best_tracks = 0, best_image_cells = 0;
+    std::array<int, spatial_cells> available{};
     for (const auto& view : cameras) {
-        int observed = 0;
-        size_t total = 0;
-        each_observation(view, [&](const glm::vec3& point) {
-            if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+        ViewSupport current;
+        current.uid = view.uid;
+        current.distance = glm::length(view.center - center);
+        if (!std::isfinite(current.distance))
+            current.distance = std::numeric_limits<float>::infinity();
+        current.projected_area = projected_coverage(view, center, inverse, half);
+        std::array<int, spatial_cells> tracks_per_cell{};
+        std::bitset<image_side * image_side> image_cells;
+        const auto visit = [&](const glm::vec3& world, glm::vec2 pixel) {
+            if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
                 return;
-            ++total;
-            observed += contains(inv*(point-center), -half, half);
-        });
-        const float coverage = projected_coverage(view, center, inv, half);
-        const int track_threshold = static_cast<int>(
-            std::clamp(std::ceil(static_cast<float>(total) * 0.05f), 2.0f, 64.0f));
-        const bool surface_visible = observed >= track_threshold;
-        if (surface_visible || coverage >= 0.02f || !view.pinhole)
-            selected.push_back(view.uid);
+            const glm::vec3 local = inverse * (world - center);
+            if (!contains(local, -half, half)) return;
+            ++current.inside_tracks;
+            const glm::vec3 unit = (local + half) / (2.0f * half);
+            const int x = std::clamp(static_cast<int>(unit.x * 4.0f), 0, 3);
+            const int y = std::clamp(static_cast<int>(unit.y * 4.0f), 0, 3);
+            const int z = std::clamp(static_cast<int>(unit.z * 2.0f), 0, 1);
+            ++tracks_per_cell[(z * 4 + y) * 4 + x];
+            if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y))
+                pixel = project_observation_pixel(view, world);
+            if (view.width > 0 && view.height > 0 &&
+                std::isfinite(pixel.x) && std::isfinite(pixel.y) &&
+                pixel.x >= 0.0f && pixel.x < view.width &&
+                pixel.y >= 0.0f && pixel.y < view.height) {
+                const int ix = std::clamp(static_cast<int>(image_side * pixel.x / view.width), 0, image_side - 1);
+                const int iy = std::clamp(static_cast<int>(image_side * pixel.y / view.height), 0, image_side - 1);
+                image_cells.set(iy * image_side + ix);
+            }
+        };
+        if (view.source) {
+            for (const auto& observation : view.source->sfm_observations())
+                visit({observation.x, observation.y, observation.z},
+                      {observation.u, observation.v});
+        } else {
+            for (size_t index = 0; index < view.observations.size(); ++index) {
+                const float invalid = std::numeric_limits<float>::quiet_NaN();
+                visit(view.observations[index],
+                      index < view.observation_pixels.size()
+                          ? view.observation_pixels[index] : glm::vec2{invalid});
+            }
+        }
+        for (int cell = 0; cell < spatial_cells; ++cell)
+            if (tracks_per_cell[cell] >= 2) {
+                current.cells.set(cell);
+                ++available[cell];
+            }
+        current.image_cells = static_cast<int>(image_cells.count());
+        current.score = current.inside_tracks + 8.0 * current.image_cells +
+                        16.0 * current.cells.count();
+        best_tracks = std::max(best_tracks, current.inside_tracks);
+        best_image_cells = std::max(best_image_cells, current.image_cells);
+        support.push_back(current);
     }
-    // Sparse reconstructions can have holes. Keep a minimum nearest-view floor.
-    const size_t floor = std::min<size_t>(8, cameras.size());
-    if (selected.size() < floor) {
-        std::vector<std::pair<float,int>> nearest;
-        for (const auto& view : cameras)
-            nearest.emplace_back(glm::length(view.center-center), view.uid);
-        std::sort(nearest.begin(), nearest.end());
-        for (const auto& [distance, uid] : nearest) {
-            if (std::find(selected.begin(), selected.end(), uid) == selected.end())
-                selected.push_back(uid);
-            if (selected.size() >= floor) break;
+
+    const int track_floor = std::max(6, static_cast<int>(std::ceil(best_tracks * 0.05)));
+    const int image_floor = std::min(best_image_cells,
+        std::max(2, static_cast<int>(std::ceil(best_image_cells * 0.10))));
+    std::vector<bool> chosen(cameras.size(), false);
+    std::array<int, spatial_cells> covered{};
+    int evidence_views = 0, observed_cells = 0;
+    size_t selected_count = 0;
+    const auto add = [&](const size_t index) {
+        if (chosen[index]) return;
+        chosen[index] = true;
+        ++selected_count;
+        for (int cell = 0; cell < spatial_cells; ++cell)
+            covered[cell] += support[index].cells.test(cell);
+    };
+    for (size_t index = 0; index < support.size(); ++index) {
+        const auto& view = support[index];
+        if (view.inside_tracks >= 2 && view.cells.any()) ++evidence_views;
+        const bool enough_image_evidence = best_image_cells == 0 ||
+            view.image_cells >= image_floor ||
+            (view.image_cells == 0 && view.inside_tracks >= best_tracks * 0.25);
+        const bool track_supported = view.inside_tracks >= track_floor && enough_image_evidence;
+        // Project the full tile volume, including empty air above the SfM points.
+        // Surface tracks alone can miss views needed to suppress floaters there.
+        const bool airspace_supported = view.projected_area >= TILE_AIRSPACE_VIEW_THRESHOLD;
+        if (diagnostics) {
+            diagnostics->track_supported_views += track_supported;
+            diagnostics->airspace_supported_views += !track_supported && airspace_supported;
+            if (track_supported || airspace_supported)
+                diagnostics->supported_uids.push_back(view.uid);
+        }
+        if (track_supported || airspace_supported)
+            add(index);
+    }
+    for (const int count : available) observed_cells += count > 0;
+
+    // Rescue tile regions seen by the SfM cameras but not yet covered twice.
+    // This is bounded by the 32 coarse cells rather than by camera count.
+    for (;;) {
+        size_t best = support.size();
+        int best_gain = 0;
+        for (size_t index = 0; index < support.size(); ++index) {
+            if (chosen[index] || support[index].inside_tracks < 2) continue;
+            int gain = 0;
+            for (int cell = 0; cell < spatial_cells; ++cell) {
+                const int target = std::min(2, available[cell]);
+                if (support[index].cells.test(cell) && covered[cell] < target)
+                    gain += covered[cell] == 0 ? 2 : 1;
+            }
+            if (gain > best_gain ||
+                (gain == best_gain && gain > 0 && best < support.size() &&
+                 (support[index].score > support[best].score ||
+                  (support[index].score == support[best].score &&
+                   support[index].uid < support[best].uid)))) {
+                best = index;
+                best_gain = gain;
+            }
+        }
+        if (best_gain == 0) break;
+        add(best);
+    }
+
+    const auto ranked = [&](const size_t a, const size_t b) {
+        if (support[a].score != support[b].score) return support[a].score > support[b].score;
+        if (support[a].projected_area != support[b].projected_area)
+            return support[a].projected_area > support[b].projected_area;
+        if (support[a].distance != support[b].distance)
+            return support[a].distance < support[b].distance;
+        return support[a].uid < support[b].uid;
+    };
+    std::vector<size_t> order(support.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), ranked);
+    const size_t minimum_evidence_views = std::min<size_t>(4, static_cast<size_t>(evidence_views));
+    for (const size_t index : order) {
+        if (selected_count >= minimum_evidence_views)
+            break;
+        if (support[index].inside_tracks >= 2 && support[index].cells.any()) add(index);
+    }
+
+    const bool sparse = evidence_views < 4 || observed_cells < 2 || best_image_cells < 2;
+    if (sparse) {
+        const size_t floor = std::min<size_t>(8, support.size());
+        for (const size_t index : order) {
+            if (selected_count >= floor) break;
+            if (support[index].inside_tracks >= 2 ||
+                support[index].projected_area >= SPARSE_VIEW_COVERAGE)
+                add(index);
+        }
+        // The remaining floor is a last resort for datasets with no usable tracks.
+        std::vector<size_t> nearest = order;
+        std::sort(nearest.begin(), nearest.end(), [&](const size_t a, const size_t b) {
+            return support[a].distance == support[b].distance
+                ? support[a].uid < support[b].uid
+                : support[a].distance < support[b].distance;
+        });
+        for (const size_t index : nearest) {
+            if (selected_count >= floor) break;
+            add(index);
         }
     }
+
+    if (diagnostics) {
+        std::sort(diagnostics->supported_uids.begin(), diagnostics->supported_uids.end());
+        diagnostics->supported_uids.erase(
+            std::unique(diagnostics->supported_uids.begin(), diagnostics->supported_uids.end()),
+            diagnostics->supported_uids.end());
+        diagnostics->evidence_views = evidence_views;
+        diagnostics->observed_cells = observed_cells;
+        diagnostics->sparse_fallback = sparse;
+        for (int cell = 0; cell < spatial_cells; ++cell) {
+            if (available[cell] == 0) continue;
+            diagnostics->covered_cells += covered[cell] >= 1;
+            if (available[cell] >= 2) {
+                ++diagnostics->multi_view_cells;
+                diagnostics->multi_view_covered_cells += covered[cell] >= 2;
+            }
+        }
+    }
+    std::vector<int> selected;
+    for (size_t index = 0; index < chosen.size(); ++index)
+        if (chosen[index]) selected.push_back(support[index].uid);
     std::sort(selected.begin(), selected.end());
     return selected;
+}
+
+TileVisibilityMask estimate_tile_visibility_mask(
+    const TileSpec& tile, const TileCameraEvidence& camera,
+    const int width, const int height) {
+    TileVisibilityMask result;
+    if (width <= 0 || height <= 0 || width > 256 || height > 256 ||
+        camera.width <= 0 || camera.height <= 0 || !camera.pinhole)
+        return result;
+
+    const glm::mat3 inverse = glm::transpose(tile_rotation(tile.rotation_degrees));
+    const glm::vec3 center = (tile.min + tile.max) * 0.5f;
+    const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+    if (half.x <= 0.0f || half.y <= 0.0f || half.z <= 0.0f)
+        return result;
+
+    struct Sample { glm::vec2 pixel; bool inside; };
+    std::vector<Sample> samples;
+    samples.reserve(std::min<size_t>(camera.observations.size(), 512));
+    int inside_count = 0, outside_count = 0;
+    const size_t step = std::max<size_t>(1, (camera.observations.size() + 511) / 512);
+    for (size_t i = 0; i < camera.observations.size(); i += step) {
+        const auto& point = camera.observations[i];
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            continue;
+        const glm::vec2 pixel = i < camera.observation_pixels.size()
+            ? camera.observation_pixels[i] : project_observation_pixel(camera, point);
+        if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y) ||
+            pixel.x < 0.0f || pixel.y < 0.0f ||
+            pixel.x >= camera.width || pixel.y >= camera.height)
+            continue;
+        const bool inside = contains(inverse * (point - center), -half, half);
+        samples.push_back({{pixel.x / camera.width, pixel.y / camera.height}, inside});
+        inside_count += inside;
+        outside_count += !inside;
+    }
+    // Sparse or one-sided tracks cannot establish a reliable image boundary.
+    if (inside_count < 8 || outside_count < 8)
+        return result;
+
+    result.width = width;
+    result.height = height;
+    result.weights.resize(static_cast<size_t>(width) * height, 1.0f);
+    bool has_excluded_region = false;
+    constexpr float radius_squared = 0.15f * 0.15f;
+    constexpr float sigma_squared = 0.07f * 0.07f;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const glm::vec2 pixel{(x + 0.5f) / width, (y + 0.5f) / height};
+            float inside_support = 0.0f, outside_support = 0.0f;
+            int nearby_outside = 0;
+            for (const auto& sample : samples) {
+                const glm::vec2 delta = pixel - sample.pixel;
+                const float distance_squared = glm::dot(delta, delta);
+                if (distance_squared > radius_squared) continue;
+                const float support = std::exp(-0.5f * distance_squared / sigma_squared);
+                if (sample.inside) inside_support += support;
+                else {
+                    outside_support += support;
+                    ++nearby_outside;
+                }
+            }
+            if (nearby_outside >= 2 && outside_support >= 0.8f &&
+                outside_support > inside_support * 2.0f) {
+                const float in_fraction = inside_support / (inside_support + outside_support);
+                result.weights[static_cast<size_t>(y) * width + x] =
+                    std::clamp(0.15f + 1.7f * in_fraction, 0.15f, 1.0f);
+                has_excluded_region = true;
+            }
+        }
+    }
+    if (!has_excluded_region) return {};
+    return result;
 }
 
 std::vector<int> select_tile_initial_point_indices(

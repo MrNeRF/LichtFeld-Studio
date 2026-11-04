@@ -5,6 +5,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/scene_partitioner.hpp"
+#include "core/tile_exposure.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -47,6 +48,47 @@ namespace {
         EXPECT_NEAR(fallback_bounds.max.x, 110.0f, 1e-4f);
     }
 
+    TEST(ScenePartitioner, VisibilityMaskUsesImageSpaceAndPreservesUnknownPixels) {
+        lfs::core::TileSpec tile;
+        tile.min = {0, 0, 0};
+        tile.max = {5, 10, 2};
+        lfs::core::TileCameraEvidence camera;
+        camera.width = 1000;
+        camera.height = 1000;
+        camera.pinhole = true;
+        for (int row = 0; row < 5; ++row) {
+            for (int column = 0; column < 5; ++column) {
+                camera.observations.emplace_back(2.0f, float(row), 1.0f);
+                camera.observation_pixels.emplace_back(150.0f + column * 20.0f,
+                                                       300.0f + row * 20.0f);
+                camera.observations.emplace_back(8.0f, float(row), 1.0f);
+                camera.observation_pixels.emplace_back(750.0f + column * 20.0f,
+                                                       300.0f + row * 20.0f);
+            }
+        }
+        const auto mask = lfs::core::estimate_tile_visibility_mask(tile, camera);
+        ASSERT_EQ(mask.weights.size(), 64u * 64u);
+        const auto at = [&](int x, int y) { return mask.weights[static_cast<size_t>(y) * 64 + x]; };
+        EXPECT_GT(at(12, 22), 0.9f);
+        EXPECT_LT(at(50, 22), 0.5f);
+        EXPECT_FLOAT_EQ(at(32, 60), 1.0f);
+    }
+
+    TEST(ScenePartitioner, VisibilityMaskNeedsTwoSidedEvidence) {
+        lfs::core::TileSpec tile;
+        tile.min = {0, 0, 0};
+        tile.max = {5, 10, 2};
+        lfs::core::TileCameraEvidence camera;
+        camera.width = 1000;
+        camera.height = 1000;
+        camera.pinhole = true;
+        for (int i = 0; i < 20; ++i) {
+            camera.observations.emplace_back(8.0f, 1.0f, 1.0f);
+            camera.observation_pixels.emplace_back(700.0f + i, 400.0f);
+        }
+        EXPECT_TRUE(lfs::core::estimate_tile_visibility_mask(tile, camera).weights.empty());
+    }
+
     TEST(ScenePartitioner, AdaptiveTilesFollowUnevenSurfaceDensity) {
         std::vector<float> coordinates;
         for (int i = 0; i < 80; ++i)
@@ -87,6 +129,71 @@ namespace {
             const float height = tile.max.y - tile.min.y;
             EXPECT_LT(std::max(width / height, height / width), 3.5f);
         }
+    }
+
+    TEST(ScenePartitioner, ImageSpaceEvidenceChangesAdaptiveCut) {
+        std::vector<float> coordinates;
+        std::vector<lfs::core::TileCameraEvidence> cameras(2);
+        for (int camera_index = 0; camera_index < 2; ++camera_index) {
+            auto& camera = cameras[camera_index];
+            camera.uid = camera_index;
+            camera.width = camera.height = 160;
+            // Native SfM pixels remain usable for distorted camera models.
+            camera.pinhole = false;
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    const glm::vec3 point{1.25f + 2.5f * x, 1.25f + 2.5f * y, 1.0f};
+                    camera.observations.push_back(point);
+                    camera.observation_pixels.emplace_back(10.0f + 30.0f * x, 20.0f);
+                    if (camera_index == 0)
+                        coordinates.insert(coordinates.end(), {point.x, point.y, point.z});
+                }
+            }
+        }
+        const lfs::core::SceneBounds bounds{{0, 0, 0}, {10, 10, 2}};
+        std::vector<lfs::core::TilePlanDiagnostics> diagnostics;
+        const auto tiles = lfs::core::generate_adaptive_tiles(
+            bounds, 2, 0.0f, bounds, cloud(coordinates), cameras, &diagnostics);
+        ASSERT_EQ(tiles.size(), 2);
+        ASSERT_EQ(diagnostics.size(), 2);
+        // Both axes have identical 3D support. A Y cut preserves more of each
+        // camera's observed image columns in both children.
+        EXPECT_GT(tiles[0].max.x - tiles[0].min.x,
+                  tiles[0].max.y - tiles[0].min.y);
+        EXPECT_EQ(diagnostics[0].image_evidence_views, 2);
+        EXPECT_GT(diagnostics[0].mean_image_coverage, 0.0f);
+
+        cameras[1].observation_pixels.assign(cameras[1].observations.size(),
+                                             glm::vec2{-1.0f, -1.0f});
+        diagnostics.clear();
+        const auto single_tile = lfs::core::generate_adaptive_tiles(
+            bounds, 1, 0.0f, bounds, cloud(coordinates), cameras, &diagnostics);
+        ASSERT_EQ(single_tile.size(), 1);
+        ASSERT_EQ(diagnostics.size(), 1);
+        EXPECT_EQ(diagnostics[0].image_evidence_views, 1);
+    }
+
+    TEST(ScenePartitioner, ImageCoverageProjectsPinholeObservationsWithoutPixels) {
+        lfs::core::TileCameraEvidence camera;
+        camera.uid = 0;
+        camera.center = {0.0f, 0.0f, 0.0f};
+        camera.world_to_camera = {1, 0, 0, 0, 0, 1, 0, 0,
+                                  0, 0, 1, 0, 0, 0, 0, 1};
+        camera.width = camera.height = 160;
+        camera.fx = camera.fy = 100.0f;
+        camera.cx = camera.cy = 80.0f;
+        camera.pinhole = true;
+        camera.observations = {{1, 1, 10}, {2, 1, 10}, {3, 1, 10}, {4, 1, 10}};
+        const lfs::core::SceneBounds bounds{{0, 0, 9}, {10, 10, 11}};
+        std::vector<lfs::core::TilePlanDiagnostics> diagnostics;
+        const auto tiles = lfs::core::generate_adaptive_tiles(
+            bounds, 1, 0.0f, bounds,
+            cloud({1, 1, 10, 2, 1, 10, 3, 1, 10, 4, 1, 10}),
+            {camera}, &diagnostics);
+        ASSERT_EQ(tiles.size(), 1);
+        ASSERT_EQ(diagnostics.size(), 1);
+        EXPECT_EQ(diagnostics[0].image_evidence_views, 1);
+        EXPECT_GE(diagnostics[0].observed_image_cells, 3);
     }
 
     TEST(ScenePartitioner, AdaptiveTilesBalanceViewAwareWorkAndKeepSharedViews) {
@@ -195,6 +302,151 @@ namespace {
         const auto without_track_support = lfs::core::select_tile_camera_uids(tile, cameras);
         EXPECT_EQ(std::find(without_track_support.begin(), without_track_support.end(), 11),
                   without_track_support.end());
+    }
+
+    TEST(ScenePartitioner, PlannerAndTrainingSelectSameAirspaceViews) {
+        const lfs::core::SceneBounds bounds{{-4, -4, 10}, {4, 4, 12}};
+        const lfs::core::TileSpec tile{bounds.min, bounds.max, {}, 0, 0, "tile_0_0"};
+        std::vector<lfs::core::TileCameraEvidence> cameras(6);
+        std::vector<float> coordinates;
+        for (int index = 0; index < 6; ++index) {
+            auto& view = cameras[index];
+            view.uid = index;
+            view.center = {0, 0, index == 4 ? 0.0f : (index == 5 ? -10.0f : -20.0f)};
+            view.world_to_camera = {1, 0, 0, 0, 0, 1, 0, 0,
+                                    0, 0, 1, 0, 0, 0, 0, 1};
+            view.fx = view.fy = 100;
+            view.cx = view.cy = 50;
+            view.width = view.height = 100;
+            view.pinhole = true;
+            if (index >= 4) continue;
+            for (int point = 0; point < 8; ++point) {
+                const glm::vec3 position{point < 4 ? -2.0f : 2.0f,
+                                         point % 2 == 0 ? -2.0f : 2.0f, 11.0f};
+                view.observations.push_back(position);
+                view.observation_pixels.emplace_back(20.0f + 10.0f * (point % 4),
+                                                     20.0f + 10.0f * (point / 4));
+                if (index == 0)
+                    coordinates.insert(coordinates.end(), {position.x, position.y, position.z});
+            }
+        }
+        lfs::core::TileCameraSelectionDiagnostics selection;
+        const auto selected = lfs::core::select_tile_camera_uids(tile, cameras, &selection);
+        EXPECT_EQ(selected, (std::vector<int>{0, 1, 2, 3, 4}));
+        EXPECT_EQ(selection.airspace_supported_views, 1);
+        EXPECT_FALSE(selection.sparse_fallback);
+
+        std::vector<lfs::core::TilePlanDiagnostics> planning;
+        const auto tiles = lfs::core::generate_adaptive_tiles(
+            bounds, 1, 0.0f, bounds, cloud(coordinates), cameras, &planning);
+        ASSERT_EQ(tiles.size(), 1);
+        ASSERT_EQ(planning.size(), 1);
+        const auto final_selected = lfs::core::select_tile_camera_uids(tiles[0], cameras);
+        EXPECT_EQ(final_selected, selected);
+        EXPECT_EQ(planning[0].estimated_selected_cameras,
+                  static_cast<int>(final_selected.size()));
+        EXPECT_EQ(planning[0].supporting_cameras,
+                  static_cast<int>(final_selected.size()));
+    }
+
+    TEST(ScenePartitioner, GlobalExposureUsesSharedTracksAndRejectsOutliers) {
+        std::vector<lfs::core::TileExposureSample> samples;
+        for (int point = 0; point < 40; ++point) {
+            const glm::vec3 position{static_cast<float>(point), 1.0f, 2.0f};
+            const float brightness = 0.20f + 0.004f * point;
+            samples.push_back({0, position, brightness});
+            samples.push_back({1, position, point < 5 ? 0.85f : brightness * 1.5f});
+            samples.push_back({2, position, brightness * 0.8f});
+            samples.push_back({3, {position.x, 9.0f, 9.0f}, brightness});
+        }
+        const auto result = lfs::core::estimate_tile_exposure(samples, {0, 1, 2, 3});
+        ASSERT_EQ(result.cameras.size(), 4);
+        EXPECT_EQ(result.shared_points, 40);
+        EXPECT_EQ(result.reliable_edges, 2);
+        EXPECT_EQ(result.connected_cameras, 3);
+        EXPECT_NEAR(result.cameras[0].gain, 1.0f, 0.02f);
+        EXPECT_NEAR(result.cameras[1].gain, 1.0f / 1.5f, 0.02f);
+        EXPECT_NEAR(result.cameras[2].gain, 1.0f / 0.8f, 0.02f);
+        EXPECT_EQ(result.cameras[3].gain, 1.0f);
+    }
+
+    TEST(ScenePartitioner, GlobalExposureKeepsWeakConnectionsUnchanged) {
+        std::vector<lfs::core::TileExposureSample> samples;
+        for (int point = 0; point < 7; ++point) {
+            const glm::vec3 position{static_cast<float>(point), 0.0f, 0.0f};
+            samples.push_back({0, position, 0.2f});
+            samples.push_back({1, position, 0.4f});
+        }
+        const auto result = lfs::core::estimate_tile_exposure(samples, {0, 1});
+        EXPECT_EQ(result.reliable_edges, 0);
+        EXPECT_EQ(result.connected_cameras, 0);
+        ASSERT_EQ(result.cameras.size(), 2);
+        EXPECT_EQ(result.cameras[0].gain, 1.0f);
+        EXPECT_EQ(result.cameras[1].gain, 1.0f);
+    }
+
+    TEST(ScenePartitioner, GlobalExposureCapsLargeCorrections) {
+        std::vector<lfs::core::TileExposureSample> samples;
+        for (int point = 0; point < 16; ++point) {
+            const glm::vec3 position{static_cast<float>(point), 0.0f, 0.0f};
+            samples.push_back({0, position, 0.1f});
+            samples.push_back({1, position, 0.9f});
+        }
+        const auto result = lfs::core::estimate_tile_exposure(samples, {0, 1});
+        ASSERT_EQ(result.cameras.size(), 2);
+        EXPECT_EQ(result.connected_cameras, 2);
+        EXPECT_NEAR(result.cameras[0].gain, 2.0f, 1e-5f);
+        EXPECT_NEAR(result.cameras[1].gain, 0.5f, 1e-5f);
+    }
+
+    TEST(ScenePartitioner, CameraSelectionRejectsEmptyProjectedViewsWhenTracksCoverTile) {
+        const lfs::core::TileSpec tile{{0, 0, 0}, {10, 10, 2}, {}, 0, 0, "tile"};
+        std::vector<lfs::core::TileCameraEvidence> cameras(12);
+        for (int index = 0; index < 12; ++index) {
+            auto& view = cameras[index];
+            view.uid = index;
+            view.center = {5, 5, -10};
+            view.world_to_camera = {1, 0, 0, 0, 0, 1, 0, 0,
+                                    0, 0, 1, 0, 0, 0, 0, 1};
+            view.fx = view.fy = 100;
+            view.cx = view.cy = 500;
+            view.width = view.height = 1000;
+            view.pinhole = true;
+            if (index >= 5) continue;
+            for (int point = 0; point < 16; ++point) {
+                view.observations.emplace_back(index == 4 ? 1.0f : (point < 8 ? 1.0f : 7.0f),
+                                               index == 4 ? 1.0f : (point < 8 ? 1.0f : 7.0f), 1.0f);
+                view.observation_pixels.emplace_back(index == 4 ? 500.0f : 150.0f + 30.0f * (point % 4),
+                                                     index == 4 ? 500.0f : 150.0f + 30.0f * (point / 4));
+            }
+        }
+        lfs::core::TileCameraSelectionDiagnostics diagnostics;
+        const auto selected = lfs::core::select_tile_camera_uids(tile, cameras, &diagnostics);
+        EXPECT_EQ(selected, (std::vector<int>{0, 1, 2, 3}));
+        EXPECT_FALSE(diagnostics.sparse_fallback);
+        EXPECT_EQ(diagnostics.covered_cells, diagnostics.observed_cells);
+        EXPECT_EQ(diagnostics.multi_view_covered_cells, diagnostics.multi_view_cells);
+    }
+
+    TEST(ScenePartitioner, CameraSelectionRescuesUndercoveredGeometry) {
+        const lfs::core::TileSpec tile{{0, 0, 0}, {10, 10, 2}, {}, 0, 0, "tile"};
+        std::vector<lfs::core::TileCameraEvidence> cameras(5);
+        for (int index = 0; index < 5; ++index) {
+            auto& view = cameras[index];
+            view.uid = index;
+            view.width = view.height = 1000;
+            for (int point = 0; point < (index == 4 ? 2 : 16); ++point) {
+                view.observations.emplace_back(index == 4 ? 9.0f : (point < 8 ? 1.0f : 6.0f),
+                                               index == 4 ? 9.0f : (point < 8 ? 1.0f : 6.0f), 1.0f);
+                view.observation_pixels.emplace_back(100.0f + 30.0f * (point % 4),
+                                                     100.0f + 30.0f * (point / 4));
+            }
+        }
+        lfs::core::TileCameraSelectionDiagnostics diagnostics;
+        const auto selected = lfs::core::select_tile_camera_uids(tile, cameras, &diagnostics);
+        EXPECT_NE(std::find(selected.begin(), selected.end(), 4), selected.end());
+        EXPECT_FALSE(diagnostics.sparse_fallback);
+        EXPECT_EQ(diagnostics.covered_cells, diagnostics.observed_cells);
     }
 
     TEST(ScenePartitioner, ProjectedBoxSelectsThinVisibleRegionBetweenRaySamples) {

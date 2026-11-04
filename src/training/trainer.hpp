@@ -682,6 +682,8 @@ namespace lfs::training {
         [[nodiscard]] std::optional<TrainingCropBoxGeometry> current_cropbox() const;
         // Crop box for this step, from the published snapshot or the scene.
         void refresh_cropbox_snapshot();
+        [[nodiscard]] core::Tensor tile_visibility_weight(
+            core::Camera& camera, int height, int width, cudaStream_t stream);
         // Adam steps of splats that this view does not see inside, in front of or behind the
         // crop box are scaled by cropbox_lr_scale.
         void install_cropbox_view_damping(
@@ -833,6 +835,8 @@ namespace lfs::training {
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> train_dataset_;
+        // Shared encoded-RGB brightness gains computed once before tile jobs.
+        std::unordered_map<int, float> tile_exposure_gains_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         // Released once train() has built its loader, which then holds the decoders.
@@ -1006,6 +1010,9 @@ namespace lfs::training {
         core::Tensor normal_consistency_partials_;
         core::Tensor normal_prior_depth_scalar_;
         core::Tensor roi_weight_map_;
+        // Low-resolution SfM visibility masks for sequential tile jobs. Keep the
+        // cached form small; expand only the current camera during a training step.
+        std::unordered_map<int, core::Tensor> tile_visibility_masks_;
         // The reported loss measures the image inside the crop box: its weight map (outside 0)
         // and the forward-only L1/D-SSIM over it, on loss readback iterations.
         core::Tensor roi_report_weight_map_;

@@ -32,6 +32,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/scene_partitioner.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -104,6 +105,7 @@
 #include <numeric>
 #include <nvtx3/nvToolsExt.h>
 #include <nvtx3/nvToolsExtCudaRt.h>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string_view>
 #include <thread>
@@ -1053,6 +1055,7 @@ namespace lfs::training {
         normal_consistency_partials_ = {};
         normal_prior_depth_scalar_ = {};
         roi_weight_map_ = {};
+        tile_visibility_masks_.clear();
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
@@ -1150,6 +1153,7 @@ namespace lfs::training {
         // Clear datasets (will be recreated)
         train_dataset_.reset();
         val_dataset_.reset();
+        tile_exposure_gains_.clear();
 
         // Reset flags
         pause_requested_ = false;
@@ -2044,6 +2048,55 @@ namespace lfs::training {
 
     void Trainer::refresh_cropbox_snapshot() {
         cropbox_ = current_cropbox();
+    }
+
+    core::Tensor Trainer::tile_visibility_weight(
+        core::Camera& camera, const int height, const int width, const cudaStream_t stream) {
+        if (!params_.tile_camera_uids_path || !params_.cropbox ||
+            camera.camera_model_type() != core::CameraModelType::PINHOLE ||
+            camera.is_undistort_prepared())
+            return {};
+
+        auto [it, inserted] = tile_visibility_masks_.try_emplace(camera.uid());
+        if (inserted) {
+            core::TileSpec tile;
+            for (int axis = 0; axis < 3; ++axis) {
+                tile.min[axis] = (*params_.cropbox)[axis];
+                tile.max[axis] = (*params_.cropbox)[axis + 3];
+            }
+            if (params_.cropbox_rotation)
+                tile.rotation_degrees = glm::vec3{
+                    (*params_.cropbox_rotation)[0],
+                    (*params_.cropbox_rotation)[1],
+                    (*params_.cropbox_rotation)[2]};
+            core::TileCameraEvidence evidence;
+            evidence.width = camera.camera_width();
+            evidence.height = camera.camera_height();
+            evidence.pinhole = camera.radial_distortion().numel() == 0 &&
+                               camera.tangential_distortion().numel() == 0;
+            const auto& observations = camera.sfm_observations();
+            const size_t sample_step = std::max<size_t>(1, (observations.size() + 511) / 512);
+            for (size_t index = 0; index < observations.size(); index += sample_step) {
+                const auto& observation = observations[index];
+                evidence.observations.emplace_back(observation.x, observation.y, observation.z);
+                evidence.observation_pixels.emplace_back(observation.u, observation.v);
+            }
+            auto visibility = core::estimate_tile_visibility_mask(tile, evidence);
+            if (!visibility.weights.empty()) {
+                auto cpu = core::Tensor::from_vector(
+                    visibility.weights,
+                    core::TensorShape{static_cast<size_t>(visibility.height),
+                                      static_cast<size_t>(visibility.width)},
+                    core::Device::CPU);
+                it->second = cpu.to(core::Device::CUDA, stream);
+            }
+        }
+        if (!it->second.is_valid()) return {};
+        it->second.sync_to_stream(stream);
+        auto weight = core::lanczos_resize_grayscale(
+            it->second, height, width, 2, stream);
+        weight.clamp_(0.0f, 1.0f);
+        return weight;
     }
 
     std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
@@ -3101,6 +3154,37 @@ namespace lfs::training {
             }
 
             train_dataset_size_ = train_dataset_->size();
+            tile_exposure_gains_.clear();
+            if (params.tile_exposure_gains_path) {
+                std::ifstream input(lfs::core::native_fs::native_path(*params.tile_exposure_gains_path));
+                if (!input) return std::unexpected("Cannot open tile exposure gains file");
+                const auto calibration = nlohmann::json::parse(input);
+                if (calibration.value("version", 0) != 1 ||
+                    calibration.value("dataset", std::string{}) !=
+                        lfs::core::path_to_utf8(params.dataset.data_path) ||
+                    calibration.value("domain", std::string{}) != "encoded_rgb" ||
+                    !calibration.contains("cameras") || !calibration["cameras"].is_array())
+                    return std::unexpected("Invalid tile exposure gains file");
+                std::unordered_map<int, std::pair<std::string, float>> by_uid;
+                for (const auto& item : calibration["cameras"]) {
+                    const int uid = item.at("uid").get<int>();
+                    const std::string name = item.at("image").get<std::string>();
+                    const float gain = item.at("gain").get<float>();
+                    if (!std::isfinite(gain) || gain < 0.5f || gain > 2.0f ||
+                        !by_uid.emplace(uid, std::pair{name, gain}).second)
+                        return std::unexpected("Tile exposure gains contain invalid or duplicate camera entries");
+                }
+                for (const auto& camera : source_cameras) {
+                    const auto found = by_uid.find(camera->uid());
+                    if (found == by_uid.end() || found->second.first != camera->image_name())
+                        return std::unexpected(std::format(
+                            "Tile exposure gains are missing image '{}' (UID {})",
+                            camera->image_name(), camera->uid()));
+                    tile_exposure_gains_.emplace(camera->uid(), found->second.second);
+                }
+                LOG_INFO("Loaded global exposure gains for {} tile cameras",
+                         tile_exposure_gains_.size());
+            }
 
             // If using Scene mode and no strategy yet, create one
             if (scene_ && !strategy_) {
@@ -7142,6 +7226,17 @@ namespace lfs::training {
                         };
                         if (roi_loss_weighting) {
                             launch_roi_map(step_params.cropbox_loss_weight, roi_weight_map_);
+                            // A tile job has a fixed crop box. Sparse SfM tracks label
+                            // image regions that confidently belong to another tile;
+                            // unknown regions, including sky, retain the ROI weight.
+                            if (step_params.cropbox_loss_weight == 0.0f) {
+                                auto visibility = tile_visibility_weight(
+                                    *cam, output.height, output.width, roi_stream);
+                                if (visibility.is_valid()) {
+                                    roi_weight_map_.mul_(visibility);
+                                    roi_weight_map_.sync_to_stream(core::getCurrentCUDAStream());
+                                }
+                            }
                             roi_weight = roi_weight_map_;
                             // Color variance weights its pixels like the photometric loss.
                             if (color_variance.weight > 0.0f)
@@ -9463,6 +9558,25 @@ namespace lfs::training {
                 // Keep the decoder lease alive until train_step has consumed it.
                 if (gt_image.dtype() == lfs::core::DataType::UInt8) {
                     gt_image.sync_to_stream(training_stream_);
+                }
+                if (!tile_exposure_gains_.empty()) {
+                    const auto found = tile_exposure_gains_.find(cam->uid());
+                    if (found == tile_exposure_gains_.end())
+                        throw std::runtime_error(std::format(
+                            "Missing global exposure gain for training camera {}", cam->uid()));
+                    const float gain = found->second;
+                    if (std::abs(gain - 1.0f) > 1e-5f) {
+                        if (gt_image.dtype() == lfs::core::DataType::UInt8) {
+                            auto corrected = gt_image.to(lfs::core::DataType::Float32);
+                            corrected.mul_(gain).clamp_(0.0f, 255.0f);
+                            gt_image = corrected.to(lfs::core::DataType::UInt8);
+                        } else {
+                            auto corrected = gt_image.clone();
+                            corrected.mul_(gain).clamp_(0.0f, 1.0f);
+                            gt_image = std::move(corrected);
+                        }
+                        gt_image.sync_to_stream(training_stream_);
+                    }
                 }
 
                 for (CUevent_st** event : {&example.depth_ready_event, &example.normal_ready_event}) {

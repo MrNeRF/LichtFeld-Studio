@@ -101,6 +101,7 @@ set(CORE_SOURCES
         scene.cpp
         scene_partitioner.cpp
         scene_tile_planner.cpp
+        tile_exposure.cpp
         session_breadcrumb.cpp
         uuid.cpp
         splat_simplify.cpp
