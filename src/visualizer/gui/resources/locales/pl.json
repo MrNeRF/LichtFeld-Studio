@@ -816,7 +816,8 @@
       "bg_modulation": "Wybiera tlo treningowe za przezroczystymi lub pustymi pikselami. Color uzywa wybranego stalego koloru. Modulation zmienia jednolite tlo RGB kolorami sinusoidalnymi. Image uzywa obrazu. Random generuje pikselowy szum RGB w kazdym kroku.",
       "invert_masks": "Odwraca znaczenie maski. Używaj, gdy czarno-białe maski oznaczają maskowany obszar przeciwnym kolorem.",
       "use_alpha_as_mask": "Uzywa przezroczystosci obrazu jako maski treningowej. Używaj, gdy obrazy RGBA juz zawieraja maske i oddzielne pliki nie są potrzebne.",
-      "steps_scaler": "Skaluje razem ustawienia treningu oparte na krokach. Auto uzywa okolo 100 iteracji na aktywny obraz treningowy, z minimum 30 000 iteracji."
+      "steps_scaler": "Skaluje razem ustawienia treningu oparte na krokach. Auto uzywa okolo 100 iteracji na aktywny obraz treningowy, z minimum 30 000 iteracji.",
+      "densify_vram": "Jak bardzo zagęszczanie może jeszcze urosnąć, zanim zabraknie VRAM, mierzone przy każdym udoskonaleniu. Pasek porównuje obecną liczbę Gaussowskich z maksymalną, która się mieści. Część VRAM zawsze pozostaje wolna na kroki treningu i udoskonalenia."
     },
     "section.masking": "Ustawienia Maski",
     "section.thresholds": "Progi",
@@ -1423,7 +1424,10 @@
     "edit_mode_discards_session": "Wejście w tryb edycji odrzuca wznawialną sesję treningową w iteracji {n}.",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "VRAM na zagęszczanie",
+    "densify_vram_left": "+%s Gaussowskich · wolne %s GiB",
+    "densify_vram_full": "Pełno przy %s Gaussowskich"
   },
   "tooltip": {
     "seq_camera_aspect": "Proporcje kamery",

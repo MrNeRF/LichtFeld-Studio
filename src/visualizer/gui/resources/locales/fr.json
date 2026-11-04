@@ -816,7 +816,8 @@
       "bg_modulation": "Choisit le fond d'entraînement derrière les pixels transparents ou vides. Color utilise la couleur fixe choisie. Modulation fait varier un fond RGB uni avec des couleurs sinusoïdales. Image utilise une image choisie. Random génère un bruit RGB par pixel à chaque étape.",
       "invert_masks": "Inverse le sens du masque. Utilisez-le lorsque vos masques noir et blanc utilisent la couleur opposée pour la région masquée.",
       "use_alpha_as_mask": "Utilise la transparence de l'image comme masque d'entraînement. Utilisez-le quand les images RGBA contiennent déjà le masque et qu'aucun fichier séparé n'est nécessaire.",
-      "steps_scaler": "Met à l'échelle ensemble les réglages basés sur des étapes. Auto utilise environ 100 itérations par image active, avec un minimum de 30 000 itérations."
+      "steps_scaler": "Met à l'échelle ensemble les réglages basés sur des étapes. Auto utilise environ 100 itérations par image active, avec un minimum de 30 000 itérations.",
+      "densify_vram": "Jusqu'où la densification peut encore croître avant de manquer de VRAM, mesuré à chaque raffinement. La barre compare les Gaussiens actuels au maximum qui tient. Un peu de VRAM reste toujours libre pour les étapes d'entraînement et les raffinements."
     },
     "section.masking": "Paramètres de Masque",
     "section.thresholds": "Seuils",
@@ -1423,7 +1424,10 @@
     "edit_mode_discards_session": "Le passage en mode édition abandonne la session d'entraînement reprenable à l'itération {n}.",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "VRAM de densification",
+    "densify_vram_left": "+%s Gaussiens · %s Gio libres",
+    "densify_vram_full": "Plein à %s Gaussiens"
   },
   "tooltip": {
     "seq_camera_aspect": "Proportions de la caméra",

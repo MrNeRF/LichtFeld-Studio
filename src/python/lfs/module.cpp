@@ -419,7 +419,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2388,6 +2388,19 @@ NB_MODULE(lichtfeld, m) {
             return tm ? tm->getMaxGaussians() : 0;
         },
         "Get maximum number of gaussians");
+
+    m.def(
+        "trainer_densification_vram", []() -> std::optional<nb::dict> {
+            const auto* tm = lfs::python::get_trainer_manager();
+            const auto room = tm ? tm->getDensificationVramRoom() : std::nullopt;
+            if (!room)
+                return std::nullopt;
+            nb::dict result;
+            result["capacity"] = room->capacity;
+            result["bytes_per_gaussian"] = room->bytes_per_gaussian;
+            return result;
+        },
+        "Gaussians that fit in VRAM and the VRAM each new one takes, as of the last refine (None before the first)");
 
     m.def(
         "trainer_num_splats", []() -> int {

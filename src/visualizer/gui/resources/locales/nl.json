@@ -816,7 +816,8 @@
       "bg_modulation": "Kiest de trainingsachtergrond achter transparante of lege pixels. Color gebruikt de geselecteerde vaste kleur. Modulation varieert een solide RGB-achtergrond met sinusvormige kleuren. Image gebruikt een afbeelding. Random genereert elke stap per-pixel RGB-ruis.",
       "invert_masks": "Draait de betekenis van het masker om. Gebruik dit wanneer je zwart-witmaskers de gemaskeerde regio met de tegenovergestelde kleur markeren.",
       "use_alpha_as_mask": "Gebruikt beeldtransparantie als trainingsmasker. Gebruik dit wanneer RGBA-afbeeldingen het masker al bevatten en aparte bestanden niet nodig zijn.",
-      "steps_scaler": "Schaalt step-gebaseerde trainingsinstellingen samen. Auto-modus gebruikt ongeveer 100 iteraties per actieve trainingsafbeelding, met een minimum van 30.000 iteraties."
+      "steps_scaler": "Schaalt step-gebaseerde trainingsinstellingen samen. Auto-modus gebruikt ongeveer 100 iteraties per actieve trainingsafbeelding, met een minimum van 30.000 iteraties.",
+      "densify_vram": "Hoe ver de verdichting nog kan groeien voordat het VRAM op is, gemeten bij elke verfijning. De balk vergelijkt de huidige Gaussians met het maximum dat past. Er blijft altijd wat VRAM vrij voor trainingsstappen en verfijningen."
     },
     "section.masking": "Maskerinstellingen",
     "section.thresholds": "Drempelwaarden",
@@ -1423,7 +1424,10 @@
     "edit_mode_discards_session": "Naar de bewerkingsmodus gaan verwijdert de hervatbare trainingssessie bij iteratie {n}.",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "VRAM voor verdichting",
+    "densify_vram_left": "+%s Gaussians · %s GiB vrij",
+    "densify_vram_full": "Vol bij %s Gaussians"
   },
   "tooltip": {
     "seq_camera_aspect": "Cameraverhouding",

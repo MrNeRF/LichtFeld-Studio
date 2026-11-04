@@ -2099,6 +2099,12 @@ namespace lfs::vis {
         return trainer_->getParams().optimization.max_cap;
     }
 
+    std::optional<lfs::training::DensificationVramRoom> TrainerManager::getDensificationVramRoom() const {
+        if (!trainer_)
+            return std::nullopt;
+        return lfs::training::densification_vram_room();
+    }
+
     std::vector<size_t> TrainerManager::getSaveSteps() const {
         if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->isLoaded())
             return param_mgr->copyActiveParams().save_steps;
