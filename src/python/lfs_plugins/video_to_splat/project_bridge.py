@@ -16,7 +16,7 @@ import lichtfeld as lf
 
 from ..environment import value as env_value
 from ..process_runner import run_cancellable_process
-from . import toolchain
+from . import masking, toolchain
 from .pipeline import ExtractParams, Hooks, PipelineError
 from .toolchain import Resolved
 
@@ -91,6 +91,36 @@ def confirm_download() -> bool:
     message = tr("video_to_splat.download_message").format(
         size_mb=toolchain.COLMAP_WINDOWS_SIZE_MB, url=toolchain.COLMAP_WINDOWS_URL, version=toolchain.COLMAP_VERSION)
     return _dialog_answer(tr("video_to_splat.download_title"), message, [accept, decline]) == accept
+
+
+def confirm_mask_setup(missing: list[str]) -> bool:
+    accept = tr("video_to_splat.mask_setup_accept")
+    decline = tr("video_to_splat.mask_setup_decline")
+    message = tr("video_to_splat.mask_setup_message").format(
+        packages=", ".join(missing) or "-", size_mb=masking.MODEL_SIZE_MB, url=masking.MODEL_URL)
+    return _dialog_answer(tr("video_to_splat.mask_setup_title"), message, [accept, decline]) == accept
+
+
+def mask_people(images: list[Path], masks_dir: Path, on_progress: Callable[[int, int], None],
+                should_cancel: Callable[[], bool], carry_state: bool) -> dict:
+    """Pipeline hook: install what RVM needs on consent, fetch the pinned model, write the masks."""
+    missing = masking.missing_packages()
+    model = masking.cached_model_path(cache_dir())
+    try:
+        if missing or not model.is_file():
+            if not confirm_mask_setup(missing):
+                return {"outcome": "skipped", "reason": tr("video_to_splat.mask_setup_declined")}
+            for package in missing:
+                lf.packages.install(package)
+            model = masking.ensure_model(cache_dir(), download=download_file)
+        matte = masking.RvmMatter(model)
+        masking.write_masks(images, masks_dir, matte, on_progress=on_progress, should_cancel=should_cancel,
+                            carry_state=carry_state)
+    except masking.MaskingCancelled:
+        return {"outcome": "cancelled"}
+    except Exception as exc:  # noqa: BLE001 - masking is optional; the run goes on without it
+        return {"outcome": "skipped", "reason": str(exc)}
+    return {"outcome": "completed", "masked": masking.count_masked_people(masks_dir)}
 
 
 def confirm_weak(ratio: float, registered: int, total: int) -> bool:
@@ -169,17 +199,22 @@ def create_project_and_wait(project: Path, dataset: Path, images_folder: str, *,
         time.sleep(poll_seconds)
 
 
-def start_training(mode: str, *, timeout: float = TRAINING_START_TIMEOUT,
+def start_training(mode: str, masked: bool = False, *, timeout: float = TRAINING_START_TIMEOUT,
                    dispatch_timeout: float = TRAINING_DISPATCH_TIMEOUT, poll_seconds: float = 0.25) -> None:
     """Start training on the UI thread and block until the trainer runs.
 
     Equirectangular cameras can only be rasterised with GUT; the trainer refuses them otherwise
-    (messages.err_non_pinhole). start_training itself returns after dispatch and reports failures
-    only through the trainer state, so a start that falls back to 'ready' is an error here."""
+    (messages.err_non_pinhole). People masks are applied in "ignore" mode so a walker is a hole in
+    the loss, not a black blob. Both go here and not at project creation, which resets the
+    parameters. start_training itself returns after dispatch and reports failures only through the
+    trainer state, so a start that falls back to 'ready' is an error here."""
 
     def start() -> None:
+        params = lf.optimization_params()
         if mode == "equirectangular":
-            lf.optimization_params().gut = True
+            params.gut = True
+        if masked:
+            params.mask_mode = lf.MaskMode.IGNORE
         lf.start_training()
 
     ask_on_ui_thread(start)
@@ -208,4 +243,5 @@ def build_hooks() -> Hooks:
         create_project=lambda project, dataset, images_folder: create_project_and_wait(project, dataset, images_folder),
         train=start_training,
         confirm_weak=confirm_weak,
+        mask_people=mask_people,
     )

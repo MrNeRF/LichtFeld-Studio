@@ -48,6 +48,19 @@
         </select>
       </div>
     </div>
+    <div class="impdlg-control-group" data-if="source_is_pipeline">
+      <span class="impdlg-field-label text-muted"></span>
+      <div class="impdlg-control-main">
+        <label class="impdlg-checkbox-label">
+          <input type="checkbox" data-checked="video_mask_people" />
+          <span>@tr:video_to_splat.mask_people</span>
+        </label>
+        <label class="impdlg-checkbox-label">
+          <input type="checkbox" data-checked="video_build_mesh" />
+          <span>@tr:video_to_splat.build_mesh</span>
+        </label>
+      </div>
+    </div>
     <div class="impdlg-control-group" data-if="source_is_pipeline && pipeline_running">
       <span class="impdlg-field-label text-muted">{{pipeline_stage}}</span>
       <div class="impdlg-control-main">

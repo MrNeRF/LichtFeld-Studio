@@ -22,7 +22,8 @@ class PipelineRunner:
     @staticmethod
     def _idle_status() -> dict:
         return {"active": False, "done": False, "cancelled": False, "error": "", "stage": "", "fraction": 0.0,
-                "message": "", "project": "", "work_dir": "", "frames": 0, "registered": 0, "mode": ""}
+                "message": "", "project": "", "work_dir": "", "frames": 0, "registered": 0, "mode": "",
+                "package_dir": ""}
 
     def start(self, request: pipeline.Request, hooks: pipeline.Hooks) -> dict:
         with self._lock:
@@ -43,7 +44,8 @@ class PipelineRunner:
                 try:
                     state = self._run(request, hooks, on_progress=on_progress, should_cancel=cancel.is_set)
                     if state is not None:
-                        outcome.update(frames=state.frames, registered=state.registered, mode=state.mode)
+                        outcome.update(frames=state.frames, registered=state.registered, mode=state.mode,
+                                       package_dir=getattr(state, "package_dir", "") or "")
                 except (pipeline.PipelineCancelled, pipeline.PipelineStopped):
                     outcome["cancelled"] = True
                 except pipeline.PipelineError as exc:

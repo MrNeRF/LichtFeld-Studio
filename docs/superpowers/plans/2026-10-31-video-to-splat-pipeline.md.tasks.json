@@ -95,7 +95,21 @@
       "status": "completed",
       "blockedBy": [11],
       "description": "**Goal:** Start, watch and cancel a run from an agent without the dialog.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/runner.py\", \"src/python/lfs_plugins/video_to_splat/mcp_tools.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_runner.py -q\", \"acceptanceCriteria\": [\"start validates inputs and refuses while busy\", \"status reports stage and result\", \"cancel stops COLMAP\"]}\n```"
+    },
+    {
+      "id": 15,
+      "subject": "Task 15: Mask people automatically",
+      "status": "completed",
+      "blockedBy": [14],
+      "description": "**Goal:** Walkers leave holes instead of smears.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/masking.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_masking.py tests/python/test_video_to_splat_bridge.py -q\", \"acceptanceCriteria\": [\"masks written with 0 = ignore and training in ignore mode\", \"declined or failed setup skips masking\"]}\n```"
+    },
+    {
+      "id": 16,
+      "subject": "Task 16: Package and mesh outputs",
+      "status": "completed",
+      "blockedBy": [14],
+      "description": "**Goal:** sparse.ply, cameras.json and an opt-in dense mesh in package/.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/sfm.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_video_to_splat_planning.py -q\", \"acceptanceCriteria\": [\"sparse.ply and cameras.json after every run\", \"dense chain runs in order; a failing tool is recorded, the splat is still built\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-03T19:30:00Z"
+  "lastUpdated": "2026-11-03T20:40:00Z"
 }

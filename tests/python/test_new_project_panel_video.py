@@ -195,6 +195,7 @@ def test_do_create_with_video_starts_pipeline(panel_env, monkeypatch):
     assert captured["request"].project == panel._target_path()
     assert captured["request"].project.name == "room.licht"
     assert captured["request"].mode_override == "auto" and captured["request"].preset == "balanced"
+    assert captured["request"].mask_people is True and captured["request"].build_mesh is False
     # the panel stayed open to show progress and no direct project_create happened here
     assert all(call[0] != "create" for call in state.calls)
     assert panel._pipeline_running is True
@@ -430,3 +431,26 @@ def test_photos_operator_opens_dialog_on_chosen_folder(panel_env, monkeypatch, t
     monkeypatch.setattr(state.lf.ui, "open_folder_dialog", lambda title, start="": "", raising=False)
     assert NewProjectFromPhotosOperator().execute(None) == {"CANCELLED"}
     assert NewProjectFromVideoOperator.label == "menu.file.new_project_from_video"
+
+
+def test_mask_and_mesh_options_reach_the_request(panel_env, monkeypatch):
+    module, panel, state = panel_env
+    panel.show("D:/clips/room.mp4")
+    panel._set_name("room")
+    panel._set_video_mask_people(False)
+    panel._set_video_build_mesh(True)
+    captured = {}
+    started = threading.Event()
+
+    def fake_run(request, hooks, *, on_progress, should_cancel):
+        captured["request"] = request
+        started.set()
+
+    monkeypatch.setattr(module.v2s_pipeline, "run", fake_run)
+    monkeypatch.setattr(module.v2s_bridge, "build_hooks", lambda: object())
+    panel._on_do_create()
+    assert started.wait(5)
+    _wait_for_thread(panel)
+    assert captured["request"].mask_people is False and captured["request"].build_mesh is True
+    panel.show("D:/clips/other.mp4")
+    assert panel._video_mask_people is True and panel._video_build_mesh is False  # show() resets the options

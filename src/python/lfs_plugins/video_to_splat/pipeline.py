@@ -24,9 +24,10 @@ from . import sfm
 from .text import _tr
 from .toolchain import Resolved
 
-STAGE_NAMES = ["toolchain", "extract", "features", "match", "map", "level", "create_project", "train"]
+STAGE_NAMES = ["toolchain", "extract", "mask", "features", "match", "map", "level", "package", "mesh",
+               "create_project", "train"]
 COLMAP_STAGES = ("features", "match", "map")
-TOOL_STAGES = COLMAP_STAGES + ("level",)  # every stage that needs the COLMAP binary
+TOOL_STAGES = COLMAP_STAGES + ("level", "package", "mesh")  # every stage that needs the COLMAP binary
 STATE_FILE = "pipeline.json"
 EXTRACTION_REPORT = "extraction_metadata.json"
 DATASET_DIR = "dataset"
@@ -69,6 +70,8 @@ class Request:
     mode_override: probe_mod.ModeOverride = "auto"
     preset: str = probe_mod.DEFAULT_PRESET
     use_gpu: bool = True
+    mask_people: bool = True   # RVM people masks, consumed by training in "ignore" mode
+    build_mesh: bool = False   # COLMAP dense stereo + Poisson + texturing; slow and needs CUDA kernels
 
     @property
     def is_photo_set(self) -> bool:
@@ -77,7 +80,7 @@ class Request:
 
     def fingerprint(self) -> str:
         facts = {"video": str(self.video), "mtime": _mtime(self.video), "mode": self.mode_override,
-                 "preset": self.preset, "gpu": self.use_gpu}
+                 "preset": self.preset, "gpu": self.use_gpu, "mask": self.mask_people, "mesh": self.build_mesh}
         if self.is_photo_set:
             facts["photos"] = [p.name for p in probe_mod.list_photos(self.video)]
         raw = json.dumps(facts, sort_keys=True)
@@ -110,9 +113,13 @@ class Hooks:
     extract: Callable[[ExtractParams, Callable[[int, int, int], None], Callable[[], bool]], dict]
     run: Callable[[list[str], Callable[[str], None], Callable[[], bool]], CompletedProcess]
     create_project: Callable[[Path, Path, str], None]
-    train: Callable[[str], None]  # receives the camera mode
+    train: Callable[[str, bool], None]  # receives the camera mode and whether people masks exist
     confirm_weak: Callable[[float, int, int], bool]
     free_bytes: Callable[[Path], int] = lambda path: shutil.disk_usage(path).free
+    # (images, masks_dir, on_progress(current, total), should_cancel, carry_state) -> {outcome, masked, reason}
+    mask_people: Callable[[list[Path], Path, Callable[[int, int], None], Callable[[], bool], bool], dict] = (
+        lambda images, masks_dir, on_progress, should_cancel, carry_state: {"outcome": "skipped",
+                                                                            "reason": "no masking hook"})
 
 
 @dataclass
@@ -123,6 +130,7 @@ class State:
     frames: int = 0
     registered: int = 0
     model_dir: str = ""
+    package_dir: str = ""
     use_gpu: Optional[bool] = None  # set to False once a COLMAP stage had to fall back to the CPU
     version: int = STATE_VERSION
 
@@ -152,7 +160,7 @@ class State:
         completed = [entry for entry in raw.get("completed", []) if isinstance(entry, dict) and "name" in entry]
         return cls(fingerprint=fingerprint, completed=completed, mode=str(raw.get("mode", "")),
                    frames=int(raw.get("frames", 0) or 0), registered=int(raw.get("registered", 0) or 0),
-                   model_dir=str(raw.get("model_dir", "")),
+                   model_dir=str(raw.get("model_dir", "")), package_dir=str(raw.get("package_dir", "")),
                    use_gpu=raw.get("use_gpu") if isinstance(raw.get("use_gpu"), bool) else None)
 
 
@@ -317,8 +325,47 @@ def _run_colmap_and_train(request: Request, hooks: Hooks, state: State, done: se
                           colmap: Optional[Resolved], images: Path, database: Path, sparse: Path, tail: list[str],
                           log: Callable[[str], None], report: Callable[[str, float, str], None],
                           check_cancel: Callable[[], None], should_cancel: Callable[[], bool]) -> State:
-    """Stages after the frames exist: COLMAP, leveling, project creation, training."""
+    """Stages after the frames exist: masking, COLMAP, leveling, package, mesh, project creation, training."""
     colmap_pending = any(stage not in done for stage in TOOL_STAGES)
+
+    def run_tool(stage: str, cmd: list[str]):
+        """Run one optional COLMAP command with log and progress plumbing; cancel becomes PipelineCancelled."""
+        def on_output(line: str) -> None:
+            log(line)
+            report(stage, 0.0, _tr("video_to_splat.progress.colmap", "COLMAP {tool}", tool=cmd[1]))
+
+        try:
+            return hooks.run(cmd, on_output, should_cancel)
+        except ProcessCancelled:
+            raise PipelineCancelled()
+
+    # People masks: a hole in training instead of a smeared walker. Optional and never fatal.
+    if "mask" not in done:
+        masks_dir = request.dataset / "masks"
+        if request.mask_people:
+            report("mask", 0.0, _tr("video_to_splat.progress.masking", "Masking people"))
+            frames = sorted(p for p in images.iterdir() if p.suffix.lower() in probe_mod.PHOTO_EXTENSIONS)
+
+            def mask_progress(current: int, total: int) -> None:
+                report("mask", current / total if total else 0.0,
+                       _tr("video_to_splat.progress.mask_frame", "Frame {current}/{total}", current=current,
+                           total=total))
+
+            result = hooks.mask_people(frames, masks_dir, mask_progress, should_cancel, not request.is_photo_set)
+            outcome = result.get("outcome")
+            if outcome == "cancelled":
+                raise PipelineCancelled()
+            if outcome == "completed":
+                state.mark("mask", applied=True, masked=int(result.get("masked", 0) or 0))
+            else:
+                reason = str(result.get("reason", "") or "")
+                log(_tr("video_to_splat.progress.mask_skipped", "People masking skipped: {reason}", reason=reason))
+                shutil.rmtree(masks_dir, ignore_errors=True)
+                state.mark("mask", applied=False, reason=reason)
+        else:
+            state.mark("mask", applied=False, reason="disabled")
+        state.save(request.work_dir)
+        check_cancel()
 
     # COLMAP stages. A stage that exits 0 but leaves the database empty is rerun on the CPU once: the official
     # CUDA build has no kernels for older GPUs and fails every image without a nonzero exit code.
@@ -422,6 +469,48 @@ def _run_colmap_and_train(request: Request, hooks: Hooks, state: State, done: se
         state.save(request.work_dir)
         check_cancel()
 
+    # Package: the sparse points and camera poses in formats other tools read.
+    package = request.work_dir / sfm.PACKAGE_DIR
+    if "package" not in done:
+        assert colmap is not None
+        report("package", 0.0, _tr("video_to_splat.progress.packaging", "Writing sparse.ply and cameras.json"))
+        package.mkdir(parents=True, exist_ok=True)
+        completed = run_tool("package", sfm.plan_package_command(colmap=colmap.path, dataset=request.dataset,
+                                                                 package=package))
+        reason = "" if completed.returncode == 0 else _tr(
+            "video_to_splat.error.tool_failed", "COLMAP {tool} failed with exit code {code}",
+            tool="model_converter", code=completed.returncode)
+        if reason:
+            log(reason)
+        sfm.write_cameras_json(canonical, package / "cameras.json")
+        state.package_dir = str(package)
+        state.mark("package", applied=not reason, reason=reason)
+        state.save(request.work_dir)
+        check_cancel()
+
+    # Mesh: dense stereo needs COLMAP's CUDA kernels; when they are missing the splat is still built.
+    if "mesh" not in done:
+        if request.build_mesh:
+            assert colmap is not None
+            report("mesh", 0.0, _tr("video_to_splat.progress.meshing", "Building the textured mesh"))
+            dense = request.work_dir / sfm.DENSE_DIR
+            commands = sfm.plan_mesh_commands(colmap=colmap.path, dataset=request.dataset, dense=dense, package=package)
+            reason = ""
+            for index, cmd in enumerate(commands):
+                report("mesh", index / len(commands), _tr("video_to_splat.progress.colmap", "COLMAP {tool}",
+                                                           tool=cmd[1]))
+                completed = run_tool("mesh", cmd)
+                if completed.returncode != 0:
+                    reason = _tr("video_to_splat.error.tool_failed", "COLMAP {tool} failed with exit code {code}",
+                                 tool=cmd[1], code=completed.returncode)
+                    log(reason)
+                    break
+            state.mark("mesh", applied=not reason, reason=reason)
+        else:
+            state.mark("mesh", applied=False, reason="disabled")
+        state.save(request.work_dir)
+        check_cancel()
+
     if "create_project" not in done:
         report("create_project", 0.0, _tr("video_to_splat.progress.creating_project", "Creating project"))
         hooks.create_project(request.project, request.dataset, sfm.IMAGES_DIR)
@@ -431,7 +520,8 @@ def _run_colmap_and_train(request: Request, hooks: Hooks, state: State, done: se
 
     if "train" not in done:
         report("train", 0.0, _tr("video_to_splat.progress.starting_training", "Starting training"))
-        hooks.train(mode)
+        masked = any(entry.get("applied") for entry in state.completed if entry["name"] == "mask")
+        hooks.train(mode, bool(masked))
         state.mark("train")
         state.save(request.work_dir)
     report("train", 1.0, _tr("video_to_splat.progress.done", "Done: {registered}/{total} frames registered",

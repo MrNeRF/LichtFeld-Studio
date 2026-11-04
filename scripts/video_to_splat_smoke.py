@@ -5,8 +5,9 @@
 Set LFS_V2S_VIDEO to an equirectangular (or perspective) MP4 and optionally
 LFS_V2S_PROJECT to a destination folder; the project is written there as
 v2s-smoke.licht with its frames in v2s-smoke/. LFS_V2S_PRESET (fast, balanced,
-high) and LFS_V2S_MODE (auto, on, off) tune the run. Prints the registration
-ratio and exits non-zero when it is under 90 percent.
+high), LFS_V2S_MODE (auto, on, off), LFS_V2S_MASK (1/0, people masking) and
+LFS_V2S_MESH (1/0, dense mesh) tune the run. Prints the registration ratio and
+exits non-zero when it is under 90 percent.
 """
 import os
 import sys
@@ -26,6 +27,8 @@ request = pipeline.Request(
     project=project,
     mode_override=os.environ.get("LFS_V2S_MODE", "auto"),
     preset=os.environ.get("LFS_V2S_PRESET", "balanced"),
+    mask_people=os.environ.get("LFS_V2S_MASK", "1") not in ("0", "false", "no"),
+    build_mesh=os.environ.get("LFS_V2S_MESH", "0") in ("1", "true", "yes"),
 )
 done = threading.Event()
 outcome = {}

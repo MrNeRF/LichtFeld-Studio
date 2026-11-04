@@ -14,13 +14,14 @@ sys.path.insert(0, str(ROOT / "src" / "python"))
 
 
 @pytest.fixture
-def lf_stub(monkeypatch):
+def lf_stub(monkeypatch, tmp_path):
     for name in list(sys.modules):
         if name == "lfs_plugins" or name.startswith("lfs_plugins."):
             sys.modules.pop(name, None)
     state = SimpleNamespace(scheduled=[], dialogs=[], created=[], loaded=[], import_states=[], started=0,
                             settings={"colmap_path": "D:/tools/colmap/bin/colmap.exe"}, extract_kwargs=None,
-                            trainer_states=["starting", "running"], optimization=SimpleNamespace(gut=False))
+                            trainer_states=["starting", "running"],
+                            optimization=SimpleNamespace(gut=False, mask_mode="NONE"), installed=[])
 
     def schedule(cb):
         state.scheduled.append(cb)
@@ -58,12 +59,14 @@ def lf_stub(monkeypatch):
     stub.load_file = lambda **kw: state.loaded.append(kw)
     stub.start_training = lambda: setattr(state, "started", state.started + 1)
     stub.trainer_state = lambda: state.trainer_states.pop(0) if len(state.trainer_states) > 1 else state.trainer_states[0]
+    stub.MaskMode = SimpleNamespace(IGNORE="IGNORE", NONE="NONE")
+    stub.packages = SimpleNamespace(install=lambda name: state.installed.append(name) or "ok")
     stub.optimization_params = lambda: state.optimization
     stub.is_training_active = lambda: False
     stub.plugins = SimpleNamespace(settings=lambda name: Settings())
     stub.video = SimpleNamespace(probe=lambda p: {"width": 1}, extract_frames=extract_frames)
     monkeypatch.setitem(sys.modules, "lichtfeld", stub)
-    monkeypatch.setenv("LFS_RESOLVED_CACHE_DIR", "C:/fake-cache")
+    monkeypatch.setenv("LFS_RESOLVED_CACHE_DIR", str(tmp_path / "cache"))
     module = import_module("lfs_plugins.video_to_splat.project_bridge")
     return module, state
 
@@ -193,14 +196,14 @@ def test_extract_forwards_params(lf_stub):
     assert kwargs["sharpness_threshold"] == 0.0
 
 
-def test_build_hooks_reads_settings_and_cache(lf_stub):
+def test_build_hooks_reads_settings_and_cache(lf_stub, tmp_path):
     bridge, state = lf_stub
     hooks = bridge.build_hooks()
     assert hooks.probe is bridge.lf.video.probe
     assert hooks.train is bridge.start_training
     assert hooks.extract is bridge.extract
     assert hooks.confirm_weak is bridge.confirm_weak
-    assert bridge.cache_dir() == Path("C:/fake-cache")
+    assert bridge.cache_dir() == tmp_path / "cache"
     assert bridge.configured_colmap_path() == "D:/tools/colmap/bin/colmap.exe"
 
 
@@ -216,3 +219,73 @@ def test_resolve_colmap_wraps_toolchain_errors(lf_stub, monkeypatch):
     with pytest.raises(bridge.PipelineError) as err:
         bridge.resolve_colmap(lambda msg: None)
     assert "Q:/missing/colmap.exe" in str(err.value).replace("\\", "/")
+
+
+def test_start_training_applies_people_masks_in_ignore_mode(lf_stub):
+    # project_create resets the parameters, so the mask mode is set right before training starts.
+    bridge, state = lf_stub
+    bridge.start_training("equirectangular", True, poll_seconds=0)
+    assert state.optimization.mask_mode == "IGNORE" and state.optimization.gut is True
+
+
+def test_start_training_leaves_mask_mode_alone_without_masks(lf_stub):
+    bridge, state = lf_stub
+    bridge.start_training("perspective", False, poll_seconds=0)
+    assert state.optimization.mask_mode == "NONE"
+
+
+def test_mask_people_sets_up_packages_and_model_on_consent(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import masking
+
+    monkeypatch.setattr(masking, "missing_packages", lambda: ["onnxruntime"])
+    downloaded = []
+
+    def download(url, dest, on_progress):
+        downloaded.append(url)
+        dest.write_bytes(b"model")
+
+    monkeypatch.setattr(bridge, "download_file", download)
+    import hashlib
+
+    monkeypatch.setattr(masking, "MODEL_SHA256", hashlib.sha256(b"model").hexdigest())
+    written = []
+
+    class FakeMatter:
+        def __init__(self, path):
+            written.append(("model", path))
+
+    monkeypatch.setattr(masking, "RvmMatter", FakeMatter)
+    monkeypatch.setattr(masking, "write_masks", lambda images, masks_dir, matte, **kw: written.append(("masks", len(images))) or len(images))
+    monkeypatch.setattr(masking, "count_masked_people", lambda masks_dir: 3)
+    images = [tmp_path / "a.jpg", tmp_path / "b.jpg"]
+    result = bridge.mask_people(images, tmp_path / "masks", lambda c, t: None, lambda: False, True)
+    assert result == {"outcome": "completed", "masked": 3}
+    assert state.installed == ["onnxruntime"]
+    assert downloaded == [masking.MODEL_URL]
+    assert state.dialogs[0][0] == "video_to_splat.mask_setup_title"
+    assert written == [("model", masking.cached_model_path(tmp_path / "cache")), ("masks", 2)]
+
+
+def test_mask_people_declined_is_skipped_not_fatal(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import masking
+
+    monkeypatch.setattr(masking, "missing_packages", lambda: ["numpy", "pillow", "onnxruntime"])
+    bridge.lf.ui.confirm_dialog = lambda title, message, buttons, callback, style="info": callback(buttons[1])
+    result = bridge.mask_people([tmp_path / "a.jpg"], tmp_path / "masks", lambda c, t: None, lambda: False, True)
+    assert result["outcome"] == "skipped" and state.installed == []
+
+
+def test_mask_people_reports_setup_failures_as_skipped(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import masking
+
+    monkeypatch.setattr(masking, "missing_packages", lambda: [])
+
+    def failing_download(url, dest, on_progress):
+        raise OSError("offline")
+
+    monkeypatch.setattr(bridge, "download_file", failing_download)
+    result = bridge.mask_people([tmp_path / "a.jpg"], tmp_path / "masks", lambda c, t: None, lambda: False, True)
+    assert result["outcome"] == "skipped" and "offline" in result["reason"]

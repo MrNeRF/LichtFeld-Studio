@@ -36,6 +36,9 @@ class Fakes:
         self.gpu_features_ok = True
         self.gpu_matches_ok = True
         self.align_ok = True
+        self.mask_outcome = "completed"
+        self.mask_calls = []
+        self.dense_rc = 0  # patch_match_stereo needs CUDA kernels the GPU may lack
 
     def resolve_colmap(self, on_progress):
         self.calls.append("toolchain")
@@ -69,6 +72,18 @@ class Fakes:
             gpu = cmd[cmd.index("--FeatureMatching.use_gpu") + 1] == "1"
             rows = 40 if (self.gpu_matches_ok or not gpu) else 0
             write_colmap_database(database, geometry_rows=[rows] * (self.frames - 1))
+        if cmd[1] == "model_converter":
+            Path(cmd[cmd.index("--output_path") + 1]).write_bytes(b"ply\n")
+        if cmd[1] == "patch_match_stereo" and self.dense_rc != 0:
+            return CompletedProcess(cmd, self.dense_rc, "", "")
+        if cmd[1] == "stereo_fusion":
+            Path(cmd[cmd.index("--output_path") + 1]).write_bytes(b"ply\n")
+        if cmd[1] == "poisson_mesher":
+            Path(cmd[cmd.index("--output_path") + 1]).write_bytes(b"ply\n")
+        if cmd[1] == "mesh_texturer":
+            out = Path(cmd[cmd.index("--output_path") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "mesh.ply").write_bytes(b"ply\n")
         if cmd[1] == "model_orientation_aligner":
             src = Path(cmd[cmd.index("--input_path") + 1])
             dst = Path(cmd[cmd.index("--output_path") + 1])
@@ -88,9 +103,23 @@ class Fakes:
         self.calls.append("create_project")
         self.create_args = (project, dataset, images_folder)
 
-    def train(self, mode):
+    def train(self, mode, masked):
         self.calls.append("train")
         self.train_mode = mode
+        self.train_masked = masked
+
+    def mask_people(self, images, masks_dir, on_progress, should_cancel, carry_state):
+        self.calls.append("mask_people")
+        self.mask_calls.append((list(images), masks_dir, carry_state))
+        if self.mask_outcome == "completed":
+            masks_dir.mkdir(parents=True, exist_ok=True)
+            for image in images:
+                (masks_dir / (image.stem + ".png")).write_bytes(b"\x89PNG")
+            on_progress(len(images), len(images))
+            return {"outcome": "completed", "masked": 7}
+        if self.mask_outcome == "cancelled":
+            return {"outcome": "cancelled"}
+        return {"outcome": "skipped", "reason": "declined"}
 
     def confirm_weak(self, ratio, registered, total):
         self.calls.append("confirm_weak")
@@ -100,7 +129,7 @@ class Fakes:
         return pipeline.Hooks(
             resolve_colmap=self.resolve_colmap, probe=self.probe, extract=self.extract, run=self.run,
             create_project=self.create_project, train=self.train, confirm_weak=self.confirm_weak,
-            free_bytes=lambda path: 100 * 1024 ** 3,
+            free_bytes=lambda path: 100 * 1024 ** 3, mask_people=self.mask_people,
         )
 
 
@@ -155,11 +184,15 @@ def test_full_run_order_and_state(tmp_path, clip):
     fakes = Fakes(project)
     state = pipeline.run(make_request(project, clip), fakes.hooks(),
                          on_progress=lambda *a: fakes.progress.append(a), should_cancel=fakes.cancel.is_set)
-    assert fakes.calls == ["toolchain", "extract", "feature_extractor", "sequential_matcher", "global_mapper",
-                           "model_orientation_aligner", "create_project", "train"]
+    assert fakes.calls == ["toolchain", "extract", "mask_people", "feature_extractor", "sequential_matcher",
+                           "global_mapper", "model_orientation_aligner", "model_converter", "create_project", "train"]
     saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert [s["name"] for s in saved["completed"]] == pipeline.STAGE_NAMES
     assert pipeline.STAGE_NAMES.index("level") == pipeline.STAGE_NAMES.index("map") + 1
+    by_name = {s["name"]: s for s in saved["completed"]}
+    assert by_name["mask"]["applied"] is True and by_name["mask"]["masked"] == 7
+    assert by_name["package"]["applied"] is True
+    assert by_name["mesh"]["applied"] is False and by_name["mesh"]["reason"] == "disabled"
     assert saved["mode"] == "equirectangular"
     assert saved["registered"] == 45 and saved["frames"] == 50
     assert state.registered == 45 and state.frames == 50
@@ -171,6 +204,7 @@ def test_full_run_order_and_state(tmp_path, clip):
     assert fakes.extract_params.dataset == tmp_path / "proj" / "dataset"
     assert fakes.create_args == (project, tmp_path / "proj" / "dataset", "images")
     assert fakes.train_mode == "equirectangular"
+    assert fakes.train_masked is True  # masks were written, so training must run in ignore mode
 
 
 def test_rerun_skips_completed_stages(tmp_path, clip):
@@ -179,12 +213,13 @@ def test_rerun_skips_completed_stages(tmp_path, clip):
     pipeline.run(make_request(project, clip), first.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     # Truncate state so only toolchain..match are complete, as if map crashed.
     saved = json.loads((work_dir(project) / "pipeline.json").read_text())
-    saved["completed"] = saved["completed"][:4]
+    saved["completed"] = saved["completed"][:5]  # toolchain, extract, mask, features, match
     (work_dir(project) / "pipeline.json").write_text(json.dumps(saved))
     second = Fakes(project)
     pipeline.run(make_request(project, clip), second.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     # COLMAP must still be located because global_mapper has to run, but frames and the database are kept.
-    assert second.calls == ["toolchain", "global_mapper", "model_orientation_aligner", "create_project", "train"]
+    assert second.calls == ["toolchain", "global_mapper", "model_orientation_aligner", "model_converter",
+                            "create_project", "train"]
 
 
 def test_changed_preset_invalidates_resume(tmp_path, clip):
@@ -250,7 +285,8 @@ def test_weak_reconstruction_can_continue(tmp_path, clip):
     fakes = Fakes(project, frames=50, registered=20)
     fakes.confirmed_weak = True
     pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
-    assert fakes.calls[-4:] == ["confirm_weak", "model_orientation_aligner", "create_project", "train"]
+    assert fakes.calls[-5:] == ["confirm_weak", "model_orientation_aligner", "model_converter", "create_project",
+                                "train"]
 
 
 def test_strong_reconstruction_does_not_ask(tmp_path, clip):
@@ -329,7 +365,7 @@ def test_cancel_before_map_keeps_state(tmp_path, clip):
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
                      should_cancel=fakes.cancel.is_set)
     saved = json.loads((work_dir(project) / "pipeline.json").read_text())
-    assert [s["name"] for s in saved["completed"]] == ["toolchain", "extract", "features", "match"]
+    assert [s["name"] for s in saved["completed"]] == ["toolchain", "extract", "mask", "features", "match"]
 
 
 def test_cancel_between_stages_is_honoured(tmp_path, clip):
@@ -400,8 +436,9 @@ def test_gpu_feature_extraction_without_features_falls_back_to_cpu(tmp_path, cli
     messages = []
     pipeline.run(make_request(project, clip), fakes.hooks(),
                  on_progress=lambda stage, frac, msg, tail: messages.append((stage, msg)), should_cancel=lambda: False)
-    assert fakes.calls == ["toolchain", "extract", "feature_extractor", "feature_extractor", "sequential_matcher",
-                           "global_mapper", "model_orientation_aligner", "create_project", "train"]
+    assert fakes.calls == ["toolchain", "extract", "mask_people", "feature_extractor", "feature_extractor",
+                           "sequential_matcher", "global_mapper", "model_orientation_aligner", "model_converter",
+                           "create_project", "train"]
     assert gpu_flags(fakes) == ["1", "0", "0"]
     assert any(stage == "features" and "CPU" in msg for stage, msg in messages)
     saved = json.loads((work_dir(project) / "pipeline.json").read_text())
@@ -413,8 +450,9 @@ def test_gpu_matching_without_pairs_falls_back_to_cpu(tmp_path, clip):
     fakes = Fakes(project)
     fakes.gpu_matches_ok = False
     pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
-    assert fakes.calls == ["toolchain", "extract", "feature_extractor", "sequential_matcher", "sequential_matcher",
-                           "global_mapper", "model_orientation_aligner", "create_project", "train"]
+    assert fakes.calls == ["toolchain", "extract", "mask_people", "feature_extractor", "sequential_matcher",
+                           "sequential_matcher", "global_mapper", "model_orientation_aligner", "model_converter",
+                           "create_project", "train"]
     assert gpu_flags(fakes) == ["1", "1", "0"]
 
 
@@ -436,11 +474,12 @@ def test_cpu_fallback_persists_across_resume(tmp_path, clip):
                      should_cancel=first.cancel.is_set)
     second = Fakes(project)
     pipeline.run(make_request(project, clip), second.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
-    assert second.calls == ["toolchain", "global_mapper", "model_orientation_aligner", "create_project", "train"]
+    assert second.calls == ["toolchain", "global_mapper", "model_orientation_aligner", "model_converter",
+                            "create_project", "train"]
     # A resumed run must not go back to the GPU for a COLMAP stage that has to be redone.
     third = Fakes(project)
     saved = json.loads((work_dir(project) / "pipeline.json").read_text())
-    saved["completed"] = saved["completed"][:3]  # toolchain, extract, features
+    saved["completed"] = saved["completed"][:4]  # toolchain, extract, mask, features
     (work_dir(project) / "pipeline.json").write_text(json.dumps(saved))
     pipeline.run(make_request(project, clip), third.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     assert gpu_flags(third) == ["0"]
@@ -533,7 +572,7 @@ def test_leveling_failure_keeps_the_original_model(tmp_path, clip):
     fakes.run = run
     state = pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
                          should_cancel=lambda: False)
-    assert fakes.calls[-3:] == ["model_orientation_aligner", "create_project", "train"]
+    assert fakes.calls[-4:] == ["model_orientation_aligner", "model_converter", "create_project", "train"]
     sparse = work_dir(project) / "dataset" / "sparse"
     assert struct.unpack("<Q", (sparse / "0" / "images.bin").read_bytes()[:8])[0] == 45
     assert state.registered == 45
@@ -559,7 +598,8 @@ def test_photo_folder_source_copies_photos_instead_of_extracting(tmp_path, photo
     state = pipeline.run(request, fakes.hooks(), on_progress=lambda *a: fakes.progress.append(a),
                          should_cancel=lambda: False)
     assert "extract" not in fakes.calls  # the video extractor never runs on a folder
-    assert fakes.calls[:2] == ["toolchain", "feature_extractor"]
+    assert fakes.calls[:3] == ["toolchain", "mask_people", "feature_extractor"]
+    assert fakes.mask_calls[0][2] is False  # photos: no temporal state between unrelated shots
     images = work_dir(project) / "dataset" / "images"
     assert sorted(p.name for p in images.iterdir()) == [f"IMG_{i:04d}.png" for i in range(30)]
     assert state.frames == 30
@@ -622,3 +662,138 @@ def test_no_features_error_carries_the_colmap_output(tmp_path, clip):
         pipeline.run(pipeline.Request(video=clip, project=project, use_gpu=False), fakes.hooks(),
                      on_progress=lambda *a: None, should_cancel=lambda: False)
     assert "SIFT died horribly" in str(err.value)
+
+
+def test_masking_writes_masks_beside_the_images_and_carries_state_for_video(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    images, masks_dir, carry = fakes.mask_calls[0]
+    assert masks_dir == work_dir(project) / "dataset" / "masks"
+    assert len(images) == 50 and images == sorted(images) and carry is True
+    assert len(list(masks_dir.glob("*.png"))) == 50
+
+
+def test_masking_can_be_disabled_or_declined(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    request = pipeline.Request(video=clip, project=project, mask_people=False)
+    pipeline.run(request, fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert "mask_people" not in fakes.calls
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
+    assert next(s for s in saved["completed"] if s["name"] == "mask")["applied"] is False
+    assert request.fingerprint() != make_request(project, clip).fingerprint()
+
+    declined = Fakes(tmp_path / "declined.licht")
+    declined.mask_outcome = "skipped"
+    pipeline.run(make_request(tmp_path / "declined.licht", clip), declined.hooks(), on_progress=lambda *a: None,
+                 should_cancel=lambda: False)
+    assert "feature_extractor" in declined.calls  # the run goes on without masks
+    assert declined.train_masked is False
+    saved = json.loads((work_dir(tmp_path / "declined.licht") / "pipeline.json").read_text())
+    mask = next(s for s in saved["completed"] if s["name"] == "mask")
+    assert mask["applied"] is False and mask["reason"] == "declined"
+
+
+def test_masking_cancel_propagates(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    fakes.mask_outcome = "cancelled"
+    with pytest.raises(pipeline.PipelineCancelled):
+        pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert "feature_extractor" not in fakes.calls
+
+
+def test_package_stage_writes_sparse_ply_and_cameras_json(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    original_run = fakes.run
+
+    def run(cmd, on_output, should_cancel):
+        result = original_run(cmd, on_output, should_cancel)
+        if cmd[1] == "global_mapper":
+            model = Path(cmd[cmd.index("--output_path") + 1]) / "0"
+            write_model(model, images=[("a.jpg", (1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 1.0))] * 1 + [("b.jpg", (0.0, 1.0, 0.0, 0.0), (1.0, 2.0, 3.0))] * 0,
+                        camera=(17, 1920, 960, (1920.0, 960.0)))
+        return result
+
+    fakes.run = run
+    state = pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
+                         should_cancel=lambda: False)
+    package = work_dir(project) / "package"
+    converter = next(cmd for cmd in fakes.commands if cmd[1] == "model_converter")
+    assert converter[converter.index("--output_type") + 1] == "PLY"
+    assert converter[converter.index("--output_path") + 1] == str(package / "sparse.ply")
+    assert converter[converter.index("--input_path") + 1] == str(work_dir(project) / "dataset" / "sparse" / "0")
+    assert (package / "sparse.ply").exists()
+    cameras = json.loads((package / "cameras.json").read_text())
+    assert cameras["cameras"]["1"]["model"] == "EQUIRECTANGULAR"
+    assert cameras["cameras"]["1"]["width"] == 1920 and cameras["cameras"]["1"]["params"] == [1920.0, 960.0]
+    assert cameras["images"][0]["name"] == "a.jpg" and cameras["images"][0]["qvec"] == [1.0, 0.0, 0.0, 0.0]
+    assert cameras["images"][0]["tvec"] == [0.0, 0.0, 1.0] and cameras["images"][0]["camera_id"] == 1
+    assert state.package_dir == str(package)
+
+
+def test_mesh_stages_run_in_order_into_the_package(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    request = pipeline.Request(video=clip, project=project, build_mesh=True)
+    pipeline.run(request, fakes.hooks(), on_progress=lambda *a: fakes.progress.append(a), should_cancel=lambda: False)
+    tools = [cmd[1] for cmd in fakes.commands]
+    assert tools[-6:] == ["model_converter", "image_undistorter", "patch_match_stereo", "stereo_fusion",
+                          "poisson_mesher", "mesh_texturer"]
+    package = work_dir(project) / "package"
+    dense = work_dir(project) / "dense"
+    undistort = next(cmd for cmd in fakes.commands if cmd[1] == "image_undistorter")
+    assert undistort[undistort.index("--output_path") + 1] == str(dense)
+    assert undistort[undistort.index("--input_path") + 1] == str(work_dir(project) / "dataset" / "sparse" / "0")
+    fusion = next(cmd for cmd in fakes.commands if cmd[1] == "stereo_fusion")
+    assert fusion[fusion.index("--output_path") + 1] == str(package / "dense.ply")
+    mesher = next(cmd for cmd in fakes.commands if cmd[1] == "poisson_mesher")
+    assert mesher[mesher.index("--input_path") + 1] == str(package / "dense.ply")
+    assert mesher[mesher.index("--output_path") + 1] == str(package / "mesh.ply")
+    texturer = next(cmd for cmd in fakes.commands if cmd[1] == "mesh_texturer")
+    assert texturer[texturer.index("--workspace_path") + 1] == str(dense)
+    assert texturer[texturer.index("--input_path") + 1] == str(package / "mesh.ply")
+    assert texturer[texturer.index("--output_path") + 1] == str(package / "textured")
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
+    mesh = next(s for s in saved["completed"] if s["name"] == "mesh")
+    assert mesh["applied"] is True
+    assert any(stage == "mesh" for stage, *_ in fakes.progress)
+    assert request.fingerprint() != make_request(project, clip).fingerprint()
+
+
+def test_mesh_failure_is_reported_but_does_not_stop_the_run(tmp_path, clip):
+    # The official COLMAP build cannot run patch_match_stereo on older GPUs; the splat is still built.
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    fakes.dense_rc = 127
+    pipeline.run(pipeline.Request(video=clip, project=project, build_mesh=True), fakes.hooks(),
+                 on_progress=lambda *a: None, should_cancel=lambda: False)
+    tools = [cmd[1] for cmd in fakes.commands]
+    assert "patch_match_stereo" in tools and "stereo_fusion" not in tools
+    assert fakes.calls[-2:] == ["create_project", "train"]
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
+    mesh = next(s for s in saved["completed"] if s["name"] == "mesh")
+    assert mesh["applied"] is False and "patch_match_stereo" in mesh["reason"]
+
+
+def write_model(model: Path, images, camera) -> None:
+    """Write cameras.bin and images.bin in COLMAP's binary layout."""
+    model.mkdir(parents=True, exist_ok=True)
+    model_id, width, height, params = camera
+    with open(model / "cameras.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1))
+        f.write(struct.pack("<iiQQ", 1, model_id, width, height))
+        f.write(struct.pack("<%dd" % len(params), *params))
+    with open(model / "images.bin", "wb") as f:
+        f.write(struct.pack("<Q", len(images)))
+        for index, (name, qvec, tvec) in enumerate(images, start=1):
+            f.write(struct.pack("<i", index))
+            f.write(struct.pack("<4d", *qvec))
+            f.write(struct.pack("<3d", *tvec))
+            f.write(struct.pack("<i", 1))
+            f.write(name.encode() + b"\x00")
+            f.write(struct.pack("<Q", 2))
+            f.write(struct.pack("<ddq", 1.0, 2.0, -1) * 2)
+    (model / "points3D.bin").write_bytes(struct.pack("<Q", 0))

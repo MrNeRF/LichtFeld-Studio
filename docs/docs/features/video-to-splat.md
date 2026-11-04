@@ -34,12 +34,23 @@ COLMAP, creates the project and starts training.
    | High | 3 | source | 25 |
 
 4. Press **Create**. The dialog stays open and shows the current stage: locating COLMAP, extracting frames,
-   detecting features, matching frames, solving cameras, leveling the scene, creating the project, starting
-   training. Cancel stops COLMAP and keeps what finished.
+   masking people, detecting features, matching frames, solving cameras, leveling the scene, writing the
+   package, building the mesh, creating the project, starting training. Cancel stops COLMAP and keeps what
+   finished.
 
    Leveling runs COLMAP's `model_orientation_aligner` so the floor is horizontal in the viewer: Manhattan-world
    vanishing points for ordinary video, the mean camera orientation for 360 footage (lines are curves in an
    equirectangular image). It is cosmetic; when it fails the model keeps its original orientation.
+
+   **Mask people** (on by default) runs Robust Video Matting on every frame and writes `dataset/masks/`, which
+   training reads in *ignore* mode: a walker becomes a hole that other views fill, not a smear. The first run
+   asks to install numpy, Pillow and onnxruntime into the app's Python environment and to download the model
+   (15 MB, verified by SHA-256). Declining skips masking for that run.
+
+   **Also build a textured mesh** (off by default) runs COLMAP's dense chain after the cameras are solved:
+   image undistortion, patch-match stereo, fusion into `dense.ply`, Poisson meshing into `mesh.ply` and
+   texturing into `textured/`. Patch-match stereo needs COLMAP's CUDA kernels; on a GPU the official build
+   does not support, the mesh is skipped with the reason in `pipeline.json` and the splat is still built.
 5. Training starts automatically. For 360 video the GUT rasterizer is switched on first, because the
    standard rasterizer only accepts pinhole cameras; note that most third-party viewers cannot display
    GUT-trained splats. Export with the usual exporters.
@@ -74,7 +85,11 @@ D:/projects/room/
   dataset/images/frame_000001.jpg …   extracted frames
   dataset/extraction_metadata.json    frame timestamps and sharpness scores
   dataset/database.db                 COLMAP features and matches
+  dataset/masks/frame_000001.png ...  people masks (0 = ignore), when masking ran
   dataset/sparse/0/{cameras,images,points3D}.bin
+  package/sparse.ply                  sparse points with colors
+  package/cameras.json                intrinsics and poses of the registered frames
+  package/dense.ply, mesh.ply, textured/   only when the mesh was built
   pipeline.json                       finished stages and their results
 ```
 
@@ -96,8 +111,8 @@ without the dialog. Python tools appear with a `plugin_` prefix in `tools/list`,
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu` | `{started, project, work_dir}` or `{started: false, error}` |
-| `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir}` |
+| `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu`, `mask_people`, `build_mesh` | `{started, project, work_dir}` or `{started: false, error}` |
+| `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir, package_dir}` |
 | `video_to_splat_cancel` | none | `{cancelling}` |
 
 One run at a time; a start while another run is active is refused. Training is left running when the run

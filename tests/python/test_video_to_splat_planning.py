@@ -174,3 +174,36 @@ def test_probe_photo_folder_lists_images_in_name_order(tmp_path):
     assert info["count"] == 3 and (info["width"], info["height"]) == (100, 50) and info["spherical"] is False
     assert probe.decide_mode(info) == "equirectangular"
     assert probe.probe_photo_folder(tmp_path / "missing") == {"width": 0, "height": 0, "spherical": False, "count": 0}
+
+
+def test_read_binary_model_returns_cameras_and_poses(tmp_path):
+    with open(tmp_path / "cameras.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1) + struct.pack("<iiQQ", 1, 1, 640, 480) + struct.pack("<4d", 500.0, 500.0, 320.0, 240.0))
+    with open(tmp_path / "images.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1) + struct.pack("<i", 1) + struct.pack("<4d", 0.5, 0.5, 0.5, 0.5)
+                + struct.pack("<3d", 1.0, 2.0, 3.0) + struct.pack("<i", 1) + b"x.jpg\x00"
+                + struct.pack("<Q", 2) + struct.pack("<ddq", 1.0, 2.0, -1) * 2)
+    cameras = sfm.read_cameras_bin(tmp_path / "cameras.bin")
+    assert cameras == {1: {"model": "PINHOLE", "width": 640, "height": 480, "params": [500.0, 500.0, 320.0, 240.0]}}
+    images = sfm.read_images_bin(tmp_path / "images.bin")
+    assert images == [{"image_id": 1, "name": "x.jpg", "camera_id": 1, "qvec": [0.5, 0.5, 0.5, 0.5],
+                       "tvec": [1.0, 2.0, 3.0]}]
+    assert sfm.read_cameras_bin(tmp_path / "missing.bin") == {}
+    assert sfm.read_images_bin(tmp_path / "missing.bin") == []
+
+
+def test_plan_package_and_mesh_commands(tmp_path):
+    convert = sfm.plan_package_command(colmap=Path("colmap"), dataset=tmp_path / "dataset", package=tmp_path / "package")
+    assert convert[1] == "model_converter"
+    assert convert[convert.index("--output_type") + 1] == "PLY"
+    cmds = sfm.plan_mesh_commands(colmap=Path("colmap"), dataset=tmp_path / "dataset", dense=tmp_path / "dense",
+                                  package=tmp_path / "package")
+    assert [c[1] for c in cmds] == ["image_undistorter", "patch_match_stereo", "stereo_fusion", "poisson_mesher",
+                                    "mesh_texturer"]
+    stereo = cmds[1]
+    assert stereo[stereo.index("--workspace_path") + 1] == str(tmp_path / "dense")
+    assert stereo[stereo.index("--PatchMatchStereo.geom_consistency") + 1] == "1"
+    fusion = cmds[2]
+    assert fusion[fusion.index("--input_type") + 1] == "geometric"
+    for cmd in cmds:
+        assert cmd[cmd.index("--log_target") + 1] == "stderr"

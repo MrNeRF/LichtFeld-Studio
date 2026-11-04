@@ -60,6 +60,7 @@ def test_runner_reports_progress_then_result(tmp_path):
     status = r.status()
     assert status["active"] is False and status["done"] is True and status["error"] == ""
     assert (status["frames"], status["registered"], status["mode"]) == (40, 38, "equirectangular")
+    assert status["package_dir"] == ""  # the fake State carries none
     assert Path(status["project"]) == request.project
 
 
@@ -145,12 +146,14 @@ def test_mcp_tools_register_and_validate(lf_stub, tmp_path, monkeypatch):
     assert busy["started"] is False and busy["error"] == "video_to_splat.training_busy"
     state.training = False
 
-    started = start(source=str(video), project=str(tmp_path / "room"), mode="on", preset="fast", use_gpu=False)
+    started = start(source=str(video), project=str(tmp_path / "room"), mode="on", preset="fast", use_gpu=False,
+                    mask_people=False, build_mesh=True)
     assert started["started"] is True
     assert Path(started["project"]) == tmp_path / "room.licht"  # the extension is added
     assert run.started.wait(5)
     request = run.requests[0]
     assert (request.mode_override, request.preset, request.use_gpu) == ("on", "fast", False)
+    assert (request.mask_people, request.build_mesh) == (False, True)
     assert state.tools["video_to_splat_status"]()["active"] is True
     assert state.tools["video_to_splat_cancel"]()["cancelling"] is True
     run.outcome = pipeline.PipelineCancelled()

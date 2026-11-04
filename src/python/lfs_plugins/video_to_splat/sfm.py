@@ -21,6 +21,16 @@ CAMERA_MODELS: dict[str, str] = {
 IMAGES_DIR = "images"
 DATABASE_NAME = "database.db"
 SPARSE_DIR = "sparse"
+PACKAGE_DIR = "package"  # beside the project: sparse.ply, cameras.json, dense.ply, mesh.ply, textured/
+DENSE_DIR = "dense"      # COLMAP dense workspace (undistorted images, depth maps)
+
+# COLMAP camera model ids -> (name, parameter count); mirrors src/io/formats/colmap.cpp.
+CAMERA_MODELS_BY_ID: dict[int, tuple[str, int]] = {
+    0: ("SIMPLE_PINHOLE", 3), 1: ("PINHOLE", 4), 2: ("SIMPLE_RADIAL", 4), 3: ("RADIAL", 5), 4: ("OPENCV", 8),
+    5: ("OPENCV_FISHEYE", 8), 6: ("FULL_OPENCV", 12), 7: ("FOV", 5), 8: ("SIMPLE_RADIAL_FISHEYE", 4),
+    9: ("RADIAL_FISHEYE", 5), 10: ("THIN_PRISM_FISHEYE", 12), 11: ("RAD_TAN_THIN_PRISM_FISHEYE", 16),
+    17: ("EQUIRECTANGULAR", 2),
+}
 
 
 def dataset_paths(dataset: Path) -> tuple[Path, Path, Path]:
@@ -129,6 +139,87 @@ def clear_matches(database: Path) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def plan_package_command(*, colmap: Path, dataset: Path, package: Path) -> list[str]:
+    """argv for model_converter: the sparse points as a colored PLY for other tools."""
+    _images, _database, sparse = dataset_paths(dataset)
+    return [str(colmap), "model_converter", "--input_path", str(sparse / "0"),
+            "--output_path", str(package / "sparse.ply"), "--output_type", "PLY", "--log_target", "stderr"]
+
+
+def plan_mesh_commands(*, colmap: Path, dataset: Path, dense: Path, package: Path) -> list[list[str]]:
+    """argv lists for the dense chain: undistort, patch-match stereo (CUDA), fusion, Poisson mesh, texture."""
+    images, _database, sparse = dataset_paths(dataset)
+    exe = str(colmap)
+    common = ["--log_target", "stderr"]
+    return [
+        [exe, "image_undistorter", "--image_path", str(images), "--input_path", str(sparse / "0"),
+         "--output_path", str(dense), "--output_type", "COLMAP", *common],
+        [exe, "patch_match_stereo", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
+         "--PatchMatchStereo.geom_consistency", "1", *common],
+        [exe, "stereo_fusion", "--workspace_path", str(dense), "--workspace_format", "COLMAP",
+         "--input_type", "geometric", "--output_path", str(package / "dense.ply"), *common],
+        [exe, "poisson_mesher", "--input_path", str(package / "dense.ply"), "--output_path", str(package / "mesh.ply"),
+         *common],
+        [exe, "mesh_texturer", "--workspace_path", str(dense), "--input_path", str(package / "mesh.ply"),
+         "--output_path", str(package / "textured"), *common],
+    ]
+
+
+def read_cameras_bin(path: Path) -> dict[int, dict]:
+    """cameras.bin -> {camera_id: {model, width, height, params}}; {} when missing or unknown."""
+    cameras: dict[int, dict] = {}
+    try:
+        with open(path, "rb") as handle:
+            (count,) = struct.unpack("<Q", handle.read(8))
+            for _ in range(count):
+                camera_id, model_id, width, height = struct.unpack("<iiQQ", handle.read(24))
+                name, num_params = CAMERA_MODELS_BY_ID.get(model_id, ("UNKNOWN", -1))
+                if num_params < 0:
+                    break
+                params = list(struct.unpack("<%dd" % num_params, handle.read(8 * num_params)))
+                cameras[camera_id] = {"model": name, "width": int(width), "height": int(height), "params": params}
+    except (OSError, struct.error):
+        return cameras
+    return cameras
+
+
+def read_images_bin(path: Path) -> list[dict]:
+    """images.bin -> [{image_id, name, camera_id, qvec, tvec}] in file order; [] when missing."""
+    images: list[dict] = []
+    try:
+        with open(path, "rb") as handle:
+            (count,) = struct.unpack("<Q", handle.read(8))
+            for _ in range(count):
+                (image_id,) = struct.unpack("<i", handle.read(4))
+                qvec = list(struct.unpack("<4d", handle.read(32)))
+                tvec = list(struct.unpack("<3d", handle.read(24)))
+                (camera_id,) = struct.unpack("<i", handle.read(4))
+                name = bytearray()
+                while True:
+                    byte = handle.read(1)
+                    if not byte or byte == b"\x00":
+                        break
+                    name += byte
+                (num_points,) = struct.unpack("<Q", handle.read(8))
+                handle.seek(24 * num_points, 1)
+                images.append({"image_id": image_id, "name": name.decode("utf-8", "replace"), "camera_id": camera_id,
+                               "qvec": qvec, "tvec": tvec})
+    except (OSError, struct.error):
+        return images
+    return images
+
+
+def write_cameras_json(model_dir: Path, path: Path) -> None:
+    """Camera intrinsics and world-to-camera poses of the registered images, for tools without a COLMAP reader."""
+    import json
+
+    payload = {"cameras": {str(k): v for k, v in read_cameras_bin(model_dir / "cameras.bin").items()},
+               "images": read_images_bin(model_dir / "images.bin"),
+               "convention": "COLMAP: qvec (w, x, y, z) and tvec map world points into the camera frame"}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
 
 
 def _read_leading_uint64(path: Path) -> int:

@@ -221,6 +221,8 @@ class NewProjectPanel(_ImportDialogPanel):
         self._name_derived_from_source = False
         self._video_mode = "auto"
         self._video_preset = DEFAULT_PRESET
+        self._video_mask_people = True
+        self._video_build_mesh = False
         self._pipeline_running = False
         self._pipeline_stage = ""
         self._pipeline_fraction = 0.0
@@ -240,6 +242,8 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_func("source_is_pipeline", self._source_is_pipeline)
         model.bind("video_mode", lambda: self._video_mode, self._set_video_mode)
         model.bind("video_preset", lambda: self._video_preset, self._set_video_preset)
+        model.bind("video_mask_people", lambda: self._video_mask_people, self._set_video_mask_people)
+        model.bind("video_build_mesh", lambda: self._video_build_mesh, self._set_video_build_mesh)
         model.bind_func("pipeline_running", lambda: self._pipeline_running)
         model.bind_func("pipeline_stage", self._pipeline_stage_label)
         model.bind_func("pipeline_fraction", lambda: self._pipeline_fraction)
@@ -335,6 +339,8 @@ class NewProjectPanel(_ImportDialogPanel):
         self._name_derived_from_source = False
         self._video_mode = "auto"
         self._video_preset = DEFAULT_PRESET
+        self._video_mask_people = True
+        self._video_build_mesh = False
         self._pipeline_stage = ""
         self._pipeline_fraction = 0.0
         self._pipeline_message = ""
@@ -844,6 +850,16 @@ class NewProjectPanel(_ImportDialogPanel):
         if value in PRESETS:
             self._video_preset = value
 
+    @staticmethod
+    def _as_bool(value) -> bool:
+        return value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "on", "yes")
+
+    def _set_video_mask_people(self, value) -> None:
+        self._video_mask_people = self._as_bool(value)
+
+    def _set_video_build_mesh(self, value) -> None:
+        self._video_build_mesh = self._as_bool(value)
+
     def _pipeline_stage_label(self) -> str:
         key = _VIDEO_STAGE_KEYS.get(self._pipeline_stage)
         return lf.ui.tr(key) if key else ""
@@ -870,7 +886,8 @@ class NewProjectPanel(_ImportDialogPanel):
             lf.ui.message_dialog(lf.ui.tr("video_to_splat.title"), lf.ui.tr("video_to_splat.training_busy"), "warning")
             return
         request = v2s_pipeline.Request(video=video, project=project, mode_override=self._video_mode,
-                                       preset=self._video_preset)
+                                       preset=self._video_preset, mask_people=self._video_mask_people,
+                                       build_mesh=self._video_build_mesh)
         self._pipeline_cancel.clear()
         self._pipeline_running = True
         self._pipeline_stage, self._pipeline_fraction, self._pipeline_message = "toolchain", 0.0, ""

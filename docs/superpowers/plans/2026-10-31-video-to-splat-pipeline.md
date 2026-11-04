@@ -2803,6 +2803,35 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 15: Mask people automatically
+
+**Goal:** Walkers leave holes instead of smears, as the cloud service does.
+
+**Files:** `video_to_splat/masking.py` (RVM through onnxruntime, pinned model), `pipeline.py` (`mask` stage), `project_bridge.py` (consent, package install, `mask_mode = IGNORE`), dialog checkbox, MCP `mask_people`, locales, `tests/python/test_video_to_splat_masking.py`.
+
+**Acceptance Criteria:**
+- [x] Masks are written as `dataset/masks/<stem>.png` with 0 where a person is; training runs in ignore mode when masks exist.
+- [x] Declining the setup, a failed download or a crashed model skips masking and the run continues.
+- [x] The real model masks the camera operator in a Theta frame (slow test).
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_masking.py tests/python/test_video_to_splat_bridge.py -q`
+
+---
+
+### Task 16: Package and mesh outputs
+
+**Goal:** The download package of the cloud service: sparse points, camera poses, and on request a dense cloud and textured mesh.
+
+**Files:** `sfm.py` (`read_cameras_bin`, `read_images_bin`, `write_cameras_json`, `plan_package_command`, `plan_mesh_commands`), `pipeline.py` (`package` and `mesh` stages), dialog checkbox, MCP `build_mesh`, docs.
+
+**Acceptance Criteria:**
+- [x] `package/sparse.ply` and `package/cameras.json` exist after every run.
+- [x] With the mesh enabled the five dense commands run in order into `package/`; a failing tool is recorded and the splat is still built.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_pipeline.py tests/python/test_video_to_splat_planning.py -q`
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.
