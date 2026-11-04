@@ -22,7 +22,7 @@
         <img src="../icon/layout-columns.png" />
       </button>
       <button type="button" class="view-btn view-btn--icon" id="btn-toggle-training">
-        <img id="btn-toggle-training-icon" src="../icon/scene/visible.png" />
+        <img id="btn-toggle-training-icon" src="../icon/scene/unlocked.png" />
       </button>
       <button type="button" class="view-btn view-btn--icon" id="btn-show-in-folder">
         <img src="../icon/scene/dataset.png" />

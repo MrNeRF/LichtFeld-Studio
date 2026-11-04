@@ -998,9 +998,9 @@ class ImagePreviewPanel(Panel):
         train_icon = doc.get_element_by_id("btn-toggle-training-icon")
         if train_icon:
             icon_src = (
-                "../icon/scene/visible.png"
+                "../icon/scene/unlocked.png"
                 if node and node.training_enabled
-                else "../icon/scene/hidden.png"
+                else "../icon/scene/locked.png"
             )
             train_icon.set_attribute("src", icon_src)
 
