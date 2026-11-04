@@ -19565,11 +19565,14 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_FALSE(state.available);
             return;
         }
-        ASSERT_TRUE(waitUntil([&] {
+        // Finish the real restore without pumping the viewer queue. Cold CUDA
+        // initialization is not a timing contract; publication must still wait
+        // for the viewer thread to process the completion below.
+        viewer.project_lifecycle_->hydration_threads_.back().join();
+        {
             std::lock_guard lock(viewer.work_queue_mutex_);
-            return !viewer.work_queue_.empty();
-        },
-                              std::chrono::seconds(2)));
+            ASSERT_FALSE(viewer.work_queue_.empty());
+        }
         EXPECT_EQ(app_store().stored_session_generation.get(), generation + 1);
         ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
             return app_store().stored_session_generation.get() == generation + 2;
