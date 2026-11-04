@@ -101,7 +101,8 @@ namespace lfs::vis::op {
 
         const auto& scene = ctx.scene().getScene();
         return std::ranges::all_of(targets, [&scene](const std::string& name) {
-            return scene.getNode(name) != nullptr;
+            const auto* node = scene.getNode(name);
+            return node && !scene.hasExternalTraining(node->id);
         });
     }
 

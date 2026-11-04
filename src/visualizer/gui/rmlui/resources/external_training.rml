@@ -1,0 +1,57 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+  <link type="text/rcss" href="external_training.rcss"/>
+</head>
+<body template="docked-panel">
+<div id="et-panel" class="external-training">
+  <p id="et-intro">@tr:external_training.intro</p>
+  <div id="et-current" class="current-card hidden">
+    <div class="panel-title">@tr:external_training.current_preview</div>
+    <div id="et-current-name" class="current-name"></div>
+    <div class="readonly-badge">@tr:external_training.readonly</div>
+    <p id="et-current-state"></p>
+    <p id="et-training-step"></p>
+    <p id="et-preview-step"></p>
+    <p id="et-preview-quality" class="status-muted hidden"></p>
+    <p id="et-preview-cost" class="status-muted hidden"></p>
+    <p id="et-saved-project" class="details hidden"></p>
+    <p id="et-current-message" class="status-muted hidden"></p>
+    <p id="et-current-error" class="status-error hidden"></p>
+    <p id="et-retry-help" class="status-muted hidden">@tr:external_training.retry_help</p>
+    <button id="et-cameras" class="btn btn--secondary hidden" title="@tr:external_training.cameras_tooltip">@tr:external_training.cameras</button>
+    <button id="et-frame" class="btn btn--secondary hidden" title="@tr:external_training.frame_tooltip">@tr:external_training.frame</button>
+    <p id="et-camera-error" class="status-error hidden"></p>
+    <div class="current-actions">
+      <button id="et-disconnect" class="btn btn--secondary hidden" title="@tr:external_training.disconnect_tooltip">@tr:external_training.disconnect</button>
+      <button id="et-reconnect" class="btn btn--primary hidden">@tr:external_training.reconnect</button>
+      <button id="et-copy" class="btn btn--secondary hidden" title="@tr:external_training.copy_tooltip">@tr:external_training.copy</button>
+    </div>
+    <button id="et-discard" class="btn btn--secondary" title="@tr:external_training.remove_tooltip">@tr:external_training.remove</button>
+    <p id="et-copy-busy" class="status-muted hidden">@tr:external_training.copy_busy</p>
+    <p id="et-copy-error" class="status-error hidden"></p>
+    <p id="et-reconnect-missing" class="status-muted hidden">@tr:external_training.reconnect_missing</p>
+    <button id="et-current-details-toggle" class="btn details-toggle">@tr:external_training.details</button>
+    <p id="et-current-details" class="details hidden"></p>
+  </div>
+  <p id="et-connect-error" class="status-error hidden"></p>
+  <div id="et-available-title" class="panel-title">@tr:external_training.available</div>
+  <button id="et-browse-toggle" class="btn browse-toggle hidden">@tr:external_training.browse_show</button>
+  <div id="et-browser">
+    <div id="et-choices" class="hidden">
+      <label class="field-label" for="et-choice">@tr:external_training.trainer</label>
+      <select id="et-choice"></select>
+      <p id="et-unavailable" class="status-muted hidden">@tr:external_training.unavailable</p>
+      <button id="et-open" class="btn btn--primary">@tr:external_training.connect</button>
+      <p id="et-switch-help" class="status-muted hidden"></p>
+      <button id="et-selected-details-toggle" class="btn details-toggle">@tr:external_training.selected_details</button>
+      <p id="et-selected-details" class="details hidden"></p>
+    </div>
+    <p id="et-empty" class="status-muted"></p>
+    <button id="et-refresh" class="btn btn--secondary">@tr:external_training.refresh</button>
+    <p class="status-muted">@tr:external_training.auto_list</p>
+    <p id="et-scan-error" class="status-error hidden"></p>
+  </div>
+</div>
+</body>
+</rml>

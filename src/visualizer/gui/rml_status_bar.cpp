@@ -304,6 +304,11 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_text", &model_.mode_text);
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
+        ctor.Bind("show_external_training", &model_.show_external_training);
+        ctor.Bind("external_training_text", &model_.external_training_text);
+        ctor.Bind("external_training_tooltip", &model_.external_training_tooltip);
+        ctor.Bind("external_training_width", &model_.external_training_width);
+        ctor.Bind("external_training_color", &model_.external_training_color);
         ctor.Bind("progress_miner", &model_.progress_miner);
         ctor.Bind("progress_tessle", &model_.progress_tessle);
         ctor.Bind("tessle_left", &model_.tessle_left);
@@ -1140,6 +1145,55 @@ namespace lfs::vis::gui {
         auto* sm = viewer ? viewer->getSceneManager() : nullptr;
         auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
         auto* tm = viewer ? viewer->getTrainerManager() : nullptr;
+        const core::SceneNode* external_node = nullptr;
+        if (sm) {
+            for (const auto* node : sm->getScene().getNodes()) {
+                if (node->type == core::NodeType::SPLAT && node->external_training) {
+                    if (!external_node || (!external_node->external_training->connected && node->external_training->connected))
+                        external_node = node;
+                }
+            }
+        }
+        setModelBool("show_external_training", model_.show_external_training, external_node != nullptr);
+        if (external_node) {
+            const auto& status = *external_node->external_training;
+            const auto state = status.connected ? status.state : "disconnected";
+            const auto state_label = [&]() {
+                if (state == "training" || state == "active")
+                    return LOC("external_training.state_training");
+                if (state == "paused")
+                    return LOC("external_training.state_paused");
+                if (state == "connecting")
+                    return LOC("external_training.state_connecting");
+                if (state == "starting" || state == "preparing")
+                    return LOC("external_training.state_preparing");
+                if (state == "finalizing")
+                    return LOC("external_training.state_finalizing");
+                if (state == "completed")
+                    return LOC("external_training.state_completed");
+                if (state == "stopped")
+                    return LOC("external_training.state_stopped");
+                if (state == "failed")
+                    return LOC("external_training.state_failed");
+                if (state == "superseded")
+                    return LOC("external_training.state_replaced");
+                if (state == "disconnected")
+                    return LOC("external_training.state_unavailable");
+                if (state == "preview error")
+                    return LOC("external_training.state_preview_error");
+                return LOC("external_training.state_unknown");
+            }();
+            setModelString("external_training_text", model_.external_training_text,
+                           LOCF("external_training.statusbar",
+                                status.pid, state_label, status.iteration,
+                                status.total > 0 ? std::to_string(status.total) : "?", status.shown_iteration));
+            setModelString("external_training_tooltip", model_.external_training_tooltip,
+                           LOC("external_training.statusbar_tooltip"));
+            const auto progress = status.total > 0 ? std::clamp(double(status.iteration) / double(status.total), 0.0, 1.0) : 0.0;
+            setModelString("external_training_width", model_.external_training_width, std::format("{:.1f}%", progress * 100));
+            setModelString("external_training_color", model_.external_training_color,
+                           colorToRml(status.connected && state != "disconnected" && state != "failed" && state != "preview error" ? p.info : p.warning));
+        }
 
         // Mode text
         auto content_type = sm ? sm->getContentType() : SceneManager::ContentType::Empty;

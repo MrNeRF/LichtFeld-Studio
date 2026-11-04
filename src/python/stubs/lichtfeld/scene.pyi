@@ -491,6 +491,14 @@ class SceneNode:
         """Camera focal length in pixels (y)"""
 
     @property
+    def camera_center_x(self) -> float | None:
+        """Camera principal point x in pixels"""
+
+    @property
+    def camera_center_y(self) -> float | None:
+        """Camera principal point y in pixels"""
+
+    @property
     def camera_width(self) -> int | None:
         """Camera image width in pixels"""
 
@@ -521,7 +529,34 @@ class NodeCollection:
     def __iter__(self) -> NodeCollectionIterator:
         """Return an iterator over all nodes"""
 
+class PreparedViewerSplat:
+    def release(self) -> None: ...
+
+
+class PreparedViewerCameras:
+    def release(self) -> None: ...
+
+
+def prepare_viewer_splat(means: numpy.ndarray, sh0: numpy.ndarray, shn: numpy.ndarray,
+                         scaling: numpy.ndarray, rotation: numpy.ndarray,
+                         opacity: numpy.ndarray, degree: int,
+                         transform: numpy.ndarray | None = None) -> PreparedViewerSplat: ...
+
+
+def prepare_viewer_cameras(records: numpy.ndarray) -> PreparedViewerCameras: ...
+
+
 class Scene:
+    def create_external_viewer(self, name: str) -> int: ...
+    def remove_external_viewer(self, name: str, uuid: str) -> PreparedViewerSplat: ...
+    def install_prepared_viewer(self, name: str, prepared: PreparedViewerSplat,
+                                editable_copy: bool = False) -> int: ...
+    def install_external_camera(self, owner: str, uuid: str, prepared: PreparedViewerCameras,
+                                index: int) -> int: ...
+    def remove_external_camera(self, uuid: str, owner: str = '') -> tuple[bool, PreparedViewerCameras]: ...
+    def update_external_viewer(self, name: str, state: str, pid: int, iteration: int,
+                               total: int, shown: int, connected: bool) -> None: ...
+
     def is_valid(self) -> bool:
         """Check if scene reference is still valid (thread-safe)"""
 
@@ -536,7 +571,7 @@ class Scene:
     def add_group(self, name: str, parent: int = -1) -> int:
         """Add an empty group node, returns node ID"""
 
-    def add_splat(self, name: str, means: lichtfeld.Tensor, sh0: lichtfeld.Tensor, shN: lichtfeld.Tensor, scaling: lichtfeld.Tensor, rotation: lichtfeld.Tensor, opacity: lichtfeld.Tensor, sh_degree: int = 0, scene_scale: float = 1.0, parent: int = -1, transient: bool = False) -> int:
+    def add_splat(self, name: str, means: lichtfeld.Tensor, sh0: lichtfeld.Tensor, shN: lichtfeld.Tensor, scaling: lichtfeld.Tensor, rotation: lichtfeld.Tensor, opacity: lichtfeld.Tensor, sh_degree: int = 0, scene_scale: float = 1.0, parent: int = -1, transient: bool = False, replace_existing: bool = False) -> int:
         """
         Add a new splat node from tensor data.
 
@@ -552,6 +587,7 @@ class Scene:
             scene_scale: Scene scale factor
             parent: Parent node ID (-1 for root)
             transient: Show the node but leave it out of project saves and undo history
+            replace_existing: Atomically replace a transient viewer node, preserving its identity and transform; saved and training nodes are rejected
 
         Returns:
             Node ID of created splat

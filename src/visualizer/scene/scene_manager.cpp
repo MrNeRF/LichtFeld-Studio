@@ -686,6 +686,10 @@ namespace lfs::vis {
 
         event_handlers_.subscribe<cmd::SetNodeLocked>([this](const auto& cmd) {
             const auto* node = scene_.getNode(cmd.name);
+            if (node && node->external_training && !cmd.locked) {
+                LOG_WARN("External trainer snapshot cannot be unlocked; create a local copy");
+                return;
+            }
             if (!node || static_cast<bool>(node->locked) == cmd.locked) {
                 return;
             }
@@ -1685,6 +1689,8 @@ namespace lfs::vis {
 
     std::expected<void, std::string> SceneManager::validateNodeRemoval(const core::NodeId id,
                                                                        const TrainingRemovalImpact impact) const {
+        if (id != core::NULL_NODE && scene_.hasExternalTraining(id))
+            return std::unexpected("External trainer snapshot is read-only. Create a local copy to edit.");
         const auto* node = scene_.getNodeById(id);
         if (!node) {
             return {};

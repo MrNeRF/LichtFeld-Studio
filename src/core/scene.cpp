@@ -210,6 +210,8 @@ namespace lfs::core {
         locked.setPropertyPath(owner_id, "locked");
 
         local_transform.setCallback([this] {
+            if (external_training)
+                local_transform.setQuiet(external_training->model_transform);
             if (scene_) {
                 scene_->markTransformDirty(id);
                 scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
@@ -222,6 +224,8 @@ namespace lfs::core {
         });
         // Locking is scene-graph state; MODEL_CHANGED would mark the splat payload dirty.
         locked.setCallback([this] {
+            if (external_training)
+                locked.setQuiet(true);
             if (scene_) {
                 scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
             }
@@ -358,6 +362,15 @@ namespace lfs::core {
         return result;
     }
 
+    static bool isOwnedExternalChild(const SceneNode& parent, const SceneNode& child) {
+        if (!parent.external_training)
+            return true;
+        const auto& owner = parent.external_training->owner_uuid;
+        return child.transient && child.external_training && !owner.empty() &&
+               (child.external_training->owner_uuid == owner ||
+                (!child.uuid.is_nil() && child.uuid.to_string() == owner));
+    }
+
     NodeId Scene::insertNode(
         std::unique_ptr<SceneNode> node,
         const bool allow_duplicate_name,
@@ -382,6 +395,10 @@ namespace lfs::core {
             const auto* parent = getNodeById(node->parent_id);
             if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
                 LOG_WARN("Cannot add node '{}': parent is incompatible", node->name);
+                return NULL_NODE;
+            }
+            if (!isOwnedExternalChild(*parent, *node)) {
+                LOG_WARN("Cannot add node '{}': external trainer container is read-only", node->name);
                 return NULL_NODE;
             }
         }
@@ -413,6 +430,8 @@ namespace lfs::core {
         if (id >= next_node_id_)
             next_node_id_ = id + 1;
         node->id = id;
+        if (node->camera && node->camera->uid() >= 0)
+            next_camera_uid_ = std::max(next_camera_uid_, int64_t{node->camera->uid()} + 1);
         const NodeId parent_id = node->parent_id;
         const std::string name = node->name;
 
@@ -442,6 +461,8 @@ namespace lfs::core {
     }
 
     void Scene::removeNodeById(const NodeId id, const bool keep_children) {
+        if (id != NULL_NODE && hasExternalTraining(id))
+            throw std::runtime_error("External trainer snapshot is read-only. Disconnect and create a local copy to edit.");
         if (!getNodeById(id)) {
             return;
         }
@@ -510,6 +531,8 @@ namespace lfs::core {
         const NodeId root_id,
         const bool keep_children) {
         std::vector<std::pair<lfs::core::Uuid, std::unique_ptr<lfs::core::SplatData>>> detached;
+        if (root_id != NULL_NODE && hasExternalTraining(root_id))
+            throw std::runtime_error("External trainer snapshot is read-only");
 
         if (root_id == NULL_NODE) {
             return detached;
@@ -649,6 +672,8 @@ namespace lfs::core {
     }
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        if (const auto* node = getNode(name); node && node->external_training)
+            throw std::runtime_error("External trainer snapshot is read-only");
         if (!model) {
             LOG_WARN("replaceNodeModel: model for node '{}' is null", name);
             return;
@@ -691,8 +716,10 @@ namespace lfs::core {
     }
 
     std::unique_ptr<lfs::core::SplatData> Scene::swapNodeModel(
-        const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const bool viewer_update) {
         auto* node = getMutableNode(name);
+        if (node && node->external_training && !viewer_update)
+            throw std::runtime_error("External trainer snapshot is read-only");
         if (!node) {
             LOG_WARN("swapNodeModel: node '{}' not found", name);
             return model;
@@ -748,6 +775,8 @@ namespace lfs::core {
     void Scene::setNodeLocked(const std::string& name, const bool locked) {
         auto* node = getMutableNode(name);
         if (node) {
+            if (node->external_training && !locked)
+                throw std::runtime_error("External trainer snapshot cannot be unlocked. Create a local copy to edit.");
             node->locked.set(locked, false);
         }
     }
@@ -3642,6 +3671,8 @@ namespace lfs::core {
     }
 
     bool Scene::renameNode(const NodeId id, const std::string& new_name) {
+        if (const auto* target = getNodeById(id); target && target->external_training)
+            return false;
         if (id == NULL_NODE) {
             return false;
         }
@@ -4333,6 +4364,8 @@ namespace lfs::core {
     }
 
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {
+        if (const auto* node = getNodeById(parent_id); node && node->external_training)
+            return NULL_NODE;
         assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
@@ -4375,6 +4408,8 @@ namespace lfs::core {
     }
 
     NodeId Scene::addEllipsoid(const std::string& name, const NodeId parent_id) {
+        if (const auto* node = getNodeById(parent_id); node && node->external_training)
+            return NULL_NODE;
         assert(parent_id != NULL_NODE && "Ellipsoid must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
@@ -4417,6 +4452,8 @@ namespace lfs::core {
 
     NodeId Scene::addCropPolygon(const std::string& name, const NodeId parent_id, CropPolygonData data,
                                  const glm::mat4& local_transform) {
+        if (const auto* node = getNodeById(parent_id); node && node->external_training)
+            return NULL_NODE;
         const auto* parent = getNodeById(parent_id);
         if (!parent) {
             LOG_WARN("Cannot add crop polygon '{}': parent id {} does not exist", name, parent_id);
@@ -4461,12 +4498,20 @@ namespace lfs::core {
         return id;
     }
 
-    NodeId Scene::addCameraGroup(const std::string& name, const NodeId parent, const size_t camera_count) {
+    NodeId Scene::addCameraGroup(const std::string& name, const NodeId parent, const size_t camera_count,
+                                 const std::string& viewer_owner_uuid) {
         auto node = std::make_unique<SceneNode>();
         node->parent_id = parent;
         node->type = NodeType::CAMERA_GROUP;
         node->name = name;
         node->gaussian_count.store(camera_count, std::memory_order_release);
+        if (!viewer_owner_uuid.empty()) {
+            node->transient = true;
+            node->training_enabled = false;
+            node->locked.setQuiet(true);
+            node->external_training.emplace();
+            node->external_training->owner_uuid = viewer_owner_uuid;
+        }
 
         const NodeId id = insertNode(std::move(node));
         if (id != NULL_NODE)
@@ -4474,7 +4519,8 @@ namespace lfs::core {
         return id;
     }
 
-    NodeId Scene::addCamera(const std::string& name, const NodeId parent, std::shared_ptr<lfs::core::Camera> camera) {
+    NodeId Scene::addCamera(const std::string& name, const NodeId parent, std::shared_ptr<lfs::core::Camera> camera,
+                            const std::string& viewer_owner_uuid) {
         assert(camera && "Camera object cannot be null");
 
         const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
@@ -4488,6 +4534,13 @@ namespace lfs::core {
         node->image_path = lfs::core::path_to_utf8(node->camera->image_path());
         node->mask_path = lfs::core::path_to_utf8(node->camera->mask_path());
         node->depth_path = lfs::core::path_to_utf8(node->camera->depth_path());
+        if (!viewer_owner_uuid.empty()) {
+            node->transient = true;
+            node->training_enabled = false;
+            node->locked.setQuiet(true);
+            node->external_training.emplace();
+            node->external_training->owner_uuid = viewer_owner_uuid;
+        }
 
         const NodeId id = insertNode(std::move(node));
         return id;
@@ -4732,6 +4785,8 @@ namespace lfs::core {
         name_to_id_.swap(staged->name_to_id_);
         uuid_to_id_.swap(staged->uuid_to_id_);
         std::swap(next_node_id_, staged->next_node_id_);
+        std::swap(next_camera_uid_, staged->next_camera_uid_);
+        next_camera_uid_ = std::max(next_camera_uid_, staged->next_camera_uid_);
 
         cached_combined_.swap(staged->cached_combined_);
         cached_combined_node_ids_.swap(staged->cached_combined_node_ids_);
@@ -5668,6 +5723,8 @@ namespace lfs::core {
 
         if (new_parent != NULL_NODE) {
             const auto* parent = getNodeById(new_parent);
+            if (parent && !isOwnedExternalChild(*parent, *node))
+                return false;
             if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
                 LOG_WARN("Cannot reparent: destination is not a group");
                 return false;
@@ -5738,6 +5795,8 @@ namespace lfs::core {
 
         if (new_parent != NULL_NODE) {
             const auto* parent = getNodeById(new_parent);
+            if (parent && !isOwnedExternalChild(*parent, *node))
+                return false;
             if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
                 LOG_WARN("Cannot move: destination is not a group");
                 return false;
@@ -5919,9 +5978,26 @@ namespace lfs::core {
         return node ? node->uuid : Uuid{};
     }
 
+    bool Scene::hasExternalTraining(const NodeId root) const {
+        if (root == NULL_NODE) {
+            return std::ranges::any_of(nodes_, [](const auto& node) { return node->external_training.has_value(); });
+        }
+        std::vector<NodeId> pending{root};
+        while (!pending.empty()) {
+            const auto* node = getNodeById(pending.back());
+            pending.pop_back();
+            if (!node)
+                continue;
+            if (node->external_training)
+                return true;
+            pending.insert(pending.end(), node->children.begin(), node->children.end());
+        }
+        return false;
+    }
+
     bool Scene::isNodeEffectivelyLocked(NodeId id) const {
         while (const auto* node = getNodeById(id)) {
-            if (static_cast<bool>(node->locked))
+            if (node->external_training || static_cast<bool>(node->locked))
                 return true;
             id = node->parent_id;
         }
@@ -6188,6 +6264,8 @@ namespace lfs::core {
     }
 
     NodeId Scene::getOrCreateCropBoxForSplat(const NodeId splat_id) {
+        if (const auto* node = getNodeById(splat_id); node && node->external_training)
+            return NULL_NODE;
         const NodeId existing = getCropBoxForSplat(splat_id);
         if (existing != NULL_NODE) {
             return existing;
@@ -6469,6 +6547,8 @@ namespace lfs::core {
     }
 
     void Scene::setTrainingModelNode(const Uuid& uuid) {
+        if (const auto* node = getNodeByUuid(uuid); node && node->external_training)
+            throw std::runtime_error("An external trainer snapshot cannot become a local training model");
         if (uuid.is_nil()) {
             training_model_uuid_ = {};
             training_model_node_.clear();
@@ -6674,6 +6754,12 @@ namespace lfs::core {
         return *getAllCamerasCached();
     }
 
+    int Scene::allocateCameraUid() {
+        if (next_camera_uid_ > std::numeric_limits<int>::max())
+            throw std::runtime_error("No camera UID available");
+        return static_cast<int>(next_camera_uid_++);
+    }
+
     std::shared_ptr<const std::vector<std::shared_ptr<lfs::core::Camera>>>
     Scene::getAllCamerasCached() const {
         const std::uint64_t render_generation = render_generation_.load(std::memory_order_acquire);
@@ -6699,7 +6785,7 @@ namespace lfs::core {
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getActiveCameras() const {
         std::vector<std::shared_ptr<lfs::core::Camera>> result;
         for (const auto& node : nodes_) {
-            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled) {
+            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled && !node->external_training) {
                 result.push_back(node->camera);
             }
         }
@@ -6748,7 +6834,7 @@ namespace lfs::core {
     size_t Scene::getActiveCameraCount() const {
         size_t count = 0;
         for (const auto& node : nodes_) {
-            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled) {
+            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled && !node->external_training) {
                 ++count;
             }
         }
@@ -6782,7 +6868,7 @@ namespace lfs::core {
 
     void Scene::setCameraTrainingEnabled(const NodeId id, const bool enabled) {
         auto* node = getNodeById(id);
-        if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
+        if (node && node->type == NodeType::CAMERA && !node->external_training && node->training_enabled != enabled) {
             node->training_enabled = enabled;
             if (!restore_staging_)
                 pending_mutations_ |= static_cast<uint32_t>(MutationType::CAMERA_TRAINING_CHANGED);
@@ -6794,7 +6880,7 @@ namespace lfs::core {
         bool changed = false;
         for (const auto& candidate : nodes_) {
             auto* node = candidate.get();
-            if (!node || node->type != NodeType::CAMERA)
+            if (!node || node->type != NodeType::CAMERA || node->external_training)
                 continue;
             const bool enabled = enabled_camera_ids.contains(node->id);
             if (node->training_enabled == enabled)
@@ -6813,12 +6899,13 @@ namespace lfs::core {
     bool Scene::setCameraGroupTrainingSelection(const NodeId camera_group_id,
                                                 const std::unordered_set<NodeId>& enabled_camera_ids) {
         const auto* group = getNodeById(camera_group_id);
-        if (!group || group->type != NodeType::CAMERA_GROUP)
+        if (!group || group->type != NodeType::CAMERA_GROUP || group->external_training)
             return false;
         bool changed = false;
         for (const NodeId child_id : group->children) {
             auto* child = getNodeById(child_id);
-            if (!child || child->type != NodeType::CAMERA || child->training_enabled == enabled_camera_ids.contains(child_id))
+            if (!child || child->type != NodeType::CAMERA || child->external_training ||
+                child->training_enabled == enabled_camera_ids.contains(child_id))
                 continue;
             child->training_enabled = enabled_camera_ids.contains(child_id);
             changed = true;

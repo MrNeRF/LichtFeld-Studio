@@ -1285,6 +1285,8 @@ namespace lfs::vis::cap {
         auto* const node = scene.getMutableNode(node_name);
         if (!node || !node->model)
             return std::unexpected("Gaussian node not found: " + node_name);
+        if (node->external_training)
+            return std::unexpected("External trainer snapshot is read-only. Create a local copy to edit.");
 
         const auto canonical_field_name = canonical_gaussian_field_name(field_name);
         if (canonical_field_name.empty())

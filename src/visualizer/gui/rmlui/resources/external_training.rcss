@@ -1,0 +1,22 @@
+body { font-family: Inter; padding: 0; bottom: 0; }
+#content-wrap { min-width: 0; min-height: 0; padding: 6dp; overflow-x: hidden; overflow-y: auto; }
+.external-training { width: 100%; min-width: 0; }
+.external-training .hidden { display: none; }
+.external-training p { display: block; width: 100%; box-sizing: border-box; margin: 4dp 0; white-space: normal; word-break: normal; }
+.external-training .panel-title { margin: 2dp 0 6dp; }
+.current-card { width: 100%; min-width: 0; box-sizing: border-box; overflow-x: hidden; border: 1dp rgba(110, 160, 220, 130); border-radius: 4dp; padding: 7dp; margin-bottom: 8dp; }
+.current-name { display: block; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; font-weight: bold; white-space: nowrap; }
+.external-training .status-error, .external-training #et-saved-project { word-break: break-all; }
+.readonly-badge { font-size: 10dp; padding: 3dp 0; opacity: 0.75; }
+.current-actions { display: flex; flex-direction: column; margin-top: 6dp; }
+.external-training .current-actions .btn { width: 100%; box-sizing: border-box; margin-bottom: 5dp; }
+.external-training .current-card > .btn { width: 100%; box-sizing: border-box; margin-bottom: 5dp; }
+.external-training .details-toggle { display: block; font-size: 11dp; margin-top: 4dp; }
+.external-training .details { white-space: pre-wrap; word-break: break-all; font-size: 11dp; opacity: 0.8; }
+.external-training .browse-toggle { width: 100%; box-sizing: border-box; margin-bottom: 7dp; text-align: left; }
+.past-filter { display: flex; align-items: center; margin: 4dp 0 8dp; gap: 5dp; }
+.past-filter span { display: block; white-space: normal; }
+.field-label { display: block; margin-bottom: 3dp; }
+#et-choice { width: 100%; box-sizing: border-box; margin-bottom: 6dp; }
+#et-open { width: 100%; box-sizing: border-box; }
+#et-refresh { display: block; margin-top: 5dp; }

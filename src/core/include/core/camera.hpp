@@ -253,6 +253,8 @@ namespace lfs::core {
             _split = split;
         }
         int uid() const noexcept { return _uid; }
+        // Assign only to a detached camera, immediately before insertion into a scene.
+        void set_uid_before_scene_insert(const int uid) noexcept { _uid = uid; }
         int camera_id() const noexcept { return _camera_id; }
 
         float FoVx() const noexcept { return _FoVx; }

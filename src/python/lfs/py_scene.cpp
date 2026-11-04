@@ -25,9 +25,12 @@
 #include "visualizer/visualizer_impl.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <cuda_runtime_api.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/pair.h>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -35,6 +38,56 @@
 namespace lfs::python {
 
     namespace {
+        struct PreparedViewerSplat {
+            std::unique_ptr<core::SplatData> model;
+            std::unique_ptr<core::SplatData> retired;
+            core::SplatTensorAllocator allocator;
+            glm::vec3 centroid{0};
+            glm::mat4 transform{1.0f};
+        };
+        struct PreparedViewerCameras {
+            std::vector<std::shared_ptr<core::Camera>> cameras;
+        };
+
+        core::SceneNode* external_viewer_container(core::Scene& scene, core::SceneNode& anchor) {
+            const auto name = anchor.name + " session";
+            const auto uuid = anchor.uuid.to_string();
+            auto* group = scene.getMutableNode(name);
+            const bool created = !group;
+            if (!group) {
+                const auto id = scene.addGroup(name);
+                group = scene.getNodeById(id);
+                if (!group)
+                    throw std::runtime_error("Could not create the external trainer group");
+                group->transient = true;
+                group->training_enabled = false;
+                group->external_training.emplace();
+                group->external_training->owner_uuid = uuid;
+                group->locked.setQuiet(true);
+            }
+            if (group->type != core::NodeType::GROUP || !group->transient ||
+                !group->external_training || group->external_training->owner_uuid != uuid)
+                throw std::runtime_error("Existing local group cannot be replaced by a trainer preview");
+            if (anchor.parent_id != group->id) {
+                // Only the internal owner may reorganize its protected nodes.
+                // Keep world transforms and restore the lock before returning.
+                const bool locked = anchor.locked;
+                anchor.locked.setQuiet(false);
+                try {
+                    if (!scene.reparent(anchor.id, group->id))
+                        throw std::runtime_error("Could not group the external trainer preview");
+                } catch (...) {
+                    anchor.locked.setQuiet(locked);
+                    if (created && group->children.empty()) {
+                        group->external_training.reset();
+                        scene.removeNodeById(group->id);
+                    }
+                    throw;
+                }
+                anchor.locked.setQuiet(locked);
+            }
+            return group;
+        }
         template <typename F>
         auto point_cloud_access(core::Scene* scene, F&& access) -> std::invoke_result_t<F> {
             using T = std::invoke_result_t<F>;
@@ -251,6 +304,8 @@ namespace lfs::python {
 
     std::optional<PySplatData> PySceneNode::splat_data() {
         auto& live = node();
+        if (live.external_training)
+            throw std::runtime_error("External trainer data is read-only. Create a local copy before accessing mutable tensors.");
         if (live.type != core::NodeType::SPLAT || !live.model) {
             return std::nullopt;
         }
@@ -598,7 +653,14 @@ namespace lfs::python {
                                const int sh_degree,
                                const float scene_scale,
                                const int32_t parent,
-                               const bool transient) {
+                               const bool transient,
+                               const bool replace_existing) {
+        auto* const existing = scene_->getNode(name);
+        if (replace_existing && existing &&
+            (!transient || !existing->transient || existing->type != core::NodeType::SPLAT ||
+             existing->id == scene_->getTrainingModelNodeId())) {
+            throw std::runtime_error("Only a transient viewer splat may be replaced");
+        }
         const auto require_float32 = [](const char* field, const PyTensor& tensor) {
             const auto dtype = tensor.tensor().dtype();
             if (dtype != core::DataType::Float32) {
@@ -639,6 +701,11 @@ namespace lfs::python {
         }
 
         const size_t gaussian_count = splat->size();
+        if (replace_existing && existing) {
+            const auto id = existing->id;
+            scene_->replaceNodeModel(name, std::move(splat));
+            return id;
+        }
         const int32_t node_id = scene_->addSplat(name, std::move(splat), parent);
         if (node_id == core::NULL_NODE) {
             return core::NULL_NODE;
@@ -832,14 +899,7 @@ namespace lfs::python {
 
         // A camera without a uid is skipped by uid-keyed features such as the frustum overlay: give it the next free one.
         if (uid < 0) {
-            uid = 0;
-            for (const auto& existing : *scene_->getAllCamerasCached()) {
-                if (!existing)
-                    continue;
-                if (existing->uid() == std::numeric_limits<int>::max())
-                    throw nb::value_error("Cannot auto-assign a camera uid above INT_MAX");
-                uid = std::max(uid, existing->uid() + 1);
-            }
+            uid = scene_->allocateCameraUid();
         }
 
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -984,7 +1044,7 @@ namespace lfs::python {
     std::vector<PySceneNode> PyScene::get_active_cameras() {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getNodes()) {
-            if (node->type == core::NodeType::CAMERA && node->camera && node->training_enabled) {
+            if (node->type == core::NodeType::CAMERA && node->camera && node->training_enabled && !node->external_training) {
                 result.emplace_back(const_cast<core::SceneNode*>(node), scene_);
             }
         }
@@ -1031,6 +1091,8 @@ namespace lfs::python {
     }
 
     void PyScene::set_camera_training_enabled(const std::string& name, bool enabled) {
+        if (const auto* node = scene_->getNode(name); node && node->external_training)
+            throw std::runtime_error("External capture cameras are read-only and cannot enter training");
         if (auto* const scene_manager = get_scene_manager()) {
             const auto* node = scene_->getNode(name);
             if (!node || node->training_enabled == enabled) {
@@ -1074,6 +1136,8 @@ namespace lfs::python {
     }
 
     std::optional<PySplatData> PyScene::combined_model() {
+        if (scene_->hasExternalTraining())
+            throw std::runtime_error("Combined data includes a read-only trainer snapshot. Access an editable local node instead.");
         auto* model = const_cast<core::SplatData*>(scene_->getCombinedModel());
         if (!model)
             return std::nullopt;
@@ -1207,6 +1271,8 @@ namespace lfs::python {
         if (!node) {
             return false;
         }
+        if (node->external_training)
+            throw std::runtime_error("External trainer snapshot cannot be made persistent. Create a local copy.");
         if (node->transient == transient) {
             return true;
         }
@@ -1471,6 +1537,107 @@ namespace lfs::python {
     }
 
     void register_scene(nb::module_& m) {
+        using CpuArray = nb::ndarray<const float, nb::c_contig, nb::device::cpu>;
+        nb::class_<PreparedViewerSplat>(m, "PreparedViewerSplat")
+            .def("release", [](PreparedViewerSplat& value) {
+                nb::gil_scoped_release release;
+                value.retired.reset();
+                value.model.reset();
+            });
+        m.def("prepare_viewer_splat", [](CpuArray means, CpuArray sh0, CpuArray shn, CpuArray scale, CpuArray rotation, CpuArray opacity, const int degree, std::optional<CpuArray> transform) {
+            if (auto* viewer = get_visualizer(); viewer && viewer->isOnViewerThread())
+                throw std::runtime_error("Prepare viewer models on a worker thread");
+            if (means.ndim() != 2 || means.shape(1) != 3)
+                throw std::runtime_error("Invalid prepared Gaussian positions");
+            const auto n = means.shape(0);
+            if (!n || degree < 0 || degree > 3 ||
+                sh0.ndim() != 3 || sh0.shape(0) != n || sh0.shape(1) != 1 || sh0.shape(2) != 3 ||
+                shn.ndim() != 3 || shn.shape(0) != n || shn.shape(1) != static_cast<size_t>((degree + 1) * (degree + 1) - 1) || shn.shape(2) != 3 ||
+                scale.ndim() != 2 || scale.shape(0) != n || scale.shape(1) != 3 ||
+                rotation.ndim() != 2 || rotation.shape(0) != n || rotation.shape(1) != 4 ||
+                opacity.ndim() != 2 || opacity.shape(0) != n || opacity.shape(1) != 1)
+                throw std::runtime_error("Invalid prepared Gaussian layout");
+            glm::mat4 model_transform{1.0f};
+            if (transform) {
+                if (transform->ndim() != 2 || transform->shape(0) != 4 || transform->shape(1) != 4)
+                    throw std::runtime_error("Invalid viewer model transform shape");
+                for (int row = 0; row < 4; ++row)
+                    for (int col = 0; col < 4; ++col) {
+                        const float value = transform->data()[row * 4 + col];
+                        if (!std::isfinite(value) || std::abs(value) > 1.e10f)
+                            throw std::runtime_error("Invalid viewer model transform");
+                        model_transform[col][row] = value;
+                    }
+                if (glm::length(glm::vec4(model_transform[0][3], model_transform[1][3], model_transform[2][3], model_transform[3][3]) - glm::vec4(0,0,0,1)) > 1.e-6f ||
+                    std::abs(glm::determinant(glm::mat3(model_transform))) < 1.e-12f)
+                    throw std::runtime_error("Invalid viewer affine transform");
+            }
+            nb::gil_scoped_release release;
+            auto copy = [](const CpuArray& array) {
+                std::vector<size_t> dimensions;
+                for (size_t i = 0; i < array.ndim(); ++i)
+                    dimensions.push_back(array.shape(i));
+                auto cpu = core::Tensor::empty(core::TensorShape(dimensions), core::Device::CPU, core::DataType::Float32, false);
+                if (array.size())
+                    std::memcpy(cpu.data_ptr(), array.data(), array.size() * sizeof(float));
+                return cpu.to(core::Device::CUDA);
+            };
+            PreparedViewerSplat result;
+            result.transform = model_transform;
+            result.model = std::make_unique<core::SplatData>(degree, copy(means), copy(sh0), copy(shn),
+                                                           copy(scale), copy(rotation), copy(opacity), 1.0f);
+            result.allocator = vis::makeViewerSplatTensorAllocator();
+            if (result.allocator) {
+                auto migrated = io::migrateSplatTensorsToAllocator(*result.model, result.allocator);
+                if (!migrated)
+                    throw std::runtime_error(migrated.error().format());
+            }
+            const auto center = result.model->means_raw().mean({0}, false).cpu();
+            const auto* xyz = center.ptr<float>();
+            result.centroid = glm::vec3(xyz[0], xyz[1], xyz[2]);
+            if (cudaDeviceSynchronize() != cudaSuccess)
+                throw std::runtime_error("Could not finish viewer snapshot preparation");
+            return result; }, nb::arg("means"), nb::arg("sh0"), nb::arg("shn"), nb::arg("scale"), nb::arg("rotation"), nb::arg("opacity"), nb::arg("degree"), nb::arg("transform") = nb::none());
+        nb::class_<PreparedViewerCameras>(m, "PreparedViewerCameras")
+            .def("release", [](PreparedViewerCameras& value) {
+                nb::gil_scoped_release release;
+                value.cameras.clear();
+            });
+        m.def("prepare_viewer_cameras", [](CpuArray records) {
+            if (auto* viewer = get_visualizer(); viewer && viewer->isOnViewerThread())
+                throw std::runtime_error("Prepare camera previews on a worker thread");
+            if (records.ndim() != 2 || records.shape(1) != 22 || records.shape(0) > 10000)
+                throw std::runtime_error("Invalid viewer camera layout");
+            for (size_t i = 0; i < records.size(); ++i)
+                if (!std::isfinite(records.data()[i]) || std::abs(records.data()[i]) > 1.e10f)
+                    throw std::runtime_error("Invalid viewer camera value");
+            nb::gil_scoped_release release;
+            PreparedViewerCameras result;
+            for (size_t i = 0; i < records.shape(0); ++i) {
+                const float* row = records.data() + i * 22;
+                glm::mat4 c2w{1.0f};
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c) c2w[c][r] = row[r * 4 + c];
+                if (glm::length(glm::vec4(c2w[0][3],c2w[1][3],c2w[2][3],c2w[3][3])-glm::vec4(0,0,0,1)) > 1.e-6f ||
+                    std::abs(glm::determinant(glm::mat3(c2w))) < 1.e-12f ||
+                    row[16] <= 0 || row[17] <= 0 || row[20] < 1 || row[21] < 1 ||
+                    row[20] > 65536 || row[21] > 65536 || row[20] != std::floor(row[20]) || row[21] != std::floor(row[21]))
+                    throw std::runtime_error("Invalid viewer camera pose or intrinsics");
+                const auto w2c = glm::inverse(c2w);
+                auto R = core::Tensor::empty({3,3},core::Device::CPU,core::DataType::Float32);
+                auto T = core::Tensor::empty({3},core::Device::CPU,core::DataType::Float32);
+                for (int r = 0; r < 3; ++r) {
+                    T.ptr<float>()[r] = w2c[3][r];
+                    for (int c = 0; c < 3; ++c) R.ptr<float>()[r*3+c] = w2c[c][r];
+                }
+                auto camera = std::make_shared<core::Camera>(R,T,row[16],row[17],row[18],row[19],
+                    core::Tensor{},core::Tensor{},core::CameraModelType::PINHOLE,
+                    "Capture camera " + std::to_string(i+1),std::filesystem::path{},std::filesystem::path{},
+                    static_cast<int>(row[20]),static_cast<int>(row[21]),0);
+                camera->set_has_image(false);
+                result.cameras.push_back(std::move(camera));
+            }
+            return result; }, nb::arg("records"));
         const auto collision_access = [](auto&& action) {
             auto* manager = get_scene_manager();
             return point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
@@ -1742,6 +1909,8 @@ namespace lfs::python {
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
             .def_prop_ro("camera_focal_y", &PySceneNode::camera_focal_y, "Camera focal length in pixels (y)")
             .def_prop_ro("camera_width", &PySceneNode::camera_width, "Camera image width in pixels")
+            .def_prop_ro("camera_center_x", &PySceneNode::camera_center_x, "Camera principal point x in pixels")
+            .def_prop_ro("camera_center_y", &PySceneNode::camera_center_y, "Camera principal point y in pixels")
             .def_prop_ro("camera_height", &PySceneNode::camera_height, "Camera image height in pixels")
             // Property introspection
             .def("prop_info", &PySceneNode::prop_info, nb::arg("name"),
@@ -1775,29 +1944,213 @@ namespace lfs::python {
 
         // Scene class
         nb::class_<PyScene>(m, "Scene")
+            .def("create_external_viewer", [](PyScene& self, const std::string& name) {
+                auto* viewer = get_visualizer();
+                if (!viewer || !viewer->isOnViewerThread() || !self.is_valid())
+                    throw std::runtime_error("External viewer anchors must be created on the UI thread");
+                auto* scene = self.scene();
+                auto* node = scene->getMutableNode(name);
+                if (node && (!node->external_training || !node->transient || node->type != core::NodeType::SPLAT))
+                    throw std::runtime_error("An existing local node cannot become an external viewer");
+                const bool created = !node;
+                if (!node) {
+                    scene->addSplatPlaceholder(name);
+                    node = scene->getMutableNode(name);
+                    if (!node)
+                        throw std::runtime_error("Could not create external viewer anchor");
+                    node->transient = true;
+                    node->external_training.emplace();
+                    node->locked.setQuiet(true);
+                    node->training_enabled = false;
+                    scene->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                }
+                node->external_training->connected = true;
+                node->external_training->state = "connecting";
+                try {
+                    external_viewer_container(*scene, *node);
+                } catch (...) {
+                    if (created && node->children.empty()) {
+                        node->external_training.reset();
+                        scene->removeNodeById(node->id);
+                    }
+                    throw;
+                }
+                return node->id; }, nb::arg("name"))
+            .def("remove_external_viewer", [](PyScene& self, const std::string& name, const std::string& uuid) {
+                auto* viewer = get_visualizer();
+                if (!viewer || !viewer->isOnViewerThread() || !self.is_valid())
+                    throw std::runtime_error("Viewer previews must be removed on their live UI thread");
+                auto* scene = self.scene();
+                auto* node = scene->getMutableNode(name);
+                if (!node || node->uuid.to_string() != uuid || !node->external_training || !node->transient ||
+                    node->type != core::NodeType::SPLAT || node->id == scene->getTrainingModelNodeId())
+                    throw std::runtime_error("Only the matching transient external preview may be removed");
+                if (!node->children.empty())
+                    throw std::runtime_error("Move child nodes out of the preview before removing it");
+                PreparedViewerSplat retired;
+                const auto parent_id = node->parent_id;
+                retired.retired = scene->swapNodeModel(name, nullptr, true);
+                node->external_training.reset();
+                scene->removeNode(name);
+                auto* group = scene->getNodeById(parent_id);
+                if (group && group->type == core::NodeType::GROUP && group->transient &&
+                    group->children.empty() && group->external_training && group->external_training->owner_uuid == uuid) {
+                    group->external_training.reset();
+                    scene->removeNodeById(parent_id);
+                }
+                return retired; // Release retired GPU data on the caller's worker.
+            },
+                 nb::arg("name"), nb::arg("uuid"))
+            .def("install_prepared_viewer", [](PyScene& self, const std::string& name, PreparedViewerSplat& prepared, const bool editable_copy) {
+                auto* viewer = get_visualizer();
+                if (!self.is_valid() || !viewer || !viewer->isOnViewerThread())
+                    throw std::runtime_error("Prepared models must be installed on their live viewer thread");
+                if (!prepared.model)
+                    throw std::runtime_error("Prepared snapshot was already consumed");
+                auto* scene = self.scene();
+                auto* node = scene->getMutableNode(name);
+                if (node && editable_copy)
+                    throw std::runtime_error("A local copy must use a new node name");
+                if (node && (!node->external_training || !node->transient || node->type != core::NodeType::SPLAT || node->id == scene->getTrainingModelNodeId()))
+                    throw std::runtime_error("Only a transient viewer node may be updated");
+                if (!node) {
+                    scene->addSplatPlaceholder(name);
+                    node = scene->getMutableNode(name);
+                    if (!node)
+                        throw std::runtime_error("Could not create viewer placeholder");
+                    node->transient = true;
+                }
+                if (!editable_copy) {
+                    if (!node->external_training)
+                        node->external_training.emplace();
+                    external_viewer_container(*scene, *node);
+                }
+                prepared.retired = scene->swapNodeModel(name, nullptr, true);
+                node->model = std::move(prepared.model);
+                node->centroid = prepared.centroid;
+                node->gaussian_count.store(node->model->size(), std::memory_order_release);
+                node->payload_hydration = core::PayloadHydrationState::Loaded;
+                if (editable_copy) {
+                    node->transient = false;
+                    node->payload_diverged = true;
+                } else {
+                    if (!node->external_training)
+                        node->external_training.emplace();
+                    node->locked.setQuiet(true);
+                    node->training_enabled = false;
+                }
+                node->local_transform.setQuiet(prepared.transform);
+                if (node->external_training)
+                    node->external_training->model_transform = prepared.transform;
+                scene->invalidateTransformCache();
+                if (prepared.allocator)
+                    scene->setCombinedModelAllocator(prepared.allocator);
+                scene->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                if (auto* manager = get_scene_manager())
+                    ensure_scene_manager_content_type(*manager, vis::SceneManager::ContentType::SplatFiles);
+                return node->id; }, nb::arg("name"), nb::arg("prepared"), nb::arg("editable_copy") = false)
+            .def("install_external_camera", [](PyScene& self, const std::string& owner, const std::string& uuid, PreparedViewerCameras& prepared, const size_t index) {
+                auto* viewer = get_visualizer();
+                if (!viewer || !viewer->isOnViewerThread() || !self.is_valid())
+                    throw std::runtime_error("Camera previews must be installed on their live UI thread");
+                auto* scene = self.scene();
+                auto* anchor = scene->getMutableNode(owner);
+                if (!anchor || anchor->uuid.to_string() != uuid || !anchor->external_training || !anchor->transient)
+                    throw std::runtime_error("External camera owner changed");
+                if (index >= prepared.cameras.size() || !prepared.cameras[index])
+                    throw std::runtime_error("Prepared camera was already consumed");
+                const auto container_id = external_viewer_container(*scene, *anchor)->id;
+                const auto group_name = owner + " cameras";
+                auto* group = scene->getMutableNode(group_name);
+                if (!group) {
+                    scene->addCameraGroup(group_name,container_id,prepared.cameras.size(),uuid);
+                    group = scene->getMutableNode(group_name);
+                    if (!group)
+                        throw std::runtime_error("Could not create external capture camera group");
+                }
+                if (group->type != core::NodeType::CAMERA_GROUP || !group->external_training ||
+                    group->external_training->owner_uuid != uuid || !group->transient)
+                    throw std::runtime_error("Existing local camera group cannot be replaced");
+                if (group->parent_id != container_id) {
+                    const bool locked = group->locked;
+                    group->locked.setQuiet(false);
+                    try {
+                        if (!scene->reparent(group->id, container_id))
+                            throw std::runtime_error("Could not group the external capture cameras");
+                    } catch (...) {
+                        group->locked.setQuiet(locked);
+                        throw;
+                    }
+                    group->locked.setQuiet(locked);
+                }
+                const int uid = scene->allocateCameraUid();
+                auto camera = std::move(prepared.cameras[index]);
+                camera->set_uid_before_scene_insert(uid);
+                const auto id = scene->addCamera(group_name + " " + std::to_string(index+1),group->id,std::move(camera),uuid);
+                auto* node = scene->getNodeById(id);
+                if (!node) throw std::runtime_error("Could not install camera preview");
+                return id; }, nb::arg("owner"), nb::arg("uuid"), nb::arg("prepared"), nb::arg("index"))
+            .def("remove_external_camera", [](PyScene& self, const std::string& uuid, const std::string& owner) {
+                auto* viewer = get_visualizer();
+                if (!viewer || !viewer->isOnViewerThread() || !self.is_valid())
+                    throw std::runtime_error("Camera previews must be removed on their live UI thread");
+                if (uuid.empty()) throw std::runtime_error("Missing camera preview owner");
+                auto* scene = self.scene();
+                PreparedViewerCameras retired;
+                std::vector<const core::SceneNode*> candidates;
+                if (!owner.empty()) {
+                    const auto* group = scene->getNode(owner + " cameras");
+                    if (group && group->external_training && group->external_training->owner_uuid == uuid && group->transient) {
+                        // Reverse insertion order makes ordinary leaf removal cheap.
+                        for (auto it = group->children.rbegin(); it != group->children.rend(); ++it) {
+                            const auto* child = scene->getNodeById(*it);
+                            if (child && child->external_training && child->external_training->owner_uuid == uuid &&
+                                child->transient && child->children.empty()) {
+                                candidates.push_back(child);
+                                break;
+                            }
+                        }
+                        if (group->children.empty()) candidates.push_back(group);
+                    }
+                } else {
+                    candidates = scene->getNodes(); // Compatibility with the first viewer API.
+                }
+                for (const auto* candidate : candidates) {
+                    if ((candidate->type != core::NodeType::CAMERA && candidate->type != core::NodeType::CAMERA_GROUP) ||
+                        !candidate->external_training || candidate->external_training->owner_uuid != uuid ||
+                        !candidate->transient || !candidate->children.empty()) continue;
+                    const auto id = candidate->id;
+                    const auto parent_id = candidate->parent_id;
+                    auto* node = scene->getNodeById(id);
+                    if (node->camera) retired.cameras.push_back(std::move(node->camera));
+                    node->external_training.reset();
+                    scene->removeNodeById(id);
+                    auto* parent = scene->getNodeById(parent_id);
+                    if (parent && parent->type == core::NodeType::GROUP && parent->children.empty() &&
+                        parent->transient && parent->external_training && parent->external_training->owner_uuid == uuid) {
+                        parent->external_training.reset();
+                        scene->removeNodeById(parent_id);
+                    }
+                    return std::make_pair(true,std::move(retired));
+                }
+                return std::make_pair(false,std::move(retired)); }, nb::arg("uuid"), nb::arg("owner") = "")
+            .def("update_external_viewer", [](PyScene& self, const std::string& name, const std::string& state, int pid, int64_t iteration, int64_t total, int64_t shown, bool connected) {
+                auto* viewer = get_visualizer();
+                if (!viewer || !viewer->isOnViewerThread() || !self.is_valid())
+                    throw std::runtime_error("Viewer status must be updated on the UI thread");
+                auto* node = self.scene()->getMutableNode(name);
+                if (!node || !node->external_training)
+                    throw std::runtime_error("External viewer node not found");
+                auto& info = *node->external_training;
+                info.state = state; info.pid = pid; info.iteration = iteration;
+                info.total = total; info.shown_iteration = shown; info.connected = connected; }, nb::arg("name"), nb::arg("state"), nb::arg("pid"), nb::arg("iteration"), nb::arg("total"), nb::arg("shown"), nb::arg("connected"))
             // Thread-safe validity checking
-            .def("is_valid", &PyScene::is_valid,
-                 "Check if scene reference is still valid (thread-safe)")
-            .def_prop_ro("generation", &PyScene::generation,
-                         "Generation counter when scene was acquired")
-            .def_prop_ro("render_generation", &PyScene::render_generation,
-                         "Scene content revision, excluding Gaussian selection changes")
+            .def("is_valid", &PyScene::is_valid, "Check if scene reference is still valid (thread-safe)")
+            .def_prop_ro("generation", &PyScene::generation, "Generation counter when scene was acquired")
+            .def_prop_ro("render_generation", &PyScene::render_generation, "Scene content revision, excluding Gaussian selection changes")
             // Node CRUD
-            .def("add_group", &PyScene::add_group,
-                 nb::arg("name"), nb::arg("parent") = core::NULL_NODE,
-                 "Add an empty group node, returns node ID")
-            .def("add_splat", &PyScene::add_splat,
-                 nb::arg("name"),
-                 nb::arg("means"),
-                 nb::arg("sh0"),
-                 nb::arg("shN"),
-                 nb::arg("scaling"),
-                 nb::arg("rotation"),
-                 nb::arg("opacity"),
-                 nb::arg("sh_degree") = 0,
-                 nb::arg("scene_scale") = 1.0f,
-                 nb::arg("parent") = core::NULL_NODE,
-                 nb::arg("transient") = false,
+            .def("add_group", &PyScene::add_group, nb::arg("name"), nb::arg("parent") = core::NULL_NODE, "Add an empty group node, returns node ID")
+            .def("add_splat", &PyScene::add_splat, nb::arg("name"), nb::arg("means"), nb::arg("sh0"), nb::arg("shN"), nb::arg("scaling"), nb::arg("rotation"), nb::arg("opacity"), nb::arg("sh_degree") = 0, nb::arg("scene_scale") = 1.0f, nb::arg("parent") = core::NULL_NODE, nb::arg("transient") = false, nb::arg("replace_existing") = false,
                  R"doc(Add a new splat node from tensor data.
 
 Args:
@@ -1816,37 +2169,10 @@ Args:
 Returns:
     Node ID of created splat
 )doc")
-            .def("add_point_cloud", &PyScene::add_point_cloud,
-                 nb::arg("name"),
-                 nb::arg("points"),
-                 nb::arg("colors"),
-                 nb::arg("parent") = core::NULL_NODE,
-                 "Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError")
-            .def("add_mesh", &PyScene::add_mesh,
-                 nb::arg("name"),
-                 nb::arg("vertices"),
-                 nb::arg("indices"),
-                 nb::arg("colors") = nb::none(),
-                 nb::arg("normals") = nb::none(),
-                 nb::arg("parent") = core::NULL_NODE,
-                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError")
-            .def("add_camera_group", &PyScene::add_camera_group,
-                 nb::arg("name"),
-                 nb::arg("parent"),
-                 nb::arg("camera_count"),
-                 "Add a camera group node")
-            .def("add_camera", &PyScene::add_camera,
-                 nb::arg("name"),
-                 nb::arg("parent"),
-                 nb::arg("R"),
-                 nb::arg("T"),
-                 nb::arg("focal_x"),
-                 nb::arg("focal_y"),
-                 nb::arg("width"),
-                 nb::arg("height"),
-                 nb::arg("image_path") = "",
-                 nb::arg("uid") = -1,
-                 nb::arg("mask") = nb::none(),
+            .def("add_point_cloud", &PyScene::add_point_cloud, nb::arg("name"), nb::arg("points"), nb::arg("colors"), nb::arg("parent") = core::NULL_NODE, "Add a point cloud node from [N,3] positions and uint8 or float32 colors; other color dtypes raise ValueError")
+            .def("add_mesh", &PyScene::add_mesh, nb::arg("name"), nb::arg("vertices"), nb::arg("indices"), nb::arg("colors") = nb::none(), nb::arg("normals") = nb::none(), nb::arg("parent") = core::NULL_NODE, "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals; invalid color shapes raise ValueError")
+            .def("add_camera_group", &PyScene::add_camera_group, nb::arg("name"), nb::arg("parent"), nb::arg("camera_count"), "Add a camera group node")
+            .def("add_camera", &PyScene::add_camera, nb::arg("name"), nb::arg("parent"), nb::arg("R"), nb::arg("T"), nb::arg("focal_x"), nb::arg("focal_y"), nb::arg("width"), nb::arg("height"), nb::arg("image_path") = "", nb::arg("uid") = -1, nb::arg("mask") = nb::none(),
                  R"doc(Add a camera node with intrinsic and extrinsic parameters.
 
 Args:
@@ -1869,29 +2195,17 @@ Args:
 Returns:
     Node ID of created camera
 )doc")
-            .def("remove_node", &PyScene::remove_node,
-                 nb::arg("name"), nb::arg("keep_children") = false,
-                 "Remove a node by name, optionally keeping its children. Raises RuntimeError if the GUI scene manager rejects removal.")
-            .def("rename_node", &PyScene::rename_node,
-                 nb::arg("old_name"), nb::arg("new_name"),
-                 "Rename a node, returns true on success")
-            .def("clear", &PyScene::clear,
-                 "Remove all nodes from the scene")
+            .def("remove_node", &PyScene::remove_node, nb::arg("name"), nb::arg("keep_children") = false, "Remove a node by name, optionally keeping its children. Raises RuntimeError if the GUI scene manager rejects removal.")
+            .def("rename_node", &PyScene::rename_node, nb::arg("old_name"), nb::arg("new_name"), "Rename a node, returns true on success")
+            .def("clear", &PyScene::clear, "Remove all nodes from the scene")
             // Hierarchy
-            .def("reparent", &PyScene::reparent,
-                 nb::arg("node_id"), nb::arg("new_parent_id"),
-                 "Move a node under a new parent, returns true on success")
-            .def("root_nodes", &PyScene::root_nodes,
-                 "Get all root-level nodes")
+            .def("reparent", &PyScene::reparent, nb::arg("node_id"), nb::arg("new_parent_id"), "Move a node under a new parent, returns true on success")
+            .def("root_nodes", &PyScene::root_nodes, "Get all root-level nodes")
             // Queries
-            .def("get_node_by_id", &PyScene::get_node_by_id, nb::arg("id"),
-                 "Find a node by its integer ID (None if not found)")
-            .def("get_node_by_uuid", &PyScene::get_node_by_uuid, nb::arg("uuid"),
-                 "Find a node by its durable UUID (None if invalid or not found)")
-            .def("get_node", &PyScene::get_node, nb::arg("name"),
-                 "Find a node by name (None if not found)")
-            .def(
-                "get_nodes", [](PyScene& self, std::optional<core::NodeType> type) -> std::vector<PySceneNode> {
+            .def("get_node_by_id", &PyScene::get_node_by_id, nb::arg("id"), "Find a node by its integer ID (None if not found)")
+            .def("get_node_by_uuid", &PyScene::get_node_by_uuid, nb::arg("uuid"), "Find a node by its durable UUID (None if invalid or not found)")
+            .def("get_node", &PyScene::get_node, nb::arg("name"), "Find a node by name (None if not found)")
+            .def("get_nodes", [](PyScene& self, std::optional<core::NodeType> type) -> std::vector<PySceneNode> {
                     auto all = self.get_nodes();
                     if (!type)
                         return all;
@@ -1900,9 +2214,7 @@ Returns:
                         if (node.type() == *type)
                             filtered.push_back(std::move(node));
                     }
-                    return filtered;
-                },
-                nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
+                    return filtered; }, nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
             .def("get_visible_nodes", &PyScene::get_visible_nodes, "Get all visible nodes in the scene")
             .def("snapshot_visible_splats", &PyScene::snapshot_visible_splats, "Copy visible splats and world transforms at a UI safe point. Returned data owns its storage and supports worker-side export after scene edits or deletion.")
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")

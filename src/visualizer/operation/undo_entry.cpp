@@ -239,6 +239,12 @@ namespace lfs::vis::op {
             if (!target.uuid.is_nil() && node->uuid != target.uuid) {
                 throw std::runtime_error("Scene node UUID mismatch while restoring metadata for '" + target.name + "'");
             }
+            if (node->external_training) {
+                // Visibility is a local presentation choice. History must never
+                // turn a streamed snapshot into an editable document node.
+                scene.setNodeVisibility(node->id, target.visible);
+                return;
+            }
 
             if (current_name != target.name) {
                 if (!scene.renameNode(current_name, target.name)) {

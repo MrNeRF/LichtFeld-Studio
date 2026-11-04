@@ -359,9 +359,14 @@ def _build_builtin_panel_steps(lf):
 
         register_overlays()
 
+    def training_sessions_panel():
+        from .training_runtime.panel import register
+        register()
+
     return [
         ("rendering_panel", rendering_panel),
         ("training_panel", training_panel),
+        ("training_sessions_panel", training_sessions_panel),
         ("import_panels", import_panels),
         ("operators", operators),
         ("sequencer_ops", sequencer_ops),

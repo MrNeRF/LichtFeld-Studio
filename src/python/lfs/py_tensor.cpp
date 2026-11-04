@@ -370,8 +370,12 @@ namespace lfs::python {
                 "numpy(copy=False): non-contiguous CPU tensors cannot be exported without a copy; "
                 "call contiguous() or use copy=True");
         }
-        Tensor host = tensor_.device() == Device::CUDA ? tensor_.cpu() : tensor_;
-        Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
+        Tensor cpu_tensor;
+        {
+            nb::gil_scoped_release release;
+            Tensor host = tensor_.device() == Device::CUDA ? tensor_.cpu() : tensor_;
+            cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
+        }
 
         const auto& dims = cpu_tensor.shape().dims();
         size_t elem_size = 4;
@@ -392,7 +396,10 @@ namespace lfs::python {
             if (!buffer) {
                 throw std::bad_alloc();
             }
-            std::memcpy(buffer, cpu_tensor.data_ptr(), total_bytes);
+            {
+                nb::gil_scoped_release release;
+                std::memcpy(buffer, cpu_tensor.data_ptr(), total_bytes);
+            }
 
             // Create owner capsule for memory management
             nb::capsule owner(buffer, [](void* p) noexcept { std::free(p); });
@@ -1831,10 +1838,10 @@ namespace lfs::python {
 
             // Memory operations
             .def("clone", &PyTensor::clone, "Deep copy of tensor")
-            .def("cpu", &PyTensor::cpu, "Move tensor to CPU")
-            .def("cuda", &PyTensor::cuda, "Move tensor to CUDA")
+            .def("cpu", &PyTensor::cpu, nb::call_guard<nb::gil_scoped_release>(), "Move tensor to CPU")
+            .def("cuda", &PyTensor::cuda, nb::call_guard<nb::gil_scoped_release>(), "Move tensor to CUDA")
             .def("contiguous", &PyTensor::contiguous, "Make tensor contiguous")
-            .def("sync", &PyTensor::sync, "Synchronize CUDA stream")
+            .def("sync", &PyTensor::sync, nb::call_guard<nb::gil_scoped_release>(), "Synchronize CUDA stream")
             .def("size", &PyTensor::size, nb::arg("dim"), "Size of dimension")
 
             // Scalar extraction
@@ -2013,7 +2020,7 @@ namespace lfs::python {
             .def("sort", &PyTensor::sort, nb::arg("dim") = -1, nb::arg("descending") = false, "Sort tensor values along a dimension and return (values, indices)")
 
             // Advanced indexing
-            .def("index_select", &PyTensor::index_select, nb::arg("dim"), nb::arg("indices"), "Select along dimension by indices")
+            .def("index_select", &PyTensor::index_select, nb::arg("dim"), nb::arg("indices"), nb::call_guard<nb::gil_scoped_release>(), "Select along dimension by indices")
             .def("gather", &PyTensor::gather, nb::arg("dim"), nb::arg("indices"), "Gather values along dimension")
             .def("masked_select", &PyTensor::masked_select, nb::arg("mask"), "Select elements where mask is true")
             .def("masked_fill", &PyTensor::masked_fill, nb::arg("mask"), nb::arg("value"), "Fill elements where mask is true")

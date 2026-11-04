@@ -1756,13 +1756,14 @@ _repl_out.close()
     }
 
     lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts) {
-        if (scripts.empty()) {
+
+        if (auto status = ensure_initialized(); !status) {
+            if (!scripts.empty())
+                return status;
+            LOG_WARN("Optional external training viewer unavailable: Python initialization failed");
             return {};
         }
-
-        if (auto status = ensure_initialized(); !status)
-            return status;
-        if (!ensure_plugins_loaded())
+        if (!scripts.empty() && !ensure_plugins_loaded())
             return lfs::Status::failure(lfs::make_error({
                 .code = lfs::ErrorCode::Unavailable,
                 .domain = lfs::ErrorDomain::Python,
@@ -1793,6 +1794,11 @@ _repl_out.close()
         {
             PyObject* lf_module = import_lichtfeld_module("Failed to pre-import lichtfeld module");
             if (!lf_module) {
+                if (scripts.empty()) {
+                    PyErr_Clear();
+                    LOG_WARN("Optional external training viewer unavailable: module import failed");
+                    return {};
+                }
                 return lfs::Status::failure(lfs::make_error({
                     .code = lfs::ErrorCode::Unavailable,
                     .domain = lfs::ErrorDomain::Python,
@@ -1803,6 +1809,14 @@ _repl_out.close()
             }
             Py_DECREF(lf_module);
             LOG_INFO("Successfully pre-imported lichtfeld module");
+        }
+
+        // Register external-viewer discovery for every trainer, including runs
+        // with no user scripts. The module does not prepare NumPy or capture
+        // model data until a renderer subscribes.
+        if (PyRun_SimpleString("from lfs_plugins.training_runtime.producer import install\ninstall()") != 0) {
+            PyErr_Clear();
+            LOG_WARN("External training-session discovery could not initialize");
         }
 
         for (const auto& script : scripts) {

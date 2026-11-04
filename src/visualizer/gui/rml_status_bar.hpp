@@ -205,6 +205,11 @@ namespace lfs::vis::gui {
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
+            bool show_external_training = false;
+            std::string external_training_text;
+            std::string external_training_tooltip;
+            std::string external_training_width = "0%";
+            std::string external_training_color;
             bool progress_miner = false;
             bool progress_tessle = false;
             std::string tessle_left = "0dp";

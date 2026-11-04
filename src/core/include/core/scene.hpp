@@ -207,6 +207,19 @@ namespace lfs::core {
         // Shown in the viewer but never saved to the project, e.g. a preview
         // that its owner fetches again when the project is opened.
         bool transient = false;
+        // A streamed trainer snapshot is immutable to local editing. This role
+        // is independent of the user-toggleable scene lock and never serialized.
+        struct ExternalTraining {
+            std::string state = "connecting";
+            int pid = 0;
+            int64_t iteration = 0;
+            int64_t total = 0;
+            int64_t shown_iteration = 0;
+            bool connected = true;
+            glm::mat4 model_transform{1.0f};
+            std::string owner_uuid;
+        };
+        std::optional<ExternalTraining> external_training;
         PayloadHydrationState payload_hydration =
             PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
@@ -358,12 +371,13 @@ namespace lfs::core {
         // recycle its (e.g. Vulkan-external) backing storage. Cheap: no disk/parse/upload,
         // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> swapNodeModel(
-            const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+            const std::string& name, std::unique_ptr<lfs::core::SplatData> model, bool viewer_update = false);
         [[nodiscard]] bool setPayloadHydrationState(
             const Uuid& uuid, PayloadHydrationState state);
         void setNodeVisibility(const std::string& name, bool visible);
         void setNodeVisibility(NodeId id, bool visible);
         void setNodeLocked(const std::string& name, bool locked);
+        [[nodiscard]] bool hasExternalTraining(NodeId root = NULL_NODE) const;
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         void setNodeTransform(NodeId id, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
@@ -398,8 +412,14 @@ namespace lfs::core {
         NodeId addCropPolygon(const std::string& name, NodeId parent_id, CropPolygonData data,
                               const glm::mat4& local_transform = glm::mat4(1.0f));
         NodeId addDataset(const std::string& name);
-        NodeId addCameraGroup(const std::string& name, NodeId parent, size_t camera_count);
-        NodeId addCamera(const std::string& name, NodeId parent, std::shared_ptr<lfs::core::Camera> camera);
+        // Internal preview installation supplies the validated owner's UUID;
+        // ordinary additions cannot enter a protected external container.
+        NodeId addCameraGroup(const std::string& name, NodeId parent, size_t camera_count,
+                              const std::string& viewer_owner_uuid = {});
+        NodeId addCamera(const std::string& name, NodeId parent, std::shared_ptr<lfs::core::Camera> camera,
+                         const std::string& viewer_owner_uuid = {});
+        // UI-thread allocation; explicit/restored camera UIDs advance this watermark.
+        [[nodiscard]] int allocateCameraUid();
         NodeId addKeyframeGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addKeyframe(const std::string& name, NodeId parent, std::unique_ptr<KeyframeData> data);
         // Identity-preserving insert for history and future SCNG hydration only.
@@ -876,6 +896,7 @@ namespace lfs::core {
         std::unordered_map<std::string, NodeId> name_to_id_;
         std::unordered_map<Uuid, NodeId> uuid_to_id_;
         NodeId next_node_id_ = 0;
+        int64_t next_camera_uid_ = 0;
 
         uint32_t pending_mutations_ = 0;
         int transaction_depth_ = 0;

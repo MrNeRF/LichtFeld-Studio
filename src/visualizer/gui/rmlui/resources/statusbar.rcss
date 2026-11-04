@@ -2,6 +2,33 @@ div {
     display: block;
 }
 
+#external-training-section {
+    display: flex;
+    align-items: center;
+    height: 18dp;
+    margin-left: 8dp;
+    padding: 0 5dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+    max-width: 620dp;
+    overflow: hidden;
+}
+#external-training-lock { width: 12dp; height: 12dp; margin-right: 5dp; }
+#external-training-track {
+    width: 70dp;
+    min-width: 70dp;
+    height: 6dp;
+    margin-right: 6dp;
+    background-color: #314051;
+    border-radius: 2dp;
+    overflow: hidden;
+}
+#external-training-fill { height: 100%; width: 0%; }
+#external-training-label { white-space: nowrap; }
+#status-left > #external-training-section { flex-shrink: 1; min-width: 210dp; }
+#external-training-label { flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
+#external-training-section.hidden { display: none; }
+
 body {
     font-family: Inter;
     font-size: 12dp;

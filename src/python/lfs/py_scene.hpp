@@ -315,12 +315,16 @@ namespace lfs::python {
             const auto& live = node();
             if (!live.camera)
                 return std::nullopt;
+            if (live.external_training)
+                return PyTensor(live.camera->R().clone(), true);
             return PyTensor(live.camera->R(), false);
         }
         std::optional<PyTensor> camera_T() const {
             const auto& live = node();
             if (!live.camera)
                 return std::nullopt;
+            if (live.external_training)
+                return PyTensor(live.camera->T().clone(), true);
             return PyTensor(live.camera->T(), false);
         }
         std::optional<float> camera_focal_x() const {
@@ -341,6 +345,12 @@ namespace lfs::python {
                 return std::nullopt;
             return live.camera->camera_width();
         }
+        std::optional<float> camera_center_x() const {
+            return node().camera ? std::optional<float>(node().camera->center_x()) : std::nullopt;
+        }
+        std::optional<float> camera_center_y() const {
+            return node().camera ? std::optional<float>(node().camera->center_y()) : std::nullopt;
+        }
         std::optional<int> camera_height() const {
             const auto& live = node();
             if (!live.camera)
@@ -357,6 +367,8 @@ namespace lfs::python {
             return property().getattr(name);
         }
         void set(const std::string& name, nb::object value) {
+            if (node().external_training && name != "visible")
+                throw std::runtime_error("External trainer snapshot is read-only. Create a local copy to edit.");
             if (name == "local_transform" && scene_->isNodeEffectivelyLocked(node().id))
                 return;
             property().setattr(name, value);
@@ -508,7 +520,8 @@ namespace lfs::python {
                           int sh_degree,
                           float scene_scale,
                           int32_t parent = core::NULL_NODE,
-                          bool transient = false);
+                          bool transient = false,
+                          bool replace_existing = false);
         int32_t add_point_cloud(const std::string& name,
                                 const PyTensor& points,
                                 const PyTensor& colors,

@@ -45,6 +45,8 @@ tests/data/nn/*
 !src/python/scripts/manage_stubs.py
 !tests/real_bicycle_sh_degree_training.py
 !tests/python/**/*.py
+!tests/external_training/*.py
+!src/python/lfs_plugins/training_runtime/*.py
 !docs/plugins/examples/**/*.py
 !tools/*.py
 !tools/nn_export/export_lpips_weights.py

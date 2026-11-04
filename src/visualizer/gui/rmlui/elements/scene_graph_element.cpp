@@ -1173,7 +1173,7 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
-            snapshot.locked = static_cast<bool>(node->locked);
+            snapshot.locked = node->external_training.has_value() || static_cast<bool>(node->locked);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.camera_uid = node->camera_uid;
@@ -1245,6 +1245,26 @@ namespace lfs::vis::gui {
                 break;
             }
 
+            if (node->external_training) {
+                // Runtime names carry ownership/session identities. Keep the
+                // same short, numbered camera labels as ordinary scene cameras.
+                if (node->type == core::NodeType::CAMERA) {
+                    const auto suffix = node->name.find_last_of(' ');
+                    snapshot.label = LOCF("scene.external_camera_label", suffix == std::string::npos ? "" : node->name.substr(suffix + 1));
+                } else if (node->type == core::NodeType::CAMERA_GROUP) {
+                    snapshot.label = LOCF("scene.external_cameras_label", node->children.size());
+                } else if (node->type == core::NodeType::GROUP && !node->external_training->owner_uuid.empty()) {
+                    constexpr std::string_view prefix = "Attached trainer ";
+                    std::string_view identity = node->name;
+                    if (identity.starts_with(prefix))
+                        identity.remove_prefix(prefix.size());
+                    snapshot.label = LOCF("scene.external_trainer_label", identity.substr(0, 8));
+                } else if (node->type == core::NodeType::SPLAT) {
+                    const auto it = active_gaussian_counts.find(node->id);
+                    snapshot.label = formatSplatLabel(tr("scene.external_preview_label"),
+                                                      it == active_gaussian_counts.end() ? 0 : it->second);
+                }
+            }
             snapshots.emplace(snapshot.id, std::move(snapshot));
             if (node->parent_id == core::NULL_NODE)
                 root_ids.push_back(node->id);
@@ -1268,28 +1288,29 @@ namespace lfs::vis::gui {
         }
 
         for (auto& [id, snapshot] : snapshots) {
+            const auto* node = scene.getNodeById(id);
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
-            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked) ||
-                                 snapshot.type == core::NodeType::SPLAT || snapshot.type == core::NodeType::GROUP;
+            snapshot.draggable = !node->external_training && (canDrag(snapshot.type, parent_is_dataset, snapshot.locked) ||
+                                                              snapshot.type == core::NodeType::SPLAT || snapshot.type == core::NodeType::GROUP);
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
             snapshot.delete_enabled = snapshot.can_delete &&
                                       !snapshot.locked &&
                                       !delete_blocked_ids.contains(id);
-            snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
+            snapshot.can_rename = !node->external_training && isRenamable(snapshot.type, parent_is_dataset);
             snapshot.rename_enabled = snapshot.can_rename;
             snapshot.can_toggle_training =
-                snapshot.type == core::NodeType::CAMERA ||
-                snapshot.type == core::NodeType::CAMERA_GROUP;
+                !node->external_training && (snapshot.type == core::NodeType::CAMERA ||
+                                             snapshot.type == core::NodeType::CAMERA_GROUP);
             snapshot.camera_frustum_container =
-                (snapshot.type == core::NodeType::GROUP &&
-                 std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
-                     const auto child_it = snapshots.find(child_id);
-                     return child_it != snapshots.end() &&
-                            child_it->second.type == core::NodeType::CAMERA_GROUP;
-                 })) ||
-                (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP));
+                !node->external_training && ((snapshot.type == core::NodeType::GROUP &&
+                                              std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
+                                                  const auto child_it = snapshots.find(child_id);
+                                                  return child_it != snapshots.end() &&
+                                                         child_it->second.type == core::NodeType::CAMERA_GROUP;
+                                              })) ||
+                                             (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP)));
             if (snapshot.camera_frustum_container) {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;
@@ -1297,7 +1318,7 @@ namespace lfs::vis::gui {
             if (!apply_session_collapse &&
                 !previous_ids.contains(id) &&
                 snapshot.type == core::NodeType::CAMERA_GROUP &&
-                static_cast<int>(snapshot.children.size()) >= kAutoCollapseCameraGroupThreshold) {
+                (node->external_training || static_cast<int>(snapshot.children.size()) >= kAutoCollapseCameraGroupThreshold)) {
                 collapsed_ids_.insert(id);
             }
         }
@@ -1318,7 +1339,8 @@ namespace lfs::vis::gui {
             appendSnapshotRows(child_id, depth + 1, child_rows, filter_text_lower);
 
         if (!filter_text_lower.empty() &&
-            lowerCopy(snapshot.name).find(filter_text_lower) == std::string::npos) {
+            lowerCopy(snapshot.name).find(filter_text_lower) == std::string::npos &&
+            lowerCopy(snapshot.label).find(filter_text_lower) == std::string::npos) {
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
             return;
         }
@@ -1339,7 +1361,7 @@ namespace lfs::vis::gui {
             .name = snapshot.name,
             .label = snapshot.label,
             .node_id_text = std::to_string(snapshot.id),
-            .encoded_label = encode(snapshot.label),
+            .encoded_label = (snapshot.locked ? "<img src=\"../icon/scene/locked.png\" style=\"width:12dp;height:12dp;margin-right:4dp;\"/>" : "") + encode(snapshot.label),
             .padding_left_dp = formatDp((selection_markers_visible_ ? 17 : 4) + depth * 16),
             .has_mask = snapshot.has_mask,
             .can_delete = snapshot.can_delete,
@@ -1767,7 +1789,7 @@ namespace lfs::vis::gui {
         setCachedProperty(slot.rename_input, "display", renaming ? "inline" : "none");
         setCachedProperty(slot.node_name, "display", renaming ? "none" : "block");
         setCachedClass(slot.node_name, "training-disabled",
-                       row.type == core::NodeType::CAMERA && !row.training_enabled);
+                       row.type == core::NodeType::CAMERA && row.can_toggle_training && !row.training_enabled);
         setCachedInnerRml(slot.node_name, row.encoded_label);
         if (renaming) {
             if (rename_buffer_.empty())

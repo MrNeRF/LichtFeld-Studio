@@ -254,7 +254,9 @@ namespace lfs::vis::op {
         if (cache_it != poll_cache_.end()) {
             const auto& e = cache_it->second;
             bool valid = true;
-            if ((deps & PollDependency::SCENE) != PollDependency::NONE) {
+            // A selection can change from editable to locked while remaining
+            // non-empty. The boolean alone cannot validate permission polls.
+            if ((deps & (PollDependency::SCENE | PollDependency::SELECTION)) != PollDependency::NONE) {
                 valid &= (e.scene_generation == gen);
             }
             if ((deps & PollDependency::SELECTION) != PollDependency::NONE) {
