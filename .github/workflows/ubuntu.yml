@@ -189,6 +189,17 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld_format_tests$'
 
+      - name: Run CPU training-adapter contracts
+        env:
+          CUDA_VISIBLE_DEVICES: '-1'
+          NVIDIA_VISIBLE_DEVICES: void
+        run: |
+          cmake --build build --target lichtfeld_training_adapter_tests -j $(nproc)
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.training_adapter$'
+
       - name: Build and run EXR image codec tests
         run: |
           cmake --build build --target lichtfeld_image_codec_tests -j $(nproc)

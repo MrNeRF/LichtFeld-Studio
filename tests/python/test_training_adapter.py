@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import textwrap
 
 import pytest
@@ -21,6 +22,56 @@ def test_owned_host_numpy_export(lf, numpy):
     numpy.testing.assert_array_equal(exported, original)
     exported[:] = -10
     numpy.testing.assert_array_equal(tensor.numpy(), original)
+
+
+@pytest.mark.gpu
+def test_sync_releases_gil_for_cuda_host_callback(gpu_available, tmp_path):
+    if not gpu_available:
+        pytest.skip("CUDA GPU required")
+    # A PyDLL enqueue keeps the GIL held until Tensor.sync. With no GIL release
+    # there, the queued Python callback and the device synchronization deadlock.
+    # A subprocess timeout contains that regression without hanging pytest.
+    code = textwrap.dedent('''\
+        import ctypes, ctypes.util, os, sys
+        from pathlib import Path
+        build = Path(os.environ["LFS_TEST_BUILD_DIR"])
+        if os.name == "nt":
+            dll_directory = os.add_dll_directory(str(build))
+        import lichtfeld as lf
+        import numpy as np
+        tensor = lf.Tensor.from_numpy(np.ones(1, dtype=np.float32)).cuda()
+        tensor.sync()
+        library = "cudart64_12.dll" if os.name == "nt" else ctypes.util.find_library("cudart")
+        runtime = ctypes.PyDLL(library)
+        callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
+        runtime.cudaStreamCreateWithFlags.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint]
+        runtime.cudaLaunchHostFunc.argtypes = [ctypes.c_void_p, callback_type, ctypes.c_void_p]
+        runtime.cudaStreamDestroy.argtypes = [ctypes.c_void_p]
+        stream = ctypes.c_void_p()
+        assert runtime.cudaStreamCreateWithFlags(ctypes.byref(stream), 1) == 0
+        calls = []
+        callback = callback_type(lambda _: calls.append(True))
+        sync = tensor.sync
+        previous_interval = sys.getswitchinterval()
+        try:
+            sys.setswitchinterval(60)
+            assert runtime.cudaLaunchHostFunc(stream, callback, None) == 0
+            sync()
+            assert calls == [True]
+        finally:
+            sys.setswitchinterval(previous_interval)
+            assert runtime.cudaStreamDestroy(stream) == 0
+        print("CUDA_CALLBACK_GIL_RELEASE_PASS")
+    ''')
+    root = Path(__file__).resolve().parents[2]
+    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build")))
+    environment = {**os.environ, "LFS_TEST_BUILD_DIR": str(build),
+                   "PYTHONPATH": os.pathsep.join(sys.path), "LFS_HOME": str(tmp_path / "runtime")}
+    result = subprocess.run([sys.executable, "-c", code], env=environment, capture_output=True,
+                            text=True, timeout=15,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "CUDA_CALLBACK_GIL_RELEASE_PASS" in result.stdout
 
 
 @pytest.fixture
