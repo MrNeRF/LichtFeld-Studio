@@ -392,17 +392,32 @@ endif()
 if(NVIDIA_SMI)
     execute_process(
             COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
+            RESULT_VARIABLE NVIDIA_SMI_CAP_RESULT
             OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
+            ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
 
     execute_process(
             COMMAND ${NVIDIA_SMI} --query-gpu=driver_version --format=csv,noheader
+            RESULT_VARIABLE NVIDIA_SMI_DRIVER_RESULT
             OUTPUT_VARIABLE NVIDIA_DRIVER_VERSION
+            ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" NVIDIA_DRIVER_VERSION "${NVIDIA_DRIVER_VERSION}")
+    # nvidia-smi fails, printing its error to stdout, when the loaded driver and its libraries differ
+    # (a driver update before a reboot) or no GPU answers. CUDA itself may still work: fall back as if
+    # nvidia-smi were missing instead of reading the error as a version.
+    if(NOT NVIDIA_SMI_CAP_RESULT EQUAL 0 OR NOT NVIDIA_SMI_DRIVER_RESULT EQUAL 0 OR
+       NOT DETECTED_COMPUTE_CAP MATCHES "^[0-9]+\\.[0-9]+$" OR NOT NVIDIA_DRIVER_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$")
+        message(WARNING "nvidia-smi could not query the GPU (${DETECTED_COMPUTE_CAP}); "
+            "skipping the driver check. Reboot after a driver update.")
+        set(NVIDIA_SMI_FAILED TRUE)
+    endif()
+endif()
+if(NVIDIA_SMI AND NOT NVIDIA_SMI_FAILED)
     message(STATUS "Detected NVIDIA driver: ${NVIDIA_DRIVER_VERSION}")
     if(NVIDIA_DRIVER_VERSION VERSION_LESS "570")
         message(FATAL_ERROR "NVIDIA driver ${NVIDIA_DRIVER_VERSION} is too old. "
@@ -417,7 +432,7 @@ if(NVIDIA_SMI)
         set(LichtFeld-Studio_CUDA_ARCH "native")
     endif()
 else()
-    message(STATUS "nvidia-smi not found; using CUDA architecture 8.6 for this build")
+    message(STATUS "No GPU found through nvidia-smi; using CUDA architecture 8.6 for this build")
     set(DETECTED_COMPUTE_CAP 8.6)
     set(LichtFeld-Studio_CUDA_ARCH "86")
 endif()
