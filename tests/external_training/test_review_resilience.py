@@ -81,9 +81,35 @@ class ReviewResilience(unittest.TestCase):
                 self.assertTrue(observer.status['geometry_error'])
                 self.assertEqual(frame['record']['iteration'], 1)
                 observer.acknowledge(frame['record']['id'])
+                publisher.update(state='paused')
                 geometry.publish(publisher, {'schema':1, 'cameras':[], 'model_to_data':geometry.IDENTITY})
                 observer.geometry_retry_at = 0
                 self.until(lambda: observer.geometry is not None and not observer.status.get('geometry_error'), lambda: observer.status)
+                repaired = None
+                def take_repaired():
+                    nonlocal repaired
+                    repaired = repaired or observer.take()
+                    return repaired is not None
+                self.until(take_repaired, lambda: observer.error)
+                self.assertEqual(repaired['record']['id'], frame['record']['id'])
+                self.assertIsNotNone(repaired['geometry'])
+                observer.acknowledge(repaired['record']['id'], geometry_ref=None)
+                self.until(lambda: observer.ack.empty(), lambda: observer.error)
+                self.assertTrue(observer.pending)  # An old geometry ACK cannot retire this frame.
+                observer.acknowledge(repaired['record']['id'], 'installation failed')
+                self.until(lambda: observer.error == 'installation failed', lambda: observer.error)
+                observer.retry_at = 0
+                repaired = None
+                self.until(take_repaired, lambda: observer.error)
+                observer.acknowledge(repaired['record']['id'])
+                self.until(lambda: observer.last_geometry_ref == repaired['geometry_ref'], lambda: observer.error)
+                publisher.update(geometry=None)
+                repaired = None
+                self.until(take_repaired, lambda: observer.error)
+                self.assertIsNone(repaired['geometry'])
+                self.assertEqual(repaired['record']['id'], frame['record']['id'])
+                observer.acknowledge(repaired['record']['id'])
+                self.until(lambda: observer.last_geometry_ref is None, lambda: observer.error)
                 self.assertFalse(observer.error)
             finally:
                 observer.close()

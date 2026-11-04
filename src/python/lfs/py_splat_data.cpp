@@ -4,6 +4,7 @@
 
 #include "py_splat_data.hpp"
 #include "core/scene.hpp"
+#include "core/splat_preview.hpp"
 #include <nanobind/stl/optional.h>
 #include <stdexcept>
 #include <string_view>
@@ -157,69 +158,46 @@ namespace lfs::python {
                          "SHN tensor in canonical [N, (degree+1)^2-1, 3] layout "
                          "(materialised from the internal swizzled storage — this allocates, "
                          "not a view).")
-            .def_prop_ro("scaling_raw", &PySplatData::scaling_raw,
-                         "Raw scaling tensor [N, 3] (log-space, view)")
-            .def_prop_ro("rotation_raw", &PySplatData::rotation_raw,
-                         "Raw rotation tensor [N, 4] (quaternions, view)")
-            .def_prop_ro("opacity_raw", &PySplatData::opacity_raw,
-                         "Raw opacity tensor [N, 1] (logit-space, view)")
+            .def("shN_rows", [](const PySplatData& self, const PyTensor& rows, int degree) { return PyTensor(core::splat_sh_preview(*self.data(), rows.tensor(), degree), true); }, nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(), "Copy only selected SH-rest rows and bands to canonical Float32 CPU storage. "
+                                                                                                                                                                                                                                                                  "Rows must be a rank-1 CPU integer tensor; call at a model read boundary.")
+            .def_prop_ro("scaling_raw", &PySplatData::scaling_raw, "Raw scaling tensor [N, 3] (log-space, view)")
+            .def_prop_ro("rotation_raw", &PySplatData::rotation_raw, "Raw rotation tensor [N, 4] (quaternions, view)")
+            .def_prop_ro("opacity_raw", &PySplatData::opacity_raw, "Raw opacity tensor [N, 1] (logit-space, view)")
 
             // Computed getters
-            .def("get_means", &PySplatData::get_means,
-                 "Get means (same as means_raw for now)")
-            .def("get_opacity", &PySplatData::get_opacity,
-                 "Get opacity with sigmoid applied")
-            .def("get_rotation", &PySplatData::get_rotation,
-                 "Get normalized rotation quaternions")
-            .def("get_scaling", &PySplatData::get_scaling,
-                 "Get scaling with exp applied")
-            .def("get_shs", &PySplatData::get_shs,
-                 "Get concatenated SH coefficients (sh0 + shN)")
+            .def("get_means", &PySplatData::get_means, "Get means (same as means_raw for now)")
+            .def("get_opacity", &PySplatData::get_opacity, "Get opacity with sigmoid applied")
+            .def("get_rotation", &PySplatData::get_rotation, "Get normalized rotation quaternions")
+            .def("get_scaling", &PySplatData::get_scaling, "Get scaling with exp applied")
+            .def("get_shs", &PySplatData::get_shs, "Get concatenated SH coefficients (sh0 + shN)")
 
             // RGB color accessors
-            .def("get_colors_rgb", &PySplatData::get_colors_rgb,
-                 "Get RGB colors [N, 3] in [0,1] range (handles SH0 encoding)")
-            .def("set_colors_rgb", &PySplatData::set_colors_rgb, nb::arg("colors"),
-                 "Set RGB colors from [N, 3] tensor in [0,1] range (handles SH0 encoding)")
+            .def("get_colors_rgb", &PySplatData::get_colors_rgb, "Get RGB colors [N, 3] in [0,1] range (handles SH0 encoding)")
+            .def("set_colors_rgb", &PySplatData::set_colors_rgb, nb::arg("colors"), "Set RGB colors from [N, 3] tensor in [0,1] range (handles SH0 encoding)")
 
             // Metadata
-            .def_prop_ro("active_sh_degree", &PySplatData::active_sh_degree,
-                         "Current active SH degree")
-            .def_prop_ro("max_sh_degree", &PySplatData::max_sh_degree,
-                         "Maximum SH degree")
-            .def_prop_ro("scene_scale", &PySplatData::scene_scale,
-                         "Scene scale factor")
-            .def_prop_ro("num_points", &PySplatData::num_points,
-                         "Number of Gaussians")
+            .def_prop_ro("active_sh_degree", &PySplatData::active_sh_degree, "Current active SH degree")
+            .def_prop_ro("max_sh_degree", &PySplatData::max_sh_degree, "Maximum SH degree")
+            .def_prop_ro("scene_scale", &PySplatData::scene_scale, "Scene scale factor")
+            .def_prop_ro("num_points", &PySplatData::num_points, "Number of Gaussians")
 
             // Soft deletion
-            .def_prop_ro("deleted", &PySplatData::deleted,
-                         "Deletion mask tensor [N] (bool)")
-            .def("has_deleted_mask", &PySplatData::has_deleted_mask,
-                 "Check if deletion mask exists")
-            .def("visible_count", &PySplatData::visible_count,
-                 "Number of visible (non-deleted) Gaussians")
-            .def("soft_delete", &PySplatData::soft_delete, nb::arg("mask"),
-                 "Mark Gaussians as deleted by mask, returns previous state for undo")
-            .def("undelete", &PySplatData::undelete, nb::arg("mask"),
-                 "Restore deleted Gaussians by mask")
-            .def("clear_deleted", &PySplatData::clear_deleted,
-                 "Clear all soft-deleted flags")
-            .def("apply_deleted", &PySplatData::apply_deleted,
-                 "Permanently remove deleted Gaussians, returns count removed")
+            .def_prop_ro("deleted", &PySplatData::deleted, "Deletion mask tensor [N] (bool)")
+            .def("has_deleted_mask", &PySplatData::has_deleted_mask, "Check if deletion mask exists")
+            .def("visible_count", &PySplatData::visible_count, "Number of visible (non-deleted) Gaussians")
+            .def("soft_delete", &PySplatData::soft_delete, nb::arg("mask"), "Mark Gaussians as deleted by mask, returns previous state for undo")
+            .def("undelete", &PySplatData::undelete, nb::arg("mask"), "Restore deleted Gaussians by mask")
+            .def("clear_deleted", &PySplatData::clear_deleted, "Clear all soft-deleted flags")
+            .def("apply_deleted", &PySplatData::apply_deleted, "Permanently remove deleted Gaussians, returns count removed")
 
             // SH degree management
-            .def("increment_sh_degree", &PySplatData::increment_sh_degree,
-                 "Increment active SH degree by 1")
-            .def("set_active_sh_degree", &PySplatData::set_active_sh_degree, nb::arg("degree"),
-                 "Set active SH degree")
-            .def("set_max_sh_degree", &PySplatData::set_max_sh_degree, nb::arg("degree"),
-                 "Set maximum SH degree")
+            .def("increment_sh_degree", &PySplatData::increment_sh_degree, "Increment active SH degree by 1")
+            .def("set_active_sh_degree", &PySplatData::set_active_sh_degree, nb::arg("degree"), "Set active SH degree")
+            .def("set_max_sh_degree", &PySplatData::set_max_sh_degree, nb::arg("degree"), "Set maximum SH degree")
 
             // Capacity
-            .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"),
-                 "Reserve capacity for Gaussians (for densification). "
-                 "Raises if the model is renderer-backed.");
+            .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"), "Reserve capacity for Gaussians (for densification). "
+                                                                                          "Raises if the model is renderer-backed.");
     }
 
 } // namespace lfs::python

@@ -3,7 +3,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$BuildDirectory,
     [string]$VcpkgPrefix,
-    [string]$CudaDirectory=$env:CUDA_PATH
+    [string]$CudaDirectory=$env:CUDA_PATH,
+    [ValidateSet('read_only_scene_core.cpp','splat_preview_core.cpp')]
+    [string]$Source='read_only_scene_core.cpp'
 )
 $ErrorActionPreference='Stop'
 $taskSource=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -23,9 +25,10 @@ foreach($taskInclude in @((Join-Path $taskBuild 'include'),
     (Join-Path $VcpkgPrefix 'include'),(Join-Path $CudaDirectory 'include'))){
     $taskArguments+=('/I'+$taskInclude)
 }
-$taskExecutable=Join-Path $taskOutput 'read_only_scene_core.exe'
-$taskArguments+=@((Join-Path $PSScriptRoot 'read_only_scene_core.cpp'),
-    ('/Fo'+(Join-Path $taskOutput 'read_only_scene_core.obj')),('/Fe'+$taskExecutable),
+$taskName=[System.IO.Path]::GetFileNameWithoutExtension($Source)
+$taskExecutable=Join-Path $taskOutput ($taskName+'.exe')
+$taskArguments+=@((Join-Path $PSScriptRoot $Source),
+    ('/Fo'+(Join-Path $taskOutput ($taskName+'.obj'))),('/Fe'+$taskExecutable),
     '/link',(Join-Path $taskBuild 'src/core/lfs_core.lib'),(Join-Path $VcpkgPrefix 'lib/fmt.lib'))
 & cl @taskArguments
 if($LASTEXITCODE -ne 0){throw 'Core contract test compilation failed'}

@@ -33,9 +33,13 @@ def process_arguments():
         return sys.argv
 
 
-def numerical_runtime():
-    with _numerical_lock:
+def numerical_runtime(wait=True):
+    if not _numerical_lock.acquire(blocking=wait):
+        raise NumericalRuntimeUnavailable("The preview numerical runtime is being prepared")
+    try:
         return _load_numerical_runtime()
+    finally:
+        _numerical_lock.release()
 
 
 class NumericalRuntimeUnavailable(RuntimeError):
@@ -78,9 +82,9 @@ def prepare_viewer_runtime():
                                    ". The connection is kept and setup will retry automatically.") from error
 
 
-def capture(model, limit=None, degree=None):
+def capture(model, limit=None, degree=None, runtime=None):
     import lichtfeld as lf
-    np = numerical_runtime()
+    np = runtime if runtime is not None else numerical_runtime(wait=False)
     # Do not allocate one host index per Gaussian just to publish a small preview.
     if not model.has_deleted_mask() and limit and model.num_points > limit:
         candidates = np.linspace(0, model.num_points - 1, min(model.num_points, limit * 4), dtype=np.int64)
@@ -95,7 +99,8 @@ def capture(model, limit=None, degree=None):
         positions = model.means_raw.index_select(0, lf.Tensor.from_numpy(candidates).cuda()).cpu()
         positions.sync()
         indices = candidates[spatial_indices(positions.numpy(), limit)]
-    selection = lf.Tensor.from_numpy(indices).cuda()
+    cpu_selection = lf.Tensor.from_numpy(indices)
+    selection = cpu_selection.cuda()
     def owned(tensor):
         tensor = tensor.index_select(0, selection).cpu()
         tensor.sync()
@@ -104,16 +109,16 @@ def capture(model, limit=None, degree=None):
     if degree is not None:
         active = min(active, degree)
     dc = owned(model.sh0_raw).reshape(len(indices), 1, 3)
-    sh = np.concatenate((dc, owned(model.shN_raw)[:, :(active + 1) ** 2 - 1]), axis=1) if active else dc
+    sh = np.concatenate((dc, model.shN_rows(cpu_selection, active).numpy()), axis=1) if active else dc
     return {"means": owned(model.means_raw), "scale": owned(model.scaling_raw),
             "rotation": owned(model.rotation_raw), "opacity": owned(model.opacity_raw).reshape(-1, 1), "sh": sh}
 
 
-def capture_view_geometry():
+def capture_view_geometry(runtime=None):
     """Called at a training safe boundary, never on the UI thread."""
     import lichtfeld as lf
     from .geometry import FLIP, IDENTITY, validate
-    np = numerical_runtime()
+    np = runtime if runtime is not None else numerical_runtime(wait=False)
     scene = lf.get_scene()
     model = scene.get_node(scene.training_model_node_name)
     value = {"schema": 1, "source_frame": "lichtfeld-visualizer", "data_to_source": FLIP,
@@ -198,18 +203,21 @@ class AutoStream:
             if time.monotonic() - self.last < self.interval or not self.publisher.clients():
                 return
             import lichtfeld as lf
-            numerical_runtime()
+            try:
+                runtime = numerical_runtime(wait=False)
+            except NumericalRuntimeUnavailable:
+                return  # Optional capture never waits for a viewer's package setup.
             if not getattr(self, "geometry_published", False) and time.monotonic() >= getattr(self, "geometry_retry_at", 0):
                 try:
                     from .geometry import publish
-                    publish(self.publisher, capture_view_geometry())
+                    publish(self.publisher, capture_view_geometry(runtime=runtime))
                     self.geometry_published = True
                     self.publisher.update(geometry_error="")
                 except Exception as error:
                     self.publisher.update(geometry_error=str(error))
                     self.geometry_retry_at = time.monotonic() + 5
             started = time.perf_counter()
-            arrays = capture(lf.get_scene().training_model(), 100000, 1)
+            arrays = capture(lf.get_scene().training_model(), 100000, 1, runtime=runtime)
             capture_seconds = time.perf_counter() - started
             self.last = time.monotonic()
             self.interval = max(2, capture_seconds / 0.02)

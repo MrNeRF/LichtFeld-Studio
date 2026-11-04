@@ -77,6 +77,7 @@ class Viewer:
         self.shown_iteration, self.copy_busy, self.copy_error = 30, busy, ""
         self.snapshot = snapshot
         self.display_arrays = object() if snapshot else None
+        self.display_snapshot = {"snapshot": {"count": 3, "sh_degree": 1}, "model_count": 3} if snapshot else {}
         self.display_geometry = {"schema": 1, "model_to_data": "fixture transform"}
         self.display_bounds = ([1, 2, 3], 4)
         self.copies = 0
@@ -129,6 +130,7 @@ class PanelContracts(unittest.TestCase):
         viewer = Viewer(current)
         viewer.reader.status.update(snapshot={"count": 100000, "sh_degree": 1}, model_count=1000000,
             preview_capture_seconds=.012, preview_publish_seconds=.003, saved_project="/saved/project.licht")
+        viewer.display_snapshot = {"snapshot": dict(viewer.reader.status["snapshot"]), "model_count": 1000000}
         panel._viewer = viewer
         self.panel.records = [current]
         model = self.panel.view_model()
@@ -149,11 +151,25 @@ class PanelContracts(unittest.TestCase):
         with mock.patch.object(panel, "Viewer", return_value=replacement):
             self.panel.connect(current)
         self.assertIs(replacement.display_arrays, previous.display_arrays)
+        self.assertIs(replacement.display_snapshot, previous.display_snapshot)
         self.assertEqual(replacement.shown_iteration, previous.shown_iteration)
         self.assertIs(replacement.display_geometry, previous.display_geometry)
         self.assertEqual(replacement.display_bounds, previous.display_bounds)
         self.assertFalse(replacement.cameras_visible)
         self.assertEqual(replacement.camera_count, previous.camera_count)
+
+    def test_pending_or_failed_snapshot_does_not_change_displayed_quality(self):
+        viewer = Viewer(record('Current'))
+        panel._viewer = viewer
+        baseline = self.panel.view_model()['text']['preview-quality']
+        for stopped, error in ((False, ''), (False, 'failed to install'), (True, '')):
+            viewer.reader.status.update(snapshot={'count': 4000, 'sh_degree': 3}, model_count=10000)
+            viewer.reader.error = error
+            if stopped: viewer.stop.set()
+            model = self.panel.view_model()
+            self.assertEqual(model['text']['preview-quality'], baseline)
+            self.assertIn('SH1', baseline)
+            self.assertEqual(model['text']['preview-step'], 'Preview shown: step 30')
 
     def test_same_trainer_is_not_offered_again(self):
         current = record("Current")

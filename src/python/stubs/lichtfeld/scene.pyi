@@ -25,6 +25,12 @@ class SplatData:
         SHN tensor in canonical [N, (degree+1)^2-1, 3] layout (materialised from the internal swizzled storage — this allocates, not a view).
         """
 
+    def shN_rows(self, rows: lichtfeld.Tensor, degree: int) -> lichtfeld.Tensor:
+        """Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage.
+
+        Rows must be a rank-1 CPU integer tensor. Call at a model read boundary.
+        """
+
     @property
     def scaling_raw(self) -> lichtfeld.Tensor:
         """Raw scaling tensor [N, 3] (log-space, view)"""

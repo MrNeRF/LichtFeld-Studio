@@ -76,6 +76,7 @@ class TrainingSessionsPanel(lf.ui.Panel):
                 if (_viewer.session_info["id"] == selected["id"] and _viewer.snapshot_in_scene()
                         and _viewer.display_arrays is not None):
                     replacement.display_arrays = _viewer.display_arrays
+                    replacement.display_snapshot = _viewer.display_snapshot
                     replacement.shown_iteration = _viewer.shown_iteration
                     replacement.display_geometry = _viewer.display_geometry
                     replacement.display_bounds = _viewer.display_bounds
@@ -157,7 +158,7 @@ class TrainingSessionsPanel(lf.ui.Panel):
                 "current-state": preview_heading(status, stopped, error, snapshot),
                 "training-step": _tr("external_training.training_step_total", step=step, total=total) if total else _tr("external_training.training_step", step=step),
                 "preview-step": _tr("external_training.preview_step", step=viewer.shown_iteration),
-                "preview-quality": preview_quality(status),
+                "preview-quality": preview_quality(viewer.display_snapshot),
                 "preview-cost": preview_cost(status),
                 "saved-project": _tr("external_training.saved_project", path=str(status.get("saved_project", ""))),
                 "current-error": str(error), "copy-error": viewer.copy_error,

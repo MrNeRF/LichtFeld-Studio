@@ -139,6 +139,19 @@ try:
             break
         removed += 1
     assert removed == count+1
+    replacement = lf.scene.prepare_viewer_cameras(rows[:3].copy())
+    ui(lambda: viewer._install_cameras(('replacement', replacement, 3)))
+    deadline = time.monotonic()+10
+    while viewer.camera_count != 3 and time.monotonic()<deadline:
+        assert not viewer.camera_error, viewer.camera_error
+        time.sleep(.02)
+    assert viewer.camera_count == 3
+    empty = lf.scene.prepare_viewer_cameras(np.empty((0,22), np.float32))
+    ui(lambda: viewer._install_cameras((None, empty, 0)))
+    deadline = time.monotonic()+10
+    while ui(lambda: lf.get_scene().get_node(name+' cameras') is not None) and time.monotonic()<deadline:
+        time.sleep(.02)
+    assert viewer.camera_ref is None and viewer.camera_count == 0
     def verify_cleanup():
         scene = lf.get_scene()
         assert scene.get_node('User sentinel') is not None
@@ -189,6 +202,10 @@ finally:
     model.release()
 proof = {'cameras':count, 'unique_uids':True, 'local_cameras_preserved':2,
          'ui_chunks':len(timings), 'max_ui_chunk_ms':max(timings, default=0), 'cleanup':True,
-         'trainer_hierarchy':True, 'both_cleanup_orders':True, 'local_name_collision_safe':True}
-(Path(os.environ['LFS_TEST_AREA'])/'camera-churn-proof.json').write_text(json.dumps(proof), encoding='utf-8')
+         'trainer_hierarchy':True, 'both_cleanup_orders':True, 'local_name_collision_safe':True,
+         'empty_geometry_removes_cameras':True}
+proof_path = Path(os.environ['LFS_TEST_AREA'])/'camera-churn-proof.json'
+temporary = proof_path.with_suffix('.json.tmp')
+temporary.write_text(json.dumps(proof), encoding='utf-8')
+temporary.replace(proof_path)
 print('CAMERA_CHURN_OWNERSHIP_AND_UIDS_PASS', json.dumps(proof), flush=True)

@@ -49,12 +49,13 @@ with (area/'gui.log').open('wb') as log:
         assert 'editor_run' in tools
         assert {'code','timeout_ms','show_console'} <= set(tools['editor_run']['inputSchema']['properties'])
         fixture = Path(__file__).with_name('renderer_camera_churn.py').read_text(encoding='utf-8')
+        proof = area/'camera-churn-proof.json'
+        proof.unlink(missing_ok=True)  # A previous run cannot satisfy this run's completion check.
         response = client.call('editor_run', {'code':fixture, 'timeout_ms':1000, 'show_console':False})
         (area/'editor-start.json').write_text(json.dumps(response), encoding='utf-8')
         output = response.get('structuredContent', {}).get('output', {}).get('text', '')
         assert 'Traceback (most recent call last)' not in output, output
         deadline = time.monotonic()+100
-        proof = area/'camera-churn-proof.json'
         while not proof.exists() and time.monotonic()<deadline:
             assert process.poll() is None, 'GUI exited during camera lifecycle test'
             time.sleep(.2)
@@ -62,7 +63,9 @@ with (area/'gui.log').open('wb') as log:
             if 'editor_get_output' in tools:
                 print(json.dumps(client.call('editor_get_output')), flush=True)
             raise AssertionError('Camera lifecycle test did not complete; see GUI/editor log')
-        print('REAL_GUI_CAMERA_REVIEW_PASS', proof.read_text(encoding='utf-8'), flush=True)
+        result = json.loads(proof.read_text(encoding='utf-8'))
+        assert result.get('cameras') == 512 and result.get('cleanup') is True, result
+        print('REAL_GUI_CAMERA_REVIEW_PASS', json.dumps(result), flush=True)
     finally:
         if process.poll() is None:
             try:

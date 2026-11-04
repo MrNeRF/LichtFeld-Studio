@@ -59,6 +59,13 @@ GPU-to-CPU capture still runs at a safe training hook and costs optimizer time.
 The interval targets an amortized capture cost of 2%, with a minimum of two
 seconds; this is not a hard latency guarantee for large models.
 
+`SplatData.shN_rows(rows, degree)` gathers only selected SH-rest coefficients
+directly from resident FP32, IEEE-f16 or q16 storage into owned canonical Float32
+CPU data. Its temporary storage scales with the selected rows and bands, rather
+than decoding the full model before applying the preview cap. SH0 previews skip
+SH-rest extraction. Call this API at a model read boundary, with rank-1 CPU integer
+indices. Invalid rows and unsupported degrees are rejected before GPU access.
+
 Windows uses named memory mappings; Linux uses temporary mapped files. Session
 metadata lives in the local training-session registry, overridable with
 `LFS_TRAINING_SESSIONS_DIR`. Dead session metadata and protocol-owned temporary
@@ -122,6 +129,12 @@ or overwrite a project. The observer-close/owner-close distinction is explicit i
 the panel and the English/Italian owner exit confirmation. Owner detachment is
 not implemented or offered.
 
+Displayed quality metadata changes only after successful native installation;
+pending/failed snapshots cannot relabel a retained preview. A total count is
+shown only when the received status and snapshot iterations agree. First-use
+numerical-runtime preparation stays on a reader worker. Training hooks skip
+optional capture while that setup is busy, including package installation.
+
 A repaired session status clears a transient metadata error without requiring a
 new Gaussian generation. Readers discard queued payload references when closing;
 the viewer isolates scheduling failures and drains retired CPU arrays on exit.
@@ -155,6 +168,10 @@ directly, and the status bar selects external splat anchors rather than temporar
 camera metadata. Optional geometry-load failures retain the last valid geometry
 and retry without blocking splat updates. Python API stubs include the camera and
 model-transform arguments used by this integration.
+
+Readers acknowledge the Gaussian generation and validated geometry reference
+together. Repaired or removed geometry therefore updates the model transform and
+owned cameras even while the trainer is paused and publishes no new splats.
 
 Optional schema-1 `view_geometry.json` metadata carries a model-local-to-data
 matrix, data-to-source matrix and OpenCV camera-to-data poses with pixel
@@ -196,3 +213,7 @@ contracts against an existing Windows build. Renderer fixtures use the local MCP
 endpoint and require a disposable GUI and project. Training and pressure fixtures
 require separate output, runtime and session directories. Keep generated logs,
 screenshots, reports and qualification records outside the source checkout.
+
+The same runner with `-Source splat_preview_core.cpp` checks selected SH extraction
+on CPU and CUDA across FP32, IEEE-f16 and q16 layouts, SH degrees 0–3, row/block
+boundaries, duplicate/unsorted rows, invalid requests and source immutability.

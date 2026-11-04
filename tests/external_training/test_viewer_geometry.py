@@ -61,6 +61,19 @@ class ViewerGeometryContracts(unittest.TestCase):
         self.assertIsNone(value.prepared_arrays)
         self.assertIsNone(value.prepared_geometry)
 
+    def test_removed_geometry_stages_empty_cameras_and_resets_model_transform(self):
+        value = self.fixture()
+        value.camera_ref = value.reader.geometry_ref
+        value.reader.geometry = value.reader.geometry_ref = None
+        payload = object()
+        prepare = mock.Mock(return_value=payload)
+        native = types.SimpleNamespace(scene=types.SimpleNamespace(prepare_viewer_cameras=prepare))
+        with mock.patch.dict(sys.modules, lichtfeld=native), mock.patch.object(viewer, 'numerical_runtime', return_value=np):
+            value._prepare({'means': np.array([[2,3,11]], dtype=np.float32)})
+        self.assertEqual(value.prepared_cameras, (None, payload, 0))
+        self.assertEqual(prepare.call_args.args[0].shape, (0,22))
+        self.assertIsNone(value._native_prepare.call_args.args[1])
+
     def test_reconnect_retires_old_reader_without_overwriting_replacement_status(self):
         value = self.fixture()
         value.node_uuid = 'retained-node'

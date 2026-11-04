@@ -332,6 +332,31 @@ class RuntimeContracts(unittest.TestCase):
         stream.publisher.finish.assert_called_once_with('stopped', iteration=5)
         stream.publisher.pool.close.assert_called_once()
 
+    def test_training_hook_skips_capture_while_viewer_setup_is_busy(self):
+        stream = producer.AutoStream.__new__(producer.AutoStream)
+        stream.publisher = types.SimpleNamespace(update=mock.Mock(), clients=lambda: [object()], publish=mock.Mock())
+        stream.writer = None
+        stream.last_status = stream.last = 0
+        stream.interval = 0
+        finished = threading.Event()
+        with producer._numerical_lock, mock.patch.dict(sys.modules, lichtfeld=types.SimpleNamespace()), mock.patch.object(
+                producer, 'capture') as capture, mock.patch.object(producer, '_load_numerical_runtime') as load:
+            thread = threading.Thread(target=lambda: (stream.step({'iteration': 7, 'num_gaussians': 3}), finished.set()))
+            thread.start()
+            self.assertTrue(finished.wait(1), 'Training hook waited for the setup lock')
+        thread.join(3)
+        capture.assert_not_called()
+        load.assert_not_called()
+        self.assertFalse(hasattr(stream, 'retry_at'))
+        runtime = object()
+        with mock.patch.dict(sys.modules, lichtfeld=types.SimpleNamespace(get_scene=lambda: types.SimpleNamespace(training_model=lambda: object()))), mock.patch.object(
+                producer, 'numerical_runtime', return_value=runtime), mock.patch.object(producer, 'capture_view_geometry', return_value={}), mock.patch.object(
+                producer, 'capture', return_value={}) as capture, mock.patch('lfs_plugins.training_runtime.geometry.publish'):
+            stream.step({'iteration': 8, 'num_gaussians': 3})
+            stream.writer.shutdown(wait=True)
+        capture.assert_called_once()
+        self.assertIs(capture.call_args.kwargs['runtime'], runtime)
+
     def test_large_model_capture_uses_bounded_candidate_indices(self):
         import numpy as np
         selected = []
@@ -351,6 +376,32 @@ class RuntimeContracts(unittest.TestCase):
             result = producer.capture(model, limit=100, degree=0)
         self.assertEqual(len(result['means']), 100)
         self.assertLessEqual(max(selected), 400)
+
+    def test_capture_gathers_only_selected_sh_rows_and_degree(self):
+        import numpy as np
+        class Tensor:
+            def __init__(self, value): self.value = value
+            def cuda(self): return self
+            def cpu(self): return self
+            def sync(self): pass
+            def numpy(self): return self.value
+            def index_select(self, axis, indices): return Tensor(self.value[indices.value])
+        class Model:
+            num_points, active_sh_degree = 1000, 3
+            has_deleted_mask = lambda self: False
+            means_raw = Tensor(np.arange(3000, dtype=np.float32).reshape(1000,3))
+            sh0_raw, scaling_raw = Tensor(np.zeros((1000,1,3), np.float32)), Tensor(np.zeros((1000,3), np.float32))
+            rotation_raw, opacity_raw = Tensor(np.zeros((1000,4), np.float32)), Tensor(np.zeros((1000,1), np.float32))
+            @property
+            def shN_raw(self): raise AssertionError('Full-model SH decode must not be used')
+            def shN_rows(self, rows, degree):
+                self.selection, self.degree = rows.value.copy(), degree
+                return Tensor(np.full((len(rows.value), (degree+1)**2-1, 3), 7, np.float32))
+        model = Model()
+        with mock.patch.dict(sys.modules, lichtfeld=types.SimpleNamespace(Tensor=types.SimpleNamespace(from_numpy=Tensor))):
+            result = producer.capture(model, limit=10, degree=1)
+        self.assertEqual((len(model.selection), model.degree, result['sh'].shape), (10, 1, (10,4,3)))
+        np.testing.assert_array_equal(result['sh'][:,1:], 7)
 
     def test_finish_stops_heartbeat_even_if_disk_write_fails(self):
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, LFS_TRAINING_SESSIONS_DIR=root):

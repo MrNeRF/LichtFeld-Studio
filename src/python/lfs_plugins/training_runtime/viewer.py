@@ -27,6 +27,7 @@ class Viewer:
         self.node_uuid = None
         self.shown_iteration = 0
         self.display_arrays = None
+        self.display_snapshot = {}
         self.prepared_arrays = None
         self.retired_arrays = queue.SimpleQueue()
         self.status_pending = False
@@ -114,10 +115,10 @@ class Viewer:
         radius = max(.01,float(np.linalg.norm(corners[:,:3]-center,axis=1).max()))
         self.prepared_bounds = (center.tolist(),radius)
         reference = self.reader.geometry_ref
-        if geometry and reference != self.camera_ref:
+        if reference != self.camera_ref:
             try:
                 import lichtfeld as lf
-                cameras = geometry.get("cameras", [])
+                cameras = (geometry or {}).get("cameras", [])
                 presentation = viewer_data_transform(geometry)
                 rows = [list((presentation @ np.asarray(c["camera_to_data"])).reshape(-1)) +
                         [c[k] for k in ("fx","fy","cx","cy","width","height")] for c in cameras]
@@ -178,6 +179,8 @@ class Viewer:
                         if self.display_arrays is not None:
                             self.retired_arrays.put(self.display_arrays)
                         self.display_arrays = self.prepared_arrays
+                        self.display_snapshot = {"snapshot": dict(frame["record"]["shared"]),
+                                                 "model_count": frame.get("model_count")}
                         self.display_geometry = frame.get("geometry")
                         self.display_bounds = self.prepared_bounds
                         if self.auto_focus and not self.has_focused:
@@ -193,7 +196,7 @@ class Viewer:
                         error = str(failure)
                     finally:
                         self.ui_max_ms = max(self.ui_max_ms, (time.perf_counter() - started) * 1000)
-                        self.reader.acknowledge(frame["record"]["id"], error)
+                        self.reader.acknowledge(frame["record"]["id"], error, geometry_ref=frame["geometry_ref"])
                 lf.ui.schedule_on_ui_thread(apply)
                 lf.ui.request_redraw()
         except Exception as error:
@@ -375,6 +378,7 @@ class Viewer:
             payload = [self.display_arrays, self.display_geometry, self.display_bounds,
                        self.prepared_arrays, getattr(self, 'prepared_geometry', None)]
             self.display_arrays = self.display_geometry = self.display_bounds = None
+            self.display_snapshot = {}
             self.prepared_arrays = self.prepared_geometry = None
         if any(value is not None for value in payload):
             # Only this list owns the transferred references. Clearing it on the

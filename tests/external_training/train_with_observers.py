@@ -66,6 +66,7 @@ with (area / "trainer.log").open("wb") as log:
         assert record.get("saved_project") == str(project), record
         assert record.get("preview_capture_seconds", -1) >= 0, record
         assert record.get("preview_publish_seconds", -1) >= 0, record
+        assert record['snapshot']['sh_degree'] == 1, record  # Exercise selected native SH-rest extraction.
         assert all(received), received
         assert record["iteration"] == 5000, record
         if args.pause_probe:
