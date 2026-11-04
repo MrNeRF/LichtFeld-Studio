@@ -24,19 +24,7 @@ namespace lfs::core::sh_value_quant {
 
         constexpr int kThreads = 256;
 
-        // Canonical host serialization and combined-model encoding require
-        // identical rounding, including when the CUDA target enables fast math.
-        __device__ __forceinline__ float decode_host_rounded(const uint16_t q, const float lo, const float hi) {
-            float range, normalized, value;
-            const float code = static_cast<float>(q);
-            constexpr float inv_q = 1.0f / 65535.0f;
-            // Explicit RN PTX also avoids fast-math's FTZ modifier.
-            asm("sub.rn.f32 %0, %1, %2;" : "=f"(range) : "f"(hi), "f"(lo));
-            asm("mul.rn.f32 %0, %1, %2;" : "=f"(normalized) : "f"(code), "f"(inv_q));
-            // Same fused RN operation as __fmaf_rn, without fast-math FTZ.
-            asm("fma.rn.f32 %0, %1, %2, %3;" : "=f"(value) : "f"(range), "f"(normalized), "f"(lo));
-            return value;
-        }
+        using lfs::core::sh_value::DeviceCodec16;
 
         __device__ __forceinline__ std::uint32_t shAtF4(
             std::uint32_t p, std::uint32_t k, std::uint32_t slots) {
@@ -202,7 +190,7 @@ namespace lfs::core::sh_value_quant {
             const auto cell = static_cast<std::uint32_t>(
                 canonical_index % floats_per_primitive);
             const float2 mm = bounds[primitive / 256u];
-            dst[output_index] = decode_host_rounded(
+            dst[output_index] = DeviceCodec16::decode_host_rounded(
                 src_u16[lfs::core::sh_value::shAtU16(primitive, cell, n_cells_per_primitive)],
                 mm.x,
                 mm.y);
@@ -311,7 +299,7 @@ namespace lfs::core::sh_value_quant {
                 const auto q = src_u16[lfs::core::sh_value::shAtU16(p_src, c, n_cells_per_prim)];
                 float v;
                 if (match_cpu_rounding) {
-                    v = decode_host_rounded(q, mm.x, mm.y);
+                    v = DeviceCodec16::decode_host_rounded(q, mm.x, mm.y);
                 } else {
                     v = DC::decode(q, mm.x, mm.y);
                 }

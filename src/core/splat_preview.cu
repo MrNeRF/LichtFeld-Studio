@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/cuda_error.hpp"
+#include "core/sh_value_codec.cuh"
 #include "splat_preview_cuda.hpp"
 #include <algorithm>
 #include <cuda_fp16.h>
@@ -21,7 +22,7 @@ namespace lfs::core::detail {
                     const auto q = static_cast<const uint16_t*>(source)[offset];
                     const float lo = bounds[(row / 256u) * 2u];
                     const float hi = bounds[(row / 256u) * 2u + 1u];
-                    output[i] = fmaf(__fsub_rn(hi, lo), __fmul_rn(static_cast<float>(q), 1.0f / 65535.0f), lo);
+                    output[i] = sh_value::DeviceCodec16::decode_host_rounded(q, lo, hi);
                 } else {
                     const size_t slots = (layout_cells + 3u) / 4u;
                     const size_t offset = (block * slots * 32u + (cell / 4u) * 32u + lane) * 4u + cell % 4u;

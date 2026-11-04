@@ -74,6 +74,20 @@ if(TARGET lfs_core)
     endif()
 endif()
 
+if(TARGET lfs_py AND TARGET LichtFeld-Studio)
+    find_package(Python REQUIRED COMPONENTS Interpreter)
+    add_test(NAME lichtfeld.python.training_adapter_gpu
+        COMMAND ${Python_EXECUTABLE} -m pytest -q -m gpu
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+    )
+    set_tests_properties(lichtfeld.python.training_adapter_gpu PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 240
+        ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+endif()
+
 if(TARGET Vulkan::Vulkan)
     add_executable(lichtfeld_collision_preview_vulkan_tests test_collision_preview_vulkan.cpp)
     target_compile_features(lichtfeld_collision_preview_vulkan_tests PRIVATE cxx_std_23)
@@ -1814,16 +1828,6 @@ set_tests_properties(lichtfeld.python.nightly PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "nightly;gpu"
     TIMEOUT 1800
-)
-
-add_test(NAME lichtfeld.python.training_adapter_gpu
-    COMMAND ${Python_EXECUTABLE} -m pytest -q -m gpu
-        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
-)
-set_tests_properties(lichtfeld.python.training_adapter_gpu PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    LABELS "gpu;integration"
-    TIMEOUT 240
 )
 
 # Leave the baseline environment intact unless a directory is configured explicitly.

@@ -5,12 +5,42 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
 import textwrap
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def lf():
+    # These contracts require the native module; a missing build must fail.
+    import lichtfeld as module
+    root = Path(__file__).resolve().parents[2]
+    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build"))).resolve()
+    assert Path(module.__file__).resolve().is_relative_to(build / "src" / "python"), module.__file__
+    return module
+
+
+def test_ctest_adapter_uses_configured_paths():
+    root = Path(__file__).resolve().parents[2]
+    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build"))).resolve()
+    cmake = os.environ.get("CMAKE_COMMAND")
+    ctest = Path(cmake).with_name("ctest.exe" if os.name == "nt" else "ctest") if cmake else None
+    command = str(ctest) if ctest and ctest.is_file() else shutil.which("ctest")
+    assert command, "CTest is required to verify the configured test entry"
+    result = subprocess.run([command, "--test-dir", str(build), "--show-only=json-v1",
+                             "-R", "^lichtfeld.python.training_adapter_gpu$"],
+                            capture_output=True, text=True, timeout=15, check=True)
+    tests = json.loads(result.stdout)["tests"]
+    assert len(tests) == 1, "The configured build must register the Python adapter test"
+    properties = {item["name"]: item["value"] for item in tests[0]["properties"]}
+    environment = dict(item.split("=", 1) for item in properties.get("ENVIRONMENT", []))
+    assert Path(environment["LFS_TEST_BUILD_DIR"]).resolve() == build
+    executable = Path(environment["LFS_EXECUTABLE"]).resolve()
+    assert executable.is_relative_to(build) and executable.is_file(), executable
 
 
 def test_owned_host_numpy_export(lf, numpy):

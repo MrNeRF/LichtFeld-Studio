@@ -4,13 +4,17 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/splat_preview.hpp"
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <stdexcept>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -89,6 +93,55 @@ namespace {
         }
         if (device == Device::CUDA)
             EXPECT_THROW(splat_sh_preview(model, rows.to(Device::CUDA), degree), std::invalid_argument);
+    }
+
+    void check_subnormal_bounds(Device device) {
+        constexpr size_t n = 300;
+        constexpr int degree = 3;
+        const auto rest = sh_rest_coefficients_for_degree(degree);
+        const auto tiny = std::numeric_limits<float>::denorm_min();
+        const auto normal = std::numeric_limits<float>::min();
+        const std::array<std::pair<float, float>, 6> ranges{{{tiny, tiny * 256}, {0, normal}, {tiny, normal}, {normal, std::nextafter(normal, 1.f)}, {tiny, tiny}, {-normal, normal}}};
+        const std::array<uint16_t, 6> codes{0, 1, 32767, 32768, 65534, 65535};
+        const size_t cells = sh_swizzled_padded_n(n) * rest * 3u;
+        auto storage = Tensor::empty_pageable_host({cells}, DataType::Float16);
+        for (size_t i = 0; i < cells; ++i)
+            static_cast<uint16_t*>(storage.data_ptr())[i] = codes[i % codes.size()];
+        const std::vector<int> requested{299, 0, 31, 32, 255, 256, 257, 31};
+        const auto rows = Tensor::from_vector(requested, {requested.size()}, Device::CPU);
+        for (const auto& [lo, hi] : ranges) {
+            SCOPED_TRACE(std::bit_cast<uint32_t>(lo));
+            SCOPED_TRACE(std::bit_cast<uint32_t>(hi));
+            auto bounds = Tensor::from_vector(std::vector<float>{lo, hi, -hi, -lo}, {size_t{4}}, Device::CPU);
+            SplatData model(degree, Tensor::zeros({n, size_t{3}}, device), Tensor::zeros({n, size_t{1}, size_t{3}}, device),
+                            storage.to(device), Tensor::zeros({n, size_t{3}}, device), Tensor::zeros({n, size_t{4}}, device),
+                            Tensor::zeros({n, size_t{1}}, device), 1.f, SplatData::ShNLayout::Swizzled);
+            model.set_active_sh_degree(degree, bounds.to(device));
+            const auto canonical = model.shN_canonical_cpu();
+            // Code zero must preserve even the smallest nonzero lower bound.
+            ASSERT_EQ(std::bit_cast<uint32_t>(canonical.ptr<float>()[0]), std::bit_cast<uint32_t>(lo));
+            for (int selected_degree = 1; selected_degree <= degree; ++selected_degree) {
+                const auto selected_cells = sh_rest_coefficients_for_degree(selected_degree) * 3u;
+                const auto output = splat_sh_preview(model, rows, selected_degree);
+                for (size_t i = 0; i < requested.size(); ++i) {
+                    for (size_t cell = 0; cell < selected_cells; ++cell) {
+                        EXPECT_EQ(std::bit_cast<uint32_t>(output.ptr<float>()[i * selected_cells + cell]),
+                                  std::bit_cast<uint32_t>(canonical.ptr<float>()[requested[i] * rest * 3u + cell]));
+                    }
+                }
+            }
+        }
+    }
+
+    TEST(SplatPreview, QuantizedSubnormalBoundsMatchCanonicalCpu) {
+        check_subnormal_bounds(Device::CPU);
+    }
+
+    TEST(SplatPreviewGpuEdgeCases, QuantizedSubnormalBoundsMatchCanonical) {
+        int count = 0;
+        if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0)
+            GTEST_SKIP() << "CUDA GPU required";
+        check_subnormal_bounds(Device::CUDA);
     }
 
     using Profile = std::tuple<int, Storage>;
