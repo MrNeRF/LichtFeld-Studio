@@ -963,6 +963,18 @@ namespace lfs::vis::gui {
         }
     }
 
+    RenderInterface_VK* RmlUIManager::getVulkanRenderInterface(Rml::Context* context) const {
+        if (context) {
+            if (const auto it = native_windows_.find(context); it != native_windows_.end())
+                return it->second->renderer.get();
+            if (!context_ids_.contains(context))
+                return nullptr;
+        }
+        // Unlike the active frame renderer, this remains the main context's
+        // owner while an external window's render queue is being processed.
+        return dynamic_cast<RenderInterface_VK*>(owned_render_interface_.get());
+    }
+
     Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height, bool floating) {
         assert(initialized_);
 

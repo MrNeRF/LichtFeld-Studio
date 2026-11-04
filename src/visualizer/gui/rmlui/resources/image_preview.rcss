@@ -43,7 +43,7 @@
 
 #preview-toolbar [disabled], #sampled-color-controls [disabled] {
     tab-index: none;
-    pointer-events: none;
+    pointer-events: auto;
 }
 
 #sampled-color-controls, #shortcut-help {

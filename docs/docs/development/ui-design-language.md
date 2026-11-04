@@ -466,11 +466,18 @@ independently of UI scale; the footer also reports the actual zoom in Fit mode.
 Metadata reads run off the UI thread, and a preview becomes usable
 only after its revisioned texture is ready. Refresh checks changed sources and
 retries failed previews. Camera-specific actions are disabled for unbound files.
+Disabled actions retain hover explanations while rejecting activation. Texture
+readiness belongs to the preview document's renderer, including external windows;
+overlay decoding preserves coverage and alpha before downscaling. Remounting a
+panel repopulates its thumbnail model, and navigation verifies scrolling after
+the virtual extent has been laid out.
 
 The color picker samples without changing settings. Applying the sample to the
 render background or to the training background is an explicit, separate,
 undoable action. Shortcuts leave editable fields and modified application
 shortcuts alone.
+Color history survives unrelated scene edits; project or scene replacement
+clears the shared history through the existing lifecycle.
 
 ### Component references
 

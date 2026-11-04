@@ -240,6 +240,7 @@ private:
         std::filesystem::path path;
         int max_size = 0;
         bool embedded_project_preview = false;
+        bool mask_overlay = false;
     };
 
     class MemoryPool;
@@ -626,7 +627,8 @@ private:
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
     LFS_VIS_API static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
                                                                    int max_size,
-                                                                   bool embedded_project_preview);
+                                                                   bool embedded_project_preview,
+                                                                   bool mask_overlay = false);
 
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;

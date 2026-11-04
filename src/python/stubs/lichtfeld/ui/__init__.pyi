@@ -2474,9 +2474,9 @@ def release_texture(texture_id: int) -> None:
 def release_rml_texture(source: str) -> bool:
     """Release a cached RmlUi texture by source URL"""
 
-def preview_texture_status(source: str) -> str:
+def preview_texture_status(source: str, document: rml.RmlDocument | None = None) -> str:
     """
-    UI thread: return unknown, pending, ready or error for a revisioned preview URL.
+    UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.
     """
 
 def get_image_info(path: str) -> tuple:

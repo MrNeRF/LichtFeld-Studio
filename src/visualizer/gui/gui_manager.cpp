@@ -134,8 +134,8 @@
 
 namespace lfs::vis::gui {
 
-    std::string GuiManager::previewTextureStatus(const std::string& source) const {
-        const auto* renderer = rmlui_manager_.getVulkanRenderInterface();
+    std::string GuiManager::previewTextureStatus(const std::string& source, Rml::Context* context) const {
+        const auto* renderer = rmlui_manager_.getVulkanRenderInterface(context);
         return renderer ? renderer->previewTextureStatus(source) : "unknown";
     }
     RmlUIManager::InputDispatchResult GuiManager::dispatchInputEvent(const SDL_Event& event) {

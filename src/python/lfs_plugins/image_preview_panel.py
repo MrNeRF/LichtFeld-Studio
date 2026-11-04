@@ -76,6 +76,9 @@ class ImagePreviewPanel(Panel):
         self._displayed_index = -1
         self._filmstrip_range = None
         self._ensure_selection_visible = True
+        self._filmstrip_scrolling = False
+        self._filmstrip_follow_selection = True
+        self._filmstrip_viewport_height = None
 
         self._pan_x = 0.0
         self._pan_y = 0.0
@@ -180,12 +183,18 @@ class ImagePreviewPanel(Panel):
         model.bind_func("filmstrip_top_spacer_height", lambda: f"{self._filmstrip_top_spacer:.1f}dp")
         model.bind_func("filmstrip_bottom_spacer_height", lambda: f"{self._filmstrip_bottom_spacer:.1f}dp")
         self._handle = model.get_handle()
+        self._filmstrip_range = None
 
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
         self._layout_show_info = None
         self._layout_show_filmstrip = None
+        self._requested_preview = ""
+        self._displayed_index = -1
+        self._preview_state = "loading" if self._image_paths else "empty"
+        self._ensure_selection_visible = True
+        self._filmstrip_viewport_height = None
 
         for eid, handler in [
             ("nav-prev", lambda _ev: self._navigate(-1)),
@@ -211,7 +220,7 @@ class ImagePreviewPanel(Panel):
         ]:
             el = doc.get_element_by_id(eid)
             if el:
-                el.add_event_listener("click", handler)
+                el.add_event_listener("click", lambda ev, action=handler: self._activate_if_enabled(ev, action))
 
         cb_mask = doc.get_element_by_id("cb-mask")
         if cb_mask:
@@ -222,6 +231,7 @@ class ImagePreviewPanel(Panel):
             filmstrip.add_event_listener("click", self._on_filmstrip_click)
             filmstrip.add_event_listener("mousescroll", self._on_precise_scroll)
             filmstrip.add_event_listener("scroll", self._on_filmstrip_scroll)
+            filmstrip.add_event_listener("mousedown", self._on_filmstrip_interaction)
 
         sidebar = doc.get_element_by_id("sidebar")
         if sidebar:
@@ -285,6 +295,7 @@ class ImagePreviewPanel(Panel):
         doc.remove_data_model("image_preview")
         self._handle = None
         self._doc = None
+        self._filmstrip_range = None
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
@@ -589,13 +600,14 @@ class ImagePreviewPanel(Panel):
         return (1, 0, False)
 
     def _make_preview_url(self, path: Path, cam_uid: int,
-                          thumb: int = 0, preview_mw: int = 0, dimensions=None) -> str:
+                          thumb: int = 0, preview_mw: int = 0, dimensions=None, mask_overlay=False) -> str:
         rf, mw, ud = self._last_training_params
         revision = self._path_revision_cache.get(str(path), "missing")
         width, height, _ = dimensions or self._image_info_cache.get(str(path), (0, 0, 0))
         return (f"preview://cam={cam_uid}&thumb={thumb}&w={width}&h={height}"
                 f"&rf={rf}&mw={mw}&pmw={preview_mw}"
-                f"&ud={1 if ud else 0}&rev={revision}&refresh={self._refresh_revision}&path={_encode_rml_path(path)}")
+                f"&ud={1 if ud else 0}&rev={revision}&refresh={self._refresh_revision}"
+                f"{'&mode=mask' if mask_overlay else ''}&path={_encode_rml_path(path)}")
 
     def _on_filmstrip_click(self, event):
         el = event.target()
@@ -622,6 +634,10 @@ class ImagePreviewPanel(Panel):
         except (TypeError, ValueError):
             return
 
+        is_filmstrip = self._doc and (getattr(scroll_el, "id", "") == "filmstrip"
+                                      or scroll_el is self._doc.get_element_by_id("filmstrip"))
+        if is_filmstrip:
+            self._on_filmstrip_interaction(event)
         max_scroll = max(0.0, scroll_el.scroll_height - scroll_el.client_height)
         if max_scroll <= 0.0:
             event.stop_propagation()
@@ -631,9 +647,7 @@ class ImagePreviewPanel(Panel):
         if abs(new_scroll - scroll_el.scroll_top) > 0.01:
             scroll_el.scroll_top = new_scroll
 
-        if self._doc and (getattr(scroll_el, "id", "") == "filmstrip"
-                          or scroll_el is self._doc.get_element_by_id("filmstrip")):
-            self._ensure_selection_visible = False
+        if is_filmstrip:
             self._update_filmstrip(self._doc, bool(self._image_paths))
 
         event.stop_propagation()
@@ -841,7 +855,7 @@ class ImagePreviewPanel(Panel):
                 self._set_decorator(layer, "main-image-a", f"image({url})")
                 self._apply_zoom(layer, path)
             query = getattr(lf.ui, "preview_texture_status", None)
-            state = query(url) if query else "ready"
+            state = query(url, doc) if query else "ready"
             if state == "ready":
                 self._preview_state = "ready"
                 self._displayed_index = self._current_index
@@ -873,16 +887,21 @@ class ImagePreviewPanel(Panel):
             if show_mask:
                 mask_path = self._mask_paths[self._current_index]
                 # The URL is versioned just like the source, avoiding stale masks after replacement.
-                mask_url = self._make_preview_url(mask_path, -1, preview_mw=self._get_main_preview_max_width(doc, path), dimensions=dimensions)
+                mask_url = self._make_preview_url(mask_path, -1, preview_mw=self._get_main_preview_max_width(doc, path), dimensions=dimensions, mask_overlay=True)
                 self._set_decorator(mask, "mask-overlay", f"image({mask_url})")
                 self._apply_zoom(mask, path)
             else:
                 self._set_decorator(mask, "mask-overlay", "none")
 
     def _on_filmstrip_scroll(self, _event):
-        self._ensure_selection_visible = False
-        if self._doc:
+        # Layout and programmatic scrolling also emit scroll events. Only input
+        # cancels navigation's visibility request, after the extent is published.
+        if self._doc and not self._filmstrip_scrolling:
             self._update_filmstrip(self._doc, bool(self._image_paths))
+
+    def _on_filmstrip_interaction(self, _event):
+        self._ensure_selection_visible = False
+        self._filmstrip_follow_selection = False
 
     def _update_filmstrip(self, doc, has_images: bool):
         filmstrip = doc.get_element_by_id("filmstrip")
@@ -894,22 +913,41 @@ class ImagePreviewPanel(Panel):
         count = len(self._image_paths) if has_images else 0
         ratio = max(1.0, lf.ui.get_ui_scale())
         height = max(1.0, float(filmstrip.client_height))
+        if self._ensure_selection_visible:
+            self._filmstrip_follow_selection = True
+        if (self._filmstrip_follow_selection and self._filmstrip_viewport_height is not None
+                and abs(height - self._filmstrip_viewport_height) > 0.5):
+            # Translation, wrapping and model layout can resize the viewport
+            # after a successful scroll. Follow navigation until the user scrolls.
+            self._ensure_selection_visible = True
+        self._filmstrip_viewport_height = height
         top = max(0.0, float(getattr(filmstrip, "scroll_top", 0.0)))
+        actual_top = top
+        item_top = self._current_index * THUMB_ROW_DP * ratio
+        item_bottom = item_top + THUMB_ROW_DP * ratio
         if self._ensure_selection_visible and count:
-            item_top = self._current_index * THUMB_ROW_DP * ratio
-            item_bottom = item_top + THUMB_ROW_DP * ratio
             if item_top < top:
                 top = item_top
             elif item_bottom > top + height:
                 top = item_bottom - height
-            filmstrip.scroll_top = top
-            self._ensure_selection_visible = False
         lo, hi = visible_thumbnail_range(count, top, height, ratio)
         key = (lo, hi, self._current_index,
                tuple((self._path_revision_cache.get(str(self._image_paths[i]), "missing"),
                       self._image_info_cache.get(str(self._image_paths[i]))) for i in range(lo, hi)),
                self._refresh_revision)
         if key == self._filmstrip_range:
+            if self._ensure_selection_visible and count:
+                # The unchanged model has had a chance to lay out its spacers.
+                self._filmstrip_scrolling = True
+                try:
+                    filmstrip.scroll_top = top
+                finally:
+                    self._filmstrip_scrolling = False
+                actual_top = max(0.0, float(filmstrip.scroll_top))
+                self._ensure_selection_visible = not (
+                    actual_top <= item_top + 1.0 and item_bottom <= actual_top + height + 1.0)
+                if self._ensure_selection_visible:
+                    self._request_model_update()
             return
         self._filmstrip_range = key
         self._filmstrip_top_spacer = lo * THUMB_ROW_DP
@@ -924,6 +962,11 @@ class ImagePreviewPanel(Panel):
         self._handle.update_record_list("thumbs", records)
         self._handle.dirty("filmstrip_top_spacer_height")
         self._handle.dirty("filmstrip_bottom_spacer_height")
+        if self._ensure_selection_visible and count:
+            self._ensure_selection_visible = not (
+                actual_top <= item_top + 1.0 and item_bottom <= actual_top + height + 1.0)
+            if self._ensure_selection_visible:
+                self._request_model_update()
 
     def _update_nav_arrows(self, doc, has_images: bool):
         prev_el = doc.get_element_by_id("nav-prev")
@@ -1174,11 +1217,18 @@ class ImagePreviewPanel(Panel):
         elif element.has_attribute("disabled"):
             element.remove_attribute("disabled")
 
+    @staticmethod
+    def _activate_if_enabled(event, action):
+        element = event.current_target()
+        if element is not None and not element.has_attribute("disabled"):
+            action(event)
+
     def _apply_sampled_color(self, destination):
         if self._sampled_color is None:
             return
         color = self._sampled_color
-        generation = RuntimeState.scene_generation.value
+        # Project/scene replacement clears the shared history. Ordinary scene
+        # mutations (including rename and its undo) must not invalidate replay.
         try:
             if destination == "render":
                 settings = lf.get_render_settings()
@@ -1186,8 +1236,6 @@ class ImagePreviewPanel(Panel):
                     raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
                 previous = tuple(settings.get("background_color"))
                 def write(value):
-                    if RuntimeState.scene_generation.value != generation:
-                        raise RuntimeError(lf.ui.tr("image_preview.scene_changed"))
                     # Render settings are snapshots: reuse would restore unrelated old settings.
                     current = lf.get_render_settings()
                     if current is None:
@@ -1199,8 +1247,6 @@ class ImagePreviewPanel(Panel):
                     raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
                 previous = tuple(params.bg_color)
                 def write(value):
-                    if RuntimeState.scene_generation.value != generation:
-                        raise RuntimeError(lf.ui.tr("image_preview.scene_changed"))
                     current = lf.optimization_params()
                     if current is None or not current.has_params():
                         raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))

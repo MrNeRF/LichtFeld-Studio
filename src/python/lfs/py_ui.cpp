@@ -68,6 +68,7 @@
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
 #include <nanobind/stl/array.h>
 #include <stdexcept>
 #include <typeinfo>
@@ -4847,10 +4848,11 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
-        m.def("preview_texture_status", [](const std::string& source) {
+        m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
             lfs::python::require_ui_texture_creation_thread();
             const auto* gui = lfs::python::get_gui_manager();
-            return gui ? gui->previewTextureStatus(source) : std::string("unknown"); }, nb::arg("source"), "UI thread: return unknown, pending, ready or error for a revisioned preview URL.");
+            auto* context = document && document->raw_doc() ? document->raw_doc()->GetContext() : nullptr;
+            return gui ? gui->previewTextureStatus(source, context) : std::string("unknown"); }, nb::arg("source"), nb::arg("document") = nb::none(), "UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.");
 
         m.def(
             "get_image_info",

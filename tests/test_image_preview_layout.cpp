@@ -164,7 +164,36 @@ namespace {
         context->Update();
         EXPECT_NEAR(std::stof(camera->GetProperty("opacity")->ToString()), 0.35f, 0.001f);
         EXPECT_EQ(camera->GetProperty("tab-index")->ToString(), "none");
-        EXPECT_EQ(camera->GetProperty("pointer-events")->ToString(), "none");
+        EXPECT_EQ(camera->GetProperty("pointer-events")->ToString(), "auto");
+        camera->SetAttribute("title", "Camera unavailable");
+        const auto center = camera->GetAbsoluteOffset(Rml::BoxArea::Border) +
+                            camera->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+        context->ProcessMouseMove(int(center.x), int(center.y), 0);
+        auto* hover = context->GetHoverElement();
+        while (hover && hover != camera)
+            hover = hover->GetParentNode();
+        ASSERT_EQ(hover, camera);
+        EXPECT_EQ(hover->GetAttribute<Rml::String>("title", ""), "Camera unavailable");
+    }
+
+    TEST_P(ImagePreviewLayoutTest, SelectionScrollCanBeAppliedAfterPublishingVirtualExtent) {
+        thumbs.clear();
+        bottom = "0dp";
+        auto model = context->GetDataModel("image_preview").GetModelHandle();
+        model.DirtyAllVariables();
+        resize(900, 700);
+        auto* film = doc->GetElementById("filmstrip");
+        const float requested = 9000 * 64 * GetParam();
+        film->SetScrollTop(requested);
+        EXPECT_LT(film->GetScrollTop(), requested - 1000);
+        top = "576000dp";
+        bottom = "63232dp";
+        thumbs.resize(12);
+        model.DirtyAllVariables();
+        context->Update();
+        context->Update();
+        film->SetScrollTop(requested);
+        EXPECT_NEAR(film->GetScrollTop(), requested, 1);
     }
 
     TEST_P(ImagePreviewLayoutTest, LoadingAndErrorMessagesHaveVisibleCenteredText) {

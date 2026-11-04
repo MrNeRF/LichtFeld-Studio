@@ -131,7 +131,7 @@ namespace lfs::vis {
             // Called after a bounded main-thread upload batch. The next frame
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
-            [[nodiscard]] std::string previewTextureStatus(const std::string& source) const;
+            [[nodiscard]] std::string previewTextureStatus(const std::string& source, Rml::Context* context = nullptr) const;
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void prepareInput();
             void prepareLayout();

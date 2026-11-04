@@ -72,8 +72,110 @@ def test_navigation_scrolls_to_selection_in_physical_pixels(panel_modules, monke
     panel, film, doc, records = browsing_panel(module)
     panel._current_index = 9000
     panel._update_filmstrip(doc, True)
+    panel._update_filmstrip(doc, True)  # after the new virtual extent is laid out
     assert 9000 in [row["index"] for row in records[-1]]
     assert film.scroll_top <= 9000 * 64 * scale < film.scroll_top + film.client_height
+
+
+def test_remount_populates_the_new_filmstrip_model_without_navigation(panel_modules):
+    module, _ = panel_modules
+    panel, film, doc, records = browsing_panel(module)
+    panel._update_filmstrip(doc, True)
+    expected = records[-1]
+    panel.on_unmount(doc)
+    new_records = []
+    handle = SimpleNamespace(update_record_list=lambda _, rows: new_records.append(rows), dirty=lambda _: None)
+    model = SimpleNamespace(bind_func=lambda *args: None, bind_record_list=lambda *args: None, get_handle=lambda: handle)
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _: model))
+    panel._update_filmstrip(doc, True)
+    assert new_records == [expected]
+    panel._metadata.close()
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+def test_navigation_retries_clamped_scroll_after_layout(panel_modules, monkeypatch, scale):
+    module, _ = panel_modules
+    monkeypatch.setattr(module.lf.ui, "get_ui_scale", lambda: scale)
+    panel, _, doc, records = browsing_panel(module)
+
+    class ClampedFilm(Element):
+        ready = False
+        top = 0.0
+        attempts = 0
+
+        @property
+        def scroll_top(self):
+            return self.top
+
+        @scroll_top.setter
+        def scroll_top(self, value):
+            self.attempts += 1
+            self.top = min(value, 640000 * scale - self.client_height) if self.ready else 0.0
+            panel._on_filmstrip_scroll(event(self))
+
+    film = ClampedFilm.__new__(ClampedFilm)
+    film.client_height = 640
+    film.attributes = {}
+    doc._elements["filmstrip"] = film
+    panel._current_index = 9000
+    panel._update_filmstrip(doc, True)
+    assert film.attempts == 0, "publish the extent before requesting its scroll"
+    assert 9000 in [row["index"] for row in records[-1]]
+    panel._on_filmstrip_scroll(event(film))  # layout can emit scroll before the new extent is ready
+    assert panel._ensure_selection_visible and film.scroll_top == 0
+    film.ready = True
+    panel._update_filmstrip(doc, True)
+    assert not panel._ensure_selection_visible
+    assert film.scroll_top <= 9000 * 64 * scale < film.scroll_top + film.client_height
+
+
+@pytest.mark.parametrize("input_kind", ["pointer", "wheel"])
+def test_user_input_cancels_pending_navigation_scroll(panel_modules, input_kind):
+    module, _ = panel_modules
+    panel, film, doc, records = browsing_panel(module)
+    panel._current_index = 9000
+    panel._update_filmstrip(doc, True)
+    assert panel._ensure_selection_visible
+    if input_kind == "wheel":
+        film.scroll_height = film.client_height  # extent has not been laid out yet
+        panel._on_precise_scroll(event(film, wheel_delta_y=1))
+    else:
+        panel._on_filmstrip_interaction(event(film))
+    panel._on_filmstrip_scroll(event(film))
+    assert not panel._ensure_selection_visible
+    assert film.scroll_top == 0
+    assert records[-1][0]["index"] == 0
+
+
+def test_navigation_remains_visible_when_localized_layout_shrinks_the_viewport(panel_modules):
+    module, _ = panel_modules
+    panel, film, doc, records = browsing_panel(module)
+    panel._current_index = 9000
+    panel._update_filmstrip(doc, True)
+    panel._update_filmstrip(doc, True)
+    film.client_height -= 120
+    panel._update_filmstrip(doc, True)
+    panel._update_filmstrip(doc, True)
+    assert film.scroll_top <= 9000 * 64 and 9001 * 64 <= film.scroll_top + film.client_height
+    assert not panel._ensure_selection_visible
+    panel._on_filmstrip_interaction(event(film))
+    film.scroll_top = 0
+    film.client_height -= 100
+    panel._on_filmstrip_scroll(event(film))
+    assert film.scroll_top == 0, "layout must not override the user's scroll position"
+    assert not panel._ensure_selection_visible
+
+
+def test_disabled_toolbar_action_keeps_hover_but_cannot_activate(panel_modules):
+    module, _ = panel_modules
+    button = Element()
+    actions = []
+    button.set_attribute("disabled", "")
+    module.ImagePreviewPanel._activate_if_enabled(event(button), lambda _: actions.append(1))
+    assert actions == []
+    button.remove_attribute("disabled")
+    module.ImagePreviewPanel._activate_if_enabled(event(button), lambda _: actions.append(1))
+    assert actions == [1]
 
 
 @pytest.mark.parametrize("rotation", range(4))
@@ -217,18 +319,43 @@ def test_overlay_waits_for_current_image_texture(panel_modules, monkeypatch):
     doc = _DocumentStub({eid: Element() for eid in
                          ("main-image-a", "main-image-b", "mask-overlay", "no-image-text", "image-viewport")})
     panel._doc = doc
-    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda _: "pending", raising=False)
+    queries = []
+    monkeypatch.setattr(module.lf.ui, "preview_texture_status",
+                        lambda source, document: queries.append((source, document)) or "pending", raising=False)
     panel._update_main_image(doc, True)
     assert panel._displayed_index == -1
     assert doc.get_element_by_id("mask-overlay").properties["decorator"] == "none"
-    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda _: "ready")
+    assert queries[-1][1] is doc
+    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda source, document: "ready")
     panel._update_main_image(doc, True)
     assert panel._displayed_index == 0
     assert "&w=640&h=480" in doc.get_element_by_id("main-image-a").properties["decorator"]
     assert "preview://" in doc.get_element_by_id("mask-overlay").properties["decorator"]
-    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda _: "error")
+    assert "&mode=mask&" in doc.get_element_by_id("mask-overlay").properties["decorator"]
+    assert "&mode=mask&" not in doc.get_element_by_id("main-image-a").properties["decorator"]
+    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda source, document: "error")
     panel._update_main_image(doc, True)
     assert panel._preview_state == "error" and panel._displayed_index == -1
+
+
+def test_remount_restarts_readiness_timeout_for_the_new_document(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    path = module.Path("frame.png")
+    panel._image_paths = [path]
+    panel._image_info_cache[str(path)] = (640, 480, 3)
+    doc = _DocumentStub({eid: Element() for eid in
+                         ("main-image-a", "mask-overlay", "no-image-text", "image-viewport")})
+    doc.add_event_listener = lambda *args: None
+    panel._requested_preview = panel._make_preview_url(path, -1, preview_mw=panel._get_main_preview_max_width(doc, path))
+    panel._requested_at = module.time.monotonic() - 100
+    panel._preview_state = "ready"
+    monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda source, document: "unknown", raising=False)
+    panel.on_mount(doc)
+    panel._update_main_image(doc, True)
+    assert panel._preview_state == "loading"
+    assert module.time.monotonic() - panel._requested_at < 5
+    panel.on_unmount(doc)
 
 
 def test_sample_does_not_mutate_backgrounds_and_apply_is_targeted_and_undoable(panel_modules, monkeypatch):
@@ -285,6 +412,37 @@ def test_failed_history_registration_restores_the_previous_color(panel_modules, 
     panel._apply_sampled_color("render")
     assert colors["background_color"] == (0.1, 0.2, 0.3)
     assert panel._action_error == "History is unavailable"
+
+
+@pytest.mark.parametrize("destination", ["render", "training"])
+def test_color_history_survives_rename_and_undo_rename(panel_modules, monkeypatch, destination):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._sampled_color = (0.4, 0.5, 0.6)
+    colors = {"background_color": (0.1, 0.2, 0.3), "exposure": 1.0}
+    params = SimpleNamespace(bg_color=(0.7, 0.8, 0.9), has_params=lambda: True)
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: SimpleNamespace(
+        get=lambda key: colors[key], set=lambda key, value: colors.__setitem__(key, value)), raising=False)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params, raising=False)
+    history = []
+    monkeypatch.setattr(module.lf, "undo", SimpleNamespace(
+        push=lambda name, undo, redo, **kwargs: history.append((undo, redo))), raising=False)
+    signal = module.RuntimeState.scene_generation
+    generation = signal.value
+    try:
+        previous = colors["background_color"] if destination == "render" else params.bg_color
+        panel._apply_sampled_color(destination)
+        assert not panel._action_error
+        signal.value = generation + 2  # scene mutations for rename and undo rename
+        colors["exposure"] = 2.0
+        undo, redo = history[-1]
+        undo()
+        assert (colors["background_color"] if destination == "render" else params.bg_color) == previous
+        redo()
+        assert (colors["background_color"] if destination == "render" else params.bg_color) == panel._sampled_color
+        assert colors["exposure"] == 2.0
+    finally:
+        signal.value = generation
 
 
 def test_late_color_sample_does_not_follow_navigation(panel_modules):
