@@ -816,7 +816,8 @@
       "bg_modulation": "transparent/empty pixel の背後に使う training background を選びます。Color は選択した固定色を使います。Modulation は sinusoidal colors で solid RGB background を変化させます。Image は選択した画像を使います。Random は各 step で pixel ごとの RGB noise を生成します。",
       "invert_masks": "マスクの意味を反転します。白黒マスクで、マスク領域が想定とは反対の色で示されている場合に使います。",
       "use_alpha_as_mask": "画像の transparency を training mask として使います。RGBA 画像に既に mask が含まれ、別の mask file が不要な場合に使います。",
-      "steps_scaler": "step-based training settings をまとめてスケールします。Auto mode では有効な training image 1 枚あたり約 100 iteration、最小 30,000 iteration を使います。"
+      "steps_scaler": "step-based training settings をまとめてスケールします。Auto mode では有効な training image 1 枚あたり約 100 iteration、最小 30,000 iteration を使います。",
+      "densify_vram": "VRAMが尽きるまでに高密度化がどこまで増やせるかを、リファインごとに測定します。バーは現在のガウシアン数と収まる最大数を比べます。学習ステップとリファインのために、常に一部のVRAMを空けておきます。"
     },
     "section.masking": "マスク設定",
     "section.thresholds": "しきい値",
@@ -1423,7 +1424,10 @@
     "edit_mode_discards_session": "編集モードに入ると、イテレーション {n} の再開可能なトレーニングセッションは破棄されます。",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "高密度化用VRAM",
+    "densify_vram_left": "+%s ガウシアン · 残り %s GiB",
+    "densify_vram_full": "%s ガウシアンで上限"
   },
   "tooltip": {
     "seq_camera_aspect": "カメラのアスペクト比",

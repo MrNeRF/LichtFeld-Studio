@@ -6,6 +6,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
 #include <cuda_runtime.h>
@@ -235,6 +236,43 @@ TEST(VramGrowthLimit, NoGrowthWhenOnlyTheReserveIsFree) {
 
     EXPECT_EQ(lfs::training::vram_growth_limit(splat, nullptr), size_t{0});
     EXPECT_EQ(lfs::training::clamp_growth_to_vram(5000, splat, nullptr), size_t{0});
+    EXPECT_EQ(lfs::training::densification_vram_room()->capacity, splat.size());
+}
+
+// The training tab shows the room as Gaussians and as VRAM above the safety
+// margins; VRAM another program takes leaves exactly that much less, with the
+// planned and with a measured refine peak.
+TEST(VramGrowthLimit, RoomInBytesFollowsFreeVram) {
+    auto splat = make_splat(1000000);
+    lfs::training::initialize_gaussians(splat, 0);
+    EXPECT_FALSE(lfs::training::densification_vram_room());
+    const auto room_bytes = [&] {
+        const size_t limit = lfs::training::vram_growth_limit(splat, nullptr);
+        const auto room = lfs::training::densification_vram_room();
+        EXPECT_TRUE(room);
+        EXPECT_EQ(room->capacity, splat.size() + limit);
+        return static_cast<double>(limit) * static_cast<double>(room->bytes_per_gaussian);
+    };
+    const auto expect_drop = [&](const char* bound) {
+        SCOPED_TRACE(bound);
+        Tensor::trim_memory_pool();
+        const double before = room_bytes();
+        constexpr size_t kHogBytes = size_t{1} << 30;
+        const VramHog hog(kHogBytes);
+        if (!hog.ptr) {
+            GTEST_SKIP() << "not enough free VRAM";
+        }
+        EXPECT_NEAR(before - room_bytes(), static_cast<double>(kHogBytes), 64.0 * kMiB);
+    };
+    expect_drop("planned refine peak");
+    {
+        // 512 B per Gaussian of refine peak outweighs the model itself.
+        const lfs::training::RefineVramWindow window(splat);
+        auto transient = Tensor::empty({size_t{512} * kMiB}, Device::CUDA, DataType::UInt8);
+        transient.zero_();
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+    expect_drop("measured refine peak");
 }
 
 // Commit-ahead pages serve only their own tensor; near the limit growth must

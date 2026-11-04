@@ -825,7 +825,8 @@
       "bg_modulation": "Chooses how the training background is supplied behind transparent or empty pixels. Color uses the selected fixed background color. Modulation varies a solid RGB background over training steps using sinusoidal colors. Image uses a selected background image. Random generates a different per-pixel RGB noise background each step.",
       "invert_masks": "Reverses mask meaning. Use when your black-and-white masks use the opposite color for the masked region.",
       "use_alpha_as_mask": "Uses image transparency as the training mask. Use when RGBA images already contain the mask and no separate mask files are needed.",
-      "steps_scaler": "Scales step-based training settings together. Auto mode uses roughly 100 iterations per active training image, with a minimum of 30,000 iterations."
+      "steps_scaler": "Scales step-based training settings together. Auto mode uses roughly 100 iterations per active training image, with a minimum of 30,000 iterations.",
+      "densify_vram": "How far densification can still grow before VRAM runs out, measured at each refine. The bar compares the current Gaussians with the most that fit. Some VRAM always stays free for training steps and refines."
     },
     "section.masking": "Mask Settings",
     "section.thresholds": "Thresholds",
@@ -1434,7 +1435,10 @@
     "edit_mode_discards_session": "Entering Edit Mode discards the resumable training session at iteration {n}.",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "Densification VRAM",
+    "densify_vram_left": "+%s Gaussians · %s GiB left",
+    "densify_vram_full": "Full at %s Gaussians"
   },
   "tooltip": {
     "seq_camera_aspect": "Camera aspect ratio",

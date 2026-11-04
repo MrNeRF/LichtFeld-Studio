@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <limits>
+#include <mutex>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -118,6 +120,15 @@ namespace lfs::training {
     namespace {
         std::atomic<size_t> g_vram_limit_logged_n{0};
         std::atomic<size_t> g_vram_extra_reserve{0};
+
+        // Written on the training thread, read by the GUI.
+        std::mutex g_densification_room_mutex;
+        std::optional<DensificationVramRoom> g_densification_room;
+
+        void store_densification_room(const std::optional<DensificationVramRoom>& room) {
+            const std::lock_guard lock(g_densification_room_mutex);
+            g_densification_room = room;
+        }
 
         // Pool allocations made while the arena is at its high-water (loss
         // workspaces, images, densify scratch) and views heavier than any seen.
@@ -267,6 +278,7 @@ namespace lfs::training {
         g_frame_transient.store(0, std::memory_order_relaxed);
         lfs::core::set_measured_frame_headroom_bytes(0);
         g_vram_limit_logged_n.store(0, std::memory_order_relaxed);
+        store_densification_room(std::nullopt);
         g_refine_transient_per_gaussian.store(kDefaultRefineTransientBytesPerGaussian, std::memory_order_relaxed);
         // Tensors are already on GPU in the new framework (created with Device::CUDA by default)
         // Gradients are now owned by AdamOptimizer, not SplatData
@@ -426,11 +438,22 @@ namespace lfs::training {
         // Growth by d needs room - d * per_gaussian to stay positive: the
         // reserve plus both the arena headroom and the grown model's refine
         // transient remain free.
-        if (room_after_arena <= 0.0 || room_after_refine <= 0.0) {
-            return 0;
-        }
-        return static_cast<size_t>(std::min(room_after_arena / per_gaussian,
-                                            room_after_refine / (per_gaussian + static_cast<double>(transient))));
+        // Whichever bound is tighter sets what each new Gaussian costs.
+        const double refine_cost = per_gaussian + static_cast<double>(transient);
+        const bool refine_bound = room_after_refine / refine_cost < room_after_arena / per_gaussian;
+        const double cost = refine_bound ? refine_cost : per_gaussian;
+        const size_t limit = room_after_arena <= 0.0 || room_after_refine <= 0.0
+                                 ? 0
+                                 : static_cast<size_t>((refine_bound ? room_after_refine : room_after_arena) / cost);
+        store_densification_room(DensificationVramRoom{
+            .capacity = n + limit,
+            .bytes_per_gaussian = static_cast<size_t>(std::ceil(cost))});
+        return limit;
+    }
+
+    std::optional<DensificationVramRoom> densification_vram_room() {
+        const std::lock_guard lock(g_densification_room_mutex);
+        return g_densification_room;
     }
 
     void note_vram_growth_limit(const lfs::core::SplatData& splat_data,

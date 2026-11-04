@@ -47,3 +47,11 @@
 .mask-settings-divider {
     background-color: @{panel.primary_border_faint};
 }
+
+/* Densification VRAM: green with room left, red when full. */
+.densify-vram progress fill { decorator: none; }
+.densify-vram--level-0 progress fill { background-color: @{blend(surface,success,0.7)}; }
+.densify-vram--level-1 progress fill { background-color: @{blend(surface,blend(success,warning,0.5),0.7)}; }
+.densify-vram--level-2 progress fill { background-color: @{blend(surface,warning,0.7)}; }
+.densify-vram--level-3 progress fill { background-color: @{blend(surface,blend(warning,error,0.5),0.7)}; }
+.densify-vram--level-4 progress fill { background-color: @{blend(surface,error,0.7)}; }

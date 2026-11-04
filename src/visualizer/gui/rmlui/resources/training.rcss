@@ -265,6 +265,10 @@ loss-graph {
     min-width: 0;
 }
 
+.densify-vram {
+    margin-top: 4dp;
+}
+
 .training-status-line {
     min-width: 0;
     white-space: nowrap;

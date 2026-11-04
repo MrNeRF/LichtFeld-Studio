@@ -816,7 +816,8 @@
       "bg_modulation": "Elige el fondo de entrenamiento detrás de píxeles transparentes o vacios. Color usa el color fijo seleccionado. Modulation varía un fondo RGB sólido con colores sinusoidales durante el entrenamiento. Image usa una imagen seleccionada. Random genera ruido RGB por píxel en cada paso.",
       "invert_masks": "Invierte el significado de la máscara. Úsalo cuando tus máscaras en blanco y negro usen el color opuesto para la región enmascarada.",
       "use_alpha_as_mask": "Usa la transparencia de la imagen como máscara de entrenamiento. Úsalo cuando imágenes RGBA ya contienen la máscara y no hacen falta archivos separados.",
-      "steps_scaler": "Escala conjuntamente ajustes de entrenamiento basados en pasos. Auto usa unas 100 iteraciones por imagen activa, con un mínimo de 30.000 iteraciones."
+      "steps_scaler": "Escala conjuntamente ajustes de entrenamiento basados en pasos. Auto usa unas 100 iteraciones por imagen activa, con un mínimo de 30.000 iteraciones.",
+      "densify_vram": "Cuánto puede crecer aún la densificación antes de quedarse sin VRAM, medido en cada refinamiento. La barra compara las gaussianas actuales con el máximo que cabe. Siempre queda algo de VRAM libre para los pasos de entrenamiento y los refinamientos."
     },
     "section.masking": "Ajustes de Máscara",
     "section.thresholds": "Umbrales",
@@ -1423,7 +1424,10 @@
     "edit_mode_discards_session": "Al entrar en el modo de edición se descarta la sesión de entrenamiento reanudable en la iteración {n}.",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
-    "color_blue_prefix": "B:"
+    "color_blue_prefix": "B:",
+    "densify_vram": "VRAM para densificación",
+    "densify_vram_left": "+%s gaussianas · %s GiB libres",
+    "densify_vram_full": "Lleno con %s gaussianas"
   },
   "tooltip": {
     "seq_camera_aspect": "Proporción de cámara",

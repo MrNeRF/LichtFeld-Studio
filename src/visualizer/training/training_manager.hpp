@@ -11,6 +11,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "io/session_chapters.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
@@ -169,6 +170,8 @@ namespace lfs::vis {
         int getTotalIterations() const;
         int getNumSplats() const;
         int getMaxGaussians() const;
+        // VRAM densification can still grow into, while a trainer runs.
+        std::optional<lfs::training::DensificationVramRoom> getDensificationVramRoom() const;
         std::vector<size_t> getSaveSteps() const;
         void setSaveSteps(std::vector<size_t> save_steps);
         const char* getStrategyType() const;
