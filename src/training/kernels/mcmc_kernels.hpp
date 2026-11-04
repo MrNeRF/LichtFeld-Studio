@@ -19,26 +19,27 @@ namespace lfs::training::mcmc {
     void init_relocation_coefficients(int n_max);
 
     /**
-     * Relocation kernel - Equation (9) from "3D Gaussian Splatting as Markov Chain Monte Carlo"
+     * Relocation - Equation (9) from "3D Gaussian Splatting as Markov Chain Monte Carlo"
      *
-     * Computes new opacities and scales for relocated Gaussians based on their sampling ratios.
-     * Requires init_relocation_coefficients() to have been called first.
+     * Each copy row holds a copy of its source row. Recomputes opacity and
+     * scale for the number of times the source was sampled and writes them,
+     * raw, to both the copy and the source. Requires init_relocation_coefficients().
      *
-     * @param opacities [N] - Original opacity values
-     * @param scales [N, 3] - Original scale values
-     * @param ratios [N] - Number of times each Gaussian was sampled (int32)
-     * @param new_opacities [N] - Output: relocated opacity values
-     * @param new_scales [N, 3] - Output: relocated scale values
-     * @param N - Number of Gaussians
-     * @param stream - CUDA stream for async execution
+     * @param src_indices [n] - Source row of each copy
+     * @param copy_indices [n] - Copy rows; nullptr means first_copy + i
+     * @param ratios [n] - Times each copy's source was sampled (int32)
+     * @param scaling_raw [N, 3] - Raw scales (modified in-place)
+     * @param opacity_raw [N] or [N, 1] - Raw opacities (modified in-place)
      */
-    void launch_relocation_kernel(
-        const float* opacities,
-        const float* scales,
+    void launch_relocate_copies(
+        const int64_t* src_indices,
+        const int64_t* copy_indices,
+        int64_t first_copy,
         const int32_t* ratios,
         float min_opacity,
-        float* new_opacities,
-        float* new_scales,
+        float* scaling_raw,
+        float* opacity_raw,
+        size_t n,
         size_t N,
         void* stream = nullptr);
 
@@ -122,98 +123,30 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Update scaling and opacity at specific indices (preserves tensor capacity)
-     *
-     * Updates scaling and opacity values at specified indices without reallocating tensors.
-     * Replaces index_put_() which creates new tensors and loses pre-allocated capacity.
-     *
-     * @param indices [n_indices] - Indices to update (int64)
-     * @param new_scaling [n_indices, 3] - New scaling values
-     * @param new_opacity_raw [n_indices] or [n_indices, 1] - New opacity values
-     * @param scaling_raw [N, 3] - Scaling tensor (modified in-place)
-     * @param opacity_raw [N] or [N, 1] - Opacity tensor (modified in-place)
-     * @param n_indices - Number of indices to update
-     * @param opacity_dim - Opacity dimension (1 for [N,1], 0 for [N])
-     * @param N - Total number of Gaussians (for bounds checking)
-     * @param stream - CUDA stream
-     */
-    void launch_update_scaling_opacity(
-        const int64_t* indices,
-        const float* new_scaling,
-        const float* new_opacity_raw,
-        float* scaling_raw,
-        float* opacity_raw,
-        size_t n_indices,
-        int opacity_dim,
-        size_t N,
-        void* stream = nullptr);
-
-    /**
-     * Fused multinomial sampling + gather kernel (no intermediate allocations)
-     *
-     * Performs multinomial sampling from sampling_weights[alive_indices] and directly gathers
-     * the sampled opacities and scales in a single kernel launch.
-     *
-     * Algorithm:
-     * 1. Thread block cooperatively computes cumulative sum of probabilities
-     * 2. Each thread generates random samples and performs binary search
-     * 3. Maps local indices → global indices (alive_indices[local_idx])
-     * 4. Directly gathers opacities and scales at sampled indices
-     *
-     * @param sampling_weights [N] - Sampling probabilities (full array)
-     * @param opacities [N] - Source opacities used for relocation math
-     * @param scaling_raw [N, 3] - Source raw scales (exp() applied inline)
-     * @param alive_indices [n_alive] - Indices of alive Gaussians
-     * @param n_alive - Number of alive Gaussians
-     * @param n_samples - Number of samples to draw
-     * @param seed - Random seed for sampling
-     * @param sampled_global_indices [n_samples] - Output: sampled global indices
-     * @param sampled_opacities [n_samples] - Output: gathered opacities
-     * @param sampled_scales [n_samples, 3] - Output: gathered scales
-     * @param N - Total number of Gaussians (for bounds checking)
-     * @param stream - CUDA stream
-     */
-    void launch_multinomial_sample_and_gather(
-        const float* sampling_weights,
-        const float* opacities,
-        const float* scaling_raw,
-        const int64_t* alive_indices,
-        size_t n_alive,
-        size_t n_samples,
-        uint64_t seed,
-        int64_t* sampled_global_indices,
-        float* sampled_opacities,
-        float* sampled_scales,
-        size_t N,
-        void* stream = nullptr);
-
-    /**
      * Fused multinomial sampling from all sampling weights (no intermediate allocations)
      *
-     * Variant that samples from all N weights (not just a subset).
-     * Used in add_new_gs() where we sample from the full population.
+     * Samples from all N weights. Relocation passes its dead rows as
+     * `excluded` instead of compacting the alive rows into an index list.
      *
-     * @param sampling_weights [N] - Sampling probabilities (full array)
-     * @param opacities [N] - Source opacities used for relocation math
-     * @param scaling_raw [N, 3] - Source raw scales (exp() applied inline)
+     * @param sampling_weights [N] - Sampling probabilities (full array), finite and >= 0
+     * @param min_weight - Floor applied to each weight as it is read, like
+     *                     Tensor::clamp_min (-inf: weights are used as given)
+     * @param excluded [N] - Optional; nonzero rows are never sampled (nullptr: none)
      * @param N - Number of Gaussians
      * @param n_samples - Number of samples to draw
      * @param seed - Random seed for sampling
      * @param sampled_indices [n_samples] - Output: sampled indices
-     * @param sampled_opacities [n_samples] - Output: gathered opacities
-     * @param sampled_scales [n_samples, 3] - Output: gathered scales
      * @param stream - CUDA stream
+     * @return false, with nothing sampled, when no row has a positive weight
      */
-    void launch_multinomial_sample_all(
+    [[nodiscard]] bool launch_multinomial_sample_all(
         const float* sampling_weights,
-        const float* opacities,
-        const float* scaling_raw,
+        float min_weight,
+        const uint8_t* excluded,
         size_t N,
         size_t n_samples,
         uint64_t seed,
         int64_t* sampled_indices,
-        float* sampled_opacities,
-        float* sampled_scales,
         void* stream = nullptr);
 
     /**
@@ -234,13 +167,13 @@ namespace lfs::training::mcmc {
 
     /**
      * fold densification error row into running max and zero the
-     * full [2,N] densification buffer in one pass (replaces max + zero_).
-     *
-     * densification_info layout: row0 [0..N), row1 [N..2N) — only row1 is maxed.
+     * densification rows in one pass (replaces max + zero_). Only the error
+     * row is maxed; the weight row, when kept, is only cleared.
      */
     void launch_max_error_and_zero_densification(
         float* error_max,
-        float* densification_info,
+        float* error_row,
+        float* weight_row,
         size_t N,
         void* stream = nullptr);
 

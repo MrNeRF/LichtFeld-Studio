@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <tuple>
 #include <type_traits>
 
 namespace lfs::training {
@@ -61,10 +62,18 @@ namespace lfs::training {
             LFS_ASSERT_MSG(adopter && adopter->has_checkpoint_runtime_state(),
                            std::format("postprocess compaction requires an initialized transactional strategy (strategy={})", strategy.strategy_type()));
 
-            auto sh_rest = core::Tensor::empty(
-                {count, model.max_sh_coeffs_rest(), 3}, model.means().device());
-            if (model.max_sh_coeffs_rest() > 0) {
-                sh_value::gather_shN_to_canonical(model, keep_indices, sh_rest);
+            // q16 rows are encoded straight from the source codes; an fp32
+            // copy would take 180 B a kept row at SH3, twice over.
+            const bool q16 = model.shN_value_quantized() && model.max_sh_coeffs_rest() > 0;
+            core::Tensor sh_rest;
+            core::Tensor sh_bounds;
+            if (q16) {
+                std::tie(sh_rest, sh_bounds) = sh_value::gather_shN_q16(model, keep_indices);
+            } else {
+                sh_rest = core::Tensor::empty({count, model.max_sh_coeffs_rest(), 3}, model.means().device());
+                if (model.max_sh_coeffs_rest() > 0) {
+                    sh_value::gather_shN_to_canonical(model, keep_indices, sh_rest);
+                }
             }
             core::SplatData staged_model(
                 model.get_max_sh_degree(),
@@ -74,8 +83,9 @@ namespace lfs::training {
                 model.scaling_raw().index_select(0, keep_indices),
                 model.rotation_raw().index_select(0, keep_indices),
                 model.opacity_raw().index_select(0, keep_indices),
-                model.get_scene_scale());
-            staged_model.set_active_sh_degree(model.get_active_sh_degree());
+                model.get_scene_scale(),
+                q16 ? core::SplatData::ShNLayout::Swizzled : core::SplatData::ShNLayout::Canonical);
+            staged_model.set_active_sh_degree(model.get_active_sh_degree(), std::move(sh_bounds));
             staged_model.set_frozen_ranges(model.frozen_ranges());
             remap_frozen_ranges_after_compaction(staged_model, keep_indices, old_size);
 

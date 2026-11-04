@@ -184,6 +184,27 @@ namespace lfs::core::host_metrics {
         }
 #else
         result.per_core_cpu_percent.resize(std::thread::hardware_concurrency(), -1.f);
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+            const auto ticks = [](const FILETIME& value) {
+                return (static_cast<std::uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
+            };
+            const auto process_ticks = ticks(kernel) + ticks(user);
+            const auto now = std::chrono::steady_clock::now();
+            if (previous.valid && process_ticks >= previous.process_ticks) {
+                const double elapsed = std::chrono::duration<double>(now - previous.timestamp).count();
+                if (elapsed > 0.0) {
+                    const auto cores = std::max(1u, std::thread::hardware_concurrency());
+                    result.process_cpu_percent = std::clamp(
+                        static_cast<float>(100.0 * (process_ticks - previous.process_ticks) /
+                                           (elapsed * 10000000.0 * cores)),
+                        0.f, 100.f);
+                }
+            }
+            previous.valid = true;
+            previous.process_ticks = process_ticks;
+            previous.timestamp = now;
+        }
 #endif
         return result;
     }

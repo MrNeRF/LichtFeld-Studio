@@ -37,6 +37,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.start_training = lambda: None
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
+    lf_stub.trainer_densification_vram = lambda: None
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None
     lf_stub.detect_dataset_info = lambda _path: None
@@ -434,6 +435,46 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
     assert panel._update_progress() is True
     assert panel._progress_value == "0.25"
     assert panel._handle.dirty_fields == ["progress_value"]
+
+
+def test_densify_vram_bar_counts_down_the_room_until_vram_is_full(training_panel_module, monkeypatch):
+    module = training_panel_module
+    texts = {
+        "training_panel.densify_vram_left": "+%s Gaussians · %s GiB left",
+        "training_panel.densify_vram_full": "Full at %s Gaussians",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: texts.get(key, key))
+    runtime = SimpleNamespace(
+        trainer_state=_make_signal("running"),
+        iteration=_make_signal(1000),
+        num_gaussians=_make_signal(1_500_000),
+    )
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    room = None
+    monkeypatch.setattr(module.lf, "trainer_densification_vram", lambda: room)
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    model = _ModelStub()
+    panel._bind_status(model, None)
+
+    def value(name):
+        return model.bindings[name][0]()
+
+    # Hidden until a refine measured the room.
+    assert panel._update_densify_vram() is False
+    assert value("show_densify_vram") is False
+
+    room = {"capacity": 2_000_000, "bytes_per_gaussian": 1024}
+    runtime.iteration.value = 1100
+    assert panel._update_densify_vram() is True
+    assert value("show_densify_vram") is True
+    assert value("densify_vram_text") == "+500.0K Gaussians · 0.48 GiB left"
+    assert value("densify_vram_value") == "0.75"
+    assert value("densify_vram_class").endswith("densify-vram--level-2")
+
+    runtime.num_gaussians.value = 2_000_000
+    assert value("densify_vram_text") == "Full at 2,000,000 Gaussians"
+    assert value("densify_vram_class").endswith("densify-vram--level-4")
 
 
 def test_training_panel_uses_dirty_update_policy(training_panel_module):

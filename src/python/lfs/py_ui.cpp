@@ -5585,6 +5585,8 @@ namespace lfs::python {
 
         m.def("get_camera_browse_repeat", [] { return vis::UserPreferences::instance().cameraBrowseRepeat(); }, "Get whether held camera shortcuts repeat through dataset images");
         m.def("set_camera_browse_repeat", [](bool enabled) { vis::UserPreferences::instance().setCameraBrowseRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts through dataset images");
+        m.def("get_camera_selection_operation", [] { return get_camera_selection_operation(); }, "Get the Scene Graph camera-selection dialog operation");
+        m.def("get_camera_selection_group_id", [] { return get_camera_selection_group_id(); }, "Get the Scene Graph camera-selection dialog target group id");
         m.def("get_camera_browse_repeat_rate", [] { return vis::UserPreferences::instance().cameraBrowseRepeatRate(); }, "Get camera image repeat rate in images per second");
         m.def("set_camera_browse_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setCameraBrowseRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set camera image repeat rate (1-20 images per second)");
 

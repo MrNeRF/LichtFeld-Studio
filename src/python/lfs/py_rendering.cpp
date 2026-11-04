@@ -790,6 +790,8 @@ namespace lfs::python {
                  "Show camera frustum wireframes", false);
         add_float(&Proxy::camera_frustum_scale, "camera_frustum_scale", "Scale", "Camera frustum display scale", 0.25,
                   0.01, 10.0);
+        add_bool(&Proxy::hide_disabled_camera_frustums, "hide_disabled_camera_frustums", "Hide Disabled Cameras",
+                 "Hide disabled camera frustums", false);
 
         // Point Cloud Mode
         add_bool(&Proxy::point_cloud_mode, "point_cloud_mode", "Point Cloud Mode",

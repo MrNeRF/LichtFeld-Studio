@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/memory_pressure.hpp"
+#include "core/cuda_allocation.hpp"
+#include "cuda/memory_arena.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
@@ -10,6 +12,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "tensor/internal/lazy_device_storage.hpp"
 #include "tensor/internal/memory_pool.hpp"
 
 #include <cuda_runtime_api.h>
@@ -26,6 +29,7 @@
 namespace lfs::core {
 
     namespace {
+        std::atomic<size_t> g_measured_frame_headroom{0};
 
         std::string format_bytes(size_t bytes) {
             constexpr double mib = 1024.0 * 1024.0;
@@ -123,6 +127,14 @@ namespace lfs::core {
         }
 
     } // namespace
+
+    void set_measured_frame_headroom_bytes(const size_t bytes) noexcept {
+        g_measured_frame_headroom.store(bytes, std::memory_order_relaxed);
+    }
+
+    size_t measured_frame_headroom_bytes() noexcept {
+        return g_measured_frame_headroom.load(std::memory_order_relaxed);
+    }
 
     MemoryAllocationError::MemoryAllocationError(const AllocationFailure& failure)
         : std::runtime_error(std::format(
@@ -222,6 +234,44 @@ namespace lfs::core {
 
     thread_local bool MemoryPressureCoordinator::Impl::in_episode = false;
 
+    void* allocate_device_scratch(const size_t bytes, const cudaStream_t stream, const bool stream_ordered,
+                                  const std::string_view label) {
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        const auto try_allocate = [&](void** const ptr) {
+            *ptr = nullptr;
+            if (bytes > 0 && coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                return cudaErrorMemoryAllocation;
+            }
+            return stream_ordered ? cudaMallocAsync(ptr, bytes, stream) : cudaMalloc(ptr, bytes);
+        };
+        void* ptr = nullptr;
+        cudaError_t status = try_allocate(&ptr);
+        if (status == cudaErrorMemoryAllocation) {
+            (void)cudaGetLastError();
+            int device = 0;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                (void)cudaGetLastError();
+            }
+            const AllocationFailure failure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .device = device,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = "cuda.scratch",
+                .operation = "cuda.scratch_allocate",
+                .native_error = cudaErrorMemoryAllocation,
+            };
+            (void)coordinator.relieve_and_should_retry(failure);
+            status = try_allocate(&ptr);
+            if (status == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+                throw MemoryAllocationError(failure);
+            }
+        }
+        LFS_CUDA_CHECK_MSG(status, "CUDA scratch allocation '{}' ({} bytes)", label, bytes);
+        return ptr;
+    }
+
     MemoryPressureCoordinator::MemoryPressureCoordinator()
         : impl_(new Impl()) {
         register_client(PressureClient{
@@ -234,6 +284,17 @@ namespace lfs::core {
                 CudaMemoryPool::instance().trim_cached_memory();
                 return ReclaimResult{};
             },
+        });
+        // Pages lazy tensors mapped past their rows; growth maps them again.
+        register_client(PressureClient{
+            .name = "lazy-commit-ahead",
+            .priority = 15,
+            .domain = MemoryDomain::CudaDevice,
+            .affinity = PressureAffinity::ImmediateThreadSafe,
+            .estimate = [](const PressureRequest&) -> size_t {
+                return LazyDeviceStorage::committed_ahead_bytes_total();
+            },
+            .shrink = [](const PressureRequest&) { return ReclaimResult{.logical_bytes_released = LazyDeviceStorage::release_ahead_total()}; },
         });
         register_client(PressureClient{
             .name = "pinned-host-cache",

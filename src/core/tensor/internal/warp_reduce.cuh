@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "core/cuda/reduce_identity.cuh"
 #include "tensor_functors.hpp"
 
 #include <cstdint>
@@ -134,7 +135,7 @@ namespace lfs::core {
             __syncthreads();
 
             if (warp_id == 0) {
-                val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : -std::numeric_limits<T>::infinity();
+                val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : max_reduce_identity<T>();
                 val = warp_reduce_max(val);
             }
 
@@ -159,7 +160,7 @@ namespace lfs::core {
             __syncthreads();
 
             if (warp_id == 0) {
-                val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : std::numeric_limits<T>::infinity();
+                val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : min_reduce_identity<T>();
                 val = warp_reduce_min(val);
             }
 
@@ -247,7 +248,7 @@ namespace lfs::core {
             size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
             size_t idx = vec_idx * 4;
 
-            T val = -std::numeric_limits<T>::infinity();
+            T val = max_reduce_identity<T>();
             if constexpr (std::is_same_v<T, float>) {
                 bool is_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
 
@@ -278,7 +279,7 @@ namespace lfs::core {
             size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
             size_t idx = vec_idx * 4;
 
-            T val = std::numeric_limits<T>::infinity();
+            T val = min_reduce_identity<T>();
             if constexpr (std::is_same_v<T, float>) {
                 bool is_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
 
@@ -396,7 +397,7 @@ namespace lfs::core {
          */
         template <typename T>
         __device__ T vectorized_segment_reduce_max(const T* segment_start, size_t segment_size) {
-            T val = -std::numeric_limits<T>::infinity();
+            T val = max_reduce_identity<T>();
             if constexpr (std::is_same_v<T, float>) {
                 bool is_aligned = (reinterpret_cast<uintptr_t>(segment_start) % 16) == 0;
 
@@ -437,7 +438,7 @@ namespace lfs::core {
          */
         template <typename T>
         __device__ T vectorized_segment_reduce_min(const T* segment_start, size_t segment_size) {
-            T val = std::numeric_limits<T>::infinity();
+            T val = min_reduce_identity<T>();
             if constexpr (std::is_same_v<T, float>) {
                 bool is_aligned = (reinterpret_cast<uintptr_t>(segment_start) % 16) == 0;
 

@@ -5,6 +5,7 @@
 #include "core/device_fault.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/tensor.hpp"
 
 #include <atomic>
@@ -202,6 +203,25 @@ namespace {
             "unused stream-and-argument failure context {}", ++format_evaluations);
 
         EXPECT_EQ(format_evaluations, 0);
+    }
+
+    // Training recovers only from a typed allocation failure, so a checked
+    // device allocation that runs out of VRAM must throw one and leave no
+    // error behind for the next launch check.
+    TEST_F(CudaErrorDiagnostics, OutOfMemoryCheckThrowsAllocationErrorAndClearsIt) {
+        void* ptr = nullptr;
+        EXPECT_THROW(LFS_CUDA_CHECK(cudaMalloc(&ptr, std::size_t{1} << 50)), lfs::core::MemoryAllocationError);
+        EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+
+        bool typed = false;
+        try {
+            LFS_CUDA_CHECK(cudaErrorInvalidValue);
+        } catch (const lfs::core::MemoryAllocationError&) {
+            typed = true;
+        } catch (const std::runtime_error&) {
+        }
+        EXPECT_FALSE(typed);
+        (void)cudaGetLastError();
     }
 
     TEST_F(CudaErrorDiagnostics, DeadAddressRangeIsAnnotatedFromTransferBreadcrumb) {

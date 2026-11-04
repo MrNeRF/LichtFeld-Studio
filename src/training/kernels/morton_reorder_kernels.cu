@@ -12,14 +12,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cub/device/device_radix_sort.cuh>
 #include <cuda_runtime.h>
 #include <limits>
 #include <stdexcept>
-#include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/sequence.h>
-#include <thrust/sort.h>
 #include <thrust/transform_reduce.h>
 
 namespace lfs::training::kernels {
@@ -52,7 +51,7 @@ namespace lfs::training::kernels {
 
         __global__ void morton_encode_kernel(
             const float* __restrict__ means,
-            std::int32_t* __restrict__ codes,
+            std::uint32_t* __restrict__ codes,
             int n,
             float min_x, float min_y, float min_z,
             float xmul, float ymul, float zmul) {
@@ -66,7 +65,33 @@ namespace lfs::training::kernels {
             const std::uint32_t ix = quantize_axis(x, min_x, xmul);
             const std::uint32_t iy = quantize_axis(y, min_y, ymul);
             const std::uint32_t iz = quantize_axis(z, min_z, zmul);
-            codes[i] = static_cast<std::int32_t>(encode_morton3(ix, iy, iz));
+            codes[i] = encode_morton3(ix, iy, iz);
+        }
+
+        __global__ void widen_order_kernel(
+            const std::int32_t* __restrict__ order,
+            std::int64_t* __restrict__ perm,
+            int n) {
+            const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+            if (i < n) {
+                perm[i] = order[i];
+            }
+        }
+
+        constexpr int kMortonBits = 30; // 10 bits per axis
+
+        [[nodiscard]] std::size_t align_scratch(const std::size_t bytes) {
+            return (bytes + 255) & ~std::size_t{255};
+        }
+
+        [[nodiscard]] std::size_t radix_sort_temp_bytes(const int n) {
+            std::size_t bytes = 0;
+            cub::DoubleBuffer<std::uint32_t> keys(nullptr, nullptr);
+            cub::DoubleBuffer<std::int32_t> values(nullptr, nullptr);
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceRadixSort::SortPairs(nullptr, bytes, keys, values, n, 0, kMortonBits),
+                "morton argsort workspace query (n={})", n);
+            return bytes;
         }
 
         struct float3_minmax {
@@ -282,9 +307,19 @@ namespace lfs::training::kernels {
 
     } // namespace
 
+    std::size_t morton_permutation_scratch_bytes(const std::size_t n) {
+        if (n == 0) {
+            return 0;
+        }
+        return 4 * align_scratch(n * sizeof(std::uint32_t)) +
+               align_scratch(radix_sort_temp_bytes(static_cast<int>(n)));
+    }
+
     lfs::core::Tensor launch_morton_permutation(
         const lfs::core::Tensor& means,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        void* scratch,
+        const std::size_t scratch_bytes) {
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -329,26 +364,41 @@ namespace lfs::training::kernels {
         const float ymul = (ylen == 0.0f) ? 0.0f : 1024.0f / ylen;
         const float zmul = (zlen == 0.0f) ? 0.0f : 1024.0f / zlen;
 
-        auto codes = Tensor::empty_exact({static_cast<std::size_t>(n)}, DataType::Int32);
-        auto indices = Tensor::empty_exact({static_cast<std::size_t>(n)}, DataType::Int64);
-        codes.set_stream(stream);
-        indices.set_stream(stream);
+        // Codes, the int32 order and their sort double buffers; the caller
+        // may lend idle memory for them, so only the int64 result is new.
+        const std::size_t row_bytes = align_scratch(static_cast<std::size_t>(n) * sizeof(std::uint32_t));
+        std::size_t temp_bytes = radix_sort_temp_bytes(n);
+        const std::size_t needed = 4 * row_bytes + align_scratch(temp_bytes);
+        Tensor owned_scratch;
+        auto* base = static_cast<char*>(scratch);
+        if (base == nullptr || scratch_bytes < needed) {
+            owned_scratch = Tensor::empty_exact({needed}, DataType::UInt8);
+            owned_scratch.set_stream(stream);
+            base = static_cast<char*>(owned_scratch.data_ptr());
+        }
+        cub::DoubleBuffer<std::uint32_t> codes(reinterpret_cast<std::uint32_t*>(base),
+                                               reinterpret_cast<std::uint32_t*>(base + row_bytes));
+        cub::DoubleBuffer<std::int32_t> order(reinterpret_cast<std::int32_t*>(base + 2 * row_bytes),
+                                              reinterpret_cast<std::int32_t*>(base + 3 * row_bytes));
 
         const int grid = grid_for_prims(n);
         morton_encode_kernel<<<grid, kThreads, 0, stream>>>(
             means.ptr<float>(),
-            codes.ptr<std::int32_t>(),
+            codes.Current(),
             n,
             bbox.min_val.x, bbox.min_val.y, bbox.min_val.z,
             xmul, ymul, zmul);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.encode");
 
-        auto idx_ptr = thrust::device_pointer_cast(indices.ptr<std::int64_t>());
-        thrust::sequence(thrust::cuda::par_nosync.on(stream), idx_ptr, idx_ptr + n, std::int64_t{0});
-        auto key_ptr = thrust::device_pointer_cast(codes.ptr<std::int32_t>());
-        thrust::sort_by_key(
-            thrust::cuda::par_nosync.on(stream),
-            key_ptr, key_ptr + n, idx_ptr);
+        thrust::sequence(thrust::cuda::par_nosync.on(stream), order.Current(), order.Current() + n, 0);
+        LFS_CUDA_CHECK_MSG(
+            cub::DeviceRadixSort::SortPairs(base + 4 * row_bytes, temp_bytes, codes, order, n, 0,
+                                            kMortonBits, stream),
+            "morton argsort (n={})", n);
+
+        auto indices = Tensor::empty_exact({static_cast<std::size_t>(n)}, DataType::Int64);
+        indices.set_stream(stream);
+        widen_order_kernel<<<grid, kThreads, 0, stream>>>(order.Current(), indices.ptr<std::int64_t>(), n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.argsort");
         return indices;
     }

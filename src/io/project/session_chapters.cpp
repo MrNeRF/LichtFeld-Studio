@@ -208,6 +208,7 @@ namespace lfs::io::project {
                 {"show_center_markers", false},
                 {"show_camera_frustums", false},
                 {"camera_frustum_scale", 0.25},
+                {"hide_disabled_camera_frustums", false},
                 {"train_camera_color", vec3(1.0, 1.0, 1.0)},
                 {"eval_camera_color", vec3(1.0, 0.0, 0.0)},
                 {"show_pivot", false},

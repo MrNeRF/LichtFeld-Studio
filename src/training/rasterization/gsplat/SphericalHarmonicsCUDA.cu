@@ -472,7 +472,10 @@ namespace gsplat_lfs {
         const bool* __restrict__ masks,
         const scalar_t* __restrict__ v_colors,
         scalar_t* __restrict__ v_coeffs,
-        scalar_t* __restrict__ v_dirs) {
+        scalar_t* __restrict__ v_dirs,
+        float* __restrict__ grad_sh0,
+        float* __restrict__ grad_shN,
+        const uint32_t grad_shN_slots) {
         const uint32_t idx = cg::this_grid().thread_rank();
         if (idx >= N * 3) {
             return;
@@ -527,8 +530,20 @@ namespace gsplat_lfs {
             compute_dir_grad ? &v_dir_y : nullptr,
             compute_dir_grad ? &v_dir_z : nullptr);
 
-        for (uint32_t k = 0; k < coeff_count; ++k) {
-            v_coeffs[elem_id * K * 3u + k * 3u + c] = v_coeffs_local[k * 3u + c];
+        if (grad_sh0 != nullptr) {
+            // One thread owns each (Gaussian, channel), so plain adds are safe.
+            grad_sh0[elem_id * 3u + c] += v_coeffs_local[c];
+            if (grad_shN != nullptr) {
+                for (uint32_t k = 1; k < coeff_count; ++k) {
+                    const uint32_t offset = (k - 1u) * 3u + c;
+                    grad_shN[static_cast<size_t>(shAt(elem_id, offset / 4u, grad_shN_slots)) * 4u + offset % 4u] +=
+                        v_coeffs_local[k * 3u + c];
+                }
+            }
+        } else {
+            for (uint32_t k = 0; k < coeff_count; ++k) {
+                v_coeffs[elem_id * K * 3u + k * 3u + c] = v_coeffs_local[k * 3u + c];
+            }
         }
         if (compute_dir_grad) {
             atomicAdd(v_dirs + elem_id * 3, v_dir_x);
@@ -543,7 +558,8 @@ namespace gsplat_lfs {
         const uint32_t color_stride,
         const bool* __restrict__ masks,
         const float* __restrict__ v_colors,
-        float* __restrict__ v_coeffs) {
+        float* __restrict__ v_coeffs,
+        float* __restrict__ grad_sh0) {
         const uint32_t idx = cg::this_grid().thread_rank();
         if (idx >= N * 3u) {
             return;
@@ -553,7 +569,12 @@ namespace gsplat_lfs {
         if (masks != nullptr && !masks[elem_id]) {
             return;
         }
-        v_coeffs[elem_id * K * 3u + c] = SH_C0 * v_colors[elem_id * color_stride + c];
+        const float v_coeff = SH_C0 * v_colors[elem_id * color_stride + c];
+        if (grad_sh0 != nullptr) {
+            grad_sh0[elem_id * 3u + c] += v_coeff;
+        } else {
+            v_coeffs[elem_id * K * 3u + c] = v_coeff;
+        }
     }
 
     void launch_spherical_harmonics_swizzled_bwd_kernel(
@@ -571,7 +592,10 @@ namespace gsplat_lfs {
         float* v_coeffs,
         float* v_dirs,
         cudaStream_t stream,
-        const float* sh_value_bounds) {
+        const float* sh_value_bounds,
+        float* grad_sh0,
+        float* grad_shN,
+        const uint32_t grad_shN_slots) {
         const uint32_t N = static_cast<uint32_t>(total_elements);
         const int64_t n_elements = static_cast<int64_t>(N) * 3;
         if (n_elements == 0) {
@@ -582,7 +606,7 @@ namespace gsplat_lfs {
         dim3 grid((n_elements + threads.x - 1) / threads.x);
         if (degrees_to_use == 0) {
             spherical_harmonics_sh0_bwd_kernel<<<grid, threads, 0, stream>>>(
-                N, static_cast<uint32_t>(K), color_stride, masks, v_colors, v_coeffs);
+                N, static_cast<uint32_t>(K), color_stride, masks, v_colors, v_coeffs, grad_sh0);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh0_bwd");
             return;
         }
@@ -601,7 +625,10 @@ namespace gsplat_lfs {
                     masks,
                     v_colors,
                     v_coeffs,
-                    compute_v_dirs ? v_dirs : nullptr);
+                    compute_v_dirs ? v_dirs : nullptr,
+                    grad_sh0,
+                    grad_shN,
+                    grad_shN_slots);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
         };
         if (compute_v_dirs && v_dirs != nullptr)

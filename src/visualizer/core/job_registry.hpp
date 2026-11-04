@@ -23,6 +23,7 @@ namespace lfs::vis {
         VideoExport,
         Mesh2Splat,
         SplatSimplify,
+        CameraSelection,
         ProjectWrite,
         ProjectOpen,
         DatasetEmbed,

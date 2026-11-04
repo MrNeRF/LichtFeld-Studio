@@ -30,6 +30,14 @@ namespace gsplat_lfs {
         cudaStream_t stream = nullptr,
         const float* sh_value_bounds = nullptr);
 
+    // Optimizer gradients the SH backward adds into, instead of writing a
+    // canonical [N, K, 3] buffer for a separate accumulate pass.
+    struct ShGradientTarget {
+        float* sh0 = nullptr;   // [N, 1, 3]
+        float* shN = nullptr;   // swizzled FP32 shN gradient, optional
+        uint32_t shN_slots = 0; // float4 slots per primitive of shN
+    };
+
     void spherical_harmonics_swizzled_bwd(
         uint32_t K,
         uint32_t degrees_to_use,
@@ -41,11 +49,12 @@ namespace gsplat_lfs {
         const float* v_colors,         // [..., 3] gradient
         int64_t total_elements,
         bool compute_v_dirs,
-        float* v_coeffs, // [..., K, 3] canonical output for accumulation
+        float* v_coeffs, // [..., K, 3] canonical output; unused with sh_grads
         float* v_dirs,   // [..., 3] optional output
         uint32_t color_stride = 3,
         cudaStream_t stream = nullptr,
-        const float* sh_value_bounds = nullptr);
+        const float* sh_value_bounds = nullptr,
+        const ShGradientTarget& sh_grads = {});
 
     //=========================================================================
     // Tile Intersection
@@ -261,7 +270,8 @@ namespace gsplat_lfs {
         float* v_scales,                      // [N, 3]
         float* v_colors,                      // [C, N, channels]
         float* v_opacities,                   // [C, N]
-        float* densification_info,            // [2, N] flattened or nullptr
+        float* densification_weight,          // [N] or nullptr
+        float* densification_error,           // [N] or nullptr
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
@@ -394,13 +404,15 @@ namespace gsplat_lfs {
         float* v_quats,                       // [N, 4]
         float* v_scales,                      // [N, 3]
         float* v_opacities,                   // [N]
-        float* v_sh_coeffs,                   // [N, K, 3]
-        float* densification_info,            // [2, N] flattened or nullptr
+        float* v_sh_coeffs,                   // [N, K, 3]; nullptr with sh_grads
+        float* densification_weight,          // [N] or nullptr
+        float* densification_error,           // [N] or nullptr
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
         cudaStream_t stream = nullptr,
         const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr,
-        const float* sh_value_bounds = nullptr);
+        const float* sh_value_bounds = nullptr,
+        const ShGradientTarget& sh_grads = {});
 
 } // namespace gsplat_lfs

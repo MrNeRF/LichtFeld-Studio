@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cuda_runtime.h>
+#include <functional>
 
 namespace lfs::training {
     class AdamOptimizer;
@@ -43,10 +44,10 @@ namespace lfs::training::morton {
         lfs::core::Tensor permutation; // Int64 [N], dest i <- src perm[i]
     };
 
-    /// Permute a row-indexed tensor. Dim 0 is the primitive axis unless the
-    /// tensor is [C, N] with C != N (densification_info). Tensors longer than
-    /// perm.n on dim 0 permute the live prefix and keep the tail.
-    void permute_row_tensor(lfs::core::Tensor& tensor, const lfs::core::Tensor& perm);
+    /// Hands each extra row-indexed tensor to the visitor; a reorder calls it
+    /// once to size its scratch and once to permute the rows with the model.
+    using RowVisitor = std::function<void(lfs::core::Tensor&)>;
+    using RowSource = std::function<void(const RowVisitor&)>;
 
     /// dest[i] <- src[perm[i]] for shN. q16 gather-decodes each dest 256-block
     /// in one launch (no full fp32 expansion). fp32 / IEEE-f16 keep the
@@ -57,11 +58,13 @@ namespace lfs::training::morton {
         cudaStream_t stream = nullptr);
 
     /// Apply Morton ordering to all per-Gaussian model parameters, optimizer
-    /// moments, and row-indexed aux tensors on `splat`. Skips (and logs at
-    /// debug) when FrozenRange spans are active.
+    /// moments, row-indexed aux tensors on `splat` and `extra_rows`. Skips
+    /// (and logs at debug) when FrozenRange spans are active, and leaves
+    /// everything untouched when its buffers do not fit in VRAM.
     [[nodiscard]] ReorderResult apply_morton_reorder(
         lfs::core::SplatData& splat,
         AdamOptimizer* optimizer = nullptr,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const RowSource& extra_rows = {});
 
 } // namespace lfs::training::morton

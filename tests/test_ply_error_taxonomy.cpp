@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/transforms.hpp"
@@ -907,8 +908,8 @@ TEST_F(PlyErrorTaxonomyTest, ExportSupportsLongLegalFileName) {
         const auto output = path(std::string(250, binary ? 'b' : 'a') + ".ply");
         const auto saved = lfs::io::save_ply(pc, {.output_path = output, .binary = binary});
         ASSERT_TRUE(saved.has_value()) << saved.error().format();
-        EXPECT_TRUE(fs::exists(output));
-        EXPECT_GT(fs::file_size(output), 0u);
+        EXPECT_TRUE(lfs::core::native_fs::exists(output));
+        EXPECT_GT(lfs::core::native_fs::file_size(output), 0u);
     }
 }
 

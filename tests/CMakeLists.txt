@@ -43,6 +43,12 @@ target_link_libraries(lichtfeld_splat_operation_tests PRIVATE lfs_core GTest::gt
 add_test(NAME lichtfeld.splat_operations COMMAND lichtfeld_splat_operation_tests)
 set_tests_properties(lichtfeld.splat_operations PROPERTIES LABELS "cpu;scene" TIMEOUT 30)
 
+add_executable(lichtfeld_camera_selection_tests test_camera_selection_algorithms.cpp)
+target_compile_features(lichtfeld_camera_selection_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
+add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
+set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
@@ -284,6 +290,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_keymap_layout_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
+        test_camera_frustum_pick.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
         test_scale_distance.cpp
@@ -345,6 +352,7 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
         lfs_training
         lfs_io
+        lfs_rendering
         lfs_sequencer
         lfs_visualizer
         lfs_core
@@ -825,6 +833,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
+    test_lazy_direct_storage.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
     test_splat_decimate.cpp
@@ -949,6 +958,7 @@ set(TEST_FILES
     test_fastgs_forward_mask.cpp
     test_raster_evaluation.cu
     test_raster_reduction.cu
+    test_warp_reduce_identity.cu
     test_raster_tile_keys.cu
     test_sh_swizzle_layout.cpp
     test_shn_bda_index_math.cpp

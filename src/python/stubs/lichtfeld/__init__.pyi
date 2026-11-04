@@ -493,6 +493,9 @@ def trainer_is_gut_enabled() -> bool:
 def trainer_max_gaussians() -> int:
     """Get maximum number of gaussians"""
 
+def trainer_densification_vram() -> dict | None:
+    """Gaussians that fit in VRAM and the VRAM each new one takes, as of the last refine (None before the first)"""
+
 def trainer_num_splats() -> int:
     """Get current number of splats"""
 
@@ -519,6 +522,19 @@ def set_node_visibility(name: str, visible: bool) -> None:
 
 def set_camera_training_enabled(name: str, enabled: bool) -> None:
     """Enable or disable a camera for training by name"""
+
+def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
+    """
+    Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    """
+
+def camera_selection_status() -> dict:
+    """Return the camera-selection job status without changing the scene."""
+
+def camera_selection_cancel() -> bool:
+    """
+    Request cancellation. Returns true only when a running job accepted the request.
+    """
 
 def remove_node(name: str, keep_children: bool = False) -> None:
     """Remove a scene node by name"""

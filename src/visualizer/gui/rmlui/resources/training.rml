@@ -87,6 +87,13 @@
         <loss-graph id="loss-graph-el" />
       </div>
     </div>
+    <div class="densify-vram" data-if="show_densify_vram" data-tooltip="training.tooltip.densify_vram">
+      <span class="status-text text-default training-status-line">{{densify_vram_label}}</span>
+      <div data-attr-class="densify_vram_class">
+        <progress max="1" data-attr-value="densify_vram_value" />
+        <span class="progress__text">{{densify_vram_text}}</span>
+      </div>
+    </div>
     <div id="psnr-graph-container" data-if="dep_eval">
       <span id="psnr-label" class="status-text text-default training-status-line">{{psnr_label}}</span>
       <div class="loss-graph-wrap">
