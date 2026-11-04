@@ -1160,7 +1160,7 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         return 0;
     texture->m_is_async_preview = true;
     texture->m_preview_source = source;
-    texture->m_preview_status = "pending";
+    texture->m_preview_status = PreviewTextureStatus::Pending;
     m_preview_textures_by_source[source] = texture;
 
     auto state = std::make_shared<async_preview_state_t>();
@@ -1176,15 +1176,15 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
                  lfs::core::path_to_utf8(request->path), e.what());
         DropAsyncPreviewTexture(texture);
-        texture->m_preview_status = "error";
+        texture->m_preview_status = PreviewTextureStatus::Error;
     }
 
     return handle;
 }
 
-std::string RenderInterface_VK::previewTextureStatus(const std::string& source) const {
+RenderInterface_VK::PreviewTextureStatus RenderInterface_VK::previewTextureStatus(const std::string& source) const {
     const auto it = m_preview_textures_by_source.find(source);
-    return it == m_preview_textures_by_source.end() ? "unknown" : it->second->m_preview_status;
+    return it == m_preview_textures_by_source.end() ? PreviewTextureStatus::Unknown : it->second->m_preview_status;
 }
 
 void RenderInterface_VK::EnsurePreviewWorkerPool() {
@@ -1417,7 +1417,7 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
             if (replacement) {
                 replacement->m_is_async_preview = true;
                 replacement->m_preview_source = state->source;
-                replacement->m_preview_status = "ready";
+                replacement->m_preview_status = PreviewTextureStatus::Ready;
                 QueueTextureForDeferredDeletion(new texture_data_t(*state->texture));
                 *state->texture = *replacement;
                 UnregisterLiveTexture(replacement);
@@ -1425,10 +1425,10 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
                 --uploads_remaining;
                 uploaded_any = true;
             } else {
-                state->texture->m_preview_status = "error";
+                state->texture->m_preview_status = PreviewTextureStatus::Error;
             }
         } else {
-            state->texture->m_preview_status = "error";
+            state->texture->m_preview_status = PreviewTextureStatus::Error;
         }
 
         it = m_async_preview_textures.erase(it);

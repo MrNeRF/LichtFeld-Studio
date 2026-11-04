@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 
 #include <RmlUi/Core/RenderInterface.h>
 
@@ -57,6 +58,7 @@ class RenderInterface_VK : public Rml::RenderInterface {
     friend class RenderInterfaceVKTestAccess;
 
 public:
+    using PreviewTextureStatus = lfs::vis::gui::PreviewTextureStatus;
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
 
@@ -135,7 +137,7 @@ public:
         return m_preview_texture_generation.load(std::memory_order_acquire);
     }
     // Graphics thread only; source identity is the complete revisioned preview URL.
-    [[nodiscard]] LFS_VIS_API std::string previewTextureStatus(const std::string& source) const;
+    [[nodiscard]] LFS_VIS_API PreviewTextureStatus previewTextureStatus(const std::string& source) const;
     [[nodiscard]] bool currentContextUsedPreviewTexture() const {
         return m_current_context_used_preview_texture;
     }
@@ -204,7 +206,7 @@ private:
         int m_height = 0;
         bool m_is_async_preview = false;
         std::string m_preview_source;
-        std::string m_preview_status;
+        PreviewTextureStatus m_preview_status = PreviewTextureStatus::Unknown;
         // Resource identity for VulkanImageBarrierTracker (#1478).
         std::uint64_t m_barrier_generation = 0;
     };

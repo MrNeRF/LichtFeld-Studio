@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 
+using lfs::vis::gui::PreviewTextureStatus;
+
 namespace {
     // Exercise the public renderer ABI, including Windows' DLL boundary.
 #ifdef _MSC_VER
@@ -32,12 +34,12 @@ public:
         RenderInterface_VK external;
         RenderInterface_VK::texture_data_t main_texture, external_texture;
         const std::string source = "preview://path=same-file&rev=1";
-        main_texture.m_preview_status = "pending";
-        external_texture.m_preview_status = "ready";
+        main_texture.m_preview_status = PreviewTextureStatus::Pending;
+        external_texture.m_preview_status = PreviewTextureStatus::Ready;
         main.m_preview_textures_by_source[source] = &main_texture;
         external.m_preview_textures_by_source[source] = &external_texture;
-        EXPECT_EQ(main.previewTextureStatus(source), "pending");
-        EXPECT_EQ(external.previewTextureStatus(source), "ready");
+        EXPECT_EQ(main.previewTextureStatus(source), PreviewTextureStatus::Pending);
+        EXPECT_EQ(external.previewTextureStatus(source), PreviewTextureStatus::Ready);
         main.m_preview_textures_by_source.clear();
         external.m_preview_textures_by_source.clear();
     }
@@ -46,18 +48,18 @@ public:
         RenderInterface_VK backend;
         RenderInterface_VK::texture_data_t texture;
         texture.m_preview_source = "preview://path=fixture&rev=1";
-        texture.m_preview_status = "pending";
-        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), "unknown");
+        texture.m_preview_status = PreviewTextureStatus::Pending;
+        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), PreviewTextureStatus::Unknown);
         backend.m_preview_textures_by_source[texture.m_preview_source] = &texture;
-        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), "pending");
-        texture.m_preview_status = "ready";
+        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), PreviewTextureStatus::Pending);
+        texture.m_preview_status = PreviewTextureStatus::Ready;
         auto retired = texture;
         releaseTexture(backend, reinterpret_cast<Rml::TextureHandle>(&retired));
-        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), "ready");
-        texture.m_preview_status = "error";
-        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), "error");
+        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), PreviewTextureStatus::Ready);
+        texture.m_preview_status = PreviewTextureStatus::Error;
+        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), PreviewTextureStatus::Error);
         releaseTexture(backend, reinterpret_cast<Rml::TextureHandle>(&texture));
-        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), "unknown");
+        EXPECT_EQ(backend.previewTextureStatus(texture.m_preview_source), PreviewTextureStatus::Unknown);
         // These two inert fixtures own no GPU resources and live on this stack.
         for (auto& pending : backend.m_pending_for_deletion_textures_by_frames)
             pending.clear();

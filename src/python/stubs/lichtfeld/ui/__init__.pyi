@@ -2487,7 +2487,8 @@ def get_image_info(path: str) -> tuple:
 def sample_image_color(path: str, x: int, y: int, radius: int = 10) -> tuple:
     """
     Sample source pixels as (r, g, b) in 0..1. Releases the GIL during image IO.
-    Raises on decode failure or invalid coordinates; failures do not produce a black sample.
+    Raises RuntimeError on decode failure and ValueError on invalid coordinates or radius.
+    Unlike earlier versions, failures raise instead of returning (0, 0, 0); plugins must handle errors.
     """
 
 def preload_image_async(path: str) -> None:

@@ -4852,7 +4852,14 @@ namespace lfs::python {
             lfs::python::require_ui_texture_creation_thread();
             const auto* gui = lfs::python::get_gui_manager();
             auto* context = document && document->raw_doc() ? document->raw_doc()->GetContext() : nullptr;
-            return gui ? gui->previewTextureStatus(source, context) : std::string("unknown"); }, nb::arg("source"), nb::arg("document") = nb::none(), "UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.");
+            using Status = lfs::vis::gui::PreviewTextureStatus;
+            switch (gui ? gui->previewTextureStatus(source, context) : Status::Unknown) {
+            case Status::Pending: return "pending";
+            case Status::Ready: return "ready";
+            case Status::Error: return "error";
+            case Status::Unknown: return "unknown";
+            }
+            return "unknown"; }, nb::arg("source"), nb::arg("document") = nb::none(), "UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.");
 
         m.def(
             "get_image_info",
@@ -4901,7 +4908,8 @@ namespace lfs::python {
             },
             nb::arg("path"), nb::arg("x"), nb::arg("y"), nb::arg("radius") = 10,
             "Sample source pixels as (r, g, b) in 0..1. Releases the GIL during image IO.\n"
-            "Raises on decode failure or invalid coordinates; failures do not produce a black sample.");
+            "Raises RuntimeError on decode failure and ValueError on invalid coordinates or radius.\n"
+            "Unlike earlier versions, failures raise instead of returning (0, 0, 0); plugins must handle errors.");
 
         m.def(
             "preload_image_async",
