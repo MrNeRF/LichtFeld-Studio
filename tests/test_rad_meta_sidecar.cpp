@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data.hpp"
+#include "core/tensor.hpp"
 #include "io/formats/rad.hpp"
 #include "io/loaders/rad_loader.hpp"
 #include "io/ply_to_rad_lod.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <zlib.h>
 
 #include <cmath>
 #include <cstdint>
@@ -18,6 +21,7 @@
 #include <iterator>
 #include <random>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace {
@@ -357,6 +361,206 @@ namespace {
         EXPECT_NE(result.error().message.find("RAD0"), std::string::npos);
 
         std::filesystem::remove_all(temp_dir);
+    }
+
+    // ---- Malformed RAD input: a minimal single-chunk container builder ----
+
+    constexpr std::uint32_t kRadMagic = 0x30444152u;      // "RAD0"
+    constexpr std::uint32_t kRadChunkMagic = 0x43444152u; // "RADC"
+
+    std::size_t pad8(const std::size_t n) { return (n + 7u) & ~std::size_t{7u}; }
+
+    void putU32(std::vector<std::uint8_t>& out, const std::uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            out.push_back(static_cast<std::uint8_t>(v >> (8 * i)));
+        }
+    }
+
+    void putU64(std::vector<std::uint8_t>& out, const std::uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            out.push_back(static_cast<std::uint8_t>(v >> (8 * i)));
+        }
+    }
+
+    // JSON blocks are space-padded to 8 bytes; the length field stores the unpadded size.
+    void putJsonBlock(std::vector<std::uint8_t>& out, const std::string& json) {
+        out.insert(out.end(), json.begin(), json.end());
+        out.insert(out.end(), pad8(json.size()) - json.size(), static_cast<std::uint8_t>(' '));
+    }
+
+    struct RawProperty {
+        std::string name;
+        std::string encoding;
+        std::vector<std::uint8_t> bytes; // stored bytes, already deflated when `deflated`
+        bool deflated = false;
+    };
+
+    std::vector<std::uint8_t> floatBytes(const std::vector<float>& values) {
+        std::vector<std::uint8_t> out(values.size() * sizeof(float));
+        std::memcpy(out.data(), values.data(), out.size());
+        return out;
+    }
+
+    // Raw deflate stream, the variant rad_decompress tries first.
+    std::vector<std::uint8_t> rawDeflate(const std::vector<std::uint8_t>& input) {
+        z_stream strm{};
+        if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+            return {};
+        }
+        std::vector<std::uint8_t> out(deflateBound(&strm, input.size()));
+        strm.next_in = const_cast<Bytef*>(input.data());
+        strm.avail_in = static_cast<uInt>(input.size());
+        strm.next_out = out.data();
+        strm.avail_out = static_cast<uInt>(out.size());
+        const int ret = deflate(&strm, Z_FINISH);
+        out.resize(strm.total_out);
+        deflateEnd(&strm);
+        return ret == Z_STREAM_END ? out : std::vector<std::uint8_t>{};
+    }
+
+    // Builds a RAD file holding one chunk that covers splats [0, count).
+    // `max_sh` is written to the file metadata only when positive.
+    std::vector<std::uint8_t> buildRadFile(const std::uint64_t count,
+                                           const std::vector<RawProperty>& props,
+                                           const int max_sh = 0) {
+        std::vector<std::uint8_t> payload;
+        nlohmann::json prop_json = nlohmann::json::array();
+        for (const auto& prop : props) {
+            const std::size_t offset = payload.size();
+            payload.insert(payload.end(), prop.bytes.begin(), prop.bytes.end());
+            payload.resize(pad8(payload.size()), 0);
+
+            nlohmann::json entry{{"offset", offset},
+                                 {"bytes", prop.bytes.size()},
+                                 {"property", prop.name},
+                                 {"encoding", prop.encoding}};
+            if (prop.deflated) {
+                entry["compression"] = "gz";
+            }
+            prop_json.push_back(entry);
+        }
+
+        const nlohmann::json chunk_meta{{"version", 1},
+                                        {"base", 0},
+                                        {"count", count},
+                                        {"payloadBytes", payload.size()},
+                                        {"properties", prop_json}};
+        const std::string chunk_json = chunk_meta.dump();
+
+        std::vector<std::uint8_t> chunk;
+        putU32(chunk, kRadChunkMagic);
+        putU32(chunk, static_cast<std::uint32_t>(chunk_json.size()));
+        putJsonBlock(chunk, chunk_json);
+        putU64(chunk, payload.size());
+        chunk.insert(chunk.end(), payload.begin(), payload.end());
+
+        nlohmann::json file_meta{{"version", 1},
+                                 {"type", "gsplat"},
+                                 {"count", count},
+                                 {"allChunkBytes", chunk.size()},
+                                 {"chunks", nlohmann::json::array({{{"offset", 0},
+                                                                    {"bytes", chunk.size()},
+                                                                    {"base", 0},
+                                                                    {"count", count}}})}};
+        if (max_sh > 0) {
+            file_meta["maxSh"] = max_sh;
+        }
+        const std::string meta_json = file_meta.dump();
+
+        std::vector<std::uint8_t> file;
+        putU32(file, kRadMagic);
+        putU32(file, static_cast<std::uint32_t>(meta_json.size()));
+        putJsonBlock(file, meta_json);
+        file.insert(file.end(), chunk.begin(), chunk.end());
+        return file;
+    }
+
+    void writeBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    // Per-test scratch directory, removed when the test ends (also on early ASSERT exits).
+    struct ScopedRadDir {
+        explicit ScopedRadDir(const std::string& name)
+            : path(std::filesystem::temp_directory_path() / ("rad_malformed_" + name)) {
+            std::filesystem::remove_all(path);
+            std::filesystem::create_directories(path);
+        }
+        ~ScopedRadDir() { std::filesystem::remove_all(path); }
+        std::filesystem::path path;
+    };
+
+    // A deflate stream cut in half must make the load fail. Before the fix the
+    // inflate loop spins forever on Z_BUF_ERROR, so this test also guards against a hang.
+    TEST(RadMalformedInput, TruncatedDeflatePayloadFailsInsteadOfHanging) {
+        const ScopedRadDir dir("truncated_deflate");
+        constexpr std::uint64_t kCount = 256;
+
+        std::mt19937 rng(7u);
+        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+        std::vector<float> centers(kCount * 3);
+        for (auto& v : centers) {
+            v = dist(rng);
+        }
+        const auto full = rawDeflate(floatBytes(centers));
+        ASSERT_GT(full.size(), 16u);
+        const std::vector<std::uint8_t> truncated(full.begin(), full.begin() + static_cast<std::ptrdiff_t>(full.size() / 2));
+
+        const auto path = dir.path / "truncated.rad";
+        writeBytes(path, buildRadFile(kCount, {{"center", "f32", truncated, true}}));
+
+        const auto loaded = lfs::io::load_rad(path);
+        ASSERT_FALSE(loaded.has_value());
+        EXPECT_NE(loaded.error().find("decompress"), std::string::npos) << loaded.error();
+    }
+
+    // maxSh comes from the file, so an out-of-range value must be clamped to the
+    // 4-entry SH table instead of indexing past it.
+    TEST(RadMalformedInput, OutOfRangeMaxShIsClampedToDegreeThree) {
+        const ScopedRadDir dir("max_sh_clamp");
+        constexpr std::uint64_t kCount = 4;
+        const std::vector<float> centers(kCount * 3, 0.5f);
+
+        const auto path = dir.path / "max_sh_9.rad";
+        writeBytes(path, buildRadFile(kCount, {{"center", "f32", floatBytes(centers), false}}, 9));
+
+        const auto loaded = lfs::io::load_rad(path);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->get_max_sh_degree(), 3);
+    }
+
+    // A per-component property whose suffix is not 0..2 must be skipped rather than
+    // written at a computed index past the end of the means buffer.
+    TEST(RadMalformedInput, PerComponentCenterWithInvalidSuffixIsIgnored) {
+        const ScopedRadDir dir("center_suffix");
+        // Large enough that the bogus component index ('Z' - '0' = 42) also lands inside the means buffer.
+        constexpr std::uint64_t kCount = 32;
+
+        // Dimension-major planes, as decode_f32 reads them: plane d holds x, y, z for every splat.
+        std::vector<float> planar(kCount * 3);
+        for (std::size_t d = 0; d < 3; ++d) {
+            for (std::size_t i = 0; i < kCount; ++i) {
+                planar[d * kCount + i] = 10.0f * static_cast<float>(d) + static_cast<float>(i) + 0.5f;
+            }
+        }
+        const std::vector<float> rogue(kCount, 1000.0f);
+
+        const auto path = dir.path / "center_z.rad";
+        writeBytes(path,
+                   buildRadFile(kCount,
+                                {{"center", "f32", floatBytes(planar), false},
+                                 {"centerZ", "f32", floatBytes(rogue), false}}));
+
+        const auto loaded = lfs::io::load_rad(path);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        const auto means = loaded->get_means().cpu().contiguous().to_vector();
+        ASSERT_EQ(means.size(), kCount * 3);
+        for (std::size_t i = 0; i < kCount; ++i) {
+            for (std::size_t d = 0; d < 3; ++d) {
+                EXPECT_FLOAT_EQ(means[i * 3 + d], planar[d * kCount + i]) << "splat " << i << " dim " << d;
+            }
+        }
     }
 
 } // namespace
