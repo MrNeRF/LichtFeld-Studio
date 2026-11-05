@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -176,7 +177,8 @@ namespace lfs::core {
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
         void set_depth_path(std::filesystem::path path);
         void set_normal_path(std::filesystem::path path);
-        void set_mask_path(std::filesystem::path path);
+        void set_mask_path(std::filesystem::path path, std::optional<Uuid> asset_uuid = std::nullopt);
+        const std::optional<Uuid>& mask_asset_uuid() const noexcept { return _mask_asset_uuid; }
 
         // Sparse SfM observations for this image (COLMAP 2D points with a 3D id).
         // Pixel coordinates are in the camera's native width/height at load
@@ -335,6 +337,7 @@ namespace lfs::core {
         // takes precedence over _mask_path when set. Processed on first use.
         Tensor _in_memory_mask_raw;
         std::uint64_t _mask_revision = 0;
+        std::optional<Uuid> _mask_asset_uuid;
 
         // Depth caching (processed depth stored on GPU)
         Tensor _cached_depth;

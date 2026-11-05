@@ -346,6 +346,10 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<void>
+        set_dataset_source(const lfs::core::Uuid& instance_uuid, LazyChunkValue payload);
+        [[nodiscard]] bool
+        remove_dataset_source(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
         [[nodiscard]] lfs::Result<std::filesystem::path>
         materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;

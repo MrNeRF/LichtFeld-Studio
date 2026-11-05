@@ -6,6 +6,7 @@
 #include "core/path_utils.hpp"
 #include "gui/assisted_masking.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -121,6 +122,7 @@ namespace {
         JobRegistry jobs;
         AssistedMasking service(jobs, [] { return true; });
         std::vector<std::vector<uint8_t>> reference;
+        uint64_t last_prediction = 0;
         for (int repetition = 0; repetition < 6; ++repetition) {
             const auto id = service.submit(input);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -133,6 +135,7 @@ namespace {
             } while (std::chrono::steady_clock::now() < deadline);
             ASSERT_EQ(state.phase, "ready") << state.error;
             ASSERT_EQ(state.request, id);
+            last_prediction = id;
             ASSERT_EQ(state.overlays.size(), 3);
             for (int c = 0; c < 3; ++c) {
                 auto [raw, width, height, channels] = lfs::core::load_image_with_alpha(state.overlays[c]);
@@ -151,6 +154,40 @@ namespace {
                 for (size_t p = 0; p < alpha.size(); ++p)
                     changed += alpha[p] != reference[c][p];
                 EXPECT_LT(double(changed) / alpha.size(), 0.0001) << "repeat=" << repetition << " candidate=" << c;
+            }
+        }
+        const auto [source_width, source_height, source_channels] = lfs::core::probe_image_info(input.image);
+        std::vector<uint8_t> kept;
+        for (const bool exclude : {false, true}) {
+            input.refine_request = last_prediction;
+            input.export_candidate = 0;
+            input.exclude = exclude;
+            const auto id = service.submit(input);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            AssistedMaskSnapshot state;
+            do {
+                state = service.poll();
+                if (state.request == id && (state.phase == "mask_ready" || state.phase == "error"))
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            } while (std::chrono::steady_clock::now() < deadline);
+            ASSERT_EQ(state.phase, "mask_ready") << state.error;
+            const auto [mw, mh, mc] = lfs::core::probe_image_info(state.mask);
+            EXPECT_EQ(mw, source_width);
+            EXPECT_EQ(mh, source_height);
+            EXPECT_EQ(mc, 1);
+            auto [raw, width, height, channels] = lfs::core::load_image(state.mask);
+            const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(raw, lfs::core::free_image);
+            ASSERT_NE(raw, nullptr);
+            const size_t count = size_t(width) * height * channels;
+            if (!exclude) {
+                kept.assign(raw, raw + count);
+                EXPECT_GT(std::ranges::count(kept, uint8_t{0}), 0);
+                EXPECT_GT(std::ranges::count(kept, uint8_t{255}), 0);
+            } else {
+                ASSERT_EQ(count, kept.size());
+                for (size_t i = 0; i < count; ++i)
+                    ASSERT_EQ(raw[i], 255 - kept[i]) << i;
             }
         }
     }

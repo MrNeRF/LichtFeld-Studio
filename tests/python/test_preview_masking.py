@@ -4,6 +4,7 @@
 
 from test_rmlui_image_sources import panel_modules
 import pytest
+from types import SimpleNamespace
 from test_preview_workflow import Element, event
 from test_rmlui_image_sources import _DocumentStub
 
@@ -85,6 +86,45 @@ def test_cancel_preserves_prompts_and_rejects_late_results(panel_modules, monkey
     assert closed == [True]
     assert value.draft.points == [(0.3, 0.4, 1)]
     assert not value.accept({"request": 12, "revision": "revision-a", "phase": "ready"})
+
+
+@pytest.mark.parametrize("changed_source", [False, True])
+def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_modules, monkeypatch, changed_source):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._mask_editor = value = editor(module)
+    value.request, value.phase = 42, "rendering"
+    panel._sam_apply_target = (42, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+    panel._path_revision_cache["frame.png"] = "changed" if changed_source else "revision-a"
+    applied = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "mask_ready"}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_apply", lambda *args: applied.append(args), raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: None, raising=False)
+    monkeypatch.setattr(panel, "_refresh_sources", lambda: None)
+    panel._service_sam()
+    panel._service_sam()
+    assert applied == ([] if changed_source else [("camera-uuid", 42)])
+    assert panel._sam_apply_target is None
+    if not changed_source:
+        assert panel._show_overlay and not value.enabled
+
+
+@pytest.mark.parametrize("exclude,inverted", [(False, False), (False, True), (True, False), (True, True)])
+def test_apply_keeps_selected_polarity_with_inverted_training_masks(panel_modules, monkeypatch, exclude, inverted):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.5, 0.5, 1)
+    value.request, value.phase, value.overlays = 5, "ready", ["proposal.png"]
+    panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid"))
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: SimpleNamespace(invert_masks=inverted), raising=False)
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *args: submitted.append(args) or 6, raising=False)
+    panel._sam_apply(exclude)
+    assert submitted[0][-1] == (exclude != inverted)
+    assert panel._sam_apply_target == (6, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
 
 
 def test_delete_move_and_change_label_have_local_undo_and_discard_old_mask_prior(panel_modules):

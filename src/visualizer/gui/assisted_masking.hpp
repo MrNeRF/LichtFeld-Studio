@@ -23,6 +23,8 @@ namespace lfs::vis::gui {
         std::optional<std::array<float, 4>> box;
         uint64_t refine_request = 0;
         int refine_candidate = -1;
+        int export_candidate = -1;
+        bool exclude = false;
     };
     struct AssistedMaskSnapshot {
         uint64_t request = 0;
@@ -31,6 +33,10 @@ namespace lfs::vis::gui {
         std::string error;
         std::vector<std::filesystem::path> overlays;
         std::vector<float> scores;
+        std::filesystem::path mask;
+        std::filesystem::path image;
+        std::filesystem::file_time_type source_time{};
+        uint64_t source_bytes = 0;
     };
 
     // App-owned worker. Closing an editor requests retirement; only app shutdown joins.

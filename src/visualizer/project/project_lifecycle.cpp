@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -41,6 +42,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "ipc/view_context.hpp"
+#include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
@@ -6319,6 +6321,116 @@ namespace lfs::vis::project {
                 0.0,
                 commit_to_present_ms - render_ms),
             render_ms, open_to_present_ms);
+    }
+
+    lfs::Result<void> ProjectLifecycle::applyCameraMask(
+        const core::Uuid& uuid, const std::filesystem::path& image, const std::filesystem::path& mask) {
+        auto* manager = viewer_.getSceneManager();
+        auto* trainer = viewer_.getTrainerManager();
+        if (!document_ || !manager || project_write_job_ || project_open_job_ ||
+            viewer_.isTrainingStartPending() || (trainer && (!trainer->isDatasetEditable() || (trainer->getTrainer() && trainer->getTrainer()->isInitialized()))))
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The image mask cannot be changed now.", "Apply requires an editable dataset and an idle project", "camera.mask");
+        auto& scene = manager->getScene();
+        auto* node = scene.getNodeByUuid(uuid);
+        std::error_code ec;
+        if (!node || !node->camera || !core::native_fs::equivalent(node->camera->image_path(), image, ec) || ec)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The source camera has changed.", "Mask target no longer matches the source image", "camera.mask");
+        try {
+            const auto [width, height, channels] = core::probe_image_info(image);
+            const auto [mw, mh, mc] = core::probe_image_info(mask);
+            const auto size = core::native_fs::file_size(mask);
+            if (mw != width || mh != height || mc != 1 || size == 0 || size > 256ull * 1024 * 1024)
+                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask has invalid dimensions or format.", "Expected a bounded original-resolution grayscale PNG", "camera.mask");
+            std::vector<std::byte> bytes(size);
+            std::ifstream input(lfs::core::native_fs::native_path(mask), std::ios::binary);
+            if (!input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
+                return fail<void>(lfs::ErrorCode::Unavailable, "The image mask could not be read.", "PNG read failed", "camera.mask");
+            constexpr std::array<std::byte, 8> png_signature{std::byte{137}, std::byte{80}, std::byte{78}, std::byte{71}, std::byte{13}, std::byte{10}, std::byte{26}, std::byte{10}};
+            if (bytes.size() < png_signature.size() || !std::ranges::equal(png_signature, std::span(bytes).first(png_signature.size())))
+                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask is not a PNG.", "Camera-mask assets must contain PNG bytes", "camera.mask");
+            const auto asset = core::generate_uuid_v4();
+            auto value = io::project::LazyChunkValue::from_owned(std::move(bytes), asset);
+            if (!value)
+                return lfs::Status::failure(std::move(value).error());
+            struct MaskState {
+                std::filesystem::path path;
+                std::optional<core::Uuid> asset;
+                std::shared_ptr<io::project::LazyChunkValue> payload;
+                core::Tensor raw;
+            };
+            auto& camera = *node->camera;
+            MaskState before{camera.mask_path(), camera.mask_asset_uuid(), {}, camera.raw_mask_tensor()};
+            if (before.asset) {
+                const auto* old = document_->find_dataset_source(*before.asset);
+                if (!old)
+                    return fail<void>(lfs::ErrorCode::DataLoss, "The previous camera mask is missing.", "Cannot retain the previous DSRC mask for undo", "camera.mask");
+                auto shared = old->share();
+                if (!shared)
+                    return lfs::Status::failure(std::move(shared).error());
+                before.payload = std::make_shared<io::project::LazyChunkValue>(std::move(*shared));
+            }
+            MaskState after{{}, asset, std::make_shared<io::project::LazyChunkValue>(std::move(*value)), {}};
+            const auto document = document_;
+            const auto epoch = documentEpoch();
+            const auto apply = [this, document, epoch, uuid](const MaskState& state) {
+                auto* manager = viewer_.getSceneManager();
+                auto* trainer = viewer_.getTrainerManager();
+                if (document_ != document || documentEpoch() != epoch || !manager || project_write_job_ || project_open_job_ ||
+                    viewer_.isTrainingStartPending() || (trainer && (!trainer->isDatasetEditable() || (trainer->getTrainer() && trainer->getTrainer()->isInitialized()))))
+                    throw op::HistoryStaleEntryError("Camera-mask edit is no longer applicable");
+                auto& scene = manager->getScene();
+                auto* node = scene.getNodeByUuid(uuid);
+                if (!node || !node->camera)
+                    throw op::HistoryStaleEntryError("Camera-mask target is no longer available");
+                auto path = state.path;
+                if (state.asset) {
+                    auto payload = state.payload->share();
+                    if (!payload)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(payload.error()));
+                    auto stored = document->set_dataset_source(*state.asset, std::move(*payload));
+                    if (!stored)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(stored.error()));
+                    auto materialized = document->materialize_embedded_asset(*state.asset, "png");
+                    if (!materialized) {
+                        (void)document->remove_dataset_source(*state.asset);
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(materialized.error()));
+                    }
+                    path = std::move(*materialized);
+                }
+                const auto old = node->camera->mask_asset_uuid();
+                node->camera->set_mask_path(path, state.asset);
+                if (state.raw.is_valid())
+                    node->camera->set_mask_tensor(state.raw);
+                node->mask_path = core::path_to_utf8(path);
+                if (old && old != state.asset && std::ranges::none_of(scene.getNodes(), [&](const auto* n) {
+                        return n && n->camera && n->camera->mask_asset_uuid() == old;
+                    }))
+                    (void)document->remove_dataset_source(*old);
+                scene.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED);
+            };
+            class MaskUndo final : public op::UndoEntry {
+            public:
+                MaskUndo(std::function<void(bool)> apply, size_t bytes) : apply_(std::move(apply)), bytes_(bytes) {}
+                void undo() override { apply_(false); }
+                void redo() override { apply_(true); }
+                std::string name() const override { return LOC("image_preview.sam_apply"); }
+                size_t estimatedBytes() const override { return bytes_; }
+                DirtyMask dirtyFlags() const override { return DirtyFlag::OVERLAY; }
+
+            private:
+                std::function<void(bool)> apply_;
+                size_t bytes_;
+            };
+            const size_t retained = after.payload->size() + (before.payload ? before.payload->size() : 0) +
+                                    (before.raw.is_valid() ? before.raw.numel() * sizeof(float) : 0);
+            auto undo = std::make_unique<MaskUndo>([apply, before, after](bool redo) { apply(redo ? after : before); }, retained);
+            undo->redo();
+            op::undoHistory().push(std::move(undo));
+            return {};
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): convert legacy image I/O and undo exceptions at the project boundary.
+            return fail<void>(lfs::ErrorCode::Unavailable, "The image mask could not be applied.", error.what(), "camera.mask");
+        }
     }
 
     void ProjectLifecycle::markSceneMutation(

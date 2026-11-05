@@ -119,6 +119,10 @@
           <button type="button" class="btn" id="sam-show"></button>
         </div>
         <div id="sam-quality" class="sam-note"></div>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-apply"></button>
+          <button type="button" class="btn" id="sam-exclude"></button>
+        </div>
         <div id="sam-status" role="status"></div>
         <div id="sam-hint" class="sam-note"></div>
         <div id="sam-text-hint" class="sam-note"></div>

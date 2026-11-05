@@ -12,6 +12,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "core/user_paths.hpp"
 #include "core/uuid.hpp"
+#include "io/atomic_output.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "preprocessing/video_masking.hpp"
@@ -210,6 +211,41 @@ namespace lfs::vis::gui {
                     if (obsolete())
                         continue;
                     auto [width, height, channels] = core::probe_image_info(image);
+                    if (w.input.export_candidate >= 0) {
+                        if (w.input.refine_request != previous_id || !previous.is_valid() ||
+                            w.input.export_candidate >= int(previous.size(0)))
+                            throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
+                        stage("rendering", 0.9f);
+                        auto selected = core::nn::resize2d(
+                                            previous.slice(0, w.input.export_candidate, w.input.export_candidate + 1).unsqueeze(0),
+                                            height, width, core::nn::ResizeMode::Bilinear, core::nn::CoordTransform::HalfPixel)
+                                            .gt(0)
+                                            .to(DataType::UInt8)
+                                            .to(Device::CPU, stream)
+                                            .contiguous();
+                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                        if (obsolete())
+                            continue;
+                        if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
+                            throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+                        std::vector<uint8_t> pixels(size_t(width) * height);
+                        for (size_t p = 0; p < pixels.size(); ++p)
+                            pixels[p] = ((selected.ptr<uint8_t>()[p] != 0) != w.input.exclude) ? 255 : 0;
+                        const auto path = directory / (std::to_string(w.id) + "-mask.png");
+                        io::ScopedAtomicOutputFile output(path);
+                        if (!core::save_png(output.temp_path(), pixels.data(), width, height, 1, 8, 1) || !output.commit())
+                            throw std::runtime_error(LOC("image_preview.sam_write_failed"));
+                        files.push_back(path);
+                        std::lock_guard lock(mutex);
+                        if (!release && result.request == w.id) {
+                            result.mask = path;
+                            result.image = image;
+                            result.source_time = stamp;
+                            result.source_bytes = bytes;
+                            result.phase = "mask_ready";
+                        }
+                        continue;
+                    }
                     std::vector<core::nn::models::Sam2PointPrompt> points;
                     for (const auto& point : w.input.points)
                         points.push_back({point[0] * (width - 1), point[1] * (height - 1), int(point[2])});

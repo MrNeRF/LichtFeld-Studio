@@ -102,6 +102,7 @@ class ImagePreviewPanel(Panel):
         self._sampled_color = None
         self._sample_request = None
         self._mask_editor = FrameMaskEditor()
+        self._sam_apply_target = None
         self._sam_markers_rml = None
         self._metadata = PreviewMetadata()
         self._metadata_required = False
@@ -266,6 +267,8 @@ class ImagePreviewPanel(Panel):
             ("sam-generate", lambda _ev: self._sam_generate(self._mask_editor.can_refine)),
             ("sam-refine", lambda _ev: self._sam_generate()),
             ("sam-cancel", lambda _ev: self._sam_cancel()),
+            ("sam-apply", lambda _ev: self._sam_apply(False)),
+            ("sam-exclude", lambda _ev: self._sam_apply(True)),
             ("sam-candidate-0", lambda _ev: self._sam_candidate(0)),
             ("sam-candidate-1", lambda _ev: self._sam_candidate(1)),
             ("sam-candidate-2", lambda _ev: self._sam_candidate(2)),
@@ -313,6 +316,11 @@ class ImagePreviewPanel(Panel):
 
     def on_update(self, doc):
         previous_state = (self._preview_state, self._preview_load_failed)
+        node = self._current_camera_node()
+        if node is not None and self._current_index < len(self._mask_paths):
+            mask = Path(node.mask_path) if node.mask_path else None
+            if mask != self._mask_paths[self._current_index]:
+                self._refresh_sources()
         self._service_sample()
         self._service_metadata()
         self._service_sam()
@@ -1475,6 +1483,7 @@ class ImagePreviewPanel(Panel):
         self._mark_dirty()
 
     def _sam_cancel(self):
+        self._sam_apply_target = None
         lf.ui.sam_preview_close()
         self._mask_editor.invalidate()
         if self._mask_editor.enabled:
@@ -1564,6 +1573,26 @@ class ImagePreviewPanel(Panel):
             editor.phase, editor.error = "error", str(error)
         self._mark_dirty()
 
+    def _sam_apply(self, exclude):
+        editor = self._mask_editor
+        node = self._current_camera_node(resolve_unbound=True)
+        if not node or editor.phase != "ready" or not editor.overlay or not editor.key:
+            return
+        stat = self._path_stat_cache.get(editor.key[0])
+        if not stat or not stat[0]:
+            return
+        try:
+            request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
+                                               editor.draft.points, editor.draft.box, editor.request, -1,
+                                               editor.weights, editor.candidate, bool(exclude) != bool(lf.optimization_params().invert_masks))
+            self._sam_apply_target = (request, node.uuid, editor.key, RuntimeState.scene_generation.value)
+            editor.request = request
+            editor.phase = "queued" if request else "closing"
+            editor.error = ""
+        except Exception as error:
+            editor.phase, editor.error = "error", str(error)
+        self._mark_dirty()
+
     def _service_sam(self):
         editor = self._mask_editor
         if not editor.enabled:
@@ -1573,6 +1602,23 @@ class ImagePreviewPanel(Panel):
         if editor.bind(path, revision):
             self._mark_dirty()
         state = lf.ui.sam_preview_poll()
+        target = self._sam_apply_target
+        if state.get("phase") == "mask_ready":
+            if not target or state.get("request") != target[0]:
+                return
+            self._sam_apply_target = None
+            if (editor.key == target[2] and editor.request == target[0]
+                    and RuntimeState.scene_generation.value == target[3]):
+                try:
+                    lf.ui.sam_preview_apply(target[1], target[0])
+                    self._sam_cancel()
+                    editor.enabled = False
+                    self._show_overlay = True
+                    self._refresh_sources()
+                except Exception as error:
+                    editor.phase, editor.error = "error", str(error)
+                self._mark_dirty()
+            return
         if editor.accept(state):
             self._mark_dirty()
         if editor.phase == "closing" and state.get("phase") == "idle":
@@ -1607,7 +1653,13 @@ class ImagePreviewPanel(Panel):
             element = doc.get_element_by_id(element_id)
             if element:
                 element.set_attribute("title", lf.ui.tr(LOCALE_KEY[key]))
-        _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint"))
+        has_target = self._current_camera_node(resolve_unbound=True) is not None
+        _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint" if has_target else "image_preview.sam_apply_dataset"))
+        _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))
+        _set_text(doc, "sam-exclude", lf.ui.tr("image_preview.sam_exclude"))
+        applicable = editor.phase == "ready" and bool(editor.overlay) and has_target
+        self._set_disabled(doc.get_element_by_id("sam-apply"), not applicable)
+        self._set_disabled(doc.get_element_by_id("sam-exclude"), not applicable)
         phase = editor.phase if not editor.error else "error"
         status = lf.ui.tr(LOCALE_KEY[phase])
         _set_text(doc, "sam-status", status + (": " + editor.error if editor.error else ""))

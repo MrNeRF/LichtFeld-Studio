@@ -200,6 +200,8 @@ namespace {
             {"sam-generate", "sam_generate"},
             {"sam-refine", "sam_recompute"},
             {"sam-cancel", "sam_cancel"},
+            {"sam-apply", "sam_apply"},
+            {"sam-exclude", "sam_exclude"},
             {"sam-heading", "sam_heading"},
             {"sam-proposals-heading", "sam_proposals_heading"},
             {"sam-edit-hint", "sam_edit_hint"},
@@ -231,7 +233,7 @@ namespace {
                 EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
                 Rml::ElementList buttons;
                 controls->QuerySelectorAll(buttons, "button");
-                ASSERT_EQ(buttons.size(), 16u);
+                ASSERT_EQ(buttons.size(), 18u);
                 for (auto* button : buttons) {
                     checkWithin(button, controls);
                     EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);

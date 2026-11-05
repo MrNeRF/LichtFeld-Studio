@@ -4869,14 +4869,14 @@ namespace lfs::python {
                 }
             }); }, nb::arg("callback"), "Register the preview callback for extracted images.");
 
-        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights) {
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
                 throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
             return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
                 .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
-                .refine_request = refine_request, .refine_candidate = refine_candidate}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", "UI thread: queue native SAM point/box inference; proposals never modify dataset masks.");
+                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, "UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.");
         m.def("sam_preview_poll", [] {
             require_ui_texture_creation_thread();
             nb::dict result;
@@ -4889,6 +4889,7 @@ namespace lfs::python {
             result["phase"] = state.phase;
             result["error"] = state.error;
             result["scores"] = state.scores;
+            result["mask"] = core::path_to_utf8(state.mask);
             std::vector<std::string> paths;
             for (const auto& path : state.overlays)
                 paths.push_back(core::path_to_utf8(path));
@@ -4898,6 +4899,26 @@ namespace lfs::python {
             require_ui_texture_creation_thread();
             if (auto* gui = get_gui_manager())
                 gui->asyncTasks().assistedMasking().close(); }, "UI thread: cancel the SAM session and retire GPU resources asynchronously.");
+        m.def("sam_preview_apply", [](const std::string& uuid, uint64_t request) {
+            require_ui_texture_creation_thread();
+            auto* viewer = get_visualizer();
+            auto* gui = get_gui_manager();
+            auto id = core::Uuid::from_string(uuid);
+            if (!viewer || !gui || !id || id->is_nil())
+                throw std::runtime_error(LOC("image_preview.sam_unavailable"));
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            if (!request || state.request != request || state.phase != "mask_ready")
+                throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
+            std::error_code ec;
+            const auto stamp = core::native_fs::last_write_time(state.image, ec);
+            if (ec || stamp != state.source_time)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            const auto size = core::native_fs::file_size(state.image, ec);
+            if (ec || size != state.source_bytes)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            auto applied = viewer->applyCameraMask(*id, state.image, state.mask);
+            if (!applied)
+                throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message())); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
 
         m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
             lfs::python::require_ui_texture_creation_thread();

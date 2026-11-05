@@ -1220,6 +1220,14 @@ namespace lfs::io::project {
             }
             const auto scng_at =
                 std::chrono::steady_clock::now();
+            for (const auto& node : *nodes) {
+                if (node.camera && node.camera->mask_asset_uuid &&
+                    !dataset_sources.contains(*node.camera->mask_asset_uuid)) {
+                    return fail<void>(lfs::ErrorCode::DataLoss,
+                                      "A saved camera mask is missing.",
+                                      "SCNG camera mask has no DSRC payload", "SCNG.camera.mask_asset_uuid");
+                }
+            }
             auto pending = parameters.snapshot();
             if (!pending) {
                 return lfs::Result<void>::failure(std::move(pending).error());
@@ -2988,6 +2996,29 @@ namespace lfs::io::project {
         return found == impl_->dataset_sources.end() ? nullptr : &found->second;
     }
 
+    lfs::Result<void> ProjectDocument::set_dataset_source(
+        const lfs::core::Uuid& instance_uuid, LazyChunkValue payload) {
+        if (instance_uuid.is_nil() || payload.size() == 0) {
+            return fail<void>(lfs::ErrorCode::InvalidArgument,
+                              "The dataset-source payload is invalid.",
+                              "DSRC requires a non-null instance UUID and nonempty bytes",
+                              "DSRC.instance_uuid");
+        }
+        impl_->dataset_sources.insert_or_assign(instance_uuid, std::move(payload));
+        impl_->mark(FOURCC_DSRC, instance_uuid);
+        impl_->content_hashes.erase(ChunkKey{FOURCC_DSRC, instance_uuid});
+        return {};
+    }
+
+    bool ProjectDocument::remove_dataset_source(const lfs::core::Uuid& instance_uuid) {
+        if (impl_->dataset_sources.erase(instance_uuid) == 0)
+            return false;
+        const ChunkKey key{FOURCC_DSRC, instance_uuid};
+        impl_->mark(key.fourcc, key.instance_uuid);
+        impl_->content_hashes.erase(key);
+        return true;
+    }
+
     lfs::Result<std::filesystem::path> ProjectDocument::embedded_asset_directory() const {
         auto paths = core::UserPaths::resolve();
         if (!paths)
@@ -2999,7 +3030,7 @@ namespace lfs::io::project {
     lfs::Result<std::filesystem::path> ProjectDocument::materialize_embedded_asset(
         const core::Uuid& uuid, const std::string_view extension) const {
         if (extension != "ply" && extension != "sog" && extension != "ssog" &&
-            extension != "spz" && extension != "lfsenv")
+            extension != "spz" && extension != "lfsenv" && extension != "png")
             return embedded_asset_error("Unsupported embedded scene asset.");
         const auto* payload = find_dataset_source(uuid);
         if (!payload)
@@ -3182,6 +3213,12 @@ namespace lfs::io::project {
         }
         auto writer = std::move(*writer_result);
         CommitOptions commit = options.commit;
+        if (auto nodes = impl_->scene_graph.nodes(); nodes && std::ranges::any_of(*nodes, [](const auto& node) {
+                                                         return node.camera && node.camera->mask_asset_uuid;
+                                                     })) {
+            commit.extra_reader_capabilities.set(CAMERA_MASK_ASSETS_V1);
+            commit.extra_writer_capabilities.set(CAMERA_MASK_ASSETS_V1);
+        }
         if (auto scene_nodes = impl_->scene_graph.nodes(); scene_nodes && std::ranges::any_of(*scene_nodes, [](const auto& node) {
                                                                return node.payload && node.payload->fourcc == "DSRC";
                                                            })) {
@@ -4282,6 +4319,12 @@ namespace lfs::io::project {
 
         CommitOptions commit = options.commit;
         const bool has_shaders = !impl_->shaders.dom().get_json("assets")->empty() || !impl_->shaders.dom().get_json("bindings")->empty();
+        if (auto nodes = impl_->scene_graph.nodes(); nodes && std::ranges::any_of(*nodes, [](const auto& node) {
+                                                         return node.camera && node.camera->mask_asset_uuid;
+                                                     })) {
+            commit.extra_reader_capabilities.set(CAMERA_MASK_ASSETS_V1);
+            commit.extra_writer_capabilities.set(CAMERA_MASK_ASSETS_V1);
+        }
         const bool custom_reveal = impl_->sequencer.dom().get<int>("timeline.reveal_clip.effect") == 12;
         commit.recompute_shader_capabilities = true;
         commit.extra_reader_capabilities.set(USER_SHADERS_V1, custom_reveal);
@@ -5944,7 +5987,8 @@ namespace lfs::io::project {
         auto shell =
             stage_scene_shell(
                 impl_->scene_graph, destination, impl_->sfm_observation_source(),
-                [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); });
+                [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); },
+                [this](const lfs::core::Uuid& uuid) { return materialize_embedded_asset(uuid, "png"); });
         if (!shell) {
             return std::move(shell).error();
         }
@@ -6406,6 +6450,7 @@ namespace lfs::io::project {
                 }
             }
             ScenePayloadResolver resolver;
+            resolver.camera_mask = [this](const lfs::core::Uuid& uuid) { return materialize_embedded_asset(uuid, "png"); };
             resolver.sfm_observations = impl_->sfm_observation_source();
             resolver.collision = [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); };
             resolver.splat =

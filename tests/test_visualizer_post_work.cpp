@@ -27,6 +27,7 @@
 #include "gui/import_error.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "io/cache_image_loader.hpp"
 // Python's Windows headers define PLATFORM, also used as a localization key.
 #pragma push_macro("PLATFORM")
 #undef PLATFORM
@@ -1630,6 +1631,53 @@ namespace lfs::vis {
         const auto source = viewer.projectTrainingSource();
         ASSERT_FALSE(source);
         EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
+    class CameraMaskApplyTest : public VisualizerImplResetTest {};
+
+    TEST_F(CameraMaskApplyTest, ApplyIsImageBoundUndoableAndRejectsInvalidReplacement) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        io::CacheLoader::getInstance(false);
+        core::set_image_loader([](const core::ImageLoadParams& p) {
+            return io::CacheLoader::getInstance().load_cached_image(p.path,
+                                                                    {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream, .output_uint8 = p.output_uint8, .skip_blob_cache = p.skip_blob_cache, .mask_grayscale = p.mask_grayscale});
+        });
+        const auto image = temporary_.path / "image.png";
+        const auto mask = temporary_.path / "mask.png";
+        const auto wrong = temporary_.path / "wrong.png";
+        std::vector<std::uint8_t> rgb(64 * 64 * 3, 127), pixels(64 * 64, 255);
+        pixels[0] = 0;
+        ASSERT_TRUE(core::save_png(image, rgb.data(), 64, 64, 3, 8, 1));
+        ASSERT_TRUE(core::save_png(mask, pixels.data(), 64, 64, 1, 8, 1));
+        ASSERT_TRUE(core::save_png(wrong, pixels.data(), 32, 32, 1, 8, 1));
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto camera = make_project_request_test_camera(image);
+        camera->set_image_dimensions(64, 64);
+        const auto id = scene.addCamera("image.png", scene.addGroup("Cameras"), camera);
+        const auto uuid = scene.getNodeUuid(id);
+        const auto applied = viewer.applyCameraMask(uuid, image, mask);
+        ASSERT_TRUE(applied) << lfs::format_for_developer(applied.error());
+        ASSERT_TRUE(camera->has_mask());
+        const auto asset = camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        EXPECT_EQ(scene.getNodeById(id)->mask_path, core::path_to_utf8(camera->mask_path()));
+        EXPECT_NE(camera->mask_path(), mask);
+        ASSERT_TRUE(core::native_fs::remove(mask));
+        const auto decoded = camera->load_and_get_mask(-1, 0, false, 0.5f, true, false).cpu().to_vector_uint8();
+        EXPECT_EQ(decoded[0], 0);
+        EXPECT_EQ(decoded[1], 1);
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, wrong));
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, wrong));
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        (void)op::undoHistory().undo();
+        EXPECT_FALSE(camera->has_mask());
+        EXPECT_FALSE(camera->mask_asset_uuid());
+        (void)op::undoHistory().redo();
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        EXPECT_TRUE(camera->has_mask());
     }
 
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};

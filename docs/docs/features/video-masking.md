@@ -40,9 +40,13 @@ The **SAM2.1** button opens an editor in the side panel. Use **Foreground +** fo
 
 Choose **Generate**, inspect candidates **1**, **2**, and **3**, then add corrections and choose **Update proposal**. Added corrections refine the selected candidate; moving, deleting, or relabeling prompts discards the previous mask prior and recomputes from the current prompts. **Recompute** explicitly generates without a prior mask. **Overlay** hides the proposal for comparison with the original. The displayed quality is SAM's estimate, not verified accuracy. Points and boxes belong to the original image, including when the preview is zoomed or rotated. Text-based object selection is not available in this preview.
 
-These are temporary proposals: generating or selecting one does not change dataset masks. Points and boxes are kept per image while browsing the current preview. **Undo edit**, **Clear points and box**, and **Cancel** act on this working session; Cancel retains points and boxes and releases the model asynchronously. Close SAM before starting training. Escape first cancels a box gesture or exits SAM mode.
+Generating or selecting a proposal does not change the image's mask. For an image associated with a camera in the current dataset, choose **Apply: keep selection** or **Apply: exclude selection** to replace its mask at the original image resolution. Apply closes SAM and updates the image's mask overlay. The shared **Undo** and **Redo** actions restore mask changes. Applying requires an editable dataset before training initialization.
 
-The assisted preview currently reviews one frame at a time. Automatic operator tracking remains available through the extraction options described above; the preview does not yet publish or propagate its edited proposals. It uses the extractor's selected model file, or the existing verified SAM2.1 model cache when no file was selected.
+Save the project normally to store the PNG mask inside the `.licht` file. Reopening the project restores the image's mask without depending on a temporary proposal file. The source dataset files are preserved. Select the desired masking mode in **Training** settings to use the mask during training; the current mask inversion setting is respected when applying the selection.
+
+Points and boxes are kept per image while browsing the current preview. **Undo edit**, **Clear points and box**, and **Cancel** act on these working controls; Cancel retains points and boxes and releases the model asynchronously. Close SAM before starting training. Escape first cancels a box gesture or exits SAM mode.
+
+The assisted preview reviews one image at a time. Frames opened directly from the extractor can be inspected and corrected as proposals; applying requires their association with a camera in the current dataset. Interactive propagation is not available. Automatic operator tracking remains available through the extraction options described above. The preview uses the extractor's selected model file, or the existing verified SAM2.1 model cache when no file was selected.
 
 ## Command line
 

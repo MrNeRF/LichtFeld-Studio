@@ -4896,6 +4896,12 @@ namespace lfs::vis {
             std::move(expected_project_uuid));
     }
 
+    lfs::Result<void> VisualizerImpl::applyCameraMask(const core::Uuid& uuid, const std::filesystem::path& image, const std::filesystem::path& mask) {
+        if (!project_lifecycle_)
+            return visualizerFailure<void>(lfs::ErrorCode::Unavailable, "Project lifecycle is unavailable.", "Cannot apply camera mask without project lifecycle", "project.lifecycle");
+        return project_lifecycle_->applyCameraMask(uuid, image, mask);
+    }
+
     lfs::Result<ProjectWritePoll>
     VisualizerImpl::projectPollWrite() {
         if (!project_lifecycle_) {
