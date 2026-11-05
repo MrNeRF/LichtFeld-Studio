@@ -3,7 +3,7 @@
 """Explicitly installed trainer publisher. No Blender or observer UI dependency."""
 import importlib
 import json
-from pathlib import Path
+from _lfs_path_io import Path
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor

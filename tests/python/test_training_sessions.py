@@ -21,6 +21,38 @@ def arrays(count=3):
             "opacity": np.zeros((count, 1), np.float32), "sh": np.zeros((count, 1, 3), np.float32)}
 
 
+def test_session_round_trip_in_long_unicode_and_verbatim_directory(tmp_path, monkeypatch):
+    from _lfs_path_io import Path as IOPath, TemporaryDirectory
+
+    # The final component must retain its trailing dot/space on Windows; the
+    # temporary directory owner supplies native names during recursive cleanup.
+    with TemporaryDirectory(dir=tmp_path) as temporary:
+        root = IOPath(temporary)
+        for _ in range(4):
+            root /= "capture-\u00e0-\u6e2c-" + "x" * 60
+        root /= "session data. "
+        assert len(str(root)) > 260
+        monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(root))
+        session = transport.SessionPublisher({"label": "Unicode path"})
+        client = None
+        try:
+            assert root.is_dir()
+            assert not root.with_name("session data").exists()
+            client = transport.SessionClient(session.root, "reader")
+            record = transport.validate_session(client.status(), session.id)
+            assert record["label"] == "Unicode path"
+            geometry.publish(session, {"schema": 1, "cameras": []})
+            assert geometry.load(session.root, client.status()["geometry"])["cameras"] == []
+            snapshot = session.publish(arrays(), 17)
+            np.testing.assert_array_equal(transport.read_snapshot(snapshot)["means"], arrays()["means"])
+        finally:
+            if client is not None:
+                client.close()
+            session.finish("stopped")
+            session.thread.join(3)
+            session.pool.close()
+
+
 def test_immutable_generations_integrity_and_owned_reader_storage(tmp_path):
     pool = transport.SnapshotPool(tmp_path)
     try:

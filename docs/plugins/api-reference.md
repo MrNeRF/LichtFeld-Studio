@@ -402,6 +402,8 @@ python -m build --wheel --outdir /path/outside/source/wheels
 The Blender extension bundles that generated `py3-none-any` wheel using Blender's
 extension dependency mechanism. Changes to the protocol must be made here and
 the wheel regenerated; the extension must not maintain another implementation.
+The wheel also includes the existing `_lfs_path_io` module so both hosts use
+LichtFeld Studio's shared Windows filesystem boundary.
 
 ## Rendering
 

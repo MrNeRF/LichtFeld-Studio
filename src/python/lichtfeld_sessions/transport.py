@@ -7,7 +7,7 @@ import json
 import math
 import mmap
 import os
-from pathlib import Path
+from _lfs_path_io import Path, native_path
 import threading
 import time
 import uuid
@@ -50,7 +50,7 @@ def replace_metadata(source, destination):
     kernel.SetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.c_int,
                                                  ctypes.c_void_p, ctypes.c_ulong]
     kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    name = str(Path(destination).resolve())
+    name = native_path(Path(destination).resolve())
     encoded_name = name.encode("utf-16-le")
     class RenameInfo(ctypes.Structure):
         _fields_ = [("flags", ctypes.c_ulong), ("root", ctypes.c_void_p),
@@ -59,7 +59,7 @@ def replace_metadata(source, destination):
     info.flags = 3  # REPLACE_IF_EXISTS | POSIX_SEMANTICS (Windows 10+).
     info.length = len(encoded_name)
     ctypes.memmove(ctypes.addressof(info) + RenameInfo.name.offset, encoded_name, info.length)
-    handle = kernel.CreateFileW(str(Path(source).resolve()), 0x10000, 7, None, 3, 0x80, None)
+    handle = kernel.CreateFileW(native_path(Path(source).resolve()), 0x10000, 7, None, 3, 0x80, None)
     if handle == ctypes.c_void_p(-1).value:
         raise PermissionError(ctypes.get_last_error(), "Cannot publish metadata", str(source))
     try:
@@ -70,7 +70,7 @@ def replace_metadata(source, destination):
         kernel.CloseHandle(handle)
     if not success:
         if error in (1, 50, 87):
-            return os.replace(source, destination)
+            return os.replace(native_path(source), native_path(destination))
         raise PermissionError(error, "Cannot atomically publish metadata", str(destination))
 
 
@@ -113,7 +113,7 @@ def read_text_shared(path, *, max_chars=MAX_METADATA_CHARS):
                                   ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p]
     kernel.CreateFileW.restype = ctypes.c_void_p
     # Readers must allow rename/delete so atomic publication can replace metadata.
-    handle = kernel.CreateFileW(str(Path(path).resolve()), 0x80000000, 7, None, 3, 0x80, None)
+    handle = kernel.CreateFileW(native_path(Path(path).resolve()), 0x80000000, 7, None, 3, 0x80, None)
     if handle == ctypes.c_void_p(-1).value:
         code = ctypes.get_last_error()
         if code in (2, 3):
