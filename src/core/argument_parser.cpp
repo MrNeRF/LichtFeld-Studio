@@ -209,9 +209,11 @@ namespace {
         return error ? path : absolute.lexically_normal();
     }
 
-    // Each --eval-steps value may hold several comma-separated iterations; the
-    // result is sorted and free of duplicates.
-    lfs::Result<std::vector<size_t>> parse_eval_steps(const std::vector<std::string>& values) {
+    // Each value of an iteration-list flag (--eval-steps, --save-project-at-iter)
+    // may hold several comma-separated iterations; the result is sorted and free
+    // of duplicates.
+    lfs::Result<std::vector<size_t>> parse_iteration_list(const std::vector<std::string>& values,
+                                                          const std::string_view flag) {
         std::vector<size_t> steps;
         for (const auto& value : values) {
             std::string_view rest = value;
@@ -229,7 +231,7 @@ namespace {
                         .code = lfs::ErrorCode::InvalidArgument,
                         .domain = lfs::ErrorDomain::Core,
                         .user_message = std::format(
-                            "Invalid --eval-steps '{}'. Use positive iterations, e.g. 1000,7000,30000", value),
+                            "Invalid {} '{}'. Use positive iterations, e.g. 1000,7000,30000", flag, value),
                         .detection = LFS_SOURCE_SITE_CURRENT(),
                     });
                 steps.push_back(step);
@@ -968,13 +970,15 @@ namespace {
             ::args::Flag no_keep_all_checkpoints(output_group, "disabled", "Replace the checkpoint superseded by each new training save, preserving existing history. Overrides the saved project setting.", {"no-keep-all-checkpoints"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
-            ::args::ValueFlag<uint32_t> save_project_at_iteration(
-                output_group, "iteration",
-                "Save a .licht project through the training snapshot service at this iteration",
+            ::args::ValueFlagList<std::string> save_project_at_iteration(
+                output_group, "iterations",
+                "Save a .licht project through the training snapshot service at these iterations, as a comma list, e.g. 7000,30000",
                 {"save-project-at-iter"});
             ::args::ValueFlag<std::string> save_project_path(
                 output_group, "path",
-                "Destination for --save-project-at-iter. If omitted, the bound project path is used",
+                "Destination for --save-project-at-iter. If omitted, the bound project path is used. Required with "
+                "several iterations: each is then a standalone <stem>_<iter>.licht holding only that iteration's "
+                "checkpoint, without earlier checkpoints or an embedded dataset; an existing file is kept and fails the run",
                 {"save-project-path"});
 
             // =============================================================================
@@ -1570,10 +1574,18 @@ namespace {
 
             std::optional<std::vector<size_t>> eval_steps_val;
             if (cli_option_present({"--eval-steps"})) {
-                auto steps = parse_eval_steps(::args::get(eval_steps));
+                auto steps = parse_iteration_list(::args::get(eval_steps), "--eval-steps");
                 if (!steps)
                     return std::unexpected(std::string(steps.error().user_message()));
                 eval_steps_val = std::move(*steps);
+            }
+
+            std::vector<size_t> save_project_at_iteration_val;
+            if (cli_option_present({"--save-project-at-iter"})) {
+                auto steps = parse_iteration_list(::args::get(save_project_at_iteration), "--save-project-at-iter");
+                if (!steps)
+                    return std::unexpected(std::string(steps.error().user_message()));
+                save_project_at_iteration_val = std::move(*steps);
             }
 
             std::optional<std::string> eval_mask_val;
@@ -1729,10 +1741,7 @@ namespace {
                                         eval_steps_val = std::move(eval_steps_val),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
-                                        save_project_at_iteration_val =
-                                            cli_option_present({"--save-project-at-iter"})
-                                                ? std::optional<uint32_t>(::args::get(save_project_at_iteration))
-                                                : std::optional<uint32_t>(),
+                                        save_project_at_iteration_val = std::move(save_project_at_iteration_val),
                                         save_project_path_val =
                                             cli_option_present({"--save-project-path"})
                                                 ? std::optional<std::string>(::args::get(save_project_path))
@@ -1835,10 +1844,8 @@ namespace {
                 setVal(timelapse_every_val, ds.timelapse_every);
                 setVal(output_name_val, ds.output_name);
                 ds.output_path_explicit = output_path_explicit_val;
-                if (save_project_at_iteration_val) {
-                    params.save_project_at_iteration =
-                        static_cast<size_t>(*save_project_at_iteration_val);
-                }
+                if (!save_project_at_iteration_val.empty())
+                    params.save_project_at_iteration = save_project_at_iteration_val;
                 if (save_project_path_val) {
                     params.save_project_path =
                         lfs::core::utf8_to_path(*save_project_path_val);

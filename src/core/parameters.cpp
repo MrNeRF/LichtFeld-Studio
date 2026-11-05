@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "io/project_path.hpp"
+#include <algorithm>
 #include <any>
 #include <array>
 #include <cassert>
@@ -1203,18 +1204,22 @@ namespace lfs::core {
                         *resume_project);
                 }
             }
-            if (save_project_at_iteration && *save_project_at_iteration == 0) {
+            if (std::ranges::contains(save_project_at_iteration, size_t{0})) {
                 return "--save-project-at-iter must be positive";
             }
             const auto project_snapshot_limit = optimization.enable_sparsity
                                                     ? static_cast<size_t>(optimization.resolved_total_iterations())
                                                     : optimization.iterations;
-            if (save_project_at_iteration && *save_project_at_iteration > project_snapshot_limit) {
+            if (!save_project_at_iteration.empty() &&
+                std::ranges::max(save_project_at_iteration) > project_snapshot_limit) {
                 return "--save-project-at-iter cannot exceed the training iteration limit";
             }
-            if (!save_project_at_iteration &&
+            if (save_project_at_iteration.empty() &&
                 !save_project_path.empty()) {
                 return "--save-project-path requires --save-project-at-iter";
+            }
+            if (save_project_at_iteration.size() > 1 && save_project_path.empty()) {
+                return "Several --save-project-at-iter iterations require --save-project-path";
             }
             if (!save_project_path.empty() &&
                 save_project_path.extension() != ".licht") {

@@ -149,7 +149,7 @@ TEST(RenderedStructure, SupportedProjectResumeKeepsSupportAndFiniteLoss) {
         auto params = *hydration.checkpoint_params;
         params.optimization.iterations = iteration + 25;
         params.optimization.enable_eval = false;
-        params.save_project_at_iteration.reset();
+        params.save_project_at_iteration.clear();
         params.save_project_path.clear();
         const auto installed = installTrainerFromProjectCheckpoint(scene, document, *hydration.checkpoint_uuid,
                                                                    params, path, iteration);

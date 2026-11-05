@@ -960,16 +960,16 @@ namespace {
     TEST_F(TrainingParametersTest, POPSpaSnapshotMayTargetPostprocessingIterations) {
         lfs::core::param::TrainingParameters params;
         params.optimization.enable_sparsity = true;
-        params.save_project_at_iteration = params.optimization.iterations + 1;
+        params.save_project_at_iteration = {params.optimization.iterations + 1};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
-        params.save_project_at_iteration = params.optimization.resolved_total_iterations();
+        params.save_project_at_iteration = {static_cast<size_t>(params.optimization.resolved_total_iterations())};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
-        params.save_project_at_iteration = params.optimization.resolved_total_iterations() + 1;
+        params.save_project_at_iteration = {static_cast<size_t>(params.optimization.resolved_total_iterations()) + 1};
         EXPECT_FALSE(params.validate().empty());
         params.optimization.enable_sparsity = false;
-        params.save_project_at_iteration = params.optimization.iterations + 1;
+        params.save_project_at_iteration = {params.optimization.iterations + 1};
         EXPECT_FALSE(params.validate().empty());
-        params.save_project_at_iteration = params.optimization.iterations;
+        params.save_project_at_iteration = {params.optimization.iterations};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
     }
 

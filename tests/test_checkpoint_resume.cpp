@@ -2569,7 +2569,7 @@ namespace {
         params.optimization.popspa_sparsify_steps = 2;
         params.optimization.popspa_refine_steps = 2;
         params.optimization.save_steps = {6};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = mid_path;
         {
             lfs::core::Scene scene;
@@ -2632,7 +2632,7 @@ namespace {
         params.optimization.popspa_sparsify_steps = 2;
         params.optimization.popspa_refine_steps = 2;
         params.optimization.save_steps = {6};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = mid_path;
         {
             lfs::core::Scene scene;
@@ -3479,7 +3479,7 @@ namespace {
         std::filesystem::create_directories(output_path);
 
         auto params = make_tiny_headless_params(output_path, 2);
-        params.save_project_at_iteration = 1;
+        params.save_project_at_iteration = {1};
         params.save_project_path = output_path / "blocked.licht";
         std::filesystem::create_directory(params.save_project_path);
 
@@ -3597,7 +3597,7 @@ namespace {
 
         auto params = make_tiny_headless_params(output_path, 4);
         params.optimization.save_steps = {1};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = output_path / "at_iteration.licht";
 
         lfs::core::Scene scene;
@@ -3659,6 +3659,70 @@ namespace {
         EXPECT_NE(std::ranges::find(iterations, 3), iterations.end());
 
         std::filesystem::remove_all(output_path, ec);
+    }
+
+    // The iterations of a project's checkpoints, sorted.
+    std::vector<int> checkpoint_iterations(const lfs::io::project::ProjectDocument& document) {
+        std::vector<int> iterations;
+        for (const auto& uuid : document.checkpoint_uuids())
+            lfs::test::licht::require_status(document.find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes) -> lfs::Result<void> {
+                    const auto header = lfs::core::load_checkpoint_header(stream, bytes);
+                    iterations.push_back(header ? header->iteration : -1);
+                    return {};
+                }));
+        std::ranges::sort(iterations);
+        return iterations;
+    }
+
+    // Catches --save-project-at-iter files carrying earlier checkpoints or the embedded dataset, replacing an
+    // existing file or not failing the run for it, skipping the iterations after it, or writing the final
+    // iteration before --crop.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveProjectAtIterationsWriteOneCheckpointPerFile) {
+        lfs::test::licht::TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 4);
+        params.optimization.save_steps = {1, 2};
+        params.optimization.keep_all_checkpoints = true;
+        params.optimization.crop_to_cropbox = true;
+        params.save_project_at_iteration = {1, 2, 3, 4};
+        const auto snapshots = temporary.path / "snapshots";
+        params.save_project_path = snapshots / "run.licht";
+        const auto existing = snapshots / "run_1.licht";
+        std::filesystem::create_directories(snapshots);
+        std::ofstream(existing) << "keep";
+        const auto existing_bytes = lfs::test::licht::read_file_bytes(existing);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        ASSERT_NO_FATAL_FAILURE(add_half_training_cropbox(scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        const auto trained = trainer.train();
+        ASSERT_FALSE(trained);
+        EXPECT_NE(lfs::format_for_developer(trained.error()).find("run_1.licht"), std::string::npos);
+        const size_t cropped = trainer.get_strategy().get_model().visible_count();
+        trainer.shutdown();
+
+        const auto open = [](const std::filesystem::path& path) {
+            return lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
+        };
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(existing), existing_bytes);
+        EXPECT_EQ(checkpoint_iterations(open(temporary.path / "project.licht")), (std::vector<int>{1, 2, 4}));
+        for (const int iteration : {2, 3}) {
+            auto snapshot = open(snapshots / std::format("run_{}.licht", iteration));
+            EXPECT_EQ(checkpoint_iterations(snapshot), std::vector<int>{iteration});
+            EXPECT_FALSE(lfs::test::licht::require_result(snapshot.parameters().embedded_dataset()));
+        }
+
+        auto final_snapshot = open(snapshots / "run_4.licht");
+        EXPECT_EQ(checkpoint_iterations(final_snapshot), std::vector<int>{4});
+        lfs::core::Scene restored;
+        const auto hydration = final_snapshot.hydrate(restored);
+        ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+        ASSERT_NE(restored.getTrainingModel(), nullptr);
+        EXPECT_EQ(static_cast<size_t>(restored.getTrainingModel()->visible_count()), cropped);
     }
 
     TEST_F(ProjectCheckpointTrainerInstall, CheckpointRetentionRecreatesUnlinkedProjectAndRejectsConflict) {
@@ -3792,7 +3856,7 @@ namespace {
         auto params = make_tiny_headless_params(
             output_path, iterations);
         params.optimization.save_steps = {1, 2};
-        params.save_project_at_iteration = 2;
+        params.save_project_at_iteration = {2};
 
         lfs::core::Scene scene;
         ASSERT_TRUE(
@@ -3846,7 +3910,7 @@ namespace {
         auto params = make_tiny_headless_params(
             output_path, iterations);
         params.optimization.save_steps = {};
-        params.save_project_at_iteration = 2;
+        params.save_project_at_iteration = {2};
         ASSERT_TRUE(params.save_project_path.empty());
 
         lfs::core::Scene scene;

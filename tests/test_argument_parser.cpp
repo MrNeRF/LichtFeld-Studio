@@ -494,7 +494,7 @@ TEST(ArgumentParserTest,
 
     EXPECT_EQ(
         (*parsed)->save_project_at_iteration,
-        std::optional<size_t>(7000));
+        std::vector<size_t>{7000});
     EXPECT_TRUE((*parsed)->save_project_path.empty());
 }
 
@@ -521,7 +521,7 @@ TEST(ArgumentParserTest,
 
     EXPECT_EQ(
         (*parsed)->save_project_at_iteration,
-        std::optional<size_t>(7000));
+        std::vector<size_t>{7000});
     EXPECT_TRUE((*parsed)->save_project_path.empty());
     EXPECT_NE(
         (*parsed)->save_project_path,
@@ -2669,6 +2669,38 @@ TEST(ArgumentParserTest, EvalStepsAcceptCommaListsAndRepeats) {
 
     EXPECT_TRUE((*parsed)->optimization.enable_eval);
     EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{1000, 7000, 30000}));
+}
+
+// Catches --save-project-at-iter dropping a value of its comma list or accepting something that is not
+// an iteration of the run or several iterations without --save-project-path, and --save-project-path being
+// accepted without it or without .licht.
+TEST(ArgumentParserTest, SaveProjectAtIterAcceptsCommaListsAndRejectsBadValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_save_project_list_data");
+    const auto output_path = make_test_path("lfs_arg_parser_save_project_list_output");
+    const auto parse = [&](std::vector<const char*> extra) {
+        std::vector<const char*> argv = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str()};
+        argv.insert(argv.end(), extra.begin(), extra.end());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    auto parsed = parse({"--save-project-at-iter", "15000, 7000,15000", "--save-project-path", "out.licht"});
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->save_project_at_iteration, (std::vector<size_t>{7000, 15000}));
+    EXPECT_EQ((*parsed)->save_project_path, std::filesystem::path("out.licht"));
+
+    for (const auto& bad : std::vector<std::vector<const char*>>{
+             {"--save-project-at-iter", "0"},
+             {"--save-project-at-iter", "7000,"},
+             {"--save-project-at-iter", "abc"},
+             {"--save-project-at-iter", "7000,999999999", "--save-project-path", "out.licht"},
+             {"--save-project-at-iter", "7000,15000"},
+             {"--save-project-path", "out.licht"},
+             {"--save-project-at-iter", "7000", "--save-project-path", "out"},
+         }) {
+        auto rejected = parse(bad);
+        ASSERT_FALSE(rejected.has_value()) << bad.back();
+        EXPECT_NE(rejected.error().find("--save-project-"), std::string::npos) << rejected.error();
+    }
 }
 
 // Catches a parser that accepts only one spelling or fails to store the selected enum value.

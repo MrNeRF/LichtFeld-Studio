@@ -3402,7 +3402,7 @@ namespace lfs::training {
                             snapshot_service.error())));
             }
 
-            if (params_.save_project_at_iteration) {
+            if (!params_.save_project_at_iteration.empty() && !saves_standalone_projects()) {
                 auto chapters =
                     reserve_project_snapshot_chapters();
                 if (!chapters) {
@@ -4489,7 +4489,8 @@ namespace lfs::training {
             std::lock_guard lock(
                 project_snapshot_mutex_);
             const bool cli_capture = request_id == 0 && popspa_cli_project_chapters_ &&
-                                     params_.save_project_at_iteration == static_cast<size_t>(capture_iteration);
+                                     std::ranges::contains(params_.save_project_at_iteration,
+                                                           static_cast<size_t>(capture_iteration));
             const auto& reserved = cli_capture ? popspa_cli_project_chapters_ : prestaged_project_chapters_;
             if (!reserved || (!cli_capture && prestaged_project_request_id_ != request_id) ||
                 reserved->snapshot_uuid.is_nil()) {
@@ -4809,11 +4810,17 @@ namespace lfs::training {
                         "Training autosave is missing live GUI project state",
                         LFS_SOURCE_SITE_CURRENT());
                 }
+                // A standalone snapshot holds no geometry inherited from a
+                // resumed project: its payloads stay in the source file.
+                std::vector<lfs::core::Uuid> omitted;
+                if (chapters->standalone)
+                    for (const auto& [uuid, binding] : project_snapshot_payload_bindings_)
+                        omitted.push_back(uuid);
                 return capture_project_snapshot_cpu_state(
                     *scene_, checkpoint_params,
                     captured_uuid, iteration,
                     *cpu_state, {},
-                    project_snapshot_payload_bindings_);
+                    project_snapshot_payload_bindings_, omitted);
             },
         };
 
@@ -4887,7 +4894,9 @@ namespace lfs::training {
                     pending.error();
                 // A topology-changing step may invalidate a preplanned
                 // layout. Coalesce and replan at the next post-step point.
-                if (!requested_project_path_) {
+                if (chapters->standalone) {
+                    // A standalone file names its iteration: not retried later.
+                } else if (!requested_project_path_) {
                     requested_project_path_ = path;
                     requested_project_preview_png_ =
                         std::move(preview_png);
@@ -5089,6 +5098,13 @@ namespace lfs::training {
                             retained_reader = retained_source;
                         if (retained_reader)
                             source_path = retained_reader->path();
+                        // A standalone snapshot copies no earlier generation,
+                        // checkpoint or embedded dataset from any source.
+                        if (chapters->standalone) {
+                            source_path.reset();
+                            retained_reader.reset();
+                            headless_source_path.reset();
+                        }
                         // A redirected recovery save does not merge into or own
                         // the original master. Its owner keeps staging alive.
                         if (!document_context && recovery_session && !recovery_session->writer_lock().owns(path)) {
@@ -5118,6 +5134,8 @@ namespace lfs::training {
                                         document_context
                                             ? document_context
                                                   ->project_uuid
+                                        : chapters->standalone
+                                            ? lfs::core::generate_uuid_v4()
                                             : project_uuid_,
                                         created_ns);
                             if (!created) {
@@ -5649,7 +5667,8 @@ namespace lfs::training {
                                 }
                             }
                         }
-                        if (write_kind != ProjectSnapshotWriteKind::Autosave && document->source_reader()) {
+                        if (write_kind != ProjectSnapshotWriteKind::Autosave && document->source_reader() &&
+                            !chapters->standalone) {
                             std::lock_guard lock(project_snapshot_mutex_);
                             // An explicit export to another path must not change
                             // the source of subsequent saves to the bound project.
@@ -5681,8 +5700,9 @@ namespace lfs::training {
                     {
                         std::lock_guard lock(
                             project_snapshot_mutex_);
-                        last_project_snapshot_path_ =
-                            path;
+                        // A standalone file is not the project being trained.
+                        if (!chapters->standalone)
+                            last_project_snapshot_path_ = path;
                         if (writer_result) {
                             last_project_writer_error_
                                 .clear();
@@ -5709,6 +5729,9 @@ namespace lfs::training {
                                 std::max(
                                     last_failed_project_request_id_,
                                     request_id);
+                            if (chapters->standalone)
+                                record_project_at_iteration_failure_locked(chapters->iteration, path,
+                                                                           last_project_writer_error_);
                         }
                     }
                     if (!writer_result) {
@@ -8768,8 +8791,8 @@ namespace lfs::training {
                 const auto project_hook =
                     getParams()
                         .save_project_at_iteration;
-                if (project_hook &&
-                    *project_hook <=
+                if (!project_hook.empty() &&
+                    project_hook.back() <=
                         static_cast<std::size_t>(
                             std::numeric_limits<int>::
                                 max())) {
@@ -8783,7 +8806,7 @@ namespace lfs::training {
                     }
                     const int target =
                         static_cast<int>(
-                            *project_hook);
+                            project_hook.front());
                     std::filesystem::path
                         project_hook_destination =
                             getParams()
@@ -8806,6 +8829,12 @@ namespace lfs::training {
                                 "Skipping save-project-at-iter project save at iteration {}: trainer-initiated saves are not authorized",
                                 iter);
                         }
+                    } else if (saves_standalone_projects()) {
+                        // Standalone files are written in the background; the
+                        // final iteration follows the terminal crop.
+                        if (std::ranges::contains(project_hook, static_cast<size_t>(iter)) &&
+                            iter != get_total_iterations())
+                            save_standalone_project(iter);
                     } else {
                         if (!in_popspa &&
                             !(popspa_enabled() && target > get_regular_iterations()) &&
@@ -9335,7 +9364,8 @@ namespace lfs::training {
                 // Reserve another outside the optimizer safe point for a CLI
                 // snapshot inside POPSpa. Its layout is prepared after this step,
                 // since intervening POPSpa boundaries can compact the model.
-                if (popspa_project_hook && *popspa_project_hook == static_cast<size_t>(iter) && popspa_enabled()) {
+                if (std::ranges::contains(popspa_project_hook, static_cast<size_t>(iter)) && popspa_enabled() &&
+                    !saves_standalone_projects()) {
                     bool needs_reservation = false;
                     {
                         std::lock_guard lock(project_snapshot_mutex_);
@@ -9668,7 +9698,7 @@ namespace lfs::training {
                 finish_project_writer();
             }
         }
-        if (!terminal_error && params_.save_project_at_iteration &&
+        if (!terminal_error && params_.save_project_at_iteration.size() == 1 &&
             !params_.save_project_path.empty()) {
             // The requested save may still be writing; its outcome is only
             // known once it ends, and the terminal save would clear it.
@@ -9710,6 +9740,9 @@ namespace lfs::training {
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
+        // Before the terminal save, whose own failure must not drop the final
+        // standalone --save-project-at-iter file.
+        const bool training_failed = terminal_error.has_value();
         // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
         // are cropped instead (export_cropbox()).
         if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
@@ -9810,6 +9843,26 @@ namespace lfs::training {
                 "Training ended at iteration {} without a project save: {}",
                 terminal_iteration,
                 skip_reason);
+        }
+        // A standalone --save-project-at-iter file at the final iteration follows
+        // the crop above. Failed ones fail the run only here, so the terminal
+        // save and every other requested iteration still ran.
+        if (saves_standalone_projects()) {
+            if (terminal_save_policy.at_step_boundaries && terminal_iteration == get_total_iterations() &&
+                std::ranges::contains(params_.save_project_at_iteration, static_cast<size_t>(terminal_iteration))) {
+                if (training_failed)
+                    LOG_WARN("Not saving iteration {} for --save-project-at-iter: training failed", terminal_iteration);
+                else
+                    save_standalone_project(terminal_iteration);
+            }
+            wait_for_project_writer();
+            std::optional<lfs::Error> standalone_error;
+            {
+                std::lock_guard lock(project_snapshot_mutex_);
+                standalone_error = std::exchange(project_at_iteration_error_, std::nullopt);
+            }
+            if (standalone_error)
+                append_terminal_error(std::move(*standalone_error));
         }
 
         // A dead train loop must not report an active pause: stale is_paused_
@@ -10051,6 +10104,70 @@ namespace lfs::training {
                 "Project snapshot did not publish the requested destination");
         }
         return path;
+    }
+
+    void Trainer::record_project_at_iteration_failure_locked(const int iteration,
+                                                             const std::filesystem::path& path,
+                                                             const std::string_view reason,
+                                                             const lfs::ErrorCode code) {
+        auto detail = std::format("Failed to save iteration {} to '{}': {}", iteration,
+                                  lfs::core::path_to_utf8(path), reason);
+        LOG_ERROR("{}", detail);
+        auto error = lfs::make_error(lfs::ErrorInit{
+            .code = code,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "Requested iteration project save failed.",
+            .detail = std::move(detail),
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+        if (project_at_iteration_error_)
+            project_at_iteration_error_ = std::move(*project_at_iteration_error_).with_suppressed(std::move(error));
+        else
+            project_at_iteration_error_ = std::move(error);
+    }
+
+    void Trainer::save_standalone_project(const int iteration) {
+        auto path = params_.save_project_path.parent_path() / params_.save_project_path.stem();
+        path += std::format("_{}.licht", iteration);
+        const auto fail = [&](const std::string_view reason, const lfs::ErrorCode code = lfs::ErrorCode::Internal) {
+            std::lock_guard lock(project_snapshot_mutex_);
+            record_project_at_iteration_failure_locked(iteration, path, reason, code);
+        };
+        if (lfs::core::native_fs::exists(path)) {
+            fail("it already exists", lfs::ErrorCode::AlreadyExists);
+            return;
+        }
+        auto chapters = reserve_project_snapshot_chapters();
+        if (!chapters) {
+            fail(lfs::format_for_developer(chapters.error()));
+            return;
+        }
+        const auto standalone = *chapters;
+        standalone->standalone = true;
+        standalone->iteration = iteration;
+
+        // Let the running writer and any pending request finish, so this capture
+        // happens at this iteration. The CLI slot keeps it apart from coalesced
+        // explicit requests: it neither replaces a pending one nor is replaced.
+        wait_for_project_writer();
+        consume_requested_project_snapshot(iteration);
+        wait_for_project_writer();
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            popspa_cli_project_chapters_ = standalone;
+        }
+        prepare_project_snapshot_at_safe_point(iteration, path);
+        capture_project_snapshot_at_safe_point(iteration);
+
+        // A started writer records its own failure. Otherwise the capture failed.
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (popspa_cli_project_chapters_ == standalone)
+            popspa_cli_project_chapters_.reset();
+        else if (project_writer_thread_.joinable())
+            return;
+        record_project_at_iteration_failure_locked(
+            iteration, path,
+            last_project_writer_error_.empty() ? "the snapshot was not captured" : last_project_writer_error_);
     }
 
     void Trainer::log_eval_appearance() const {

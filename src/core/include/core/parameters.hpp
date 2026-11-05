@@ -639,9 +639,12 @@ namespace lfs::core {
             std::optional<std::filesystem::path> dataset_project = std::nullopt;
 
             // Headless/integration-test trigger for the production training
-            // snapshot path. Empty unless the user passed --save-project-path;
-            // the trainer then falls back to the bound project destination.
-            std::optional<size_t> save_project_at_iteration = std::nullopt;
+            // snapshot path, at each of these sorted iterations. Empty
+            // save_project_path saves into the bound project destination.
+            // Several iterations require a save_project_path; each is then a
+            // standalone <stem>_<iter>.licht holding only that iteration's
+            // checkpoint.
+            std::vector<size_t> save_project_at_iteration;
             std::filesystem::path save_project_path;
 
             // Headless camera-path -> video render mode (see --render-camera-path)
