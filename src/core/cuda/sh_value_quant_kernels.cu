@@ -820,15 +820,17 @@ namespace lfs::core::sh_value_quant {
         if (!source || !rows || !output || selected_rest > layout_rest)
             throw std::invalid_argument("Invalid gathered floating-point SH canonical decode arguments");
         const auto blocks = static_cast<unsigned>(std::min<size_t>(4096, (count * selected_rest * 3u + kThreads - 1) / kThreads));
-        if (half)
+        if (half) {
             decode_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
                 static_cast<const __half*>(source), nullptr, rows, output, static_cast<uint32_t>(count),
                 static_cast<uint32_t>(n_src), layout_rest * 3u, selected_rest * 3u, true);
-        else
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_float_gathered_to_canonical");
+        } else {
             decode_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
                 static_cast<const float*>(source), nullptr, rows, output, static_cast<uint32_t>(count),
                 static_cast<uint32_t>(n_src), layout_rest * 3u, selected_rest * 3u, true);
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_float_gathered_to_canonical");
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_float_gathered_to_canonical");
+        }
     }
 
     void overlay_canonical_into_float4_chunk(
