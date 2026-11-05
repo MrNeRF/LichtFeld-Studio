@@ -48,21 +48,6 @@ add_test(NAME lichtfeld.collision_preview_upload COMMAND lichtfeld_collision_pre
 set_tests_properties(lichtfeld.collision_preview_upload PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
 
 if(TARGET lfs_core)
-    add_executable(lichtfeld_training_adapter_tests test_splat_preview.cpp test_training_hook_context.cpp)
-    target_compile_features(lichtfeld_training_adapter_tests PRIVATE cxx_std_23)
-    # Resolve lfs_core's driver symbols against the toolkit stub on GPU-less Linux runners.
-    target_link_libraries(lichtfeld_training_adapter_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
-    add_test(NAME lichtfeld.training_adapter
-        COMMAND lichtfeld_training_adapter_tests --gtest_filter=-*SplatPreviewGpu*)
-    add_test(NAME lichtfeld.training_adapter_gpu
-        COMMAND lichtfeld_training_adapter_tests --gtest_filter=*SplatPreviewGpu*)
-    set_tests_properties(lichtfeld.training_adapter PROPERTIES LABELS "fast;cpu" TIMEOUT 30)
-    set_tests_properties(lichtfeld.training_adapter_gpu PROPERTIES LABELS "gpu" TIMEOUT 60)
-    if(WIN32)
-        set_tests_properties(lichtfeld.training_adapter lichtfeld.training_adapter_gpu PROPERTIES
-            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
-    endif()
-
     add_executable(lichtfeld_collision_volume_tests test_collision_volume_validation.cpp)
     target_compile_features(lichtfeld_collision_volume_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_collision_volume_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
@@ -73,20 +58,6 @@ if(TARGET lfs_core)
         set_tests_properties(lichtfeld.collision_volume PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
     endif()
-endif()
-
-if(TARGET lfs_py AND TARGET LichtFeld-Studio)
-    find_package(Python REQUIRED COMPONENTS Interpreter)
-    add_test(NAME lichtfeld.python.training_adapter_gpu
-        COMMAND ${Python_EXECUTABLE} -m pytest -q -m gpu
-            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
-    )
-    set_tests_properties(lichtfeld.python.training_adapter_gpu PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        LABELS "gpu;integration"
-        TIMEOUT 240
-        ENVIRONMENT "LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR};LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
-    )
 endif()
 
 if(TARGET Vulkan::Vulkan)
@@ -730,6 +701,8 @@ set(POPSPA_TEST_FILES
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    test_splat_preview.cpp
+    test_training_hook_context.cpp
     licht_test_support.cpp
     test_assert_hardening.cpp
     test_cuda_error.cpp
@@ -1934,11 +1907,17 @@ add_test(NAME lichtfeld.python.gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast;gpu"
     TIMEOUT 60
+)
+set_tests_properties(
+    lichtfeld.python.fast lichtfeld.python.gpu lichtfeld.python.slow lichtfeld.python.nightly
+    PROPERTIES
+    ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
 )
 
 

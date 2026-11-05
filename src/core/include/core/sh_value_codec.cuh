@@ -17,6 +17,7 @@ namespace lfs::core::sh_value {
     constexpr float kInvQMaxDevice = 1.0f / 65535.0f;
     constexpr float kEpsDevice = 1e-20f;
 
+#ifdef __CUDACC__
     struct DeviceCodec16 {
         // Canonical host/export rounding, unaffected by CUDA fast-math FTZ.
         __device__ static __forceinline__ float decode_host_rounded(const uint16_t q, const float lo, const float hi) {
@@ -38,6 +39,7 @@ namespace lfs::core::sh_value {
             return static_cast<uint16_t>(qf);
         }
     };
+#endif
 
     // Cell-linear swizzle index for q16 values (pad-dropped layout).
     // Layout [ceil(N/R), n_cells, R] of uint16, R=32.

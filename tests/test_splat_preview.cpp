@@ -3,7 +3,6 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
-#include "core/splat_preview.hpp"
 #include <array>
 #include <bit>
 #include <cmath>
@@ -48,7 +47,7 @@ namespace {
         const auto before = model.shN_raw().to_pageable_host().clone();
         for (int selected_degree = 0; selected_degree <= degree; ++selected_degree) {
             SCOPED_TRACE(selected_degree);
-            auto output = splat_sh_preview(model, rows, selected_degree);
+            auto output = model.shN_canonical_cpu_rows(rows, selected_degree);
             const auto selected_rest = sh_rest_coefficients_for_degree(selected_degree);
             ASSERT_EQ(output.device(), Device::CPU);
             ASSERT_EQ(output.dtype(), DataType::Float32);
@@ -72,7 +71,7 @@ namespace {
                     EXPECT_EQ(output.ptr<float>()[i * selected_rest * 3u + c], expected);
                 }
             }
-            const auto int64_output = splat_sh_preview(model, rows.to(DataType::Int64), selected_degree);
+            const auto int64_output = model.shN_canonical_cpu_rows(rows.to(DataType::Int64), selected_degree);
             ASSERT_EQ(int64_output.bytes(), output.bytes());
             if (output.bytes()) {
                 EXPECT_EQ(std::memcmp(output.data_ptr(), int64_output.data_ptr(), output.bytes()), 0);
@@ -81,18 +80,18 @@ namespace {
         }
         const auto after = model.shN_raw().to_pageable_host();
         EXPECT_EQ(std::memcmp(before.data_ptr(), after.data_ptr(), before.bytes()), 0);
-        EXPECT_EQ(splat_sh_preview(model, Tensor::empty_pageable_host({size_t{0}}, DataType::Int64), degree).numel(), 0);
-        EXPECT_THROW(splat_sh_preview(model, rows, -1), std::invalid_argument);
-        EXPECT_THROW(splat_sh_preview(model, rows, degree + 1), std::invalid_argument);
-        EXPECT_THROW(splat_sh_preview(model, rows.to(DataType::Float32), degree), std::invalid_argument);
-        EXPECT_THROW(splat_sh_preview(model, rows.reshape({size_t{2}, size_t{4}}), degree), std::invalid_argument);
-        EXPECT_THROW(splat_sh_preview(model, Tensor{}, degree), std::invalid_argument);
+        EXPECT_EQ(model.shN_canonical_cpu_rows(Tensor::empty_pageable_host({size_t{0}}, DataType::Int64), degree).numel(), 0);
+        EXPECT_THROW(model.shN_canonical_cpu_rows(rows, -1), std::invalid_argument);
+        EXPECT_THROW(model.shN_canonical_cpu_rows(rows, degree + 1), std::invalid_argument);
+        EXPECT_THROW(model.shN_canonical_cpu_rows(rows.to(DataType::Float32), degree), std::invalid_argument);
+        EXPECT_THROW(model.shN_canonical_cpu_rows(rows.reshape({size_t{2}, size_t{4}}), degree), std::invalid_argument);
+        EXPECT_THROW(model.shN_canonical_cpu_rows(Tensor{}, degree), std::invalid_argument);
         for (int invalid : {-1, 300}) {
             const auto invalid_rows = Tensor::from_vector(std::vector<int>{invalid}, {size_t{1}}, Device::CPU);
-            EXPECT_THROW(splat_sh_preview(model, invalid_rows, degree), std::out_of_range);
+            EXPECT_THROW(model.shN_canonical_cpu_rows(invalid_rows, degree), std::out_of_range);
         }
         if (device == Device::CUDA)
-            EXPECT_THROW(splat_sh_preview(model, rows.to(Device::CUDA), degree), std::invalid_argument);
+            EXPECT_THROW(model.shN_canonical_cpu_rows(rows.to(Device::CUDA), degree), std::invalid_argument);
     }
 
     void check_subnormal_bounds(Device device) {
@@ -122,7 +121,7 @@ namespace {
             ASSERT_EQ(std::bit_cast<uint32_t>(canonical.ptr<float>()[0]), std::bit_cast<uint32_t>(lo));
             for (int selected_degree = 1; selected_degree <= degree; ++selected_degree) {
                 const auto selected_cells = sh_rest_coefficients_for_degree(selected_degree) * 3u;
-                const auto output = splat_sh_preview(model, rows, selected_degree);
+                const auto output = model.shN_canonical_cpu_rows(rows, selected_degree);
                 for (size_t i = 0; i < requested.size(); ++i) {
                     for (size_t cell = 0; cell < selected_cells; ++cell) {
                         EXPECT_EQ(std::bit_cast<uint32_t>(output.ptr<float>()[i * selected_cells + cell]),
@@ -155,7 +154,7 @@ namespace {
                         Tensor::zeros({n, size_t{4}}, Device::CPU), Tensor::zeros({n, size_t{1}}, Device::CPU),
                         1.f, SplatData::ShNLayout::Swizzled);
         const auto rows = Tensor::from_vector(std::vector<int>{1, 0, 1}, {size_t{3}}, Device::CPU);
-        const auto result = splat_sh_preview(model, rows, 0);
+        const auto result = model.shN_canonical_cpu_rows(rows, 0);
         EXPECT_EQ(result.shape(), TensorShape({size_t{3}, size_t{0}, size_t{3}}));
         EXPECT_EQ(result.device(), Device::CPU);
         EXPECT_EQ(result.dtype(), DataType::Float32);

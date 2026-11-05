@@ -108,8 +108,6 @@ set(CORE_SOURCES
         splat_data_mirror.cpp
         splat_data_mirror_centroid.cu
         splat_data_transform.cpp
-        splat_preview.cpp
-        splat_preview.cu
         splat_exportable_storage.cpp
         sh_value_quant.cpp
         shareable_allocation_limit.cpp

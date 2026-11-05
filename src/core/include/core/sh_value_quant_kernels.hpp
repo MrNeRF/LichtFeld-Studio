@@ -72,7 +72,15 @@ namespace lfs::core::sh_value_quant {
         std::size_t n_dst,
         std::size_t n_src_primitives,
         std::uint32_t coeffs_rest,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        std::uint32_t selected_rest = 0,
+        bool host_rounding = false);
+
+    /// Gather selected FP32/IEEE-f16 rows and bands from float4-swizzled storage.
+    void decode_shN_float_gathered_to_canonical(
+        const void* source, bool half, const std::int64_t* rows, float* output,
+        std::size_t count, std::size_t n_src, std::uint32_t layout_rest,
+        std::uint32_t selected_rest, cudaStream_t stream = nullptr);
 
     /// Overlay canonical [K, rest, 3] rows into a compact float4-swizzled
     /// chunk of n_chunk prims that represents global prims

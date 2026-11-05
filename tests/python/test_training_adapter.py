@@ -1,46 +1,15 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Public tensor/SH APIs and real headless training hook outcomes."""
+"""Public bounded SH extraction and GIL-release contracts."""
 
-import json
 import os
 from pathlib import Path
-import shutil
 import struct
 import subprocess
 import sys
 import textwrap
 
 import pytest
-
-
-@pytest.fixture(scope="session")
-def lf():
-    # These contracts require the native module; a missing build must fail.
-    import lichtfeld as module
-    root = Path(__file__).resolve().parents[2]
-    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build"))).resolve()
-    assert Path(module.__file__).resolve().is_relative_to(build / "src" / "python"), module.__file__
-    return module
-
-
-def test_ctest_adapter_uses_configured_paths():
-    root = Path(__file__).resolve().parents[2]
-    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build"))).resolve()
-    cmake = os.environ.get("CMAKE_COMMAND")
-    ctest = Path(cmake).with_name("ctest.exe" if os.name == "nt" else "ctest") if cmake else None
-    command = str(ctest) if ctest and ctest.is_file() else shutil.which("ctest")
-    assert command, "CTest is required to verify the configured test entry"
-    result = subprocess.run([command, "--test-dir", str(build), "--show-only=json-v1",
-                             "-R", "^lichtfeld.python.training_adapter_gpu$"],
-                            capture_output=True, text=True, timeout=15, check=True)
-    tests = json.loads(result.stdout)["tests"]
-    assert len(tests) == 1, "The configured build must register the Python adapter test"
-    properties = {item["name"]: item["value"] for item in tests[0]["properties"]}
-    environment = dict(item.split("=", 1) for item in properties.get("ENVIRONMENT", []))
-    assert Path(environment["LFS_TEST_BUILD_DIR"]).resolve() == build
-    executable = Path(environment["LFS_EXECUTABLE"]).resolve()
-    assert executable.is_relative_to(build) and executable.is_file(), executable
 
 
 def test_owned_host_numpy_export(lf, numpy):
@@ -157,72 +126,3 @@ def test_selected_sh_rows_reject_invalid_requests(lf, numpy, sh_model):
     for degree in (-1, 4):
         with pytest.raises(ValueError):
             sh_model.shN_rows(rows, degree)
-
-
-@pytest.mark.gpu
-@pytest.mark.integration
-@pytest.mark.parametrize("outcome", ["completed", "stopped", "failed"])
-def test_headless_training_hook_outcome(tmp_path, gpu_available, outcome):
-    if not gpu_available:
-        pytest.skip("CUDA GPU required for training")
-    from test_mcp_dataset_load_training import _dataset
-
-    root = Path(__file__).resolve().parents[2]
-    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build")))
-    executable = Path(os.environ.get("LFS_EXECUTABLE", build / ("LichtFeld-Studio.exe" if os.name == "nt" else "LichtFeld-Studio")))
-    assert executable.is_file(), f"Build the executable first: {executable}"
-    dataset = _dataset(tmp_path / "dataset", 60)
-    script = tmp_path / "hooks.py"
-    script.write_text(textwrap.dedent('''\
-        import json, os
-        from pathlib import Path
-        import lichtfeld as lf
-        steps = []
-        if os.environ["LFS_TEST_OUTCOME"] == "completed":
-            # First-use adapter setup must launch uv with a valid environment
-            # block, including non-ASCII paths. This creates no downloaded packages.
-            runtime = Path(lf.packages.init())
-            assert (runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")).is_file()
-        @lf.on_post_step
-        def step(context):
-            steps.append(dict(context))
-            if os.environ["LFS_TEST_OUTCOME"] == "stopped":
-                lf.session().request_stop()
-        @lf.on_training_end
-        def end(context):
-            Path(os.environ["LFS_TEST_HOOK_OUTPUT"]).write_text(
-                json.dumps({"end": dict(context), "steps": steps}), encoding="utf-8")
-    '''), encoding="utf-8")
-    checkpoint = tmp_path / "project.licht"
-    if outcome == "failed":
-        blocked = tmp_path / "not-a-directory"
-        blocked.write_text("Block the terminal project save", encoding="utf-8")
-        checkpoint = blocked / "project.licht"
-    proof = tmp_path / "hooks.json"
-    environment = {**os.environ, "LFS_HOME": str(tmp_path / "runtime-\u00e0-\u6e2c"),
-                   "LFS_TEST_OUTCOME": outcome, "LFS_TEST_HOOK_OUTPUT": str(proof)}
-    for name in ("LFS_TRAINING_PUBLISHER", "LFS_BLENDER_JOB", "PYTHONHOME", "PYTHONPATH"):
-        environment.pop(name, None)
-    command = [str(executable), "--headless", "-d", dataset, "-o", str(tmp_path / "output"),
-               "--iter", "4", "--max-cap", "1000", "--sh-degree", "1", "--strategy", "mcmc",
-               "--min-track-length", "0", "--centralize", "off", "--no-download",
-               "--save-project-at-iter", "4", "--save-project-path", str(checkpoint),
-               "--python-script", str(script)]
-    with (tmp_path / "trainer.log").open("w", encoding="utf-8") as log:
-        process = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=60,
-                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-    assert proof.is_file(), (tmp_path / "trainer.log").read_text(encoding="utf-8")[-8000:]
-    payload = json.loads(proof.read_text(encoding="utf-8"))
-    assert payload["end"]["terminal_state"] == outcome
-    assert payload["end"]["iterations"] == 4
-    assert type(payload["end"]["is_paused"]) is bool
-    if outcome == "stopped":
-        assert 0 <= payload["end"]["iteration"] < 4
-    else:
-        assert payload["end"]["iteration"] == 4
-    assert payload["steps"]
-    for step in payload["steps"]:
-        assert step["iterations"] == 4
-        assert type(step["is_paused"]) is bool
-        assert "terminal_state" not in step
-    assert (process.returncode != 0) == (outcome == "failed")

@@ -26,9 +26,8 @@ class SplatData:
         """
 
     def shN_rows(self, rows: lichtfeld.Tensor, degree: int) -> lichtfeld.Tensor:
-        """Copy selected SH-rest rows/bands to owned Float32 CPU storage.
-
-        Rows must be rank-1 CPU Int32 or Int64. Call at a model read boundary.
+        """
+        Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.
         """
 
     @property

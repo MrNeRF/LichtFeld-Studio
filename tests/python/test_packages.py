@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for lichtfeld.packages module (UV package management)."""
 
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
 import pytest
 
 
@@ -106,6 +113,39 @@ class TestVenvManagement:
     def test_init_function_exists(self, lf):
         """Test init function exists for venv setup."""
         assert hasattr(lf.packages, "init")
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(os.name != "nt", reason="Windows Unicode subprocess environment")
+    def test_fresh_unicode_environment(self, tmp_path):
+        build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", "build"))).resolve()
+        if not (build / "bin" / "uv.exe").is_file():
+            pytest.skip("A build with bundled uv is required")
+        # The package manager discovers uv relative to the host executable.
+        fd, name = tempfile.mkstemp(prefix="package-test-", suffix=".exe", dir=build)
+        os.close(fd)
+        executable = Path(name)
+        runtime = tmp_path / "runtime-\u00e0-\u6e2c"
+        code = f"""
+import os, sys
+from pathlib import Path
+dll = os.add_dll_directory({str(build)!r})
+sys.path.insert(0, {str(build / 'src' / 'python')!r})
+import lichtfeld as lf
+directory = Path(lf.packages.init())
+assert directory.is_relative_to(Path(os.environ['LFS_HOME']))
+assert (directory / 'Scripts' / 'python.exe').is_file()
+print('FRESH_UNICODE_VENV_PASS')
+"""
+        environment = {**os.environ, "LFS_HOME": str(runtime), "PYTHONHOME": sys.base_prefix}
+        environment.pop("PYTHONPATH", None)
+        try:
+            shutil.copyfile(sys._base_executable, executable)
+            result = subprocess.run([str(executable), "-c", code], env=environment, capture_output=True,
+                                    text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "FRESH_UNICODE_VENV_PASS" in result.stdout
+        finally:
+            executable.unlink(missing_ok=True)
 
     @pytest.mark.slow
     def test_init_creates_venv(self, lf):
