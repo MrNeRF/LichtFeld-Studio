@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 
 #include <RmlUi/Core/Element.h>
+#include <cstdint>
 #include <zep/display.h>
 
 namespace lfs::vis::editor {
@@ -45,6 +46,7 @@ namespace lfs::vis::editor {
         Rml::Element* element_ = nullptr;
         Zep::NRectf clip_rect_;
         float base_font_size_ = Zep::DefaultTextSize;
+        std::uint64_t font_generation_ = 0;
     };
 
 } // namespace lfs::vis::editor
