@@ -2,14 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 
 #include <array>
 #include <cstddef>
-#include <expected>
 #include <filesystem>
-#include <string>
 
 namespace lfs::core {
     struct MeshData;
@@ -40,11 +39,11 @@ namespace lfs::training {
     // One opaque Gaussian per cell inside `mesh` and clear of its surface. Inside are the cells of the collision grid of the
     // mesh's surface splats that no path of free cells joins to the grid's border; open boundary loops, such as the
     // underside of an object scanned on a table, are capped first.
-    [[nodiscard]] std::expected<NoiseInfill, std::string> make_noise_infill(const core::MeshData& mesh);
+    [[nodiscard]] lfs::Result<NoiseInfill> make_noise_infill(const core::MeshData& mesh);
 
     // The noise infill of the mesh file, moved from dataset coordinates to the training frame at `origin`.
-    [[nodiscard]] std::expected<core::SplatData, std::string> load_noise_infill(const std::filesystem::path& mesh,
-                                                                                const std::array<float, 3>& origin);
+    [[nodiscard]] lfs::Result<core::SplatData> load_noise_infill(const std::filesystem::path& mesh,
+                                                                 const std::array<float, 3>& origin);
 
     // Rows [0, count) of a model trained with `params` whose noise infill was prepended: its frozen range starting at
     // row 0, which compaction keeps first and whole since frozen rows are never removed; 0 without one.

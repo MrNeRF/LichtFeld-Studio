@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <deque>
 #include <format>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -29,6 +30,15 @@
 namespace lfs::training {
 
     namespace {
+        lfs::Error infill_error(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
         constexpr float kSh0 = 0.28209479177387814f;
         // SH0 coefficients of a colour channel at 0 and at 1.
         constexpr float kChannelOff = -0.5f / kSh0, kChannelOn = 0.5f / kSh0;
@@ -201,9 +211,9 @@ namespace lfs::training {
         }
     } // namespace
 
-    std::expected<NoiseInfill, std::string> make_noise_infill(const core::MeshData& mesh) {
+    lfs::Result<NoiseInfill> make_noise_infill(const core::MeshData& mesh) {
         if (!mesh.vertices.is_valid() || !mesh.indices.is_valid() || mesh.face_count() == 0)
-            return std::unexpected("The noise infill mesh has no triangles");
+            return infill_error("The noise infill mesh has no triangles");
         assert(mesh.vertices.ndim() == 2 && mesh.vertices.size(1) == 3);
         assert(mesh.indices.ndim() == 2 && mesh.indices.size(1) == 3);
         Geometry g;
@@ -218,7 +228,7 @@ namespace lfs::training {
         const glm::vec3 size = high - low;
         const float extent = std::max({size.x, size.y, size.z});
         if (!(extent > 0.0f) || !std::isfinite(extent))
-            return std::unexpected("The noise infill mesh has no extent");
+            return infill_error("The noise infill mesh has no extent");
         weld_by_position(g);
         const size_t loops = cap_boundary_loops(g);
         const float cell = std::clamp(float(std::cbrt(enclosed_volume(g) / kInsideCells)), extent / 512.0f, extent / 16.0f);
@@ -231,7 +241,7 @@ namespace lfs::training {
         options.resolution_target = std::clamp(int(std::ceil(4.0f * extent / cell)), core::Mesh2SplatOptions::kMinResolution, 2048);
         auto surface = rendering::mesh_to_splat(capped, options);
         if (!surface)
-            return std::unexpected(std::format("Noise infill surface splats failed: {}", surface.error()));
+            return infill_error(std::format("Noise infill surface splats failed: {}", surface.error()));
 
         core::CollisionSettings collision;
         collision.voxel_size = cell;
@@ -241,7 +251,12 @@ namespace lfs::training {
         try {
             volume = core::generateCollision(core::captureCollisionSource(**surface), collision);
         } catch (const std::exception& error) {
-            return std::unexpected(std::format("Noise infill voxelization failed: {}", error.what()));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format("Noise infill voxelization failed: {}", error.what()),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
         }
 
         Grid grid;
@@ -254,7 +269,7 @@ namespace lfs::training {
         mark_outside(grid);
         const auto kept = eroded_inside(grid);
         if (kept.empty())
-            return std::unexpected(std::format("The noise infill mesh encloses no cell clear of its surface at cell {}", cell));
+            return infill_error(std::format("The noise infill mesh encloses no cell clear of its surface at cell {}", cell));
 
         const size_t count = kept.size();
         std::vector<float> means, rotation(count * 4, 0.0f);
@@ -275,20 +290,20 @@ namespace lfs::training {
                            .capped_loops = loops};
     }
 
-    std::expected<core::SplatData, std::string> load_noise_infill(const std::filesystem::path& mesh,
-                                                                  const std::array<float, 3>& origin) {
+    lfs::Result<core::SplatData> load_noise_infill(const std::filesystem::path& mesh,
+                                                   const std::array<float, 3>& origin) {
         io::LoadOptions options;
         options.mesh_geometry_only = true;
         auto loaded = io::Loader::create()->load(mesh, options);
         if (!loaded)
-            return std::unexpected(std::format("Failed to load the noise infill mesh '{}': {}", core::path_to_utf8(mesh),
-                                               loaded.error().format()));
+            return infill_error(std::format("Failed to load the noise infill mesh '{}': {}", core::path_to_utf8(mesh),
+                                            loaded.error().format()));
         const auto* const data = std::get_if<std::shared_ptr<core::MeshData>>(&loaded->data);
         if (!data || !*data)
-            return std::unexpected(std::format("'{}' is not a mesh", core::path_to_utf8(mesh)));
+            return infill_error(std::format("'{}' is not a mesh", core::path_to_utf8(mesh)));
         auto infill = make_noise_infill(**data);
         if (!infill)
-            return std::unexpected(infill.error());
+            return std::move(infill.error());
         auto& means = infill->splats.means();
         means = (means - core::Tensor::from_vector({origin[0], origin[1], origin[2]}, core::TensorShape({1, 3}), means.device())).contiguous();
         return std::move(infill->splats);

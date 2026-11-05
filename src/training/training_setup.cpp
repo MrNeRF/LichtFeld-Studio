@@ -585,7 +585,7 @@ namespace lfs::training {
 
         // Noise guided splatting: the noise infill of the mesh's interior leads the model, frozen. Frozen rows are never
         // removed and compaction keeps the order, so the noise stays rows [0, count) and nothing else starts at row 0.
-        std::expected<void, std::string> prependNoiseInfill(
+        lfs::Result<void> prependNoiseInfill(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
             const glm::vec3& dataset_origin) {
@@ -596,12 +596,12 @@ namespace lfs::training {
             }
             // Frozen rows share one learning-rate scale, and the noise must not move.
             if (params.freeze_lr_scale != 0.0f) {
-                return std::unexpected("--noise-infill-mesh needs --freeze-lr-scale 0");
+                return lfs::Result<void>::failure(initFileError("--noise-infill-mesh needs --freeze-lr-scale 0"));
             }
             auto noise = load_noise_infill(lfs::core::utf8_to_path(opt.noise_infill_mesh),
                                            {dataset_origin.x, dataset_origin.y, dataset_origin.z});
             if (!noise) {
-                return std::unexpected(noise.error());
+                return lfs::Result<void>::failure(std::move(noise.error()));
             }
             if (noise_infill_start_iteration(opt) > 0) {
                 noise->opacity_raw().fill_(kHiddenOpacity);
@@ -613,7 +613,7 @@ namespace lfs::training {
             }
             if (!replaceWithMerged(model, {{&*noise, glm::mat4{1.0f}}, {&model, glm::mat4{1.0f}}},
                                    std::move(frozen_ranges), opt.sh_degree)) {
-                return std::unexpected("Failed to merge the noise infill into the training model");
+                return lfs::Result<void>::failure(initFileError("Failed to merge the noise infill into the training model"));
             }
             return {};
         }
@@ -1212,7 +1212,7 @@ namespace lfs::training {
                 return result;
             }
             if (auto result = prependNoiseInfill(params, model, dataset_origin); !result) {
-                return result;
+                return std::unexpected(std::string(result.error().user_message()));
             }
             if (auto result = migrateTrainingModelToAllocator(params, model, tensor_allocator); !result) {
                 return result;
@@ -1245,7 +1245,7 @@ namespace lfs::training {
                     lfs::core::random_choose(*loaded->model, max_cap);
                 }
                 if (auto result = prependNoiseInfill(params, *loaded->model, dataset_origin); !result) {
-                    return std::unexpected(std::move(result.error()));
+                    return std::unexpected(std::string(result.error().user_message()));
                 }
                 if (auto result = migrateTrainingModelToAllocator(
                         params, *loaded->model, tensor_allocator);
@@ -1270,7 +1270,7 @@ namespace lfs::training {
                 lfs::core::random_choose(*model, max_cap);
             }
             if (auto result = prependNoiseInfill(params, *model, dataset_origin); !result) {
-                return std::unexpected(std::move(result.error()));
+                return std::unexpected(std::string(result.error().user_message()));
             }
 
             if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {

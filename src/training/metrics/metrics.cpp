@@ -1604,7 +1604,7 @@ namespace lfs::training {
             assert(mesh);
             auto noise = load_noise_infill(lfs::core::utf8_to_path(std::string(*mesh)), _training_origin);
             if (!noise) {
-                LOG_WARN("Eval: green infill not scored: {}", noise.error());
+                LOG_WARN("Eval: green infill not scored: {}", noise.error().user_message());
                 return metrics;
             }
             infill_rows = static_cast<size_t>(noise->size());

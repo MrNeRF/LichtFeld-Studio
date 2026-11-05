@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <string_view>
 #include <vector>
 
 using namespace lfs::core;
@@ -63,7 +64,7 @@ namespace {
 // hollow, and a cell tied to the mesh's extent, which would give a solid shape millions of noise splats.
 TEST(NoiseInfillTest, FillsTheInsideOfAClosedMeshClearOfItsSurface) {
     const auto infill = lfs::training::make_noise_infill(make_cube(false));
-    ASSERT_TRUE(infill.has_value()) << infill.error();
+    ASSERT_TRUE(infill.has_value()) << infill.error().user_message();
     EXPECT_NEAR(infill->cell, std::cbrt(1.0f / 200000.0f), 1e-4f);
     const auto means = infill->splats.means().cpu().contiguous().to_vector();
     for (const float v : means) {
@@ -84,12 +85,26 @@ TEST(NoiseInfillTest, CapsOpenLoopsButNotTextureSeams) {
         SCOPED_TRACE(split_faces);
         const auto closed = lfs::training::make_noise_infill(make_cube(false, split_faces));
         const auto open = lfs::training::make_noise_infill(make_cube(true, split_faces));
-        ASSERT_TRUE(closed.has_value()) << closed.error();
-        ASSERT_TRUE(open.has_value()) << open.error();
+        ASSERT_TRUE(closed.has_value()) << closed.error().user_message();
+        ASSERT_TRUE(open.has_value()) << open.error().user_message();
         EXPECT_EQ(closed->capped_loops, 0u);
         EXPECT_EQ(open->capped_loops, 1u);
         EXPECT_EQ(open->splats.size(), closed->splats.size());
     }
+}
+
+// Catches a flat shape or a splat file going on with an empty infill instead of stopping with a message that names the cause.
+TEST(NoiseInfillTest, AMeshWithoutAnInsideStopsWithAMessage) {
+    const std::vector<float> vertices{0, 0, 0, 1, 0, 0, 0, 1, 0};
+    const std::vector<int> indices{0, 1, 2};
+    const auto flat = lfs::training::make_noise_infill(MeshData(Tensor::from_vector(vertices, {3, 3}, Device::CPU),
+                                                                Tensor::from_vector(indices, {1, 3}, Device::CPU)));
+    ASSERT_FALSE(flat.has_value());
+    EXPECT_NE(flat.error().user_message().find("encloses no cell"), std::string_view::npos) << flat.error().user_message();
+
+    const auto not_a_mesh = lfs::training::load_noise_infill(fs::path(LFS_SIMPLIFY_TEST_PLY), {0.0f, 0.0f, 0.0f});
+    ASSERT_FALSE(not_a_mesh.has_value());
+    EXPECT_FALSE(not_a_mesh.error().user_message().empty());
 }
 
 // Catches a colour draw the tensor library refuses, or one that leaves the six high-contrast colours or the noise rows.
