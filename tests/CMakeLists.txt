@@ -50,7 +50,8 @@ set_tests_properties(lichtfeld.collision_preview_upload PROPERTIES LABELS "cpu;c
 if(TARGET lfs_core)
     add_executable(lichtfeld_training_adapter_tests test_splat_preview.cpp test_training_hook_context.cpp)
     target_compile_features(lichtfeld_training_adapter_tests PRIVATE cxx_std_23)
-    target_link_libraries(lichtfeld_training_adapter_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart)
+    # Resolve lfs_core's driver symbols against the toolkit stub on GPU-less Linux runners.
+    target_link_libraries(lichtfeld_training_adapter_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
     add_test(NAME lichtfeld.training_adapter
         COMMAND lichtfeld_training_adapter_tests --gtest_filter=-*SplatPreviewGpu*)
     add_test(NAME lichtfeld.training_adapter_gpu
