@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/editor/zep_rml_display.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FontEngineInterface.h>
@@ -110,9 +111,12 @@ namespace lfs::vis::editor {
 
     private:
         void ensureFontHandles() const {
-            if (face_handle_)
+            // A release of the app's font resources frees the handles cached here.
+            const auto generation = gui::fontResourceGeneration();
+            if (face_handle_ && handle_generation_ == generation)
                 return;
 
+            handle_generation_ = generation;
             face_handle_ = {};
             effects_handle_ = {};
 
@@ -141,15 +145,23 @@ namespace lfs::vis::editor {
 
         mutable Rml::FontFaceHandle face_handle_ = {};
         mutable Rml::FontEffectsHandle effects_handle_ = {};
+        mutable std::uint64_t handle_generation_ = 0;
     };
 
-    ZepDisplay_Rml::ZepDisplay_Rml() : Zep::ZepDisplay() {
+    ZepDisplay_Rml::ZepDisplay_Rml() : Zep::ZepDisplay(),
+                                       font_generation_(gui::fontResourceGeneration()) {
         SetPixelScale(Zep::NVec2f(1.0f));
         ensureDefaultFonts();
     }
 
     void ZepDisplay_Rml::beginFrame(Rml::Element& element) {
         element_ = &element;
+        // Glyph sizes measured before the app added or released font faces may be wrong now.
+        if (const auto generation = gui::fontResourceGeneration(); generation != font_generation_) {
+            font_generation_ = generation;
+            m_fonts = {};
+            SetLayoutDirty(true);
+        }
         ensureDefaultFonts();
     }
 
