@@ -11,7 +11,7 @@ import pytest
 from test_rmlui_image_sources import panel_modules, _DocumentStub, _ElementStub
 
 
-@pytest.mark.parametrize("field", ["_show_info", "_show_filmstrip"])
+@pytest.mark.parametrize("field", ["_show_info", "_show_filmstrip", "resize"])
 def test_chrome_toggle_remeasures_after_layout_then_stops(panel_modules, monkeypatch, tmp_path, field):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
@@ -24,6 +24,8 @@ def test_chrome_toggle_remeasures_after_layout_then_stops(panel_modules, monkeyp
                      + chunk(b'IHDR', struct.pack('>2I5B', 640, 480, 8, 2, 0, 0, 0))
                      + chunk(b'IDAT', zlib.compress(pixels)) + chunk(b'IEND', b''))
     panel._image_paths = [path]
+    panel._service_metadata = lambda: None
+    panel._preview_state = "ready"
     panel._get_image_info = lambda _: (640, 480, 3)
     viewport = _ElementStub()
     viewport.client_width = 612
@@ -41,8 +43,11 @@ def test_chrome_toggle_remeasures_after_layout_then_stops(panel_modules, monkeyp
     panel.on_update(doc)
     panel.on_update(doc)
     requests.clear()
-    setattr(panel, field, False)
-    panel._mark_dirty()
+    if field == "resize":
+        panel._on_layout_resize(None)
+    else:
+        setattr(panel, field, False)
+        panel._mark_dirty()
     panel.on_update(doc)
     # RmlUI processes style and layout after the panel's update hook.
     viewport.client_width = 814

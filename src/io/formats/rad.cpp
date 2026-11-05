@@ -154,6 +154,13 @@ namespace lfs::io {
         constexpr const char* PROP_CHILD_COUNT = "child_count";
         constexpr const char* PROP_CHILD_START = "child_start";
 
+        // Per-component properties (center0..center2, rgb0..rgb2, scales0..scales2) carry the component
+        // index as the final character of the name. Only 0..2 is a valid index.
+        inline bool is_component_suffix(const std::string& property) {
+            const char ch = property.back();
+            return ch >= '0' && ch <= '2';
+        }
+
         // ============================================================================
         // Utility Functions
         // ============================================================================
@@ -380,7 +387,8 @@ namespace lfs::io {
                 strm.next_out = chunk.data();
 
                 ret = inflate(&strm, Z_NO_FLUSH);
-                if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
+                // Z_BUF_ERROR (truncated input) and Z_NEED_DICT make no further progress, so they end the attempt.
+                if (ret != Z_OK && ret != Z_STREAM_END) {
                     inflateEnd(&strm);
                     return std::nullopt;
                 }
@@ -1110,7 +1118,7 @@ namespace lfs::io {
                 meta.count = j.at("count").get<uint64_t>();
                 meta.payload_bytes = j.at("payloadBytes").get<uint64_t>(); // camelCase
                 if (j.contains("maxSh"))
-                    meta.max_sh = j.at("maxSh").get<int>();
+                    meta.max_sh = std::clamp(j.at("maxSh").get<int>(), 0, 3);
                 if (j.contains("lodTree"))
                     meta.lod_tree = j.at("lodTree").get<bool>();
                 if (j.contains("splatEncoding")) {
@@ -1207,7 +1215,7 @@ namespace lfs::io {
                 meta.type = j.at("type").get<std::string>();
                 meta.count = j.at("count").get<uint64_t>();
                 if (j.contains("maxSh"))
-                    meta.max_sh = j.at("maxSh").get<int>();
+                    meta.max_sh = std::clamp(j.at("maxSh").get<int>(), 0, 3);
                 if (j.contains("lodTree"))
                     meta.lod_tree = j.at("lodTree").get<bool>();
                 if (j.contains("chunkSize"))
@@ -1775,7 +1783,8 @@ namespace lfs::io {
                         if (means != nullptr) {
                             PropertyDecoder::decode_center(prop_data.data(), means, 3, chunk_count, prop.encoding);
                         }
-                    } else if (prop.property.find(PROP_CENTER) == 0 && prop.property != PROP_CENTER && means != nullptr) {
+                    } else if (prop.property.find(PROP_CENTER) == 0 && prop.property != PROP_CENTER && means != nullptr &&
+                               is_component_suffix(prop.property)) {
                         const int comp = prop.property.back() - '0';
                         PropertyDecoder::decode_center(prop_data.data(), comp_data.data(), 1, chunk_count, prop.encoding);
                         for (std::size_t i = 0; i < chunk_count; ++i) {
@@ -1800,7 +1809,8 @@ namespace lfs::io {
                                                         prop.max_val.value_or(1.0f),
                                                         prop.base.value_or(0.0f),
                                                         prop.scale.value_or(1.0f));
-                    } else if (prop.property.find(PROP_RGB) == 0 && prop.property != PROP_RGB && sh0 != nullptr) {
+                    } else if (prop.property.find(PROP_RGB) == 0 && prop.property != PROP_RGB && sh0 != nullptr &&
+                               is_component_suffix(prop.property)) {
                         const int comp = prop.property.back() - '0';
                         PropertyDecoder::decode_rgb(prop_data.data(),
                                                     comp_data.data(),
@@ -1823,7 +1833,8 @@ namespace lfs::io {
                                                            prop.encoding,
                                                            prop.min_val.value_or(0.0f),
                                                            prop.max_val.value_or(prop.scale.value_or(1.0f)));
-                    } else if (prop.property.find(PROP_SCALES) == 0 && prop.property != PROP_SCALES && scales != nullptr) {
+                    } else if (prop.property.find(PROP_SCALES) == 0 && prop.property != PROP_SCALES && scales != nullptr &&
+                               is_component_suffix(prop.property)) {
                         const int comp = prop.property.back() - '0';
                         PropertyDecoder::decode_scales(prop_data.data(),
                                                        comp_data.data(),

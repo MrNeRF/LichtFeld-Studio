@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Image preview panel using RmlUI floating window."""
-from _lfs_path_io import native_path
 
-import os
 import time
 from math import gcd
 from _lfs_path_io import Path
@@ -14,6 +12,8 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
 from .panels import panel_class
+from .preview_geometry import THUMB_ROW_DP, visible_thumbnail_range, view_to_source, source_to_view
+from .preview_metadata import PreviewMetadata, SourceChangedError
 from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
@@ -29,12 +29,9 @@ def __lfs_after_reload__(runtime):
     runtime.ui.on_open_camera_preview(open_camera_preview_by_uid)
 
 
-ZOOM_MIN = 0.1
+ZOOM_MIN = 0.01
 ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0
-CROSSFADE_DURATION = 0.2
-SCROLL_DURATION = 0.15
-FILMSTRIP_WINDOW = 40
 THUMB_MAX_PX = 256
 
 _instance = None
@@ -65,6 +62,23 @@ class ImagePreviewPanel(Panel):
         self._show_info = True
         self._show_filmstrip = True
         self._show_overlay = False
+        self._show_help = False
+        self._sampled_color = None
+        self._sample_request = None
+        self._metadata = PreviewMetadata()
+        self._metadata_required = False
+        self._metadata_validated = set()
+        self._action_error = ""
+        self._preview_state = "loading"
+        self._reset_preview()
+        self._refresh_revision = 0
+        self._requested_at = 0.0
+        self._displayed_index = -1
+        self._filmstrip_range = None
+        self._ensure_selection_visible = True
+        self._filmstrip_scrolling = False
+        self._filmstrip_follow_selection = True
+        self._filmstrip_viewport_height = None
 
         self._pan_x = 0.0
         self._pan_y = 0.0
@@ -81,19 +95,10 @@ class ImagePreviewPanel(Panel):
         self._doc = None
         self._handle = None
         self._dirty = True
-        self._prev_image_index = -1
         self._layout_show_info = None
         self._layout_show_filmstrip = None
+        self._layout_extra = None
         self._layout_pending = False
-
-        self._active_layer = "a"
-        self._crossfade_pending = False
-        self._crossfade_start = 0.0
-
-        self._scroll_target = None
-        self._scroll_origin = 0.0
-        self._scroll_start_time = 0.0
-
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
         self._path_stat_cache: dict[str, tuple[bool, int, int, int, int, int]] = {}
         self._path_revision_cache: dict[str, str] = {}
@@ -178,12 +183,18 @@ class ImagePreviewPanel(Panel):
         model.bind_func("filmstrip_top_spacer_height", lambda: f"{self._filmstrip_top_spacer:.1f}dp")
         model.bind_func("filmstrip_bottom_spacer_height", lambda: f"{self._filmstrip_bottom_spacer:.1f}dp")
         self._handle = model.get_handle()
+        self._filmstrip_range = None
 
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
         self._layout_show_info = None
         self._layout_show_filmstrip = None
+        self._reset_preview()
+        self._displayed_index = -1
+        self._preview_state = "loading" if self._image_paths else "empty"
+        self._ensure_selection_visible = True
+        self._filmstrip_viewport_height = None
 
         for eid, handler in [
             ("nav-prev", lambda _ev: self._navigate(-1)),
@@ -195,14 +206,21 @@ class ImagePreviewPanel(Panel):
             ("btn-gt-compare", lambda _ev: self._action_open_in_gt_compare()),
             ("btn-toggle-training", lambda _ev: self._action_toggle_training()),
             ("btn-show-in-folder", lambda _ev: self._action_show_in_file_manager()),
+            ("btn-fit", lambda _ev: self._reset_view_and_refresh()),
+            ("btn-actual-size", lambda _ev: self._actual_size()),
+            ("btn-zoom-in", lambda _ev: self._zoom_in()),
+            ("btn-zoom-out", lambda _ev: self._zoom_out()),
+            ("btn-info", lambda _ev: self._toggle_chrome("_show_info")),
+            ("btn-thumbnails", lambda _ev: self._toggle_chrome("_show_filmstrip")),
+            ("btn-help", lambda _ev: self._toggle_chrome("_show_help")),
+            ("btn-picker", lambda _ev: self._toggle_picker()),
+            ("btn-refresh", lambda _ev: self._refresh_sources()),
+            ("btn-apply-render-color", lambda _ev: self._apply_sampled_color("render")),
+            ("btn-apply-training-color", lambda _ev: self._apply_sampled_color("training")),
         ]:
             el = doc.get_element_by_id(eid)
             if el:
-                el.add_event_listener("click", handler)
-
-        cb_fit = doc.get_element_by_id("cb-fit")
-        if cb_fit:
-            cb_fit.add_event_listener("change", self._on_fit_checkbox_change)
+                el.add_event_listener("click", lambda ev, action=handler: self._activate_if_enabled(ev, action))
 
         cb_mask = doc.get_element_by_id("cb-mask")
         if cb_mask:
@@ -212,6 +230,8 @@ class ImagePreviewPanel(Panel):
         if filmstrip:
             filmstrip.add_event_listener("click", self._on_filmstrip_click)
             filmstrip.add_event_listener("mousescroll", self._on_precise_scroll)
+            filmstrip.add_event_listener("scroll", self._on_filmstrip_scroll)
+            filmstrip.add_event_listener("mousedown", self._on_filmstrip_interaction)
 
         sidebar = doc.get_element_by_id("sidebar")
         if sidebar:
@@ -226,20 +246,22 @@ class ImagePreviewPanel(Panel):
             img_container.add_event_listener("mouseover", self._on_img_mouseover)
             img_container.add_event_listener("mouseout", self._on_img_mouseout)
 
-        wf = doc.get_element_by_id("window-frame")
-
         doc.add_event_listener("keydown", self._on_keydown)
         doc.add_event_listener("resize", self._on_layout_resize)
-        if wf:
-            wf.add_event_listener("keydown", self._on_keydown)
+        # The document listener receives bubbling keys once, including native-window content.
 
         self._decorator_cache = {}
         self._dirty = True
         self._subscribe_reactive_state()
 
     def on_update(self, doc):
-        if not self._fit_to_window and self._image_paths and self._hover_image:
+        previous_state = (self._preview_state, self._preview_load_failed)
+        self._service_sample()
+        self._service_metadata()
+        if not self._color_picker_active and not self._fit_to_window and self._image_paths and self._hover_image:
             lf.ui.set_mouse_cursor_hand()
+
+        self._update_filmstrip(doc, bool(self._image_paths))
 
         current_params = self._get_training_params()
         if current_params != self._last_training_params:
@@ -247,37 +269,34 @@ class ImagePreviewPanel(Panel):
             self._dirty = True
 
         needs_redraw = False
-        if self._layout_pending:
-            self._layout_pending = False
+        if (self._preview_state == "loading" or self._preview_pending) and not self._dirty:
             self._update_main_image(doc, bool(self._image_paths))
             needs_redraw = True
-
-        if self._crossfade_pending:
-            if time.monotonic() - self._crossfade_start >= CROSSFADE_DURATION:
-                self._finalize_crossfade(doc)
+        if self._layout_pending and not self._dirty:
+            self._layout_pending = False
+            self._update_main_image(doc, bool(self._image_paths))
+            self._update_status(doc, bool(self._image_paths))
             needs_redraw = True
 
-        if self._scroll_target is not None:
-            self._tick_scroll(doc)
-            needs_redraw = True
+        if (self._preview_state, self._preview_load_failed) != previous_state:
+            self._dirty = True
 
         if self._dirty:
             self._dirty = False
             self._refresh_ui(doc)
-            if self._crossfade_pending or self._scroll_target is not None:
-                self._request_model_update()
             return True
-
-        if needs_redraw and (self._crossfade_pending or self._scroll_target is not None):
-            self._request_model_update()
 
         return needs_redraw
 
     def on_unmount(self, doc):
+        self._sample_request = None
+        self._metadata.close()
         self._unsubscribe_reactive_state()
         doc.remove_data_model("image_preview")
         self._handle = None
         self._doc = None
+        self._filmstrip_range = None
+        self._reset_preview()
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
@@ -298,9 +317,6 @@ class ImagePreviewPanel(Panel):
             self._image_info_cache.clear()
             self._path_stat_cache.clear()
             self._current_index = 0
-            self._prev_image_index = -1
-            self._crossfade_pending = False
-            self._scroll_target = None
             self._color_picker_active = False
             self._reset_view()
             self._close_panel()
@@ -318,6 +334,19 @@ class ImagePreviewPanel(Panel):
         if self._handle:
             w.request_model_update(self._handle)
 
+    def _request_async_update(self):
+        self._request_model_update()
+        lf.ui.request_redraw(0.03)
+
+    def _reset_preview(self):
+        self._requested_preview = ""
+        self._ready_preview = ""
+        self._preview_identity = None
+        self._preview_max_width = 0
+        self._preview_pending = False
+        self._preview_load_failed = False
+        self._active_image_layer = "main-image-a"
+
     def _mark_dirty(self):
         self._dirty = True
         self._request_model_update()
@@ -325,33 +354,25 @@ class ImagePreviewPanel(Panel):
     def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
              start_index: int, camera_uids: list[int] | None = None,
              camera_nodes: dict[int, tuple[int, str]] | None = None):
+        self._reset_preview()
         if not image_paths:
             return
 
         self._image_paths = [Path(p) for p in image_paths]
         self._mask_paths = [Path(p) if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
-        live_paths = {
-            str(path)
-            for path in self._image_paths + [p for p in self._mask_paths if p is not None]
-        }
-        previous_stats = self._path_stat_cache
-        previous_info = self._image_info_cache
-        self._path_stat_cache = {}
-        self._path_revision_cache = {}
-        for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
-            try:
-                stat = os.stat(native_path(path))
-                revision = (int(stat.st_mtime_ns), int(stat.st_size),
-                            int(stat.st_dev), int(stat.st_ino), int(stat.st_ctime_ns))
-                self._path_stat_cache[str(path)] = (True, *revision)
-                self._path_revision_cache[str(path)] = "-".join(str(value) for value in revision)
-            except OSError:
-                self._path_stat_cache[str(path)] = (False, 0, 0, 0, 0, 0)
-        self._image_info_cache = {
-            path: info for path, info in previous_info.items()
-            if path in live_paths and (path not in previous_stats
-                                       or previous_stats[path] == self._path_stat_cache[path])
-        }
+        live_paths = {str(p) for p in self._image_paths + [p for p in self._mask_paths if p]}
+        self._metadata.reset()
+        self._sample_request = None
+        self._sampled_color = None
+        self._action_error = ""
+        self._displayed_index = -1
+        self._preview_state = "loading"
+        self._color_picker_active = False
+        self._metadata_required = True
+        self._metadata_validated.clear()
+        self._image_info_cache = {p: v for p, v in self._image_info_cache.items() if p in live_paths}
+        self._path_stat_cache = {p: v for p, v in self._path_stat_cache.items() if p in live_paths}
+        self._path_revision_cache = {p: v for p, v in self._path_revision_cache.items() if p in live_paths}
         self._camera_uids = list(camera_uids) if camera_uids is not None else [-1] * len(image_paths)
         self._camera_nodes = dict(camera_nodes) if camera_nodes is not None else {}
         self._unbound_camera_generation = (
@@ -359,17 +380,17 @@ class ImagePreviewPanel(Panel):
             if camera_nodes is None and any(uid >= 0 for uid in self._camera_uids)
             else None
         )
-        self._current_index = min(start_index, len(image_paths) - 1)
+        self._filmstrip_range = None
+        self._ensure_selection_visible = True
+        self._current_index = max(0, min(start_index, len(image_paths) - 1))
         self._last_training_params = self._get_training_params()
         self._rotation_quadrants = 0
         self._reset_view()
         if self._pending_view_chrome:
             self._apply_view_chrome(self._pending_view_chrome)
             self._pending_view_chrome = None
-        self._prev_image_index = -1
-        self._crossfade_pending = False
-        self._scroll_target = None
         self._decorator_cache = {}
+        self._update_picker_cursor()
         self._mark_dirty()
 
     def _reset_pan(self):
@@ -389,20 +410,46 @@ class ImagePreviewPanel(Panel):
         new_idx = self._current_index + delta
         if 0 <= new_idx < len(self._image_paths):
             self._current_index = new_idx
+            self._ensure_selection_visible = True
+            self._sampled_color = None
+            self._action_error = ""
             self._reset_pan()
             self._refresh_immediately()
 
     def _go_to_image(self, index: int):
         if 0 <= index < len(self._image_paths):
             self._current_index = index
+            self._ensure_selection_visible = True
+            self._sampled_color = None
+            self._action_error = ""
             self._reset_pan()
             self._refresh_immediately()
 
     def _toggle_fit(self):
-        self._fit_to_window = not self._fit_to_window
         if self._fit_to_window:
-            self._reset_view()
+            self._actual_size()
+        else:
+            self._reset_view_and_refresh()
+
+    def _reset_view_and_refresh(self):
+        self._reset_view()
         self._mark_dirty()
+
+    def _actual_size(self):
+        self._zoom = 1.0 / max(1.0, lf.ui.get_ui_scale())
+        self._fit_to_window = False
+        self._reset_pan()
+        self._mark_dirty()
+
+    def _toggle_chrome(self, field):
+        setattr(self, field, not getattr(self, field))
+        self._mark_dirty()
+
+    def _toggle_picker(self):
+        if self._image_paths and self._preview_state == "ready" and self._sample_request is None:
+            self._color_picker_active = not self._color_picker_active
+            self._update_picker_cursor()
+            self._mark_dirty()
 
     def _copy_path_to_clipboard(self):
         if self._image_paths:
@@ -471,15 +518,27 @@ class ImagePreviewPanel(Panel):
         self._rotation_quadrants = (self._rotation_quadrants + delta_quadrants) % 4
         self._mark_dirty()
 
+    def _effective_zoom(self):
+        if self._image_paths and self._fit_to_window:
+            layout = self._get_image_layout(self._image_paths[self._current_index])
+            if layout:
+                return layout["scale"]
+        return self._zoom
+
     def _zoom_in(self):
-        self._zoom = min(ZOOM_MAX, self._zoom * 1.25)
+        self._zoom = self._clamp_zoom(self._effective_zoom() * 1.25)
         self._fit_to_window = False
         self._mark_dirty()
 
     def _zoom_out(self):
-        self._zoom = max(ZOOM_MIN, self._zoom / 1.25)
+        self._zoom = self._clamp_zoom(self._effective_zoom() / 1.25)
         self._fit_to_window = False
         self._mark_dirty()
+
+    @staticmethod
+    def _clamp_zoom(zoom):
+        ratio = max(1.0, lf.ui.get_ui_scale())
+        return max(ZOOM_MIN / ratio, min(ZOOM_MAX / ratio, zoom))
 
     def _has_valid_overlay(self) -> bool:
         if self._current_index >= len(self._mask_paths):
@@ -488,16 +547,41 @@ class ImagePreviewPanel(Panel):
         return mask_path is not None and self._path_stat_cache.get(str(mask_path), (False, 0, 0, 0, 0, 0))[0]
 
     def _close_panel(self):
+        self._sample_request = None
+        self._metadata.close()
         lf.ui.set_panel_enabled("lfs.image_preview", False)
 
     def _get_image_info(self, path: Path) -> tuple[int, int, int]:
-        key = str(path)
-        if key not in self._image_info_cache:
-            try:
-                self._image_info_cache[key] = lf.ui.get_image_info(key)
-            except Exception:
-                self._image_info_cache[key] = (0, 0, 0)
-        return self._image_info_cache[key]
+        return self._image_info_cache.get(str(path), (0, 0, 0))
+
+    def _service_metadata(self):
+        if not self._image_paths or self._sample_request is not None:
+            return
+        index = self._current_index
+        wanted = [(self._image_paths[index], True)]
+        if index < len(self._mask_paths) and self._mask_paths[index]:
+            wanted.append((self._mask_paths[index], False))
+        if self._filmstrip_range:
+            lo, hi = self._filmstrip_range[:2]
+            wanted.extend((self._image_paths[i], True) for i in range(lo, hi))
+        cached = {str(path): (self._path_stat_cache.get(str(path)), self._image_info_cache.get(str(path)))
+                  for path, full in wanted if full}
+        result, pending = self._metadata.tick(wanted, lf.ui.get_image_info, cached)
+        if result:
+            path, stat, info = result
+            key = str(path)
+            previous = self._path_stat_cache.get(key)
+            self._path_stat_cache[key] = stat
+            self._path_revision_cache[key] = "-".join(str(v) for v in stat[1:]) if stat[0] else "missing"
+            if info is not None:
+                self._image_info_cache[key] = info
+                self._metadata_validated.add(key)
+            elif previous != stat:
+                self._image_info_cache.pop(key, None)
+            self._mark_dirty()
+        if pending:
+            # Worker never calls RmlUI. A bounded UI poll also works in native windows.
+            self._request_async_update()
 
     @staticmethod
     def _format_aspect_ratio(w: int, h: int) -> str:
@@ -528,12 +612,14 @@ class ImagePreviewPanel(Panel):
         return (1, 0, False)
 
     def _make_preview_url(self, path: Path, cam_uid: int,
-                          thumb: int = 0, preview_mw: int = 0) -> str:
+                          thumb: int = 0, preview_mw: int = 0, dimensions=None, mask_overlay=False) -> str:
         rf, mw, ud = self._last_training_params
         revision = self._path_revision_cache.get(str(path), "missing")
-        return (f"preview://cam={cam_uid}&thumb={thumb}"
+        width, height, _ = dimensions or self._image_info_cache.get(str(path), (0, 0, 0))
+        return (f"preview://cam={cam_uid}&thumb={thumb}&w={width}&h={height}"
                 f"&rf={rf}&mw={mw}&pmw={preview_mw}"
-                f"&ud={1 if ud else 0}&rev={revision}&path={_encode_rml_path(path)}")
+                f"&ud={1 if ud else 0}&rev={revision}&refresh={self._refresh_revision}"
+                f"{'&mode=mask' if mask_overlay else ''}&path={_encode_rml_path(path)}")
 
     def _on_filmstrip_click(self, event):
         el = event.target()
@@ -543,14 +629,6 @@ class ImagePreviewPanel(Panel):
                 self._go_to_image(int(idx_str))
                 return
             el = el.parent()
-
-    def _on_fit_checkbox_change(self, _event):
-        cb = self._doc.get_element_by_id("cb-fit") if self._doc else None
-        if cb:
-            self._fit_to_window = cb.has_attribute("checked")
-            if self._fit_to_window:
-                self._reset_view()
-            self._mark_dirty()
 
     def _on_mask_checkbox_change(self, _event):
         cb = self._doc.get_element_by_id("cb-mask") if self._doc else None
@@ -568,6 +646,10 @@ class ImagePreviewPanel(Panel):
         except (TypeError, ValueError):
             return
 
+        is_filmstrip = self._doc and (scroll_el.id == "filmstrip"
+                                      or scroll_el is self._doc.get_element_by_id("filmstrip"))
+        if is_filmstrip:
+            self._on_filmstrip_interaction(event)
         max_scroll = max(0.0, scroll_el.scroll_height - scroll_el.client_height)
         if max_scroll <= 0.0:
             event.stop_propagation()
@@ -577,6 +659,9 @@ class ImagePreviewPanel(Panel):
         if abs(new_scroll - scroll_el.scroll_top) > 0.01:
             scroll_el.scroll_top = new_scroll
 
+        if is_filmstrip:
+            self._update_filmstrip(self._doc, bool(self._image_paths))
+
         event.stop_propagation()
 
     def _on_wheel(self, event):
@@ -584,17 +669,36 @@ class ImagePreviewPanel(Panel):
         if delta == 0:
             return
         event.stop_propagation()
-        if delta > 0:
-            self._zoom = min(ZOOM_MAX, self._zoom * 1.15)
-        else:
-            self._zoom = max(ZOOM_MIN, self._zoom / 1.15)
+        self._zoom_at_pointer(1.15 if delta > 0 else 1 / 1.15, event)
+
+    def _zoom_at_pointer(self, factor, event):
+        if not self._image_paths:
+            return
+        path = self._image_paths[self._current_index]
+        viewport = self._doc.get_element_by_id("image-viewport") if self._doc else None
+        old = self._get_image_layout(path, viewport)
+        if not old:
+            return
+        x = (float(event.get_parameter("mouse_x", "0")) - viewport.absolute_left) / old["dp_ratio"]
+        y = (float(event.get_parameter("mouse_y", "0")) - viewport.absolute_top) / old["dp_ratio"]
+        source = view_to_source(old, self._rotation_quadrants, x, y)
+        self._zoom = self._clamp_zoom(old["scale"] * factor)
         self._fit_to_window = False
+        new = self._get_image_layout(path, viewport)
+        nx, ny = source_to_view(new, self._rotation_quadrants, *source)
+        self._pan_x += x - nx
+        self._pan_y += y - ny
         self._mark_dirty()
 
     def _on_img_mousedown(self, event):
         button = int(event.get_parameter("button", "0"))
         if button != 0:
             return
+        target = event.target()
+        while target is not None:
+            if target.tag_name in ("button", "input", "select"):
+                return
+            target = target.parent()
 
         if self._color_picker_active and self._image_paths:
             self._perform_color_pick(event)
@@ -629,13 +733,8 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
 
     def _on_layout_resize(self, _event):
+        self._layout_pending = True
         self._mark_dirty()
-
-    def _get_active_layer_id(self):
-        return "main-image-a" if self._active_layer == "a" else "main-image-b"
-
-    def _get_inactive_layer_id(self):
-        return "main-image-b" if self._active_layer == "a" else "main-image-a"
 
     def _get_rotation_degrees(self) -> int:
         return (self._rotation_quadrants % 4) * 90
@@ -649,8 +748,8 @@ class ImagePreviewPanel(Panel):
             return None
 
         dp_ratio = max(1.0, lf.ui.get_ui_scale())
-        vw = max(1, int(viewport.client_width / dp_ratio))
-        vh = max(1, int(viewport.client_height / dp_ratio))
+        vw = max(1.0, viewport.client_width / dp_ratio)
+        vh = max(1.0, viewport.client_height / dp_ratio)
         rotated_w, rotated_h = (h, w) if self._rotation_quadrants % 2 else (w, h)
 
         if self._fit_to_window:
@@ -658,8 +757,8 @@ class ImagePreviewPanel(Panel):
         else:
             scale = self._zoom
 
-        dw = max(1, int(round(w * scale)))
-        dh = max(1, int(round(h * scale)))
+        dw = max(1.0 / dp_ratio, w * scale)
+        dh = max(1.0 / dp_ratio, h * scale)
 
         ox = (vw - dw) * 0.5
         oy = (vh - dh) * 0.5
@@ -690,37 +789,28 @@ class ImagePreviewPanel(Panel):
         ox = layout["offset_x"]
         oy = layout["offset_y"]
 
-        img_el.set_property("width", f"{dw}dp")
-        img_el.set_property("height", f"{dh}dp")
+        img_el.set_property("width", f"{dw:.9g}dp")
+        img_el.set_property("height", f"{dh:.9g}dp")
         img_el.set_property("max-width", "none")
         img_el.set_property("max-height", "none")
-        img_el.set_property("left", f"{int(round(ox))}dp")
-        img_el.set_property("top", f"{int(round(oy))}dp")
+        img_el.set_property("left", f"{ox:.9g}dp")
+        img_el.set_property("top", f"{oy:.9g}dp")
         img_el.set_property("transform", f"rotate({self._get_rotation_degrees()}deg)")
         img_el.remove_property("margin-left")
         img_el.remove_property("margin-top")
 
     def _get_main_preview_max_width(self, doc, path: Path) -> int:
         if not self._fit_to_window:
-            return 0
-
+            return max(self._get_image_info(path)[:2])
         viewport = doc.get_element_by_id("image-viewport") if doc else None
-        if not viewport:
-            return 0
-
-        dp_ratio = max(1.0, lf.ui.get_ui_scale())
-        vw = int(viewport.client_width / dp_ratio)
-        vh = int(viewport.client_height / dp_ratio)
-        if vw <= 1 or vh <= 1:
-            return 0
-
-        preview_max = max(vw, vh) * 1.25
-
-        w, h, _ = self._get_image_info(path)
-        if w > 0 and h > 0:
-            preview_max = min(preview_max, max(w, h))
-
-        return max(512, (int(preview_max) + 255) // 256 * 256)
+        layout = self._get_image_layout(path, viewport)
+        if not layout:
+            return 512
+        # Fit starts display-sized. Leaving Fit requests the source once, not a new
+        # decode for every zoom step. The current source retains its largest request.
+        source_max = max(layout["width"], layout["height"])
+        target = min(source_max, source_max * layout["scale"] * layout["dp_ratio"] * 1.25)
+        return max(512, (int(target) + 255) // 256 * 256)
 
     def _set_decorator(self, element, cache_key: str, decorator: str):
         if not element:
@@ -743,172 +833,193 @@ class ImagePreviewPanel(Panel):
         self._update_nav_arrows(doc, has_images)
         self._update_view_controls(doc, has_images)
         self._update_status(doc, has_images)
+        self._update_toolbar(doc, has_images)
 
+        extra = (self._show_help, bool(self._sampled_color), self._action_error,
+                 RuntimeState.language_generation.value)
         if (self._show_info != self._layout_show_info
-                or self._show_filmstrip != self._layout_show_filmstrip):
+                or self._show_filmstrip != self._layout_show_filmstrip or extra != self._layout_extra):
             self._layout_show_info = self._show_info
             self._layout_show_filmstrip = self._show_filmstrip
+            self._layout_extra = extra
             # RmlUI resolves chrome visibility after this hook. Measure once more
             # using the resulting viewport, without repeating metadata refresh.
             self._layout_pending = True
+        if self._layout_pending:
             self._request_model_update()
 
-        if hasattr(self, '_handle'):
+        if self._handle:
             self._handle.dirty("panel_label")
 
     def _update_main_image(self, doc, has_images: bool):
-        layer_a = doc.get_element_by_id("main-image-a")
-        layer_b = doc.get_element_by_id("main-image-b")
-        mask_img = doc.get_element_by_id("mask-overlay")
-        no_text = doc.get_element_by_id("no-image-text")
-
-        if not has_images:
-            for layer in (layer_a, layer_b):
+        mask = doc.get_element_by_id("mask-overlay")
+        message = doc.get_element_by_id("no-image-text")
+        self._displayed_index = -1
+        self._preview_state = "empty"
+        path = self._image_paths[self._current_index] if has_images else None
+        dimensions = self._get_image_info(path) if path else (0, 0, 0)
+        validated = path is None or not self._metadata_required or str(path) in self._metadata_validated
+        if path and validated and dimensions[0] > 0 and dimensions[1] > 0:
+            uid = self._current_camera_uid()
+            # All source/geometry/revision parameters except decode resolution.
+            identity = self._make_preview_url(path, uid)
+            if identity != self._preview_identity:
+                self._reset_preview()
+                self._preview_identity = identity
+                self._sample_request = None
+                self._sampled_color = None
+            self._preview_max_width = max(self._preview_max_width, self._get_main_preview_max_width(doc, path))
+            url = self._make_preview_url(path, uid, preview_mw=self._preview_max_width)
+            if url != self._requested_preview:
+                self._requested_preview, self._requested_at = url, time.monotonic()
+                self._preview_load_failed = False
+            target = self._active_image_layer
+            if self._ready_preview and url != self._ready_preview:
+                target = "main-image-b" if target == "main-image-a" else "main-image-a"
+            # The staging layer is rendered behind the ready layer. Hiding it with
+            # display:none would prevent RmlUi from requesting its texture.
+            for layer_id in ("main-image-a", "main-image-b"):
+                layer = doc.get_element_by_id(layer_id)
+                if not layer:
+                    continue
+                active = layer_id == self._active_image_layer and bool(self._ready_preview)
+                staging = layer_id == target and not self._preview_load_failed
+                source = self._ready_preview if active else url if staging else ""
+                layer.set_attribute("class", "image-layer preview-active" if active else
+                                    "image-layer" if source else "image-layer hidden")
+                self._set_decorator(layer, layer_id, f"image({source})" if source else "none")
+                if source:
+                    self._apply_zoom(layer, path)
+            state = "error" if self._preview_load_failed else lf.ui.preview_texture_status(url, doc)
+            if state == "ready":
+                self._ready_preview = url
+                self._active_image_layer = target
+                self._preview_pending = False
+                for layer_id in ("main-image-a", "main-image-b"):
+                    layer = doc.get_element_by_id(layer_id)
+                    if layer:
+                        layer.set_attribute("class", "image-layer preview-active" if layer_id == target else "image-layer hidden")
+                        if layer_id != target:
+                            self._set_decorator(layer, layer_id, "none")
+            elif state == "error" or (state == "unknown" and time.monotonic() - self._requested_at > 5):
+                if url == self._ready_preview:
+                    self._ready_preview = ""
+                self._preview_load_failed = True
+                self._preview_pending = False
+                if target != self._active_image_layer or not self._ready_preview:
+                    layer = doc.get_element_by_id(target)
+                    if layer:
+                        layer.set_attribute("class", "image-layer hidden")
+                        self._set_decorator(layer, target, "none")
+            else:
+                self._preview_pending = True
+            self._preview_state = "ready" if self._ready_preview else "error" if self._preview_load_failed else "loading"
+            if self._ready_preview:
+                self._displayed_index = self._current_index
+        else:
+            self._reset_preview()
+            for layer_id in ("main-image-a", "main-image-b"):
+                layer = doc.get_element_by_id(layer_id)
                 if layer:
                     layer.set_attribute("class", "image-layer hidden")
-            self._set_decorator(layer_a, "main-image-a", "none")
-            self._set_decorator(layer_b, "main-image-b", "none")
-            if mask_img:
-                mask_img.set_attribute("class", "")
-            self._set_decorator(mask_img, "mask-overlay", "none")
-            if no_text:
-                no_text.set_attribute("class", "")
-                no_text.set_text(lf.ui.tr("image_preview.no_images_loaded"))
-            self._prev_image_index = -1
-            self._crossfade_pending = False
-            return
-
-        path = self._image_paths[self._current_index]
-        uid = self._camera_uids[self._current_index] if self._current_index < len(self._camera_uids) else -1
-        preview_mw = self._get_main_preview_max_width(doc, path)
-        preview_dec = f"image({self._make_preview_url(path, uid, preview_mw=preview_mw)})"
-        active_layer = doc.get_element_by_id(self._get_active_layer_id())
-        inactive_layer = doc.get_element_by_id(self._get_inactive_layer_id())
-
-        if no_text:
-            no_text.set_attribute("class", "hidden")
-
-        if self._prev_image_index == -1:
-            if active_layer:
-                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
-                active_layer.set_attribute("class", "image-layer")
-                self._apply_zoom(active_layer, path)
-            if inactive_layer:
-                inactive_layer.set_attribute("class", "image-layer hidden")
-                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
-            self._prev_image_index = self._current_index
-        elif self._prev_image_index != self._current_index:
-            if self._crossfade_pending and inactive_layer:
-                inactive_layer.set_attribute("class", "image-layer hidden")
-                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
-
-            if inactive_layer:
-                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), preview_dec)
-                inactive_layer.set_attribute("class", "image-layer")
-                self._apply_zoom(inactive_layer, path)
-            if active_layer:
-                active_layer.set_attribute("class", "image-layer fading-out")
-
-            self._active_layer = "b" if self._active_layer == "a" else "a"
-            self._crossfade_pending = True
-            self._crossfade_start = time.monotonic()
-            self._prev_image_index = self._current_index
-        else:
-            if active_layer:
-                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
-                self._apply_zoom(active_layer, path)
-
-        active_layer = doc.get_element_by_id(self._get_active_layer_id())
-        show_mask = self._show_overlay and self._has_valid_overlay()
-        if mask_img:
+                    self._set_decorator(layer, layer_id, "none")
+            if path:
+                self._preview_state = "error" if validated and str(path) in self._image_info_cache else "loading"
+        if self._preview_state == "loading" or self._preview_pending:
+            self._request_async_update()
+        if message:
+            keys = {"empty": "image_preview.no_images_loaded", "loading": "image_preview.loading",
+                    "error": "image_preview.load_failed"}
+            message.set_attribute("class", "hidden" if self._preview_state == "ready" else "")
+            if self._preview_state != "ready":
+                label = doc.get_element_by_id("preview-state-text") or message
+                label.set_text(lf.ui.tr(keys[self._preview_state]))
+        show_mask = self._preview_state == "ready" and self._show_overlay and self._has_valid_overlay()
+        if mask:
+            mask.set_attribute("class", "visible" if show_mask else "")
             if show_mask:
                 mask_path = self._mask_paths[self._current_index]
-                self._set_decorator(mask_img, "mask-overlay",
-                                    f"image({_encode_rml_path(mask_path)})")
-                mask_img.set_attribute("class", "visible")
-                self._apply_zoom(mask_img, path)
+                # The URL is versioned just like the source, avoiding stale masks after replacement.
+                mask_url = self._make_preview_url(mask_path, -1, preview_mw=self._preview_max_width, dimensions=dimensions, mask_overlay=True)
+                self._set_decorator(mask, "mask-overlay", f"image({mask_url})")
+                self._apply_zoom(mask, path)
             else:
-                mask_img.set_attribute("class", "")
-                self._set_decorator(mask_img, "mask-overlay", "none")
+                self._set_decorator(mask, "mask-overlay", "none")
 
-    def _finalize_crossfade(self, doc):
-        outgoing_id = self._get_inactive_layer_id()
-        outgoing = doc.get_element_by_id(outgoing_id)
-        if outgoing:
-            outgoing.set_attribute("class", "image-layer hidden")
-            self._set_decorator(outgoing, outgoing_id, "none")
-        self._crossfade_pending = False
+    def _on_filmstrip_scroll(self, _event):
+        # Layout and programmatic scrolling also emit scroll events. Only input
+        # cancels navigation's visibility request, after the extent is published.
+        if self._doc and not self._filmstrip_scrolling:
+            self._update_filmstrip(self._doc, bool(self._image_paths))
+
+    def _on_filmstrip_interaction(self, _event):
+        self._ensure_selection_visible = False
+        self._filmstrip_follow_selection = False
 
     def _update_filmstrip(self, doc, has_images: bool):
         filmstrip = doc.get_element_by_id("filmstrip")
-        if not filmstrip:
+        if not filmstrip or not self._handle:
             return
-
+        filmstrip.set_attribute("class", "" if self._show_filmstrip else "hidden")
         if not self._show_filmstrip:
-            filmstrip.set_attribute("class", "hidden")
             return
-        filmstrip.set_attribute("class", "")
-
-        if not has_images:
-            self._handle.update_record_list("thumbs", [])
+        count = len(self._image_paths) if has_images else 0
+        ratio = max(1.0, lf.ui.get_ui_scale())
+        height = max(1.0, float(filmstrip.client_height))
+        if self._ensure_selection_visible:
+            self._filmstrip_follow_selection = True
+        if (self._filmstrip_follow_selection and self._filmstrip_viewport_height is not None
+                and abs(height - self._filmstrip_viewport_height) > 0.5):
+            # Translation, wrapping and model layout can resize the viewport
+            # after a successful scroll. Follow navigation until the user scrolls.
+            self._ensure_selection_visible = True
+        self._filmstrip_viewport_height = height
+        top = max(0.0, float(filmstrip.scroll_top))
+        actual_top = top
+        item_top = self._current_index * THUMB_ROW_DP * ratio
+        item_bottom = item_top + THUMB_ROW_DP * ratio
+        if self._ensure_selection_visible and count:
+            if item_top < top:
+                top = item_top
+            elif item_bottom > top + height:
+                top = item_bottom - height
+        lo, hi = visible_thumbnail_range(count, top, height, ratio)
+        key = (lo, hi, self._current_index,
+               tuple((self._path_revision_cache.get(str(self._image_paths[i]), "missing"),
+                      self._image_info_cache.get(str(self._image_paths[i]))) for i in range(lo, hi)),
+               self._refresh_revision)
+        if key == self._filmstrip_range:
+            if self._ensure_selection_visible and count:
+                # The unchanged model has had a chance to lay out its spacers.
+                self._filmstrip_scrolling = True
+                try:
+                    filmstrip.scroll_top = top
+                finally:
+                    self._filmstrip_scrolling = False
+                actual_top = max(0.0, float(filmstrip.scroll_top))
+                self._ensure_selection_visible = not (
+                    actual_top <= item_top + 1.0 and item_bottom <= actual_top + height + 1.0)
+                if self._ensure_selection_visible:
+                    self._request_model_update()
             return
-
-        half = FILMSTRIP_WINDOW // 2
-        n = len(self._image_paths)
-        lo = max(0, self._current_index - half)
-        hi = min(n, self._current_index + half)
-
-        self._filmstrip_top_spacer = lo * 46.0
-        self._filmstrip_bottom_spacer = max(0, n - hi) * 46.0
+        self._filmstrip_range = key
+        self._filmstrip_top_spacer = lo * THUMB_ROW_DP
+        self._filmstrip_bottom_spacer = max(0, count - hi) * THUMB_ROW_DP
         records = []
         for i in range(lo, hi):
             path = self._image_paths[i]
             uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
-            dec = f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)})"
-            records.append({
-                "index": i,
-                "label": f"{i + 1:02d}",
-                "selected": i == self._current_index,
-                "decorator": dec,
-            })
+            records.append({"index": i, "label": f"{i + 1:,}", "name": path.name,
+                            "selected": i == self._current_index,
+                            "decorator": f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)} contain)"})
         self._handle.update_record_list("thumbs", records)
         self._handle.dirty("filmstrip_top_spacer_height")
         self._handle.dirty("filmstrip_bottom_spacer_height")
-
-        self._scroll_filmstrip_smooth(filmstrip, self._current_index)
-
-    def _scroll_filmstrip_smooth(self, filmstrip, index: int):
-        children = filmstrip.children()
-        child_index = index - max(0, self._current_index - FILMSTRIP_WINDOW // 2) + 1
-        if child_index < 1 or child_index >= len(children) - 1:
-            return
-        el = children[child_index]
-        item_top = el.offset_top
-        item_bot = item_top + el.offset_height
-        view_h = filmstrip.client_height
-        if view_h <= 0:
-            return
-        st = filmstrip.scroll_top
-        if item_top < st:
-            target = item_top
-        elif item_bot > st + view_h:
-            target = item_bot - view_h
-        else:
-            return
-        self._scroll_target = target
-        self._scroll_origin = st
-        self._scroll_start_time = time.monotonic()
-
-    def _tick_scroll(self, doc):
-        filmstrip = doc.get_element_by_id("filmstrip")
-        if not filmstrip:
-            self._scroll_target = None
-            return
-        t = min(1.0, (time.monotonic() - self._scroll_start_time) / SCROLL_DURATION)
-        t = t * (2.0 - t)
-        filmstrip.scroll_top = self._scroll_origin + (self._scroll_target - self._scroll_origin) * t
-        if t >= 1.0:
-            self._scroll_target = None
+        if self._ensure_selection_visible and count:
+            self._ensure_selection_visible = not (
+                actual_top <= item_top + 1.0 and item_bottom <= actual_top + height + 1.0)
+            if self._ensure_selection_visible:
+                self._request_model_update()
 
     def _update_nav_arrows(self, doc, has_images: bool):
         prev_el = doc.get_element_by_id("nav-prev")
@@ -983,9 +1094,9 @@ class ImagePreviewPanel(Panel):
         train_icon = doc.get_element_by_id("btn-toggle-training-icon")
         if train_icon:
             icon_src = (
-                "../icon/scene/visible.png"
+                "../icon/scene/unlocked.png"
                 if node and node.training_enabled
-                else "../icon/scene/hidden.png"
+                else "../icon/scene/locked.png"
             )
             train_icon.set_attribute("src", icon_src)
 
@@ -1004,7 +1115,6 @@ class ImagePreviewPanel(Panel):
         _set_text(doc, "sidebar-file-header", tr("image_preview.file_section"))
         _set_text(doc, "sidebar-image-label", tr("image_preview.image_section"))
         _set_text(doc, "sidebar-storage-label", tr("image_preview.storage_section"))
-        _set_text(doc, "sidebar-view-label", tr("image_preview.view_section"))
 
         if has_images:
             path = self._image_paths[self._current_index]
@@ -1021,15 +1131,13 @@ class ImagePreviewPanel(Panel):
                 _set_text(doc, "sidebar-aspect", self._format_aspect_ratio(w, h))
             else:
                 for eid in ("sidebar-width", "sidebar-height", "sidebar-mp", "sidebar-aspect"):
-                    _set_text(doc, eid, "")
+                    _set_text(doc, eid, "—")
 
             _set_text(doc, "sidebar-channels", self._get_channel_label(c))
 
             _set_text(doc, "sidebar-format", ext)
-            if path.exists():
-                _set_text(doc, "sidebar-size", self._format_size(path.stat().st_size))
-            else:
-                _set_text(doc, "sidebar-size", "")
+            stat = self._path_stat_cache.get(str(path))
+            _set_text(doc, "sidebar-size", self._format_size(stat[2]) if stat and stat[0] else "—")
 
             full_path = str(path)
             display_dir = str(path.parent)
@@ -1045,15 +1153,6 @@ class ImagePreviewPanel(Panel):
                         "sidebar-aspect", "sidebar-channels", "sidebar-format",
                         "sidebar-size", "sidebar-filepath"):
                 _set_text(doc, eid, "")
-
-        cb_fit = doc.get_element_by_id("cb-fit")
-        if cb_fit:
-            is_checked = cb_fit.has_attribute("checked")
-            if self._fit_to_window and not is_checked:
-                cb_fit.set_attribute("checked", "")
-            elif not self._fit_to_window and is_checked:
-                cb_fit.remove_attribute("checked")
-        _set_text(doc, "cb-fit-label", tr("image_preview.fit_to_window"))
 
         has_mask = self._has_valid_overlay()
         mask_section = doc.get_element_by_id("sidebar-mask-section")
@@ -1092,90 +1191,193 @@ class ImagePreviewPanel(Panel):
                 if not button.has_attribute("disabled"):
                     button.set_attribute("disabled", "")
 
+    def _refresh_sources(self):
+        node = self._current_camera_node(resolve_unbound=True)
+        if node is not None and self._current_index < len(self._mask_paths):
+            self._mask_paths[self._current_index] = Path(node.mask_path) if node.mask_path else None
+        self._metadata.reset()
+        self._sample_request = None
+        self._color_picker_active = False
+        self._displayed_index = -1
+        self._preview_state = "loading"
+        self._update_picker_cursor()
+        self._refresh_revision += 1
+        self._action_error = ""
+        self._metadata_validated.clear()
+        self._metadata_required = True
+        self._sampled_color = None
+        if self._image_paths:
+            # Explicit Refresh also handles tools that preserve a file's timestamps.
+            self._image_info_cache.pop(str(self._image_paths[self._current_index]), None)
+        self._mark_dirty()
+
+    def _update_toolbar(self, doc, has_images):
+        tr = lf.ui.tr
+        labels = {"btn-fit": "image_preview.fit", "btn-info": "image_preview.info",
+                  "btn-thumbnails": "image_preview.thumbnails", "btn-help": "image_preview.help",
+                  "btn-picker": "image_preview.color_picker", "btn-refresh": "image_preview.refresh",
+                  "btn-apply-render-color": "image_preview.apply_render_color",
+                  "btn-apply-training-color": "image_preview.apply_training_color"}
+        for eid, key in labels.items():
+            _set_text(doc, eid, tr(key))
+        node = self._current_camera_node(resolve_unbound=True) if has_images else None
+        for eid in ("btn-go-to-camera", "btn-gt-compare", "btn-toggle-training"):
+            el = doc.get_element_by_id(eid)
+            if el:
+                self._set_disabled(el, node is None)
+                if node is None:
+                    el.set_attribute("title", tr("image_preview.camera_unavailable"))
+        for eid in ("btn-fit", "btn-actual-size", "btn-zoom-in", "btn-zoom-out", "btn-picker", "btn-refresh"):
+            el = doc.get_element_by_id(eid)
+            if el:
+                self._set_disabled(el, not has_images or (eid == "btn-picker" and
+                                   (self._preview_state != "ready" or self._sample_request is not None)))
+        for eid, active in (("btn-info", self._show_info), ("btn-thumbnails", self._show_filmstrip),
+                            ("btn-help", self._show_help), ("btn-fit", self._fit_to_window),
+                            ("btn-picker", self._color_picker_active)):
+            el = doc.get_element_by_id(eid)
+            if el:
+                el.set_attribute("aria-pressed", "true" if active else "false")
+                el.set_attribute("class", "btn btn--primary" if active else "btn")
+        help_el = doc.get_element_by_id("shortcut-help")
+        if help_el:
+            help_el.set_attribute("class", "" if self._show_help else "hidden")
+        sample = doc.get_element_by_id("sampled-color-controls")
+        if sample:
+            sample.set_attribute("class", "" if self._sampled_color else "hidden")
+        if self._sampled_color:
+            _set_text(doc, "sampled-color-value", "RGB " + ", ".join(f"{c:.3f}" for c in self._sampled_color))
+        for destination in ("render", "training"):
+            button = doc.get_element_by_id(f"btn-apply-{destination}-color")
+            if button:
+                available = self._can_apply_color(destination)
+                self._set_disabled(button, not available)
+                button.set_attribute("title", "" if available else tr("training_panel.parameters_unavailable"))
+        _set_text(doc, "preview-message", self._action_error or
+                  (lf.ui.tr("image_preview.load_failed") if self._preview_load_failed and self._ready_preview else ""))
+
+    def _can_apply_color(self, destination):
+        if self._sampled_color is None:
+            return False
+        if destination == "render":
+            return lf.get_render_settings() is not None
+        params = lf.optimization_params()
+        return params is not None and params.has_params()
+
+    @staticmethod
+    def _set_disabled(element, disabled):
+        if disabled:
+            element.set_attribute("disabled", "")
+        elif element.has_attribute("disabled"):
+            element.remove_attribute("disabled")
+
+    @staticmethod
+    def _activate_if_enabled(event, action):
+        element = event.current_target()
+        if element is not None and not element.has_attribute("disabled"):
+            action(event)
+
+    def _apply_sampled_color(self, destination):
+        if self._sampled_color is None:
+            return
+        color = self._sampled_color
+        # Project/scene replacement clears the shared history. Ordinary scene
+        # mutations (including rename and its undo) must not invalidate replay.
+        try:
+            if destination == "render":
+                settings = lf.get_render_settings()
+                if settings is None:
+                    raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
+                previous = tuple(settings.get("background_color"))
+                def write(value):
+                    # Render settings are snapshots: reuse would restore unrelated old settings.
+                    current = lf.get_render_settings()
+                    if current is None:
+                        raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
+                    current.set("background_color", value)
+            else:
+                params = lf.optimization_params()
+                if params is None or not params.has_params():
+                    raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
+                previous = tuple(params.bg_color)
+                def write(value):
+                    current = lf.optimization_params()
+                    if current is None or not current.has_params():
+                        raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
+                    current.bg_color = value
+            write(color)
+            try:
+                label = "image_preview.apply_render_color" if destination == "render" else "image_preview.apply_training_color"
+                lf.undo.push(lf.ui.tr(label),
+                             lambda: write(previous), lambda: write(color),
+                             scope="parameters", estimated_bytes=48)
+            except Exception:
+                write(previous)
+                raise
+            self._action_error = ""
+        except Exception as error:
+            self._action_error = str(error)
+        self._mark_dirty()
+
     def _update_status(self, doc, has_images: bool):
-        ids = ("st-w", "st-h", "st-ch", "st-zoom", "st-position")
+        ids = ("st-zoom", "st-position")
         if not has_images:
             for sid in ids:
                 _set_text(doc, sid, "")
             return
 
-        path = self._image_paths[self._current_index]
-        w, h, c = self._get_image_info(path)
-
-        _set_text(doc, "st-w", f"W {w}" if w > 0 else "")
-        _set_text(doc, "st-h", f"H {h}" if h > 0 else "")
-        _set_text(doc, "st-ch", f"CH {c}")
         _set_text(doc, "st-zoom", f"{lf.ui.tr('image_preview.zoom')} {self._get_zoom_display()}")
         _set_text(doc, "st-position", f"{self._current_index + 1:,} / {len(self._image_paths):,}")
 
     # -- Color Picker --
 
     def _perform_color_pick(self, event):
-        """Sample the average color at the clicked position and set as bg_color."""
+        """Sample off-thread; changing either background requires an explicit command."""
+        if self._sample_request is not None:
+            return
+        if self._displayed_index != self._current_index:
+            return
         path = self._image_paths[self._current_index]
         viewport = self._doc.get_element_by_id("image-viewport") if self._doc else None
         layout = self._get_image_layout(path, viewport)
         if not layout:
             return
 
-        w = layout["width"]
-        h = layout["height"]
-        dp_ratio = layout["dp_ratio"]
-        scale = layout["scale"]
-        ox = layout["offset_x"]
-        oy = layout["offset_y"]
-        cx = ox + layout["draw_width"] * 0.5
-        cy = oy + layout["draw_height"] * 0.5
-
-        # Get click position relative to the viewport
-        vp_left = viewport.absolute_left
-        vp_top = viewport.absolute_top
-        mx = float(event.get_parameter("mouse_x", "0")) / dp_ratio - vp_left / dp_ratio
-        my = float(event.get_parameter("mouse_y", "0")) / dp_ratio - vp_top / dp_ratio
-
-        dx = mx - cx
-        dy = my - cy
-        rotation = self._rotation_quadrants % 4
-        if rotation == 1:
-            ux = dy
-            uy = -dx
-        elif rotation == 2:
-            ux = -dx
-            uy = -dy
-        elif rotation == 3:
-            ux = -dy
-            uy = dx
-        else:
-            ux = dx
-            uy = dy
-
-        ix = int(round(ux / scale + w * 0.5))
-        iy = int(round(uy / scale + h * 0.5))
-
-        if ix < 0 or ix >= w or iy < 0 or iy >= h:
+        ratio = layout["dp_ratio"]
+        x = (float(event.get_parameter("mouse_x", "0")) - viewport.absolute_left) / ratio
+        y = (float(event.get_parameter("mouse_y", "0")) - viewport.absolute_top) / ratio
+        sx, sy = view_to_source(layout, self._rotation_quadrants, x, y)
+        if not (0 <= sx < layout["width"] and 0 <= sy < layout["height"]):
             return
+        ix, iy = int(sx), int(sy)
 
-        try:
-            r, g, b = lf.ui.sample_image_color(str(path), ix, iy, 10)
-        except Exception:
-            return
-
-        color = (r, g, b)
-        try:
-            params = lf.optimization_params()
-            params.bg_color = color
-        except Exception:
-            pass
-        try:
-            rs = lf.get_render_settings()
-            if rs:
-                rs.set("background_color", color)
-        except Exception:
-            pass
-
+        future = self._metadata.sample(path, self._path_stat_cache.get(str(path)), ix, iy,
+                                       lf.ui.sample_image_color)
+        self._sample_request = (str(path), self._path_revision_cache.get(str(path)), future)
+        self._sampled_color = None
+        self._action_error = ""
         self._color_picker_active = False
         self._update_picker_cursor()
         self._mark_dirty()
+
+    def _service_sample(self):
+        if self._sample_request is None:
+            return
+        path, revision, future = self._sample_request
+        if not future.done():
+            self._request_async_update()
+            return
+        self._sample_request = None
+        self._mark_dirty()
+        if (not self._image_paths or str(self._image_paths[self._current_index]) != path
+                or self._path_revision_cache.get(path) != revision):
+            return
+        try:
+            self._sampled_color = future.result()
+        except SourceChangedError:
+            self._action_error = lf.ui.tr("image_preview.source_changed")
+        except Exception as error:
+            self._action_error = lf.ui.tr("image_preview.color_sample_failed").format(str(error))
 
     def _update_picker_cursor(self):
         """Toggle the picker-active CSS class on the image container."""
@@ -1191,7 +1393,23 @@ class ImagePreviewPanel(Panel):
     # -- Keyboard --
 
     def _on_keydown(self, event):
+        target = event.target()
+        while target is not None:
+            if target.tag_name.lower() in ("input", "textarea", "select"):
+                return
+            if target.has_attribute("contenteditable"):
+                return
+            target = target.parent()
+        if any(
+                event.get_bool_parameter(name, False)
+                for name in ("ctrl_key", "alt_key", "meta_key", "command_key")):
+            return
         key = int(event.get_parameter("key_identifier", "0"))
+
+        if key == KI_SPACE:
+            target = event.target()
+            if target is not None and target.tag_name == "button":
+                return
 
         if key == KI_LEFT or key == KI_UP:
             self._navigate(-1)
@@ -1222,10 +1440,7 @@ class ImagePreviewPanel(Panel):
                 self._mark_dirty()
             event.stop_propagation()
         elif key == KI_1:
-            self._zoom = 1.0
-            self._fit_to_window = False
-            self._reset_pan()
-            self._mark_dirty()
+            self._actual_size()
             event.stop_propagation()
         elif key == KI_OEM_PLUS or key == KI_ADD:
             self._zoom_in()
@@ -1235,27 +1450,24 @@ class ImagePreviewPanel(Panel):
             event.stop_propagation()
         elif key == KI_SPACE:
             if self._fit_to_window:
-                self._fit_to_window = False
-                self._zoom = 1.0
-                self._reset_pan()
+                self._actual_size()
             else:
-                self._reset_view()
-            self._mark_dirty()
+                self._reset_view_and_refresh()
             event.stop_propagation()
         elif key == KI_R:
             self._reset_view()
             self._mark_dirty()
             event.stop_propagation()
         elif key == KI_C:
-            if self._image_paths:
-                self._color_picker_active = not self._color_picker_active
-                self._update_picker_cursor()
-                self._mark_dirty()
+            self._toggle_picker()
             event.stop_propagation()
         elif key == KI_ESCAPE:
             if self._color_picker_active:
                 self._color_picker_active = False
                 self._update_picker_cursor()
+                self._mark_dirty()
+            elif self._show_help:
+                self._show_help = False
                 self._mark_dirty()
             else:
                 self._close_panel()
@@ -1264,12 +1476,19 @@ class ImagePreviewPanel(Panel):
     # -- Helpers --
 
     def _get_zoom_display(self) -> str:
+        ratio = max(1.0, lf.ui.get_ui_scale())
         if self._fit_to_window:
+            layout = self._get_image_layout(self._image_paths[self._current_index]) if self._image_paths else None
+            if layout:
+                percentage = round(layout["scale"] * ratio * 100, 6)
+                return f"{percentage:.0f}% · {lf.ui.tr('image_preview.fit')}"
             return lf.ui.tr("image_preview.fit")
-        return f"{self._zoom * 100:.0f}%"
+        return f"{self._zoom * ratio * 100:.0f}%"
 
     @staticmethod
     def _get_channel_label(channels: int) -> str:
+        if channels <= 0:
+            return "—"
         if channels == 1:
             return lf.ui.tr("image_preview.channel_gray")
         if channels == 2:
@@ -1303,9 +1522,7 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
     lf.ui.set_panel_enabled("lfs.image_preview", True)
     panel = _instance
     if panel is None:
-        get_panel_object = getattr(lf.ui, "get_panel_object", None)
-        if get_panel_object is not None:
-            panel = get_panel_object("lfs.image_preview")
+        panel = lf.ui.get_panel_object("lfs.image_preview")
     pending = _pending_open
     if panel and pending is not None:
         _pending_open = None

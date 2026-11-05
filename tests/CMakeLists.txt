@@ -328,6 +328,8 @@ if(BUILD_VISUALIZER_TESTS)
         test_sdl_rml_key_mapping.cpp
         test_rml_form_control_layout.cpp
         test_histogram_layout.cpp
+        test_image_preview_layout.cpp
+        test_preview_texture_status.cpp
     )
     target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_rmlui_tests PRIVATE
@@ -1711,6 +1713,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_workflow.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scale_distance_contract.py
@@ -2270,10 +2273,8 @@ if(TARGET lfs_vulkan_rasterizer)
         LFS_STOCHASTIC_TEST_SPIRV_DIR="${_stochastic_shader_dir}/generated")
     add_test(NAME lichtfeld.stochastic COMMAND stochastic_tests)
     set_tests_properties(lichtfeld.stochastic PROPERTIES LABELS "gpu" TIMEOUT 120)
-    # Test private history state without widening the Windows DLL exports.
-    add_executable(stochastic_viewport_tests
-        test_stochastic_viewport.cpp
-        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
+    # Exercise history state through the same DLL implementation as the viewer.
+    add_executable(stochastic_viewport_tests test_stochastic_viewport.cpp)
     target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
     target_include_directories(stochastic_viewport_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
@@ -2328,7 +2329,8 @@ if(TARGET lfs_visualizer AND TARGET lfs_user_shader_ir)
             $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
         target_compile_definitions(${_target} PRIVATE LFS_SHADER_PACKAGE_DIR="${_custom_effect_package_dir}")
         target_link_libraries(${_target} PRIVATE
-            lfs_vulkan_rasterizer lfs_visualizer lfs_core SDL3::SDL3 GTest::gtest)
+            lfs_vulkan_rasterizer lfs_visualizer lfs_core lfs_io lfs_sequencer lfs_rendering
+            SDL3::SDL3 GTest::gtest)
         add_dependencies(${_target} lfs_user_shader_ir)
         if(MSVC)
             target_link_options(${_target} PRIVATE "/DELAYLOAD:nvcuda.dll")

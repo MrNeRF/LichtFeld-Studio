@@ -2027,6 +2027,16 @@
     "disabled": "Désactivé"
   },
   "image_preview": {
+    "source_changed": "L’image a changé. Actualisez et prélevez à nouveau la couleur.",
+    "scene_changed": "La scène a changé. Prélevez à nouveau la couleur.",
+    "color_sample_failed": "Impossible de prélever la couleur : {}",
+    "help": "Aide",
+    "refresh": "Actualiser",
+    "apply_render_color": "Appliquer au fond du rendu",
+    "apply_training_color": "Appliquer au fond d’entraînement",
+    "camera_unavailable": "Aucune caméra associée à cette image",
+    "loading": "Chargement de l’image…",
+    "load_failed": "Impossible de charger l’image. Actualisez ou choisissez une autre image.",
     "title": "Aperçu de l'image",
     "image_section": "IMAGE",
     "file_section": "FICHIER",

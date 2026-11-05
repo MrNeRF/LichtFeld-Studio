@@ -2027,6 +2027,16 @@
     "disabled": "Desactivado"
   },
   "image_preview": {
+    "source_changed": "La imagen ha cambiado. Actualiza y vuelve a muestrear el color.",
+    "scene_changed": "La escena ha cambiado. Vuelve a muestrear el color.",
+    "color_sample_failed": "No se pudo muestrear el color: {}",
+    "help": "Ayuda",
+    "refresh": "Actualizar",
+    "apply_render_color": "Aplicar al fondo del render",
+    "apply_training_color": "Aplicar al fondo de entrenamiento",
+    "camera_unavailable": "No hay ninguna cámara asociada a esta imagen",
+    "loading": "Cargando imagen…",
+    "load_failed": "No se pudo cargar la imagen. Actualiza o elige otra imagen.",
     "title": "Vista Previa de Imagen",
     "image_section": "IMAGEN",
     "file_section": "ARCHIVO",

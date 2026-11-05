@@ -2038,6 +2038,16 @@
     "disabled": "Disabled"
   },
   "image_preview": {
+    "source_changed": "Image changed. Refresh and sample the color again.",
+    "scene_changed": "The scene changed. Sample the color again.",
+    "color_sample_failed": "Could not sample the color: {}",
+    "help": "Help",
+    "refresh": "Refresh",
+    "apply_render_color": "Apply to render background",
+    "apply_training_color": "Apply to training background",
+    "camera_unavailable": "No camera is associated with this image",
+    "loading": "Loading image…",
+    "load_failed": "Image could not be loaded. Refresh or choose another image.",
     "title": "Image Preview",
     "image_section": "IMAGE",
     "file_section": "FILE",

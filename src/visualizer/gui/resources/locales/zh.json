@@ -2027,6 +2027,16 @@
     "disabled": "已禁用"
   },
   "image_preview": {
+    "source_changed": "图像已更改。请刷新后重新拾取颜色。",
+    "scene_changed": "场景已更改。请重新拾取颜色。",
+    "color_sample_failed": "无法拾取颜色：{}",
+    "help": "帮助",
+    "refresh": "刷新",
+    "apply_render_color": "应用到渲染背景",
+    "apply_training_color": "应用到训练背景",
+    "camera_unavailable": "此图像没有关联的相机",
+    "loading": "正在加载图像…",
+    "load_failed": "无法加载图像。请刷新或选择其他图像。",
     "title": "图像预览",
     "image_section": "图像",
     "file_section": "文件",

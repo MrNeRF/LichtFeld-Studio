@@ -10,7 +10,8 @@ from test_rmlui_image_sources import panel_modules
 
 
 def event(**values):
-    return SimpleNamespace(get_parameter=lambda key, default: str(values.get(key, default)))
+    return SimpleNamespace(target=lambda: None,
+                           get_parameter=lambda key, default: str(values.get(key, default)))
 
 
 @pytest.mark.parametrize("scale", [1.0, 1.25, 1.5, 2.0])

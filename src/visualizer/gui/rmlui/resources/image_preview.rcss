@@ -19,6 +19,49 @@
 
 /* -- Main Area -- */
 
+#preview-toolbar, .preview-tool-group, #sampled-color-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4dp;
+}
+
+#preview-toolbar {
+    flex-shrink: 0;
+    padding: 6dp;
+    gap: 6dp 10dp;
+    border-bottom-width: 1dp;
+}
+
+#preview-toolbar .btn, #sampled-color-controls .btn {
+    box-sizing: border-box;
+    display: inline-block;
+    height: 28dp;
+    line-height: 26dp;
+    padding: 0 8dp;
+}
+
+#preview-toolbar [disabled], #sampled-color-controls [disabled] {
+    tab-index: none;
+    pointer-events: auto;
+}
+
+#sampled-color-controls, #shortcut-help {
+    flex-shrink: 0;
+    padding: 6dp 10dp;
+    border-bottom-width: 1dp;
+}
+
+#preview-message {
+    flex-shrink: 0;
+    padding: 0 10dp;
+    font-size: 12dp;
+}
+
+#sampled-color-controls.hidden, #shortcut-help.hidden {
+    display: none;
+}
+
 #main-area {
     display: flex;
     flex: 1;
@@ -30,7 +73,8 @@
 /* -- Filmstrip -- */
 
 #filmstrip {
-    width: 72dp;
+    box-sizing: border-box;
+    width: 96dp;
     overflow-y: auto;
     padding: 6dp;
     flex-shrink: 0;
@@ -43,26 +87,34 @@
 }
 
 .filmstrip-virtual-spacer {
-    width: 60dp;
+    width: 80dp;
+    flex-shrink: 0;
+}
+
+.thumb-row {
+    height: 64dp;
     flex-shrink: 0;
 }
 
 .thumb-item {
-    width: 60dp;
-    height: 44dp;
-    margin-bottom: 2dp;
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    height: 54dp;
+    padding: 0;
+    margin: 2dp 0;
     cursor: pointer;
     border-width: 1.5dp;
     border-color: transparent;
     border-radius: 3dp;
-    opacity: 0.5;
+    opacity: 0.85;
     position: relative;
     overflow: hidden;
     transition: opacity 0.12s quadratic-out;
 }
 
 .thumb-item:hover {
-    opacity: 0.8;
+    opacity: 1;
 }
 
 .thumb-item.selected {
@@ -106,12 +158,10 @@
     display: block;
     decorator: none;
     opacity: 1;
-    transition: opacity 0.2s quadratic-out;
+    z-index: 0;
 }
 
-.image-layer.fading-out {
-    opacity: 0;
-}
+.image-layer.preview-active { z-index: 1; }
 
 .image-layer.hidden {
     display: none;
@@ -121,6 +171,7 @@
     position: absolute;
     display: none;
     decorator: none;
+    z-index: 2;
 }
 
 #mask-overlay.visible {
@@ -129,14 +180,13 @@
 
 #no-image-text {
     font-size: 12dp;
+    z-index: 3;
     position: absolute;
-    top: 0;
+    top: 50%;
     right: 0;
-    bottom: 0;
     left: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: block;
+    transform: translateY(-50%);
     text-align: center;
     pointer-events: none;
 }
@@ -145,9 +195,19 @@
     display: none;
 }
 
+#preview-state-text {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    padding: 0 24dp;
+    line-height: 18dp;
+    text-align: center;
+}
+
 /* -- Nav Arrows -- */
 
 .nav-arrow {
+    box-sizing: border-box;
     display: block;
     position: absolute;
     top: 50%;
@@ -183,6 +243,7 @@
 /* -- Sidebar -- */
 
 #sidebar {
+    box-sizing: border-box;
     width: 200dp;
     overflow-y: auto;
     flex-shrink: 0;
@@ -264,18 +325,23 @@
 }
 
 .btn-copy {
-    display: block;
-    width: 16dp;
-    height: 16dp;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28dp;
+    height: 28dp;
+    padding: 0;
+    border-width: 1dp;
+    border-color: transparent;
     border-radius: 3dp;
     cursor: pointer;
     background-color: transparent;
 }
 
 .btn-copy-icon {
-    width: 12dp;
-    height: 12dp;
-    margin: 2dp;
+    width: 14dp;
+    height: 14dp;
 }
 
 .meta-val-secondary {
@@ -310,9 +376,10 @@
 /* -- Status Bar -- */
 
 #status-bar {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
-    height: 24dp;
+    height: 28dp;
     padding: 0 10dp;
     flex-shrink: 0;
     border-top-width: 1dp;
@@ -331,8 +398,8 @@
     display: flex;
     align-items: center;
     gap: 4dp;
-    margin-right: 12dp;
-    flex-shrink: 0;
+    margin-right: 0;
+    flex-wrap: wrap;
 }
 
 #view-controls.hidden {
@@ -340,15 +407,17 @@
 }
 
 .view-btn {
-    width: 20dp;
-    height: 20dp;
+    box-sizing: border-box;
+    display: block;
+    width: 28dp;
+    height: 28dp;
     padding: 0;
     border-width: 1dp;
     border-radius: 3dp;
     cursor: pointer;
     font-size: 12dp;
     text-align: center;
-    line-height: 18dp;
+    line-height: 26dp;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out,
                 color 0.12s quadratic-out, opacity 0.12s quadratic-out;
 }
@@ -364,7 +433,7 @@
     height: 14dp;
 }
 
-.view-btn:disabled {
+.view-btn:disabled, .view-btn[disabled] {
     opacity: 0.35;
     cursor: default;
 }
@@ -376,9 +445,9 @@
     justify-content: center;
     align-content: flex-start;
     min-width: 0;
-    height: 18dp;
+    height: auto;
     margin-right: 12dp;
-    overflow: hidden;
+    overflow: visible;
     gap: 0 8dp;
 }
 

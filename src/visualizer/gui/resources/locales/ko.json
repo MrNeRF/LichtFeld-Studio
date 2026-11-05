@@ -2027,6 +2027,16 @@
     "disabled": "비활성화됨"
   },
   "image_preview": {
+    "source_changed": "이미지가 변경되었습니다. 새로 고친 후 색상을 다시 추출하세요.",
+    "scene_changed": "장면이 변경되었습니다. 색상을 다시 추출하세요.",
+    "color_sample_failed": "색상을 추출할 수 없습니다: {}",
+    "help": "도움말",
+    "refresh": "새로 고침",
+    "apply_render_color": "렌더 배경에 적용",
+    "apply_training_color": "학습 배경에 적용",
+    "camera_unavailable": "이 이미지에 연결된 카메라가 없습니다",
+    "loading": "이미지 로딩 중…",
+    "load_failed": "이미지를 불러올 수 없습니다. 새로 고치거나 다른 이미지를 선택하세요.",
     "title": "이미지 미리보기",
     "image_section": "이미지",
     "file_section": "파일",

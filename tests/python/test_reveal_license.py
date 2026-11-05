@@ -22,6 +22,17 @@ class RevealLicenseTest(unittest.TestCase):
         self.assertTrue("Spark" in notice, "Spark is missing from generated notices")
         self.assertTrue("WORLD LABS TECHNOLOGIES, INC." in notice, "Spark copyright is missing")
 
+    def test_distribution_contains_html_viewer_notices(self):
+        args = argparse.Namespace(
+            source=ROOT,
+            triplet_dir=ROOT / "build-tests-release/vcpkg_installed/x64-windows",
+            install_prefix=ROOT / "dist-fast",
+            vcpkg_root=None,
+        )
+        notice = generate(args)
+        self.assertIn("PlayCanvas Ltd.", notice, "PlayCanvas copyright is missing")
+        self.assertIn("Arseny Kapoulkine", notice, "meshoptimizer copyright is missing")
+
 
 if __name__ == "__main__":
     unittest.main()
