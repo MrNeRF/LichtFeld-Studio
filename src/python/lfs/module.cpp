@@ -589,6 +589,8 @@ namespace {
         d["num_splats"] = ctx.num_gaussians;
         d["num_gaussians"] = ctx.num_gaussians;
         d["is_refining"] = ctx.is_refining;
+        d["is_paused"] = ctx.trainer && ctx.trainer->is_paused();
+        d["iterations"] = ctx.trainer ? ctx.trainer->get_total_iterations() : 0;
         return d;
     }
 
@@ -597,7 +599,16 @@ namespace {
         HookInvocationGuard hook_guard(ctx);
         LOG_DEBUG("Python hook invoke hook={} iter={}", static_cast<int>(hook), ctx.iteration);
         try {
-            callback(build_python_hook_payload(ctx));
+            auto payload = build_python_hook_payload(ctx);
+            if (hook == ControlHook::TrainingEnd) {
+                switch (ctx.terminal_outcome) {
+                case lfs::training::TrainingOutcome::Completed: payload["terminal_state"] = "completed"; break;
+                case lfs::training::TrainingOutcome::Stopped: payload["terminal_state"] = "stopped"; break;
+                case lfs::training::TrainingOutcome::Failed: payload["terminal_state"] = "failed"; break;
+                default: payload["terminal_state"] = "unknown"; break;
+                }
+            }
+            callback(payload);
         } catch (const std::exception& e) {
             LOG_ERROR("Python hook threw: {}", e.what());
         }

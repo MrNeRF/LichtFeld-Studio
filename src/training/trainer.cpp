@@ -9850,7 +9850,10 @@ namespace lfs::training {
                 .loss = current_loss_.load(),
                 .num_gaussians = strategy_ ? reported_gaussian_count(strategy_->get_model()) : 0,
                 .is_refining = strategy_ ? strategy_->is_refining(terminal_iteration) : false,
-                .trainer = this};
+                .trainer = this,
+                .terminal_outcome = terminal_error ? lfs::training::TrainingOutcome::Failed
+                                    : user_stopped ? lfs::training::TrainingOutcome::Stopped
+                                                   : lfs::training::TrainingOutcome::Completed};
             command_center.set_phase(lfs::training::TrainingPhase::SafeControl);
             command_center.update_snapshot(
                 ctx, get_total_iterations(), is_paused_.load(), false, user_stopped,

@@ -112,6 +112,11 @@ class SplatData:
         Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
         """
 
+    def shN_rows(self, rows: lichtfeld.Tensor, degree: int) -> lichtfeld.Tensor:
+        """
+        Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.
+        """
+
 def generate_collision(voxel_size: float = 0.05000000074505806, opacity: float = 0.10000000149011612, auto_resolution: bool = False, cleanup: bool = True, max_gaussian_area: float = 0.0) -> None: ...
 
 def export_collision(uuid: str, path: str) -> None: ...

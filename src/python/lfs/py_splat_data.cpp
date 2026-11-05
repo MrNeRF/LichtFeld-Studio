@@ -219,7 +219,9 @@ namespace lfs::python {
             // Capacity
             .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"),
                  "Reserve capacity for Gaussians (for densification). "
-                 "Raises if the model is renderer-backed.");
+                 "Raises if the model is renderer-backed.")
+            .def("shN_rows", [](const PySplatData& self, const PyTensor& rows, int degree) { return PyTensor(self.data()->shN_canonical_cpu_rows(rows.tensor(), degree), true); }, nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(), "Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. "
+                                                                                                                                                                                                                                                                 "Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.");
     }
 
 } // namespace lfs::python

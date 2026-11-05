@@ -701,6 +701,8 @@ set(POPSPA_TEST_FILES
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    test_splat_preview.cpp
+    test_training_hook_context.cpp
     licht_test_support.cpp
     test_assert_hardening.cpp
     test_cuda_error.cpp
@@ -1667,6 +1669,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_operations.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
@@ -1904,11 +1907,17 @@ add_test(NAME lichtfeld.python.gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_row_mask_assignment.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast;gpu"
     TIMEOUT 60
+)
+set_tests_properties(
+    lichtfeld.python.fast lichtfeld.python.gpu lichtfeld.python.slow lichtfeld.python.nightly
+    PROPERTIES
+    ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
 )
 
 
