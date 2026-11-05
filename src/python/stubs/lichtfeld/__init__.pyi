@@ -494,7 +494,9 @@ def trainer_max_gaussians() -> int:
     """Get maximum number of gaussians"""
 
 def trainer_densification_vram() -> dict | None:
-    """Gaussians that fit in VRAM and the VRAM each new one takes, as of the last refine (None before the first)"""
+    """
+    Gaussians that fit in VRAM and the VRAM each new one takes, as of the last refine (None before the first)
+    """
 
 def trainer_num_splats() -> int:
     """Get current number of splats"""

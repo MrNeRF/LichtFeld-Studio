@@ -55,7 +55,7 @@ namespace lfs::vis::gui {
     BoundsGizmoResult drawBoundsGizmo(const BoundsGizmoConfig& config);
 
     [[nodiscard]] LFS_VIS_API bool isBoundsGizmoHovered();
-    [[nodiscard]] bool isBoundsGizmoActive();
+    [[nodiscard]] LFS_VIS_API bool isBoundsGizmoActive();
     LFS_VIS_API void cancelBoundsGizmoDrag();
 
 } // namespace lfs::vis::gui
