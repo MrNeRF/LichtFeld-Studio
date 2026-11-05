@@ -68,6 +68,15 @@ namespace {
         service.shutdown();
     }
 
+    TEST(AssistedMasking, ShutdownBeforeFirstRequestRejectsNewWork) {
+        JobRegistry jobs;
+        AssistedMasking service(jobs, [] { return true; });
+        service.shutdown();
+        service.shutdown();
+        EXPECT_THROW(service.submit(missing_source()), std::runtime_error);
+        EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
+    }
+
     TEST(AssistedMasking, ExtractorReviewUsesCompletedFramesInSourceOrderAndPreservesWeights) {
         using Event = lfs::core::events::cmd::OpenImagePreview;
         struct Subscription {

@@ -988,7 +988,7 @@ namespace lfs::vis {
     std::string_view TrainerManager::getActionBlockedReason(const TrainingAction action) const {
         if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
             viewer_->jobs().anyRunning(JobType::AssistedMask))
-            return "Close the SAM preview before starting training";
+            return LOC("image_preview.sam_training_blocked");
         return state_machine_.getActionBlockedReason(action);
     }
 

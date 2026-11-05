@@ -3,6 +3,7 @@
 #include "gui/assisted_masking.hpp"
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/nn/models/sam2.hpp"
@@ -53,7 +54,7 @@ namespace lfs::vis::gui {
         std::thread worker;
 
         Impl(JobRegistry& registry, std::function<bool()> check)
-            : jobs(registry), admission(std::move(check)), worker([this] { run(); }) {}
+            : jobs(registry), admission(std::move(check)) {}
 
         void run() {
             std::optional<Sam2> model;
@@ -144,7 +145,7 @@ namespace lfs::vis::gui {
 #endif
                     const auto mtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(system_stamp.time_since_epoch()).count();
                     if (mtime_ns != w.input.mtime_ns || current_bytes != w.input.size_bytes)
-                        throw std::runtime_error("The source image changed before inference");
+                        throw std::runtime_error(LOC("image_preview.sam_source_changed"));
                     if (!stream)
                         LFS_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
                     const core::CUDAStreamGuard guard(stream);
@@ -223,7 +224,7 @@ namespace lfs::vis::gui {
                     if (w.input.refine_candidate >= 0) {
                         if (w.input.refine_request != previous_id || !previous.is_valid() ||
                             w.input.refine_candidate >= int(previous.size(0)))
-                            throw std::runtime_error("The refinement proposal is no longer current");
+                            throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
                         refinement = previous.slice(0, w.input.refine_candidate, w.input.refine_candidate + 1).reshape({1, 1, 256, 256});
                     }
                     stage("predicting", 0.7f);
@@ -243,7 +244,7 @@ namespace lfs::vis::gui {
                     if (obsolete())
                         continue;
                     if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
-                        throw std::runtime_error("The source image changed during inference");
+                        throw std::runtime_error(LOC("image_preview.sam_source_changed"));
                     if (directory.empty()) {
                         auto paths = core::UserPaths::resolve();
                         if (!paths)
@@ -263,7 +264,7 @@ namespace lfs::vis::gui {
                         const auto path = directory / (std::to_string(w.id) + "-" + std::to_string(c) + ".png");
                         files.push_back(path);
                         if (!core::save_png(path, rgba.data(), ow, oh, 4, 8, 1))
-                            throw std::runtime_error("Unable to write the proposal preview");
+                            throw std::runtime_error(LOC("image_preview.sam_write_failed"));
                     }
                     stage("rendering", 0.95f);
                     std::lock_guard lock(mutex);
@@ -296,22 +297,24 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(impl_->mutex);
             if (impl_->stopping)
-                throw std::runtime_error("The SAM preview service is shutting down");
+                throw std::runtime_error(LOC("image_preview.sam_shutting_down"));
         }
         const auto valid = [](float v) { return std::isfinite(v) && v >= 0 && v <= 1; };
         if (input.image.empty() || input.revision.empty() || input.points.size() > 256 ||
             (input.points.empty() && !input.box))
-            throw std::invalid_argument("A source revision and point or box prompts are required");
+            throw std::invalid_argument(LOC("image_preview.sam_invalid_input"));
         for (const auto& p : input.points)
             if (!valid(p[0]) || !valid(p[1]) || (p[2] != 0 && p[2] != 1))
-                throw std::invalid_argument("Invalid normalized point prompt");
+                throw std::invalid_argument(LOC("image_preview.sam_invalid_point"));
         if (input.box && (!std::ranges::all_of(*input.box, valid) || (*input.box)[0] >= (*input.box)[2] || (*input.box)[1] >= (*input.box)[3]))
-            throw std::invalid_argument("Invalid normalized box prompt");
+            throw std::invalid_argument(LOC("image_preview.sam_invalid_box"));
         if (!impl_->admission())
-            throw std::runtime_error("Close training or the active import before using SAM");
+            throw std::runtime_error(LOC("image_preview.sam_unavailable"));
         const auto prior = poll();
         if (prior.phase == "closing")
             return 0;
+        if (!impl_->worker.joinable())
+            impl_->worker = std::thread([this] { impl_->run(); });
         if (!impl_->job) {
             const auto job = impl_->jobs.init(JobType::AssistedMask, "loading");
             if (!job)
@@ -350,15 +353,14 @@ namespace lfs::vis::gui {
         impl_->cv.notify_one();
     }
     void AssistedMasking::shutdown() {
-        if (!impl_->worker.joinable())
-            return;
         close();
         {
             std::lock_guard lock(impl_->mutex);
             impl_->stopping = true;
             impl_->cv.notify_one();
         }
-        impl_->worker.join();
+        if (impl_->worker.joinable())
+            impl_->worker.join();
         (void)poll();
     }
 } // namespace lfs::vis::gui

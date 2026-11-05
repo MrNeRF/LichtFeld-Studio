@@ -4873,7 +4873,7 @@ namespace lfs::python {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
-                throw std::runtime_error("The editor is not available");
+                throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
             return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
                 .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
                 .refine_request = refine_request, .refine_candidate = refine_candidate}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", "UI thread: queue native SAM point/box inference; proposals never modify dataset masks.");

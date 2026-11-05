@@ -313,8 +313,11 @@ if(BUILD_VISUALIZER_TESTS)
         target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
     endif()
-    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
+    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests --gtest_filter=-AssistedMaskingGpu.*)
     set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_test(NAME lichtfeld.rmlui_gpu COMMAND lichtfeld_rmlui_tests --gtest_filter=AssistedMaskingGpu.*)
+    set_tests_properties(lichtfeld.rmlui_gpu PROPERTIES LABELS "gpu;ui" TIMEOUT 420
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE

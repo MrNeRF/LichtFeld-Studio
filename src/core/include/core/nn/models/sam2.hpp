@@ -64,7 +64,6 @@ namespace lfs::core::nn::models {
         // Runs the image encoder in `dtype` (tensor cores for Float16) while prompts, the mask decoder and video
         // tracking keep the compute dtype; the encoder's features are converted on the way out.
         void set_encoder_dtype(DataType dtype);
-        [[nodiscard]] Device device() const { return device_; }
         [[nodiscard]] std::size_t weights_bytes() const;
         [[nodiscard]] std::size_t arena_bytes() const { return arena_.capacity(); }
 

@@ -1932,7 +1932,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::pollImportCompletion() {
-        (void)assisted_masking_->poll();
+        if (jobs_.anyRunning(JobType::AssistedMask))
+            (void)assisted_masking_->poll();
         pollCollision();
         pollAprilTagScanCompletion();
         if (import_cancel_pending_) {

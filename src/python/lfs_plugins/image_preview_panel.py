@@ -36,6 +36,36 @@ ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0
 THUMB_MAX_PX = 256
 
+LOCALE_KEY = {
+    "positive": "image_preview.sam_positive",
+    "negative": "image_preview.sam_negative",
+    "box": "image_preview.sam_box",
+    "edit": "image_preview.sam_edit",
+    "pan": "image_preview.sam_pan",
+    "undo": "image_preview.sam_undo",
+    "clear": "image_preview.sam_clear",
+    "remove": "image_preview.sam_remove",
+    "flip": "image_preview.sam_flip",
+    "generate": "image_preview.sam_generate",
+    "cancel": "image_preview.sam_cancel",
+    "show": "image_preview.sam_show",
+    "heading": "image_preview.sam_heading",
+    "proposals_heading": "image_preview.sam_proposals_heading",
+    "edit_hint": "image_preview.sam_edit_hint",
+    "text_hint": "image_preview.sam_text_hint",
+    "generate_hint": "image_preview.sam_generate_hint",
+    "recompute_hint": "image_preview.sam_recompute_hint",
+    "idle": "image_preview.sam_idle",
+    "queued": "image_preview.sam_queued",
+    "loading": "image_preview.sam_loading",
+    "encoding": "image_preview.sam_encoding",
+    "predicting": "image_preview.sam_predicting",
+    "rendering": "image_preview.sam_rendering",
+    "closing": "image_preview.sam_closing",
+    "ready": "image_preview.sam_ready",
+    "error": "image_preview.sam_error",
+}
+
 _instance = None
 _pending_open = None
 _RML_PATH_SAFE_CHARS = "/:._-~"
@@ -1441,11 +1471,9 @@ class ImagePreviewPanel(Panel):
         self._mark_dirty()
 
     def _sam_cancel(self):
-        close = getattr(lf.ui, "sam_preview_close", None)
-        if close:
-            close()
+        lf.ui.sam_preview_close()
         self._mask_editor.invalidate()
-        if close and self._mask_editor.enabled:
+        if self._mask_editor.enabled:
             self._mask_editor.phase = "closing"
         self._mark_dirty()
 
@@ -1522,7 +1550,7 @@ class ImagePreviewPanel(Panel):
         base, candidate = editor.refinement if refine and editor.refinement else (0, -1)
         try:
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
-                                               draft.points, draft.box, base, candidate, getattr(editor, "weights", ""))
+                                               draft.points, draft.box, base, candidate, editor.weights)
             editor.invalidate()
             editor.request = request
             editor.submitted_signature = editor.signature
@@ -1540,17 +1568,14 @@ class ImagePreviewPanel(Panel):
         revision = self._path_revision_cache.get(str(path)) if path else None
         if editor.bind(path, revision):
             self._mark_dirty()
-        poll = getattr(lf.ui, "sam_preview_poll", None)
-        if poll:
-            state = poll()
-            if editor.accept(state):
-                self._mark_dirty()
-            if editor.phase == "closing" and state.get("phase") == "idle":
-                editor.phase = "idle"
-                self._mark_dirty()
+        state = lf.ui.sam_preview_poll()
+        if editor.accept(state):
+            self._mark_dirty()
+        if editor.phase == "closing" and state.get("phase") == "idle":
+            editor.phase = "idle"
+            self._mark_dirty()
         if editor.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing"):
-            self._request_model_update()
-            lf.ui.request_redraw(0.03)
+            self._request_async_update()
 
     def _update_sam(self, doc):
         editor = self._mask_editor
@@ -1564,21 +1589,21 @@ class ImagePreviewPanel(Panel):
         for key in ("positive", "negative", "box", "edit", "pan", "undo", "clear", "remove", "flip", "generate", "cancel", "show"):
             element = doc.get_element_by_id("sam-" + key)
             if element:
-                element.set_text(lf.ui.tr("image_preview.sam_" + key))
+                element.set_text(lf.ui.tr(LOCALE_KEY[key]))
                 element.set_attribute("aria-pressed", "true" if editor.tool == key else "false")
         _set_text(doc, "btn-sam", lf.ui.tr("image_preview.sam_title"))
         for key in ("heading", "proposals-heading", "edit-hint", "text-hint"):
-            _set_text(doc, "sam-" + key, lf.ui.tr("image_preview.sam_" + key.replace("-", "_")))
+            _set_text(doc, "sam-" + key, lf.ui.tr(LOCALE_KEY[key.replace("-", "_")]))
         _set_text(doc, "sam-refine", lf.ui.tr("image_preview.sam_recompute"))
         _set_text(doc, "sam-generate", lf.ui.tr("image_preview.sam_update" if editor.can_refine else "image_preview.sam_generate"))
         for element_id, key in (("sam-generate", "generate_hint"), ("sam-refine", "recompute_hint"),
                                 ("sam-edit", "edit_hint"), ("sam-remove", "edit_hint")):
             element = doc.get_element_by_id(element_id)
             if element:
-                element.set_attribute("title", lf.ui.tr("image_preview.sam_" + key))
+                element.set_attribute("title", lf.ui.tr(LOCALE_KEY[key]))
         _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint"))
         phase = editor.phase if not editor.error else "error"
-        status = lf.ui.tr("image_preview.sam_" + phase)
+        status = lf.ui.tr(LOCALE_KEY[phase])
         _set_text(doc, "sam-status", status + (": " + editor.error if editor.error else ""))
         ready = bool(editor.draft and (editor.draft.points or editor.draft.box) and self._preview_state == "ready")
         busy = editor.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
@@ -1593,7 +1618,7 @@ class ImagePreviewPanel(Panel):
             selection = lf.ui.tr("image_preview.sam_box")
         elif isinstance(editor.selected, int) and editor.draft:
             label = "positive" if editor.draft.points[editor.selected][2] else "negative"
-            selection = f"{editor.selected + 1} · {lf.ui.tr('image_preview.sam_' + label)}"
+            selection = f"{editor.selected + 1} · {lf.ui.tr(LOCALE_KEY[label])}"
         _set_text(doc, "sam-selection", selection)
         _set_text(doc, "sam-quality", (lf.ui.tr("image_preview.sam_quality").format(score=round(100 * editor.scores[editor.candidate]))
                                        if editor.scores else ""))

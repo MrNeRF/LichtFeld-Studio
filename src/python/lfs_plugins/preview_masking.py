@@ -20,6 +20,7 @@ class MaskDraft:
 class FrameMaskEditor:
     def __init__(self):
         self.enabled = False
+        self.weights = ""
         self.tool = "positive"
         self.drafts = {}
         self.key = None

@@ -38,6 +38,8 @@ def _install_lf_stub(monkeypatch):
         get_image_info=lambda _path: (0, 0, 0),
         preview_texture_status=lambda _source, _document=None: "ready",
         request_redraw=lambda _delay=0.0: None,
+        sam_preview_poll=lambda: {"phase": "idle"},
+        sam_preview_close=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
