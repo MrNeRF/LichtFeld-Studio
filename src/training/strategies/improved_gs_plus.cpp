@@ -215,8 +215,12 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::restart_mean_lr() {
-        if (_optimizer && _params && _splat_data)
-            _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
+        if (!_optimizer || !_params || !_splat_data)
+            return;
+        _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
+        // One decay drives both rates: over the steps left it takes the means to their final rate.
+        _scheduler = std::make_unique<ExponentialLR>(*_optimizer, restart_decay_gamma(*_params, *_optimizer, 0.1),
+                                                     std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
     }
 
     void ImprovedGSPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {

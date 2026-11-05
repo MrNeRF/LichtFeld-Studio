@@ -27,7 +27,6 @@
 #include "rendering/vulkan_external_tensor.hpp"
 #include "training/camera_training_notice.hpp"
 #include "training/control/command_api.hpp"
-#include "training/noise_infill.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
@@ -562,8 +561,10 @@ namespace lfs::vis {
         splat_storage_.reset();
         lfs::core::SplatTensorAllocator tensor_allocator;
 
+        // Noise infill rows come on top of max_cap and are known only once the mesh is voxelized, so the reserve then
+        // follows device memory, as without a cap.
         const std::size_t configured_capacity =
-            params.optimization.max_cap > 0
+            params.optimization.max_cap > 0 && params.optimization.noise_infill_mesh.empty()
                 ? static_cast<std::size_t>(params.optimization.max_cap)
                 : 0;
         const int sh_degree = params.optimization.sh_degree;
@@ -1286,10 +1287,6 @@ namespace lfs::vis {
         if (!crop || !scene_)
             return std::nullopt;
         return lfs::training::resolve_training_cropbox_geom(*scene_);
-    }
-
-    std::size_t TrainerManager::exportNoiseInfillRows(const core::SplatData& model) const {
-        return trainer_ ? lfs::training::noise_infill_rows(model, trainer_->getParams().optimization) : 0;
     }
 
     bool TrainerManager::startTraining() {

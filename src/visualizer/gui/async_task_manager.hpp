@@ -293,8 +293,6 @@ namespace lfs::vis {
                 glm::mat4 transform{1.0f};
                 // The training model with "Crop to ROI at end" on: exported cropped to its crop box.
                 std::optional<lfs::training::TrainingCropBoxGeometry> crop;
-                // The training model's leading noise infill rows, which no export carries.
-                std::size_t noise_infill_rows = 0;
             };
 
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,

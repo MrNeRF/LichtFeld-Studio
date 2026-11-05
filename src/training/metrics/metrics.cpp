@@ -1586,19 +1586,34 @@ namespace lfs::training {
             }
         };
 
+        std::unique_ptr<lfs::core::SplatData> with_infill;
+        std::optional<RowOverride> noise_opacity, noise_color;
+        // A pause between views can save the project, so the model is back in its training state at every view boundary.
+        const auto training_state_at_view_boundaries = [&](std::function<void()> apply_overrides) -> std::function<bool()> {
+            apply_overrides();
+            if (!on_view_boundary)
+                return {};
+            return [&, apply_overrides = std::move(apply_overrides)] {
+                noise_color.reset();
+                noise_opacity.reset();
+                const bool keep_going = on_view_boundary();
+                apply_overrides();
+                return keep_going;
+            };
+        };
+
         // The noise infill only guides training: the metrics score the surface alone.
-        const size_t noise_rows = noise_infill_rows(splatData, _params.optimization);
-        std::optional<RowOverride> hidden_noise;
-        if (noise_rows > 0)
-            hidden_noise.emplace(splatData_mutable.opacity_raw(), 0, noise_rows, kHiddenOpacity);
-        auto metrics = evaluate_views(iteration, val_dataset, source, background, image_loader, on_view_boundary);
-        hidden_noise.reset();
+        const size_t noise_rows = noise_infill_rows(splatData);
+        auto metrics = evaluate_views(iteration, val_dataset, source, background, image_loader,
+                                      noise_rows == 0 ? on_view_boundary : training_state_at_view_boundaries([&] {
+                                          noise_opacity.emplace(splatData_mutable.opacity_raw(), 0, noise_rows, kHiddenOpacity);
+                                      }));
+        noise_opacity.reset();
         if (!_params.optimization.eval_green_infill || metrics.cancelled)
             return metrics;
 
         // A second pass with green inside, the paper's starred metrics. A model trained without noise gets a copy with it.
         size_t infill_rows = noise_rows;
-        std::unique_ptr<lfs::core::SplatData> with_infill;
         if (infill_rows == 0) {
             const auto mesh = lfs::core::param::eval_green_infill_mesh(_params.optimization);
             assert(mesh);
@@ -1615,14 +1630,16 @@ namespace lfs::training {
             }
             rendered = with_infill.get();
         }
-        const RowOverride shown_infill(rendered->opacity_raw(), 0, infill_rows, kShownNoiseOpacity);
-        RowOverride infill_color(rendered->sh0(), 0, infill_rows, 0.0f);
-        paint_noise_green(infill_color.rows());
         auto green_source = source;
         green_source.report_scores = false;
         green_source.image_dir = _params.dataset.output_path / std::format("eval_step_{}_green_infill", iteration);
         green_source.image_labels[1] = "Render, infill green";
-        const auto green = evaluate_views(iteration, val_dataset, green_source, background, image_loader, std::move(on_view_boundary));
+        const auto green = evaluate_views(iteration, val_dataset, green_source, background, image_loader,
+                                          training_state_at_view_boundaries([&] {
+                                              noise_opacity.emplace(rendered->opacity_raw(), 0, infill_rows, kShownNoiseOpacity);
+                                              noise_color.emplace(rendered->sh0(), 0, infill_rows, 0.0f);
+                                              paint_noise_green(noise_color->rows());
+                                          }));
         if (!green.cancelled)
             report_green_infill(iteration, *rendered, infill_rows, *val_dataset, green, _params);
         return metrics;

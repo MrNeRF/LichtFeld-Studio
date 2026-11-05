@@ -2599,6 +2599,7 @@ namespace lfs::core {
                 } else {
                     copied_cuda |= node.model->means_raw().device() == Device::CUDA;
                     auto copy = std::make_shared<SplatData>(node.model->clone());
+                    copy->set_frozen_ranges(node.model->frozen_ranges());
                     result.push_back({std::move(copy), getWorldTransform(node.id), 0,
                                       static_cast<size_t>(node.model->size()), node.model->get_active_sh_degree()});
                 }

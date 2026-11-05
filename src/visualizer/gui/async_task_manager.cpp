@@ -2055,9 +2055,7 @@ namespace lfs::vis::gui {
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id),
-                    .crop = training_model ? export_crop : std::nullopt,
-                    .noise_infill_rows =
-                        training_model && trainer_manager ? trainer_manager->exportNoiseInfillRows(*node->model) : 0});
+                    .crop = training_model ? export_crop : std::nullopt});
             }
         }
         if (splats.empty()) {
@@ -2470,8 +2468,8 @@ namespace lfs::vis::gui {
                             if (!source.data)
                                 continue;
                             const lfs::core::SplatData* data = source.data;
-                            if (source.noise_infill_rows > 0)
-                                data = &cropped.emplace_back(lfs::training::without_noise_infill(*data, source.noise_infill_rows));
+                            if (auto without_noise = lfs::training::without_noise_infill(*data))
+                                data = &cropped.emplace_back(std::move(*without_noise));
                             if (source.crop) {
                                 if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
                                     if (kept->size() == 0)

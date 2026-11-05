@@ -1372,11 +1372,6 @@ namespace {
                     return std::unexpected(std::format("Noise infill mesh does not exist: {}", path_str));
                 }
             }
-            // A resumed project may hold its own mesh; the trainer checks that one when it starts.
-            if (eval_green_infill && !noise_infill_mesh && !resume_checkpoint &&
-                !lfs::core::param::eval_mask_mesh_file(::args::get(eval_mask))) {
-                return std::unexpected(std::string(lfs::core::param::kEvalGreenInfillNeedsMesh));
-            }
 
             if (!sog_flags.read(params))
                 return std::unexpected("Invalid SSOG LOD options");
@@ -2235,6 +2230,11 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
 
     if (apply_overrides) {
         apply_overrides();
+    }
+    // A resumed project may hold its own mesh; the trainer checks that one when it starts.
+    if (params->optimization.eval_green_infill && !params->resume_project && !params->resume_checkpoint &&
+        !lfs::core::param::eval_green_infill_mesh(params->optimization)) {
+        return std::unexpected(std::string(lfs::core::param::kEvalGreenInfillNeedsMesh));
     }
     const auto validate_cli_nonnegative = [&flag_given](
                                               const std::string_view flag,

@@ -39,6 +39,22 @@ namespace lfs::training {
             });
         }
 
+        struct NoiseRange {
+            std::size_t count;
+            bool hidden;
+        };
+
+        [[nodiscard]] std::optional<NoiseRange> find_noise(const core::SplatData& model) {
+            for (const auto& range : model.frozen_ranges()) {
+                if (range.start != 0 || range.count == 0)
+                    continue;
+                const float opacity = model.opacity_raw().slice(0, 0, 1).item<float>();
+                if (opacity == kHiddenOpacity || opacity == kShownNoiseOpacity)
+                    return NoiseRange{range.count, opacity == kHiddenOpacity};
+            }
+            return std::nullopt;
+        }
+
         constexpr float kSh0 = 0.28209479177387814f;
         // SH0 coefficients of a colour channel at 0 and at 1.
         constexpr float kChannelOff = -0.5f / kSh0, kChannelOn = 0.5f / kSh0;
@@ -309,13 +325,9 @@ namespace lfs::training {
         return std::move(infill->splats);
     }
 
-    std::size_t noise_infill_rows(const core::SplatData& model, const core::param::OptimizationParameters& params) {
-        if (params.noise_infill_mesh.empty())
-            return 0;
-        for (const auto& range : model.frozen_ranges())
-            if (range.start == 0)
-                return range.count;
-        return 0;
+    std::size_t noise_infill_rows(const core::SplatData& model) {
+        const auto noise = find_noise(model);
+        return noise ? noise->count : 0;
     }
 
     int noise_infill_start_iteration(const core::param::OptimizationParameters& params) {
@@ -331,18 +343,19 @@ namespace lfs::training {
         const auto colors = core::Tensor::from_vector(
             std::vector<float>{on, off, off, off, on, off, off, off, on, off, on, on, on, off, on, on, on, off}, {6, 3}, noise.device());
         const auto picks = core::Tensor::randint({count}, 0, 6, noise.device(), core::DataType::Int32).to(core::DataType::Int64);
-        noise.copy_from(colors.index_select(0, picks).reshape({count, 1, 3}));
+        const auto rows = static_cast<int>(count);
+        noise.copy_from(colors.index_select(0, picks).reshape({rows, 1, 3}));
     }
 
     bool noise_infill_step(core::SplatData& model, const core::param::OptimizationParameters& params, const int iter) {
-        const std::size_t count = noise_infill_rows(model, params);
-        const int start = noise_infill_start_iteration(params);
-        if (count == 0 || iter < start)
+        const auto noise = find_noise(model);
+        // A later step than the start one when the run was shortened past it.
+        if (!noise || (noise->hidden && iter < noise_infill_start_iteration(params)))
             return false;
-        randomize_noise_colors(model, count);
-        if (iter != start)
+        randomize_noise_colors(model, noise->count);
+        if (!noise->hidden)
             return false;
-        model.opacity_raw().slice(0, 0, count).fill_(kShownNoiseOpacity);
+        model.opacity_raw().slice(0, 0, noise->count).fill_(kShownNoiseOpacity);
         return true;
     }
 
@@ -350,11 +363,14 @@ namespace lfs::training {
                                                                const core::SplatData* const model) {
         auto capped = params;
         if (model && capped.max_cap > 0)
-            capped.max_cap += static_cast<int>(noise_infill_rows(*model, params));
+            capped.max_cap += static_cast<int>(noise_infill_rows(*model));
         return capped;
     }
 
-    core::SplatData without_noise_infill(const core::SplatData& model, const std::size_t noise_rows) {
+    std::optional<core::SplatData> without_noise_infill(const core::SplatData& model) {
+        const std::size_t noise_rows = noise_infill_rows(model);
+        if (noise_rows == 0)
+            return std::nullopt;
         const auto rows = static_cast<std::size_t>(model.size());
         assert(noise_rows <= rows);
         std::vector<bool> keep(rows, true);
@@ -395,9 +411,9 @@ namespace lfs::training {
         struct ActiveShDegree {
             core::SplatData& model;
             int degree;
-            ~ActiveShDegree() { model.set_active_sh_degree(degree); }
+            ~ActiveShDegree() { model.set_rendered_sh_degree(degree); }
         } const active_sh_degree{model, model.get_active_sh_degree()};
-        model.set_active_sh_degree(0);
+        model.set_rendered_sh_degree(0);
         auto black = core::Tensor::zeros({3}, model.sh0().device());
         const auto green_sum = [&](core::Camera& camera) {
             const auto image = fast_rasterize(camera, model, black, mip_filter).image;

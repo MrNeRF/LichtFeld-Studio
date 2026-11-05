@@ -36,6 +36,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/noise_infill.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
@@ -446,11 +447,13 @@ namespace lfs::vis::gui {
                     return;
                 result = io::save_ply(*node->point_cloud, options);
                 break;
-            case core::NodeType::SPLAT:
+            case core::NodeType::SPLAT: {
                 if (!node->model || node->model->size() == 0)
                     return;
-                result = io::save_ply(*node->model, options);
+                const auto without_noise = training::without_noise_infill(*node->model);
+                result = io::save_ply(without_noise ? *without_noise : *node->model, options);
                 break;
+            }
             default:
                 return;
             }

@@ -591,7 +591,7 @@ namespace lfs::training {
             const glm::vec3& dataset_origin) {
             const auto& opt = params.optimization;
             // A scored model needs no noise of its own: with --eval-green-infill the evaluator builds its own.
-            if (opt.noise_infill_mesh.empty() || params.evaluate_only || noise_infill_rows(model, opt) > 0) {
+            if (opt.noise_infill_mesh.empty() || params.evaluate_only || noise_infill_rows(model) > 0) {
                 return {};
             }
             // Frozen rows share one learning-rate scale, and the noise must not move.
@@ -1263,7 +1263,7 @@ namespace lfs::training {
                 return std::unexpected(std::move(result.error()));
             }
 
-            const int max_cap = params.optimization.max_cap;
+            const int max_cap = with_noise_outside_cap(params.optimization, model).max_cap;
             if (max_cap > 0 && model->size() > max_cap) {
                 LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
                          max_cap, model->size(), max_cap);
@@ -1834,8 +1834,8 @@ namespace lfs::training {
             if (!kept)
                 return lfs::Status::failure(std::move(kept).error());
             without_frozen = std::move(*kept);
-        } else if (const size_t noise_rows = noise_infill_rows(trained, trainer.getParams().optimization); noise_rows > 0) {
-            without_frozen = without_noise_infill(trained, noise_rows);
+        } else {
+            without_frozen = without_noise_infill(trained);
         }
         const auto& unfrozen = without_frozen ? *without_frozen : trained;
         // A stopped run keeps every splat so it can resume; its exports still hold only the crop box.

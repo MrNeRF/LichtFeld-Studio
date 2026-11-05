@@ -27,7 +27,7 @@ The noise is frozen: it is never moved, densified or pruned. It stays invisible 
 so the surface forms undisturbed. Then the position learning rate restarts, and every step gives each noise splat a new
 color: red, green, blue, cyan, magenta or yellow.
 
-The noise does not count toward `--max-cap` and no export carries it. Project files keep it so a run can resume.
+The noise does not count toward `--max-cap` or `--popspa-target-count` and no export carries it. Project files keep it so a run can resume.
 Evaluation hides it while scoring. `--noise-infill-mesh` needs `--freeze-lr-scale` at 0.
 
 ## Evaluation

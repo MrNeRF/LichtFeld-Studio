@@ -3,6 +3,7 @@
 #include "core/mesh_data.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/formats/ply.hpp"
 #include "training/noise_infill.hpp"
@@ -145,7 +146,6 @@ TEST(NoiseInfillTest, NoiseAppearsOnceAtItsStartStep) {
     model.set_frozen_ranges({{0, noise}});
     model.opacity_raw().slice(0, 0, noise).fill_(lfs::training::kHiddenOpacity);
     param::OptimizationParameters params;
-    params.noise_infill_mesh = "scan.obj";
     params.iterations = 1000;
     ASSERT_EQ(lfs::training::noise_infill_start_iteration(params), 300);
 
@@ -163,8 +163,52 @@ TEST(NoiseInfillTest, NoiseAppearsOnceAtItsStartStep) {
     EXPECT_NE(model.sh0().cpu().contiguous().to_vector(), first);
 }
 
-// Catches the noise taking rows from the surface, a cap appearing where there was none, and a run without a noise mesh
-// gaining rows through a frozen range that merely starts at row 0.
+// Catches noise that stays hidden for good once a shortened run has passed its start step, and noise that stops changing
+// colour when a lengthened run moves the start step ahead of it.
+TEST(NoiseInfillTest, NoiseFollowsAChangedIterationLimit) {
+    auto loaded = load_real_splat();
+    ASSERT_TRUE(loaded);
+    auto& model = loaded->value;
+    const size_t noise = static_cast<size_t>(model.size()) / 10;
+    model.set_frozen_ranges({{0, noise}});
+    model.opacity_raw().slice(0, 0, noise).fill_(lfs::training::kHiddenOpacity);
+    param::OptimizationParameters params;
+    params.iterations = 1000;
+
+    EXPECT_TRUE(lfs::training::noise_infill_step(model, params, 500));
+    EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector()[noise - 1], lfs::training::kShownNoiseOpacity);
+
+    params.iterations = 100000;
+    const auto colours = model.sh0().cpu().contiguous().to_vector();
+    EXPECT_FALSE(lfs::training::noise_infill_step(model, params, 501));
+    EXPECT_NE(model.sh0().cpu().contiguous().to_vector(), colours);
+}
+
+// Catches a row cap mixing the noise with other frozen rows, which would then be recoloured and left out of every export.
+TEST(NoiseInfillTest, ARowCapKeepsTheNoiseApartFromOtherFrozenRows) {
+    auto loaded = load_real_splat();
+    ASSERT_TRUE(loaded);
+    auto& model = loaded->value;
+    const auto rows = static_cast<size_t>(model.size());
+    const size_t noise = rows / 10, added = rows / 10, added_start = rows - added;
+    model.opacity_raw().slice(0, 0, noise).fill_(lfs::training::kShownNoiseOpacity);
+    model.set_frozen_ranges({{0, noise}, {added_start, added}});
+    const auto means = model.means().cpu().contiguous().to_vector();
+
+    random_choose(model, static_cast<int>(noise + added + (rows - noise - added) / 2));
+
+    EXPECT_EQ(lfs::training::noise_infill_rows(model), noise);
+    ASSERT_EQ(model.frozen_ranges().size(), 2u);
+    EXPECT_EQ(model.frozen_ranges()[1].count, added);
+    const auto kept_means = model.means().cpu().contiguous().to_vector();
+    for (size_t k = 0; k < 3; ++k) {
+        EXPECT_EQ(kept_means[3 * model.frozen_ranges()[1].start + k], means[3 * added_start + k]);
+        EXPECT_EQ(kept_means[k], means[k]);
+    }
+}
+
+// Catches the noise taking rows from the surface, a cap appearing where there was none, and added frozen rows that lead a
+// model being taken for noise.
 TEST(NoiseInfillTest, NoiseStaysOutsideTheRowCap) {
     auto loaded = load_real_splat();
     ASSERT_TRUE(loaded);
@@ -173,7 +217,7 @@ TEST(NoiseInfillTest, NoiseStaysOutsideTheRowCap) {
     param::OptimizationParameters params;
     params.max_cap = 1000;
     EXPECT_EQ(lfs::training::with_noise_outside_cap(params, &model).max_cap, 1000);
-    params.noise_infill_mesh = "scan.obj";
+    model.opacity_raw().slice(0, 0, 100).fill_(lfs::training::kShownNoiseOpacity);
     EXPECT_EQ(lfs::training::with_noise_outside_cap(params, &model).max_cap, 1100);
     EXPECT_EQ(lfs::training::with_noise_outside_cap(params, nullptr).max_cap, 1000);
     params.max_cap = 0;
@@ -188,10 +232,10 @@ TEST(NoiseInfillTest, NoiseRowsLeaveTheExportAndOverridesAreUndone) {
     const auto rows = static_cast<size_t>(model.size());
     const size_t noise = rows / 10;
     model.set_frozen_ranges({{0, noise}});
-    param::OptimizationParameters params;
-    EXPECT_EQ(lfs::training::noise_infill_rows(model, params), 0u) << "without a mesh it is an added splat";
-    params.noise_infill_mesh = "scan.obj";
-    ASSERT_EQ(lfs::training::noise_infill_rows(model, params), noise);
+    EXPECT_EQ(lfs::training::noise_infill_rows(model), 0u) << "the opacity of an added splat";
+    EXPECT_FALSE(lfs::training::without_noise_infill(model));
+    model.opacity_raw().slice(0, 0, noise).fill_(lfs::training::kShownNoiseOpacity);
+    ASSERT_EQ(lfs::training::noise_infill_rows(model), noise);
 
     const auto opacity = model.opacity_raw().cpu().contiguous().to_vector();
     {
@@ -202,10 +246,11 @@ TEST(NoiseInfillTest, NoiseRowsLeaveTheExportAndOverridesAreUndone) {
     }
     EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector(), opacity);
 
-    const auto exported = lfs::training::without_noise_infill(model, noise);
-    ASSERT_EQ(static_cast<size_t>(exported.size()), rows - noise);
+    const auto exported = lfs::training::without_noise_infill(model);
+    ASSERT_TRUE(exported);
+    ASSERT_EQ(static_cast<size_t>(exported->size()), rows - noise);
     const auto means = model.means().cpu().contiguous().to_vector();
-    const auto exported_means = exported.means().cpu().contiguous().to_vector();
+    const auto exported_means = exported->means().cpu().contiguous().to_vector();
     for (size_t k = 0; k < 3; ++k)
         EXPECT_EQ(exported_means[k], means[3 * noise + k]);
 }

@@ -835,6 +835,8 @@ namespace lfs::core {
                 }
                 selected_indices.push_back(idx);
             }
+            // In their order, so each frozen range stays whole and keeps its place among the others.
+            std::ranges::sort(selected_indices);
         }
 
         auto indices_tensor = Tensor::from_vector(

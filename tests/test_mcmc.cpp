@@ -54,6 +54,38 @@ namespace {
 
 } // namespace
 
+// Catches a restart that keeps the full-run decay, which ends the run with the means rate above its final value.
+template <class Strategy>
+void expect_restarted_means_rate_to_end_at(const double final_fraction) {
+    auto splat_data = create_test_splat_data(50);
+    Strategy strategy(splat_data);
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 20;
+    opt_params.max_cap = 64;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    (void)optimizer.get_grad(ParamType::Means);
+    const double initial_rate = optimizer.get_param_lr(ParamType::Means);
+    int iter = 0;
+    for (; iter < 6; ++iter)
+        strategy.step(iter);
+    ASSERT_LT(optimizer.get_param_lr(ParamType::Means), initial_rate);
+
+    strategy.restart_mean_lr();
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate, initial_rate * 1e-6);
+    for (; iter < 20; ++iter)
+        strategy.step(iter);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate * final_fraction, initial_rate * final_fraction * 1e-3);
+}
+
+TEST(NoiseInfillRestartTest, McmcMeansRateEndsAtItsFinalValue) {
+    expect_restarted_means_rate_to_end_at<MCMC>(0.01);
+}
+
+TEST(NoiseInfillRestartTest, IgsPlusMeansRateEndsAtItsFinalValue) {
+    expect_restarted_means_rate_to_end_at<ImprovedGSPlus>(0.1);
+}
+
 TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
     auto splat_data = create_test_splat_data(50);
     MCMC strategy(splat_data);

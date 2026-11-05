@@ -45,6 +45,11 @@ def _green_infill_mesh_available(params):
     )
 
 
+def _green_infill_option_visible(params):
+    """An enabled option stays visible so it can be turned off once its mesh is gone."""
+    return params.enable_eval and (params.eval_green_infill or _green_infill_mesh_available(params))
+
+
 def _eval_mask_display(params):
     if not (params and params.has_params() and params.eval_mask):
         return tr("training.value.none")
@@ -595,7 +600,7 @@ class TrainingPanel(Panel):
             "dep_undistort": params.undistort,
             "dep_eval_mask": params.enable_eval and bool(params.eval_mask),
             "dep_eval_mask_splat": params.enable_eval and params.eval_mask.startswith("splat:"),
-            "dep_eval_green_infill": params.enable_eval and _green_infill_mesh_available(params),
+            "dep_eval_green_infill": _green_infill_option_visible(params),
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -821,10 +826,7 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_eval_green_infill",
-            lambda: p() is not None
-            and p().has_params()
-            and p().enable_eval
-            and _green_infill_mesh_available(p()),
+            lambda: p() is not None and p().has_params() and _green_infill_option_visible(p()),
         )
         model.bind_func(
             "dep_eval_holdout",

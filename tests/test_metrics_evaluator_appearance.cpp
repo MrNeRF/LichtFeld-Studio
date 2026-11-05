@@ -10,6 +10,7 @@
 #include "training/dataset.hpp"
 #include "training/metrics/eval_image_labels.hpp"
 #include "training/metrics/metrics.hpp"
+#include "training/noise_infill.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -149,7 +150,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookNotConsultedWhenUnset) {
 }
 
 // Catches the green pass running without the option, polluting the report with a second row, leaving the model's noise
-// shown or recoloured, or scoring its normal metrics with the noise visible.
+// shown or recoloured, a pause between views saving it hidden or green, or scoring its normal metrics with the noise visible.
 TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeavesTheModelAsItWas) {
     const UniqueTempDir root("lfs_eval_green_infill");
     write_constant_png(root.path() / "a.png", 0.5f);
@@ -171,7 +172,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeav
     auto shN = Tensor::zeros({rows, 0, 3}, Device::CUDA);
     auto scaling = Tensor::full({rows, 3}, -2.0f, Device::CUDA);
     auto rotation = Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {rows, 4}, Device::CUDA);
-    auto opacity = Tensor::full({rows, 1}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::from_vector({lfs::training::kShownNoiseOpacity, 2.0f}, {rows, 1}, Device::CUDA);
     SplatData model(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     model.set_frozen_ranges({{0, 1}});
     const auto sh0_before = model.sh0().cpu().contiguous().to_vector();
@@ -191,8 +192,15 @@ TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeav
     on_params.optimization.eval_green_infill = true;
     std::filesystem::create_directories(on_params.dataset.output_path);
     MetricsEvaluator on(on_params);
-    const auto on_metrics = on.evaluate(3, model, val_dataset, background);
+    int view_boundaries = 0;
+    const auto on_metrics = on.evaluate(3, model, val_dataset, background, nullptr, [&] {
+        EXPECT_EQ(model.sh0().cpu().contiguous().to_vector(), sh0_before);
+        EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector(), opacity_before);
+        ++view_boundaries;
+        return true;
+    });
     ASSERT_TRUE(on_metrics.valid);
+    EXPECT_GE(view_boundaries, 2) << "both passes";
     EXPECT_NEAR(on_metrics.psnr, plain_metrics.psnr, 1e-3f) << "the returned metrics score the surface alone";
     EXPECT_EQ(model.sh0().cpu().contiguous().to_vector(), sh0_before);
     EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector(), opacity_before);

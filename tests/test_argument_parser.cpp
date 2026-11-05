@@ -150,6 +150,37 @@ TEST(ArgumentParserTest, EvalGreenInfillWithoutAMeshStopsNamingTheFlagsToAdd) {
     }
 }
 
+// Catches the mesh check running before the config file is read, which rejects a mesh only the config names, and a config
+// that turns the option on without a mesh passing the check.
+TEST(ArgumentParserTest, EvalGreenInfillTakesItsMeshFromTheConfigFile) {
+    const auto dir = std::filesystem::path(make_test_path("lfs_arg_parser_green_infill_config"));
+    const auto data_path = (dir / "data").string();
+    const auto output_path = (dir / "output").string();
+    const auto config_path = (dir / "optimization.json").string();
+    const auto mesh_path = (dir / "scan.obj").string();
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+    std::ofstream(mesh_path).put('\n');
+    const auto parse_with = [&](const nlohmann::json& fields) {
+        auto config = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        config.update(fields);
+        std::ofstream(config_path) << config.dump(2);
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--config", config_path.c_str(), "--eval-green-infill"};
+        return lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    };
+    for (const nlohmann::json& fields : {nlohmann::json{{"noise_infill_mesh", mesh_path}},
+                                         nlohmann::json{{"enable_eval", true}, {"eval_mask", "mesh:" + mesh_path}}}) {
+        SCOPED_TRACE(fields.dump());
+        const auto parsed = parse_with(fields);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_TRUE((*parsed)->optimization.eval_green_infill);
+    }
+    const auto without_mesh = parse_with(nlohmann::json::object());
+    ASSERT_FALSE(without_mesh);
+    EXPECT_NE(without_mesh.error().find("needs a mesh"), std::string::npos) << without_mesh.error();
+}
+
 // Catches the flag not turning the evaluation on, or one of the two meshes not being taken.
 TEST(ArgumentParserTest, EvalGreenInfillTakesEitherMesh) {
     const auto data_path = make_test_path("lfs_arg_parser_green_infill_data");

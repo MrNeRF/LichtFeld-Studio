@@ -114,6 +114,28 @@ def training_panel_module(monkeypatch):
     return import_module("lfs_plugins.training_panel")
 
 
+@pytest.mark.parametrize(
+    ("enable_eval", "enabled", "noise_mesh", "eval_mask", "visible"),
+    [
+        (True, False, "scan.obj", "", True),
+        (True, False, "", "scan.obj", True),
+        (True, False, "", "cropbox", False),
+        (True, True, "", "cropbox", True),
+        (False, True, "scan.obj", "", False),
+    ],
+)
+def test_enabled_green_infill_stays_visible_once_its_mesh_is_gone(
+    training_panel_module, enable_eval, enabled, noise_mesh, eval_mask, visible
+):
+    params = SimpleNamespace(
+        enable_eval=enable_eval,
+        eval_green_infill=enabled,
+        noise_infill_mesh=noise_mesh,
+        eval_mask=eval_mask,
+    )
+    assert bool(training_panel_module._green_infill_option_visible(params)) is visible
+
+
 class _HandleStub:
     def __init__(self):
         self.dirty_fields = []

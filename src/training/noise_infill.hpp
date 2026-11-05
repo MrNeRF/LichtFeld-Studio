@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 
 namespace lfs::core {
     struct MeshData;
@@ -45,10 +46,9 @@ namespace lfs::training {
     [[nodiscard]] lfs::Result<core::SplatData> load_noise_infill(const std::filesystem::path& mesh,
                                                                  const std::array<float, 3>& origin);
 
-    // Rows [0, count) of a model trained with `params` whose noise infill was prepended: its frozen range starting at
-    // row 0, which compaction keeps first and whole since frozen rows are never removed; 0 without one.
-    [[nodiscard]] std::size_t noise_infill_rows(const core::SplatData& model,
-                                                const core::param::OptimizationParameters& params);
+    // Rows [0, count) of a model with a noise infill: its frozen range at row 0, whose first row has an opacity only noise
+    // has. Frozen rows never train and are never removed, so that range stays first and whole. 0 without one.
+    [[nodiscard]] std::size_t noise_infill_rows(const core::SplatData& model);
 
     // The training step at which the noise appears; until then its rows render invisible, so the surface forms undisturbed.
     [[nodiscard]] int noise_infill_start_iteration(const core::param::OptimizationParameters& params);
@@ -57,7 +57,8 @@ namespace lfs::training {
     // most with natural surface colours.
     void randomize_noise_colors(core::SplatData& model, std::size_t count);
 
-    // Runs before each forward pass: from the start iteration on, new colours for the noise. Returns whether it appears now.
+    // Runs before each forward pass: new colours for noise that shows, and hidden noise appears once its start iteration
+    // is reached. Returns whether it appears now.
     [[nodiscard]] bool noise_infill_step(core::SplatData& model, const core::param::OptimizationParameters& params, int iter);
 
     // `params` with the noise rows of `model` on top of its row cap: the noise never reaches an export, so it takes no row
@@ -65,8 +66,9 @@ namespace lfs::training {
     [[nodiscard]] core::param::OptimizationParameters with_noise_outside_cap(const core::param::OptimizationParameters& params,
                                                                              const core::SplatData* model);
 
-    // `model` without its noise rows [0, `noise_rows`) and its deleted rows: no export carries the noise.
-    [[nodiscard]] core::SplatData without_noise_infill(const core::SplatData& model, std::size_t noise_rows);
+    // A copy of `model` without its noise infill and its deleted rows, for an export, which never carries the noise; none
+    // if it has no noise.
+    [[nodiscard]] std::optional<core::SplatData> without_noise_infill(const core::SplatData& model);
 
     // Rows [begin, end) of a tensor set to `value`, restored when this goes out of scope.
     class RowOverride {
