@@ -977,8 +977,9 @@ namespace {
             ::args::ValueFlag<std::string> save_project_path(
                 output_group, "path",
                 "Destination for --save-project-at-iter. If omitted, the bound project path is used. Required with "
-                "several iterations: each is then a standalone <stem>_<iter>.licht holding only that iteration's "
-                "checkpoint, without earlier checkpoints or an embedded dataset; an existing file is kept and fails the run",
+                "several iterations: each is then a standalone <stem>_<iter>.licht with a new project ID and only "
+                "that iteration's checkpoint. A run from a project keeps that project's other nodes and embedded "
+                "dataset. An existing file fails the run before training",
                 {"save-project-path"});
 
             // =============================================================================

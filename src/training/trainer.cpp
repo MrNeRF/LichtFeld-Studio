@@ -4810,17 +4810,11 @@ namespace lfs::training {
                         "Training autosave is missing live GUI project state",
                         LFS_SOURCE_SITE_CURRENT());
                 }
-                // A standalone snapshot holds no geometry inherited from a
-                // resumed project: its payloads stay in the source file.
-                std::vector<lfs::core::Uuid> omitted;
-                if (chapters->standalone)
-                    for (const auto& [uuid, binding] : project_snapshot_payload_bindings_)
-                        omitted.push_back(uuid);
                 return capture_project_snapshot_cpu_state(
                     *scene_, checkpoint_params,
                     captured_uuid, iteration,
                     *cpu_state, {},
-                    project_snapshot_payload_bindings_, omitted);
+                    project_snapshot_payload_bindings_);
             },
         };
 
@@ -5098,12 +5092,14 @@ namespace lfs::training {
                             retained_reader = retained_source;
                         if (retained_reader)
                             source_path = retained_reader->path();
-                        // A standalone snapshot copies no earlier generation,
-                        // checkpoint or embedded dataset from any source.
-                        if (chapters->standalone) {
-                            source_path.reset();
-                            retained_reader.reset();
-                            headless_source_path.reset();
+                        // A standalone file of a run with a project is a Save As,
+                        // which replaces its destination: keep a file that
+                        // appeared after this iteration was requested.
+                        if (chapters->standalone && lfs::core::native_fs::exists(path)) {
+                            return project_snapshot_error(
+                                lfs::ErrorCode::AlreadyExists,
+                                "The standalone project file already exists",
+                                LFS_SOURCE_SITE_CURRENT());
                         }
                         // A redirected recovery save does not merge into or own
                         // the original master. Its owner keeps staging alive.
@@ -5412,6 +5408,14 @@ namespace lfs::training {
                             return std::move(staged)
                                 .error();
                         }
+                        // A standalone file holds only this iteration's checkpoint.
+                        std::vector<lfs::core::Uuid> earlier_checkpoints;
+                        if (chapters->standalone) {
+                            for (const auto& uuid : document->checkpoint_uuids()) {
+                                if (uuid != captured->snapshot_uuid && document->remove_checkpoint(uuid))
+                                    earlier_checkpoints.push_back(uuid);
+                            }
+                        }
                         const auto* source_reader =
                             document->source_reader();
                         const bool has_existing_preview =
@@ -5486,7 +5490,10 @@ namespace lfs::training {
                                         document_context
                                             ? document_context
                                                   ->save_as_project_uuid
+                                        : chapters->standalone
+                                            ? lfs::core::generate_uuid_v4()
                                             : (headless_source_path && save_as ? project_uuid_ : lfs::core::Uuid{}),
+                                    .save_as_excluded_checkpoints = std::move(earlier_checkpoints),
                                     .allow_existing_destination_replacement =
                                         document_context &&
                                         document_context
@@ -9044,6 +9051,29 @@ namespace lfs::training {
             })));
         }
 
+        // An existing --save-project-at-iter file fails the run before it trains.
+        if (saves_standalone_projects()) {
+            bool saves_at_steps = false;
+            {
+                std::lock_guard lock(project_snapshot_mutex_);
+                saves_at_steps = trainer_project_save_policy_.at_step_boundaries;
+            }
+            for (const auto iteration : params_.save_project_at_iteration) {
+                const auto step = static_cast<int>(iteration);
+                if (!saves_at_steps || step <= current_iteration_.load())
+                    continue;
+                if (const auto path = standalone_project_path(step); lfs::core::native_fs::exists(path)) {
+                    return lfs::Status::failure(attach_train_stamp(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::AlreadyExists,
+                        .domain = lfs::ErrorDomain::IO,
+                        .user_message = "A --save-project-at-iter project file already exists.",
+                        .detail = std::format("Iteration {} saves to '{}', which already exists", step,
+                                              lfs::core::path_to_utf8(path)),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    })));
+                }
+            }
+        }
         training_complete_ = false;
         empty_ignore_mask_warned_ = false;
         pending_snapshot_finish_reason_ =
@@ -10126,9 +10156,14 @@ namespace lfs::training {
             project_at_iteration_error_ = std::move(error);
     }
 
-    void Trainer::save_standalone_project(const int iteration) {
+    std::filesystem::path Trainer::standalone_project_path(const int iteration) const {
         auto path = params_.save_project_path.parent_path() / params_.save_project_path.stem();
         path += std::format("_{}.licht", iteration);
+        return path;
+    }
+
+    void Trainer::save_standalone_project(const int iteration) {
+        const auto path = standalone_project_path(iteration);
         const auto fail = [&](const std::string_view reason, const lfs::ErrorCode code = lfs::ErrorCode::Internal) {
             std::lock_guard lock(project_snapshot_mutex_);
             record_project_at_iteration_failure_locked(iteration, path, reason, code);
