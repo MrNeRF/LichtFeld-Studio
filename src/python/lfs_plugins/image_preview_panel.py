@@ -55,6 +55,10 @@ LOCALE_KEY = {
     "text_hint": "image_preview.sam_text_hint",
     "generate_hint": "image_preview.sam_generate_hint",
     "recompute_hint": "image_preview.sam_recompute_hint",
+    "positive_hint": "image_preview.sam_positive_hint",
+    "negative_hint": "image_preview.sam_negative_hint",
+    "box_hint": "image_preview.sam_box_hint",
+    "pan_hint": "image_preview.sam_pan_hint",
     "idle": "image_preview.sam_idle",
     "queued": "image_preview.sam_queued",
     "loading": "image_preview.sam_loading",
@@ -1596,7 +1600,9 @@ class ImagePreviewPanel(Panel):
             _set_text(doc, "sam-" + key, lf.ui.tr(LOCALE_KEY[key.replace("-", "_")]))
         _set_text(doc, "sam-refine", lf.ui.tr("image_preview.sam_recompute"))
         _set_text(doc, "sam-generate", lf.ui.tr("image_preview.sam_update" if editor.can_refine else "image_preview.sam_generate"))
-        for element_id, key in (("sam-generate", "generate_hint"), ("sam-refine", "recompute_hint"),
+        for element_id, key in (("sam-positive", "positive_hint"), ("sam-negative", "negative_hint"),
+                                ("sam-box", "box_hint"), ("sam-pan", "pan_hint"),
+                                ("sam-generate", "generate_hint"), ("sam-refine", "recompute_hint"),
                                 ("sam-edit", "edit_hint"), ("sam-remove", "edit_hint")):
             element = doc.get_element_by_id(element_id)
             if element:

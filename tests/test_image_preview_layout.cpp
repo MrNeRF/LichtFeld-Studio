@@ -5,6 +5,7 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/FontEngineInterface.h>
 #include <algorithm>
+#include <core/event_bridge/localization_manager.hpp>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -72,6 +73,7 @@ namespace {
             doc->Show();
         }
         void TearDown() override {
+            lfs::event::LocalizationManager::getInstance().reset();
             Rml::RemoveContext("preview-layout");
             Rml::Shutdown();
         }
@@ -184,51 +186,64 @@ namespace {
         sidebar->SetClass("sam-sidebar", true);
         doc->GetElementById("metadata-info")->SetClass("hidden", true);
         doc->GetElementById("sam-markers")->SetInnerRML("<div id='test-sam-box' class='sam-box'></div>");
-        const std::map<std::string, std::string> sam_labels{
-            {"sam-positive", "Oggetto +"},
-            {"sam-negative", "Sfondo -"},
-            {"sam-box", "Riquadro"},
-            {"sam-edit", "Modifica"},
-            {"sam-pan", "Naviga"},
-            {"sam-remove", "Elimina"},
-            {"sam-flip", "Scambia +/−"},
-            {"sam-show", "Overlay"},
-            {"sam-undo", "Annulla prompt"},
-            {"sam-clear", "Pulisci prompt"},
-            {"sam-generate", "Genera"},
-            {"sam-refine", "Ricalcola"},
-            {"sam-cancel", "Annulla"},
-            {"sam-candidate-0", "1"},
-            {"sam-candidate-1", "2"},
-            {"sam-candidate-2", "3"},
-            {"sam-heading", "1 · Indicazioni"},
-            {"sam-proposals-heading", "2 · Proposta"},
-            {"sam-edit-hint", "Clicca un punto per selezionarlo. Modifica: trascina per spostarlo. Canc o clic destro per eliminarlo. Annulla ripristina la modifica."},
-            {"sam-selection", "Seleziona un punto o il bordo del riquadro."},
-            {"sam-quality", "Qualità stimata: 97% · non verificata"},
-            {"sam-text-hint", "La selezione scrivendo non è disponibile in questa preview."},
-            {"sam-status", "Scegli una proposta o affinala"},
-            {"sam-hint", "Immagine originale, solo proposte. Le maschere del dataset restano invariate."}};
-        for (const auto& [id, text] : sam_labels)
-            doc->GetElementById(id)->SetInnerRML(text);
-        for (int width : {600, 760, 1200}) {
-            SCOPED_TRACE(width);
-            resize(width);
-            EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
-            Rml::ElementList buttons;
-            controls->QuerySelectorAll(buttons, "button");
-            ASSERT_EQ(buttons.size(), 16u);
-            for (auto* button : buttons) {
-                checkWithin(button, controls);
-                EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
-                EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
-                const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
-                    button->GetFontFaceHandle(), sam_labels.at(button->GetId()),
-                    Rml::TextShapingContext{button->GetComputedValues().language()});
-                EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+        const std::map<std::string, std::string> sam_keys{
+            {"sam-positive", "sam_positive"},
+            {"sam-negative", "sam_negative"},
+            {"sam-box", "sam_box"},
+            {"sam-edit", "sam_edit"},
+            {"sam-pan", "sam_pan"},
+            {"sam-remove", "sam_remove"},
+            {"sam-flip", "sam_flip"},
+            {"sam-show", "sam_show"},
+            {"sam-undo", "sam_undo"},
+            {"sam-clear", "sam_clear"},
+            {"sam-generate", "sam_generate"},
+            {"sam-refine", "sam_recompute"},
+            {"sam-cancel", "sam_cancel"},
+            {"sam-heading", "sam_heading"},
+            {"sam-proposals-heading", "sam_proposals_heading"},
+            {"sam-edit-hint", "sam_edit_hint"},
+            {"sam-selection", "sam_selection_none"},
+            {"sam-quality", "sam_quality"},
+            {"sam-text-hint", "sam_text_hint"},
+            {"sam-status", "sam_ready"},
+            {"sam-hint", "sam_hint"}};
+        const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
+        for (const char* font : {"NotoSansJP-Regular.ttf", "NotoSansKR-Regular.ttf"})
+            ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts" / font).string(), true));
+        auto& locales = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(locales.initialize((root / "src/visualizer/gui/resources/locales").string()));
+        for (const auto& language : locales.getAvailableLanguages()) {
+            SCOPED_TRACE(language);
+            ASSERT_TRUE(locales.setLanguage(language));
+            std::map<std::string, std::string> sam_labels{
+                {"sam-candidate-0", "1"},
+                {"sam-candidate-1", "2"},
+                {"sam-candidate-2", "3"}};
+            for (const auto& [id, key] : sam_keys)
+                sam_labels[id] = locales.get("image_preview." + key);
+            sam_labels["sam-quality"] = Rml::StringUtilities::Replace(sam_labels["sam-quality"], "{score}", "97");
+            for (const auto& [id, text] : sam_labels)
+                doc->GetElementById(id)->SetInnerRML(text);
+            for (int width : {600, 760, 1200}) {
+                SCOPED_TRACE(width);
+                resize(width);
+                EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
+                Rml::ElementList buttons;
+                controls->QuerySelectorAll(buttons, "button");
+                ASSERT_EQ(buttons.size(), 16u);
+                for (auto* button : buttons) {
+                    checkWithin(button, controls);
+                    EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
+                    EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
+                    const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
+                        button->GetFontFaceHandle(), sam_labels.at(button->GetId()),
+                        Rml::TextShapingContext{button->GetComputedValues().language()});
+                    EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+                }
+                EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
+                EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
             }
-            EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
-            EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
         }
     }
 
