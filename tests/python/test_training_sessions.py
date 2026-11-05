@@ -129,22 +129,31 @@ def test_capture_capacity_rejected_before_attribute_access():
 
 def test_native_camera_uses_actual_principal_point_and_model_frame():
     world = np.eye(4); world[:3, 3] = [1, 2, 3]
+    model = np.eye(4); model[:3, 3] = [2, -3, 4]
+    rotation = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    translation = np.array([3, 4, 5])
     camera = SimpleNamespace(has_camera=True, name="Camera 1", world_transform=world,
-        camera_R=Tensor(np.eye(3)), camera_T=Tensor([2, 0, 0]),
+        camera_R=Tensor(rotation), camera_T=Tensor(translation),
         camera_focal_x=50., camera_focal_y=60., camera_center_x=17., camera_center_y=22.,
         camera_width=64, camera_height=48)
-    scene = SimpleNamespace(training_model_node_name="model", get_node=lambda name: SimpleNamespace(world_transform=world),
-                            get_active_cameras=lambda: [camera])
+    scene = SimpleNamespace(training_model_node_name="model", get_node=lambda name: SimpleNamespace(world_transform=model),
+                            get_active_cameras=lambda: [SimpleNamespace(has_camera=False), camera])
     result = geometry.from_native_scene(scene)
     assert result["cameras"][0]["cx"] == 17.
     assert result["cameras"][0]["cy"] == 22.
-    np.testing.assert_array_equal(np.asarray(result["cameras"][0]["camera_to_data"])[:3, 3], [-1, 2, 3])
-    np.testing.assert_array_equal(result["model_to_data"], world)
+    expected = np.eye(4); expected[:3, :3] = rotation.T; expected[:3, 3] = -rotation.T @ translation
+    np.testing.assert_array_equal(result["cameras"][0]["camera_to_data"], world @ expected)
+    np.testing.assert_array_equal(result["model_to_data"], model)
+    assert result["cameras"][0]["fy"] == 60.
+    assert result["cameras"][0]["height"] == 48
     source = {"source_frame": "blender-world", "data_to_source": geometry.BLENDER_TO_VISUALIZER}
     result = geometry.from_native_scene(scene, source)
     assert result["source_frame"] == "blender-world"
     np.testing.assert_array_equal(result["data_to_source"], source["data_to_source"])
     assert result["cameras"][0]["cx"] == 17.
+    camera.camera_focal_x = float("nan")
+    with pytest.raises(ValueError, match="intrinsics"):
+        geometry.from_native_scene(scene)
 
 
 def test_dependency_preparation_never_blocks_capture_or_terminal_hook(tmp_path, monkeypatch):
