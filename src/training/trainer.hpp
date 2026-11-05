@@ -772,6 +772,7 @@ namespace lfs::training {
         [[nodiscard]] bool saves_standalone_projects() const {
             return params_.save_project_at_iteration.size() > 1 && !params_.save_project_path.empty();
         }
+        [[nodiscard]] std::filesystem::path standalone_project_path(int iteration) const;
         // Starts writing <stem>_<iteration>.licht, holding only this iteration's
         // checkpoint. Failures are kept in project_at_iteration_error_.
         void save_standalone_project(int iteration);
