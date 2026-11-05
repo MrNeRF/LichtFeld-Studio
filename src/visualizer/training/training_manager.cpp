@@ -2078,14 +2078,18 @@ namespace lfs::vis {
 
         // Prefer scene metadata so UI polling does not dereference the live
         // training model while topology-changing refinement is in progress.
+        const auto without_noise = [this](const std::size_t rows) {
+            const std::size_t noise_rows = trainer_->noise_infill_row_count();
+            return static_cast<int>(rows > noise_rows ? rows - noise_rows : 0);
+        };
         if (scene_) {
-            return static_cast<int>(scene_->getTrainingModelGaussianCount());
+            return without_noise(scene_->getTrainingModelGaussianCount());
         }
 
         // Legacy fallback for non-scene-backed trainers.
         if (trainer_->isInitialized()) {
             const std::shared_lock lock(trainer_->getRenderMutex());
-            return static_cast<int>(trainer_->get_strategy().get_model().size());
+            return without_noise(trainer_->get_strategy().get_model().size());
         }
         return 0;
     }

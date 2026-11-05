@@ -8,13 +8,13 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/selection_chapter.hpp"
 #include "rendering/environment_image.hpp"
 #include "rendering/rendering_types.hpp"
-#include "training/noise_infill.hpp"
 
 #include <algorithm>
 #include <array>
@@ -479,7 +479,7 @@ namespace lfs::vis::gui {
                 throw std::runtime_error("Scene preparation canceled.");
             auto& published = request.nodes[i];
             if (auto& live = published.snapshot; live.data && live.row_count == static_cast<size_t>(live.data->size())) {
-                if (auto without_noise = training::without_noise_infill(*live.data)) {
+                if (auto without_noise = core::without_noise_infill(*live.data)) {
                     live.row_count = without_noise->size();
                     live.data = std::make_shared<core::SplatData>(std::move(*without_noise));
                 }
@@ -494,7 +494,7 @@ namespace lfs::vis::gui {
                         loaded_payload = published.load_payload();
                         if (!loaded_payload)
                             throw std::runtime_error("Embedded asset is not splat data.");
-                        if (auto without_noise = training::without_noise_infill(*loaded_payload))
+                        if (auto without_noise = core::without_noise_infill(*loaded_payload))
                             loaded_payload = std::make_shared<core::SplatData>(std::move(*without_noise));
                     }
                     published.snapshot.row_count = loaded_payload->size();

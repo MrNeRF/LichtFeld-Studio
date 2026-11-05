@@ -584,7 +584,7 @@ namespace lfs::training {
         }
 
         // Noise guided splatting: the noise infill of the mesh's interior leads the model, frozen. Frozen rows are never
-        // removed and compaction keeps the order, so the noise stays rows [0, count) and nothing else starts at row 0.
+        // removed and compaction keeps the order, so the noise stays rows [0, count).
         lfs::Result<void> prependNoiseInfill(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
@@ -593,10 +593,6 @@ namespace lfs::training {
             // A scored model needs no noise of its own: with --eval-green-infill the evaluator builds its own.
             if (opt.noise_infill_mesh.empty() || params.evaluate_only || noise_infill_rows(model) > 0) {
                 return {};
-            }
-            // Frozen rows share one learning-rate scale, and the noise must not move.
-            if (params.freeze_lr_scale != 0.0f) {
-                return lfs::Result<void>::failure(initFileError("--noise-infill-mesh needs --freeze-lr-scale 0"));
             }
             auto noise = load_noise_infill(lfs::core::utf8_to_path(opt.noise_infill_mesh),
                                            {dataset_origin.x, dataset_origin.y, dataset_origin.z});

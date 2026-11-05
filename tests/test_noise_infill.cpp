@@ -108,6 +108,41 @@ TEST(NoiseInfillTest, AMeshWithoutAnInsideStopsWithAMessage) {
     EXPECT_FALSE(not_a_mesh.error().user_message().empty());
 }
 
+// Catches a second shell overflowing the buffer of surface splats, whose holes let the outside flood the inside, and shells
+// wound against each other, whose signed volume understates the inside and would ask for millions of noise splats.
+TEST(NoiseInfillTest, ShellsWoundAgainstEachOtherFillAsOneInside) {
+    const auto cube = make_cube(false);
+    auto vertices = cube.vertices.cpu().contiguous().to_vector();
+    auto indices = cube.indices.cpu().contiguous().to_vector_int();
+    const size_t outer_vertices = vertices.size() / 3, outer_indices = indices.size();
+    for (size_t v = 0; v < outer_vertices * 3; ++v)
+        vertices.push_back(0.05f + 0.9f * vertices[v]);
+    for (size_t i = 0; i < outer_indices; i += 3) {
+        indices.push_back(indices[i] + int(outer_vertices));
+        indices.push_back(indices[i + 2] + int(outer_vertices));
+        indices.push_back(indices[i + 1] + int(outer_vertices));
+    }
+    const auto infill = lfs::training::make_noise_infill(MeshData(Tensor::from_vector(vertices, {vertices.size() / 3, 3}, Device::CPU),
+                                                                  Tensor::from_vector(indices, {indices.size() / 3, 3}, Device::CPU)));
+    ASSERT_TRUE(infill.has_value()) << infill.error().user_message();
+    EXPECT_EQ(infill->capped_loops, 0u);
+    EXPECT_GT(infill->splats.size(), 50000);
+    EXPECT_LT(infill->splats.size(), 400000);
+}
+
+// Catches a patch wound the other way reading as a hole, whose caps would wall off parts of the inside.
+TEST(NoiseInfillTest, AFlippedFaceIsNotAnOpenLoop) {
+    auto mesh = make_cube(false);
+    auto indices = mesh.indices.cpu().contiguous().to_vector_int();
+    std::swap(indices[0], indices[1]);
+    std::swap(indices[3], indices[4]);
+    const auto flipped = lfs::training::make_noise_infill(
+        MeshData(mesh.vertices, Tensor::from_vector(indices, {indices.size() / 3, 3}, Device::CPU)));
+    ASSERT_TRUE(flipped.has_value()) << flipped.error().user_message();
+    EXPECT_EQ(flipped->capped_loops, 0u);
+    EXPECT_GT(flipped->splats.size(), 0);
+}
+
 // Catches a colour draw the tensor library refuses, or one that leaves the six high-contrast colours or the noise rows.
 TEST(NoiseInfillTest, ColoursStayOnTheSixColoursOfTheNoiseRows) {
     auto loaded = load_real_splat();

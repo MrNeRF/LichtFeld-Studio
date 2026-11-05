@@ -201,6 +201,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeav
     });
     ASSERT_TRUE(on_metrics.valid);
     EXPECT_GE(view_boundaries, 2) << "both passes";
+    EXPECT_EQ(on_metrics.num_gaussians, 1) << "the surface alone";
     EXPECT_NEAR(on_metrics.psnr, plain_metrics.psnr, 1e-3f) << "the returned metrics score the surface alone";
     EXPECT_EQ(model.sh0().cpu().contiguous().to_vector(), sh0_before);
     EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector(), opacity_before);
@@ -218,6 +219,19 @@ TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeav
     for (std::string line; std::getline(csv, line);)
         lines += !line.empty();
     EXPECT_EQ(lines, 2u) << "header and the surface's row, no row for the green pass";
+
+    // Catches a mesh no view sees, as in the wrong coordinates, reading as a perfectly opaque surface.
+    auto behind_camera = Tensor::from_vector({0.0f, 0.0f, -100.0f, 0.0f, 0.0f, 0.0f}, {rows, 3}, Device::CUDA);
+    SplatData unseen(0, behind_camera, sh0.clone(), shN, scaling, rotation, opacity.clone(), 1.0f);
+    unseen.set_frozen_ranges({{0, 1}});
+    auto unseen_params = on_params;
+    unseen_params.dataset.output_path = root.path() / "unseen";
+    std::filesystem::create_directories(unseen_params.dataset.output_path);
+    MetricsEvaluator unseen_evaluator(unseen_params);
+    ASSERT_TRUE(unseen_evaluator.evaluate(3, unseen, val_dataset, background).valid);
+    std::ifstream unseen_report(root.path() / "unseen" / "green_infill_step_3.json");
+    const auto unseen_document = nlohmann::json::parse(unseen_report);
+    EXPECT_FALSE(unseen_document.contains("surface_opacity"));
 }
 
 TEST_F(MetricsEvaluatorAppearanceTest, HookRunsOncePerFrameBeforeClampAndSavesCorrectedRender) {

@@ -826,7 +826,7 @@ namespace lfs::training {
 
         size_t reported_gaussian_count(const lfs::core::SplatData& model) {
             const size_t count = model.size();
-            return count - std::min(count, model.deleted_count());
+            return count - std::min(count, model.deleted_count() + noise_infill_rows(model));
         }
 
         [[nodiscard]] std::array<float, 3> lerp_color(const std::array<float, 3>& a,
@@ -3119,6 +3119,10 @@ namespace lfs::training {
 
             auto& splat = strategy_->get_model();
 
+            // Frozen rows share one learning-rate scale, and the noise must not move.
+            if (params.freeze_lr_scale != 0.0f && noise_infill_rows(splat) > 0)
+                return std::unexpected("--noise-infill-mesh needs --freeze-lr-scale 0");
+
             const int max_cap = with_noise_outside_cap(params.optimization, &splat).max_cap;
             if (max_cap > 0 && max_cap < splat.size()) {
                 LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
@@ -3134,6 +3138,7 @@ namespace lfs::training {
                 splat,
                 strategy_->get_optimizer(),
                 params_.freeze_lr_scale);
+            noise_infill_row_count_.store(noise_infill_rows(splat), std::memory_order_relaxed);
             {
                 std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
                 if (auto result = ensureModelTensorAllocatorStorage(splat, "strategy initialization"); !result) {
@@ -6799,8 +6804,11 @@ namespace lfs::training {
 
                 {
                     nvtxRangePush("rasterize");
-                    if (noise_infill_step(strategy_->get_model(), params_.optimization, iter))
-                        strategy_->restart_mean_lr();
+                    if (auto& model = strategy_->get_model(); model.has_frozen_ranges()) {
+                        const std::unique_lock model_write_lock(model_access_mutex_);
+                        if (noise_infill_step(model, params_.optimization, iter))
+                            strategy_->restart_mean_lr();
+                    }
 
                     lfs::core::Tensor gt_tile = gt_image;
                     lfs::core::Tensor bg_tile;
@@ -8702,6 +8710,9 @@ namespace lfs::training {
                                     cam_to_use->load_image_size(params_.dataset.resize_factor, params_.dataset.max_width);
                                 }
 
+                                std::optional<RowOverride> hidden_noise;
+                                if (const size_t noise_rows = noise_infill_rows(strategy_->get_model()); noise_rows > 0)
+                                    hidden_noise.emplace(strategy_->get_model().opacity_raw(), 0, noise_rows, kHiddenOpacity);
                                 RenderOutput rendered_timelapse_output;
                                 if (step_params.gut) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
@@ -10337,6 +10348,7 @@ namespace lfs::training {
             apply_frozen_ranges_to_optimizer(strategy_->get_model(), strategy_->get_optimizer());
             if (popspa_optimizer_)
                 apply_frozen_ranges_to_optimizer(strategy_->get_model(), *popspa_optimizer_, 0.0f);
+            noise_infill_row_count_.store(noise_infill_rows(strategy_->get_model()), std::memory_order_relaxed);
         }
         popspa_dataset_validated_ = false;
         if (params_.optimization.enable_sparsity) {

@@ -10,7 +10,6 @@
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -409,9 +408,6 @@ namespace lfs::core {
         // unclassifiable Float16 storage). Internal maintenance helper.
         void verify_or_resize_non_q16_shN(size_t n, size_t cap, uint32_t layout_rest);
         void set_active_sh_degree(int sh_degree);
-        // The degree that renders, for a render of a lower degree that then puts it back: a flag, which does not depend on the
-        // state of the SH storage.
-        void set_rendered_sh_degree(const int sh_degree) noexcept { _active_sh_degree = std::clamp(sh_degree, 0, _max_sh_degree); }
         // Attach optional q16 bounds, then set the active SH degree.
         // Reconstruct/migrate paths that copy pad-dropped codes must pass the
         // bounds so the tripwire never sees codes without them (#1616, #1678).

@@ -225,6 +225,8 @@ namespace lfs::training {
 
         // Check if trainer is initialized
         bool isInitialized() const { return initialized_.load(); }
+        // The leading rows of the model that are its noise infill, cached for the row count the UI polls.
+        std::size_t noise_infill_row_count() const { return noise_infill_row_count_.load(std::memory_order_relaxed); }
 
         // Main training method with stop token support
         [[nodiscard]] lfs::Status train(std::stop_token stop_token = {});
@@ -1083,6 +1085,7 @@ namespace lfs::training {
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
         std::atomic<bool> evaluation_active_{false};
+        std::atomic<std::size_t> noise_infill_row_count_{0};
         std::atomic<bool> training_complete_{false};
         std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};

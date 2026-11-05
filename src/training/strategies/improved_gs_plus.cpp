@@ -218,9 +218,9 @@ namespace lfs::training {
         if (!_optimizer || !_params || !_splat_data)
             return;
         _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
-        // One decay drives both rates: over the steps left it takes the means to their final rate.
+        // The scheduler then takes the means to their final rate over the steps left; step() keeps the scaling's decay.
         _scheduler = std::make_unique<ExponentialLR>(*_optimizer, restart_decay_gamma(*_params, *_optimizer, 0.1),
-                                                     std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
+                                                     std::vector<ParamType>{ParamType::Means});
     }
 
     void ImprovedGSPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
@@ -805,6 +805,8 @@ namespace lfs::training {
             _optimizer->step(iter);
             _optimizer->zero_grad(iter);
             _scheduler->step();
+            if (!_scheduler->updates(ParamType::Scaling))
+                _optimizer->set_param_lr(ParamType::Scaling, _optimizer->get_param_lr(ParamType::Scaling) * std::pow(0.1, 1.0 / _params->iterations));
         }
     }
 

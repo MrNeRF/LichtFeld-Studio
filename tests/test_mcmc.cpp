@@ -54,9 +54,10 @@ namespace {
 
 } // namespace
 
-// Catches a restart that keeps the full-run decay, which ends the run with the means rate above its final value.
+// Catches a restart that keeps the full-run decay, which ends the run with the means rate above its final value, and one
+// that changes the decay of the scaling rate.
 template <class Strategy>
-void expect_restarted_means_rate_to_end_at(const double final_fraction) {
+void expect_restarted_rates_to_end_at(const double means_fraction, const double scaling_fraction) {
     auto splat_data = create_test_splat_data(50);
     Strategy strategy(splat_data);
     param::OptimizationParameters opt_params;
@@ -66,6 +67,7 @@ void expect_restarted_means_rate_to_end_at(const double final_fraction) {
     auto& optimizer = strategy.get_optimizer();
     (void)optimizer.get_grad(ParamType::Means);
     const double initial_rate = optimizer.get_param_lr(ParamType::Means);
+    const double initial_scaling_rate = optimizer.get_param_lr(ParamType::Scaling);
     int iter = 0;
     for (; iter < 6; ++iter)
         strategy.step(iter);
@@ -75,15 +77,17 @@ void expect_restarted_means_rate_to_end_at(const double final_fraction) {
     EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate, initial_rate * 1e-6);
     for (; iter < 20; ++iter)
         strategy.step(iter);
-    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate * final_fraction, initial_rate * final_fraction * 1e-3);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate * means_fraction, initial_rate * means_fraction * 1e-3);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Scaling), initial_scaling_rate * scaling_fraction,
+                initial_scaling_rate * scaling_fraction * 1e-3);
 }
 
 TEST(NoiseInfillRestartTest, McmcMeansRateEndsAtItsFinalValue) {
-    expect_restarted_means_rate_to_end_at<MCMC>(0.01);
+    expect_restarted_rates_to_end_at<MCMC>(0.01, 1.0);
 }
 
 TEST(NoiseInfillRestartTest, IgsPlusMeansRateEndsAtItsFinalValue) {
-    expect_restarted_means_rate_to_end_at<ImprovedGSPlus>(0.1);
+    expect_restarted_rates_to_end_at<ImprovedGSPlus>(0.1, 0.1);
 }
 
 TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {

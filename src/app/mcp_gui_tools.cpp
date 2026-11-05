@@ -1941,8 +1941,7 @@ namespace lfs::app {
             const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
             // Copies of the training model without its noise infill and cropped; the scene model stays whole so a stopped
             // run can resume.
-            std::optional<core::SplatData> without_noise;
-            std::optional<core::SplatData> cropped;
+            std::deque<core::SplatData> copies;
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
@@ -1955,12 +1954,13 @@ namespace lfs::app {
                     }
                     const core::SplatData* data = node->model.get();
                     if (auto kept = training::without_noise_infill(*data))
-                        data = &without_noise.emplace(std::move(*kept));
-                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
-                        (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
-                        if (cropped->size() == 0)
-                            continue;
-                        data = &*cropped;
+                        data = &copies.emplace_back(std::move(*kept));
+                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid()) {
+                        if (auto cropped = training::crop_copy_to_training_cropbox(*data, *export_crop)) {
+                            if (cropped->size() == 0)
+                                continue;
+                            data = &copies.emplace_back(std::move(*cropped));
+                        }
                     }
                     splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }

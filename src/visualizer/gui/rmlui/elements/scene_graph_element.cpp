@@ -15,6 +15,7 @@
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/global_context_menu.hpp"
@@ -36,7 +37,6 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/noise_infill.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
@@ -57,6 +57,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -450,7 +451,7 @@ namespace lfs::vis::gui {
             case core::NodeType::SPLAT: {
                 if (!node->model || node->model->size() == 0)
                     return;
-                const auto without_noise = training::without_noise_infill(*node->model);
+                const auto without_noise = core::without_noise_infill(*node->model);
                 result = io::save_ply(without_noise ? *without_noise : *node->model, options);
                 break;
             }
@@ -751,6 +752,7 @@ namespace lfs::vis::gui {
                 if (auto* mutex = scene.liveModelMutex())
                     lock.emplace(*mutex);
                 std::vector<SplatTransferSource> sources;
+                std::deque<core::SplatData> without_noise;
                 for (const auto& [id, uuid] : identity) {
                     const auto* node = scene.getNodeById(id);
                     if (!node || node->uuid != uuid || !node->model)
@@ -758,7 +760,10 @@ namespace lfs::vis::gui {
                     const auto axes = prefs.format != "ply"               ? SplatDragAxes{}
                                       : target == FileDragTarget::Blender ? SplatDragAxes::blender()
                                                                           : prefs.axes;
-                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
+                    const core::SplatData* model = node->model.get();
+                    if (auto kept = core::without_noise_infill(*model))
+                        model = &without_noise.emplace_back(std::move(*kept));
+                    sources.push_back({model, scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
                     // Read the iteration beside the paused model snapshot, not
                     // when the drag is armed or after the export has finished.
                     if (trainer && trainer->getState() == TrainingState::Paused &&

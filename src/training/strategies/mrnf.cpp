@@ -513,10 +513,10 @@ namespace lfs::training {
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
-        auto resolved_params = with_noise_outside_cap(optimParams, _splat_data);
+        auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
-            std::move(resolved_params));
+            with_noise_outside_cap(resolved_params, _splat_data));
 
         if (_params->max_cap > 0) {
             const size_t capacity = static_cast<size_t>(_params->max_cap);
@@ -2929,9 +2929,9 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
-        auto resolved_params = with_noise_outside_cap(params, _splat_data);
+        auto resolved_params = params;
         resolved_params.resolve_mrnf_capacity_defaults();
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(resolved_params, _splat_data));
         if (renderer_changed)
             reset_exchange_state();
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)

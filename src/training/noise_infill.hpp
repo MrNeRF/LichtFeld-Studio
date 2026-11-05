@@ -4,11 +4,13 @@
 
 #include "core/error.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 
 #include <array>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <optional>
 
 namespace lfs::core {
@@ -27,9 +29,10 @@ namespace lfs::training {
 
     // Cells kept free under the surface, so the noise stays behind it.
     inline constexpr int kNoiseInfillErosion = 2;
-    // Raw opacity of a row that renders invisible, and of a noise row: the logit of 0.99.
-    inline constexpr float kHiddenOpacity = -40.0f;
-    inline constexpr float kShownNoiseOpacity = 4.59512f;
+    using core::kHiddenOpacity;
+    using core::kShownNoiseOpacity;
+    using core::noise_infill_rows;
+    using core::without_noise_infill;
 
     struct NoiseInfill {
         core::SplatData splats;
@@ -46,10 +49,6 @@ namespace lfs::training {
     [[nodiscard]] lfs::Result<core::SplatData> load_noise_infill(const std::filesystem::path& mesh,
                                                                  const std::array<float, 3>& origin);
 
-    // Rows [0, count) of a model with a noise infill: its frozen range at row 0, whose first row has an opacity only noise
-    // has. Frozen rows never train and are never removed, so that range stays first and whole. 0 without one.
-    [[nodiscard]] std::size_t noise_infill_rows(const core::SplatData& model);
-
     // The training step at which the noise appears; until then its rows render invisible, so the surface forms undisturbed.
     [[nodiscard]] int noise_infill_start_iteration(const core::param::OptimizationParameters& params);
 
@@ -65,10 +64,6 @@ namespace lfs::training {
     // from the surface.
     [[nodiscard]] core::param::OptimizationParameters with_noise_outside_cap(const core::param::OptimizationParameters& params,
                                                                              const core::SplatData* model);
-
-    // A copy of `model` without its noise infill and its deleted rows, for an export, which never carries the noise; none
-    // if it has no noise.
-    [[nodiscard]] std::optional<core::SplatData> without_noise_infill(const core::SplatData& model);
 
     // Rows [begin, end) of a tensor set to `value`, restored when this goes out of scope.
     class RowOverride {
@@ -88,9 +83,10 @@ namespace lfs::training {
     // Writes green into the [count, 1, 3] colours of the noise rows.
     void paint_noise_green(core::Tensor& noise_sh0);
 
-    // The share of the infill rows [0, `noise_rows`) of `model` that shows through its surface on `cameras`: renders with the
-    // surface black and the infill green, against renders of the infill alone.
-    [[nodiscard]] double surface_see_through(core::SplatData& model, std::size_t noise_rows, const CameraDataset& cameras,
-                                             bool mip_filter);
+    // The share of the infill rows [0, `noise_rows`) of `model`, a copy it repaints, that shows through its surface on
+    // `cameras`: renders with the surface black and the infill green, against renders of the infill alone. None if no view
+    // sees the infill or `keep_going`, asked before each view, stops it.
+    [[nodiscard]] std::optional<double> surface_see_through(core::SplatData& model, std::size_t noise_rows, const CameraDataset& cameras,
+                                                            bool mip_filter, const std::function<bool()>& keep_going);
 
 } // namespace lfs::training

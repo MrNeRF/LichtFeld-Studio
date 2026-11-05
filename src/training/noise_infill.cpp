@@ -39,22 +39,6 @@ namespace lfs::training {
             });
         }
 
-        struct NoiseRange {
-            std::size_t count;
-            bool hidden;
-        };
-
-        [[nodiscard]] std::optional<NoiseRange> find_noise(const core::SplatData& model) {
-            for (const auto& range : model.frozen_ranges()) {
-                if (range.start != 0 || range.count == 0)
-                    continue;
-                const float opacity = model.opacity_raw().slice(0, 0, 1).item<float>();
-                if (opacity == kHiddenOpacity || opacity == kShownNoiseOpacity)
-                    return NoiseRange{range.count, opacity == kHiddenOpacity};
-            }
-            return std::nullopt;
-        }
-
         constexpr float kSh0 = 0.28209479177387814f;
         // SH0 coefficients of a colour channel at 0 and at 1.
         constexpr float kChannelOff = -0.5f / kSh0, kChannelOn = 0.5f / kSh0;
@@ -101,32 +85,48 @@ namespace lfs::training {
         // Each open boundary loop is closed by a fan around its centroid; returns the number of loops.
         size_t cap_boundary_loops(Geometry& g) {
             const size_t faces = g.indices.size() / 3;
+            const auto undirected = [](const int a, const int b) { return edge_key(std::min(a, b), std::max(a, b)); };
+            std::unordered_map<uint64_t, int> faces_on_edge;
             std::unordered_set<uint64_t> directed;
+            faces_on_edge.reserve(faces * 3);
             directed.reserve(faces * 3);
-            for (size_t f = 0; f < faces; ++f)
-                for (int k = 0; k < 3; ++k)
-                    directed.insert(edge_key(g.indices[3 * f + k], g.indices[3 * f + (k + 1) % 3]));
-            // A face edge whose reverse no face has lies on the boundary; walking them from vertex to vertex follows a loop.
+            for (size_t f = 0; f < faces; ++f) {
+                for (int k = 0; k < 3; ++k) {
+                    const int a = g.indices[3 * f + k], b = g.indices[3 * f + (k + 1) % 3];
+                    ++faces_on_edge[undirected(a, b)];
+                    directed.insert(edge_key(a, b));
+                }
+            }
+            // An edge only one face holds lies on the boundary, however the faces are wound. Walking both ways from vertex to
+            // vertex follows a loop across patches wound differently.
             std::unordered_multimap<int, int> boundary;
-            for (const auto key : directed) {
+            for (const auto& [key, count] : faces_on_edge) {
+                if (count != 1)
+                    continue;
                 const int a = int(key >> 32), b = int(uint32_t(key));
-                if (!directed.contains(edge_key(b, a)))
-                    boundary.emplace(a, b);
+                boundary.emplace(a, b);
+                boundary.emplace(b, a);
             }
             size_t loops = 0;
             while (!boundary.empty()) {
                 std::vector<int> loop;
-                auto it = boundary.begin();
-                const int first = it->first;
+                const int first = boundary.begin()->first;
                 int at = first;
-                while (it != boundary.end()) {
+                while (true) {
                     loop.push_back(at);
+                    const auto it = boundary.find(at);
+                    if (it == boundary.end())
+                        break;
                     const int next = it->second;
                     boundary.erase(it);
+                    auto [reverse, end] = boundary.equal_range(next);
+                    while (reverse != end && reverse->second != at)
+                        ++reverse;
+                    assert(reverse != end);
+                    boundary.erase(reverse);
                     at = next;
                     if (at == first)
                         break;
-                    it = boundary.find(at);
                 }
                 if (loop.size() < 3)
                     continue;
@@ -138,9 +138,12 @@ namespace lfs::training {
                 for (const double c : centroid)
                     g.vertices.push_back(float(c));
                 for (size_t i = 0; i < loop.size(); ++i) {
-                    // The face beside the boundary edge (a, b) holds it as a -> b; the cap holds it as b -> a.
+                    // The cap holds a boundary edge the other way round from the face beside it.
                     const int a = loop[i], b = loop[(i + 1) % loop.size()];
-                    g.indices.insert(g.indices.end(), {b, a, center});
+                    if (directed.contains(edge_key(a, b)))
+                        g.indices.insert(g.indices.end(), {b, a, center});
+                    else
+                        g.indices.insert(g.indices.end(), {a, b, center});
                 }
                 ++loops;
             }
@@ -247,43 +250,59 @@ namespace lfs::training {
             return infill_error("The noise infill mesh has no extent");
         weld_by_position(g);
         const size_t loops = cap_boundary_loops(g);
-        const float cell = std::clamp(float(std::cbrt(enclosed_volume(g) / kInsideCells)), extent / 512.0f, extent / 16.0f);
+        const auto clamped_cell = [extent](const double wanted) { return std::clamp(float(wanted), extent / 512.0f, extent / 16.0f); };
+        float cell = clamped_cell(std::cbrt(enclosed_volume(g) / kInsideCells));
 
         const auto vertex_count = g.vertices.size() / 3, face_count = g.indices.size() / 3;
         core::MeshData capped(core::Tensor::from_vector(g.vertices, {vertex_count, 3}, core::Device::CPU),
                               core::Tensor::from_vector(g.indices, {face_count, 3}, core::Device::CPU));
-        core::Mesh2SplatOptions options;
-        // Surface splats a few to a cell close the surface in the collision grid.
-        options.resolution_target = std::clamp(int(std::ceil(4.0f * extent / cell)), core::Mesh2SplatOptions::kMinResolution, 2048);
-        auto surface = rendering::mesh_to_splat(capped, options);
-        if (!surface)
-            return infill_error(std::format("Noise infill surface splats failed: {}", surface.error()));
+        struct InsideCells {
+            glm::vec3 origin;
+            std::vector<glm::ivec3> cells;
+        };
+        const auto inside_cells = [&](const float voxel) -> lfs::Result<InsideCells> {
+            core::Mesh2SplatOptions options;
+            // Surface splats a few to a cell close the surface in the collision grid.
+            options.resolution_target = std::clamp(int(std::ceil(4.0f * extent / voxel)), core::Mesh2SplatOptions::kMinResolution, 2048);
+            auto surface = rendering::mesh_to_splat(capped, options);
+            if (!surface)
+                return infill_error(std::format("Noise infill surface splats failed: {}", surface.error()));
 
-        core::CollisionSettings collision;
-        collision.voxel_size = cell;
-        collision.opacity = kSurfaceOpacity;
-        collision.cleanup = false;
-        core::CollisionVolume volume;
-        try {
-            volume = core::generateCollision(core::captureCollisionSource(**surface), collision);
-        } catch (const std::exception& error) {
-            return lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Internal,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = std::format("Noise infill voxelization failed: {}", error.what()),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
+            core::CollisionSettings collision;
+            collision.voxel_size = voxel;
+            collision.opacity = kSurfaceOpacity;
+            collision.cleanup = false;
+            core::CollisionVolume volume;
+            try {
+                volume = core::generateCollision(core::captureCollisionSource(**surface), collision);
+            } catch (const std::exception& error) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = std::format("Noise infill voxelization failed: {}", error.what()),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+
+            Grid grid;
+            grid.dims = volume.dimensions;
+            grid.state.assign(size_t(grid.dims.x) * size_t(grid.dims.y) * size_t(grid.dims.z), kFree);
+            grid.for_each_cell([&](const glm::ivec3 p) {
+                if (volume.occupied(p))
+                    grid.state[grid.at(p)] = kSurface;
             });
+            mark_outside(grid);
+            return InsideCells{volume.origin, eroded_inside(grid)};
+        };
+        auto inside = inside_cells(cell);
+        // Shells wound against each other enclose far more than their signed volume says: what the grid found sets the cell.
+        if (inside && double(inside->cells.size()) > 2.0 * kInsideCells) {
+            cell = clamped_cell(cell * std::cbrt(double(inside->cells.size()) / kInsideCells));
+            inside = inside_cells(cell);
         }
-
-        Grid grid;
-        grid.dims = volume.dimensions;
-        grid.state.assign(size_t(grid.dims.x) * size_t(grid.dims.y) * size_t(grid.dims.z), kFree);
-        grid.for_each_cell([&](const glm::ivec3 p) {
-            if (volume.occupied(p))
-                grid.state[grid.at(p)] = kSurface;
-        });
-        mark_outside(grid);
-        const auto kept = eroded_inside(grid);
+        if (!inside)
+            return std::move(inside.error());
+        const auto& kept = inside->cells;
         if (kept.empty())
             return infill_error(std::format("The noise infill mesh encloses no cell clear of its surface at cell {}", cell));
 
@@ -291,7 +310,7 @@ namespace lfs::training {
         std::vector<float> means, rotation(count * 4, 0.0f);
         means.reserve(count * 3);
         for (size_t i = 0; i < count; ++i) {
-            const glm::vec3 center = volume.origin + (glm::vec3(kept[i]) + 0.5f) * cell;
+            const glm::vec3 center = inside->origin + (glm::vec3(kept[i]) + 0.5f) * cell;
             means.insert(means.end(), {center.x, center.y, center.z});
             rotation[4 * i] = 1.0f;
         }
@@ -325,11 +344,6 @@ namespace lfs::training {
         return std::move(infill->splats);
     }
 
-    std::size_t noise_infill_rows(const core::SplatData& model) {
-        const auto noise = find_noise(model);
-        return noise ? noise->count : 0;
-    }
-
     int noise_infill_start_iteration(const core::param::OptimizationParameters& params) {
         return static_cast<int>(kStartFraction * static_cast<float>(params.iterations));
     }
@@ -348,7 +362,7 @@ namespace lfs::training {
     }
 
     bool noise_infill_step(core::SplatData& model, const core::param::OptimizationParameters& params, const int iter) {
-        const auto noise = find_noise(model);
+        const auto noise = core::find_noise_infill(model);
         // A later step than the start one when the run was shortened past it.
         if (!noise || (noise->hidden && iter < noise_infill_start_iteration(params)))
             return false;
@@ -365,20 +379,6 @@ namespace lfs::training {
         if (model && capped.max_cap > 0)
             capped.max_cap += static_cast<int>(noise_infill_rows(*model));
         return capped;
-    }
-
-    std::optional<core::SplatData> without_noise_infill(const core::SplatData& model) {
-        const std::size_t noise_rows = noise_infill_rows(model);
-        if (noise_rows == 0)
-            return std::nullopt;
-        const auto rows = static_cast<std::size_t>(model.size());
-        assert(noise_rows <= rows);
-        std::vector<bool> keep(rows, true);
-        std::fill_n(keep.begin(), noise_rows, false);
-        auto keep_mask = core::Tensor::from_vector(keep, core::TensorShape({rows}), model.means().device());
-        if (model.deleted_mask_matches_size())
-            keep_mask = keep_mask.logical_and(model.deleted().logical_not());
-        return core::extract_by_mask(model, keep_mask);
     }
 
     RowOverride::RowOverride(core::Tensor& tensor, const std::size_t begin, const std::size_t end, const float value)
@@ -401,19 +401,14 @@ namespace lfs::training {
         noise_sh0.copy_from(core::Tensor::from_vector(green, {count, 1, 3}, noise_sh0.device()));
     }
 
-    double surface_see_through(core::SplatData& model, const std::size_t noise_rows, const CameraDataset& cameras,
-                               const bool mip_filter) {
+    std::optional<double> surface_see_through(core::SplatData& model, const std::size_t noise_rows, const CameraDataset& cameras,
+                                              const bool mip_filter, const std::function<bool()>& keep_going) {
         const auto rows = static_cast<std::size_t>(model.size());
         assert(noise_rows > 0 && noise_rows <= rows);
-        RowOverride noise_color(model.sh0(), 0, noise_rows, 0.0f);
-        paint_noise_green(noise_color.rows());
-        const RowOverride surface_color(model.sh0(), noise_rows, rows, kChannelOff);
-        struct ActiveShDegree {
-            core::SplatData& model;
-            int degree;
-            ~ActiveShDegree() { model.set_rendered_sh_degree(degree); }
-        } const active_sh_degree{model, model.get_active_sh_degree()};
-        model.set_rendered_sh_degree(0);
+        auto noise_color = model.sh0().slice(0, 0, noise_rows);
+        paint_noise_green(noise_color);
+        model.sh0().slice(0, noise_rows, rows).fill_(kChannelOff);
+        model.set_active_sh_degree(0);
         auto black = core::Tensor::zeros({3}, model.sh0().device());
         const auto green_sum = [&](core::Camera& camera) {
             const auto image = fast_rasterize(camera, model, black, mip_filter).image;
@@ -422,12 +417,16 @@ namespace lfs::training {
         };
         double shown = 0.0, covered = 0.0;
         for (std::size_t i = 0; i < cameras.size(); ++i) {
+            if (keep_going && !keep_going())
+                return std::nullopt;
             auto& camera = *cameras.get_camera(i);
             shown += green_sum(camera);
             const RowOverride hidden_surface(model.opacity_raw(), noise_rows, rows, kHiddenOpacity);
             covered += green_sum(camera);
         }
-        return covered > 0.0 ? shown / covered : 0.0;
+        if (covered <= 0.0)
+            return std::nullopt;
+        return shown / covered;
     }
 
 } // namespace lfs::training

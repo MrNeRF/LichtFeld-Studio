@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_transfer.hpp"
-#include "training/noise_infill.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -129,8 +128,6 @@ namespace lfs::vis::gui {
             throw std::runtime_error("Splat preparation cancelled");
         if (!options.axes.valid())
             throw std::runtime_error("Invalid splat transfer axes");
-        if (auto without_noise = training::without_noise_infill(model))
-            return captureTransfer(*without_noise, world, cancelled, options);
         if (model.lod_tree && model.lod_tree->has_tree()) {
             auto leaves = core::extract_lod_leaves(model);
             if (!leaves)
