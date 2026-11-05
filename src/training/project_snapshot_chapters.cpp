@@ -110,7 +110,8 @@ namespace lfs::training {
         ProjectSnapshotCpuState& output,
         const std::span<const lfs::core::Uuid>
             selected_node_uuids,
-        const lfs::io::project::ScenePayloadBindings& inherited_bindings) {
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings,
+        const std::span<const lfs::core::Uuid> omit_node_uuids) {
         if (snapshot_uuid.is_nil()) {
             return capture_error(
                 lfs::ErrorCode::InvalidArgument,
@@ -142,7 +143,7 @@ namespace lfs::training {
         const auto scng_begin = Clock::now();
         auto scene_graph =
             lfs::io::project::capture_scene_graph_state(
-                scene, bindings);
+                scene, bindings, omit_node_uuids);
         metrics.scng_ms =
             Milliseconds(Clock::now() - scng_begin)
                 .count();
@@ -200,7 +201,8 @@ namespace lfs::training {
         ProjectSnapshotCpuState& output,
         const std::span<const lfs::core::Uuid>
             selected_node_uuids,
-        const lfs::io::project::ScenePayloadBindings& inherited_bindings) {
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings,
+        const std::span<const lfs::core::Uuid> omit_node_uuids) {
         auto parameters =
             capture_parameters(checkpoint_params);
         if (!parameters) {
@@ -213,7 +215,7 @@ namespace lfs::training {
         return capture_project_snapshot_cpu_state(
             scene, *parameters, snapshot_uuid,
             iteration, output,
-            selected_node_uuids, inherited_bindings);
+            selected_node_uuids, inherited_bindings, omit_node_uuids);
     }
 
     lfs::Result<void>
@@ -266,6 +268,7 @@ namespace lfs::training {
             std::move(state.sfm_observation_cameras);
         staged.collisions = std::move(collisions);
         staged.document_context = std::move(context);
+        staged.standalone = output.standalone;
         output = std::move(staged);
         return {};
     }

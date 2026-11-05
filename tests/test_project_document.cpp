@@ -6492,10 +6492,13 @@ namespace {
         EXPECT_THROW((void)scene.captureCollisionSource(model_id), lfs::Exception);
         lfs::training::ProjectSnapshotChapters
             chapters;
+        // The writer reads the request's standalone flag after materializing.
+        chapters.standalone = true;
         require_status(lfs::training::
                            materialize_project_snapshot_cpu_chapters(
                                std::move(cpu_state),
                                chapters));
+        EXPECT_TRUE(chapters.standalone);
         ASSERT_EQ(chapters.collisions.size(), 1);
         EXPECT_EQ(chapters.collisions.begin()->second, volume);
         const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);

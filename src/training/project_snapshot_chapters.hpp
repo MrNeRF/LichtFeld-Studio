@@ -74,6 +74,8 @@ namespace lfs::training {
         lfs::io::project::CollisionPayloads collisions;
         std::optional<ProjectSnapshotDocumentContext>
             document_context;
+        // Write a fresh file instead of appending to or copying an existing project.
+        bool standalone = false;
     };
 
     // Detached source of truth captured inside the optimizer safe-point.
@@ -102,7 +104,8 @@ namespace lfs::training {
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
             selected_node_uuids = {},
-        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {},
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     // Fallback for callers without a live ParameterManager (for example,
     // headless periodic checkpoint saves). GUI training saves must use the
@@ -117,7 +120,8 @@ namespace lfs::training {
         ProjectSnapshotCpuState& output,
         std::span<const lfs::core::Uuid>
             selected_node_uuids = {},
-        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {});
+        const lfs::io::project::ScenePayloadBindings& inherited_bindings = {},
+        std::span<const lfs::core::Uuid> omit_node_uuids = {});
 
     // Builds JSON/DOM-backed chapters exclusively from a detached safe-point
     // copy. This may run after the optimizer is allowed to mutate again.
