@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -346,6 +347,37 @@ namespace lfs::training {
         const double gamma = std::pow(0.01, 1.0 / params.iterations);
 
         return std::make_unique<ExponentialLR>(optimizer, gamma, std::vector<ParamType>{ParamType::Means});
+    }
+
+    double restart_decay_gamma(
+        const lfs::core::param::OptimizationParameters& params,
+        const AdamOptimizer& optimizer,
+        const double final_fraction) {
+        const auto completed_steps = static_cast<size_t>(std::max<int64_t>(0, optimizer.get_step_count(ParamType::Means)));
+        const size_t steps_left = params.iterations > completed_steps ? params.iterations - completed_steps : 1;
+        return std::pow(final_fraction, 1.0 / static_cast<double>(steps_left));
+    }
+
+    std::optional<lfs::core::Tensor> rows_over_cap(const lfs::core::SplatData& splat_data, const int max_cap) {
+        const auto rows = static_cast<size_t>(splat_data.size());
+        const size_t live = rows - std::min(rows, splat_data.deleted_count());
+        if (max_cap <= 0 || live <= static_cast<size_t>(max_cap))
+            return std::nullopt;
+        const auto frozen = make_frozen_mask(splat_data, rows, lfs::core::Device::CPU);
+        const auto frozen_rows = frozen.is_valid() ? frozen.to_vector_bool() : std::vector<bool>(rows, false);
+        const auto deleted_rows = splat_data.deleted_mask_matches_size() ? splat_data.deleted().cpu().to_vector_bool()
+                                                                         : std::vector<bool>(rows, false);
+        std::vector<size_t> candidates;
+        for (size_t row = 0; row < rows; ++row)
+            if (!frozen_rows[row] && !deleted_rows[row])
+                candidates.push_back(row);
+        std::mt19937 rng(0);
+        std::shuffle(candidates.begin(), candidates.end(), rng);
+        candidates.resize(std::min(candidates.size(), live - static_cast<size_t>(max_cap)));
+        std::vector<bool> remove(rows, false);
+        for (const size_t row : candidates)
+            remove[row] = true;
+        return lfs::core::Tensor::from_vector(remove, lfs::core::TensorShape({rows}), splat_data.means().device());
     }
 
     namespace {

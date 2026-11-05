@@ -59,6 +59,7 @@
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
+#include "training/strategies/strategy_utils.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 
@@ -1183,6 +1184,46 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    // Catches a resume with a lower row cap than the checkpoint holds failing to load the strategy state, which was saved for
+    // the larger cap; the trainer cuts the rows only after the load.
+    TEST_P(CheckpointStrategyStateRoundTripTest, LoadsUnderALowerRowCap) {
+        const auto& strategy_name = GetParam();
+        const auto temp_dir = std::filesystem::temp_directory_path() /
+                              std::format("lfs_checkpoint_lower_cap_{}", strategy_name);
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = strategy_name;
+        params.optimization.iterations = 20;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+
+        const auto model_device = strategy_name == "igs+"
+                                      ? lfs::core::Device::CUDA
+                                      : lfs::core::Device::CPU;
+        auto source_model = make_checkpoint_test_splat(8, model_device);
+        auto source = std::move(*lfs::training::StrategyFactory::instance().create(strategy_name, *source_model));
+        source->initialize(params.optimization);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(temp_dir, 11, *source, params, nullptr, nullptr, nullptr).has_value());
+
+        auto target_model = make_checkpoint_test_splat(1, model_device);
+        auto target = std::move(*lfs::training::StrategyFactory::instance().create(strategy_name, *target_model));
+        target->initialize(params.optimization);
+        auto loaded_params = params;
+        loaded_params.optimization.max_cap = 4;
+        loaded_params.overrides.optimization_json = R"({"max_cap": 4})";
+        const auto load_result = lfs::training::load_checkpoint(
+            lfs::test::checkpoint_fixture_path(temp_dir), *target, loaded_params, nullptr, nullptr, nullptr);
+
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+        EXPECT_EQ(target->get_model().size(), 8);
+        EXPECT_EQ(loaded_params.optimization.max_cap, 4);
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         CheckpointStrategies,
         CheckpointStrategyStateRoundTripTest,
@@ -1193,6 +1234,25 @@ namespace {
                 name.begin(), name.end(), [](const unsigned char c) { return !std::isalnum(c); }, '_');
             return name;
         });
+
+    // Catches a cut that removes frozen or deleted rows, or leaves more live rows than the cap.
+    TEST(RowsOverCapTest, CutsOnlyLiveTrainingRowsDownToTheCap) {
+        auto model = make_checkpoint_test_splat(10, lfs::core::Device::CUDA);
+        model->set_frozen_ranges({{0, 2}});
+        std::vector<bool> deleted(10, false);
+        deleted[9] = true;
+        model->deleted() = lfs::core::Tensor::from_vector(deleted, lfs::core::TensorShape({10}), lfs::core::Device::CUDA);
+        model->refresh_deleted_count();
+        EXPECT_FALSE(lfs::training::rows_over_cap(*model, 9)) << "nine live rows fit";
+        EXPECT_FALSE(lfs::training::rows_over_cap(*model, 0)) << "no cap";
+        const auto over = lfs::training::rows_over_cap(*model, 5);
+        ASSERT_TRUE(over);
+        const auto removed = over->cpu().to_vector_bool();
+        ASSERT_EQ(removed.size(), 10u);
+        EXPECT_FALSE(removed[0] || removed[1]) << "frozen rows stay";
+        EXPECT_FALSE(removed[9]) << "a deleted row is no live row to cut";
+        EXPECT_EQ(std::count(removed.begin(), removed.end(), true), 4);
+    }
 
     TEST(SplatDataDeletedCountTest, DeserializePublishesDeletedCountAndPreservesPayload) {
         for (const size_t deleted_count : {0u, 3u, 6u}) {
@@ -2509,7 +2569,7 @@ namespace {
         params.optimization.popspa_sparsify_steps = 2;
         params.optimization.popspa_refine_steps = 2;
         params.optimization.save_steps = {6};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = mid_path;
         {
             lfs::core::Scene scene;
@@ -2572,7 +2632,7 @@ namespace {
         params.optimization.popspa_sparsify_steps = 2;
         params.optimization.popspa_refine_steps = 2;
         params.optimization.save_steps = {6};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = mid_path;
         {
             lfs::core::Scene scene;
@@ -3419,7 +3479,7 @@ namespace {
         std::filesystem::create_directories(output_path);
 
         auto params = make_tiny_headless_params(output_path, 2);
-        params.save_project_at_iteration = 1;
+        params.save_project_at_iteration = {1};
         params.save_project_path = output_path / "blocked.licht";
         std::filesystem::create_directory(params.save_project_path);
 
@@ -3537,7 +3597,7 @@ namespace {
 
         auto params = make_tiny_headless_params(output_path, 4);
         params.optimization.save_steps = {1};
-        params.save_project_at_iteration = 3;
+        params.save_project_at_iteration = {3};
         params.save_project_path = output_path / "at_iteration.licht";
 
         lfs::core::Scene scene;
@@ -3599,6 +3659,279 @@ namespace {
         EXPECT_NE(std::ranges::find(iterations, 3), iterations.end());
 
         std::filesystem::remove_all(output_path, ec);
+    }
+
+    // The iterations of a project's checkpoints, sorted.
+    std::vector<int> checkpoint_iterations(const lfs::io::project::ProjectDocument& document) {
+        std::vector<int> iterations;
+        for (const auto& uuid : document.checkpoint_uuids())
+            lfs::test::licht::require_status(document.find_checkpoint(uuid)->visit_stream(
+                [&](std::istream& stream, const std::uint64_t bytes) -> lfs::Result<void> {
+                    const auto header = lfs::core::load_checkpoint_header(stream, bytes);
+                    iterations.push_back(header ? header->iteration : -1);
+                    return {};
+                }));
+        std::ranges::sort(iterations);
+        return iterations;
+    }
+
+    // Catches --save-project-at-iter files carrying earlier checkpoints or sharing a project ID, replacing a
+    // file that appeared during the run or not failing the run for it, skipping the iterations after it, or
+    // writing the final iteration before --crop.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveProjectAtIterationsWriteOneCheckpointPerFile) {
+        lfs::test::licht::TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 4);
+        params.optimization.save_steps = {1, 2};
+        params.optimization.keep_all_checkpoints = true;
+        params.optimization.crop_to_cropbox = true;
+        params.save_project_at_iteration = {1, 2, 3, 4};
+        const auto snapshots = temporary.path / "snapshots";
+        params.save_project_path = snapshots / "run.licht";
+        const auto appeared = snapshots / "run_2.licht";
+        std::filesystem::create_directories(snapshots);
+
+        lfs::core::Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+        ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+        ASSERT_NO_FATAL_FAILURE(add_half_training_cropbox(scene));
+        lfs::training::Trainer trainer(scene);
+        ASSERT_TRUE(trainer.initialize(params));
+        lfs::training::grant_headless_project_saves(trainer, params);
+        auto& boundary = lfs::training::ControlBoundary::instance();
+        const auto handle = boundary.register_callback(
+            lfs::training::ControlHook::PostStep, [&](const lfs::training::HookContext& ctx) {
+                if (ctx.trainer == &trainer && ctx.iteration == 1)
+                    std::ofstream(appeared) << "keep";
+            });
+        const auto trained = trainer.train();
+        boundary.unregister_callback(lfs::training::ControlHook::PostStep, handle);
+        ASSERT_FALSE(trained);
+        EXPECT_NE(lfs::format_for_developer(trained.error()).find("run_2.licht"), std::string::npos);
+        const size_t cropped = trainer.get_strategy().get_model().visible_count();
+        trainer.shutdown();
+
+        const auto open = [](const std::filesystem::path& path) {
+            return lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
+        };
+        EXPECT_EQ(lfs::test::licht::read_file_bytes(appeared), lfs::test::licht::byte_vector("keep"));
+        const auto project = open(temporary.path / "project.licht");
+        EXPECT_EQ(checkpoint_iterations(project), (std::vector<int>{1, 2, 4}));
+        std::vector<lfs::core::Uuid> project_ids{project.project_uuid()};
+        const auto new_project_id = [&](const lfs::core::Uuid& uuid) {
+            const bool unseen = std::ranges::find(project_ids, uuid) == project_ids.end();
+            project_ids.push_back(uuid);
+            return unseen;
+        };
+        for (const int iteration : {1, 3}) {
+            auto snapshot = open(snapshots / std::format("run_{}.licht", iteration));
+            EXPECT_EQ(checkpoint_iterations(snapshot), std::vector<int>{iteration});
+            EXPECT_FALSE(lfs::test::licht::require_result(snapshot.parameters().embedded_dataset()));
+            EXPECT_TRUE(new_project_id(snapshot.project_uuid()));
+        }
+
+        auto final_snapshot = open(snapshots / "run_4.licht");
+        EXPECT_EQ(checkpoint_iterations(final_snapshot), std::vector<int>{4});
+        EXPECT_TRUE(new_project_id(final_snapshot.project_uuid()));
+        lfs::core::Scene restored;
+        const auto hydration = final_snapshot.hydrate(restored);
+        ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+        ASSERT_NE(restored.getTrainingModel(), nullptr);
+        EXPECT_EQ(static_cast<size_t>(restored.getTrainingModel()->visible_count()), cropped);
+    }
+
+    // Catches an existing --save-project-at-iter file found only when its iteration is saved, at the end of
+    // the training it wasted, or a check that stops at the first iteration.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveProjectAtIterationsFailBeforeTrainingOnAnExistingFile) {
+        lfs::test::licht::TemporaryDirectory temporary;
+        auto params = make_tiny_headless_params(temporary.path, 2);
+        params.optimization.save_steps.clear();
+        params.save_project_at_iteration = {1, 2};
+        const auto snapshots = temporary.path / "snapshots";
+        params.save_project_path = snapshots / "run.licht";
+        const auto first = snapshots / "run_1.licht";
+        const auto saved = snapshots / "run_2.licht";
+
+        for (const bool exists : {false, true}) {
+            SCOPED_TRACE(exists);
+            const auto before = exists ? lfs::test::licht::read_file_bytes(saved) : std::vector<std::byte>{};
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            ASSERT_TRUE(trainer.initialize(params));
+            lfs::training::grant_headless_project_saves(trainer, params);
+            const auto trained = trainer.train();
+            const int reached = trainer.get_current_iteration();
+            trainer.shutdown();
+            if (!exists) {
+                ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+                ASSERT_TRUE(std::filesystem::is_regular_file(saved));
+                ASSERT_TRUE(std::filesystem::remove(first));
+                continue;
+            }
+            ASSERT_FALSE(trained);
+            EXPECT_EQ(trained.error().code(), lfs::ErrorCode::AlreadyExists);
+            EXPECT_NE(lfs::format_for_developer(trained.error()).find("run_2.licht"), std::string::npos);
+            EXPECT_EQ(reached, 0);
+            EXPECT_FALSE(std::filesystem::exists(first));
+            EXPECT_EQ(lfs::test::licht::read_file_bytes(saved), before);
+        }
+    }
+
+    // Catches --save-project-at-iter files of a resumed project that drop its other nodes, keep its
+    // checkpoint or project ID, or fail the run for a file of an iteration before the resume point.
+    TEST_F(ProjectCheckpointTrainerInstall, SaveProjectAtIterationsKeepAResumedProjectsNodes) {
+        using namespace lfs::io::project;
+        using namespace lfs::test::licht;
+        TemporaryDirectory temporary;
+        const auto source_path = temporary.path / "source.licht";
+        const auto imported_ply = temporary.path / "imported.ply";
+        const auto imported = lfs::core::generate_uuid_v4();
+        std::size_t imported_rows = 0;
+        std::optional<SplatChapterPayload> imported_payload;
+        {
+            auto params = make_tiny_headless_params(temporary.path / "first", 1);
+            params.optimization.save_steps.clear();
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            ASSERT_TRUE(trainer.initialize(params));
+            lfs::training::grant_headless_project_saves(trainer, params, source_path);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            const auto& model = trainer.get_strategy().get_model();
+            imported_rows = model.size();
+            ASSERT_TRUE(lfs::io::save_ply(model, {.output_path = imported_ply}).has_value());
+            imported_payload = require_result(SplatChapterPayload::capture(model, SplatSourceKind::ImportedPly, false));
+            trainer.shutdown();
+        }
+        {
+            auto source = require_result_ptr(ProjectDocument::open(source_path));
+            std::uint32_t child_order = 0;
+            for (const auto& node : require_result(source->scene_graph().nodes()))
+                if (!node.parent_uuid)
+                    child_order = std::max(child_order, node.child_order + 1);
+            require_status(source->edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = imported,
+                .type = "splat",
+                .name = "Imported",
+                .child_order = child_order,
+                .payload = PayloadBinding{.fourcc = "SPLT", .instance_uuid = imported, .source_kind = "ply"},
+            }));
+            require_status(source->set_splat(imported, std::move(*imported_payload)));
+            require_status(source->edit_project().upsert_embed_decision(EmbedDecision{
+                .uuid = imported,
+                .node_uuid = imported,
+                .payload_fourcc = "SPLT",
+                .decision = "embedded",
+                .reason = "imported splat",
+            }));
+            require_status(source->edit_project().upsert_embedded_payload_provenance(EmbeddedPayloadProvenance{
+                .uuid = imported,
+                .node_uuid = imported,
+                .fourcc = "SPLT",
+                .import_locator = {.preferred = "imported.ply", .base = LocatorBase::Project},
+                .import_fingerprint = require_result(fingerprint_path(imported_ply)),
+                .content_xxh3_128 = {},
+            }));
+            (void)require_result(source->save(source_path));
+        }
+
+        auto params = make_tiny_headless_params(temporary.path / "second", 3);
+        params.cli_iterations_set = true;
+        params.optimization.save_steps.clear();
+        params.save_project_at_iteration = {1, 2, 3};
+        const auto snapshots = temporary.path / "snapshots";
+        params.save_project_path = snapshots / "run.licht";
+        const auto before_resume = snapshots / "run_1.licht";
+        std::filesystem::create_directories(snapshots);
+        std::ofstream(before_resume) << "written by the first run";
+        const auto source_project = require_result(ProjectDocument::open(source_path)).project_uuid();
+        {
+            auto source = require_result_ptr(ProjectDocument::open(source_path));
+            lfs::core::Scene scene;
+            const auto hydration = require_result(source->hydrate(scene));
+            ASSERT_TRUE(hydration.checkpoint_uuid);
+            auto installed = lfs::training::installTrainerFromProjectCheckpoint(
+                scene, *source, *hydration.checkpoint_uuid, params, lfs::core::path_to_utf8(source_path), 1);
+            ASSERT_TRUE(installed) << installed.error();
+            lfs::training::grant_headless_project_saves(*installed->trainer, params,
+                                                        temporary.path / "second" / "project.licht", source_path);
+            const auto trained = installed->trainer->train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            installed->trainer->shutdown();
+        }
+
+        EXPECT_EQ(read_file_bytes(before_resume), byte_vector("written by the first run"));
+        for (const int iteration : {2, 3}) {
+            SCOPED_TRACE(iteration);
+            auto snapshot = require_result(ProjectDocument::open(snapshots / std::format("run_{}.licht", iteration)));
+            EXPECT_EQ(checkpoint_iterations(snapshot), std::vector<int>{iteration});
+            EXPECT_NE(snapshot.project_uuid(), source_project);
+            lfs::core::Scene restored;
+            const auto hydration = snapshot.hydrate(restored);
+            ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+            const auto* node = restored.getNodeByUuid(imported);
+            ASSERT_NE(node, nullptr);
+            ASSERT_NE(node->model, nullptr);
+            EXPECT_EQ(node->model->size(), imported_rows);
+        }
+    }
+
+    // Catches POPSpa standalone saves captured at another iteration than requested, holding the checkpoint of
+    // an earlier phase, or skipped while a POPSpa phase runs.
+    TEST_F(ProjectCheckpointTrainerInstall, POPSpaSaveProjectAtIterationsCaptureEachPhase) {
+        const auto dataset = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        if (!std::filesystem::is_directory(dataset / TEST_IMAGES))
+            GTEST_SKIP() << "bicycle dataset is required for the real Trainer snapshot contract";
+        lfs::test::licht::TemporaryDirectory temporary;
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.max_width = 64;
+        params.dataset.output_path = temporary.path;
+        params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        params.optimization.iterations = 2;
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 1000;
+        params.optimization.start_refine = 0;
+        params.optimization.stop_refine = 0;
+        params.optimization.enable_sparsity = true;
+        params.optimization.popspa_first_prune_count = 800;
+        params.optimization.popspa_target_count = 600;
+        params.optimization.popspa_sparsify_steps = 2;
+        params.optimization.popspa_refine_steps = 2;
+        params.optimization.save_steps = {6};
+        params.save_project_at_iteration = {2, 3, 5, 6};
+        params.save_project_path = temporary.path / "run.licht";
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            lfs::training::grant_headless_project_saves(trainer, params);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 6);
+            trainer.shutdown();
+        }
+        for (const int iteration : {2, 3, 5, 6}) {
+            SCOPED_TRACE(iteration);
+            auto snapshot = lfs::test::licht::require_result(
+                lfs::io::project::ProjectDocument::open(temporary.path / std::format("run_{}.licht", iteration)));
+            EXPECT_EQ(checkpoint_iterations(snapshot), std::vector<int>{iteration});
+            lfs::core::Scene restored;
+            const auto hydration = snapshot.hydrate(restored);
+            ASSERT_TRUE(hydration) << lfs::format_for_developer(hydration.error());
+            ASSERT_NE(restored.getTrainingModel(), nullptr);
+            if (iteration == 6)
+                EXPECT_LE(restored.getTrainingModel()->size(),
+                          static_cast<size_t>(params.optimization.popspa_target_count));
+        }
     }
 
     TEST_F(ProjectCheckpointTrainerInstall, CheckpointRetentionRecreatesUnlinkedProjectAndRejectsConflict) {
@@ -3732,7 +4065,7 @@ namespace {
         auto params = make_tiny_headless_params(
             output_path, iterations);
         params.optimization.save_steps = {1, 2};
-        params.save_project_at_iteration = 2;
+        params.save_project_at_iteration = {2};
 
         lfs::core::Scene scene;
         ASSERT_TRUE(
@@ -3786,7 +4119,7 @@ namespace {
         auto params = make_tiny_headless_params(
             output_path, iterations);
         params.optimization.save_steps = {};
-        params.save_project_at_iteration = 2;
+        params.save_project_at_iteration = {2};
         ASSERT_TRUE(params.save_project_path.empty());
 
         lfs::core::Scene scene;

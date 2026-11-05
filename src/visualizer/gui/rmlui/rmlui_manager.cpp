@@ -48,6 +48,7 @@
 #include <RmlUi/Debugger.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <chrono>
@@ -62,6 +63,20 @@
 #include <vector>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        std::atomic<std::uint64_t> font_resource_generation{0};
+    } // namespace
+
+    void releaseFontResources() {
+        // Bump first: RmlUi updates its contexts inside the release, and that may already measure text.
+        font_resource_generation.fetch_add(1, std::memory_order_relaxed);
+        Rml::ReleaseFontResources();
+    }
+
+    std::uint64_t fontResourceGeneration() {
+        return font_resource_generation.load(std::memory_order_relaxed);
+    }
 
     namespace {
         RenderInterface_VK::ExternalContext nativeRenderContext(VulkanContext& vulkan_context) {
@@ -815,7 +830,7 @@ namespace lfs::vis::gui {
         }
         cjk_fonts_loaded_ = any_loaded;
         if (any_loaded)
-            Rml::ReleaseFontResources();
+            releaseFontResources();
     }
 
     namespace {
@@ -896,7 +911,7 @@ namespace lfs::vis::gui {
             return;
         }
         LOG_INFO("RmlUI: loaded emoji font {}", emoji_font_path_);
-        Rml::ReleaseFontResources();
+        releaseFontResources();
     }
 
     void RmlUIManager::shutdown() {

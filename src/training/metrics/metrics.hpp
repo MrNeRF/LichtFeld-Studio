@@ -330,6 +330,7 @@ namespace lfs::training {
         int warp_supersample = kEvaluationWarpSupersample;
         std::filesystem::path image_dir;                                   // Where images are saved; empty = <output>/eval_step_<iteration>
         std::array<std::string, 2> image_labels{"Ground Truth", "Render"}; // Captions in saved images, left first
+        bool report_scores = true;                                         // False: only the caller sees the scores, not the report or the GUI
     };
 
     [[nodiscard]] lfs::Error evaluation_error(std::string detail, lfs::core::SourceSite site);
@@ -466,6 +467,9 @@ namespace lfs::training {
                              lfs::io::PipelinedImageLoader* image_loader = nullptr,
                              std::function<bool()> on_view_boundary = {});
 
+        // Where a green infill's mesh sits relative to the training model.
+        void set_training_origin(const std::array<float, 3>& origin) { _training_origin = origin; }
+
         // Scores what source.render returns for each view against the view's reference image.
         EvalMetrics evaluate_views(int iteration,
                                    std::shared_ptr<CameraDataset> val_dataset,
@@ -487,6 +491,7 @@ namespace lfs::training {
         }
 
     private:
+        std::array<float, 3> _training_origin{0.0f, 0.0f, 0.0f};
         [[nodiscard]] std::string_view evaluated_split() const {
             return _params.optimization.eval_all ? "train" : "test";
         }

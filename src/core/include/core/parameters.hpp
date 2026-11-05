@@ -297,6 +297,7 @@ namespace lfs::core {
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
             bool eval_flip = false;                            // Also compute FLIP and save its error maps
+            bool eval_green_infill = false;                    // Also score with opaque green filling the inside of a mesh, see eval_green_infill_mesh
             EvalSpace eval_space = EvalSpace::Distorted;       // Reference image space used for evaluation
             EvalBitDepth eval_bit_depth = EvalBitDepth::Auto;  // Grid the render is quantized to for evaluation
             std::string eval_mask = "";                        // Mesh path, bbox:..., cropbox, masks:<folder>, depth:near,far, points:radius,close or points:<file>; empty disables
@@ -409,6 +410,9 @@ namespace lfs::core {
             // Mesh2Splat raster resolution when the init file is a mesh
             int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
 
+            // Noise guided splatting: a closed mesh whose interior opaque noise fills, re-coloured every step; empty: off
+            std::string noise_infill_mesh = "";
+
             // POPSpa post-training sparsification
             bool enable_sparsity = false;
             int popspa_target_count = 256000;
@@ -478,6 +482,12 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_points_file(std::string_view spec);
         // The PLY of a splat:<file> spec, whose rendered coverage selects the evaluated pixels.
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
+        inline constexpr std::string_view kEvalGreenInfillNeedsMesh =
+            "--eval-green-infill needs a mesh: add --noise-infill-mesh <file> or --eval-mask mesh:<file>";
+        // The mesh file of a spec that names one; nothing for the other sources.
+        [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_mesh_file(std::string_view spec);
+        // The mesh whose inside the green infill of an evaluation fills: noise_infill_mesh, else the eval_mask mesh.
+        [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_green_infill_mesh(const OptimizationParameters& params);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
         // Three finite numbers rx,ry,rz, as --cropbox-rotation takes them.
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 3>> parse_cropbox_rotation(std::string_view spec);
@@ -629,9 +639,12 @@ namespace lfs::core {
             std::optional<std::filesystem::path> dataset_project = std::nullopt;
 
             // Headless/integration-test trigger for the production training
-            // snapshot path. Empty unless the user passed --save-project-path;
-            // the trainer then falls back to the bound project destination.
-            std::optional<size_t> save_project_at_iteration = std::nullopt;
+            // snapshot path, at each of these sorted iterations. Empty
+            // save_project_path saves into the bound project destination.
+            // Several iterations require a save_project_path; each is then a
+            // standalone <stem>_<iter>.licht holding only that iteration's
+            // checkpoint.
+            std::vector<size_t> save_project_at_iteration;
             std::filesystem::path save_project_path;
 
             // Headless camera-path -> video render mode (see --render-camera-path)

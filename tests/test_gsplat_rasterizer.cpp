@@ -2497,3 +2497,38 @@ TEST(GsplatRasterizerQuantTest, FirstQ16AndSteadyForwardsAllocateNoDecodedShTens
         EXPECT_EQ(alloc_counter::delta_since(before), 0u) << "q16 forward " << i;
     }
 }
+
+TEST(RasterizerBackgroundImage, RejectsBackgroundOfAnotherSize) {
+    // The blend reads a background image with the strides of the rendered region; a background made at
+    // another size (for example the camera's full resolution while training renders a downscaled image)
+    // must be refused instead of mixing up pixels and colour planes.
+    constexpr int width = 32;
+    constexpr int height = 24;
+    auto camera = make_camera(width, height);
+    auto model = make_visible_splat(4);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto wrong = Tensor::full({size_t{3}, size_t{height * 2}, size_t{width * 2}}, 0.5f, Device::CUDA);
+    const auto right = Tensor::full({size_t{3}, size_t{height}, size_t{width}}, 0.5f, Device::CUDA);
+
+    auto rejected = fast_rasterize_forward(camera, *model, background, 0, 0, 0, 0, false, wrong);
+    ASSERT_FALSE(rejected.has_value());
+    EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+
+    auto accepted = fast_rasterize_forward(camera, *model, background, 0, 0, 0, 0, false, right);
+    ASSERT_TRUE(accepted.has_value()) << lfs::format_for_developer(accepted.error());
+    accepted->second.release_forward_context();
+
+    for (const bool use_gut : {false, true}) {
+        try {
+            (void)gsplat_rasterize_forward(
+                camera, *model, background, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, use_gut, wrong);
+            FAIL() << "gsplat accepted a background of another size (gut=" << use_gut << ")";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string_view(error.what()).find("does not match"), std::string_view::npos);
+        }
+        auto ok = gsplat_rasterize_forward(
+            camera, *model, background, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, use_gut, right);
+        ASSERT_TRUE(ok.has_value()) << ok.error();
+        release_ctx_arena(ok->second);
+    }
+}

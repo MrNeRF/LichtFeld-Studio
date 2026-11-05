@@ -16,6 +16,7 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -4774,7 +4775,8 @@ namespace lfs::python {
                         LOG_WARN("save_node_to_disk: splat '{}' has no data", node_name);
                         return;
                     }
-                    result = lfs::io::save_ply(*node->model, options);
+                    const auto without_noise = lfs::core::without_noise_infill(*node->model);
+                    result = lfs::io::save_ply(without_noise ? *without_noise : *node->model, options);
                     break;
                 }
                 default:

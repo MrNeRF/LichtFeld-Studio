@@ -799,6 +799,17 @@
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
             </div>
           </div>
+          <div data-if="!pv_search_active">
+            <div class="setting-row" data-tooltip="training.tooltip.noise_infill_mesh">
+              <span class="prop-label">{{label_noise_infill_mesh}}</span>
+              <span class="text-disabled">{{noise_infill_mesh_display}}</span>
+            </div>
+            <div class="setting-row">
+              <span class="prop-label">&#160;</span>
+              <button class="btn btn--secondary" data-event-click="action('browse_noise_infill_mesh')">{{label_browse}}</button>
+              <button class="btn btn--secondary" data-if="dep_noise_infill" data-event-click="action('clear_noise_infill_mesh')">{{label_clear}}</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -824,6 +835,12 @@
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
           <div class="setting-row" data-for="row : pv_dataset_eval_flip_rows" data-if="dep_eval"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-for="row : pv_dataset_eval_green_infill_rows" data-if="dep_eval_green_infill"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
             <input type="checkbox" data-checked="row.checked"

@@ -225,6 +225,8 @@ namespace lfs::training {
 
         // Check if trainer is initialized
         bool isInitialized() const { return initialized_.load(); }
+        // The leading rows of the model that are its noise infill, cached for the row count the UI polls.
+        std::size_t noise_infill_row_count() const { return noise_infill_row_count_.load(std::memory_order_relaxed); }
 
         // Main training method with stop token support
         [[nodiscard]] lfs::Status train(std::stop_token stop_token = {});
@@ -764,6 +766,20 @@ namespace lfs::training {
         initialize_project_snapshot_service();
         void capture_project_snapshot_at_safe_point(int iteration);
         void consume_requested_project_snapshot(int iteration);
+        // Several --save-project-at-iter iterations with --save-project-path
+        // write one standalone project each; a single one keeps saving through
+        // the regular snapshot path.
+        [[nodiscard]] bool saves_standalone_projects() const {
+            return params_.save_project_at_iteration.size() > 1 && !params_.save_project_path.empty();
+        }
+        [[nodiscard]] std::filesystem::path standalone_project_path(int iteration) const;
+        // Starts writing <stem>_<iteration>.licht, holding only this iteration's
+        // checkpoint. Failures are kept in project_at_iteration_error_.
+        void save_standalone_project(int iteration);
+        // Requires project_snapshot_mutex_.
+        void record_project_at_iteration_failure_locked(
+            int iteration, const std::filesystem::path& path, std::string_view reason,
+            lfs::ErrorCode code = lfs::ErrorCode::Internal);
         [[nodiscard]] int project_snapshot_iteration() const;
         void attach_live_document_context(
             std::optional<ProjectSnapshotDocumentContext>&
@@ -883,7 +899,8 @@ namespace lfs::training {
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
         // Independent of coalesced explicit requests; reserved before the
-        // target POPSpa step and consumed only by its CLI capture.
+        // target POPSpa step, or by a standalone save, and consumed only by
+        // its CLI capture.
         std::shared_ptr<ProjectSnapshotChapters>
             popspa_cli_project_chapters_;
         std::uint64_t
@@ -1063,6 +1080,9 @@ namespace lfs::training {
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
         std::optional<std::filesystem::path> lpips_weights_path_;
         std::optional<lfs::Error> deferred_evaluation_error_;
+        // Failed standalone --save-project-at-iter saves; they fail the run at
+        // its end. Guarded by project_snapshot_mutex_: writers record their own.
+        std::optional<lfs::Error> project_at_iteration_error_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;
@@ -1083,6 +1103,7 @@ namespace lfs::training {
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};
         std::atomic<bool> evaluation_active_{false};
+        std::atomic<std::size_t> noise_infill_row_count_{0};
         std::atomic<bool> training_complete_{false};
         std::atomic<bool> saving_model_{false};
         std::atomic<bool> ready_to_start_{false};

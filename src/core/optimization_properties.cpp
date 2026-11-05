@@ -817,6 +817,14 @@ namespace lfs::core::param {
             .locale("training_params.eval_flip")
             .tooltip("training.tooltip.eval_flip")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_green_infill,
+                       "eval_green_infill", "Eval Green Infill", d.eval_green_infill,
+                       "Also score with opaque green filling the inside of a mesh, --noise-infill-mesh or else the --eval-mask mesh: "
+                       "a see-through surface loses score. Adds a second pass over the views, saved next to the evaluation images, "
+                       "and the share of the green that shows through the surface")
+            .locale("training_params.eval_green_infill")
+            .tooltip("training.tooltip.eval_green_infill")
+            .all_strategies()
             .enum_prop(&OptimizationParameters::eval_space,
                        "eval_space", "Eval Space", d.eval_space,
                        {{"Distorted", EvalSpace::Distorted, "training.options.eval_space.distorted", "distorted"},
@@ -894,6 +902,14 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.mesh_resolution")
             .precision(0)
             .ui_step(128)
+            .all_strategies()
+            .string_prop(&OptimizationParameters::noise_infill_mesh,
+                         "noise_infill_mesh", "Noise Infill Mesh", d.noise_infill_mesh,
+                         "Closed mesh whose interior opaque noise Gaussians fill during training, re-coloured every step, so "
+                         "transparent surfaces become opaque (noise guided splatting); left out of exports")
+            .locale("training.init.noise_infill_mesh")
+            .tooltip("training.tooltip.noise_infill_mesh")
+            .flags(PROP_NEEDS_RESTART)
 
             // Sparsity
             .all_strategies()

@@ -38,6 +38,7 @@
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/components/ppisp_file.hpp"
+#include "training/noise_infill.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
@@ -3722,6 +3723,19 @@ namespace lfs::vis {
         // Keep the model owned by the scene until trainer teardown succeeds:
         // a deferred clear must not destroy it through a local unique_ptr.
         auto splat_data = std::move(model_node->model);
+        // Edit mode has no training left to guide: the noise infill ends here, as in every export.
+        try {
+            if (auto without_noise = lfs::training::without_noise_infill(*splat_data)) {
+                *splat_data = std::move(*without_noise);
+                const auto splat_allocator = makeViewerSplatTensorAllocator();
+                if (splat_allocator && !lfs::io::splatTensorsRendererReady(*splat_data)) {
+                    if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*splat_data, splat_allocator); !migrated)
+                        throw std::runtime_error(migrated.error().format());
+                }
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Edit mode keeps the noise infill: {}", e.what());
+        }
         const size_t num_gaussians = splat_data->size();
 
         scene_.clear();

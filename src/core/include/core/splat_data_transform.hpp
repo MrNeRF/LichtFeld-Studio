@@ -6,9 +6,11 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include <cstddef>
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -82,6 +84,22 @@ namespace lfs::core {
      * @param num_required_splat Number of splats to keep
      * @param seed Random seed for reproducibility (default: 0)
      */
+    // A noise infill leads a model in training: opaque Gaussians in a frozen range at row 0. Frozen rows never train and are
+    // never removed, so the range stays first and whole and these raw opacities tell it from other frozen rows: a row that
+    // renders invisible until the noise appears, and a noise row, the logit of 0.99.
+    inline constexpr float kHiddenOpacity = -40.0f;
+    inline constexpr float kShownNoiseOpacity = 4.59512f;
+    struct NoiseInfillRange {
+        std::size_t count;
+        bool hidden;
+    };
+    [[nodiscard]] LFS_CORE_API std::optional<NoiseInfillRange> find_noise_infill(const SplatData& model);
+    // Rows [0, count) of a model with a noise infill; 0 without one.
+    [[nodiscard]] LFS_CORE_API std::size_t noise_infill_rows(const SplatData& model);
+    // A copy of `model` without its noise infill and its deleted rows, for an export, which never carries the noise; none if
+    // it has no noise.
+    [[nodiscard]] LFS_CORE_API std::optional<SplatData> without_noise_infill(const SplatData& model);
+
     LFS_CORE_API void random_choose(SplatData& splat_data, int num_required_splat, int seed = 0);
 
     /**

@@ -16,6 +16,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "io/atomic_output.hpp"
 #include "io/collision_export.hpp"
 #include "io/exporter.hpp"
@@ -487,6 +488,8 @@ namespace lfs::app {
 
                 splat = std::move(*splat_ptr);
             }
+            if (auto without_noise = lfs::core::without_noise_infill(*splat))
+                splat = std::make_shared<SplatData>(std::move(*without_noise));
             std::println("  Loaded {} gaussians, SH degree {}", splat->size(), splat->get_max_sh_degree());
 
             if (params.sh_degree >= 0 && params.sh_degree != splat->get_max_sh_degree()) {
