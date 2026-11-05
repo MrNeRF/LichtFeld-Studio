@@ -10,6 +10,7 @@ LichtFeld Studio can score a reconstruction against its input images while it tr
 | `--eval-all` | Train on every image and evaluate all of them. The scores then show fit, not generalization. |
 | `--eval-steps 7000,30000` | Iterations to evaluate at. The last iteration is always evaluated. |
 | `--eval-flip` | Also compute FLIP and save its error maps. |
+| `--eval-green-infill` | Also score with opaque green filling the inside of a mesh; see [Green infill](#green-infill). |
 | `--no-save-eval-images` | Skip the comparison images. |
 
 Fresh datasets use case-sensitive lexicographic image-name order, starting with the first image. A `.licht` project keeps its saved holdout when resumed or evaluated; explicitly passing `--test-every` rebuilds it in image-name order. Legacy `.resume` checkpoints retain record-order splitting.
@@ -36,6 +37,8 @@ Everything is written to the output directory:
 ├── metrics.csv              one row per evaluated iteration
 ├── metrics_report.txt       best and final scores in plain text
 ├── per_image_metrics.json   every image at every evaluated iteration
+├── green_infill_step_30000.json   with --eval-green-infill
+├── eval_step_30000_green_infill   with --eval-green-infill, the same images with green inside the mesh
 └── eval_step_30000
     ├── IMG_0001.png               ground truth | render, unscored pixels black; with a mask three rows:
     │                              unmasked, mask applied, inverted mask applied
@@ -187,6 +190,22 @@ LichtFeld-Studio compare dataset/ renders/ --eval-mask masks:/data/eval_masks
 ```
 
 The masks mirror the layout because `frame_0001.png` alone would match both cameras.
+
+## Green infill
+
+A see-through surface can score well, because the photos and the render show the same thing behind it. `--eval-green-infill`, or Evaluate Green Infill in the Evaluation section, shows how solid a surface really is, for any model, whether or not it was trained with [noise infill](noise-infill.md):
+
+```bash
+LichtFeld-Studio eval model.ply -d data/scene -o output/eval --eval-all --eval-green-infill --noise-infill-mesh scan.obj
+LichtFeld-Studio eval model.ply -d data/scene -o output/eval --eval-all --eval-green-infill --eval-mask mesh:scan.obj
+```
+
+It needs a mesh of the object, `--noise-infill-mesh` or else the mesh of `--eval-mask`; without one the command stops and names the flags to add. The usual scores do not change. On top of them it adds:
+
+- **PSNR, SSIM and LPIPS with green inside:** a second pass over the views with opaque green filling the inside of the mesh. A surface that hides the inside keeps its scores; a see-through one falls sharply.
+- **Surface opacity:** the share of the inside that shows through the surface, from renders with the surface black and the inside green against renders of the inside alone, with the score `log(share + 1e-10) / log(1e-10)`, 1 for an opaque surface. Not available with `--gut`.
+
+The log and `green_infill_step_<iteration>.json` give both. The method follows noise guided splatting ([arXiv 2510.15736](https://arxiv.org/abs/2510.15736)), whose surface opacity score divides by the object mask instead of the coverage of the inside.
 
 ## Distorted images
 

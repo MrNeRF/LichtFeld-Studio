@@ -75,6 +75,7 @@ def test_sparsity_toggle_controls_popspa_rows_and_search(
         use_exposure_correction=False, ppisp_use_controller=False,
         use_bilateral_grid=False, strategy="mcmc", random=False,
         enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+        noise_infill_mesh="",
     )
     monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
     panel = module.TrainingPanel()
@@ -146,6 +147,8 @@ class _ParamsStub:
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
+        self.noise_infill_mesh = ""
+        self.eval_green_infill = False
         self.eval_mask = ""
         self.eval_mask_report = ""
         self.save_steps = [7000]

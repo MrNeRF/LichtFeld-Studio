@@ -20,6 +20,7 @@
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "strategy_utils.hpp"
 #include "training/dataset.hpp"
 #include <algorithm>
@@ -512,7 +513,7 @@ namespace lfs::training {
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
-        auto resolved_params = optimParams;
+        auto resolved_params = with_noise_outside_cap(optimParams, _splat_data);
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
             std::move(resolved_params));
@@ -2928,7 +2929,7 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
-        auto resolved_params = params;
+        auto resolved_params = with_noise_outside_cap(params, _splat_data);
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(std::move(resolved_params));
         if (renderer_changed)
@@ -2963,6 +2964,14 @@ namespace lfs::training {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
         }
+    }
+
+    void MRNF::restart_mean_lr() {
+        if (!_params)
+            return;
+        _mean_lr_unscaled = _params->means_lr;
+        refresh_decay_schedule_from_current_state();
+        sync_mean_learning_rate();
     }
 
     void MRNF::refresh_decay_schedule_from_current_state() {

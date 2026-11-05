@@ -56,6 +56,7 @@
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
 #include "metrics/eval_mask.hpp"
+#include "noise_infill.hpp"
 #include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
@@ -3118,7 +3119,7 @@ namespace lfs::training {
 
             auto& splat = strategy_->get_model();
 
-            const int max_cap = params.optimization.max_cap;
+            const int max_cap = with_noise_outside_cap(params.optimization, &splat).max_cap;
             if (max_cap > 0 && max_cap < splat.size()) {
                 LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
                          max_cap, splat.size(), max_cap);
@@ -3244,11 +3245,14 @@ namespace lfs::training {
             }
 
             // Initialize the evaluator - it handles all metrics internally
+            if (params_.optimization.eval_green_infill && !lfs::core::param::eval_green_infill_mesh(params_.optimization))
+                return std::unexpected(std::string(lfs::core::param::kEvalGreenInfillNeedsMesh));
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
             if (lpips_weights_path_)
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
+            const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
+            evaluator_->set_training_origin({origin.x, origin.y, origin.z});
             if (!params_.optimization.eval_mask.empty()) {
-                const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
                 auto installed = evaluator_->install_eval_mask_source({origin.x, origin.y, origin.z});
                 if (!installed)
                     return std::unexpected(std::string(installed.error().user_message()));
@@ -6795,6 +6799,8 @@ namespace lfs::training {
 
                 {
                     nvtxRangePush("rasterize");
+                    if (noise_infill_step(strategy_->get_model(), params_.optimization, iter))
+                        strategy_->restart_mean_lr();
 
                     lfs::core::Tensor gt_tile = gt_image;
                     lfs::core::Tensor bg_tile;

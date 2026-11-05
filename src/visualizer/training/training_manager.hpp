@@ -34,7 +34,8 @@
 
 namespace lfs::core {
     class Scene;
-}
+    class SplatData;
+} // namespace lfs::core
 
 class TrainingSceneInitConcurrencyTest;
 
@@ -101,6 +102,8 @@ namespace lfs::vis {
         // With "Crop to ROI at end" on, the training crop box that exports of the training model are cropped to.
         // Read on the thread that owns the scene.
         [[nodiscard]] std::optional<lfs::training::TrainingCropBoxGeometry> exportCropBox() const;
+        // Leading rows of the training model that exports leave out: its noise infill.
+        [[nodiscard]] std::size_t exportNoiseInfillRows(const core::SplatData& model) const;
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control

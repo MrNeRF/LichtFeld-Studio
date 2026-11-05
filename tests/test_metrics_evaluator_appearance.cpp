@@ -13,11 +13,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -143,6 +146,70 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookNotConsultedWhenUnset) {
     metrics = evaluator.evaluate(1, *splat, std::make_shared<CameraDataset>(dataset), background);
     EXPECT_TRUE(metrics.valid);
     EXPECT_EQ(calls, 1);
+}
+
+// Catches the green pass running without the option, polluting the report with a second row, leaving the model's noise
+// shown or recoloured, or scoring its normal metrics with the noise visible.
+TEST_F(MetricsEvaluatorAppearanceTest, GreenInfillIsAnOptionalSecondPassThatLeavesTheModelAsItWas) {
+    const UniqueTempDir root("lfs_eval_green_infill");
+    write_constant_png(root.path() / "a.png", 0.5f);
+    auto cam = make_eval_camera(root.path() / "a.png", 1);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    const auto val_dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{cam}, lfs::training::DatasetConfig{}, CameraDataset::Split::ALL);
+
+    auto surface_only = make_eval_splat();
+    auto plain_params = make_eval_params(root.path() / "plain");
+    MetricsEvaluator plain(plain_params);
+    const auto plain_metrics = plain.evaluate(3, *surface_only, val_dataset, background);
+    ASSERT_TRUE(plain_metrics.valid);
+
+    // One noise row in front of the surface row: any render that shows it scores differently.
+    const size_t rows = 2;
+    auto means = Tensor::from_vector({0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f}, {rows, 3}, Device::CUDA);
+    auto sh0 = Tensor::full({rows, 1, 3}, 0.5f, Device::CUDA);
+    auto shN = Tensor::zeros({rows, 0, 3}, Device::CUDA);
+    auto scaling = Tensor::full({rows, 3}, -2.0f, Device::CUDA);
+    auto rotation = Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {rows, 4}, Device::CUDA);
+    auto opacity = Tensor::full({rows, 1}, 2.0f, Device::CUDA);
+    SplatData model(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    model.set_frozen_ranges({{0, 1}});
+    const auto sh0_before = model.sh0().cpu().contiguous().to_vector();
+    const auto opacity_before = model.opacity_raw().cpu().contiguous().to_vector();
+
+    auto off_params = make_eval_params(root.path() / "off");
+    off_params.optimization.noise_infill_mesh = "scan.obj";
+    MetricsEvaluator off(off_params);
+    const auto off_metrics = off.evaluate(3, model, val_dataset, background);
+    ASSERT_TRUE(off_metrics.valid);
+    EXPECT_NEAR(off_metrics.psnr, plain_metrics.psnr, 1e-3f);
+    EXPECT_FALSE(std::filesystem::exists(root.path() / "off" / "green_infill_step_3.json"));
+    EXPECT_FALSE(std::filesystem::exists(root.path() / "off" / "eval_step_3_green_infill"));
+
+    auto on_params = off_params;
+    on_params.dataset.output_path = root.path() / "on";
+    on_params.optimization.eval_green_infill = true;
+    std::filesystem::create_directories(on_params.dataset.output_path);
+    MetricsEvaluator on(on_params);
+    const auto on_metrics = on.evaluate(3, model, val_dataset, background);
+    ASSERT_TRUE(on_metrics.valid);
+    EXPECT_NEAR(on_metrics.psnr, plain_metrics.psnr, 1e-3f) << "the returned metrics score the surface alone";
+    EXPECT_EQ(model.sh0().cpu().contiguous().to_vector(), sh0_before);
+    EXPECT_EQ(model.opacity_raw().cpu().contiguous().to_vector(), opacity_before);
+
+    const auto report = root.path() / "on" / "green_infill_step_3.json";
+    ASSERT_TRUE(std::filesystem::exists(report));
+    std::ifstream in(report);
+    const auto document = nlohmann::json::parse(in);
+    EXPECT_GT(std::abs(document.at("psnr").get<float>() - plain_metrics.psnr), 0.01f) << "the second pass shows the green";
+    EXPECT_GT(document.at("see_through").get<double>(), 0.5) << "nothing covers the noise row";
+    EXPECT_TRUE(std::filesystem::exists(root.path() / "on" / "eval_step_3_green_infill" / "a.png"));
+
+    std::ifstream csv(root.path() / "on" / "metrics.csv");
+    size_t lines = 0;
+    for (std::string line; std::getline(csv, line);)
+        lines += !line.empty();
+    EXPECT_EQ(lines, 2u) << "header and the surface's row, no row for the green pass";
 }
 
 TEST_F(MetricsEvaluatorAppearanceTest, HookRunsOncePerFrameBeforeClampAndSavesCorrectedRender) {

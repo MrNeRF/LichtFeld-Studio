@@ -27,6 +27,7 @@
 #include "rendering/vulkan_external_tensor.hpp"
 #include "training/camera_training_notice.hpp"
 #include "training/control/command_api.hpp"
+#include "training/noise_infill.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
@@ -1285,6 +1286,10 @@ namespace lfs::vis {
         if (!crop || !scene_)
             return std::nullopt;
         return lfs::training::resolve_training_cropbox_geom(*scene_);
+    }
+
+    std::size_t TrainerManager::exportNoiseInfillRows(const core::SplatData& model) const {
+        return trainer_ ? lfs::training::noise_infill_rows(model, trainer_->getParams().optimization) : 0;
     }
 
     bool TrainerManager::startTraining() {

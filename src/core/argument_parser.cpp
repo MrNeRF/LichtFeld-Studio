@@ -75,6 +75,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--init-num-pts", "init_num_pts", Integer},
             OptimizationCliBinding{"--init-extent", "init_extent", Float},
             OptimizationCliBinding{"--init-mesh-resolution", "init_mesh_resolution", Integer},
+            OptimizationCliBinding{"--noise-infill-mesh", "noise_infill_mesh", String},
             OptimizationCliBinding{"--mask-mode", "mask_mode", Enum, false,
                                    "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
             OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
@@ -108,6 +109,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--no-keep-all-checkpoints", "keep_all_checkpoints", Bool, true},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-flip", "eval_flip", Bool},
+            OptimizationCliBinding{"--eval-green-infill", "eval_green_infill", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
             OptimizationCliBinding{"--eval-bit-depth", "eval_bit_depth", Enum},
             OptimizationCliBinding{"--eval-mask", "eval_mask", String, false,
@@ -846,6 +848,7 @@ namespace {
             ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::core::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
             ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::core::args::optimization_cli_help("--init-extent"), {"init-extent"});
             ::args::ValueFlag<int> init_mesh_resolution(init_group, "init_mesh_resolution", lfs::core::args::optimization_cli_help("--init-mesh-resolution"), {"init-mesh-resolution"});
+            ::args::ValueFlag<std::string> noise_infill_mesh(init_group, "noise_infill_mesh", lfs::core::args::optimization_cli_help("--noise-infill-mesh"), {"noise-infill-mesh"});
 
             // =============================================================================
             // DATASET OPTIONS
@@ -948,6 +951,7 @@ namespace {
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag eval_all(output_group, "eval_all", lfs::core::args::optimization_cli_help("--eval-all"), {"eval-all"});
             ::args::Flag eval_flip(output_group, "eval_flip", lfs::core::args::optimization_cli_help("--eval-flip"), {"eval-flip"});
+            ::args::Flag eval_green_infill(output_group, "eval_green_infill", lfs::core::args::optimization_cli_help("--eval-green-infill"), {"eval-green-infill"});
             ::args::MapFlag<std::string, lfs::core::param::EvalSpace> eval_space(
                 output_group, "eval_space", lfs::core::args::optimization_cli_help("--eval-space"), {"eval-space"},
                 EVAL_SPACES);
@@ -1362,6 +1366,18 @@ namespace {
                 }
             }
 
+            if (noise_infill_mesh) {
+                const auto& path_str = ::args::get(noise_infill_mesh);
+                if (!lfs::core::native_fs::exists(absolute_input_path(path_str))) {
+                    return std::unexpected(std::format("Noise infill mesh does not exist: {}", path_str));
+                }
+            }
+            // A resumed project may hold its own mesh; the trainer checks that one when it starts.
+            if (eval_green_infill && !noise_infill_mesh && !resume_checkpoint &&
+                !lfs::core::param::eval_mask_mesh_file(::args::get(eval_mask))) {
+                return std::unexpected(std::string(lfs::core::param::kEvalGreenInfillNeedsMesh));
+            }
+
             if (!sog_flags.read(params))
                 return std::unexpected("Invalid SSOG LOD options");
             if (export_formats) {
@@ -1631,6 +1647,7 @@ namespace {
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
                                         init_mesh_resolution_val = cli_option_present({"--init-mesh-resolution"}) ? std::optional<int>(::args::get(init_mesh_resolution)) : std::optional<int>(),
+                                        noise_infill_mesh_val = cli_option_present({"--noise-infill-mesh"}) ? std::optional<std::string>(lfs::core::path_to_utf8(absolute_input_path(::args::get(noise_infill_mesh)))) : std::optional<std::string>(),
                                         strategy_val = cli_option_present({"--strategy"}) ? std::optional<std::string>(::args::get(strategy)) : std::optional<std::string>(),
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
@@ -1671,6 +1688,7 @@ namespace {
                                         enable_eval_flag = bool(enable_eval),
                                         eval_all_flag = bool(eval_all),
                                         eval_flip_flag = bool(eval_flip),
+                                        eval_green_infill_flag = bool(eval_green_infill),
                                         eval_space_val = cli_option_present({"--eval-space"}) ? std::optional<lfs::core::param::EvalSpace>(::args::get(eval_space)) : std::optional<lfs::core::param::EvalSpace>(),
                                         eval_bit_depth_val = cli_option_present({"--eval-bit-depth"}) ? std::optional<lfs::core::param::EvalBitDepth>(::args::get(eval_bit_depth)) : std::optional<lfs::core::param::EvalBitDepth>(),
                                         eval_mask_val = std::move(eval_mask_val),
@@ -1816,6 +1834,7 @@ namespace {
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
                 setVal(init_mesh_resolution_val, opt.init_mesh_resolution);
+                setVal(noise_infill_mesh_val, opt.noise_infill_mesh);
                 setVal(strategy_val, opt.strategy);
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
@@ -1860,6 +1879,8 @@ namespace {
                 setFlag(eval_all_flag, opt.eval_all);
                 setFlag(eval_all_flag, opt.enable_eval);
                 setFlag(eval_flip_flag, opt.eval_flip);
+                setFlag(eval_green_infill_flag, opt.eval_green_infill);
+                setFlag(eval_green_infill_flag, opt.enable_eval);
                 setVal(eval_space_val, opt.eval_space);
                 setVal(eval_bit_depth_val, opt.eval_bit_depth);
                 setVal(eval_mask_val, opt.eval_mask);
@@ -1975,6 +1996,7 @@ namespace {
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());
+                note_opt("noise_infill_mesh", noise_infill_mesh_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
                 note_opt("popspa_target_count", popspa_target_count_val.has_value());
                 note_opt("perf_bench", perf_bench_flag);
@@ -1990,9 +2012,10 @@ namespace {
                 note_opt("ppisp_use_controller", ppisp_controller_flag);
                 note_opt("ppisp_freeze_from_sidecar", ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
-                note_opt("enable_eval", enable_eval_flag || eval_all_flag);
+                note_opt("enable_eval", enable_eval_flag || eval_all_flag || eval_green_infill_flag);
                 note_opt("eval_all", eval_all_flag);
                 note_opt("eval_flip", eval_flip_flag);
+                note_opt("eval_green_infill", eval_green_infill_flag);
                 note_opt("eval_space", eval_space_val.has_value());
                 note_opt("eval_bit_depth", eval_bit_depth_val.has_value());
                 note_opt("eval_mask", eval_mask_val.has_value());
@@ -2464,12 +2487,27 @@ namespace {
 Scores a .licht project, .resume checkpoint or splat file without training it.
 A splat file needs -d and the settings it was trained with. Evaluation and
 dataset options work as in training; see the Evaluation page of the docs.
+
+Evaluation options:
 )";
+
+    std::string evaluation_options_help() {
+        std::string help;
+        const auto add = [&](const std::string_view flag, const std::string_view description) {
+            help += std::format("  {}\n      {}\n", flag, description);
+        };
+        for (const std::string_view flag : {"--eval-all", "--eval-mask", "--eval-mask-opacity", "--eval-flip", "--eval-green-infill",
+                                            "--eval-space", "--eval-bit-depth", "--noise-infill-mesh"})
+            add(flag, lfs::core::args::optimization_cli_help(flag));
+        add("--eval-mask-report", EVAL_MASK_REPORT_HELP);
+        add("--no-save-eval-images", "Do not save the evaluation comparison images (default: saved)");
+        return help;
+    }
 
     std::optional<lfs::core::args::ParsedArgs> parseEvalArgs(const int argc, const char* const argv[], std::string& error) {
         const std::vector<std::string> args(argv + 2, argv + argc);
         if (args.empty() || args.front() == "-h" || args.front() == "--help") {
-            std::print("{}", EVAL_HELP);
+            std::print("{}{}", EVAL_HELP, evaluation_options_help());
             return lfs::core::args::HelpMode{};
         }
         const std::string& model = args.front();

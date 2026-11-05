@@ -10,6 +10,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "strategy_utils.hpp"
 
 #include "core/tensor/internal/memory_pool.hpp"
@@ -209,8 +210,17 @@ namespace lfs::training {
         return values;
     }
 
+    void ImprovedGSPlus::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(params, _splat_data));
+    }
+
+    void ImprovedGSPlus::restart_mean_lr() {
+        if (_optimizer && _params && _splat_data)
+            _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
+    }
+
     void ImprovedGSPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(optimParams, _splat_data));
 
         // Initialize Gaussians
         initialize_gaussians(*(_splat_data), _params->max_cap);

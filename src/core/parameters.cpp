@@ -761,6 +761,20 @@ namespace lfs::core {
             return range;
         }
 
+        std::optional<std::string_view> eval_mask_mesh_file(const std::string_view spec) {
+            if (spec.empty() || spec == "none" || is_eval_mask_box(spec) || is_eval_mask_cropbox(spec) || is_eval_mask_folder(spec) ||
+                is_eval_mask_depth(spec) || is_eval_mask_points(spec) || eval_mask_points_file(spec) ||
+                eval_mask_splat_file(spec))
+                return std::nullopt;
+            return spec.starts_with("mesh:") ? spec.substr(5) : spec;
+        }
+
+        std::optional<std::string_view> eval_green_infill_mesh(const OptimizationParameters& params) {
+            if (!params.noise_infill_mesh.empty())
+                return std::string_view{params.noise_infill_mesh};
+            return eval_mask_mesh_file(params.eval_mask);
+        }
+
         std::string normalize_eval_mask(const std::string_view spec) {
             if (spec.empty())
                 return {};
