@@ -321,7 +321,7 @@ namespace lfs::vis {
             bool stochastic = false, warmup = false;
         };
         [[nodiscard]] LFS_VIS_API std::expected<PreparedDraw, std::string> prepare(VulkanContext&, const core::SplatData&,
-                                                                       const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload = false, bool capture = false);
+                                                                                   const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload = false, bool capture = false);
         [[nodiscard]] PreparedDraw prepareDecision(const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload, bool capture = false);
         [[nodiscard]] VulkanGSRenderer::HostPlan hostsFor(const VulkanGSRenderer::HostInputs& inputs) { return renderer_.hostsFor(inputs); }
         [[nodiscard]] lfs::Result<bool> preparePrograms(const std::shared_ptr<const shaders::ShaderPrograms>&,
