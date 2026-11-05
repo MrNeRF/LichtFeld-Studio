@@ -36,6 +36,12 @@ namespace {
                p.z >= low.z && p.z <= high.z;
     }
 
+    std::pair<glm::vec3, glm::vec3> tile_context_bounds(const TileSpec& tile) {
+        if (tile.has_context_bounds)
+            return {tile.context_min, tile.context_max};
+        return {tile.min, tile.max};
+    }
+
     glm::vec2 project_observation_pixel(const TileCameraEvidence& view,
                                         const glm::vec3& world) {
         const float invalid = std::numeric_limits<float>::quiet_NaN();
@@ -201,28 +207,44 @@ namespace {
 
     TileSpec tile_from_rect(const Rect& rect, const PlanContext& context,
                             const int index) {
-        glm::vec2 low = rect.low, high = rect.high;
+        glm::vec2 context_low = rect.low, context_high = rect.high;
         const auto& bounds = context.bounds;
         const auto& outer = context.outer_bounds;
         for (int axis = 0; axis < 2; ++axis) {
-            const float width = high[axis] - low[axis];
+            const float width = context_high[axis] - context_low[axis];
             const float margin = width * context.overlap_ratio * 0.5f;
-            low[axis] -= rect.low[axis] <= bounds.min[axis] + 1e-5f
+            context_low[axis] -= rect.low[axis] <= bounds.min[axis] + 1e-5f
                 ? std::min(std::max(bounds.min[axis] - outer.min[axis], width * 0.1f), width * 0.5f)
                 : margin;
-            high[axis] += rect.high[axis] >= bounds.max[axis] - 1e-5f
+            context_high[axis] += rect.high[axis] >= bounds.max[axis] - 1e-5f
                 ? std::min(std::max(outer.max[axis] - bounds.max[axis], width * 0.1f), width * 0.5f)
                 : margin;
         }
         const glm::vec3 extent = bounds.max - bounds.min;
-        const glm::vec3 local_center{(low.x + high.x) * 0.5f,
-                                     (low.y + high.y) * 0.5f,
-                                     (bounds.min.z + bounds.max.z) * 0.5f};
-        const glm::vec3 half{(high.x - low.x) * 0.5f,
-                             (high.y - low.y) * 0.5f, extent.z * 0.5f};
-        const glm::vec3 center = context.rotation * local_center;
-        return {center - half, center + half, bounds.rotation_degrees,
-                index, 0, std::format("tile_{}_0", index)};
+        const auto world_bounds = [&](const glm::vec2 low, const glm::vec2 high) {
+            const glm::vec3 local_center{(low.x + high.x) * 0.5f,
+                                         (low.y + high.y) * 0.5f,
+                                         (bounds.min.z + bounds.max.z) * 0.5f};
+            const glm::vec3 half{(high.x - low.x) * 0.5f,
+                                 (high.y - low.y) * 0.5f, extent.z * 0.5f};
+            const glm::vec3 center = context.rotation * local_center;
+            return std::pair{center - half, center + half};
+        };
+        glm::vec2 owned_high = rect.high;
+        // Like grid tiles, adaptive crop boxes are closed intervals: choose a
+        // deterministic half-open ownership rule at every interior split.
+        if (rect.high.x < bounds.max.x)
+            owned_high.x = std::nextafter(owned_high.x, -std::numeric_limits<float>::infinity());
+        if (rect.high.y < bounds.max.y)
+            owned_high.y = std::nextafter(owned_high.y, -std::numeric_limits<float>::infinity());
+        const auto [core_min, core_max] = world_bounds(rect.low, owned_high);
+        const auto [context_min, context_max] = world_bounds(context_low, context_high);
+        TileSpec tile{core_min, core_max, bounds.rotation_degrees,
+                      index, 0, std::format("tile_{}_0", index)};
+        tile.context_min = context_min;
+        tile.context_max = context_max;
+        tile.has_context_bounds = true;
+        return tile;
     }
 
     int spatial_cell(const glm::vec2& point, const Rect& rect) {
@@ -238,8 +260,9 @@ namespace {
         std::array<bool, 16> occupied{};
         std::array<int, 16> observed_by_cameras{};
         const auto tile = tile_from_rect(rect, context, 0);
-        const glm::vec3 center = (tile.min + tile.max) * 0.5f;
-        const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+        const auto [context_min, context_max] = tile_context_bounds(tile);
+        const glm::vec3 center = (context_min + context_max) * 0.5f;
+        const glm::vec3 half = (context_max - context_min) * 0.5f;
         const glm::vec3 local_center = context.inverse_rotation * center;
         TileCameraSelectionDiagnostics camera_diagnostics;
         const auto selected_uids = select_tile_camera_uids(
@@ -723,8 +746,9 @@ std::vector<int> select_tile_camera_uids(
     if (diagnostics) *diagnostics = {};
     if (cameras.empty()) return {};
     const glm::mat3 inverse = glm::transpose(tile_rotation(tile.rotation_degrees));
-    const glm::vec3 center = (tile.min + tile.max) * 0.5f;
-    const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+    const auto [context_min, context_max] = tile_context_bounds(tile);
+    const glm::vec3 center = (context_min + context_max) * 0.5f;
+    const glm::vec3 half = (context_max - context_min) * 0.5f;
     if (half.x <= 0.0f || half.y <= 0.0f || half.z <= 0.0f ||
         !std::isfinite(half.x) || !std::isfinite(half.y) || !std::isfinite(half.z))
         throw std::invalid_argument("Camera selection needs a non-empty tile");
@@ -998,9 +1022,83 @@ TileVisibilityMask estimate_tile_visibility_mask(
     return result;
 }
 
+TileVisibilityMask estimate_tile_depth_visibility_mask(
+    const TileSpec& tile, const TileCameraEvidence& camera,
+    const std::vector<glm::vec3>& coarse_points,
+    const int width, const int height) {
+    TileVisibilityMask result;
+    if (width <= 2 || height <= 2 || width > 256 || height > 256 ||
+        coarse_points.empty() || camera.width <= 0 || camera.height <= 0 || !camera.pinhole)
+        return result;
+
+    const glm::mat3 inverse = glm::transpose(tile_rotation(tile.rotation_degrees));
+    const glm::vec3 core_center = (tile.min + tile.max) * 0.5f;
+    const glm::vec3 core_half = (tile.max - tile.min) * 0.5f;
+    if (core_half.x <= 0.0f || core_half.y <= 0.0f || core_half.z <= 0.0f)
+        return result;
+
+    struct ZCell {
+        float depth = std::numeric_limits<float>::infinity();
+        bool owner_is_core = false;
+        bool known = false;
+    };
+    std::vector<ZCell> zbuffer(static_cast<size_t>(width) * height);
+    const auto& m = camera.world_to_camera;
+    for (const glm::vec3& point : coarse_points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+            continue;
+        const glm::vec3 delta = point - camera.center;
+        const glm::vec3 view{m[0]*delta.x + m[1]*delta.y + m[2]*delta.z,
+                             m[4]*delta.x + m[5]*delta.y + m[6]*delta.z,
+                             m[8]*delta.x + m[9]*delta.y + m[10]*delta.z};
+        if (!std::isfinite(view.z) || view.z <= 1e-4f)
+            continue;
+        const glm::vec2 pixel{camera.fx * view.x / view.z + camera.cx,
+                              camera.fy * view.y / view.z + camera.cy};
+        if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y) ||
+            pixel.x < 0.0f || pixel.y < 0.0f ||
+            pixel.x >= camera.width || pixel.y >= camera.height)
+            continue;
+        const int x = std::clamp(static_cast<int>(pixel.x * width / camera.width), 0, width - 1);
+        const int y = std::clamp(static_cast<int>(pixel.y * height / camera.height), 0, height - 1);
+        auto& cell = zbuffer[static_cast<size_t>(y) * width + x];
+        if (view.z < cell.depth) {
+            cell.depth = view.z;
+            cell.owner_is_core = contains(inverse * (point - core_center), -core_half, core_half);
+            cell.known = true;
+        }
+    }
+
+    // A lone point is not enough evidence to erase a training pixel.  Require
+    // a 3x3 majority of nearer, non-owner coarse surfels before masking it.
+    result.width = width;
+    result.height = height;
+    result.weights.assign(static_cast<size_t>(width) * height, 1.0f);
+    bool masked_any = false;
+    for (int y = 1; y + 1 < height; ++y) {
+        for (int x = 1; x + 1 < width; ++x) {
+            int known = 0, foreign = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const auto& cell = zbuffer[static_cast<size_t>(y + dy) * width + (x + dx)];
+                    if (!cell.known) continue;
+                    ++known;
+                    foreign += !cell.owner_is_core;
+                }
+            }
+            if (known >= 5 && foreign * 4 >= known * 3) {
+                result.weights[static_cast<size_t>(y) * width + x] = 0.15f;
+                masked_any = true;
+            }
+        }
+    }
+    return masked_any ? result : TileVisibilityMask{};
+}
+
 std::vector<int> select_tile_initial_point_indices(
     const PointCloud& points, const TileSpec& tile,
-    const std::vector<TileCameraEvidence>& selected_cameras) {
+    const std::vector<TileCameraEvidence>& selected_cameras,
+    const bool include_context_points) {
     if (!points.means.is_valid() || points.means.ndim() != 2 || points.means.size(1) < 3)
         return {};
     const auto means = points.means.cpu().contiguous();
@@ -1011,6 +1109,9 @@ std::vector<int> select_tile_initial_point_indices(
     const glm::mat3 inverse_rotation = glm::transpose(tile_rotation(tile.rotation_degrees));
     const glm::vec3 center = (tile.min + tile.max) * 0.5f;
     const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+    const auto [context_min, context_max] = tile_context_bounds(tile);
+    const glm::vec3 context_center = (context_min + context_max) * 0.5f;
+    const glm::vec3 context_half = (context_max - context_min) * 0.5f;
 
     std::unordered_set<PointKey, PointKeyHash> observed;
     for (const auto& view : selected_cameras)
@@ -1024,8 +1125,11 @@ std::vector<int> select_tile_initial_point_indices(
     for (size_t index = 0; index < count; ++index) {
         const glm::vec3 point{values[index*stride], values[index*stride+1], values[index*stride+2]};
         if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) continue;
-        if (contains(inverse_rotation * (point - center), -half, half) ||
-            observed.contains(point_key(point)))
+        const auto local = inverse_rotation * (point - center);
+        const auto context_local = inverse_rotation * (point - context_center);
+        if (contains(local, -half, half) ||
+            (include_context_points && contains(context_local, -context_half, context_half)) ||
+            (observed.contains(point_key(point)) && contains(context_local, -context_half, context_half)))
             selected.push_back(static_cast<int>(index));
     }
     // A mostly empty cell still needs enough initial points for a stable run.

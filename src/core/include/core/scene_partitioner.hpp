@@ -55,12 +55,22 @@ namespace lfs::core {
     };
 
     struct TileSpec {
+        // The core is the ownership region.  Cores form a disjoint partition and
+        // are the only bounds used for the final crop/export.
         glm::vec3 min{0.0f};
         glm::vec3 max{0.0f};
         glm::vec3 rotation_degrees{0.0f};
         int i = 0;
         int j = 0;
         std::string name;
+
+        // A possibly overlapping training context.  It supplies cameras and
+        // auxiliary initialization points but is never exported by itself.
+        // Keeping this optional preserves compatibility with hand-authored
+        // plans made before core/context ownership was introduced.
+        glm::vec3 context_min{0.0f};
+        glm::vec3 context_max{0.0f};
+        bool has_context_bounds = false;
     };
 
     // Snapshot of the SfM evidence needed by the partitioner. The matrix is the
@@ -114,6 +124,15 @@ namespace lfs::core {
         const TileSpec& tile, const TileCameraEvidence& camera,
         int width = 64, int height = 64);
 
+    // Conservative coarse-depth z-buffer mask.  Each low-resolution pixel is
+    // masked only when a coherent local neighbourhood is occluded by a coarse
+    // Gaussian whose centre belongs to another ownership core.  Empty or
+    // ambiguous pixels retain weight one.
+    [[nodiscard]] LFS_CORE_API TileVisibilityMask estimate_tile_depth_visibility_mask(
+        const TileSpec& tile, const TileCameraEvidence& camera,
+        const std::vector<glm::vec3>& coarse_points,
+        int width = 32, int height = 32);
+
     [[nodiscard]] LFS_CORE_API std::vector<TileCameraEvidence> collect_tile_camera_evidence(
         const std::vector<std::shared_ptr<Camera>>& cameras);
     [[nodiscard]] LFS_CORE_API std::vector<TileSpec> generate_adaptive_tiles(
@@ -142,7 +161,8 @@ namespace lfs::core {
         TileCameraSelectionDiagnostics* diagnostics = nullptr);
     [[nodiscard]] LFS_CORE_API std::vector<int> select_tile_initial_point_indices(
         const PointCloud& points, const TileSpec& tile,
-        const std::vector<TileCameraEvidence>& selected_cameras);
+        const std::vector<TileCameraEvidence>& selected_cameras,
+        bool include_context_points = false);
 
     [[nodiscard]] LFS_CORE_API SceneBounds compute_robust_scene_bounds(
         const PointCloud& pc, const std::vector<glm::vec3>& camera_centers,

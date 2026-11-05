@@ -820,12 +820,17 @@ namespace {
             ::args::ValueFlag<std::string> tile_source(training_group, "source", "Data used for tile bounds and orientation: 'points' (default), 'both', or 'cameras'", {"tile-source"});
             ::args::ValueFlag<float> tile_quantile(training_group, "ratio", "Outlier trim quantile from 0 to 0.49 (default 0.02)", {"tile-quantile"});
             ::args::ValueFlag<float> tile_outside_loss_weight(training_group, "weight", "Loss weight outside each tile from 0 to 1 (default 0)", {"tile-outside-loss-weight"});
+            ::args::ValueFlag<int> tile_coarse_iterations(training_group, "iterations", "Global coarse-pass iterations used to initialize every tile (default 5000)", {"tile-coarse-iterations"});
+            ::args::ValueFlag<int> tile_coarse_resize(training_group, "factor", "Global coarse-pass image resize factor: 1, 2, 4, or 8 (default 4)", {"tile-coarse-resize"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
             ::args::Flag no_tile_crop(training_group, "no_tile_crop", "Keep splats outside each tile after training", {"no-tile-crop"});
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
             ::args::ValueFlag<std::string> tile_plan(training_group, "path", "Use edited tile boxes from a JSON plan instead of recomputing the grid", {"tile-plan"});
             ::args::ValueFlag<std::string> tile_camera_uids(training_group, "path", "Internal: camera UID allowlist for one tile job", {"tile-camera-uids"});
             ::args::ValueFlag<std::string> tile_exposure_gains(training_group, "path", "Internal: global per-image exposure gains shared by tile jobs", {"tile-exposure-gains"});
+            ::args::ValueFlag<std::string> tile_contextbox(training_group, "x0,y0,z0,x1,y1,z1", "Internal: overlapping context bounds used only for tile camera/initialization selection", {"tile-contextbox"});
+            ::args::ValueFlag<std::string> tile_depth_masks(training_group, "path", "Internal: coarse depth-derived per-camera loss masks for one tile job", {"tile-depth-masks"});
+            ::args::Flag tile_child(training_group, "tile_child", "Internal: suppress parent auto-tile orchestration in a worker process", {"tile-child"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -1434,9 +1439,29 @@ namespace {
                     params.tile_outside_loss_weight < 0.0f || params.tile_outside_loss_weight > 1.0f)
                     return std::unexpected("--tile-outside-loss-weight must be between 0 and 1");
             }
+            if (tile_coarse_iterations) {
+                params.tile_coarse_iterations = ::args::get(tile_coarse_iterations);
+                if (params.tile_coarse_iterations < 100)
+                    return std::unexpected("--tile-coarse-iterations must be at least 100");
+            }
+            if (tile_coarse_resize) {
+                params.tile_coarse_resize_factor = ::args::get(tile_coarse_resize);
+                if (params.tile_coarse_resize_factor != 1 && params.tile_coarse_resize_factor != 2 &&
+                    params.tile_coarse_resize_factor != 4 && params.tile_coarse_resize_factor != 8)
+                    return std::unexpected("--tile-coarse-resize must be 1, 2, 4, or 8");
+            }
             params.auto_tile_crop = !no_tile_crop;
             params.auto_tile_merge = !no_tile_merge;
-            if (tile_plan) {
+            params.tile_child_job = tile_child;
+            // Configuration files are deliberately forwarded to workers so
+            // regular training settings stay identical.  A config may contain
+            // --auto-tile, however, which must only be honoured by the parent.
+            if (params.tile_child_job) {
+                params.auto_tile_grid.reset();
+                params.auto_tile_count = 0;
+                params.auto_tile_size = 0.0f;
+            }
+            if (tile_plan && !params.tile_child_job) {
                 params.tile_plan_path = absolute_input_path(::args::get(tile_plan));
                 if (!lfs::core::native_fs::exists(*params.tile_plan_path))
                     return std::unexpected("--tile-plan file does not exist");
@@ -1450,12 +1475,29 @@ namespace {
                 if (params.auto_tile_grid || params.auto_tile_count || params.auto_tile_size > 0.0f)
                     return std::unexpected("--tile-camera-uids is for one tile job only");
             }
+            if (tile_contextbox) {
+                const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(tile_contextbox));
+                if (!box)
+                    return std::unexpected("--tile-contextbox needs six finite min/max coordinates");
+                params.tile_contextbox = *box;
+                if (!params.tile_camera_uids_path || !params.cropbox)
+                    return std::unexpected("--tile-contextbox needs --tile-camera-uids and --cropbox");
+            }
             if (tile_exposure_gains) {
                 params.tile_exposure_gains_path = absolute_input_path(::args::get(tile_exposure_gains));
                 if (!lfs::core::native_fs::exists(*params.tile_exposure_gains_path))
                     return std::unexpected("--tile-exposure-gains file does not exist");
                 if (!params.tile_camera_uids_path)
                     return std::unexpected("--tile-exposure-gains needs --tile-camera-uids");
+            }
+            if (tile_depth_masks) {
+                params.tile_depth_masks_path = absolute_input_path(::args::get(tile_depth_masks));
+                if (!lfs::core::native_fs::exists(*params.tile_depth_masks_path))
+                    return std::unexpected("--tile-depth-masks file does not exist");
+                if (!params.tile_camera_uids_path)
+                    return std::unexpected("--tile-depth-masks needs --tile-camera-uids");
+                if (params.auto_tile_grid || params.auto_tile_count || params.auto_tile_size > 0.0f)
+                    return std::unexpected("--tile-depth-masks is for one tile job only");
             }
             if ((params.auto_tile_grid || params.auto_tile_count > 0 || params.auto_tile_size > 0.0f) &&
                 (params.cropbox || params.resume_checkpoint || params.resume_project))

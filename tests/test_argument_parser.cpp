@@ -1557,6 +1557,8 @@ TEST(ArgumentParserTest, AutoTileKeepsExportsAndOutsideLossWhenRequested) {
     EXPECT_TRUE((*defaults)->auto_tile_crop);
     EXPECT_TRUE((*defaults)->auto_tile_merge);
     EXPECT_FLOAT_EQ((*defaults)->tile_outside_loss_weight, 0.0f);
+    EXPECT_EQ((*defaults)->tile_coarse_iterations, 5000);
+    EXPECT_EQ((*defaults)->tile_coarse_resize_factor, 4);
 
     const char* argv[] = {
         "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
@@ -1567,6 +1569,32 @@ TEST(ArgumentParserTest, AutoTileKeepsExportsAndOutsideLossWhenRequested) {
     EXPECT_FALSE((*parsed)->auto_tile_crop);
     EXPECT_FALSE((*parsed)->auto_tile_merge);
     EXPECT_FLOAT_EQ((*parsed)->tile_outside_loss_weight, 0.25f);
+}
+
+TEST(ArgumentParserTest, AutoTileParsesCoarsePriorSettings) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_coarse_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_coarse_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-coarse-iterations", "1200", "--tile-coarse-resize", "2"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->tile_coarse_iterations, 1200);
+    EXPECT_EQ((*parsed)->tile_coarse_resize_factor, 2);
+}
+
+TEST(ArgumentParserTest, TileChildSuppressesInheritedAutoTileOrchestration) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_child_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_child_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-child"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->tile_child_job);
+    EXPECT_EQ((*parsed)->auto_tile_count, 0);
+    EXPECT_FALSE((*parsed)->auto_tile_grid.has_value());
+    EXPECT_FLOAT_EQ((*parsed)->auto_tile_size, 0.0f);
 }
 
 TEST(ArgumentParserTest, AutoTileAcceptsAdaptiveCount) {

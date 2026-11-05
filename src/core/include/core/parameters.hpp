@@ -626,10 +626,20 @@ namespace lfs::core {
             float auto_tile_quantile = 0.02f;
             bool auto_tile_crop = true;
             bool auto_tile_merge = true;
+            // Internal: prevents a worker launched by the auto-tile parent from
+            // recursively becoming another auto-tile parent through --config.
+            bool tile_child_job = false;
             float tile_outside_loss_weight = 0.0f;
+            // A low-resolution global pass anchors each local optimization.
+            int tile_coarse_iterations = 5000;
+            int tile_coarse_resize_factor = 4;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
             std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
             std::optional<std::filesystem::path> tile_exposure_gains_path = std::nullopt;
+            std::optional<std::array<float, 6>> tile_contextbox = std::nullopt;
+            // Internal: per-camera conservative masks derived from the global
+            // coarse model's z-buffer.  Tile jobs only consume this file.
+            std::optional<std::filesystem::path> tile_depth_masks_path = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Training Panel - RmlUI with native data binding."""
 
+import math
 import os
 import subprocess
 import threading
@@ -264,14 +265,18 @@ class TrainingPanel(Panel):
         self._auto_scale_steps_locked = True
         self._auto_scale_user_override = False
         self._auto_scale_dataset_path = ""
+        self._auto_tile_mode = "adaptive"
         self._auto_tile_columns = "2"
         self._auto_tile_rows = "2"
-        self._auto_tile_adaptive = True
         self._auto_tile_count = "4"
+        self._auto_tile_target_size = "10"
         self._auto_tile_overlap = 0.15
         self._auto_tile_align_mode = "obb_3d"
+        self._auto_tile_source = "points"
         self._auto_tile_quantile = 0.02
         self._auto_tile_outside_loss = 0.0
+        self._auto_tile_coarse_iterations = "5000"
+        self._auto_tile_coarse_resize = "4"
         self._auto_tile_crop = True
         self._auto_tile_merge = True
         self._auto_tile_run_merge = True
@@ -281,6 +286,8 @@ class TrainingPanel(Panel):
         self._auto_tile_preview_group = -1
         self._auto_tile_preview_settings = None
         self._auto_tile_preview_dataset = ""
+        self._auto_tile_preview_tiles = []
+        self._auto_tile_selected_index = 0
         self._last_state = ""
         self._last_session = None
         self._last_save_steps = None
@@ -368,19 +375,23 @@ class TrainingPanel(Panel):
         d = lf.dataset_params
 
         self._bind_labels(model)
+        model.bind("auto_tile_mode", lambda: self._auto_tile_mode,
+                   lambda value: setattr(self, "_auto_tile_mode", str(value)))
         model.bind("auto_tile_columns", lambda: self._auto_tile_columns,
                    lambda value: setattr(self, "_auto_tile_columns", str(value)))
         model.bind("auto_tile_rows", lambda: self._auto_tile_rows,
                    lambda value: setattr(self, "_auto_tile_rows", str(value)))
-        model.bind("auto_tile_adaptive", lambda: self._auto_tile_adaptive,
-                   lambda value: setattr(self, "_auto_tile_adaptive", bool(value)))
         model.bind("auto_tile_count", lambda: self._auto_tile_count,
                    lambda value: setattr(self, "_auto_tile_count", str(value)))
+        model.bind("auto_tile_target_size", lambda: self._auto_tile_target_size,
+                   lambda value: setattr(self, "_auto_tile_target_size", str(value)))
         model.bind("auto_tile_overlap_steps", lambda: round(self._auto_tile_overlap * 100),
                    lambda value: setattr(self, "_auto_tile_overlap", round(float(value)) / 100))
         model.bind_func("auto_tile_overlap_label", lambda: f"{self._auto_tile_overlap:.2f}")
         model.bind("auto_tile_align_mode", lambda: self._auto_tile_align_mode,
                    lambda value: setattr(self, "_auto_tile_align_mode", str(value)))
+        model.bind("auto_tile_source", lambda: self._auto_tile_source,
+                   lambda value: setattr(self, "_auto_tile_source", str(value)))
         model.bind("auto_tile_quantile_steps", lambda: round(self._auto_tile_quantile * 1000),
                    lambda value: setattr(self, "_auto_tile_quantile", round(float(value)) / 1000))
         model.bind_func("auto_tile_quantile_label", lambda: f"{self._auto_tile_quantile:.3f}")
@@ -391,6 +402,17 @@ class TrainingPanel(Panel):
                    lambda value: setattr(self, "_auto_tile_crop", bool(value)))
         model.bind("auto_tile_merge", lambda: self._auto_tile_merge,
                    lambda value: setattr(self, "_auto_tile_merge", bool(value)))
+        model.bind("auto_tile_coarse_iterations", lambda: self._auto_tile_coarse_iterations,
+                   lambda value: setattr(self, "_auto_tile_coarse_iterations", str(value)))
+        model.bind("auto_tile_coarse_resize", lambda: self._auto_tile_coarse_resize,
+                   lambda value: setattr(self, "_auto_tile_coarse_resize", str(value)))
+        model.bind("auto_tile_selected_index", lambda: str(self._auto_tile_selected_index),
+                   self._set_auto_tile_selected_index)
+        model.bind_func("auto_tile_has_preview", lambda: bool(self._auto_tile_preview_tiles))
+        model.bind_func("auto_tile_preview_tiles", lambda: self._auto_tile_preview_tiles)
+        model.bind_func("auto_tile_selected_cameras", self._auto_tile_selected_cameras)
+        model.bind_func("auto_tile_selected_camera_count",
+                        lambda: len(self._auto_tile_selected_cameras()))
         model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
         model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
         self._bind_property_search(model)
@@ -1519,6 +1541,7 @@ class TrainingPanel(Panel):
         model.bind_event("pv_escape", self._on_pv_number_input_escape)
         model.bind_event("pv_value_change", self._on_pv_value_change)
         model.bind_event("auto_tile_slider_change", self._on_auto_tile_slider_change)
+        model.bind_event("auto_tile_select", self._on_auto_tile_select)
         model.bind_event("pv_search_clear", self._on_pv_search_clear)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
@@ -1907,6 +1930,9 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
 
     def on_unmount(self, doc):
+        restore_auto_tile_preview = getattr(lf, "restore_auto_tile_preview", None)
+        if callable(restore_auto_tile_preview):
+            restore_auto_tile_preview()
         self._unsubscribe_reactive_state()
         self._cancel_deferred_updates()
         doc.remove_data_model("training")
@@ -2799,6 +2825,10 @@ class TrainingPanel(Panel):
             self._action_start()
         elif action == "auto_tile_preview":
             self._auto_tile_preview()
+        elif action == "auto_tile_focus":
+            self._auto_tile_focus()
+        elif action == "auto_tile_restore":
+            self._auto_tile_restore()
         elif action == "auto_tile_train":
             self._auto_tile_train()
         elif action == "auto_tile_cancel":
@@ -2940,22 +2970,42 @@ class TrainingPanel(Panel):
 
     def _auto_tile_settings(self):
         try:
-            columns = 1 if self._auto_tile_adaptive else int(self._auto_tile_columns)
-            rows = 1 if self._auto_tile_adaptive else int(self._auto_tile_rows)
-            count = int(self._auto_tile_count) if self._auto_tile_adaptive else 0
+            mode = str(self._auto_tile_mode)
             overlap = float(self._auto_tile_overlap)
             quantile = float(self._auto_tile_quantile)
+            coarse_iterations = int(self._auto_tile_coarse_iterations)
+            coarse_resize = int(self._auto_tile_coarse_resize)
         except (TypeError, ValueError):
             raise ValueError(tr("auto_tiles.invalid_grid"))
         if -1e-6 <= overlap < 0.0:
             overlap = 0.0
         if -1e-6 <= quantile < 0.0:
             quantile = 0.0
-        if not (0 <= count <= 100 and 1 <= columns <= 100 and 1 <= rows <= 100 and
-                columns * rows <= 1000 and 0.0 <= overlap <= 0.3 and
-                0.0 <= quantile < 0.5) or (self._auto_tile_adaptive and count < 1):
+        if mode not in ("adaptive", "grid", "size") or self._auto_tile_source not in ("points", "both", "cameras"):
             raise ValueError(tr("auto_tiles.invalid_grid"))
-        return columns, rows, count, overlap, quantile
+        if not (0.0 <= overlap <= 0.3 and 0.0 <= quantile < 0.5 and
+                coarse_iterations >= 100 and coarse_resize in (1, 2, 4, 8)):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        columns = rows = 1
+        count = 0
+        target_size = 0.0
+        try:
+            if mode == "adaptive":
+                count = int(self._auto_tile_count)
+                if not 1 <= count <= 100:
+                    raise ValueError
+            elif mode == "grid":
+                columns = int(self._auto_tile_columns)
+                rows = int(self._auto_tile_rows)
+                if not (1 <= columns <= 100 and 1 <= rows <= 100 and columns * rows <= 1000):
+                    raise ValueError
+            else:
+                target_size = float(self._auto_tile_target_size)
+                if not math.isfinite(target_size) or target_size <= 0.0:
+                    raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        return mode, columns, rows, count, target_size, overlap, quantile, coarse_iterations, coarse_resize
 
     def _on_auto_tile_slider_change(self, handle, _event, args):
         if len(args) < 2:
@@ -2977,14 +3027,68 @@ class TrainingPanel(Panel):
             handle.dirty("auto_tile_outside_loss_steps")
             handle.dirty("auto_tile_outside_loss_label")
 
+    def _on_auto_tile_select(self, _handle, _event, args):
+        if args:
+            self._set_auto_tile_selected_index(args[0])
+
     def _set_auto_tile_status(self, status):
         self._auto_tile_status = status
         if self._handle:
             self._handle.dirty("auto_tile_status")
 
+    def _dirty_auto_tile_preview(self):
+        if not self._handle:
+            return
+        self._handle.dirty("auto_tile_has_preview")
+        self._handle.dirty("auto_tile_preview_tiles")
+        self._handle.dirty("auto_tile_selected_index")
+        self._handle.dirty("auto_tile_selected_cameras")
+        self._handle.dirty("auto_tile_selected_camera_count")
+
+    def _set_auto_tile_selected_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            index = 0
+        self._auto_tile_selected_index = max(0, min(index, len(self._auto_tile_preview_tiles) - 1)) \
+            if self._auto_tile_preview_tiles else 0
+        self._dirty_auto_tile_preview()
+
+    def _auto_tile_selected_cameras(self):
+        if not self._auto_tile_preview_tiles:
+            return []
+        index = min(self._auto_tile_selected_index, len(self._auto_tile_preview_tiles) - 1)
+        return self._auto_tile_preview_tiles[index].get("cameras", [])
+
+    def _refresh_auto_tile_preview_details(self):
+        details = lf.auto_tile_preview_details(self._auto_tile_preview_group)
+        self._auto_tile_preview_tiles = list(details)
+        self._auto_tile_selected_index = 0
+        self._dirty_auto_tile_preview()
+
+    def _auto_tile_focus(self):
+        if not self._auto_tile_preview_tiles or self._auto_tile_preview_group < 0:
+            self._set_auto_tile_status(tr("auto_tiles.preview_before_inspect"))
+            return
+        try:
+            lf.focus_auto_tile_preview_tile(self._auto_tile_preview_group,
+                                            self._auto_tile_selected_index)
+            selected = self._auto_tile_preview_tiles[self._auto_tile_selected_index]
+            self._set_auto_tile_status(tr("auto_tiles.inspecting").format(
+                selected.get("name", ""), selected.get("camera_count", 0)))
+        except RuntimeError as error:
+            self._set_auto_tile_status(str(error))
+
+    def _auto_tile_restore(self):
+        restore = getattr(lf, "restore_auto_tile_preview", None)
+        if callable(restore):
+            restore()
+        self._set_auto_tile_status(tr("auto_tiles.inspection_restored"))
+
     def _auto_tile_preview(self):
         try:
-            columns, rows, count, overlap, quantile = self._auto_tile_settings()
+            (mode, columns, rows, count, target_size, overlap, quantile,
+             coarse_iterations, coarse_resize) = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
                 raise ValueError(tr("auto_tiles.dataset_required"))
@@ -2993,22 +3097,25 @@ class TrainingPanel(Panel):
             resize_factor = getattr(dataset, "resize_factor", -1)
             max_width = getattr(dataset, "max_width", 3840)
             self._auto_tile_preview_group = lf.preview_auto_tiles(
-                columns, rows, overlap,
+                columns if mode == "grid" else 1, rows if mode == "grid" else 1, overlap,
                 align_mode=self._auto_tile_align_mode,
-                source="points",
+                source=self._auto_tile_source,
                 quantile=quantile,
                 replace_group_id=self._auto_tile_preview_group,
-                count=count,
+                count=count if mode == "adaptive" else 0,
+                target_size=target_size if mode == "size" else 0.0,
                 outside_loss_weight=self._auto_tile_outside_loss,
                 resize_factor=resize_factor,
                 max_width=max_width)
             self._auto_tile_preview_settings = (
-                columns, rows, count, overlap, quantile,
-                self._auto_tile_align_mode,
+                mode, columns, rows, count, target_size, overlap, quantile,
+                self._auto_tile_align_mode, self._auto_tile_source,
                 self._auto_tile_outside_loss, resize_factor, max_width
             )
             self._auto_tile_preview_dataset = dataset.data_path if dataset and dataset.has_params() else ""
-            self._set_auto_tile_status(tr("auto_tiles.previewed").format(count or columns * rows))
+            self._refresh_auto_tile_preview_details()
+            self._set_auto_tile_status(tr("auto_tiles.previewed").format(
+                len(self._auto_tile_preview_tiles)))
         except (RuntimeError, ValueError) as error:
             self._set_auto_tile_status(str(error))
 
@@ -3019,7 +3126,8 @@ class TrainingPanel(Panel):
             self._set_auto_tile_status(tr("auto_tiles.training_active"))
             return
         try:
-            columns, rows, count, overlap, quantile = self._auto_tile_settings()
+            (mode, columns, rows, count, target_size, overlap, quantile,
+             coarse_iterations, coarse_resize) = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
                 raise ValueError(tr("auto_tiles.dataset_required"))
@@ -3030,14 +3138,21 @@ class TrainingPanel(Panel):
                                      os.path.join(dataset_path, "output"))
             resize_factor = getattr(dataset, "resize_factor", -1)
             max_width = getattr(dataset, "max_width", 3840)
-            command = [lf.studio_executable_path(), "-d", dataset_path,
-                       "-o", output, "--auto-tile", str(count) if count else f"{columns}x{rows}",
+            command = [lf.studio_executable_path(), "-d", dataset_path, "-o", output]
+            if mode == "size":
+                command.extend(["--tile-size", f"{target_size:.6g}"])
+            else:
+                command.extend(["--auto-tile", str(count) if mode == "adaptive" else f"{columns}x{rows}"])
+            command.extend([
                        "--tile-overlap", f"{overlap:.4g}",
                        "--tile-align", self._auto_tile_align_mode,
+                       "--tile-source", self._auto_tile_source,
                        "--tile-quantile", f"{quantile:.4g}",
                        "--tile-outside-loss-weight", f"{self._auto_tile_outside_loss:.4g}",
+                       "--tile-coarse-iterations", str(coarse_iterations),
+                       "--tile-coarse-resize", str(coarse_resize),
                        "-r", "auto" if resize_factor <= 1 else str(resize_factor),
-                       "--max-width", str(max_width)]
+                       "--max-width", str(max_width)])
             if not self._auto_tile_crop:
                 command.append("--no-tile-crop")
             if not self._auto_tile_merge:
@@ -3045,13 +3160,14 @@ class TrainingPanel(Panel):
             if (self._auto_tile_preview_group >= 0 and
                     self._auto_tile_preview_dataset == dataset.data_path and
                     self._auto_tile_preview_settings ==
-                    (columns, rows, count, overlap, quantile,
-                     self._auto_tile_align_mode,
+                    (mode, columns, rows, count, target_size, overlap, quantile,
+                     self._auto_tile_align_mode, self._auto_tile_source,
                      self._auto_tile_outside_loss, resize_factor, max_width)):
                 tile_plan = os.path.join(output, "auto_tile_plan.json")
                 saved_count = lf.save_auto_tile_plan(self._auto_tile_preview_group,
-                                                     count or columns, tile_plan)
-                if saved_count != (count or columns * rows):
+                                                     columns if mode == "grid" else max(1, count), tile_plan)
+                expected_count = count if mode == "adaptive" else columns * rows if mode == "grid" else saved_count
+                if saved_count != expected_count:
                     raise ValueError(tr("auto_tiles.invalid_preview"))
                 command.extend(["--tile-plan", tile_plan])
             if self._auto_tile_align_mode == "axis_aligned":
@@ -3064,13 +3180,17 @@ class TrainingPanel(Panel):
                                 "--iter", str(params.iterations),
                                 "--sh-degree", str(params.sh_degree),
                                 "--max-cap", str(params.max_cap)])
+                if getattr(params, "use_exposure_correction", False):
+                    command.append("--exposure-correction")
             os.makedirs(output, exist_ok=True)
             self._auto_tile_output = output
             with open(os.path.join(output, "auto_tiles.log"), "w", encoding="utf-8") as log:
                 self._auto_tile_process = subprocess.Popen(
                     command, stdout=log, stderr=subprocess.STDOUT)
             self._auto_tile_run_merge = self._auto_tile_merge
-            self._set_auto_tile_status(tr("auto_tiles.running").format(count or columns * rows))
+            display_count = (count if mode == "adaptive" else columns * rows
+                             if mode == "grid" else len(self._auto_tile_preview_tiles))
+            self._set_auto_tile_status(tr("auto_tiles.running").format(display_count))
             self._schedule_deferred_update(0.25)
             if self._handle:
                 self._handle.dirty("auto_tile_running")

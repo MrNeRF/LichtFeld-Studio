@@ -15,6 +15,7 @@
 #include <glm/vec2.hpp>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace lfs::core {
     namespace {
@@ -396,20 +397,44 @@ namespace lfs::core {
         tiles.reserve(columns * rows);
         for (int j = 0; j < rows; ++j) {
             for (int i = 0; i < columns; ++i) {
-                const glm::vec2 low{bounds.min.x + cell.x * i - (i ? margin.x : extension_low.x),
-                                    bounds.min.y + cell.y * j - (j ? margin.y : extension_low.y)};
-                const glm::vec2 high{bounds.min.x + cell.x * (i + 1) + (i + 1 < columns ? margin.x : extension_high.x),
-                                     bounds.min.y + cell.y * (j + 1) + (j + 1 < rows ? margin.y : extension_high.y)};
-                const glm::vec3 local_center{(low.x + high.x) * 0.5f,
-                                             (low.y + high.y) * 0.5f,
-                                             (bounds.min.z + bounds.max.z) * 0.5f};
-                const glm::vec3 half{(high.x - low.x) * 0.5f,
-                                     (high.y - low.y) * 0.5f,
-                                     extent.z * 0.5f};
-                const glm::vec3 world_center = glm::vec3(R * glm::vec4(local_center, 1.0f));
-                tiles.push_back({world_center - half, world_center + half,
-                                 bounds.rotation_degrees, i, j,
-                                 std::format("tile_{}_{}", i, j)});
+                // The core bounds deliberately have no overlap.  Context is
+                // expanded only for cameras/auxiliary points during training.
+                const glm::vec2 core_low{bounds.min.x + cell.x * i,
+                                         bounds.min.y + cell.y * j};
+                const glm::vec2 core_high{bounds.min.x + cell.x * (i + 1),
+                                          bounds.min.y + cell.y * (j + 1)};
+                const glm::vec2 context_low{
+                    core_low.x - (i ? margin.x : extension_low.x),
+                    core_low.y - (j ? margin.y : extension_low.y)};
+                const glm::vec2 context_high{
+                    core_high.x + (i + 1 < columns ? margin.x : extension_high.x),
+                    core_high.y + (j + 1 < rows ? margin.y : extension_high.y)};
+                const auto world_bounds = [&](const glm::vec2 low, const glm::vec2 high) {
+                    const glm::vec3 local_center{(low.x + high.x) * 0.5f,
+                                                 (low.y + high.y) * 0.5f,
+                                                 (bounds.min.z + bounds.max.z) * 0.5f};
+                    const glm::vec3 half{(high.x - low.x) * 0.5f,
+                                         (high.y - low.y) * 0.5f,
+                                         extent.z * 0.5f};
+                    const glm::vec3 world_center = glm::vec3(R * glm::vec4(local_center, 1.0f));
+                    return std::pair{world_center - half, world_center + half};
+                };
+                // Crop boxes are closed intervals.  Give an exactly-on-a-grid
+                // boundary centre to the tile on its positive side, rather
+                // than exporting it from both neighbours.
+                glm::vec2 owned_high = core_high;
+                if (i + 1 < columns)
+                    owned_high.x = std::nextafter(owned_high.x, -std::numeric_limits<float>::infinity());
+                if (j + 1 < rows)
+                    owned_high.y = std::nextafter(owned_high.y, -std::numeric_limits<float>::infinity());
+                const auto [core_min, core_max] = world_bounds(core_low, owned_high);
+                const auto [context_min, context_max] = world_bounds(context_low, context_high);
+                TileSpec tile{core_min, core_max, bounds.rotation_degrees, i, j,
+                              std::format("tile_{}_{}", i, j)};
+                tile.context_min = context_min;
+                tile.context_max = context_max;
+                tile.has_context_bounds = true;
+                tiles.push_back(std::move(tile));
             }
         }
         return tiles;

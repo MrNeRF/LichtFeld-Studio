@@ -698,6 +698,8 @@ namespace lfs::training {
             AdamOptimizer& optimizer);
         // Removes the splats outside the training crop box (inside it when inverse).
         void crop_to_training_cropbox();
+        void clip_boundary_gaussian_extents(core::SplatData& model,
+                                            const TrainingCropBoxGeometry& geometry);
         // Whether the camera stands inside the crop box (host pose, no device read).
         [[nodiscard]] bool cropbox_contains_camera(const lfs::core::Camera& camera) const;
         [[nodiscard]] bool morton_reorder_due(int iter) const;
@@ -1013,6 +1015,7 @@ namespace lfs::training {
         // Low-resolution SfM visibility masks for sequential tile jobs. Keep the
         // cached form small; expand only the current camera during a training step.
         std::unordered_map<int, core::Tensor> tile_visibility_masks_;
+        bool tile_visibility_masks_initialized_ = false;
         // The reported loss measures the image inside the crop box: its weight map (outside 0)
         // and the forward-only L1/D-SSIM over it, on loss readback iterations.
         core::Tensor roi_report_weight_map_;

@@ -1056,6 +1056,7 @@ namespace lfs::training {
         normal_prior_depth_scalar_ = {};
         roi_weight_map_ = {};
         tile_visibility_masks_.clear();
+        tile_visibility_masks_initialized_ = false;
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
@@ -2057,6 +2058,46 @@ namespace lfs::training {
             camera.is_undistort_prepared())
             return {};
 
+        if (!tile_visibility_masks_initialized_) {
+            tile_visibility_masks_initialized_ = true;
+            if (params_.tile_depth_masks_path) {
+                try {
+                    std::ifstream input(lfs::core::native_fs::native_path(*params_.tile_depth_masks_path));
+                    const auto document = nlohmann::json::parse(input);
+                    if (!document.contains("masks") || !document["masks"].is_array())
+                        throw std::runtime_error("missing masks array");
+                    for (const auto& entry : document["masks"]) {
+                        const int uid = entry.at("uid").get<int>();
+                        const int mask_width = entry.at("width").get<int>();
+                        const int mask_height = entry.at("height").get<int>();
+                        const auto values = entry.at("weights").get<std::vector<float>>();
+                        if (uid < 0 || mask_width < 3 || mask_height < 3 ||
+                            mask_width > 256 || mask_height > 256 ||
+                            values.size() != static_cast<size_t>(mask_width) * mask_height)
+                            throw std::runtime_error("invalid mask dimensions or sample count");
+                        if (!std::ranges::all_of(values, [](const float value) {
+                                return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+                            }))
+                            throw std::runtime_error("non-finite or out-of-range mask weight");
+                        auto cpu = core::Tensor::from_vector(
+                            values, core::TensorShape{static_cast<size_t>(mask_height),
+                                                      static_cast<size_t>(mask_width)},
+                            core::Device::CPU);
+                        tile_visibility_masks_.emplace(uid, cpu.to(core::Device::CUDA, stream));
+                    }
+                    LOG_INFO("Loaded {} coarse-depth tile loss masks from {}",
+                             tile_visibility_masks_.size(),
+                             lfs::core::path_to_utf8(*params_.tile_depth_masks_path));
+                } catch (const std::exception& error) {
+                    // The sparse SfM estimator below is intentionally retained as
+                    // a safe fallback for interrupted or manually edited runs.
+                    tile_visibility_masks_.clear();
+                    LOG_WARN("Cannot load coarse-depth tile masks '{}': {}; using sparse SfM masks",
+                             lfs::core::path_to_utf8(*params_.tile_depth_masks_path), error.what());
+                }
+            }
+        }
+
         auto [it, inserted] = tile_visibility_masks_.try_emplace(camera.uid());
         if (inserted) {
             core::TileSpec tile;
@@ -2172,7 +2213,7 @@ namespace lfs::training {
         std::unique_lock render_lock(render_mutex_);
         std::unique_lock model_lock(model_access_mutex_);
         waitForModelReaders();
-        const auto& model = strategy_->get_model();
+        auto& model = strategy_->get_model();
         if (model.size() == 0)
             return;
         const auto before = model.visible_count();
@@ -2181,9 +2222,58 @@ namespace lfs::training {
         // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
         if (outside->sum_scalar() > 0)
             strategy_->remove_gaussians(*outside);
+        // A mean-owned Gaussian can still have a very long footprint across a
+        // core boundary.  At terminal export there is no future optimizer step,
+        // so conservatively clamp its extent to the owner core before the tile
+        // PLY is concatenated.  This is the safe strict-crop counterpart of
+        // boundary splitting: it prevents an exported owner from painting a
+        // neighbouring core without creating duplicate splats.
+        if (params_.tile_camera_uids_path)
+            clip_boundary_gaussian_extents(strategy_->get_model(), *cropbox_);
         // MCMC soft-deletes removed splats, so count the live ones.
         LOG_INFO("Cropped the trained model to its crop {}: {} of {} splats kept",
                  cropbox_->is_polygon() ? "polygon" : "box", strategy_->get_model().visible_count(), before);
+    }
+
+    void Trainer::clip_boundary_gaussian_extents(
+        lfs::core::SplatData& model, const TrainingCropBoxGeometry& geometry) {
+        if (model.size() == 0 || geometry.is_polygon())
+            return;
+        const auto means = model.get_means().cpu().contiguous();
+        const auto scales = model.scaling_raw().cpu().contiguous();
+        if (means.ndim() != 2 || means.size(1) < 3 || scales.ndim() != 2 || scales.size(1) < 3 ||
+            means.size(0) != scales.size(0))
+            return;
+        const auto* mean_values = means.ptr<float>();
+        auto raw_scales = scales.to_vector();
+        const size_t rows = means.size(0);
+        size_t clipped = 0;
+        constexpr float kSafety = 0.75f;
+        constexpr float kMinScale = 1e-7f;
+        for (size_t row = 0; row < rows; ++row) {
+            const glm::vec3 mean{mean_values[3 * row], mean_values[3 * row + 1], mean_values[3 * row + 2]};
+            const glm::vec3 local = glm::vec3(geometry.model_to_cropbox * glm::vec4(mean, 1.0f));
+            if (!training_crop_region_contains(geometry, local))
+                continue;
+            const glm::vec3 distance = glm::min(local - geometry.min, geometry.max - local);
+            const float boundary_distance = std::min(distance.x, std::min(distance.y, distance.z));
+            if (!std::isfinite(boundary_distance) || boundary_distance <= 0.0f)
+                continue;
+            const float cap = std::log(std::max(kMinScale, boundary_distance * kSafety));
+            const float largest = std::max(raw_scales[3 * row],
+                                           std::max(raw_scales[3 * row + 1], raw_scales[3 * row + 2]));
+            if (largest <= cap)
+                continue;
+            raw_scales[3 * row] = std::min(raw_scales[3 * row], cap);
+            raw_scales[3 * row + 1] = std::min(raw_scales[3 * row + 1], cap);
+            raw_scales[3 * row + 2] = std::min(raw_scales[3 * row + 2], cap);
+            ++clipped;
+        }
+        if (clipped == 0)
+            return;
+        model.scaling_raw() = lfs::core::Tensor::from_vector(
+            std::move(raw_scales), scales.shape(), model.scaling_raw().device());
+        LOG_INFO("Clipped {} Gaussian extents at the strict tile ownership boundary", clipped);
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {

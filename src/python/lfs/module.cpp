@@ -113,6 +113,7 @@
 #include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -122,10 +123,12 @@
 #include <future>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <ranges>
 #include <span>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -921,6 +924,152 @@ namespace {
             return static_cast<int>(scene->getTrainingModelGaussianCount());
         }
         return 0;
+    }
+
+    // Preview boxes live in the scene so the user can edit them with regular
+    // crop-box tools.  The ownership core is visible there, while this small
+    // ephemeral cache retains the corresponding overlapping context required
+    // by camera selection and by a saved auto-tile plan.
+    struct AutoTilePreviewCache {
+        lfs::core::Scene* scene = nullptr;
+        lfs::core::NodeId group_id = lfs::core::NULL_NODE;
+        std::vector<lfs::core::NodeId> child_ids;
+        std::vector<lfs::core::TileSpec> generated_tiles;
+        std::unordered_map<lfs::core::NodeId, bool> visibility_before_inspection;
+        lfs::core::NodeId inspection_points_id = lfs::core::NULL_NODE;
+    };
+
+    AutoTilePreviewCache auto_tile_preview_cache;
+
+    [[nodiscard]] bool cached_auto_tile_preview_matches(
+        const lfs::core::Scene& scene, const lfs::core::NodeId group_id) {
+        return auto_tile_preview_cache.scene == &scene &&
+               auto_tile_preview_cache.group_id == group_id;
+    }
+
+    void restore_auto_tile_preview_visibility() {
+        if (auto_tile_preview_cache.visibility_before_inspection.empty() &&
+            auto_tile_preview_cache.inspection_points_id == lfs::core::NULL_NODE)
+            return;
+        auto* const scene_manager = lfs::python::get_scene_manager();
+        auto* const scene = get_scene_internal();
+        if (scene_manager && scene == auto_tile_preview_cache.scene) {
+            if (scene->getNodeById(auto_tile_preview_cache.inspection_points_id))
+                scene->removeNodeById(auto_tile_preview_cache.inspection_points_id);
+            for (const auto& [node_id, visible] : auto_tile_preview_cache.visibility_before_inspection)
+                if (scene->getNodeById(node_id))
+                    scene_manager->setNodeVisibilityTransient(node_id, visible);
+        }
+        auto_tile_preview_cache.visibility_before_inspection.clear();
+        auto_tile_preview_cache.inspection_points_id = lfs::core::NULL_NODE;
+    }
+
+    void cache_auto_tile_preview(lfs::core::Scene& scene,
+                                 const lfs::core::NodeId group_id,
+                                 const std::vector<lfs::core::TileSpec>& tiles) {
+        restore_auto_tile_preview_visibility();
+        auto_tile_preview_cache = {.scene = &scene, .group_id = group_id, .generated_tiles = tiles};
+        const auto* const group = scene.getNodeById(group_id);
+        if (!group || group->children.size() != tiles.size()) {
+            auto_tile_preview_cache = {};
+            throw std::runtime_error("Could not retain the auto-tile preview");
+        }
+        auto_tile_preview_cache.child_ids = group->children;
+    }
+
+    [[nodiscard]] std::optional<size_t> cached_auto_tile_index(
+        const lfs::core::Scene& scene, const lfs::core::NodeId group_id,
+        const lfs::core::NodeId child_id) {
+        if (!cached_auto_tile_preview_matches(scene, group_id))
+            return std::nullopt;
+        const auto found = std::ranges::find(auto_tile_preview_cache.child_ids, child_id);
+        if (found == auto_tile_preview_cache.child_ids.end())
+            return std::nullopt;
+        return static_cast<size_t>(found - auto_tile_preview_cache.child_ids.begin());
+    }
+
+    [[nodiscard]] lfs::core::TileSpec tile_spec_from_preview_box(
+        const lfs::core::Scene& scene, const lfs::core::NodeId box_id,
+        const lfs::core::TileSpec* const generated) {
+        const auto* const box = scene.getNodeById(box_id);
+        if (!box || box->type != lfs::core::NodeType::CROPBOX || !box->cropbox)
+            throw std::runtime_error("Tile preview contains an invalid node");
+        const glm::mat4 world = scene.getWorldTransform(box_id);
+        const glm::vec3 scale{glm::length(glm::vec3(world[0])),
+                              glm::length(glm::vec3(world[1])),
+                              glm::length(glm::vec3(world[2]))};
+        if (!std::isfinite(scale.x) || !std::isfinite(scale.y) || !std::isfinite(scale.z) ||
+            scale.x <= 0.0f || scale.y <= 0.0f || scale.z <= 0.0f)
+            throw std::runtime_error("Tile preview contains a zero-size box");
+        glm::mat4 rotation{1.0f};
+        for (int axis = 0; axis < 3; ++axis)
+            rotation[axis] = world[axis] / scale[axis];
+        if (glm::determinant(glm::mat3(rotation)) < 0.99f)
+            throw std::runtime_error("Tile preview contains a mirrored or sheared box");
+        float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+        glm::extractEulerAngleXYZ(rotation, rx, ry, rz);
+        if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz))
+            throw std::runtime_error("Tile preview contains invalid rotation");
+        const glm::vec3 local_center = (box->cropbox->min + box->cropbox->max) * 0.5f;
+        const glm::vec3 center = glm::vec3(world * glm::vec4(local_center, 1.0f));
+        const glm::vec3 half = (box->cropbox->max - box->cropbox->min) * 0.5f * scale;
+        const glm::vec3 lo = center - half, hi = center + half;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) || lo[axis] >= hi[axis])
+                throw std::runtime_error("Tile preview contains invalid bounds");
+        }
+        lfs::core::TileSpec tile{lo, hi, {glm::degrees(rx), glm::degrees(ry), glm::degrees(rz)},
+                                 generated ? generated->i : 0, generated ? generated->j : 0,
+                                 box->name};
+        if (!generated || !generated->has_context_bounds)
+            return tile;
+
+        // Preserve the original context-to-core proportions in the tile's local
+        // frame.  This keeps a hand-resized preview usable without silently
+        // discarding the overlap needed for its camera set.
+        const glm::vec3 old_center = (generated->min + generated->max) * 0.5f;
+        const glm::vec3 old_half = (generated->max - generated->min) * 0.5f;
+        const glm::vec3 new_center = (tile.min + tile.max) * 0.5f;
+        const glm::vec3 new_half = (tile.max - tile.min) * 0.5f;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (old_half[axis] <= 0.0f) return tile;
+            const float normalized_low = (generated->context_min[axis] - old_center[axis]) / old_half[axis];
+            const float normalized_high = (generated->context_max[axis] - old_center[axis]) / old_half[axis];
+            tile.context_min[axis] = new_center[axis] + normalized_low * new_half[axis];
+            tile.context_max[axis] = new_center[axis] + normalized_high * new_half[axis];
+        }
+        tile.has_context_bounds = true;
+        return tile;
+    }
+
+    struct ResolvedAutoTilePreview {
+        lfs::core::NodeId node_id = lfs::core::NULL_NODE;
+        lfs::core::TileSpec tile;
+        std::vector<int> camera_uids;
+    };
+
+    [[nodiscard]] std::vector<ResolvedAutoTilePreview> resolve_auto_tile_preview(
+        lfs::core::Scene& scene, const lfs::core::NodeId group_id) {
+        const auto* const group = scene.getNodeById(group_id);
+        if (!group || group->type != lfs::core::NodeType::GROUP ||
+            !group->name.starts_with("AutoTiles") || group->children.empty())
+            throw std::runtime_error("Preview tile boxes before inspecting them");
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        for (const auto* const node : scene.getNodes())
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+                cameras.push_back(node->camera);
+        const auto evidence = lfs::core::collect_tile_camera_evidence(cameras);
+        std::vector<ResolvedAutoTilePreview> result;
+        result.reserve(group->children.size());
+        for (const auto child_id : group->children) {
+            const auto cached_index = cached_auto_tile_index(scene, group_id, child_id);
+            const auto* generated = cached_index && *cached_index < auto_tile_preview_cache.generated_tiles.size()
+                ? &auto_tile_preview_cache.generated_tiles[*cached_index] : nullptr;
+            auto tile = tile_spec_from_preview_box(scene, child_id, generated);
+            auto camera_uids = lfs::core::select_tile_camera_uids(tile, evidence);
+            result.push_back({child_id, std::move(tile), std::move(camera_uids)});
+        }
+        return result;
     }
 
 } // namespace
@@ -3745,6 +3894,7 @@ NB_MODULE(lichtfeld, m) {
                                     float quantile,
                                     int replace_group_id,
                                     int count,
+                                    float target_size,
                                     float outside_loss_weight,
                                     int resize_factor,
                                     int max_width) {
@@ -3800,6 +3950,9 @@ NB_MODULE(lichtfeld, m) {
             bounds.min -= padding;
             bounds.max += padding;
         }
+        lfs::core::TileGridConfig grid{columns, rows, target_size, overlap,
+                                       mode != lfs::core::OrientationMode::AxisAligned,
+                                       mode, quantile};
         const auto tiles = count > 0
             ? lfs::core::generate_adaptive_tiles(bounds, count, overlap, outer_bounds,
                                                  points, lfs::core::collect_tile_camera_evidence(cameras),
@@ -3807,9 +3960,8 @@ NB_MODULE(lichtfeld, m) {
                                                  {.all_cameras_for_training = outside_loss_weight > 0.0f,
                                                   .resize_factor = resize_factor,
                                                   .max_width = max_width})
-            : lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap,
-                                                     mode != lfs::core::OrientationMode::AxisAligned,
-                                                     mode, quantile}, outer_bounds);
+            : lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
+        restore_auto_tile_preview_visibility();
         if (const auto* old = scene->getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
             scene->removeNode(old->name);
@@ -3817,11 +3969,13 @@ NB_MODULE(lichtfeld, m) {
         const auto group_id = scene->createTileCropBoxes(tiles);
         if (group_id == lfs::core::NULL_NODE)
             throw std::runtime_error("Could not create tile preview boxes");
+        cache_auto_tile_preview(*scene, group_id, tiles);
         return group_id;
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
        nb::arg("align_mode") = "obb_3d", nb::arg("source") = "points",
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
-       nb::arg("count") = 0, nb::arg("outside_loss_weight") = 0.0f,
+       nb::arg("count") = 0, nb::arg("target_size") = 0.0f,
+       nb::arg("outside_loss_weight") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
        "Preview auto-tile boxes in the current scene");
 
@@ -3857,6 +4011,7 @@ NB_MODULE(lichtfeld, m) {
         bounds.max += padding;
         const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca, mode, 0.02f},
                                                         outer_bounds);
+        restore_auto_tile_preview_visibility();
         if (const auto* old = scene->getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
             scene->removeNode(old->name);
@@ -3864,10 +4019,148 @@ NB_MODULE(lichtfeld, m) {
         const auto group_id = scene->createTileCropBoxes(tiles);
         if (group_id == lfs::core::NULL_NODE)
             throw std::runtime_error("Could not create tile preview boxes");
+        cache_auto_tile_preview(*scene, group_id, tiles);
         return group_id;
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
        nb::arg("align_pca") = true, nb::arg("replace_group_id") = -1,
        "Preview auto-tile boxes in the current scene (legacy signature)");
+
+    m.def("auto_tile_preview_details", [](int group_id) -> nb::list {
+        auto* const scene = get_scene_internal();
+        if (!scene)
+            throw std::runtime_error("No scene is loaded");
+        const auto tiles = resolve_auto_tile_preview(*scene, group_id);
+        std::unordered_map<int, std::string> image_name_by_uid;
+        for (const auto* const node : scene->getNodes()) {
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+                image_name_by_uid.emplace(node->camera->uid(), node->camera->image_name());
+        }
+        nb::list result;
+        for (size_t index = 0; index < tiles.size(); ++index) {
+            const auto& resolved = tiles[index];
+            const auto* const node = scene->getNodeById(resolved.node_id);
+            nb::dict item;
+            item["index"] = static_cast<int>(index);
+            item["name"] = node ? node->name : resolved.tile.name;
+            item["camera_count"] = static_cast<int>(resolved.camera_uids.size());
+            nb::list cameras;
+            for (const int uid : resolved.camera_uids) {
+                nb::dict camera;
+                camera["uid"] = uid;
+                const auto found = image_name_by_uid.find(uid);
+                camera["name"] = found != image_name_by_uid.end()
+                    ? found->second : std::format("camera {}", uid);
+                cameras.append(std::move(camera));
+            }
+            item["cameras"] = std::move(cameras);
+            result.append(std::move(item));
+        }
+        return result;
+    }, nb::arg("group_id"),
+       "Return the preview tiles and the exact SfM camera allowlist each tile would use");
+
+    m.def("focus_auto_tile_preview_tile", [](int group_id, int index) {
+        auto* const scene = get_scene_internal();
+        auto* const scene_manager = lfs::python::get_scene_manager();
+        if (!scene || !scene_manager)
+            throw std::runtime_error("No editable scene is loaded");
+        if (!cached_auto_tile_preview_matches(*scene, group_id))
+            throw std::runtime_error("Preview the automatic tiles again before inspecting one");
+        const auto tiles = resolve_auto_tile_preview(*scene, group_id);
+        if (index < 0 || index >= static_cast<int>(tiles.size()))
+            throw std::runtime_error("Selected tile is outside the preview");
+
+        restore_auto_tile_preview_visibility();
+        const auto* const group = scene->getNodeById(group_id);
+        if (!group)
+            throw std::runtime_error("Preview tile group no longer exists");
+        const std::unordered_set<int> selected_cameras(
+            tiles[static_cast<size_t>(index)].camera_uids.begin(),
+            tiles[static_cast<size_t>(index)].camera_uids.end());
+        const auto remember_and_set_visibility = [&](const lfs::core::NodeId node_id, const bool visible) {
+            const auto* const node = scene->getNodeById(node_id);
+            if (!node)
+                return;
+            auto_tile_preview_cache.visibility_before_inspection.emplace(
+                node_id, static_cast<bool>(node->visible));
+            scene_manager->setNodeVisibilityTransient(node_id, visible);
+        };
+        for (const auto* const node : scene->getNodes()) {
+            switch (node->type) {
+                case lfs::core::NodeType::CAMERA:
+                    if (node->camera)
+                        remember_and_set_visibility(
+                            node->id, selected_cameras.contains(node->camera->uid()));
+                    break;
+                case lfs::core::NodeType::CROPBOX:
+                    remember_and_set_visibility(
+                        node->id, node->id == tiles[static_cast<size_t>(index)].node_id);
+                    break;
+                case lfs::core::NodeType::POINTCLOUD:
+                case lfs::core::NodeType::SPLAT:
+                case lfs::core::NodeType::MESH:
+                case lfs::core::NodeType::PLY_SEQUENCE:
+                case lfs::core::NodeType::ELLIPSOID:
+                case lfs::core::NodeType::CROP_POLYGON:
+                case lfs::core::NodeType::COLLISION:
+                    remember_and_set_visibility(node->id, false);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        auto source_points = scene->getInitialPointCloud();
+        const lfs::core::SceneNode* source_node = scene->getDatasetPointCloudNode();
+        if (!source_points) {
+            for (const auto* const node : scene->getNodes()) {
+                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
+                    source_points = node->point_cloud;
+                    source_node = node;
+                    break;
+                }
+            }
+        }
+        if (!source_points || source_points->size() == 0) {
+            restore_auto_tile_preview_visibility();
+            throw std::runtime_error("The scene has no sparse points to inspect for this tile");
+        }
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        for (const auto* const node : scene->getNodes()) {
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+                cameras.push_back(node->camera);
+        }
+        auto evidence = lfs::core::collect_tile_camera_evidence(cameras);
+        std::erase_if(evidence, [&](const auto& view) { return !selected_cameras.contains(view.uid); });
+        const auto selected_points = lfs::core::select_tile_initial_point_indices(
+            *source_points, tiles[static_cast<size_t>(index)].tile, evidence);
+        if (selected_points.empty()) {
+            restore_auto_tile_preview_visibility();
+            throw std::runtime_error("No sparse points are associated with this tile");
+        }
+        const auto point_indices = lfs::core::Tensor::from_vector(
+            selected_points, lfs::core::TensorShape({selected_points.size()}), source_points->means.device());
+        auto inspection_points = std::make_shared<lfs::core::PointCloud>();
+        inspection_points->means = source_points->means.index_select(0, point_indices).contiguous();
+        if (source_points->colors.is_valid() && source_points->colors.ndim() > 0 &&
+            source_points->colors.size(0) == source_points->means.size(0)) {
+            inspection_points->colors = source_points->colors.index_select(0, point_indices).contiguous();
+        }
+        const auto points_id = scene->addPointCloud("AutoTileInspectionPoints", inspection_points);
+        if (points_id == lfs::core::NULL_NODE) {
+            restore_auto_tile_preview_visibility();
+            throw std::runtime_error("Could not create the temporary tile point preview");
+        }
+        if (source_node)
+            scene->setNodeTransform(points_id, scene->getWorldTransform(source_node->id));
+        auto_tile_preview_cache.inspection_points_id = points_id;
+        scene_manager->selectNode(tiles[static_cast<size_t>(index)].node_id);
+    }, nb::arg("group_id"), nb::arg("index"),
+       "Temporarily isolate one preview tile, its selected sparse points, and its camera frusta");
+
+    m.def("restore_auto_tile_preview", [] {
+        restore_auto_tile_preview_visibility();
+    }, "Restore visibility after inspecting an automatic tile preview");
 
     m.def("save_auto_tile_plan", [](int group_id, int columns, const std::string& destination) {
         auto* scene = get_scene_internal();
@@ -3877,42 +4170,26 @@ NB_MODULE(lichtfeld, m) {
         if (!group || group->type != lfs::core::NodeType::GROUP ||
             !group->name.starts_with("AutoTiles") || group->children.empty())
             throw std::runtime_error("Preview tile boxes before training");
+        const auto tiles = resolve_auto_tile_preview(*scene, group_id);
         nlohmann::json plan;
         plan["tiles"] = nlohmann::json::array();
-        int index = 0;
-        for (const auto child_id : group->children) {
-            const auto* box = scene->getNodeById(child_id);
-            if (!box || box->type != lfs::core::NodeType::CROPBOX || !box->cropbox)
-                throw std::runtime_error("Tile preview contains an invalid node");
-            const glm::mat4 world = scene->getWorldTransform(child_id);
-            const glm::vec3 scale{glm::length(glm::vec3(world[0])),
-                                  glm::length(glm::vec3(world[1])),
-                                  glm::length(glm::vec3(world[2]))};
-            if (!std::isfinite(scale.x) || !std::isfinite(scale.y) || !std::isfinite(scale.z) ||
-                scale.x <= 0.0f || scale.y <= 0.0f || scale.z <= 0.0f)
-                throw std::runtime_error("Tile preview contains a zero-size box");
-            glm::mat4 rotation{1.0f};
-            for (int axis = 0; axis < 3; ++axis)
-                rotation[axis] = world[axis] / scale[axis];
-            if (glm::determinant(glm::mat3(rotation)) < 0.99f)
-                throw std::runtime_error("Tile preview contains a mirrored or sheared box");
-            float rx = 0.0f, ry = 0.0f, rz = 0.0f;
-            glm::extractEulerAngleXYZ(rotation, rx, ry, rz);
-            if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz))
-                throw std::runtime_error("Tile preview contains invalid rotation");
-            const glm::vec3 local_center = (box->cropbox->min + box->cropbox->max) * 0.5f;
-            const glm::vec3 center = glm::vec3(world * glm::vec4(local_center, 1.0f));
-            const glm::vec3 half = (box->cropbox->max - box->cropbox->min) * 0.5f * scale;
-            const glm::vec3 lo = center - half, hi = center + half;
-            for (int axis = 0; axis < 3; ++axis) {
-                if (!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) || lo[axis] >= hi[axis])
-                    throw std::runtime_error("Tile preview contains invalid bounds");
+        for (size_t index = 0; index < tiles.size(); ++index) {
+            const auto& tile = tiles[index].tile;
+            const int i = cached_auto_tile_preview_matches(*scene, group_id)
+                ? tile.i : static_cast<int>(index % static_cast<size_t>(columns));
+            const int j = cached_auto_tile_preview_matches(*scene, group_id)
+                ? tile.j : static_cast<int>(index / static_cast<size_t>(columns));
+            nlohmann::json item = {
+                {"i", i}, {"j", j},
+                {"min", {tile.min.x, tile.min.y, tile.min.z}},
+                {"max", {tile.max.x, tile.max.y, tile.max.z}},
+                {"rotation_degrees", {tile.rotation_degrees.x, tile.rotation_degrees.y,
+                                      tile.rotation_degrees.z}}};
+            if (tile.has_context_bounds) {
+                item["context_min"] = {tile.context_min.x, tile.context_min.y, tile.context_min.z};
+                item["context_max"] = {tile.context_max.x, tile.context_max.y, tile.context_max.z};
             }
-            plan["tiles"].push_back({{"i", index % columns}, {"j", index / columns},
-                                      {"min", {lo.x, lo.y, lo.z}},
-                                      {"max", {hi.x, hi.y, hi.z}},
-                                      {"rotation_degrees", {glm::degrees(rx), glm::degrees(ry), glm::degrees(rz)}}});
-            ++index;
+            plan["tiles"].push_back(std::move(item));
         }
         const auto path = lfs::core::utf8_to_path(destination);
         lfs::core::native_fs::create_directories(path.parent_path());
@@ -3921,7 +4198,7 @@ NB_MODULE(lichtfeld, m) {
         output << plan.dump(2) << '\n';
         output.close();
         if (!output) throw std::runtime_error("Could not write tile plan");
-        return index;
+        return static_cast<int>(tiles.size());
     }, nb::arg("group_id"), nb::arg("columns"), nb::arg("destination"),
        "Save edited preview boxes for a headless auto-tile run");
 

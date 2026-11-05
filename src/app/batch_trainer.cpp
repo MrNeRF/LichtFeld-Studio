@@ -1284,9 +1284,13 @@ namespace lfs::app {
             LOG_ERROR("Auto-tiling currently requires --centralize off so crop boxes and exports share dataset coordinates");
             return 1;
         }
+        if (!params.auto_tile_crop && params.auto_tile_merge) {
+            LOG_ERROR("A merged auto-tile export requires the strict core crop; remove --no-tile-crop or add --no-tile-merge");
+            return 1;
+        }
         if (params.resume_checkpoint || params.resume_project || params.dataset_project || params.cropbox ||
-            !params.add_splat_paths.empty()) {
-            LOG_ERROR("Auto-tiling requires fresh dataset training without a manual crop box or added splats");
+            params.init_path || params.optimization.random || !params.add_splat_paths.empty()) {
+            LOG_ERROR("Auto-tiling owns the initialization and requires fresh dataset training without a manual crop box, --init/--random, or added splats");
             return 1;
         }
 
@@ -1312,7 +1316,10 @@ namespace lfs::app {
                                      name == "--no-tile-crop" || name == "--no-tile-merge" ||
                                      name == "--tile-outside-loss-weight" || name == "--tile-plan" ||
                                      name == "--tile-align" || name == "--tile-source" ||
-                                     name == "--tile-quantile" ||
+                                     name == "--tile-quantile" || name == "--tile-coarse-iterations" ||
+                                     name == "--tile-coarse-resize" || name == "--tile-depth-masks" ||
+                                     name == "--tile-camera-uids" || name == "--tile-exposure-gains" ||
+                                     name == "--tile-contextbox" || name == "--tile-child" ||
                                      name == "--train";
             if (!parent_only)
                 shared.insert(shared.end(), command_line.begin() + n, command_line.begin() + n + count);
@@ -1343,6 +1350,19 @@ namespace lfs::app {
                     tile.min = {lo[0], lo[1], lo[2]};
                     tile.max = {hi[0], hi[1], hi[2]};
                     tile.rotation_degrees = {rotation[0], rotation[1], rotation[2]};
+                    if (item.contains("context_min") || item.contains("context_max")) {
+                        if (!item.contains("context_min") || !item.contains("context_max"))
+                            throw std::runtime_error("Tile plan needs both context_min and context_max");
+                        const auto context_lo = item.at("context_min").get<std::array<float, 3>>();
+                        const auto context_hi = item.at("context_max").get<std::array<float, 3>>();
+                        tile.context_min = {context_lo[0], context_lo[1], context_lo[2]};
+                        tile.context_max = {context_hi[0], context_hi[1], context_hi[2]};
+                        tile.has_context_bounds = true;
+                        for (int axis = 0; axis < 3; ++axis)
+                            if (!std::isfinite(context_lo[axis]) || !std::isfinite(context_hi[axis]) ||
+                                context_lo[axis] >= context_hi[axis])
+                                throw std::runtime_error("Tile plan contains invalid context bounds");
+                    }
                     for (int axis = 0; axis < 3; ++axis) {
                         if (!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) ||
                             !std::isfinite(rotation[axis]) || lo[axis] >= hi[axis])
@@ -1464,6 +1484,11 @@ namespace lfs::app {
                 tile, camera_evidence, &diagnostics));
             camera_selection_diagnostics.push_back(diagnostics);
         }
+
+        // Solve this once from SfM before the coarse pass.  The same normalized
+        // images are then seen by the global prior and every local optimizer;
+        // learned exposure correction, when enabled, only needs to model the
+        // residual instead of letting tiles choose incompatible baselines.
         lfs::core::TileExposureCalibration exposure;
         size_t exposure_samples = 0;
         try {
@@ -1510,6 +1535,105 @@ namespace lfs::app {
         }
         const path exposure_path = output / "tile_exposure.json";
         if (!write_batch_report(exposure_path, exposure_file.dump(2) + "\n")) return 1;
+
+        lfs::core::param::BatchTrainingParameters batch;
+        batch.output_dir = output;
+        batch.shared_args = shared;
+        batch.continue_on_failure = false;
+        std::filesystem::path executable;
+        try {
+            executable = lfs::core::getExecutablePath();
+        } catch (const std::exception& error) {
+            LOG_ERROR("{}", error.what());
+            return 1;
+        }
+        ScopedSignalHandler signal_handler;
+
+        // CityGaussian/Sun-style global prior: one inexpensive global model
+        // fixes the coordinate frame and supplies geometry to every local run.
+        lfs::core::param::BatchJobItem coarse_job;
+        coarse_job.dataset_path = dataset;
+        coarse_job.name = "coarse";
+        coarse_job.output_path = output / "coarse";
+        json coarse_allowlist = {{"dataset", path_to_utf8(dataset)}, {"cameras", json::array()}};
+        for (const auto& view : camera_evidence)
+            coarse_allowlist["cameras"].push_back({{"uid", view.uid}, {"image", view.image_name}});
+        const path coarse_camera_path = coarse_job.output_path / "coarse_cameras.json";
+        if (!write_batch_report(coarse_camera_path, coarse_allowlist.dump(2) + "\n")) return 1;
+        coarse_job.extra_args = {
+            "--iter", std::format("{}", params.tile_coarse_iterations),
+            "--resize_factor", std::format("{}", params.tile_coarse_resize_factor),
+            "--tile-camera-uids", path_to_utf8(coarse_camera_path),
+            "--tile-exposure-gains", path_to_utf8(exposure_path),
+            "--tile-child", "--output-name", "coarse", "--export", "ply"};
+        std::string coarse_error;
+        if (!validate_job_arguments(coarse_job, batch, coarse_error)) {
+            LOG_ERROR("Invalid coarse auto-tile pass: {}", coarse_error);
+            return 1;
+        }
+        if (g_interrupt_count.load() > 0) return 1;
+        std::println("[Auto-tile] Training global coarse prior ({} iterations, resize {})",
+                     params.tile_coarse_iterations, params.tile_coarse_resize_factor);
+        const auto coarse_result = execute_job(coarse_job, batch, executable);
+        if (!coarse_result.success) {
+            LOG_ERROR("Global coarse pass failed: {}", coarse_result.error_message);
+            return 1;
+        }
+        const path coarse_export = coarse_job.output_path / "coarse.ply";
+        if (!lfs::core::native_fs::exists(coarse_export)) {
+            LOG_ERROR("Global coarse pass completed without its expected PLY export: {}", path_to_utf8(coarse_export));
+            return 1;
+        }
+
+        std::vector<glm::vec3> coarse_points;
+        try {
+            auto loaded = lfs::io::Loader::create()->load(coarse_export);
+            if (!loaded) throw std::runtime_error(loaded.error().format());
+            const auto* splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
+            if (!splat || !*splat) throw std::runtime_error("coarse export is not a Gaussian splat PLY");
+            const auto means = (*splat)->get_means().cpu().contiguous();
+            if (means.ndim() != 2 || means.size(1) < 3)
+                throw std::runtime_error("coarse export has invalid Gaussian means");
+            const size_t count = means.size(0);
+            const size_t stride = means.size(1);
+            const size_t max_samples = 150'000;
+            const size_t step = std::max<size_t>(1, (count + max_samples - 1) / max_samples);
+            const auto* values = means.ptr<float>();
+            coarse_points.reserve((count + step - 1) / step);
+            for (size_t row = 0; row < count; row += step) {
+                const glm::vec3 point{values[row * stride], values[row * stride + 1], values[row * stride + 2]};
+                if (std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z))
+                    coarse_points.push_back(point);
+            }
+            if (coarse_points.empty()) throw std::runtime_error("coarse export has no finite Gaussian means");
+            LOG_INFO("Using {} sampled coarse Gaussian centres for depth-aware tile masks", coarse_points.size());
+        } catch (const std::exception& error) {
+            LOG_ERROR("Cannot prepare coarse depth masks: {}", error.what());
+            return 1;
+        }
+
+        std::vector<path> tile_depth_mask_paths(tiles.size());
+        for (size_t tile_index = 0; tile_index < tiles.size(); ++tile_index) {
+            json depth_masks = {
+                {"version", 1},
+                {"method", "coarse_gaussian_center_zbuffer_conservative_3x3"},
+                {"coarse_model", path_to_utf8(coarse_export)},
+                {"masks", json::array()}};
+            for (const int uid : tile_cameras[tile_index]) {
+                const auto view = views_by_uid.find(uid);
+                if (view == views_by_uid.end()) continue;
+                const auto mask = lfs::core::estimate_tile_depth_visibility_mask(
+                    tiles[tile_index], *view->second, coarse_points);
+                if (!mask.weights.empty()) {
+                    depth_masks["masks"].push_back({
+                        {"uid", uid}, {"width", mask.width}, {"height", mask.height},
+                        {"weights", mask.weights}});
+                }
+            }
+            tile_depth_mask_paths[tile_index] = output / "tiles" / tiles[tile_index].name / "tile_depth_masks.json";
+            if (!write_batch_report(tile_depth_mask_paths[tile_index], depth_masks.dump() + "\n"))
+                return 1;
+        }
         // The parent needs only UID/name metadata after planning. Release loaded
         // camera payloads before starting a separate training process.
         for (auto& view : camera_evidence) {
@@ -1523,6 +1647,13 @@ namespace lfs::app {
         manifest["outside_loss_weight"] = params.tile_outside_loss_weight;
         manifest["crop_after_training"] = params.auto_tile_crop;
         manifest["merge_exports"] = params.auto_tile_merge;
+        manifest["ownership"] = "disjoint_core_export_with_overlapping_training_context";
+        manifest["coarse_prior"] = {
+            {"path", "coarse/coarse.ply"},
+            {"iterations", params.tile_coarse_iterations},
+            {"resize_factor", params.tile_coarse_resize_factor},
+            {"training_seconds", coarse_result.duration_seconds}};
+        manifest["depth_masks"] = "conservative coarse Gaussian-centre z-buffer; sparse SfM fallback in tile trainer";
         manifest["partition_mode"] = params.auto_tile_count > 0 ? "adaptive" : "grid";
         manifest["camera_selection"] = "sfm_image_support_tile_coverage_and_projected_airspace";
         manifest["airspace_view_threshold"] = lfs::core::TILE_AIRSPACE_VIEW_THRESHOLD;
@@ -1539,11 +1670,16 @@ namespace lfs::app {
             json entry = {{"name", tile.name}, {"i", tile.i}, {"j", tile.j},
                           {"camera_count", tile_cameras[index].size()},
                           {"camera_allowlist", path_to_utf8(path("tiles") / tile.name / "tile_cameras.json")},
+                          {"depth_masks", path_to_utf8(path("tiles") / tile.name / "tile_depth_masks.json")},
                           {"min", {tile.min.x, tile.min.y, tile.min.z}},
                           {"max", {tile.max.x, tile.max.y, tile.max.z}},
                           {"rotation_degrees", {tile.rotation_degrees.x,
                                                  tile.rotation_degrees.y,
                                                  tile.rotation_degrees.z}}};
+            if (tile.has_context_bounds) {
+                entry["context_min"] = {tile.context_min.x, tile.context_min.y, tile.context_min.z};
+                entry["context_max"] = {tile.context_max.x, tile.context_max.y, tile.context_max.z};
+            }
             const auto& selection = camera_selection_diagnostics[index];
             entry["camera_selection"] = {
                 {"evidence_views", selection.evidence_views},
@@ -1573,14 +1709,6 @@ namespace lfs::app {
         if (!write_batch_report(output / "tiles.json", manifest.dump(2) + "\n"))
             return 1;
 
-        lfs::core::param::BatchTrainingParameters batch;
-        batch.output_dir = output;
-        batch.shared_args = std::move(shared);
-        batch.continue_on_failure = false;
-        std::filesystem::path executable;
-        try { executable = lfs::core::getExecutablePath(); }
-        catch (const std::exception& error) { LOG_ERROR("{}", error.what()); return 1; }
-        ScopedSignalHandler signal_handler;
         std::vector<path> exports;
         exports.reserve(tiles.size());
         for (size_t tile_index = 0; tile_index < tiles.size(); ++tile_index) {
@@ -1601,10 +1729,19 @@ namespace lfs::app {
             if (!write_batch_report(camera_path, allowlist.dump(2) + "\n")) return 1;
             const auto box = std::format("{},{},{},{},{},{}", tile.min.x, tile.min.y, tile.min.z,
                                          tile.max.x, tile.max.y, tile.max.z);
+            const auto context_min = tile.has_context_bounds ? tile.context_min : tile.min;
+            const auto context_max = tile.has_context_bounds ? tile.context_max : tile.max;
+            const auto context_box = std::format("{},{},{},{},{},{}",
+                                                 context_min.x, context_min.y, context_min.z,
+                                                 context_max.x, context_max.y, context_max.z);
             job.extra_args = {"--cropbox=" + box, "--cropbox-loss-weight",
                               std::format("{}", params.tile_outside_loss_weight),
                               "--tile-camera-uids", path_to_utf8(camera_path),
+                              "--tile-contextbox=" + context_box,
                               "--tile-exposure-gains", path_to_utf8(exposure_path),
+                              "--tile-depth-masks", path_to_utf8(tile_depth_mask_paths[tile_index]),
+                              "--init", path_to_utf8(coarse_export),
+                              "--tile-child",
                               "--output-name", tile.name, "--export", "ply"};
             if (params.auto_tile_crop)
                 job.extra_args.push_back("--crop");

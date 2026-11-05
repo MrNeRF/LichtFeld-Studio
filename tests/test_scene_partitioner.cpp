@@ -89,6 +89,31 @@ namespace {
         EXPECT_TRUE(lfs::core::estimate_tile_visibility_mask(tile, camera).weights.empty());
     }
 
+    TEST(ScenePartitioner, CoarseDepthMaskKeepsOnlyConfidentForeignSurfacePixels) {
+        lfs::core::TileSpec tile;
+        tile.min = {-1, -1, 4};
+        tile.max = {1, 1, 6};
+        lfs::core::TileCameraEvidence camera;
+        camera.center = {0, 0, 0};
+        camera.world_to_camera = {1, 0, 0, 0,
+                                  0, 1, 0, 0,
+                                  0, 0, 1, 0,
+                                  0, 0, 0, 1};
+        camera.fx = camera.fy = 100.0f;
+        camera.cx = camera.cy = 50.0f;
+        camera.width = camera.height = 100;
+        camera.pinhole = true;
+        std::vector<glm::vec3> coarse;
+        // A coherent 3x3 nearer surface whose centres are outside this core.
+        for (int y = -4; y <= 4; ++y)
+            for (int x = -4; x <= 4; ++x)
+                coarse.emplace_back(0.04f * x, 0.04f * y, 2.0f);
+        const auto mask = lfs::core::estimate_tile_depth_visibility_mask(tile, camera, coarse, 16, 16);
+        ASSERT_EQ(mask.weights.size(), 16u * 16u);
+        EXPECT_LT(mask.weights[8u * 16u + 8u], 0.5f);
+        EXPECT_FLOAT_EQ(mask.weights[1u * 16u + 1u], 1.0f);
+    }
+
     TEST(ScenePartitioner, AdaptiveTilesFollowUnevenSurfaceDensity) {
         std::vector<float> coordinates;
         for (int i = 0; i < 80; ++i)
@@ -100,9 +125,12 @@ namespace {
             bounds, 2, 0.2f, bounds, cloud(coordinates), {});
         ASSERT_EQ(tiles.size(), 2);
         EXPECT_LT(tiles[0].max.x, 6.0f);
-        EXPECT_GE(tiles[0].max.x, tiles[1].min.x);
-        EXPECT_LT(tiles[0].min.x, 0.0f);
-        EXPECT_GT(tiles[1].max.x, 10.0f);
+        EXPECT_LT(tiles[0].max.x, tiles[1].min.x);
+        EXPECT_NEAR(tiles[0].min.x, 0.0f, 1e-4f);
+        EXPECT_NEAR(tiles[1].max.x, 10.0f, 1e-4f);
+        EXPECT_TRUE(tiles[0].has_context_bounds);
+        EXPECT_LT(tiles[0].context_min.x, tiles[0].min.x);
+        EXPECT_GT(tiles[1].context_max.x, tiles[1].max.x);
         EXPECT_EQ(tiles[0].name, "tile_0_0");
         EXPECT_EQ(tiles[1].name, "tile_1_0");
         const auto more_tiles = lfs::core::generate_adaptive_tiles(
@@ -223,7 +251,7 @@ namespace {
         // Equal point counts would cut near x=5. Camera coverage and image
         // resolution make a later cut cheaper while preserving shared views.
         EXPECT_GT(tiles[0].max.x, 6.0f);
-        EXPECT_NEAR(tiles[0].max.x, tiles[1].min.x, 1e-4f);
+        EXPECT_LT(tiles[0].max.x, tiles[1].min.x);
         EXPECT_GE(diagnostics[0].supporting_cameras, 8);
         EXPECT_GE(diagnostics[1].supporting_cameras, 8);
         EXPECT_EQ(diagnostics[0].covered_cells, diagnostics[0].occupied_cells);
@@ -535,8 +563,10 @@ namespace {
         ASSERT_EQ(tiles.size(), 2);
         EXPECT_EQ(tiles[0].name, "tile_0_0");
         EXPECT_EQ(tiles[1].name, "tile_1_0");
-        EXPECT_NEAR(tiles[0].max.x - tiles[0].min.x, 11.0f, 1e-4f);
-        EXPECT_NEAR(tiles[1].max.x - tiles[1].min.x, 11.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].max.x - tiles[0].min.x, 10.0f, 1e-4f);
+        EXPECT_NEAR(tiles[1].max.x - tiles[1].min.x, 10.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].context_max.x - tiles[0].context_min.x, 11.0f, 1e-4f);
+        EXPECT_NEAR(tiles[1].context_max.x - tiles[1].context_min.x, 11.0f, 1e-4f);
         EXPECT_NEAR(tiles[1].rotation_degrees.z, 30.0f, 1e-4f);
         const glm::vec3 center0 = (tiles[0].min + tiles[0].max) * 0.5f;
         const glm::vec3 center1 = (tiles[1].min + tiles[1].max) * 0.5f;
@@ -550,14 +580,18 @@ namespace {
             partition, {4, 3, 0.0f, 0.2f, false}, outer);
         ASSERT_EQ(tiles.size(), 12);
         // An outer percentile can still contain noise; expansion is capped at half a cell.
-        EXPECT_NEAR(tiles[0].min.x, -3.0f, 1e-4f);
-        EXPECT_NEAR(tiles[0].min.y, -5.0f, 1e-4f);
-        EXPECT_NEAR(tiles[3].max.x, 45.0f, 1e-4f);
-        EXPECT_NEAR(tiles[11].max.y, 35.0f, 1e-4f);
-        EXPECT_NEAR(tiles[5].min.x, 9.0f, 1e-4f);
-        EXPECT_NEAR(tiles[5].max.x, 21.0f, 1e-4f);
-        EXPECT_NEAR(tiles[5].min.y, 9.0f, 1e-4f);
-        EXPECT_NEAR(tiles[5].max.y, 21.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].min.x, 0.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].min.y, 0.0f, 1e-4f);
+        EXPECT_NEAR(tiles[3].max.x, 40.0f, 1e-4f);
+        EXPECT_NEAR(tiles[11].max.y, 30.0f, 1e-4f);
+        EXPECT_NEAR(tiles[5].min.x, 10.0f, 1e-4f);
+        EXPECT_NEAR(tiles[5].max.x, 20.0f, 1e-4f);
+        EXPECT_NEAR(tiles[5].min.y, 10.0f, 1e-4f);
+        EXPECT_NEAR(tiles[5].max.y, 20.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].context_min.x, -3.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].context_min.y, -5.0f, 1e-4f);
+        EXPECT_NEAR(tiles[3].context_max.x, 45.0f, 1e-4f);
+        EXPECT_NEAR(tiles[11].context_max.y, 35.0f, 1e-4f);
         for (const auto& tile : tiles) {
             EXPECT_NEAR(tile.min.z, -2.0f, 1e-4f);
             EXPECT_NEAR(tile.max.z, 8.0f, 1e-4f);
@@ -586,11 +620,13 @@ namespace {
         const auto tiles = lfs::core::generate_tile_grid(
             bounds, {2, 2, 0.0f, 0.0f, false}, bounds);
         ASSERT_EQ(tiles.size(), 4);
-        EXPECT_NEAR(tiles[0].min.x, -1.0f, 1e-4f);
-        EXPECT_NEAR(tiles[0].min.y, -1.0f, 1e-4f);
-        EXPECT_NEAR(tiles[3].max.x, 21.0f, 1e-4f);
-        EXPECT_NEAR(tiles[3].max.y, 21.0f, 1e-4f);
-        EXPECT_NEAR(tiles[0].max.x, tiles[1].min.x, 1e-4f);
+        EXPECT_NEAR(tiles[0].min.x, 0.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].min.y, 0.0f, 1e-4f);
+        EXPECT_NEAR(tiles[3].max.x, 20.0f, 1e-4f);
+        EXPECT_NEAR(tiles[3].max.y, 20.0f, 1e-4f);
+        EXPECT_LT(tiles[0].max.x, tiles[1].min.x);
+        EXPECT_NEAR(tiles[0].context_min.x, -1.0f, 1e-4f);
+        EXPECT_NEAR(tiles[3].context_max.x, 21.0f, 1e-4f);
     }
 
     TEST(ScenePartitioner, BoundaryExtensionFollowsRotatedGridAxes) {
@@ -604,7 +640,8 @@ namespace {
         const auto local_center = glm::vec3(inverse_rotation * glm::vec4(center, 1.0f));
         EXPECT_NEAR(local_center.x, 3.0f, 1e-4f);
         EXPECT_NEAR(local_center.y, 5.0f, 1e-4f);
-        EXPECT_NEAR(tiles[0].max.x - tiles[0].min.x, 14.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].max.x - tiles[0].min.x, 10.0f, 1e-4f);
+        EXPECT_NEAR(tiles[0].context_max.x - tiles[0].context_min.x, 14.0f, 1e-4f);
         EXPECT_NEAR(tiles[0].rotation_degrees.z, 30.0f, 1e-4f);
     }
 
@@ -743,7 +780,7 @@ namespace {
 
         const auto tiles = lfs::core::generate_tile_grid(bounds, {2, 2, 0.0f, 0.0f, false, lfs::core::OrientationMode::AxisAligned, 0.0f});
         ASSERT_EQ(tiles.size(), 4);
-        EXPECT_NEAR(tiles[0].max.x, tiles[1].min.x, 1e-4f);
-        EXPECT_NEAR(tiles[0].max.y, tiles[2].min.y, 1e-4f);
+        EXPECT_LT(tiles[0].max.x, tiles[1].min.x);
+        EXPECT_LT(tiles[0].max.y, tiles[2].min.y);
     }
 } // namespace

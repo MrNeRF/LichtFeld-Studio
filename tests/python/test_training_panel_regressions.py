@@ -62,6 +62,14 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
+        for key in (
+            "partition_mode", "mode_adaptive", "mode_grid", "mode_target_size",
+            "target_size", "source", "source_points", "source_both", "source_cameras",
+            "coarse_iterations", "coarse_resize", "coarse_help", "inspect_tile",
+            "inspect_selected", "restore_scene", "associated_cameras", "cameras_short",
+            "preview_before_inspect", "inspecting", "inspection_restored",
+        ):
+            assert data["auto_tiles"][key]
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -167,7 +175,7 @@ def test_auto_tile_gui_forwards_export_policy_and_loss_weight(
     )
     params = SimpleNamespace(
         has_params=lambda: True, strategy="mcmc", iterations=100,
-        sh_degree=3, max_cap=10_000_000
+        sh_degree=3, max_cap=10_000_000, use_exposure_correction=True
     )
     monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
     monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
@@ -189,11 +197,46 @@ def test_auto_tile_gui_forwards_export_policy_and_loss_weight(
     assert "--no-tile-crop" in command
     assert "--no-tile-merge" in command
     assert command[command.index("--tile-outside-loss-weight") + 1] == "0.25"
-    assert "--tile-source" not in command
+    assert command[command.index("--tile-source") + 1] == "points"
+    assert command[command.index("--tile-coarse-iterations") + 1] == "5000"
+    assert command[command.index("--tile-coarse-resize") + 1] == "4"
+    assert "--exposure-correction" in command
     assert command[command.index("--max-cap") + 1] == "10000000"
     assert command[command.index("-r") + 1] == "2"
     assert command[command.index("--max-width") + 1] == "2048"
     assert panel._auto_tile_run_merge is False
+
+
+def test_auto_tile_gui_forwards_target_size_mode(
+    training_panel_module, monkeypatch, tmp_path
+):
+    module = training_panel_module
+    dataset = SimpleNamespace(
+        has_params=lambda: True, data_path=str(tmp_path),
+        output_path=str(tmp_path / "output"), centralize_dataset="off", images="images",
+        resize_factor=4, max_width=3840,
+    )
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", iterations=100,
+        sh_degree=3, max_cap=10_000_000, use_exposure_correction=False,
+    )
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "studio_executable_path", lambda: "LichtFeld-Studio", raising=False)
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(trainer_state=_make_signal("ready")))
+    started = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: started.append(command) or object())
+
+    panel = module.TrainingPanel()
+    panel._auto_tile_mode = "size"
+    panel._auto_tile_target_size = "12.5"
+    panel._schedule_deferred_update = lambda _delay: None
+    panel._auto_tile_train()
+
+    assert len(started) == 1
+    command = started[0]
+    assert command[command.index("--tile-size") + 1] == "12.5"
+    assert "--auto-tile" not in command
 
 
 class _ParamsStub:

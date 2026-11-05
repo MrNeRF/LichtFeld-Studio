@@ -457,6 +457,12 @@ namespace lfs::training {
                 tile.min = {box[0], box[1], box[2]};
                 tile.max = {box[3], box[4], box[5]};
                 tile.rotation_degrees = {rotation[0], rotation[1], rotation[2]};
+                if (params.tile_contextbox) {
+                    const auto& context = *params.tile_contextbox;
+                    tile.context_min = {context[0], context[1], context[2]};
+                    tile.context_max = {context[3], context[4], context[5]};
+                    tile.has_context_bounds = true;
+                }
                 const auto evidence = lfs::core::collect_tile_camera_evidence(*tile_cameras);
                 const auto selected = lfs::core::select_tile_initial_point_indices(*point_cloud, tile, evidence);
                 if (!selected.empty() && selected.size() < static_cast<size_t>(point_cloud->size())) {
@@ -559,6 +565,59 @@ namespace lfs::training {
                     : scene.getSceneCenter();
             recomputeInitSplatSceneScale(*model, scene_center, init_file);
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
+
+            // The global coarse prior is intentionally distributed to tiles by
+            // centre ownership plus the overlapping camera-supported context.
+            // Without this filter every local job would optimize the whole
+            // coarse model and the later merge would duplicate it N times.
+            if (params.tile_camera_uids_path && params.cropbox && model->size() > 0) {
+                lfs::core::TileSpec tile;
+                const auto& box = *params.cropbox;
+                tile.min = {box[0], box[1], box[2]};
+                tile.max = {box[3], box[4], box[5]};
+                if (params.cropbox_rotation) {
+                    tile.rotation_degrees = {
+                        (*params.cropbox_rotation)[0],
+                        (*params.cropbox_rotation)[1],
+                        (*params.cropbox_rotation)[2]};
+                }
+                if (params.tile_contextbox) {
+                    const auto& context = *params.tile_contextbox;
+                    tile.context_min = {context[0], context[1], context[2]};
+                    tile.context_max = {context[3], context[4], context[5]};
+                    tile.has_context_bounds = true;
+                }
+                lfs::core::PointCloud proxy;
+                proxy.means = model->get_means();
+                const auto evidence = lfs::core::collect_tile_camera_evidence(scene.getAllCameras());
+                const auto selected = lfs::core::select_tile_initial_point_indices(
+                    proxy, tile, evidence, /*include_context_points=*/true);
+                if (selected.empty()) {
+                    return std::unexpected("Tile coarse initialization selected no Gaussian centres");
+                }
+                if (selected.size() < static_cast<size_t>(model->size())) {
+                    const auto indices = lfs::core::Tensor::from_vector(
+                        selected, lfs::core::TensorShape({selected.size()}), model->means().device());
+                    auto canonical_sh = model->shN_canonical();
+                    auto selected_sh = canonical_sh.is_valid() && canonical_sh.numel() > 0
+                                           ? canonical_sh.index_select(0, indices)
+                                           : lfs::core::Tensor{};
+                    auto filtered = std::make_unique<lfs::core::SplatData>(
+                        model->get_max_sh_degree(),
+                        model->means().index_select(0, indices),
+                        model->sh0().index_select(0, indices),
+                        std::move(selected_sh),
+                        model->scaling_raw().index_select(0, indices),
+                        model->rotation_raw().index_select(0, indices),
+                        model->opacity_raw().index_select(0, indices),
+                        model->get_scene_scale(),
+                        lfs::core::SplatData::ShNLayout::Canonical);
+                    filtered->set_active_sh_degree(model->get_active_sh_degree());
+                    LOG_INFO("Tile coarse initialization retains {} of {} Gaussians (core + context auxiliaries)",
+                             selected.size(), model->size());
+                    model = std::move(filtered);
+                }
+            }
             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                      model->size(),
                      lfs::core::path_to_utf8(init_file.filename()),
