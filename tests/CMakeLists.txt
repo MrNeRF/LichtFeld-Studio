@@ -1861,6 +1861,18 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
     )
 
+    add_test(NAME lichtfeld.python.scene_splat_inputs
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_splat_inputs_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.scene_splat_inputs PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+
     add_test(NAME lichtfeld.python.scene_export_path
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_export_path_runtime.py
@@ -1909,6 +1921,7 @@ add_test(NAME lichtfeld.python.gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_standalone_camera_load_image.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

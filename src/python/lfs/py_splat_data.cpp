@@ -121,7 +121,10 @@ namespace lfs::python {
     // Soft deletion
     PyTensor PySplatData::deleted() const {
         if (!data_->has_deleted_mask()) {
-            return PyTensor(core::Tensor(), false);
+            // Nothing deleted yet: hand out an all-false mask instead of an unusable invalid tensor.
+            const auto& means = data_->means();
+            const auto device = means.is_valid() ? means.device() : core::Device::CPU;
+            return PyTensor(core::Tensor::zeros({data_->size()}, device, core::DataType::Bool), true);
         }
         return PyTensor(data_->deleted(), false);
     }

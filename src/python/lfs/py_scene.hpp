@@ -618,7 +618,7 @@ namespace lfs::python {
         bool has_training_data() const { return scene_->hasTrainingData(); }
         bool is_point_cloud_modified() const { return scene_->isPointCloudModified(); }
         void set_point_cloud_modified(bool modified) { scene_->setPointCloudModified(modified); }
-        PyTensor scene_center() const;
+        std::optional<PyTensor> scene_center() const;
 
         // Counts
         size_t node_count() const { return scene_->getNodeCount(); }
