@@ -63,6 +63,7 @@ namespace lfs::training {
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;
         void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override;
+        void restart_mean_lr() override;
 
         // Exposed for testing
         int add_new_gs_test() { return add_new_gs(); }

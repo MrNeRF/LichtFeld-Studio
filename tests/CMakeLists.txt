@@ -1055,6 +1055,7 @@ set(TEST_FILES
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
+    test_noise_infill.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
     test_scale_distance.cpp

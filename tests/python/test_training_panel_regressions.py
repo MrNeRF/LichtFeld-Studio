@@ -75,6 +75,7 @@ def test_sparsity_toggle_controls_popspa_rows_and_search(
         use_exposure_correction=False, ppisp_use_controller=False,
         use_bilateral_grid=False, strategy="mcmc", random=False,
         enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+        noise_infill_mesh="",
     )
     monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
     panel = module.TrainingPanel()
@@ -113,6 +114,28 @@ def training_panel_module(monkeypatch):
     return import_module("lfs_plugins.training_panel")
 
 
+@pytest.mark.parametrize(
+    ("enable_eval", "enabled", "noise_mesh", "eval_mask", "visible"),
+    [
+        (True, False, "scan.obj", "", True),
+        (True, False, "", "scan.obj", True),
+        (True, False, "", "cropbox", False),
+        (True, True, "", "cropbox", True),
+        (False, True, "scan.obj", "", False),
+    ],
+)
+def test_enabled_green_infill_stays_visible_once_its_mesh_is_gone(
+    training_panel_module, enable_eval, enabled, noise_mesh, eval_mask, visible
+):
+    params = SimpleNamespace(
+        enable_eval=enable_eval,
+        eval_green_infill=enabled,
+        noise_infill_mesh=noise_mesh,
+        eval_mask=eval_mask,
+    )
+    assert bool(training_panel_module._green_infill_option_visible(params)) is visible
+
+
 class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
@@ -146,6 +169,8 @@ class _ParamsStub:
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
+        self.noise_infill_mesh = ""
+        self.eval_green_infill = False
         self.eval_mask = ""
         self.eval_mask_report = ""
         self.save_steps = [7000]

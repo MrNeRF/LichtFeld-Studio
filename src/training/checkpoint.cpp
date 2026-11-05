@@ -13,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "noise_infill.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -73,11 +74,12 @@ namespace lfs::training {
             if (!params.enable_sparsity || !controller.is_initialized() || controller.state_size() != rows)
                 throw std::runtime_error("Invalid POPSpa checkpoint: method or model row count disagrees");
             const auto& config = controller.config();
+            const size_t noise_rows = noise_infill_rows(model);
             const size_t expected_first_count = params.popspa_first_prune_count == 0
                                                     ? std::max(config.target_count, static_cast<size_t>(std::round(
                                                                                         std::sqrt(static_cast<long double>(controller.input_size()) * config.target_count))))
-                                                    : static_cast<size_t>(params.popspa_first_prune_count);
-            if (config.target_count != static_cast<size_t>(params.popspa_target_count) ||
+                                                    : static_cast<size_t>(params.popspa_first_prune_count) + noise_rows;
+            if (config.target_count != static_cast<size_t>(params.popspa_target_count) + noise_rows ||
                 config.first_prune_count != expected_first_count ||
                 config.sparsify_steps != static_cast<uint32_t>(params.popspa_sparsify_steps) ||
                 config.refine_steps != static_cast<uint32_t>(params.popspa_refine_steps) ||

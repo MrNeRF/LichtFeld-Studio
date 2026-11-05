@@ -348,6 +348,15 @@ namespace lfs::training {
         return std::make_unique<ExponentialLR>(optimizer, gamma, std::vector<ParamType>{ParamType::Means});
     }
 
+    double restart_decay_gamma(
+        const lfs::core::param::OptimizationParameters& params,
+        const AdamOptimizer& optimizer,
+        const double final_fraction) {
+        const auto completed_steps = static_cast<size_t>(std::max<int64_t>(0, optimizer.get_step_count(ParamType::Means)));
+        const size_t steps_left = params.iterations > completed_steps ? params.iterations - completed_steps : 1;
+        return std::pow(final_fraction, 1.0 / static_cast<double>(steps_left));
+    }
+
     namespace {
         // Per-Gaussian strategy buffers the ledger does not count (refine
         // weights, screen share, edge scores, densify scratch).

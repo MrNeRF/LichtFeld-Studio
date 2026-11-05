@@ -73,6 +73,9 @@ namespace lfs::training {
         // Update the strategy's cached optimization parameters after checkpoint params are resolved.
         virtual void set_optimization_params(const lfs::core::param::OptimizationParameters&) {}
 
+        // Restarts the decay of the means learning rate from its initial value, over the remaining steps.
+        virtual void restart_mean_lr() {}
+
         // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
         virtual std::shared_ptr<CameraDataset> get_training_dataset() const { return {}; }

@@ -13,6 +13,7 @@
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
+#include "training/noise_infill.hpp"
 #include "user_shader_sources.hpp"
 
 #include <gtest/gtest.h>
@@ -244,6 +245,38 @@ TEST(GalleryScenePublicationTest, PublicationStripsOnlyCustomClipFromCopiedTimel
     EXPECT_TRUE(published.shaders().dom().get_json("assets")->empty());
     EXPECT_FALSE(published.sequencer().dom().get_json("timeline.reveal_clip"));
     EXPECT_FALSE(published.source_reader()->commit().required_writer_capabilities.contains(lfs::io::project::USER_SHADERS_V1));
+}
+
+// Catches a published scene carrying the noise infill of a model in training or of a saved project.
+TEST(GalleryScenePublicationTest, PublicationLeavesOutTheNoiseInfill) {
+    TemporaryDirectory temporary;
+    const auto noisy = [] {
+        auto model = make_splat(8);
+        model->opacity_raw().slice(0, 0, 3).fill_(lfs::training::kShownNoiseOpacity);
+        model->set_frozen_ranges({{0, 3}});
+        return model;
+    };
+    const auto kept_rows = static_cast<std::uint64_t>(noisy()->size()) - 3;
+
+    Scene scene;
+    Scene::RestoreNodeDesc desc;
+    desc.uuid = fixed_uuid(19201);
+    desc.type = NodeType::SPLAT;
+    desc.name = "splat";
+    desc.payload_hydration = PayloadHydrationState::Loaded;
+    desc.model = noisy();
+    ASSERT_NE(scene.restoreNodeWithUuid(std::move(desc)), lfs::core::NULL_NODE);
+    auto snapshots = scene.snapshotVisibleSplats();
+    ASSERT_EQ(snapshots.size(), 1u);
+    auto live = base_request(temporary.path / "live.scene", ExportFormat::GALLERY_SCENE);
+    live.nodes.push_back({.snapshot = std::move(snapshots.front()), .name = "Live"});
+    writeGalleryScenePublication(live, {}, {});
+    EXPECT_EQ(read_published_node(live.path).publication_count, kept_rows);
+
+    auto saved = base_request(temporary.path / "saved.scene", ExportFormat::GALLERY_SCENE);
+    saved.nodes.push_back({.name = "Saved", .load_payload = [&] { return std::shared_ptr<SplatData>(noisy().release()); }, .metadata_known = false});
+    writeGalleryScenePublication(saved, {}, {});
+    EXPECT_EQ(read_published_node(saved.path).publication_count, kept_rows);
 }
 
 TEST(GalleryScenePublicationTest, PublishedCameraRecordsWorldExtentFromSettingsScale) {

@@ -52,6 +52,7 @@
 #include "sequencer/reveal_render_state.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "shaders/shader_service.hpp"
+#include "training/noise_infill.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -2050,10 +2051,11 @@ namespace lfs::vis::gui {
                     publishExportFailureState(format, path, LOCF(lichtfeld::Strings::Runtime::EXPORT_STREAMED_LOD, name));
                     return;
                 }
+                const bool training_model = node->uuid == scene.getTrainingModelNodeUuid();
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id),
-                    .crop = node->uuid == scene.getTrainingModelNodeUuid() ? export_crop : std::nullopt});
+                    .crop = training_model ? export_crop : std::nullopt});
             }
         }
         if (splats.empty()) {
@@ -2460,12 +2462,14 @@ namespace lfs::vis::gui {
                     if (!cancelled) {
                         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> merge_inputs;
                         merge_inputs.reserve(splats.size());
-                        // Cropped copies; the scene model stays whole so a stopped run can resume.
+                        // Copies without the noise infill and cropped; the scene model stays whole so a stopped run can resume.
                         std::deque<lfs::core::SplatData> cropped;
                         for (const auto& source : splats) {
                             if (!source.data)
                                 continue;
                             const lfs::core::SplatData* data = source.data;
+                            if (auto without_noise = lfs::training::without_noise_infill(*data))
+                                data = &cropped.emplace_back(std::move(*without_noise));
                             if (source.crop) {
                                 if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
                                     if (kept->size() == 0)
