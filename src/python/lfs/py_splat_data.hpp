@@ -37,6 +37,7 @@ namespace lfs::python {
         PyTensor means_raw() const;
         PyTensor sh0_raw() const;
         PyTensor shN_raw() const;
+        PyTensor shN_rows(const PyTensor& rows, int degree) const;
         PyTensor scaling_raw() const;
         PyTensor rotation_raw() const;
         PyTensor opacity_raw() const;

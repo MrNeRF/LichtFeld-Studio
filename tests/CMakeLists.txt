@@ -701,7 +701,7 @@ set(POPSPA_TEST_FILES
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
-    test_splat_preview.cpp
+    test_splat_sh_rows.cpp
     test_training_hook_context.cpp
     licht_test_support.cpp
     test_assert_hardening.cpp
