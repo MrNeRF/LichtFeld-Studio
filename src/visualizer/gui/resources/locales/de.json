@@ -2027,6 +2027,16 @@
     "disabled": "Deaktiviert"
   },
   "image_preview": {
+    "source_changed": "Das Bild wurde geändert. Aktualisieren Sie es und nehmen Sie die Farbe erneut auf.",
+    "scene_changed": "Die Szene wurde geändert. Nehmen Sie die Farbe erneut auf.",
+    "color_sample_failed": "Die Farbe konnte nicht aufgenommen werden: {}",
+    "help": "Hilfe",
+    "refresh": "Aktualisieren",
+    "apply_render_color": "Als Renderhintergrund übernehmen",
+    "apply_training_color": "Als Trainingshintergrund übernehmen",
+    "camera_unavailable": "Diesem Bild ist keine Kamera zugeordnet",
+    "loading": "Bild wird geladen…",
+    "load_failed": "Bild konnte nicht geladen werden. Aktualisieren oder ein anderes Bild wählen.",
     "title": "Bildvorschau",
     "image_section": "BILD",
     "file_section": "DATEI",

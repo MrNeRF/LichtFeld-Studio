@@ -452,6 +452,17 @@ Before calling a window or panel complete, verify:
 
 ## Reference resources
 
+### Image inspection
+
+- At 100%, one source pixel occupies one physical screen pixel, independently
+  of UI density.
+- Fit reports its actual zoom percentage.
+- Picking a color does not change settings. Applying it to a background is an
+  explicit action.
+- Disabled actions keep their explanation accessible while rejecting activation.
+
+### Component references
+
 Use these files when implementing or reviewing a surface:
 
 - `src/visualizer/gui/rmlui/resources/components.rcss` and

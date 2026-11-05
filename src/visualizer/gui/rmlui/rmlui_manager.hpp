@@ -146,6 +146,7 @@ namespace lfs::vis::gui {
         void activateTheme(const std::string& theme_id);
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
+        [[nodiscard]] LFS_VIS_API RenderInterface_VK* getVulkanRenderInterface(Rml::Context* context) const;
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
         [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }

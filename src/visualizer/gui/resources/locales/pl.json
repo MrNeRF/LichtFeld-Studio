@@ -2027,6 +2027,16 @@
     "disabled": "Wyłączony"
   },
   "image_preview": {
+    "source_changed": "Obraz został zmieniony. Odśwież go i ponownie pobierz kolor.",
+    "scene_changed": "Scena została zmieniona. Ponownie pobierz kolor.",
+    "color_sample_failed": "Nie można pobrać koloru: {}",
+    "help": "Pomoc",
+    "refresh": "Odśwież",
+    "apply_render_color": "Zastosuj do tła renderowania",
+    "apply_training_color": "Zastosuj do tła treningu",
+    "camera_unavailable": "Brak kamery powiązanej z tym obrazem",
+    "loading": "Ładowanie obrazu…",
+    "load_failed": "Nie można wczytać obrazu. Odśwież lub wybierz inny obraz.",
     "title": "Podgląd obrazu",
     "image_section": "OBRAZ",
     "file_section": "PLIK",

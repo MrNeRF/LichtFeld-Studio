@@ -2040,6 +2040,16 @@
     "disabled": "Disabilitato"
   },
   "image_preview": {
+    "source_changed": "L’immagine è cambiata. Aggiorna e preleva di nuovo il colore.",
+    "scene_changed": "La scena è cambiata. Preleva di nuovo il colore.",
+    "color_sample_failed": "Impossibile prelevare il colore: {}",
+    "help": "Aiuto",
+    "refresh": "Aggiorna",
+    "apply_render_color": "Applica allo sfondo rendering",
+    "apply_training_color": "Applica allo sfondo training",
+    "camera_unavailable": "Nessuna camera associata a questa immagine",
+    "loading": "Caricamento immagine…",
+    "load_failed": "Impossibile caricare l’immagine. Aggiorna o scegli un’altra immagine.",
     "title": "Anteprima immagine",
     "image_section": "IMMAGINE",
     "file_section": "FILE",

@@ -23,6 +23,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/selection_cursor.hpp"
@@ -131,6 +132,7 @@ namespace lfs::vis {
             // Called after a bounded main-thread upload batch. The next frame
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
+            [[nodiscard]] PreviewTextureStatus previewTextureStatus(const std::string& source, Rml::Context* context = nullptr) const;
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void prepareInput();
             void prepareLayout();

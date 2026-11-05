@@ -133,6 +133,11 @@
 #endif
 
 namespace lfs::vis::gui {
+
+    PreviewTextureStatus GuiManager::previewTextureStatus(const std::string& source, Rml::Context* context) const {
+        const auto* renderer = rmlui_manager_.getVulkanRenderInterface(context);
+        return renderer ? renderer->previewTextureStatus(source) : PreviewTextureStatus::Unknown;
+    }
     RmlUIManager::InputDispatchResult GuiManager::dispatchInputEvent(const SDL_Event& event) {
         if (auto* window = rmlui_manager_.mainWindow())
             rml_menu_bar_.onWindowPointerEvent(event, SDL_GetWindowID(window));

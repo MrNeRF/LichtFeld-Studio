@@ -2027,6 +2027,16 @@
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {
+    "source_changed": "De afbeelding is gewijzigd. Vernieuw en neem de kleur opnieuw op.",
+    "scene_changed": "De scène is gewijzigd. Neem de kleur opnieuw op.",
+    "color_sample_failed": "De kleur kon niet worden opgenomen: {}",
+    "help": "Help",
+    "refresh": "Vernieuwen",
+    "apply_render_color": "Toepassen op renderachtergrond",
+    "apply_training_color": "Toepassen op trainingsachtergrond",
+    "camera_unavailable": "Er is geen camera aan deze afbeelding gekoppeld",
+    "loading": "Afbeelding laden…",
+    "load_failed": "Afbeelding kan niet worden geladen. Vernieuw of kies een andere afbeelding.",
     "title": "Afbeeldingsvoorbeeld",
     "image_section": "AFBEELDING",
     "file_section": "BESTAND",

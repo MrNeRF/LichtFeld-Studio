@@ -34,6 +34,10 @@ def _install_lf_stub(monkeypatch):
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
         set_panel_enabled=lambda _panel_id, _enabled: None,
+        get_panel_object=lambda _panel_id: None,
+        get_image_info=lambda _path: (0, 0, 0),
+        preview_texture_status=lambda _source, _document=None: "ready",
+        request_redraw=lambda _delay=0.0: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -147,6 +151,12 @@ class _ElementStub:
         self.client_height = 600
         self.offset_top = 0
         self.offset_height = 0
+        self.id = ""
+        self.tag_name = "div"
+        self.scroll_top = 0.0
+
+    def parent(self):
+        return None
 
     def set_property(self, name, value):
         self.properties[name] = value
@@ -168,7 +178,9 @@ class _ElementStub:
 
 class _DocumentStub:
     def __init__(self, elements):
-        self._elements = elements
+        self._elements = dict(elements)
+        if "main-image-a" in elements:
+            self._elements.setdefault("main-image-b", _ElementStub())
         self.removed_models = []
 
     def get_element_by_id(self, element_id):
@@ -222,7 +234,9 @@ def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
 
     expected_mask = quote(str(mask_path), safe=_RML_PATH_SAFE_CHARS)
     mask_img = panel._doc.get_element_by_id("mask-overlay")
-    assert mask_img.properties["decorator"] == f"image({expected_mask})"
+    assert mask_img.properties["decorator"].startswith("image(preview://")
+    assert mask_img.properties["decorator"].endswith(f"&path={expected_mask})")
+    assert "&rev=" in mask_img.properties["decorator"]
 
 
 def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
