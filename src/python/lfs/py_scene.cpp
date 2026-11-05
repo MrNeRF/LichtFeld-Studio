@@ -1741,6 +1741,8 @@ namespace lfs::python {
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
             .def_prop_ro("camera_focal_y", &PySceneNode::camera_focal_y, "Camera focal length in pixels (y)")
+            .def_prop_ro("camera_center_x", &PySceneNode::camera_center_x, "Camera principal point in pixels (x)")
+            .def_prop_ro("camera_center_y", &PySceneNode::camera_center_y, "Camera principal point in pixels (y)")
             .def_prop_ro("camera_width", &PySceneNode::camera_width, "Camera image width in pixels")
             .def_prop_ro("camera_height", &PySceneNode::camera_height, "Camera image height in pixels")
             // Property introspection

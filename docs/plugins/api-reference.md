@@ -348,6 +348,61 @@ are rejected. The model's SH storage is not modified or fully decoded.
 Long native transfers in `Tensor.cpu()`, `cuda()`, `sync()`, `index_select()`,
 and `numpy()` release the GIL; Python object construction retains it.
 
+### Local training sessions
+
+`lichtfeld_sessions` is a public, pure Python package shared with the Blender
+extension. It provides immutable, navigable splat snapshots; it does not enable
+an observer interface in Studio or grant control over an external trainer.
+
+Ordinary training does not start this publisher. Set
+`LFS_TRAINING_PUBLISHER=automatic` before launching Studio or a headless trainer
+to enable it. Alternatively, an adapter script can explicitly call:
+
+```python
+from lichtfeld_sessions.publisher import install
+stream = install(dataset="/path/to/dataset", label="My training", limit=100000, degree=0, interval=2.0)
+```
+
+The automatic defaults are 100,000 points, SH1 and a minimum two-second interval.
+SH0–SH3 are supported. Snapshot capture runs only when a live reader is present;
+only owned CPU arrays cross the worker boundary. A single writer handles
+publication, with at most one capture in flight. Numerical-runtime preparation
+and metadata writes do not run in the capture callback. First use may install
+NumPy in the existing per-user LichtFeld environment. Preparation failures are
+reported in session metadata and retry without stopping optimization.
+
+Readers use `transport.discover()`, `SessionClient(directory, label)`,
+`client.status()`, and `read_snapshot(status["snapshot"])` on their worker.
+`geometry.load(directory, status.get("geometry"))` reads the validated camera and
+coordinate metadata. Readers must close their client lease. Snapshot generations
+can expire while being read; retain the installed model and retry the next
+generation. Reading produces owned NumPy arrays, independent of producer memory.
+
+The local protocol is version 1. It uses named mappings on Windows and private
+mapped files on Linux, with bounded dimensions and integrity checks. The registry
+is per user; `LFS_TRAINING_SESSIONS_DIR` can select another local directory.
+Discovery excludes dead, unresponsive, terminal and superseded registrations.
+It is a local same-user interoperability interface, not a remote control service.
+
+Camera geometry includes actual native intrinsics, including off-centre
+`SceneNode.camera_center_x` and `camera_center_y`, and explicit data/model/source
+transforms. Capture helpers filter deleted rows and select rows before copying
+SH-rest coefficients. Saved checkpoints keep the trainer's full model quality.
+Closing the process that owns training stops that training; publication does not
+detach or transfer it. Snapshots are temporary and do not replace checkpoints.
+
+The package source belongs to Studio in `src/python/lichtfeld_sessions` and is
+copied/installed alongside the native module. To build its standard Python wheel:
+
+```sh
+python -m pip install build
+python -m build --wheel --outdir /path/outside/source/wheels
+```
+
+The Blender extension bundles that generated `py3-none-any` wheel using Blender's
+extension dependency mechanism. Changes to the protocol must be made here and
+the wheel regenerated; the extension must not maintain another implementation.
+
 ## Rendering
 
 | Function                                              | Returns          | Description                |

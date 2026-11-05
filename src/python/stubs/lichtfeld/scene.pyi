@@ -496,6 +496,14 @@ class SceneNode:
         """Camera focal length in pixels (y)"""
 
     @property
+    def camera_center_x(self) -> float | None:
+        """Camera principal point in pixels (x)"""
+
+    @property
+    def camera_center_y(self) -> float | None:
+        """Camera principal point in pixels (y)"""
+
+    @property
     def camera_width(self) -> int | None:
         """Camera image width in pixels"""
 

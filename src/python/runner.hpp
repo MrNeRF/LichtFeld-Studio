@@ -44,7 +44,8 @@ namespace lfs::python {
      * @return lfs::Result<void>: the latched init failure, or a typed IO/Python error on a
      *         missing script or execution failure. Success is a default Status.
      */
-    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts,
+                                                                       const std::filesystem::path& dataset = {});
 
     /**
      * @brief Set the callback for Python stdout/stderr capture.
@@ -218,6 +219,9 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API std::filesystem::path get_user_packages_dir();
 
     LFS_PYTHON_RUNTIME_API void update_python_path();
+
+    LFS_PYTHON_RUNTIME_API bool training_publisher_requested();
+    LFS_PYTHON_RUNTIME_API void drain_training_publication();
 
     struct CapabilityResult {
         bool success = false;
