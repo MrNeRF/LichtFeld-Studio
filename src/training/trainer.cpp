@@ -10361,6 +10361,19 @@ namespace lfs::training {
         }
         sync_strategy_optimization_params();
 
+        // A lower --max-cap than the checkpoint holds: the random cut a fresh run makes, now that the rows' state is loaded.
+        if (!popspa_controller_.is_initialized()) {
+            if (const auto over = rows_over_cap(strategy_->get_model(),
+                                                with_noise_outside_cap(params_.optimization, &strategy_->get_model()).max_cap)) {
+                LOG_WARN("Max cap ({}) is less than the {} splats of the checkpoint, randomly removing the rest",
+                         params_.optimization.max_cap, strategy_->get_model().visible_count());
+                std::unique_lock model_lock(model_access_mutex_);
+                waitForModelReaders();
+                strategy_->remove_gaussians(*over);
+                syncTrainingSceneTopology(scene_, strategy_->get_model());
+            }
+        }
+
         current_iteration_ = *result;
         popspa_completed_iteration_.store(popspa_controller_.is_initialized() ? *result : -1, std::memory_order_release);
 

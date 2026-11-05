@@ -723,7 +723,8 @@ namespace lfs::training {
             _pending_failure_snapshot = {};
             // No edge scores reach the strategy while PPISP distillation freezes the Gaussians.
             if (_precompute_valid)
-                densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
+                densify_with_score(_precomputed_scores, _error_score_max,
+                                   _params->max_cap > 0 ? std::min<int64_t>(get_current_budget(), _params->max_cap) : get_current_budget());
 
             opacity_prune(iter);
 

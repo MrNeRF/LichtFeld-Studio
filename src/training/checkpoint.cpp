@@ -811,11 +811,16 @@ namespace lfs::training {
             // its camera hull and far-field mask during initialization. Adopting
             // a candidate without cameras would disable those protections.
             loaded_strategy->set_training_dataset(strategy.get_training_dataset());
+            // The saved strategy state fits the cap it was saved under; the trainer cuts the rows over a lower one once loaded.
+            auto strategy_params = loaded_params.optimization;
+            if (strategy_params.max_cap > 0 &&
+                (saved_optimization.max_cap == 0 || saved_optimization.max_cap > strategy_params.max_cap))
+                strategy_params.max_cap = saved_optimization.max_cap;
             auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
             if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
-                loaded_strategy->initialize(loaded_params.optimization);
+                loaded_strategy->initialize(strategy_params);
             else
-                loaded_strategy->set_optimization_params(loaded_params.optimization);
+                loaded_strategy->set_optimization_params(strategy_params);
             const auto strategy_initialized_at = std::chrono::steady_clock::now();
             loaded_strategy->deserialize(file);
             const auto strategy_deserialized_at = std::chrono::steady_clock::now();

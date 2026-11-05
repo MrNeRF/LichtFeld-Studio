@@ -59,6 +59,7 @@
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
+#include "training/strategies/strategy_utils.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 
@@ -1183,6 +1184,46 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    // Catches a resume with a lower row cap than the checkpoint holds failing to load the strategy state, which was saved for
+    // the larger cap; the trainer cuts the rows only after the load.
+    TEST_P(CheckpointStrategyStateRoundTripTest, LoadsUnderALowerRowCap) {
+        const auto& strategy_name = GetParam();
+        const auto temp_dir = std::filesystem::temp_directory_path() /
+                              std::format("lfs_checkpoint_lower_cap_{}", strategy_name);
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = strategy_name;
+        params.optimization.iterations = 20;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+
+        const auto model_device = strategy_name == "igs+"
+                                      ? lfs::core::Device::CUDA
+                                      : lfs::core::Device::CPU;
+        auto source_model = make_checkpoint_test_splat(8, model_device);
+        auto source = std::move(*lfs::training::StrategyFactory::instance().create(strategy_name, *source_model));
+        source->initialize(params.optimization);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(temp_dir, 11, *source, params, nullptr, nullptr, nullptr).has_value());
+
+        auto target_model = make_checkpoint_test_splat(1, model_device);
+        auto target = std::move(*lfs::training::StrategyFactory::instance().create(strategy_name, *target_model));
+        target->initialize(params.optimization);
+        auto loaded_params = params;
+        loaded_params.optimization.max_cap = 4;
+        loaded_params.overrides.optimization_json = R"({"max_cap": 4})";
+        const auto load_result = lfs::training::load_checkpoint(
+            lfs::test::checkpoint_fixture_path(temp_dir), *target, loaded_params, nullptr, nullptr, nullptr);
+
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+        EXPECT_EQ(target->get_model().size(), 8);
+        EXPECT_EQ(loaded_params.optimization.max_cap, 4);
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         CheckpointStrategies,
         CheckpointStrategyStateRoundTripTest,
@@ -1193,6 +1234,25 @@ namespace {
                 name.begin(), name.end(), [](const unsigned char c) { return !std::isalnum(c); }, '_');
             return name;
         });
+
+    // Catches a cut that removes frozen or deleted rows, or leaves more live rows than the cap.
+    TEST(RowsOverCapTest, CutsOnlyLiveTrainingRowsDownToTheCap) {
+        auto model = make_checkpoint_test_splat(10, lfs::core::Device::CUDA);
+        model->set_frozen_ranges({{0, 2}});
+        std::vector<bool> deleted(10, false);
+        deleted[9] = true;
+        model->deleted() = lfs::core::Tensor::from_vector(deleted, lfs::core::TensorShape({10}), lfs::core::Device::CUDA);
+        model->refresh_deleted_count();
+        EXPECT_FALSE(lfs::training::rows_over_cap(*model, 9)) << "nine live rows fit";
+        EXPECT_FALSE(lfs::training::rows_over_cap(*model, 0)) << "no cap";
+        const auto over = lfs::training::rows_over_cap(*model, 5);
+        ASSERT_TRUE(over);
+        const auto removed = over->cpu().to_vector_bool();
+        ASSERT_EQ(removed.size(), 10u);
+        EXPECT_FALSE(removed[0] || removed[1]) << "frozen rows stay";
+        EXPECT_FALSE(removed[9]) << "a deleted row is no live row to cut";
+        EXPECT_EQ(std::count(removed.begin(), removed.end(), true), 4);
+    }
 
     TEST(SplatDataDeletedCountTest, DeserializePublishesDeletedCountAndPreservesPayload) {
         for (const size_t deleted_count : {0u, 3u, 6u}) {
