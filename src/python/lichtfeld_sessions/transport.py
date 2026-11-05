@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Immutable local snapshots. No application imports; shared by both clients."""
 import ctypes
-import hashlib
+from functools import lru_cache
 import json
 import math
 import mmap
@@ -13,43 +13,40 @@ import time
 import uuid
 
 PROTOCOL = 1
+TERMINAL = frozenset({"completed", "stopped", "failed", "superseded"})
 FIELDS = ("means", "scale", "rotation", "opacity", "sh")
 MAX_BYTES = 2 * 1024 ** 3
 MAX_METADATA_CHARS = 262144
 MAX_DOCUMENT_CHARS = 32 * 1024 * 1024
 
 
-def spatial_indices(positions, limit):
-    """Stratify occupied cells instead of following Gaussian storage order."""
-    import numpy as np
-    count = len(positions)
-    if count <= limit:
-        return np.arange(count, dtype=np.int64)
-    low = positions.min(axis=0)
-    extent = np.maximum(positions.max(axis=0) - low, 1e-8)
-    resolution = max(2, int(round(limit ** (1 / 3))))
-    for _ in range(5):
-        cells = np.minimum(((positions - low) / extent * resolution).astype(np.int64), resolution - 1)
-        keys = cells[:, 0] + resolution * (cells[:, 1] + resolution * cells[:, 2])
-        _, chosen = np.unique(keys, return_index=True)
-        if len(chosen) >= limit:
-            return chosen[np.linspace(0, len(chosen) - 1, limit, dtype=np.int64)]
-        resolution *= 2
-    remaining = np.setdiff1d(np.arange(count), chosen, assume_unique=True)
-    fill = remaining[np.linspace(0, len(remaining) - 1, limit - len(chosen), dtype=np.int64)]
-    return np.concatenate((chosen, fill))
+@lru_cache(maxsize=1)
+def _kernel32():
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    signatures = {
+        "CreateFileW": ([ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p,
+                         ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p], ctypes.c_void_p),
+        "SetFileInformationByHandle": ([ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+                                       ctypes.c_ulong], ctypes.c_int),
+        "OpenProcess": ([ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong], ctypes.c_void_p),
+        "GetExitCodeProcess": ([ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)], ctypes.c_int),
+        "GetProcessTimes": ([ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_ulonglong)] * 4, ctypes.c_int),
+        "OpenFileMappingW": ([ctypes.c_ulong, ctypes.c_int, ctypes.c_wchar_p], ctypes.c_void_p),
+        "MapViewOfFile": ([ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                           ctypes.c_size_t], ctypes.c_void_p),
+        "UnmapViewOfFile": ([ctypes.c_void_p], ctypes.c_int),
+        "CloseHandle": ([ctypes.c_void_p], ctypes.c_int),
+    }
+    for name, (arguments, result) in signatures.items():
+        function = getattr(kernel, name)
+        function.argtypes, function.restype = arguments, result
+    return kernel
 
 
 def replace_metadata(source, destination):
     if os.name != "nt":
         return os.replace(source, destination)
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong,
-                                  ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p]
-    kernel.CreateFileW.restype = ctypes.c_void_p
-    kernel.SetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.c_int,
-                                                 ctypes.c_void_p, ctypes.c_ulong]
-    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel = _kernel32()
     name = native_path(Path(destination).resolve())
     encoded_name = name.encode("utf-16-le")
     class RenameInfo(ctypes.Structure):
@@ -108,10 +105,7 @@ def read_text_shared(path, *, max_chars=MAX_METADATA_CHARS):
         with Path(path).open("r", encoding="utf-8") as stream:
             return bounded_metadata(stream, max_chars)
     import msvcrt
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong,
-                                  ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p]
-    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel = _kernel32()
     # Readers must allow rename/delete so atomic publication can replace metadata.
     handle = kernel.CreateFileW(native_path(Path(path).resolve()), 0x80000000, 7, None, 3, 0x80, None)
     if handle == ctypes.c_void_p(-1).value:
@@ -132,19 +126,14 @@ def read_json(path, default=None):
 
 
 def registry_root():
-    return Path(os.environ.get("LFS_TRAINING_SESSIONS_DIR",
-                str(Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) /
-                    "LichtFeld" / "training-sessions")))
+    return Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "LichtFeld" / "training-sessions"
 
 
 def process_alive(pid):
     if type(pid) is not int or not 0 < pid <= 0xffffffff:
         return False
     if os.name == "nt":
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.restype = ctypes.c_void_p
-        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel = _kernel32()
         handle = kernel.OpenProcess(0x1000, False, pid)
         if not handle:
             return False
@@ -167,11 +156,7 @@ def process_identity(pid):
     if type(pid) is not int or not 0 < pid <= 0xffffffff:
         return None
     if os.name == "nt":
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-        kernel.OpenProcess.restype = ctypes.c_void_p
-        kernel.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_ulonglong)] * 4
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel = _kernel32()
         handle = kernel.OpenProcess(0x1000, False, pid)
         if not handle:
             return None
@@ -218,20 +203,6 @@ def validate_session(record, expected_id=None):
         raise ValueError("Invalid training session identity")
     if expected_id is not None and record["id"] != expected_id:
         raise ValueError("Training session identity changed; select the trainer again")
-    state = record.get("state", "active")
-    if not isinstance(state, str) or not 0 < len(state) <= 64:
-        raise ValueError("Invalid training session state")
-    for key in ("iteration", "iterations", "count", "model_count", "preview_limit", "preview_sh_degree"):
-        if key in record and (type(record[key]) is not int or not 0 <= record[key] <= 2**63 - 1):
-            raise ValueError("Invalid training session counter: " + key)
-    for key in ("heartbeat", "started"):
-        if key in record and (type(record[key]) not in (int, float) or not 0 <= record[key] <= 2**63 - 1 or not math.isfinite(record[key])):
-            raise ValueError("Invalid training session timestamp: " + key)
-    for key in ("label", "project", "dataset", "job_root", "error", "process_identity", "saved_project"):
-        if record.get(key) is not None and (not isinstance(record[key], str) or len(record[key]) > 32768):
-            raise ValueError("Invalid training session text: " + key)
-    if record.get("snapshot") is not None and not isinstance(record["snapshot"], dict):
-        raise ValueError("Invalid training session snapshot")
     return record
 
 
@@ -277,8 +248,7 @@ def discover():
         record["directory"] = str(path.parent)
         record["liveness"] = session_liveness(record)
         record["alive"] = record["liveness"] == "responsive"
-        record["active"] = record["alive"] and record.get("state") not in {
-            "completed", "stopped", "failed", "superseded"}
+        record["active"] = record["alive"] and record.get("state") not in TERMINAL
         if record["liveness"] != "responsive":
             continue
         # A LichtFeld process owns one current training run. A newer terminal
@@ -336,8 +306,7 @@ class SnapshotPool:
                 layout[key] = {"offset": offset, "shape": list(array.shape)}
                 region.write(memoryview(array).cast("B"))
                 offset += array.nbytes
-            checksum = hashlib.sha256(region).hexdigest()
-            record = {"protocol": PROTOCOL, "id": token, "bytes": size, "sha256": checksum,
+            record = {"protocol": PROTOCOL, "id": token, "bytes": size,
                       "count": count, "sh_degree": degree, "iteration": iteration,
                       "kind": kind, "layout": layout, "created": time.time(), **location}
             self.mappings.append((region, path))
@@ -364,28 +333,30 @@ class SnapshotPool:
 def read_snapshot(record):
     """Return owned arrays; release OS handles before touching application data."""
     import numpy as np
-    if not isinstance(record, dict):
-        raise ValueError("Invalid snapshot metadata")
+
+    if (not isinstance(record, dict) or type(record.get("protocol")) is not int
+            or record["protocol"] != PROTOCOL):
+        raise ValueError("Unsupported snapshot protocol")
     for key in ("iteration", "count", "sh_degree", "bytes"):
-        if type(record.get(key)) is not int or not 0 <= record[key] <= 2**63 - 1:
+        if type(record.get(key)) is not int or record[key] < 0:
             raise ValueError("Invalid snapshot counter: " + key)
-    if not isinstance(record.get("id"), str) or not record["id"] or len(record["id"]) > 128:
-        raise ValueError("Invalid snapshot identity")
-    if record["count"] < 1 or not 0 <= record["sh_degree"] <= 3:
+    count, degree, size = record["count"], record["sh_degree"], record["bytes"]
+    if count < 1 or not 0 <= degree <= 3 or not 0 < size <= MAX_BYTES:
         raise ValueError("Invalid snapshot dimensions")
-    size = record["bytes"]
-    if type(record.get("protocol")) is not int or record["protocol"] != PROTOCOL or not isinstance(size, int) or not 0 < size <= MAX_BYTES:
-        raise ValueError("Unsupported or oversized snapshot")
+    shapes = {"means": (count, 3), "scale": (count, 3), "rotation": (count, 4),
+              "opacity": (count, 1), "sh": (count, (degree + 1) ** 2, 3)}
+    offset = 0
+    for key, shape in shapes.items():
+        entry = record["layout"][key]
+        length = math.prod(shape) * 4
+        if tuple(entry["shape"]) != shape or entry["offset"] != offset or offset + length > size:
+            raise ValueError("Invalid snapshot layout")
+        offset += length
+    if offset != size:
+        raise ValueError("Invalid snapshot size")
     close = None
     if record["transport"] == "win32_mapping" and os.name == "nt":
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenFileMappingW.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_wchar_p]
-        kernel.OpenFileMappingW.restype = ctypes.c_void_p
-        kernel.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
-                                       ctypes.c_ulong, ctypes.c_size_t]
-        kernel.MapViewOfFile.restype = ctypes.c_void_p
-        kernel.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel = _kernel32()
         handle = kernel.OpenFileMappingW(4, False, record["name"])
         if not handle:
             raise FileNotFoundError("Snapshot expired; waiting for the next generation")
@@ -405,25 +376,9 @@ def read_snapshot(record):
     else:
         raise ValueError("Snapshot transport is unavailable on this platform")
     try:
-        if hashlib.sha256(buffer).hexdigest() != record["sha256"]:
-            raise ValueError("Snapshot integrity check failed")
-        count, degree = record["count"], record["sh_degree"]
-        shapes = {"means": (count, 3), "scale": (count, 3), "rotation": (count, 4),
-                  "opacity": (count, 1), "sh": (count, (degree + 1) ** 2, 3)}
-        offset, arrays = 0, {}
-        if not isinstance(count, int) or count < 1 or not 0 <= degree <= 3:
-            raise ValueError("Invalid snapshot dimensions")
-        for key in FIELDS:
-            entry = record["layout"][key]
-            length = int(np.prod(shapes[key])) * 4
-            if tuple(entry["shape"]) != shapes[key] or entry["offset"] != offset or offset + length > size:
-                raise ValueError("Invalid snapshot layout")
-            arrays[key] = np.frombuffer(buffer, dtype="<f4", count=length // 4,
-                                        offset=offset).reshape(shapes[key]).copy()
-            offset += length
-        if offset != size or not all(np.isfinite(a).all() for a in arrays.values()):
-            raise ValueError("Invalid snapshot payload")
-        return arrays
+        return {key: np.frombuffer(buffer, dtype="<f4", count=math.prod(shape),
+                                   offset=record["layout"][key]["offset"]).reshape(shape).copy()
+                for key, shape in shapes.items()}
     finally:
         buffer.release()
         close()
@@ -451,14 +406,14 @@ class SessionPublisher:
     def heartbeat(self):
         self.clients()
         values = {}
-        if self.status_provider and not self.stop.is_set() and self.record.get('state') not in {'completed', 'stopped', 'failed', 'superseded'}:
+        if self.status_provider and not self.stop.is_set() and self.record.get('state') not in TERMINAL:
             try:
                 values = self.status_provider() or {}
             except Exception:
                 pass  # A status probe must never break training/publication.
         with self.io_lock:
             with self.lock:
-                if not self.stop.is_set() and self.record.get('state') not in {'completed', 'stopped', 'failed', 'superseded'}:
+                if not self.stop.is_set() and self.record.get('state') not in TERMINAL:
                     self.record.update(values)
                 record = {**self.record, "heartbeat": time.time()}
             atomic_json(self.root / "session.json", record)
@@ -499,12 +454,10 @@ class SessionPublisher:
             if not isinstance(value, dict):
                 continue
             updated = value.get("updated", 0)
-            if (type(updated) not in (int, float) or not 0 <= updated <= 2**63 - 1
-                    or not math.isfinite(updated)):
-                continue
-            if session_liveness({**value, "heartbeat": updated}) == "responsive":
+            liveness = session_liveness({**value, "heartbeat": updated})
+            if liveness == "responsive":
                 clients.append(value)
-            elif time.time() - updated > 60 and not process_alive(value.get("pid")):
+            elif liveness == "exited":
                 try: path.unlink(missing_ok=True)
                 except OSError: pass
         self._clients_cache = clients

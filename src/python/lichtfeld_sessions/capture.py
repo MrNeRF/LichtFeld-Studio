@@ -1,7 +1,25 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Owned CPU snapshots captured only at a trainer's model read boundary."""
-from .transport import spatial_indices
+def spatial_indices(positions, limit):
+    """Stratify occupied cells instead of following Gaussian storage order."""
+    import numpy as np
+    count = len(positions)
+    if count <= limit:
+        return np.arange(count, dtype=np.int64)
+    low = positions.min(axis=0)
+    extent = np.maximum(positions.max(axis=0) - low, 1e-8)
+    resolution = max(2, int(round(limit ** (1 / 3))))
+    for _ in range(5):
+        cells = np.minimum(((positions - low) / extent * resolution).astype(np.int64), resolution - 1)
+        keys = cells[:, 0] + resolution * (cells[:, 1] + resolution * cells[:, 2])
+        _, chosen = np.unique(keys, return_index=True)
+        if len(chosen) >= limit:
+            return chosen[np.linspace(0, len(chosen) - 1, limit, dtype=np.int64)]
+        resolution *= 2
+    remaining = np.setdiff1d(np.arange(count), chosen, assume_unique=True)
+    fill = remaining[np.linspace(0, len(remaining) - 1, limit - len(chosen), dtype=np.int64)]
+    return np.concatenate((chosen, fill))
 
 
 class PreviewCapacityError(ValueError):

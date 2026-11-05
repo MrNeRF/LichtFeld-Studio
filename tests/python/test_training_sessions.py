@@ -32,7 +32,7 @@ def test_session_round_trip_in_long_unicode_and_verbatim_directory(tmp_path, mon
             root /= "capture-\u00e0-\u6e2c-" + "x" * 60
         root /= "session data. "
         assert len(str(root)) > 260
-        monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(root))
+        monkeypatch.setattr(transport, "registry_root", lambda: root)
         session = transport.SessionPublisher({"label": "Unicode path"})
         client = None
         try:
@@ -53,7 +53,7 @@ def test_session_round_trip_in_long_unicode_and_verbatim_directory(tmp_path, mon
             session.pool.close()
 
 
-def test_immutable_generations_integrity_and_owned_reader_storage(tmp_path):
+def test_immutable_generations_layout_and_owned_reader_storage(tmp_path):
     pool = transport.SnapshotPool(tmp_path)
     try:
         original = arrays()
@@ -63,8 +63,11 @@ def test_immutable_generations_integrity_and_owned_reader_storage(tmp_path):
         assert first["id"] != second["id"]
         assert np.all(transport.read_snapshot(first)["means"] == 0)
         installed = transport.read_snapshot(second)
-        with pytest.raises(ValueError, match="integrity"):
-            transport.read_snapshot({**second, "sha256": "0" * 64})
+        with pytest.raises(ValueError, match="layout"):
+            transport.read_snapshot({**second, "layout": {**second["layout"],
+                "means": {**second["layout"]["means"], "offset": 4}}})
+        with pytest.raises(ValueError, match="size"):
+            transport.read_snapshot({**second, "bytes": second["bytes"] + 4})
         pool.close()
         assert np.all(installed["means"] == 9)
     finally:
@@ -72,7 +75,7 @@ def test_immutable_generations_integrity_and_owned_reader_storage(tmp_path):
 
 
 def test_live_discovery_rejects_terminal_and_reused_pid(tmp_path, monkeypatch):
-    monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path)
     session = transport.SessionPublisher({"label": "test"})
     one = transport.SessionClient(session.root, "one")
     two = transport.SessionClient(session.root, "two")
@@ -83,7 +86,7 @@ def test_live_discovery_rejects_terminal_and_reused_pid(tmp_path, monkeypatch):
         monkeypatch.setattr(transport, "process_identity", lambda pid: "reused")
         assert transport.discover() == []
         monkeypatch.undo()
-        monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(tmp_path))
+        monkeypatch.setattr(transport, "registry_root", lambda: tmp_path)
         session.finish("stopped")
         assert transport.discover() == []
     finally:
@@ -95,7 +98,7 @@ def test_live_discovery_rejects_terminal_and_reused_pid(tmp_path, monkeypatch):
 
 
 def test_slow_metadata_io_does_not_hold_the_training_status_lock(tmp_path, monkeypatch):
-    monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path)
     session = transport.SessionPublisher({})
     entered, release, updated = threading.Event(), threading.Event(), threading.Event()
     original = transport.atomic_json
@@ -178,7 +181,7 @@ def test_native_camera_uses_actual_principal_point_and_model_frame():
     np.testing.assert_array_equal(result["model_to_data"], model)
     assert result["cameras"][0]["fy"] == 60.
     assert result["cameras"][0]["height"] == 48
-    source = {"source_frame": "blender-world", "data_to_source": geometry.BLENDER_TO_VISUALIZER}
+    source = {"source_frame": "blender-world", "data_to_source": [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]}
     result = geometry.from_native_scene(scene, source)
     assert result["source_frame"] == "blender-world"
     np.testing.assert_array_equal(result["data_to_source"], source["data_to_source"])
@@ -188,31 +191,52 @@ def test_native_camera_uses_actual_principal_point_and_model_frame():
         geometry.from_native_scene(scene)
 
 
-def test_dependency_preparation_never_blocks_capture_or_terminal_hook(tmp_path, monkeypatch):
-    monkeypatch.setenv("LFS_TRAINING_SESSIONS_DIR", str(tmp_path))
-    entered, release = threading.Event(), threading.Event()
+def test_publisher_waits_for_training_start_before_registering(tmp_path, monkeypatch):
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path)
+    prepare = Mock(side_effect=AssertionError("Dependencies prepared before training start"))
+    monkeypatch.setattr(publisher, "ensure_numpy", prepare)
+    stream = publisher.TrainingPublisher(SimpleNamespace(ScopedHandler=Mock))
+    stream.end({"terminal_state": "failed"})
+    assert transport.discover() == []
+    assert list(tmp_path.iterdir()) == []
+    prepare.assert_not_called()
+
+
+def test_capture_stays_nonblocking_and_training_end_drains_worker(tmp_path, monkeypatch):
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path)
+    entered, release, ending, ended = (threading.Event() for _ in range(4))
 
     def prepare(lf):
         entered.set()
         assert release.wait(3)
 
     monkeypatch.setattr(publisher, "ensure_numpy", prepare)
-    lf = SimpleNamespace(ScopedHandler=Mock)
-    stream = publisher.TrainingPublisher(lf, degree=0)
+    stream = publisher.TrainingPublisher(SimpleNamespace(ScopedHandler=Mock), degree=0)
     hook = {"iteration": 1, "iterations": 20, "num_gaussians": 5, "is_paused": False}
+    stream.start(hook)
+
+    def finish():
+        ending.set()
+        stream.end({**hook, "terminal_state": "stopped"})
+        ended.set()
+
+    worker = threading.Thread(target=finish)
     try:
         assert entered.wait(2)
         pending = stream.pending
         stream.step(hook)
         stream.step(hook)
-        assert stream.pending is pending  # No unbounded queue of capture work.
-        stream.end({**hook, "terminal_state": "stopped"})
-        assert not release.is_set()
+        assert stream.pending is pending
+        worker.start()
+        assert ending.wait(2)
+        assert not ended.wait(0.1)
     finally:
         release.set()
+        if worker.ident is not None:
+            worker.join(3)
         stream.end(hook)
-        stream.writer.shutdown(wait=True)
         stream.publisher.thread.join(3)
+    assert ended.is_set()
     assert transport.read_json(stream.publisher.root / "session.json")["state"] == "stopped"
 
 
@@ -226,18 +250,20 @@ def test_headless_publisher_requires_explicit_opt_in(tmp_path, gpu_available, en
     root = Path(__file__).resolve().parents[2]
     build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build")))
     executable = build / ("LichtFeld-Studio.exe" if os.name == "nt" else "LichtFeld-Studio")
-    sessions = tmp_path / "sessions"
+    registry = tmp_path / "registry"
+    sessions = registry / "LichtFeld" / "training-sessions"
     environment = {**os.environ, "LFS_HOME": str(tmp_path / "runtime"),
-                   "LFS_TRAINING_SESSIONS_DIR": str(sessions),
+                   "LOCALAPPDATA": str(registry),
                    "PYTHONPATH": str(Path(np.__file__).resolve().parents[1])}
     environment.pop("PYTHONHOME", None)
-    environment.pop("LFS_TRAINING_PUBLISHER", None)
-    if enabled:
-        environment["LFS_TRAINING_PUBLISHER"] = "automatic"
     dataset = _dataset(tmp_path / "dataset", 60)
     command = [str(executable), "--headless", "-d", dataset, "-o", str(tmp_path / "output"),
                "--iter", "8", "--max-cap", "1000", "--sh-degree", "1", "--strategy", "mcmc",
                "--min-track-length", "0", "--centralize", "off", "--no-download"]
+    if enabled:
+        script = tmp_path / "publish.py"
+        script.write_text(f"from lichtfeld_sessions.publisher import install\ninstall(dataset={dataset!r})\n", encoding="utf-8")
+        command += ["--python-script", str(script)]
     log = tmp_path / "trainer.log"
     with log.open("w", encoding="utf-8") as stream:
         result = subprocess.run(command, env=environment, stdout=stream, stderr=subprocess.STDOUT,

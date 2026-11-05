@@ -3375,14 +3375,11 @@ namespace lfs::training {
             }
 
             // Execute configured Python scripts to register iteration callbacks
-            if (!python_scripts_.empty() || lfs::python::training_publisher_requested()) {
-                auto py_result = lfs::python::run_scripts(python_scripts_, params.dataset.data_path);
+            if (!python_scripts_.empty()) {
+                auto py_result = lfs::python::run_scripts(python_scripts_);
                 if (!py_result) {
-                    if (!python_scripts_.empty()) {
-                        return std::unexpected(std::format("Failed to run Python scripts: {}",
-                                                           lfs::format_for_developer(py_result.error())));
-                    }
-                    LOG_WARN("Training preview publisher unavailable: {}", lfs::format_for_developer(py_result.error()));
+                    return std::unexpected(std::format("Failed to run Python scripts: {}",
+                                                       lfs::format_for_developer(py_result.error())));
                 }
             }
 

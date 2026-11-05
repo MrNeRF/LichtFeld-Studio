@@ -132,11 +132,11 @@ namespace {
         }
     }
 
-    TEST(SplatShRows, QuantizedSubnormalBoundsMatchCanonicalCpu) {
+    TEST(SplatPreview, QuantizedSubnormalBoundsMatchCanonicalCpu) {
         check_subnormal_bounds(Device::CPU);
     }
 
-    TEST(SplatShRowsGpuEdgeCases, QuantizedSubnormalBoundsMatchCanonical) {
+    TEST(SplatPreviewGpuEdgeCases, QuantizedSubnormalBoundsMatchCanonical) {
         int count = 0;
         if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0)
             GTEST_SKIP() << "CUDA GPU required";
@@ -144,10 +144,10 @@ namespace {
     }
 
     using Profile = std::tuple<int, Storage>;
-    class SplatShRowsCpu : public testing::TestWithParam<Profile> {};
-    class SplatShRowsGpu : public testing::TestWithParam<Profile> {};
+    class SplatPreviewCpu : public testing::TestWithParam<Profile> {};
+    class SplatPreviewGpu : public testing::TestWithParam<Profile> {};
 
-    TEST(SplatShRows, DegreeZeroModelHasNoRestStorage) {
+    TEST(SplatPreview, DegreeZeroModelHasNoRestStorage) {
         constexpr size_t n = 2;
         SplatData model(0, Tensor::zeros({n, size_t{3}}, Device::CPU), Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CPU),
                         Tensor::empty_pageable_host({size_t{0}}, DataType::Float32), Tensor::zeros({n, size_t{3}}, Device::CPU),
@@ -160,12 +160,12 @@ namespace {
         EXPECT_EQ(result.dtype(), DataType::Float32);
     }
 
-    TEST_P(SplatShRowsCpu, SelectedRowsBandsAndOwnedStorage) {
+    TEST_P(SplatPreviewCpu, SelectedRowsBandsAndOwnedStorage) {
         const auto [degree, format] = GetParam();
         check_preview(Device::CPU, degree, format);
     }
 
-    TEST_P(SplatShRowsGpu, SelectedRowsBandsAndOwnedStorage) {
+    TEST_P(SplatPreviewGpu, SelectedRowsBandsAndOwnedStorage) {
         int count = 0;
         if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0)
             GTEST_SKIP() << "CUDA GPU required";
@@ -173,8 +173,8 @@ namespace {
         check_preview(Device::CUDA, degree, format);
     }
 
-    INSTANTIATE_TEST_SUITE_P(StorageLayouts, SplatShRowsCpu,
+    INSTANTIATE_TEST_SUITE_P(StorageLayouts, SplatPreviewCpu,
                              testing::Combine(testing::Values(1, 2, 3), testing::Values(Storage::Float32, Storage::Float16, Storage::Quantized16)));
-    INSTANTIATE_TEST_SUITE_P(StorageLayouts, SplatShRowsGpu,
+    INSTANTIATE_TEST_SUITE_P(StorageLayouts, SplatPreviewGpu,
                              testing::Combine(testing::Values(1, 2, 3), testing::Values(Storage::Float32, Storage::Float16, Storage::Quantized16)));
 } // namespace

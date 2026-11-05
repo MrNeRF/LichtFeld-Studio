@@ -1755,34 +1755,14 @@ _repl_out.close()
         }
     }
 
-    bool training_publisher_requested() {
-        return lfs::core::environment::value("LFS_TRAINING_PUBLISHER") == "automatic";
-    }
-
-    void drain_training_publication() {
-        if (!Py_IsInitialized())
-            return;
-        const GilAcquire gil;
-        PyObject* module = PyDict_GetItemString(PyImport_GetModuleDict(), "lichtfeld_sessions.publisher");
-        if (!module)
-            return;
-        PyObject* result = PyObject_CallMethod(module, "drain", nullptr);
-        if (!result) {
-            LOG_WARN("Training preview publisher could not finish");
-            PyErr_Print();
-        }
-        Py_XDECREF(result);
-    }
-
-    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts,
-                                  const std::filesystem::path& dataset) {
-        if (scripts.empty() && !training_publisher_requested()) {
+    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts) {
+        if (scripts.empty()) {
             return {};
         }
 
         if (auto status = ensure_initialized(); !status)
             return status;
-        if (!scripts.empty() && !ensure_plugins_loaded())
+        if (!ensure_plugins_loaded())
             return lfs::Status::failure(lfs::make_error({
                 .code = lfs::ErrorCode::Unavailable,
                 .domain = lfs::ErrorDomain::Python,
@@ -1823,18 +1803,6 @@ _repl_out.close()
             }
             Py_DECREF(lf_module);
             LOG_INFO("Successfully pre-imported lichtfeld module");
-        }
-
-        if (training_publisher_requested()) {
-            PyObject* module = PyImport_ImportModule("lichtfeld_sessions.publisher");
-            const auto dataset_utf8 = lfs::core::path_to_utf8(dataset);
-            PyObject* stream = module ? PyObject_CallMethod(module, "install", "s", dataset_utf8.c_str()) : nullptr;
-            if (!stream) {
-                LOG_WARN("Training preview publisher could not start; training will continue");
-                PyErr_Print();
-            }
-            Py_XDECREF(stream);
-            Py_XDECREF(module);
         }
 
         for (const auto& script : scripts) {

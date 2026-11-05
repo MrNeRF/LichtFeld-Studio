@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .capture import capture
 from . import geometry
-from .transport import MAX_BYTES, SessionPublisher, read_text_shared
+from .transport import MAX_BYTES, TERMINAL, SessionPublisher, read_text_shared
 
 _stream = None
 
@@ -37,13 +37,13 @@ class TrainingPublisher:
         if type(interval) not in (int, float) or not 0.1 <= interval <= 3600:
             raise ValueError("Invalid preview interval")
         self.lf, self.limit, self.degree, self.interval = lf, limit, degree, interval
-        self.publisher = SessionPublisher({"label": label, "dataset": dataset, "source": "lichtfeld",
-                                           "backend": sys.executable, "state": "preparing",
-                                           "preview_limit": limit, "preview_sh_degree": degree},
-                                          status_provider=self.status)
-        self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="training-preview")
+        self.metadata = {"label": label, "dataset": dataset, "source": "lichtfeld",
+                         "backend": sys.executable, "state": "preparing",
+                         "preview_limit": limit, "preview_sh_degree": degree}
+        self.publisher = None
+        self.writer = None
         self.dataset = dataset
-        self.pending = self.writer.submit(self.prepare)
+        self.pending = None
         self.ready = False
         self.source_geometry = None
         self.closed = False
@@ -51,8 +51,18 @@ class TrainingPublisher:
         self.retry_at = 0.0
         self.geometry = None
         self.hooks = lf.ScopedHandler()
+        self.hooks.on_training_start(self.start)
         self.hooks.on_post_step(self.step)
         self.hooks.on_training_end(self.end)
+
+    def start(self, hook):
+        # Initialization may fail while the GUI remains open. Register only once
+        # the trainer actually starts, rather than leaving a live phantom session.
+        if self.closed or self.publisher is not None:
+            return
+        self.publisher = SessionPublisher(self.metadata, status_provider=self.status)
+        self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="training-preview")
+        self.pending = self.writer.submit(self.prepare)
 
     def status(self):
         # These AppContext fields copy CommandCenter state without reading a model
@@ -72,7 +82,7 @@ class TrainingPublisher:
         return None
 
     def step(self, hook):
-        if self.closed:
+        if self.closed or self.publisher is None:
             return
         # Only a short memory lock; heartbeat and writer own all metadata IO.
         self.publisher.update(flush=False, iteration=hook["iteration"],
@@ -118,15 +128,13 @@ class TrainingPublisher:
         self.closed = True
         self.hooks.clear()
         terminal = hook.get("terminal_state", "unknown")
-        if terminal not in {"completed", "stopped", "failed", "superseded"}:
+        if terminal not in TERMINAL:
             terminal = "failed"
-
-        def finish():
+        if self.writer is not None:
+            # TrainingEnd runs on the trainer worker. Finish its pending CPU
+            # publication before recording the terminal state or exiting headless.
+            self.writer.shutdown(wait=True)
             self.publisher.finish(terminal, iteration=hook.get("iteration", 0))
-
-        # Serialize retirement after any in-flight publication, without a UI join.
-        self.finished = self.writer.submit(finish)
-        self.writer.shutdown(wait=False)
 
 
 def install(dataset="", **options):
@@ -139,21 +147,7 @@ def install(dataset="", **options):
     stream = TrainingPublisher(lf, **options)
     if previous is not None:
         previous.end({"terminal_state": "superseded"})
-        def retire():
-            try:
-                previous.finished.result()
-            finally:
-                previous.publisher.pool.close()
-        stream.writer.submit(retire)
+        if previous.publisher is not None:
+            previous.publisher.pool.close()
     _stream = stream
     return _stream
-
-
-def drain():
-    """Headless process exit only: finish CPU publication before immediate exit.
-
-    GUI callbacks use end() and never join a writer.
-    """
-    if _stream is not None:
-        _stream.end({"terminal_state": "unknown"})
-        _stream.writer.shutdown(wait=True)

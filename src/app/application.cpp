@@ -936,8 +936,7 @@ namespace lfs::app {
 
                 if (manager->getStateMachine().getFinishReason() == vis::FinishReason::Error) {
                     LOG_ERROR("Training error: {}", manager->getLastError());
-                    if (!params->python_scripts.empty() || python::training_publisher_requested()) {
-                        python::drain_training_publication();
+                    if (!params->python_scripts.empty()) {
                         core::teardown_gpu_before_exit();
                         python::finalize();
                         core::flush_and_exit(1);
@@ -961,7 +960,6 @@ namespace lfs::app {
                 LOG_INFO("Headless with TCP training completed");
             }
 
-            python::drain_training_publication();
             core::teardown_gpu_before_exit();
 
             const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;
@@ -1135,8 +1133,7 @@ namespace lfs::app {
 
                     if (const auto result = trainer->train(coordinator.stop_token()); !result) {
                         LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
-                        if (!params->python_scripts.empty() || python::training_publisher_requested()) {
-                            python::drain_training_publication();
+                        if (!params->python_scripts.empty()) {
                             core::teardown_gpu_before_exit();
                             python::finalize();
                             core::flush_and_exit(1);
@@ -1183,8 +1180,7 @@ namespace lfs::app {
 
                     if (const auto result = trainer->train(coordinator.stop_token()); !result) {
                         LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
-                        if (!params->python_scripts.empty() || python::training_publisher_requested()) {
-                            python::drain_training_publication();
+                        if (!params->python_scripts.empty()) {
                             core::teardown_gpu_before_exit();
                             python::finalize();
                             core::flush_and_exit(1);
@@ -1195,13 +1191,11 @@ namespace lfs::app {
                         return 1;
                 }
 
-                python::drain_training_publication();
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
                 core::flush_and_exit(0);
             }
 
-            python::drain_training_publication();
             core::teardown_gpu_before_exit();
 
             const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;

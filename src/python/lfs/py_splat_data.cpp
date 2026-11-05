@@ -53,10 +53,6 @@ namespace lfs::python {
         return PyTensor(data_->shN_canonical(), true);
     }
 
-    PyTensor PySplatData::shN_rows(const PyTensor& rows, const int degree) const {
-        return PyTensor(data_->shN_canonical_cpu_rows(rows.tensor(), degree), true);
-    }
-
     PyTensor PySplatData::scaling_raw() const {
         return PyTensor(data_->scaling_raw(), false);
     }
@@ -224,9 +220,8 @@ namespace lfs::python {
             .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"),
                  "Reserve capacity for Gaussians (for densification). "
                  "Raises if the model is renderer-backed.")
-            .def("shN_rows", &PySplatData::shN_rows, nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(),
-                 "Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. "
-                 "Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.");
+            .def("shN_rows", [](const PySplatData& self, const PyTensor& rows, int degree) { return PyTensor(self.data()->shN_canonical_cpu_rows(rows.tensor(), degree), true); }, nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(), "Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. "
+                                                                                                                                                                                                                                                                 "Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.");
     }
 
 } // namespace lfs::python
