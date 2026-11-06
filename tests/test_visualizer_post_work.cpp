@@ -1656,7 +1656,7 @@ namespace lfs::vis {
         pixels[0] = 0;
         ASSERT_TRUE(core::save_png(image, rgb.data(), 64, 64, 3, 8, 1));
         auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
-        ASSERT_TRUE(core::save_png(wrong, pixels.data(), 32, 32, 1, 8, 1));
+        ASSERT_TRUE(core::save_png(wrong, rgb.data(), 64, 64, 3, 8, 1));
         VisualizerImpl viewer(projectOptions());
         auto& scene = viewer.getScene();
         auto camera = make_project_request_test_camera(image);
@@ -1673,9 +1673,11 @@ namespace lfs::vis {
         const auto decoded = camera->load_and_get_mask(-1, 0, false, 0.5f, true, false).cpu().to_vector_uint8();
         EXPECT_EQ(decoded[0], 0);
         EXPECT_EQ(decoded[1], 1);
-        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1)), 32, 32));
+        const auto replacement = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, replacement, 32, 32));
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
-        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, {}, 64, 64));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, replacement, 64, 64));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, {}, 64, 64));
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
         (void)op::undoHistory().undo();
         EXPECT_FALSE(camera->has_mask());

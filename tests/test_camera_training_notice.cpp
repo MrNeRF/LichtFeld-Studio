@@ -9,6 +9,7 @@
 #include "scene/scene_manager.hpp"
 #include "training/camera_training_notice.hpp"
 
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -36,6 +37,15 @@ namespace {
 
     private:
         lfs::event::HandlerId id_;
+    };
+
+    class CameraTrainingNoticeGpuTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            int devices = 0;
+            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+                GTEST_SKIP() << "Camera construction requires CUDA";
+        }
     };
 
     std::shared_ptr<lfs::core::Camera> make_camera() {
@@ -68,7 +78,7 @@ namespace {
 
 } // namespace
 
-TEST(CameraTrainingNoticeTest, OneEffectiveTogglePostsOneToastAndNoOpPostsNothing) {
+TEST_F(CameraTrainingNoticeGpuTest, OneEffectiveTogglePostsOneToastAndNoOpPostsNothing) {
     lfs::core::Scene scene;
     const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 1);
     const auto camera = scene.addCamera("frame.png", group, make_camera());
@@ -87,7 +97,7 @@ TEST(CameraTrainingNoticeTest, OneEffectiveTogglePostsOneToastAndNoOpPostsNothin
     EXPECT_EQ(delivery.stack.entries.front().count, 1u);
 }
 
-TEST(CameraTrainingNoticeTest, TenRapidEffectiveChangesPostAndCoalesce) {
+TEST_F(CameraTrainingNoticeGpuTest, TenRapidEffectiveChangesPostAndCoalesce) {
     lfs::core::Scene scene;
     const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 1);
     const auto camera = scene.addCamera("frame.png", group, make_camera());
@@ -108,7 +118,7 @@ TEST(CameraTrainingNoticeTest, TenRapidEffectiveChangesPostAndCoalesce) {
     EXPECT_EQ(delivery.stack.entries.front().count, 10u);
 }
 
-TEST(CameraTrainingNoticeTest, UndoAndRedoEachPostNotice) {
+TEST_F(CameraTrainingNoticeGpuTest, UndoAndRedoEachPostNotice) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
     const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 1);
@@ -155,7 +165,7 @@ TEST(CameraTrainingNoticeTest, ChangeImmediatelyAfterRestartIsDelivered) {
     EXPECT_EQ(delivery.stack.entries.front().count, 2u);
 }
 
-TEST(CameraTrainingNoticeTest, StoredMasksWarnOnlyWhenMaskingIsDisabled) {
+TEST_F(CameraTrainingNoticeGpuTest, StoredMasksWarnOnlyWhenMaskingIsDisabled) {
     using lfs::core::param::MaskMode;
     lfs::core::Scene scene;
     const auto camera = make_camera();

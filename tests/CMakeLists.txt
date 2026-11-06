@@ -249,6 +249,7 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_camera_training_notice.cpp
         test_analog_navigation.cpp
         test_gamepad_service.cpp
         test_gamepad_navigation.cpp

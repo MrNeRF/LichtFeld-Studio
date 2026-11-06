@@ -111,5 +111,5 @@
 .sam-point { border-color: @{white}; color: @{white}; }
 .sam-point-1 { background-color: @{success}; }
 .sam-point-0 { background-color: @{error}; }
-.sam-point-selected, .sam-box-selected { border-color: @{warning}; }
 .sam-box { border-color: @{primary}; }
+.sam-point-selected, .sam-box-selected { border-color: @{warning}; }
