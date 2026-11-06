@@ -6,6 +6,23 @@
 #include <condition_variable>
 #include <mutex>
 
+namespace lfs::vis {
+    // Fixture commands use production validation and installation without adding UI history or routing a timeline.
+    struct ShaderCommands {
+        shaders::ShaderService& service;
+        auto command(const shaders::ShaderCommand& cmd) {
+            return service.applyCommand(cmd, {}, false);
+        }
+        auto createAsset(std::string name, std::string source) { return command(shaders::SetShaderSource{{}, std::move(source), std::move(name), {}}); }
+        auto updateSource(core::Uuid id, std::string source) { return command(shaders::SetShaderSource{id, std::move(source), {}, {}}); }
+        auto renameAsset(core::Uuid id, std::string name) { return command(shaders::RenameShader{id, std::move(name)}); }
+        auto removeAsset(core::Uuid id) { return command(shaders::RemoveShader{id}); }
+        auto setParameter(core::Uuid id, std::string_view name, std::span<const float> values) { return command(shaders::SetShaderParameter{id, std::string(name), {values.begin(), values.end()}, {}}); }
+        auto bind(shaders::ShaderSlot slot, core::Uuid id) { return command(shaders::BindShader{slot, id}); }
+        auto unbind(shaders::ShaderSlot slot) { return command(shaders::UnbindShader{slot, {}}); }
+    };
+} // namespace lfs::vis
+
 namespace lfs::test {
     namespace shaders = lfs::vis::shaders;
     // Links on the service worker in the order the test releases them.

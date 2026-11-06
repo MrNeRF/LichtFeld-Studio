@@ -1,8 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "user_shader_test_access.hpp"
-
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/panel_input_utils.hpp"
