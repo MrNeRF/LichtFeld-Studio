@@ -3660,7 +3660,7 @@ namespace lfs::vis::gui {
             request.style = core::ModalStyle::Warning;
             request.body_rml = encode(tr(bake ? "splat_inspector.group_bake_note" : "splat_inspector.group_delete_note"));
             request.buttons = {{tr("common.cancel"), "secondary"}, {label, "warning"}};
-            request.on_result = [uuid = *uuid, members = std::move(members), bake, label,
+            request.on_result = [uuid = *uuid, members = std::move(members), bake, label = label,
                                  expected_generation = scene->renderGeneration(), changed_message = tr("splat_inspector.group_changed")](const core::ModalResult& result) {
                 if (result.button_label != label)
                     return;
@@ -3711,7 +3711,7 @@ namespace lfs::vis::gui {
                 request.style = core::ModalStyle::Warning;
                 request.body_rml = encode(tr("splat_inspector.bake_note"));
                 request.buttons = {{tr("common.cancel"), "secondary"}, {apply_label, "warning"}};
-                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label](const core::ModalResult& result) {
+                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label](const core::ModalResult& result) {
                     if (result.button_label != apply_label)
                         return;
                     auto* sm = services().sceneOrNull();

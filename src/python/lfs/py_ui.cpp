@@ -4446,7 +4446,7 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_shape",
             [](const std::string& shape) {
-                invoke_on_viewer([shape] {
+                invoke_on_viewer([shape = shape] {
                     if (auto* const gui = lfs::python::get_gui_manager())
                         gui->gizmo().setCropToolShape(shape);
                     markProjectSessionChapterCommitted("VIEW");
@@ -4468,7 +4468,7 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_operation",
             [](const std::string& operation) {
-                invoke_on_viewer([operation] {
+                invoke_on_viewer([operation = operation] {
                     if (auto* const gui = lfs::python::get_gui_manager())
                         gui->gizmo().setCropToolOperation(operation);
                     markProjectSessionChapterCommitted("VIEW");
@@ -4528,7 +4528,7 @@ namespace lfs::python {
             "Whether editing an existing crop keeps its saved shape type");
         m.def(
             "change_crop_tool_shape", [](const std::string& shape) {
-                return invoke_on_viewer([shape] {
+                return invoke_on_viewer([shape = shape] {
                     auto* gui = lfs::python::get_gui_manager();
                     return gui && gui->gizmo().changeCropToolShape(shape);
                 },
@@ -4548,7 +4548,7 @@ namespace lfs::python {
             nb::arg("uuid"), "Edit an existing crop volume without creating another");
         m.def(
             "new_crop_tool", [](const std::string& shape) {
-                invoke_on_viewer([shape] {
+                invoke_on_viewer([shape = shape] {
                     if (auto* gui = lfs::python::get_gui_manager())
                         gui->gizmo().newCropTool(shape);
                 });
