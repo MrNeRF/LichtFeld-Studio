@@ -96,14 +96,16 @@ def test_cancel_preserves_prompts_and_rejects_late_results(panel_modules, monkey
     assert not value.accept({"request": 12, "revision": "revision-a", "phase": "ready"})
 
 
-@pytest.mark.parametrize("changed_source", [False, True])
-def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_modules, monkeypatch, changed_source):
+@pytest.mark.parametrize("changed_source,changed_scene", [(False, False), (True, False), (False, True)])
+def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_modules, monkeypatch, changed_source, changed_scene):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
     panel._image_paths = [module.Path("frame.png")]
     panel._mask_editor = value = editor(module)
     value.request, value.phase = 42, "rendering"
     panel._sam_apply_target = (42, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+    if changed_scene:
+        module.RuntimeState.scene_generation.value += 1
     panel._path_revision_cache["frame.png"] = "changed" if changed_source else "revision-a"
     applied = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "mask_ready"}, raising=False)
@@ -112,9 +114,11 @@ def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_mo
     monkeypatch.setattr(panel, "_refresh_sources", lambda: None)
     panel._service_sam()
     panel._service_sam()
-    assert applied == ([] if changed_source else [("camera-uuid", 42)])
+    assert applied == ([] if changed_source or changed_scene else [("camera-uuid", 42)])
     assert panel._sam_apply_target is None
-    if not changed_source:
+    if changed_source or changed_scene:
+        assert value.phase == "error", "a stale Apply must not leave the editor busy"
+    else:
         assert panel._show_overlay and not value.enabled
 
 
@@ -124,7 +128,10 @@ def test_apply_keeps_selected_polarity_with_inverted_training_masks(panel_module
     panel = module.ImagePreviewPanel()
     panel._mask_editor = value = editor(module)
     value.point(0.5, 0.5, 1)
-    value.request, value.phase, value.overlays = 5, "ready", ["proposal.png"]
+    class Proposal:
+        def __bool__(self):
+            raise AssertionError("An image tensor is not a scalar boolean")
+    value.request, value.phase, value.overlays = 5, "ready", [Proposal()]
     panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
     monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid"))
     monkeypatch.setattr(module.lf, "optimization_params", lambda: SimpleNamespace(invert_masks=inverted), raising=False)

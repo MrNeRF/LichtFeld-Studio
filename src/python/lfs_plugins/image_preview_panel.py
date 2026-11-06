@@ -1610,7 +1610,7 @@ class ImagePreviewPanel(Panel):
     def _sam_apply(self, exclude):
         editor = self._mask_editor
         node = self._current_camera_node(resolve_unbound=True)
-        if not node or editor.phase != "ready" or not editor.overlay or not editor.key:
+        if not node or editor.phase != "ready" or editor.overlay is None or not editor.key:
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0]:
@@ -1651,6 +1651,10 @@ class ImagePreviewPanel(Panel):
                     self._refresh_sources()
                 except Exception as error:
                     editor.phase, editor.error = "error", str(error)
+                self._mark_dirty()
+            else:
+                editor.invalidate()
+                editor.phase, editor.error = "error", lf.ui.tr("image_preview.sam_proposal_expired")
                 self._mark_dirty()
             return
         if editor.accept(state):
