@@ -920,7 +920,8 @@ namespace lfs::vis {
             } else if (has_model || has_points) {
                 FrameContext panel_context = frame_context;
                 panel_context.render_size = panel_size;
-                auto pc_request = buildPointCloudRenderRequest(panel_context, panel_size, point_cloud_transforms());
+                const auto transforms = point_cloud_transforms();
+                auto pc_request = buildPointCloudRenderRequest(panel_context, panel_size, transforms);
                 bool equirectangular = false;
                 applyGTComparisonRenderCamera(pc_request.frame_view, equirectangular, *panel_camera);
                 auto outputs = render_point_scene(pc_request, view.split_right_render_target_);
@@ -1018,8 +1019,9 @@ namespace lfs::vis {
             image = std::move(outputs->color);
             depth = std::move(outputs->depth);
         } else {
+            const auto transforms = point_cloud_transforms();
             auto outputs = render_point_scene(
-                buildPointCloudRenderRequest(frame_context, render_size, point_cloud_transforms()),
+                buildPointCloudRenderRequest(frame_context, render_size, transforms),
                 view.main_render_target_);
             if (!outputs)
                 return keep_previous(outputs.error());
