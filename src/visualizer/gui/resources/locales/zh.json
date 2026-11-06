@@ -2081,6 +2081,7 @@
     "sam_invalid_point": "点坐标必须介于0和1之间，标签必须为0或1。",
     "sam_invalid_box": "矩形框边界必须介于0和1之间，且宽度和高度必须为正。",
     "sam_unavailable": "使用SAM前，请停止训练并等待正在进行的导入或视频导出完成。",
+    "sam_reset_training": "修改图像蒙版前，请重置训练。",
     "sam_training_blocked": "开始训练前请关闭SAM预览。",
     "source_changed": "图像已更改。请刷新后重新拾取颜色。",
     "scene_changed": "场景已更改。请重新拾取颜色。",

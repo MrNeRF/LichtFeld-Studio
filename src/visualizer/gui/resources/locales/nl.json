@@ -2081,6 +2081,7 @@
     "sam_invalid_point": "Puntcoördinaten moeten tussen 0 en 1 liggen, met label 0 of 1.",
     "sam_invalid_box": "De kadergrenzen moeten tussen 0 en 1 liggen, met een positieve breedte en hoogte.",
     "sam_unavailable": "Stop de training en wacht tot actieve importen of video-exporten klaar zijn voordat u SAM gebruikt.",
+    "sam_reset_training": "Reset de training voordat je afbeeldingsmaskers wijzigt.",
     "sam_training_blocked": "Sluit het SAM-voorbeeld voordat u de training start.",
     "source_changed": "De afbeelding is gewijzigd. Vernieuw en neem de kleur opnieuw op.",
     "scene_changed": "De scène is gewijzigd. Neem de kleur opnieuw op.",

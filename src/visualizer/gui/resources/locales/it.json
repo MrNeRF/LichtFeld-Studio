@@ -2094,6 +2094,7 @@
     "sam_invalid_point": "Le coordinate dei punti devono essere tra 0 e 1, con etichetta 0 o 1.",
     "sam_invalid_box": "I limiti del riquadro devono essere tra 0 e 1, con larghezza e altezza positive.",
     "sam_unavailable": "Ferma il training e attendi la fine delle importazioni o esportazioni video attive prima di usare SAM.",
+    "sam_reset_training": "Reimposta il training prima di modificare le maschere delle immagini.",
     "sam_training_blocked": "Chiudi l’anteprima SAM prima di avviare il training.",
     "source_changed": "L’immagine è cambiata. Aggiorna e preleva di nuovo il colore.",
     "scene_changed": "La scena è cambiata. Preleva di nuovo il colore.",

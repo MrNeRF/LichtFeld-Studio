@@ -1757,6 +1757,93 @@ namespace lfs::vis {
         EXPECT_TRUE(std::ranges::any_of(*nodes, [&](const auto& n) { return n.camera && n.camera->mask_asset_uuid == asset; }));
     }
 
+    TEST_F(CameraMaskApplyTest, UnsavedMaskSurvivesTrainingCompletionAndReopen) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = temporary_.path / "training-mask-dataset";
+        const auto init = temporary_.path / "init.ply";
+        const auto project = temporary_.path / "training-mask.licht";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        const std::array<std::uint8_t, 3> rgb{128, 128, 128};
+        for (int i = 1; i <= 2; ++i)
+            ASSERT_TRUE(core::save_png(dataset / std::format("frame_{:04}.png", i), rgb.data(), 1, 1, 3, 8, 1));
+        ASSERT_TRUE(event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        auto splat = lfs::test::licht::make_splat(8);
+        ASSERT_TRUE(io::save_ply(*splat, {.output_path = init, .binary = true, .async = false}));
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        const auto* context = viewer.getWindowManager()->getVulkanContext();
+        if (!context || !context->externalMemoryInteropEnabled())
+            GTEST_SKIP() << "Vulkan external memory interop unavailable";
+        const auto wait = [&](auto condition) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!condition() && std::chrono::steady_clock::now() < deadline) {
+                viewer.pumpPostedWorkForProjectWrite();
+                viewer.getGuiManager()->asyncTasks().pollImportCompletion();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return condition();
+        };
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) {
+            params.iterations = 2;
+            params.max_cap = 64;
+            params.enable_eval = false;
+            params.save_steps.clear();
+            params.eval_steps.clear();
+        });
+        core::events::cmd::LoadFile{.path = dataset, .is_dataset = true, .init_path = init, .centralize_dataset = "off", .discard_changes = true}.emit();
+        ASSERT_TRUE(wait([&] { return !viewer.getGuiManager()->asyncTasks().isImporting(); }));
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        ASSERT_TRUE(viewer.projectSaveAs(project, false));
+        ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        auto& scene = viewer.getScene();
+        const auto nodes = scene.getNodes();
+        const auto found = std::ranges::find_if(nodes, [](const auto* node) { return node && node->camera; });
+        ASSERT_NE(found, nodes.end());
+        const auto* node = *found;
+        const auto [width, height, channels] = core::probe_image_info(node->camera->image_path());
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(
+            std::vector<std::uint8_t>(width * height, 255), width, height, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(node->uuid, node->camera->image_path(), png, width, height));
+        const auto asset = node->camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        auto before = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(before);
+        EXPECT_EQ(before->find_dataset_source(*asset), nullptr);
+        viewer.getTrainer()->set_trainer_project_save_policy(
+            {.on_completion = true, .on_stop_or_error = false, .at_step_boundaries = false});
+        ASSERT_TRUE(viewer.startTraining());
+        ASSERT_TRUE(wait([&] {
+            return viewer.getTrainerManager()->isFinished() && !viewer.getTrainerManager()->isCompletionPending();
+        }));
+        const auto undo_count = op::undoHistory().undoCount();
+        const auto undo = op::undoHistory().undo();
+        EXPECT_FALSE(undo.success);
+        EXPECT_NE(undo.error.find(LOC("image_preview.sam_reset_training")), std::string::npos);
+        EXPECT_EQ(op::undoHistory().undoCount(), undo_count);
+        auto saved = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(saved->checkpoint_uuids().empty());
+        const auto* payload = saved->find_dataset_source(*asset);
+        ASSERT_NE(payload, nullptr);
+        ASSERT_EQ(payload->size(), png->size());
+        std::vector<std::byte> restored_png(png->size());
+        ASSERT_TRUE(payload->read_at(0, restored_png));
+        EXPECT_EQ(restored_png, *png);
+        auto mask = saved->resolve_camera_mask(*asset);
+        ASSERT_TRUE(mask) << lfs::format_for_developer(mask.error());
+        EXPECT_TRUE(core::native_fs::is_regular_file(mask->path));
+        const auto restored = saved->scene_graph().nodes();
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(std::ranges::any_of(*restored, [&](const auto& item) {
+            return item.camera && item.camera->mask_asset_uuid == asset;
+        }));
+    }
+
     TEST_F(CameraMaskApplyTest, DeletedCameraMaskIsPrunedButRetainedBySharedUndo) {
         if (!cuda_device_available())
             GTEST_SKIP() << "CUDA device unavailable";

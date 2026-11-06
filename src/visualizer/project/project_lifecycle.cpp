@@ -1762,6 +1762,24 @@ namespace lfs::vis::project {
                             minted.error()));
                 }
             }
+            decltype(lfs::training::ProjectSnapshotDocumentContext::camera_mask_sources) mask_sources;
+            std::unordered_set<lfs::core::Uuid> mask_assets;
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (!node || !node->camera || !node->camera->mask_asset_uuid())
+                    continue;
+                const auto asset = *node->camera->mask_asset_uuid();
+                if (!mask_assets.insert(asset).second)
+                    continue;
+                const auto* source = document.find_dataset_source(asset);
+                if (!source)
+                    return fail<lfs::training::ProjectSnapshotDocumentContext>(
+                        lfs::ErrorCode::DataLoss, "A saved camera mask is missing.",
+                        "Training snapshot camera mask has no DSRC payload", "camera.mask");
+                auto shared = source->share();
+                if (!shared)
+                    return std::move(shared).error();
+                mask_sources.emplace_back(asset, std::make_shared<const lfs::io::project::LazyChunkValue>(std::move(*shared)));
+            }
             return lfs::training::
                 ProjectSnapshotDocumentContext{
                     .project_uuid =
@@ -1797,6 +1815,7 @@ namespace lfs::vis::project {
                     .writer_lock_lease =
                         std::move(
                             writer_lock_lease),
+                    .camera_mask_sources = std::move(mask_sources),
                 };
         }
 
@@ -6411,8 +6430,10 @@ namespace lfs::vis::project {
                 auto* trainer = viewer_.getTrainerManager();
                 if (project_write_job_)
                     throw std::runtime_error(LOC("project_cleanup.wait"));
+                if (trainer && trainer->getTrainer() && trainer->getTrainer()->isInitialized())
+                    throw std::runtime_error(LOC("image_preview.sam_reset_training"));
                 if (project_open_job_ || viewer_.isTrainingStartPending() ||
-                    (trainer && (!trainer->isDatasetEditable() || (trainer->getTrainer() && trainer->getTrainer()->isInitialized()))))
+                    (trainer && !trainer->isDatasetEditable()))
                     throw std::runtime_error(LOC("image_preview.sam_unavailable"));
                 const auto document = document_;
                 if (!document || !manager || (document != origin && document->project_uuid() != origin->project_uuid()))

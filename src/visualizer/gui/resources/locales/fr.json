@@ -2081,6 +2081,7 @@
     "sam_invalid_point": "Les coordonnées des points doivent être comprises entre 0 et 1, avec une étiquette 0 ou 1.",
     "sam_invalid_box": "Les limites du cadre doivent être comprises entre 0 et 1, avec une largeur et une hauteur positives.",
     "sam_unavailable": "Arrêtez l’entraînement et attendez la fin des importations ou exportations vidéo en cours avant d’utiliser SAM.",
+    "sam_reset_training": "Réinitialisez l’entraînement avant de modifier les masques des images.",
     "sam_training_blocked": "Fermez l’aperçu SAM avant de démarrer l’entraînement.",
     "source_changed": "L’image a changé. Actualisez et prélevez à nouveau la couleur.",
     "scene_changed": "La scène a changé. Prélevez à nouveau la couleur.",

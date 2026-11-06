@@ -4055,13 +4055,23 @@ namespace lfs::python {
                 if (!callback || callback.is_none())
                     return;
                 g_open_camera_preview_handler_id = lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
-                    nb::gil_scoped_acquire guard;
-                    if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
-                        try {
-                            g_open_camera_preview_callback(e.cam_id);
-                        } catch (const std::exception& ex) {
-                            LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                    const auto open = [cam_id = e.cam_id] {
+                        if (!lfs::python::can_acquire_gil())
+                            return;
+                        nb::gil_scoped_acquire guard;
+                        if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                            try {
+                                g_open_camera_preview_callback(cam_id);
+                            } catch (const std::exception& ex) {
+                                LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                            }
                         }
+                    };
+                    if (lfs::python::on_graphics_thread()) {
+                        open();
+                    } else {
+                        lfs::python::schedule_graphics_callback(open);
+                        lfs::python::request_redraw();
                     }
                 });
             },

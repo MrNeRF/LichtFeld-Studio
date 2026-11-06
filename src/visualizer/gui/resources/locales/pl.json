@@ -2081,6 +2081,7 @@
     "sam_invalid_point": "Współrzędne punktów muszą mieścić się między 0 a 1, a etykieta musi mieć wartość 0 lub 1.",
     "sam_invalid_box": "Granice prostokąta muszą mieścić się między 0 a 1, a szerokość i wysokość muszą być dodatnie.",
     "sam_unavailable": "Zatrzymaj trening i poczekaj na zakończenie aktywnych importów lub eksportów wideo przed użyciem SAM.",
+    "sam_reset_training": "Zresetuj trening przed zmianą masek obrazów.",
     "sam_training_blocked": "Zamknij podgląd SAM przed rozpoczęciem treningu.",
     "source_changed": "Obraz został zmieniony. Odśwież go i ponownie pobierz kolor.",
     "scene_changed": "Scena została zmieniona. Ponownie pobierz kolor.",

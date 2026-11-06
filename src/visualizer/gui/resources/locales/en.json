@@ -2092,6 +2092,7 @@
     "sam_invalid_point": "Point coordinates must be between 0 and 1, with label 0 or 1.",
     "sam_invalid_box": "Box bounds must be between 0 and 1, with positive width and height.",
     "sam_unavailable": "Stop training and wait for active imports or video exports to finish before using SAM.",
+    "sam_reset_training": "Reset training before changing image masks.",
     "sam_training_blocked": "Close the SAM preview before starting training.",
     "source_changed": "Image changed. Refresh and sample the color again.",
     "scene_changed": "The scene changed. Sample the color again.",
