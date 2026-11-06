@@ -60,7 +60,6 @@
     <div id="sam-hint" class="sam-note"></div>
   </div>
   <div id="preview-message" role="status"></div>
-  <div id="mask-legend" class="sam-note hidden" role="status"></div>
 
   <div id="main-area">
     <div id="filmstrip">
@@ -122,7 +121,6 @@
           <button type="button" class="btn" id="sam-show"></button>
         </div>
         <div id="sam-quality" class="sam-note"></div>
-        <div id="sam-status" role="status"></div>
       </div>
       <div id="metadata-info">
       <div class="sidebar-header-ip">
@@ -193,12 +191,14 @@
           <button type="button" class="btn btn--primary" id="sam-apply"></button>
           <button type="button" class="btn" id="sam-exclude"></button>
         </div>
+        <div id="sam-status" role="status"></div>
       </div>
     </div>
   </div>
 
   <div id="status-bar">
     <span class="status-item" id="st-zoom"></span>
+    <div id="mask-legend" class="sam-note hidden" role="status"></div>
     <span class="status-position" id="st-position"></span>
   </div>
 

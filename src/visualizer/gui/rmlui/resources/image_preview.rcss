@@ -188,7 +188,16 @@
 #sam-apply-controls.hidden { display: none; }
 #sam-apply-controls { padding: 10dp; flex-shrink: 0; }
 #sam-controls .hidden { display: none; }
-#mask-legend { margin: 0; padding: 4dp 10dp; flex-shrink: 0; }
+#mask-legend {
+    flex: 1;
+    min-width: 0;
+    height: 18dp;
+    line-height: 18dp;
+    margin: 0 16dp 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 #mask-legend.hidden { display: none; }
 #sam-selection { width: 100%; box-sizing: border-box; height: 28dp; }
 .sam-tool-row {
@@ -208,7 +217,10 @@
     padding: 0dp 8dp;
 }
 .sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
-#sam-selection, #sam-status { font-size: 12dp; margin: 6dp 0; }
+#sam-selection { font-size: 12dp; margin: 6dp 0; }
+#sam-step-hint { height: 32dp; line-height: 16dp; overflow-y: auto; }
+#sam-quality { height: 18dp; line-height: 18dp; }
+#sam-status { height: 48dp; line-height: 16dp; font-size: 12dp; overflow-y: auto; }
 #sidebar.sam-sidebar { width: 260dp; display: flex; flex-direction: column; overflow: hidden; }
 .sam-sidebar #sam-controls { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .sam-sidebar #metadata-info { flex: 1 1 auto; min-height: 0; overflow-y: auto; }

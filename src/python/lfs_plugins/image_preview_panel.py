@@ -1754,7 +1754,6 @@ class ImagePreviewPanel(Panel):
         refine = doc.get_element_by_id("sam-refine")
         if refine:
             refine.set_text(lf.ui.tr("image_preview.sam_refine"))
-            refine.set_attribute("class", "btn" if editor.can_refine else "btn hidden")
         for element_id, key in (("sam-positive", "positive_hint"), ("sam-negative", "negative_hint"),
                                 ("sam-box", "box_hint"), ("sam-pan", "pan_hint"),
                                 ("sam-generate", "generate_hint"), ("sam-refine", "refine_hint"),
@@ -1789,11 +1788,15 @@ class ImagePreviewPanel(Panel):
         has_controls = bool(editor.draft and (editor.draft.points or editor.draft.box))
         status = ("" if phase == "idle" and not has_controls else
                   lf.ui.tr(_sam_key("generate_hint" if phase == "idle" else phase)))
-        _set_text(doc, "sam-status", status + (": " + editor.error if editor.error else ""))
+        status += ": " + editor.error if editor.error else ""
+        _set_text(doc, "sam-status", status)
+        status_element = doc.get_element_by_id("sam-status")
+        if status_element:
+            status_element.set_attribute("title", status)
         ready = bool(editor.draft and (editor.draft.points or editor.draft.box) and self._preview_state == "ready")
         busy = editor.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
         self._set_disabled(doc.get_element_by_id("sam-generate"), not ready or busy)
-        self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy)
+        self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy or not editor.can_refine)
         self._set_disabled(doc.get_element_by_id("sam-cancel"), not self._sam_session_active or editor.phase == "closing")
         self._set_disabled(doc.get_element_by_id("sam-clear"), not bool(editor.draft and (editor.draft.points or editor.draft.box)))
         self._set_disabled(doc.get_element_by_id("sam-remove"), editor.selected is None)
@@ -1826,7 +1829,9 @@ class ImagePreviewPanel(Panel):
             legend.set_attribute("class", "sam-note" if proposal or applied else "sam-note hidden")
             key = ("image_preview.sam_proposal_legend" if proposal else
                    "image_preview.mask_excluded_legend" if self._mask_inverted else "image_preview.mask_kept_legend")
-            legend.set_text(lf.ui.tr(key))
+            description = lf.ui.tr(key)
+            legend.set_text(description)
+            legend.set_attribute("title", description)
         self._update_sam_geometry(doc)
 
     def _update_sam_selection(self, doc):
