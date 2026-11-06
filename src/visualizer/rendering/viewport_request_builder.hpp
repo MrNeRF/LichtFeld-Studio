@@ -35,6 +35,9 @@ namespace lfs::vis {
 
     [[nodiscard]] LFS_VIS_API lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms);
+    // The request points at model_transforms; a temporary would dangle.
+    lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
+        const FrameContext&, glm::ivec2, std::vector<glm::mat4>&&) = delete;
 
     // Point renderer request for `frame`: camera, filters, selection and depth
     // view. The caller supplies the points, revisions and deleted mask; the
