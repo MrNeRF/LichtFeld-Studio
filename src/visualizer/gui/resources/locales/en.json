@@ -2238,6 +2238,8 @@
     "set": "Set",
     "set_start": "Set start to current position",
     "set_end": "Set end to current position",
+    "remove_segment": "Remove this segment",
+    "timeline_hint": "Drag an edge to trim; double-click to split a segment or join two touching ones",
     "reset": "Reset",
     "estimated_frames": "(~{} frames)",
     "input_video": "Input Video",

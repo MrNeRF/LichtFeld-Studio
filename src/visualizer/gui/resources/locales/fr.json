@@ -2227,6 +2227,8 @@
     "set": "Définir",
     "set_start": "Définir le début à la position actuelle",
     "set_end": "Définir la fin à la position actuelle",
+    "remove_segment": "Retirer ce segment",
+    "timeline_hint": "Faites glisser un bord pour rogner ; double-cliquez pour scinder un segment ou réunir deux segments contigus",
     "reset": "Réinitialiser",
     "estimated_frames": "(~{} images)",
     "input_video": "Vidéo source",

@@ -2227,6 +2227,8 @@
     "set": "设置",
     "set_start": "将开始设为当前位置",
     "set_end": "将结束设为当前位置",
+    "remove_segment": "移除此片段",
+    "timeline_hint": "拖动边缘以修剪，双击可拆分片段或合并两个相邻片段",
     "reset": "重置",
     "estimated_frames": "(~{} 帧)",
     "input_video": "输入视频",

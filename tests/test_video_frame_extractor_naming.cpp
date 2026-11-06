@@ -37,6 +37,7 @@ extern "C" {
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -387,8 +388,7 @@ namespace lfs::gui {
                                       const int rotation, const double duration,
                                       const double source_fps) {
             auto& item = dialog.batch_items_.at(index);
-            item.start_time = start_time;
-            item.end_time = end_time;
+            item.segments = {{static_cast<float>(start_time), static_cast<float>(end_time)}};
             item.end_time_is_auto = false;
             item.rotation = rotation;
             item.duration = duration;
@@ -433,8 +433,8 @@ namespace lfs::gui {
             return {
                 {"video", dialog.video_path_.string()},
                 {"output", dialog.output_dir_.string()},
-                {"start", dialog.trim_start_},
-                {"end", dialog.trim_end_},
+                {"start", dialog.segments_.front().start},
+                {"end", dialog.segments_.back().end},
                 {"auto_end", dialog.trim_end_is_auto_},
                 {"duration", dialog.player_->duration()},
                 {"player_open", dialog.player_->isOpen()},
@@ -471,7 +471,23 @@ namespace lfs::gui {
             }
             return true;
         }
-        static double end(const VideoExtractorDialog& dialog) { return dialog.trim_end_; }
+        static double end(const VideoExtractorDialog& dialog) { return dialog.segments_.back().end; }
+        static std::vector<io::VideoFrameExtractor::Segment> segments(const VideoExtractorDialog& dialog) {
+            return dialog.segments_;
+        }
+        static float timelineX(const VideoExtractorDialog& dialog, const double time) {
+            auto* const timeline = dialog.timeline_el_;
+            return timeline->GetAbsoluteLeft() + static_cast<float>(time / dialog.player_->duration()) *
+                                                     timeline->GetBox().GetSize(Rml::BoxArea::Border).x;
+        }
+        static void play(VideoExtractorDialog& dialog) {
+            if (!dialog.player_->isPlaying())
+                dialog.player_->togglePlayPause();
+        }
+        static bool playing(const VideoExtractorDialog& dialog) { return dialog.player_->isPlaying(); }
+        static double now(const VideoExtractorDialog& dialog) { return dialog.player_->currentTime(); }
+        static void skipCut(VideoExtractorDialog& dialog) { dialog.skipCutWhilePlaying(); }
+        static int estimated(const VideoExtractorDialog& dialog) { return dialog.calculateEstimatedFrames(); }
 
         static void timeline(VideoExtractorDialog& dialog) { dialog.syncTimeline(); }
         static void click(VideoExtractorDialog& dialog, const std::string& id) { dialog.handleClick(id); }
@@ -576,6 +592,54 @@ namespace {
             input->DispatchEvent(Rml::EventId::Change, {});
             Access::sync(*dialog);
             context->Update();
+        }
+        // Mouse input on the timeline goes through the context as a user's does, so RmlUi makes the double clicks.
+        void moveOverTimeline(const double time) {
+            auto* const timeline = document->GetElementById("timeline");
+            context->ProcessMouseMove(static_cast<int>(std::lround(Access::timelineX(*dialog, time))),
+                                      static_cast<int>(timeline->GetAbsoluteTop() +
+                                                       timeline->GetBox().GetSize(Rml::BoxArea::Border).y / 2),
+                                      0);
+        }
+        void settle() {
+            Access::timeline(*dialog);
+            context->Update();
+        }
+        void pressTimeline(const double time) {
+            moveOverTimeline(time);
+            context->ProcessMouseButtonDown(0, 0);
+            context->ProcessMouseButtonUp(0, 0);
+            settle();
+        }
+        void doubleClickTimeline(const double time) {
+            pressTimeline(time);
+            pressTimeline(time);
+        }
+        void dragTimeline(const double from, const double to) {
+            moveOverTimeline(from);
+            context->ProcessMouseButtonDown(0, 0);
+            moveOverTimeline(to);
+            context->ProcessMouseButtonUp(0, 0);
+            settle();
+        }
+        // Presses the x of the segment under `time`, which shows while the pointer is over that segment.
+        void removeSegmentUnder(const double time) {
+            moveOverTimeline(time);
+            settle();
+            Rml::ElementList marks;
+            document->GetElementById("timeline-segments")->GetElementsByClassName(marks, "timeline-segment-remove");
+            const auto shown = std::ranges::find_if(marks, [](const Rml::Element* mark) { return mark->IsVisible(); });
+            ASSERT_NE(shown, marks.end());
+            const auto size = (*shown)->GetBox().GetSize(Rml::BoxArea::Border);
+            context->ProcessMouseMove(static_cast<int>((*shown)->GetAbsoluteLeft() + size.x / 2),
+                                      static_cast<int>((*shown)->GetAbsoluteTop() + size.y / 2), 0);
+            context->ProcessMouseButtonDown(0, 0);
+            context->ProcessMouseButtonUp(0, 0);
+            settle();
+        }
+        [[nodiscard]] double timelinePixel() const {
+            return Access::end(*dialog) /
+                   document->GetElementById("timeline")->GetBox().GetSize(Rml::BoxArea::Border).x;
         }
         FpsTestRenderInterface renderer;
         Rml::Context* context = nullptr;
@@ -760,9 +824,9 @@ namespace {
                     document->GetElementById(id)->DispatchEvent(Rml::EventId::Blur, {});
                 Access::timeline(*dialog);
                 const auto request = Access::request(*dialog, output, interval, false);
-                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
+                EXPECT_DOUBLE_EQ(request.segments.front().start, 0.0);
                 EXPECT_DOUBLE_EQ(Access::end(*dialog), expected_end);
-                EXPECT_DOUBLE_EQ(request.end_time, interval ? -1.0 : expected_end);
+                EXPECT_DOUBLE_EQ(request.segments.back().end, interval ? -1.0 : expected_end);
             }
         }
     }
@@ -791,10 +855,105 @@ namespace {
             }
             for (const bool interval : {false, true}) {
                 const auto request = Access::request(*dialog, output, interval, false);
-                EXPECT_DOUBLE_EQ(request.start_time, static_cast<double>(start));
-                EXPECT_DOUBLE_EQ(request.end_time, static_cast<double>(end));
+                EXPECT_DOUBLE_EQ(request.segments.front().start, static_cast<double>(start));
+                EXPECT_DOUBLE_EQ(request.segments.back().end, static_cast<double>(end));
             }
         }
+    }
+
+    // Catches the timeline gestures not reaching the extraction through RmlUi's own input: a double click splits a
+    // segment, a segment's x removes it, a double click on the seam of two touching segments joins them again, and the
+    // request carries the stretches kept.
+    TEST_F(VideoExtractorFpsInputTest, TimelineSplitsRemovesAndJoinsSegments) {
+        TempDir temp("segments_gestures");
+        const auto source = temp.path / "source.mp4";
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_1.png").put('x');
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 185, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        settle();
+        const double pixel = timelinePixel(), end = Access::end(*dialog);
+
+        doubleClickTimeline(2.0);
+        doubleClickTimeline(4.0);
+        auto kept = Access::segments(*dialog);
+        ASSERT_EQ(kept.size(), 3u);
+        EXPECT_NEAR(kept[0].end, 2.0, 2 * pixel);
+        EXPECT_NEAR(kept[1].end, 4.0, 2 * pixel);
+        EXPECT_EQ(kept[1].start, kept[0].end);
+        EXPECT_EQ(kept[2].start, kept[1].end);
+
+        removeSegmentUnder(3.0);
+        kept = Access::segments(*dialog);
+        ASSERT_EQ(kept.size(), 2u);
+        const auto request = Access::request(*dialog, output, false, false);
+        ASSERT_EQ(request.segments.size(), 2u);
+        EXPECT_EQ(request.segments[0].start, 0.0);
+        EXPECT_EQ(request.segments[0].end, kept[0].end);
+        EXPECT_EQ(request.segments[1].start, kept[1].start);
+        EXPECT_EQ(request.segments[1].end, end);
+        Access::cancelOverwrite(*dialog);
+        settle();
+
+        doubleClickTimeline(5.0);
+        kept = Access::segments(*dialog);
+        ASSERT_EQ(kept.size(), 3u);
+        doubleClickTimeline(kept[1].end);
+        kept = Access::segments(*dialog);
+        ASSERT_EQ(kept.size(), 2u);
+        EXPECT_NEAR(kept[1].start, 4.0, 2 * pixel);
+        EXPECT_EQ(kept[1].end, end);
+    }
+
+    // Catches a dragged edge passing its neighbour or missing the playhead: dragged through RmlUi, an edge catches the
+    // playhead nearby and stops at the next segment, and the touching segments it leaves extract as one stretch.
+    TEST_F(VideoExtractorFpsInputTest, DraggedEdgesCatchThePlayheadAndStopAtTheNextSegment) {
+        TempDir temp("segments_drag");
+        const auto source = temp.path / "source.mp4";
+        const auto output = temp.path / "frames";
+        std::filesystem::create_directories(output);
+        std::ofstream(output / "frame_1.png").put('x');
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 185, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        settle();
+        const double pixel = timelinePixel();
+        doubleClickTimeline(2.0);
+        doubleClickTimeline(4.0);
+        removeSegmentUnder(3.0);
+        pressTimeline(3.0);
+        const double playhead = Access::now(*dialog);
+        ASSERT_NEAR(playhead, 3.0, 2 * pixel + 1.0 / 30.0);
+
+        dragTimeline(Access::segments(*dialog)[0].end, playhead - 3 * pixel);
+        auto kept = Access::segments(*dialog);
+        EXPECT_EQ(kept[0].end, playhead);
+        dragTimeline(kept[1].start, 1.0);
+        kept = Access::segments(*dialog);
+        EXPECT_EQ(kept[1].start, kept[0].end);
+        EXPECT_EQ(VideoFrameExtractor::joinTouching(Access::request(*dialog, output, false, false).segments).size(),
+                  1u);
+    }
+
+    // Catches the frame estimate or the preview counting a cut stretch: at one frame a second the two kept segments of
+    // 0 to 2.5 and 4.5 to 6.2 seconds estimate five frames, and playback reaching the cut plays on from the next one.
+    TEST_F(VideoExtractorFpsInputTest, EstimateAndPlaybackSkipTheCutStretch) {
+        TempDir temp("segments_preview");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 185, 0, 30, 1));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        settle();
+        doubleClickTimeline(2.5);
+        doubleClickTimeline(4.5);
+        removeSegmentUnder(3.5);
+        enter("1");
+        EXPECT_EQ(Access::estimated(*dialog), 5);
+
+        pressTimeline(3.5);
+        Access::play(*dialog);
+        Access::skipCut(*dialog);
+        EXPECT_TRUE(Access::playing(*dialog));
+        EXPECT_NEAR(Access::now(*dialog), Access::segments(*dialog)[1].start, 1.0 / 30.0);
     }
 
     TEST_F(VideoExtractorFpsInputTest, ShortVideoTrimButtonsKeepAValidRange) {
@@ -813,8 +972,8 @@ namespace {
                 Access::click(*dialog, id);
                 Access::timeline(*dialog);
                 const auto request = Access::request(*dialog, output, false, false);
-                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
-                EXPECT_DOUBLE_EQ(request.end_time, duration);
+                EXPECT_DOUBLE_EQ(request.segments.front().start, 0.0);
+                EXPECT_DOUBLE_EQ(request.segments.back().end, duration);
             }
         }
     }
@@ -844,8 +1003,8 @@ namespace {
                 }
                 Access::timeline(*dialog);
                 const auto request = Access::request(*dialog, output, false, false);
-                EXPECT_DOUBLE_EQ(request.start_time, 0.0);
-                EXPECT_DOUBLE_EQ(request.end_time, duration);
+                EXPECT_DOUBLE_EQ(request.segments.front().start, 0.0);
+                EXPECT_DOUBLE_EQ(request.segments.back().end, duration);
             }
         }
     }
@@ -877,7 +1036,7 @@ TEST(VideoExtractorDialogTrim, FpsFullRangeKeepsThePreviewEnd) {
     ASSERT_TRUE(dialog.openVideoPath(video_path));
     const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
     const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, false, false);
-    EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+    EXPECT_DOUBLE_EQ(request.segments.back().end, expected_end);
 }
 
 TEST(VideoExtractorDialogTrim, ExplicitEndAtPreviewDurationStaysBounded) {
@@ -891,7 +1050,7 @@ TEST(VideoExtractorDialogTrim, ExplicitEndAtPreviewDurationStaysBounded) {
     ASSERT_TRUE(dialog.openVideoPath(video_path));
     const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
     const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, true, true);
-    EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+    EXPECT_DOUBLE_EQ(request.segments.back().end, expected_end);
 }
 
 TEST(VideoExtractorDialogTrim, AutomaticIntervalAndResetStillReadToEnd) {
@@ -904,11 +1063,11 @@ TEST(VideoExtractorDialogTrim, AutomaticIntervalAndResetStillReadToEnd) {
     lfs::gui::VideoExtractorDialog dialog;
     ASSERT_TRUE(dialog.openVideoPath(video_path));
     using Access = lfs::gui::VideoExtractorDialogTestAccess;
-    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).end_time, -1.0);
-    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, true).end_time, Access::end(dialog));
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).segments.back().end, -1.0);
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, true).segments.back().end, Access::end(dialog));
     Access::reset(dialog);
-    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).end_time, -1.0);
-    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, false, false).end_time, Access::end(dialog));
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, true, false).segments.back().end, -1.0);
+    EXPECT_DOUBLE_EQ(Access::request(dialog, output_dir, false, false).segments.back().end, Access::end(dialog));
 }
 
 TEST(VideoExtractorDialogTrim, SharpnessWindowKeepsThePreviewEnd) {
@@ -938,13 +1097,92 @@ TEST(VideoExtractorDialogTrim, SharpnessWindowKeepsThePreviewEnd) {
     lfs::gui::VideoExtractorDialog dialog;
     ASSERT_TRUE(dialog.openVideoPath(video_path));
     lfs::gui::VideoExtractorDialogTestAccess::syncEndInput(dialog, end_input.get());
-    EXPECT_DOUBLE_EQ(lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, true, false).end_time, -1.0);
+    EXPECT_DOUBLE_EQ(lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, true, false).segments.back().end, -1.0);
     lfs::gui::VideoExtractorDialogTestAccess::sharpnessWindow(dialog, toggle.get(), mode);
     const double expected_end = lfs::gui::VideoExtractorDialogTestAccess::end(dialog);
     for (const bool interval : {false, true}) {
         const auto request = lfs::gui::VideoExtractorDialogTestAccess::request(dialog, output_dir, interval, false);
         ASSERT_TRUE(request.sharpness_enabled && request.sharpness_window_mode);
-        EXPECT_DOUBLE_EQ(request.end_time, expected_end);
+        EXPECT_DOUBLE_EQ(request.segments.back().end, expected_end);
+    }
+}
+
+// Catches cut stretches being decoded into frames, or a metadata file written per segment: two kept segments of a ten
+// second clip yield frames inside them only, named after their source frames, in one metadata file listing both.
+TEST(VideoFrameExtractorSegments, ExtractsOnlyTheKeptStretches) {
+    TempDir temp("segments_extract");
+    const auto source = temp.path / "source.mp4";
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 100, 0, 10, 1));
+    auto params = extractionParams(source, temp.path / "frames");
+    params.end_time = -1.0;
+    params.segments = {{1.0, 2.0}, {6.0, 7.5}};
+    std::filesystem::create_directories(params.output_dir);
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+
+    const auto metadata = readMetadata(params.output_dir);
+    ASSERT_EQ(metadata["segments"].size(), 2u);
+    std::size_t first = 0, second = 0;
+    for (const auto& frame : metadata["frames"]) {
+        const double time = frame["timestamp"];
+        first += time >= 1.0 && time <= 2.0;
+        second += time >= 6.0 && time <= 7.5;
+        EXPECT_TRUE((time >= 1.0 && time <= 2.0) || (time >= 6.0 && time <= 7.5)) << time;
+        EXPECT_TRUE(std::filesystem::is_regular_file(params.output_dir / frame["file"].get<std::string>()));
+    }
+    EXPECT_NEAR(static_cast<double>(first), 10.0, 1.0);
+    EXPECT_NEAR(static_cast<double>(second), 15.0, 1.0);
+    EXPECT_EQ(countPngFiles(params.output_dir), metadata["frames"].size());
+    EXPECT_EQ(metadata["performance"]["written_frames"].get<std::size_t>(), metadata["frames"].size());
+}
+
+// Catches touching segments, as a split leaves them, extracted apart: at three frames a second the sampling grid would
+// restart at their seam, 2.05 s, which lies off the grid, and pick other frames than the one stretch they make up.
+// They extract exactly as that stretch.
+TEST(VideoFrameExtractorSegments, TouchingSegmentsExtractAsOneStretch) {
+    TempDir temp("segments_touching");
+    const auto source = temp.path / "source.mp4";
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 100, 0, 10, 1));
+    const auto extracted = [&](const char* name, std::vector<VideoFrameExtractor::Segment> segments) {
+        auto params = extractionParams(source, temp.path / name);
+        params.mode = ExtractionMode::FPS;
+        params.fps = 3.0;
+        params.segments = std::move(segments);
+        std::filesystem::create_directories(params.output_dir);
+        VideoFrameExtractor extractor;
+        std::string error;
+        EXPECT_TRUE(extractor.extract(params, error)) << error;
+        const auto metadata = readMetadata(params.output_dir);
+        std::vector<std::string> files;
+        for (const auto& frame : metadata.at("frames"))
+            files.push_back(frame.at("file"));
+        return files;
+    };
+
+    const auto split = extracted("split", {{1.0, 2.05}, {2.05, 3.1}});
+
+    ASSERT_FALSE(split.empty());
+    EXPECT_EQ(split, extracted("whole", {{1.0, 3.1}}));
+    EXPECT_EQ(std::set<std::string>(split.begin(), split.end()).size(), split.size());
+}
+
+// Catches overlapping or unordered segments reaching the decoder, which would write a stretch twice.
+TEST(VideoFrameExtractorSegments, RejectsSegmentsOutOfOrder) {
+    TempDir temp("segments_order");
+    const auto source = temp.path / "source.mp4";
+    ASSERT_TRUE(writeProbedVideoWithRate(source, "mp4", AV_CODEC_ID_MPEG4, 100, 0, 10, 1));
+    auto params = extractionParams(source, temp.path / "frames");
+    std::filesystem::create_directories(params.output_dir);
+    for (const auto& segments : {std::vector<VideoFrameExtractor::Segment>{{2.0, 4.0}, {3.0, 5.0}},
+                                 std::vector<VideoFrameExtractor::Segment>{{5.0, 6.0}, {1.0, 2.0}},
+                                 std::vector<VideoFrameExtractor::Segment>{{1.0, -1.0}, {5.0, 6.0}}}) {
+        params.segments = segments;
+        VideoFrameExtractor extractor;
+        std::string error;
+        EXPECT_FALSE(extractor.extract(params, error));
+        EXPECT_NE(error.find("time order"), std::string::npos) << error;
+        EXPECT_EQ(countPngFiles(params.output_dir), 0u);
     }
 }
 
@@ -1814,11 +2052,11 @@ namespace {
         ASSERT_EQ(params.size(), 2u);
         EXPECT_EQ(params[0].output_dir, root / "clip");
         EXPECT_EQ(params[1].output_dir, root / "clip_2");
-        EXPECT_DOUBLE_EQ(params[0].start_time, 1.25);
-        EXPECT_DOUBLE_EQ(params[0].end_time, 4.5);
+        EXPECT_DOUBLE_EQ(params[0].segments.front().start, 1.25);
+        EXPECT_DOUBLE_EQ(params[0].segments.back().end, 4.5);
         EXPECT_EQ(params[0].rotation, 90);
-        EXPECT_DOUBLE_EQ(params[1].start_time, 0.5);
-        EXPECT_DOUBLE_EQ(params[1].end_time, 3.0);
+        EXPECT_DOUBLE_EQ(params[1].segments.front().start, 0.5);
+        EXPECT_DOUBLE_EQ(params[1].segments.back().end, 3.0);
         EXPECT_EQ(params[1].rotation, 270);
     }
 
@@ -1840,7 +2078,7 @@ namespace {
         ASSERT_EQ(params.size(), 2u);
         EXPECT_EQ(params[1].rotation, 90);
         EXPECT_DOUBLE_EQ(params[1].fps, 24.0);
-        EXPECT_GT(params[1].end_time, 0.0);
+        EXPECT_GT(params[1].segments.back().end, 0.0);
     }
 
     TEST_F(VideoExtractorNamingUiTest, BatchProbesPublishOnlyAfterTheWorkerCompletes) {

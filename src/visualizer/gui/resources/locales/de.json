@@ -2227,6 +2227,8 @@
     "set": "Setzen",
     "set_start": "Start auf aktuelle Position setzen",
     "set_end": "Ende auf aktuelle Position setzen",
+    "remove_segment": "Diesen Abschnitt entfernen",
+    "timeline_hint": "Kante ziehen zum Kürzen; Doppelklick teilt einen Abschnitt oder verbindet zwei angrenzende",
     "reset": "Zurücksetzen",
     "estimated_frames": "(~{} Frames)",
     "input_video": "Eingabevideo",

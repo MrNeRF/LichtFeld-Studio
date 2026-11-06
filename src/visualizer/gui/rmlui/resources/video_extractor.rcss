@@ -182,14 +182,40 @@ body {
     opacity: 0.45;
 }
 
-#timeline-trim {
+#timeline-segments {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.timeline-segment {
     position: absolute;
     top: 0;
     bottom: 0;
-    background-color: rgba(137, 180, 250, 38);
+    border-width: 0 1dp;
+}
+
+.timeline-segment-remove {
+    display: none;
+    position: absolute;
+    top: 0;
+    right: 2dp;
+    width: 12dp;
+    height: 12dp;
+    line-height: 12dp;
+    font-size: 11dp;
+    text-align: center;
+    cursor: pointer;
+}
+
+.timeline-segment:hover .timeline-segment-remove {
+    display: block;
 }
 
 #timeline-progress {
+    pointer-events: none;
     position: absolute;
     left: 0;
     bottom: 0;
@@ -198,6 +224,7 @@ body {
 }
 
 #timeline-playhead {
+    pointer-events: none;
     position: absolute;
     top: 0;
     width: 2dp;
@@ -211,18 +238,20 @@ body {
     top: 0;
     width: 3dp;
     height: 20dp;
-    margin-left: -1dp;
 }
 
 .timeline-handle--start {
+    left: -1dp;
     background-color: #a6e3a1;
 }
 
 .timeline-handle--end {
+    right: -2dp;
     background-color: #f38ba8;
 }
 
 #timeline-markers {
+    pointer-events: none;
     position: absolute;
     left: 0;
     right: 0;

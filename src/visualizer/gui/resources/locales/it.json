@@ -2240,6 +2240,8 @@
     "set": "Imposta",
     "set_start": "Imposta inizio alla posizione attuale",
     "set_end": "Imposta fine alla posizione attuale",
+    "remove_segment": "Rimuovi questo segmento",
+    "timeline_hint": "Trascina un bordo per tagliare; doppio clic per dividere un segmento o unirne due adiacenti",
     "reset": "Reimposta",
     "estimated_frames": "(~{} fotogrammi)",
     "input_video": "Video di input",

@@ -2227,6 +2227,8 @@
     "set": "설정",
     "set_start": "시작을 현재 위치로 설정",
     "set_end": "끝을 현재 위치로 설정",
+    "remove_segment": "이 구간 제거",
+    "timeline_hint": "가장자리를 끌어 자르고, 두 번 클릭하면 구간을 나누거나 맞닿은 두 구간을 합칩니다",
     "reset": "초기화",
     "estimated_frames": "(~{} 프레임)",
     "input_video": "입력 동영상",

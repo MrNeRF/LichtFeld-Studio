@@ -2227,6 +2227,8 @@
     "set": "Instellen",
     "set_start": "Start instellen op huidige positie",
     "set_end": "Einde instellen op huidige positie",
+    "remove_segment": "Dit segment verwijderen",
+    "timeline_hint": "Sleep een rand om bij te snijden; dubbelklik om een segment te splitsen of twee aangrenzende samen te voegen",
     "reset": "Herstellen",
     "estimated_frames": "(~{} frames)",
     "input_video": "Invoervideo",

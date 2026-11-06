@@ -2227,6 +2227,8 @@
     "set": "Ustaw",
     "set_start": "Ustaw początek na bieżącą pozycję",
     "set_end": "Ustaw koniec na bieżącą pozycję",
+    "remove_segment": "Usuń ten fragment",
+    "timeline_hint": "Przeciągnij krawędź, aby przyciąć; dwukrotne kliknięcie dzieli fragment lub łączy dwa sąsiednie",
     "reset": "Resetuj",
     "estimated_frames": "(~{} klatek)",
     "input_video": "Wideo wejściowe",
