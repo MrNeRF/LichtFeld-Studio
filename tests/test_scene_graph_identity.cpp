@@ -5,6 +5,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
@@ -35,6 +36,91 @@
 using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::Tensor;
+
+TEST(SceneExternalPreview, OwnershipCannotBeRemovedByUserLocksOrGraphOperations) {
+    lfs::core::Scene scene;
+    const auto root_id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(root_id);
+    auto* root = scene.getNodeById(root_id);
+    ASSERT_NE(root, nullptr);
+    ASSERT_EQ(root->children.size(), 1);
+    const auto model_id = root->children.front();
+    auto* model = scene.getNodeById(model_id);
+    ASSERT_NE(model, nullptr);
+    EXPECT_TRUE(root->transient);
+    EXPECT_TRUE(model->transient);
+    EXPECT_TRUE(model->isExternalPreview());
+    root->locked = false;
+    model->locked = false;
+    scene.setNodeLocked(root->name, false);
+    EXPECT_TRUE(root->locked.get());
+    EXPECT_TRUE(scene.isNodeEffectivelyLocked(model_id));
+    auto transform = glm::mat4(1.0f);
+    transform[3][0] = 12.0f;
+    EXPECT_FALSE(scene.updateExternalPreview(uuid, nullptr, transform, {}).get());
+    EXPECT_EQ(model->local_transform.get(), transform);
+    model->local_transform = glm::mat4(1.0f);
+    scene.setNodeTransform(model_id, glm::mat4(1.0f));
+    EXPECT_EQ(model->local_transform.get(), transform);
+    EXPECT_FALSE(scene.renameNode(model_id, "Renamed"));
+    EXPECT_FALSE(scene.reparent(model_id, lfs::core::NULL_NODE));
+    const auto local = scene.addGroup("Local");
+    EXPECT_FALSE(scene.reparent(local, root_id));
+    EXPECT_EQ(scene.addGroup("Foreign child", root_id), lfs::core::NULL_NODE);
+    EXPECT_EQ(scene.addCropBox("Crop", model_id), lfs::core::NULL_NODE);
+    scene.setTrainingModelNode(model_id);
+    EXPECT_EQ(scene.getTrainingModelNodeId(), lfs::core::NULL_NODE);
+    scene.removeNodeById(root_id);
+    scene.removeNodeById(model_id);
+    EXPECT_NE(scene.getNodeByUuid(uuid), nullptr);
+    EXPECT_TRUE(scene.detachSplatModelsForRemoval(root_id).empty());
+    scene.setNodeVisibility(root_id, false);
+    EXPECT_FALSE(scene.isNodeEffectivelyVisible(model_id));
+    scene.removeExternalPreview(scene.getNodeUuid(local));
+    EXPECT_NE(scene.getNodeById(local), nullptr);
+    scene.removeExternalPreview(uuid);
+    EXPECT_EQ(scene.getNodeByUuid(uuid), nullptr);
+    EXPECT_FALSE(scene.hasExternalPreview());
+    EXPECT_NE(scene.getNodeById(local), nullptr);
+}
+
+TEST(SceneExternalPreview, SceneClearInvalidatesTheOldOwner) {
+    lfs::core::Scene scene;
+    const auto id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(id);
+    scene.clear();
+    const auto replacement = scene.addExternalPreview("Trainer", "Preview");
+    EXPECT_NE(scene.getNodeUuid(replacement), uuid);
+    scene.removeExternalPreview(uuid);
+    EXPECT_NE(scene.getNodeById(replacement), nullptr);
+}
+
+TEST(SceneExternalPreview, ViewerUpdatesInvalidateRenderingWithoutDirtyingTheDocument) {
+    lfs::core::Scene scene;
+    std::vector<bool> document_changes;
+    lfs::event::ScopedHandler handlers;
+    handlers.subscribe<lfs::core::events::state::SceneChanged>([&](const auto& event) {
+        EXPECT_NE(event.mutation_flags, 0u);
+        document_changes.push_back(event.document_changed);
+    });
+    const auto id = scene.addExternalPreview("Trainer", "Preview");
+    const auto uuid = scene.getNodeUuid(id);
+    scene.setNodeVisibility(id, false);
+    auto transform = glm::mat4(1.0f);
+    transform[3][0] = 2.0f;
+    (void)scene.updateExternalPreview(uuid, nullptr, transform, {});
+    scene.removeExternalPreview(uuid);
+    ASSERT_EQ(document_changes.size(), 4);
+    EXPECT_TRUE(std::ranges::none_of(document_changes, [](const bool value) { return value; }));
+    document_changes.clear();
+    {
+        lfs::core::Scene::Transaction mixed(scene);
+        scene.addExternalPreview("Trainer", "Preview");
+        scene.addGroup("Local edit");
+    }
+    ASSERT_EQ(document_changes.size(), 1);
+    EXPECT_TRUE(document_changes.front());
+}
 
 namespace {
 

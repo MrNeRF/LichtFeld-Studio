@@ -6267,6 +6267,9 @@ namespace lfs::python {
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
+            auto observer = nb::module_::import_("sys").attr("modules").attr("get")("lfs_plugins.external_training");
+            if (!observer.is_none())
+                observer.attr("shutdown")();
             PyPanelRegistry::instance().unregister_all();
             PyUIHookRegistry::instance().clear_all();
             PyMenuRegistry::instance().unregister_all();

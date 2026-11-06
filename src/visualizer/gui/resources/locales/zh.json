@@ -3789,5 +3789,22 @@
   "shader.untitled": "未命名着色器",
   "editor.documents": "Python 和着色器文档",
   "shader.restore_warning": "部分着色器状态无法恢复：\n{}",
-  "shader.publication_omitted": "发布时将省略用户着色器和自定义显现片段。发布的场景使用原始 splat。"
+  "shader.publication_omitted": "发布时将省略用户着色器和自定义显现片段。发布的场景使用原始 splat。",
+  "external_training.title": "外部训练",
+  "external_training.preview": "预览",
+  "external_training.cameras": "采集相机",
+  "external_training.read_only": "只读 · 导航与可见性",
+  "external_training.disconnected": "已断开 · 保留最后的预览",
+  "external_training.frame": "将预览居中显示",
+  "external_training.disconnect": "断开连接",
+  "external_training.remove": "移除预览",
+  "external_training.available": "可用训练进程",
+  "external_training.empty": "未找到正在运行的训练进程。",
+  "external_training.connect": "查看训练",
+  "external_training.refresh": "刷新列表",
+  "external_training.connect_hint": "查看从Blender启动或明确启用会话发布的训练进程。导航和可见性仅在本地生效；训练仍由原进程管理。",
+  "external_training.progress": "步数 {step} / {total}",
+  "external_training.snapshot": "预览：步数 {step} · {count}个高斯 · SH{degree}",
+  "external_training.waiting": "等待首次预览…",
+  "external_training.dataset_open": "查看外部训练进程前，请打开新场景或将已加载的数据集切换到编辑模式。"
 }

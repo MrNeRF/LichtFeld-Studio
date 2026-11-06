@@ -3789,5 +3789,22 @@
   "shader.untitled": "제목 없는 셰이더",
   "editor.documents": "Python 및 셰이더 문서",
   "shader.restore_warning": "일부 셰이더 상태를 복원하지 못했습니다:\n{}",
-  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다."
+  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다.",
+  "external_training.title": "외부 학습",
+  "external_training.preview": "미리보기",
+  "external_training.cameras": "촬영 카메라",
+  "external_training.read_only": "읽기 전용 · 탐색 및 표시 설정",
+  "external_training.disconnected": "연결 해제됨 · 마지막 미리보기 유지",
+  "external_training.frame": "미리보기 화면에 맞추기",
+  "external_training.disconnect": "연결 해제",
+  "external_training.remove": "미리보기 제거",
+  "external_training.available": "사용 가능한 트레이너",
+  "external_training.empty": "실행 중인 트레이너를 찾지 못했습니다.",
+  "external_training.connect": "학습 보기",
+  "external_training.refresh": "목록 새로 고침",
+  "external_training.connect_hint": "Blender에서 시작했거나 세션 게시를 명시적으로 활성화한 트레이너를 표시합니다. 탐색과 표시 설정은 로컬에만 적용되며 학습은 원래 프로세스에서 계속됩니다.",
+  "external_training.progress": "단계 {step} / {total}",
+  "external_training.snapshot": "미리보기: 단계 {step} · 가우시안 {count}개 · SH{degree}",
+  "external_training.waiting": "첫 미리보기를 기다리는 중…",
+  "external_training.dataset_open": "외부 트레이너를 보려면 새 장면을 열거나 불러온 데이터셋을 편집 모드로 전환하세요."
 }

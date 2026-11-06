@@ -2,11 +2,223 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Scene.add_splat input checks and scene values that exist before any dataset is loaded."""
 
+import time
+
 import pytest
 
-from test_api_camera_project_runtime import camera_runtime, _editor  # noqa: F401
+from test_api_camera_project_runtime import camera_runtime, _editor, _ui_editor  # noqa: F401
+from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+
+def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime, tmp_path, monkeypatch, request):
+    import numpy as np
+    from lichtfeld_sessions import geometry, transport
+    from test_training_sessions import arrays
+
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Independent trainer", "state": "training", "iterations": 100})
+    try:
+        snapshot = producer.publish(arrays(32), 7)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        output = _ui_editor(camera_runtime, '''
+import lfs_plugins.external_training_panel as panel
+from lfs_plugins.external_training import ExternalTraining
+import lichtfeld_sessions.transport as session_transport
+from _lfs_path_io import Path
+session_transport.registry_root = lambda: Path(TEST_REGISTRY)
+panel._current = ExternalTraining(RECORD)
+assert any(tab.id == panel.ExternalTrainingPanel.id for tab in lf.ui.get_main_panel_tabs())
+lf.ui.set_main_panel_active_tab(panel.ExternalTrainingPanel.id)
+print("attached")
+'''.replace("RECORD", repr(record)).replace("TEST_REGISTRY", repr(str(producer.root.parent))))
+        assert "attached" in output
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            output = _editor(camera_runtime, '''
+import lfs_plugins.external_training_panel as panel
+print("ready" if panel._current.shown else "pending", panel._current.error)
+''')
+            if output.startswith("ready"):
+                break
+            time.sleep(0.1)
+        assert output.startswith("ready"), output
+
+        # New calibration must install without requiring a new Gaussian generation.
+        pose = np.eye(4)
+        pose[:3, :3] = [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]
+        pose[:3, 3] = [1, 2, 3]
+        model_transform = np.eye(4)
+        model_transform[0, 3] = 4
+        value = {"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP,
+                 "model_to_data": model_transform.tolist(), "cameras": [{
+                     "name": "camera", "camera_to_data": pose.tolist(), "fx": 600, "fy": 610,
+                     "cx": 310, "cy": 235, "width": 640, "height": 480}]}
+        geometry.publish(producer, value)
+        revision = transport.read_json(producer.root / "session.json")["geometry"]["revision"]
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            output = _editor(camera_runtime, '''
+import lfs_plugins.external_training_panel as panel
+print("geometry-ready" if panel._current.geometry_revision == EXPECTED_REVISION else
+      (panel._current.geometry_revision, panel._current.error, panel._current.stop.is_set(),
+       panel._current.geometry_error))
+'''.replace("EXPECTED_REVISION", repr(revision)))
+            if output.startswith("geometry-ready"):
+                break
+            time.sleep(0.1)
+        assert output.startswith("geometry-ready"), output
+        output = _ui_editor(camera_runtime, '''
+import lichtfeld as lf, numpy as np
+import lfs_plugins.external_training_panel as panel
+from lfs_plugins.external_training import presentation_transform
+viewer = panel._current
+scene = lf.get_scene()
+root = scene.get_node_by_uuid(viewer.uuid)
+model = next(scene.get_node_by_id(i) for i in root.children if scene.get_node_by_id(i).type == lf.scene.NodeType.SPLAT)
+assert viewer.generation == SNAPSHOT_ID
+assert viewer.shown["iteration"] == 7
+assert model.gaussian_count == 32 and model.read_only and root.read_only
+assert model.splat_data() is None and scene.combined_model() is None
+expected = presentation_transform(GEOMETRY, np) @ np.asarray(GEOMETRY["model_to_data"])
+np.testing.assert_allclose(np.asarray(model.local_transform), expected, atol=1e-6)
+camera = next(node for node in scene.nodes if node.type == lf.scene.NodeType.CAMERA)
+assert camera.read_only and camera.camera_center_x == 310 and camera.camera_center_y == 235
+view = np.eye(4)
+view[:3, :3] = camera.camera_R.cpu().numpy()
+view[:3, 3] = camera.camera_T.cpu().numpy().reshape(3)
+expected_pose = presentation_transform(GEOMETRY, np) @ np.asarray(GEOMETRY["cameras"][0]["camera_to_data"])
+np.testing.assert_allclose(np.asarray(camera.world_transform) @ np.linalg.inv(view), expected_pose, atol=1e-6)
+returned = camera.camera_R
+returned[0, 0] = 123
+assert camera.camera_R.cpu().numpy()[0, 0] != 123  # No mutable alias to the live calibration.
+for node in (root, model, camera):
+    for prop, value in (("locked", False), ("name", "changed"), ("training_enabled", True)):
+        try:
+            node.set(prop, value)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError((prop, node.name))
+try:
+    scene.set_node_transient(root.name, False)
+except RuntimeError as error:
+    assert "External preview is transient" in str(error)
+else:
+    raise AssertionError("A streamed preview became persistent")
+print("verified")
+'''.replace("SNAPSHOT_ID", repr(snapshot["id"])).replace("GEOMETRY", repr(value)))
+        assert "verified" in output
+        _ui_editor(camera_runtime, '''
+camera_uuid, camera_uid = camera.uuid, camera.camera_uid
+camera.set("visible", False)
+''')
+        for camera_count in (2, 1):
+            geometry.publish(producer, {**value, "cameras": value["cameras"] * camera_count})
+            revision = transport.read_json(producer.root / "session.json")["geometry"]["revision"]
+            _editor(camera_runtime, '''
+import time
+deadline = time.monotonic() + 5
+while panel._current.geometry_revision != REVISION and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert panel._current.geometry_revision == REVISION, panel._current.geometry_error
+'''.replace("REVISION", repr(revision)))
+            _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+camera = scene.get_node_by_uuid(camera_uuid)
+assert camera.camera_uid == camera_uid and not camera.get("visible")
+assert len(scene.get_nodes(lf.scene.NodeType.CAMERA)) == CAMERA_COUNT
+'''.replace("CAMERA_COUNT", str(camera_count)))
+        # A changing foreign point count must not move the user's local selection.
+        _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+z = lambda shape: lf.Tensor.zeros(shape, device="cpu", dtype="float32")
+rotation = z([2, 4])
+rotation[0, 0] = rotation[1, 0] = 1
+scene.add_splat("Local model", z([2, 3]), z([2, 1, 3]), z([2, 0, 3]), z([2, 3]), rotation, z([2, 1]), sh_degree=0)
+''')
+        _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+scene.set_selection([32])
+assert scene.selection_mask is not None, (scene.total_gaussian_count, scene.active_selection_group)
+assert scene.selection_mask.cpu().tolist() == [0] * 32 + [1, 0]
+''')
+        next_snapshot = producer.publish(arrays(33), 8)
+        output = _editor(camera_runtime, '''
+import time
+deadline = time.monotonic() + 5
+while panel._current.generation != NEXT_ID and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert panel._current.generation == NEXT_ID, panel._current.error
+'''.replace("NEXT_ID", repr(next_snapshot["id"])))
+        _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+assert scene.selection_mask.cpu().tolist() == [0] * 33 + [1, 0]
+lf.select_node(scene.get_node_by_uuid(panel._current.uuid).name)
+lf.ui.set_main_panel_active_tab(next(tab.id for tab in lf.ui.get_main_panel_tabs() if tab.id != panel.ExternalTrainingPanel.id))
+''')
+        # Persistence excludes the foreign subtree even when it is selected.
+        project = tmp_path / "local-with-observer.licht"
+        saved = _tool(camera_runtime, "project_save_as", {"path": str(project)})
+        assert saved.get("success", True), saved
+        opened = _tool(camera_runtime, "project_open", {"path": str(project), "discard_changes": True})
+        assert opened.get("success", True), opened
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 5
+while lf.get_scene().get_node("Local model").gaussian_count != 2 and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert lf.get_scene().get_node("Local model").gaussian_count == 2
+''')
+        output = _ui_editor(camera_runtime, '''
+import lfs_plugins.external_training_panel as panel
+assert panel._current.stop.is_set()
+scene = lf.get_scene()
+assert scene.get_node("Local model").gaussian_count == 2
+assert not any(node.read_only for node in scene.nodes)
+target = scene.create_external_preview("Cancelled upload", "Preview")
+scene = lf.get_scene()
+cancelled = lf.scene.prepare_external_cameras(lf.Tensor.zeros([0, 22], device="cpu"), np.eye(4, dtype=np.float32))
+assert scene.upload_external_preview(cancelled)
+print("restored")
+''')
+        assert "restored" in output
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 5
+while not cancelled.ready and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert cancelled.ready
+''')
+        _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+scene.cancel_external_preview_upload()
+assert not scene.apply_external_preview(target, cancelled, "Cameras")
+scene.remove_external_preview(target)
+''')
+        assert transport.read_json(producer.root / "session.json")["state"] == "training"
+        deadline = time.monotonic() + 5
+        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not list((producer.root / "clients").glob("*.json"))
+        # Normal application exit must drain an active reader, not require the
+        # fixture's forced cleanup or stop the trainer that owns the session.
+        _ui_editor(camera_runtime, '''
+panel._current = ExternalTraining(RECORD)
+'''.replace("RECORD", repr(record)))
+        assert request.node.camera_process.poll() is None
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 5
+while panel._current.shown is None and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert panel._current.shown is not None, panel._current.error
+threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()
+''')
+        assert request.node.camera_process.wait(timeout=10) == 0
+        assert not list((producer.root / "clients").glob("*.json"))
+        assert transport.read_json(producer.root / "session.json")["state"] == "training"
+    finally:
+        producer.finish("stopped")
+        producer.thread.join(3)
 
 
 def test_add_splat_rejects_mismatched_inputs(camera_runtime):
