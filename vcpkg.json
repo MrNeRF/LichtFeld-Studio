@@ -97,7 +97,10 @@
         "vulkan-memory-allocator",
         "volk",
         "libplacebo",
-        "openxr-loader",
+        {
+          "name": "openxr-loader",
+          "platform": "!osx"
+        },
         {
           "name": "glslang",
           "features": ["tools", "opt"]

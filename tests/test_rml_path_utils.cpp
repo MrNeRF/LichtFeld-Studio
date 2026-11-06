@@ -73,6 +73,17 @@ TEST(RmlDocumentUtilsTest, LeavesNonFileImageSourcesUnchanged) {
     EXPECT_EQ(rewritten, source);
 }
 
+// A source missing on disk and in the bundled assets makes the asset lookup throw
+// inside the visualizer library, which must catch it there.
+TEST(RmlDocumentUtilsTest, LeavesBindingsAndMissingImageSourcesUnchanged) {
+    const auto document_path = std::filesystem::path("/tmp/lichtfeld/rmlui/test.rml");
+    const std::string source =
+        R"(<img data-attr-src="area.editor_icon" /><img src="lfs-missing-icon.png" />)";
+
+    EXPECT_EQ(lfs::vis::gui::rml_documents::rewriteRelativeImageSources(source, document_path),
+              source);
+}
+
 // RmlUi passes every image source through JoinPath before LoadTexture opens it,
 // so an encoded source must come back as the original path (e.g. a mounted
 // "/Volumes/LichtFeld Studio" disk image).

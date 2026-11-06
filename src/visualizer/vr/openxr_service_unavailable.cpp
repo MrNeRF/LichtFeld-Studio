@@ -1,13 +1,18 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-// VR for builds without the Vulkan viewport renderer, which draws the eyes.
+// VR for macOS, which has no OpenXR runtime, and for builds without the Vulkan
+// viewport renderer, which draws the eyes.
 #include "core/event_bridge/localization_manager.hpp"
 #include "openxr_service.hpp"
 
 namespace lfs::vis::vr {
 
     struct OpenXrService::Impl {
+#ifdef __APPLE__
+        std::string status_detail = "macOS has no OpenXR runtime.";
+#else
         std::string status_detail = "VR needs the Vulkan graphics backend with the Vulkan rasterizer.";
+#endif
         EyeFrame mirror;
     };
 

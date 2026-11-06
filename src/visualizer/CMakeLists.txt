@@ -14,6 +14,14 @@ else()
     set(LFS_VIS_LIB_TYPE STATIC)
 endif()
 
+# OpenXR VR viewing draws its eyes with vksplat. macOS has no OpenXR runtime, and
+# the loader's -fno-rtti typeinfo copies would break std::exception catches here.
+if(LFS_VKSPLAT_VIEWPORT_BUILD AND NOT APPLE)
+    set(LFS_OPENXR_BUILD ON)
+else()
+    set(LFS_OPENXR_BUILD OFF)
+endif()
+
 add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Core
         visualizer.cpp
@@ -26,8 +34,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
-        $<$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>:vr/openxr_service.cpp>
-        $<$<NOT:$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>>:vr/openxr_service_unavailable.cpp>
+        $<$<BOOL:${LFS_OPENXR_BUILD}>:vr/openxr_service.cpp>
+        $<$<NOT:$<BOOL:${LFS_OPENXR_BUILD}>>:vr/openxr_service_unavailable.cpp>
 
         # Geometry node modifiers
         nodes/modifier_manager.cpp
@@ -319,8 +327,7 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 
-# OpenXR VR viewing draws its eyes with vksplat.
-if(LFS_VKSPLAT_VIEWPORT_BUILD)
+if(LFS_OPENXR_BUILD)
     find_package(OpenXR CONFIG REQUIRED)
 endif()
 
@@ -350,7 +357,7 @@ target_link_libraries(lfs_visualizer
         nfd::nfd
         vterm
         fmt::fmt-header-only
-        $<$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>:OpenXR::openxr_loader>
+        $<$<BOOL:${LFS_OPENXR_BUILD}>:OpenXR::openxr_loader>
 )
 
 set_property(SOURCE
