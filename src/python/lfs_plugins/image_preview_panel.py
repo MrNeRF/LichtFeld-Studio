@@ -5,6 +5,7 @@
 import time
 import weakref
 from math import gcd
+from html import escape
 from _lfs_path_io import Path
 from typing import Optional
 from urllib.parse import quote
@@ -78,8 +79,12 @@ class ImagePreviewPanel(Panel):
         self._sam_texture_key = None
         self._sam_texture_source = ""
         self._sam_controls_state = None
+        self._sam_session_active = False
         self._sam_apply_target = None
         self._sam_markers_rml = None
+        self._sam_selection_options = None
+        self._sam_syncing_selection = False
+        self._mask_inverted = False
         self._metadata = PreviewMetadata()
         self._metadata_required = False
         self._metadata_validated = set()
@@ -204,6 +209,7 @@ class ImagePreviewPanel(Panel):
         super().on_mount(doc)
         self._doc = doc
         self._sam_markers_rml = None
+        self._sam_selection_options = None
         self._layout_show_info = None
         self._layout_show_filmstrip = None
         self._reset_preview()
@@ -233,15 +239,14 @@ class ImagePreviewPanel(Panel):
             ("sam-positive", lambda _ev: self._sam_tool("positive")),
             ("sam-negative", lambda _ev: self._sam_tool("negative")),
             ("sam-box", lambda _ev: self._sam_tool("box")),
-            ("sam-edit", lambda _ev: self._sam_tool("edit")),
             ("sam-pan", lambda _ev: self._sam_tool("pan")),
             ("sam-undo", lambda _ev: (lf.undo.undo(), self._mark_dirty())),
             ("sam-clear", lambda _ev: self._sam_edit("clear")),
             ("sam-remove", lambda _ev: self._sam_edit("remove_selected")),
             ("sam-flip", lambda _ev: self._sam_edit("flip_selected")),
             ("sam-show", lambda _ev: self._sam_show()),
-            ("sam-generate", lambda _ev: self._sam_generate(self._mask_editor.can_refine)),
-            ("sam-refine", lambda _ev: self._sam_generate()),
+            ("sam-generate", lambda _ev: self._sam_generate()),
+            ("sam-refine", lambda _ev: self._sam_generate(True)),
             ("sam-cancel", lambda _ev: self._sam_cancel()),
             ("sam-apply", lambda _ev: self._sam_apply(False)),
             ("sam-exclude", lambda _ev: self._sam_apply(True)),
@@ -260,6 +265,9 @@ class ImagePreviewPanel(Panel):
         cb_mask = doc.get_element_by_id("cb-mask")
         if cb_mask:
             cb_mask.add_event_listener("change", self._on_mask_checkbox_change)
+        selection = doc.get_element_by_id("sam-selection")
+        if selection:
+            selection.add_event_listener("change", self._sam_select_control)
 
         filmstrip = doc.get_element_by_id("filmstrip")
         if filmstrip:
@@ -316,6 +324,11 @@ class ImagePreviewPanel(Panel):
         if current_params != self._last_training_params:
             self._last_training_params = current_params
             self._dirty = True
+        params = lf.optimization_params()
+        inverted = bool(params and params.has_params() and params.invert_masks)
+        if inverted != self._mask_inverted:
+            self._mask_inverted = inverted
+            self._dirty = True
 
         needs_redraw = False
         if (self._preview_state == "loading" or self._preview_pending) and not self._dirty:
@@ -324,6 +337,7 @@ class ImagePreviewPanel(Panel):
         if self._layout_pending and not self._dirty:
             self._layout_pending = False
             self._update_main_image(doc, bool(self._image_paths))
+            self._update_sam_geometry(doc)
             self._update_status(doc, bool(self._image_paths))
             needs_redraw = True
 
@@ -406,8 +420,7 @@ class ImagePreviewPanel(Panel):
              camera_nodes: dict[int, tuple[int, str]] | None = None, assisted: bool = False, weights: str = ""):
         self._reset_preview()
         self._sam_cancel()
-        self._mask_editor.drafts.clear()
-        self._mask_editor.key = None
+        self._mask_editor = FrameMaskEditor(self._sam_record_edit)
         self._mask_editor.enabled = assisted
         self._mask_editor.weights = weights
         if assisted:
@@ -792,6 +805,13 @@ class ImagePreviewPanel(Panel):
         self._drag_start_pan_y = self._pan_y
 
     def _on_img_mouseup(self, _event):
+        if self._mask_editor.box_drag is not None:
+            end = self._sam_source_point(_event, clamp=True)
+            if end:
+                box = self._mask_editor.dragged_box(end)
+                self._mask_editor.set_box(box[:2], box[2:])
+            self._mask_editor.box_drag = None
+            self._mark_dirty()
         if self._mask_editor.point_drag is not None:
             end = self._sam_source_point(_event, clamp=True)
             if end:
@@ -807,6 +827,10 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
 
     def _on_img_mousemove(self, event):
+        if self._mask_editor.box_drag is not None:
+            self._mask_editor.drag_end = self._sam_source_point(event, clamp=True)
+            self._mark_dirty()
+            return
         if self._mask_editor.point_drag is not None:
             end = self._sam_source_point(event, clamp=True)
             if end:
@@ -829,7 +853,7 @@ class ImagePreviewPanel(Panel):
         self._hover_image = True
 
     def _on_img_mouseout(self, _event):
-        if (self._mask_editor.drag_start is not None or self._mask_editor.point_drag is not None) and self._doc:
+        if self._mask_editor.dragging and self._doc:
             viewport = self._doc.get_element_by_id("image-viewport")
             mx = float(_event.get_parameter("mouse_x", "-1"))
             my = float(_event.get_parameter("mouse_y", "-1"))
@@ -838,8 +862,11 @@ class ImagePreviewPanel(Panel):
                 return
         self._hover_image = False
         self._dragging = False
+        if self._mask_editor.dragging:
+            self._mark_dirty()
         self._mask_editor.drag_start = self._mask_editor.drag_end = None
         self._mask_editor.point_drag = None
+        self._mask_editor.box_drag = None
 
     def _on_layout_resize(self, _event):
         self._layout_pending = True
@@ -947,7 +974,9 @@ class ImagePreviewPanel(Panel):
 
         extra = (self._show_help, bool(self._sampled_color), self._action_error,
                  RuntimeState.language_generation.value, self._mask_editor.enabled,
-                 self._mask_editor.phase, self._mask_editor.error, bool(self._mask_editor.scores))
+                 self._mask_editor.phase, self._mask_editor.error, bool(self._mask_editor.scores),
+                 self._mask_editor.can_refine, self._mask_editor.show_proposal,
+                 self._show_overlay, self._has_valid_overlay())
         if (self._show_info != self._layout_show_info
                 or self._show_filmstrip != self._layout_show_filmstrip or extra != self._layout_extra):
             self._layout_show_info = self._show_info
@@ -1461,6 +1490,7 @@ class ImagePreviewPanel(Panel):
         self._mask_editor.tool = tool
         self._mask_editor.drag_start = self._mask_editor.drag_end = None
         self._mask_editor.point_drag = None
+        self._mask_editor.box_drag = None
         self._color_picker_active = False
         self._update_picker_cursor()
         self._dragging = False
@@ -1468,12 +1498,15 @@ class ImagePreviewPanel(Panel):
 
     def _sam_record_edit(self, key, before, after):
         panel_ref = weakref.ref(self)
+        editor = self._mask_editor
+        editor_ref = weakref.ref(editor)
 
         def restore(state):
             panel = panel_ref()
+            owner = editor_ref()
             # Project replacement clears shared history; ordinary scene mutations
             # (including Apply and its undo) must not invalidate these edits.
-            if panel is not None and panel._mask_editor.restore(key, state):
+            if panel is not None and owner is panel._mask_editor and owner.restore(key, state):
                 panel._mark_dirty()
 
         try:
@@ -1482,7 +1515,7 @@ class ImagePreviewPanel(Panel):
                          scope="image_preview", dirty_flags=16,
                          estimated_bytes=512 + 128 * (len(before[0]) + len(after[0])))
         except Exception:
-            self._mask_editor.restore(key, before)
+            editor.restore(key, before)
             raise
 
     def _sam_release_texture(self, destroy=True):
@@ -1510,6 +1543,17 @@ class ImagePreviewPanel(Panel):
     def _sam_edit(self, action):
         getattr(self._mask_editor, action)()
         self._mark_dirty()
+
+    def _sam_select_control(self, event):
+        if self._sam_syncing_selection:
+            return
+        value = event.get_parameter("value", "")
+        draft = self._mask_editor.draft
+        selected = ("box" if value == "box" and draft and draft.box else
+                    int(value) if value.isdecimal() and draft and int(value) < len(draft.points) else None)
+        if selected != self._mask_editor.selected:
+            self._mask_editor.selected = selected
+            self._mark_dirty()
 
     def _sam_show(self):
         self._mask_editor.show_proposal = not self._mask_editor.show_proposal
@@ -1552,10 +1596,25 @@ class ImagePreviewPanel(Panel):
         if point is None:
             return
         hit = self._sam_hit(event)
-        if self._mask_editor.tool != "box" and hit is not None:
+        if hit is None and self._mask_editor.tool == "box" and self._mask_editor.draft and self._mask_editor.draft.box:
+            x0, y0, x1, y1 = self._mask_editor.draft.box
+            if x0 < point[0] < x1 and y0 < point[1] < y1:
+                hit = "box"
+        if hit is not None:
             self._mask_editor.selected = hit
-            if self._mask_editor.tool == "edit" and isinstance(hit, int):
+            if isinstance(hit, int):
                 self._mask_editor.point_drag = point
+            else:
+                box = self._mask_editor.draft.box
+                layout = self._get_image_layout(self._image_paths[self._current_index])
+                sx, sy = (layout["width"] - 1) * layout["scale"], (layout["height"] - 1) * layout["scale"]
+                edges = []
+                for axis, scale in ((0, sx), (1, sy)):
+                    edge = min((axis, axis + 2), key=lambda i: abs(point[axis] - box[i]))
+                    if abs(point[axis] - box[edge]) * scale <= 8:
+                        edges.append(edge)
+                self._mask_editor.box_drag = (box, point, edges)
+                self._mask_editor.drag_end = point
             self._mark_dirty()
             return
         if self._mask_editor.tool == "box":
@@ -1581,8 +1640,8 @@ class ImagePreviewPanel(Panel):
         if draft.box:
             x0, y0, x1, y1 = draft.box
             x, y = point
-            if ((x0 <= x <= x1 and min(abs(y-y0), abs(y-y1)) * sy <= 8)
-                    or (y0 <= y <= y1 and min(abs(x-x0), abs(x-x1)) * sx <= 8)):
+            if ((x0 - 8 / max(sx, 1) <= x <= x1 + 8 / max(sx, 1) and min(abs(y-y0), abs(y-y1)) * sy <= 8)
+                    or (y0 - 8 / max(sy, 1) <= y <= y1 + 8 / max(sy, 1) and min(abs(x-x0), abs(x-x1)) * sx <= 8)):
                 return "box"
         return None
 
@@ -1600,6 +1659,7 @@ class ImagePreviewPanel(Panel):
                                                draft.points, draft.box, base, candidate, editor.weights)
             editor.invalidate()
             editor.request = request
+            self._sam_session_active = bool(request)
             editor.submitted_signature = editor.signature
             editor.show_proposal = True
             editor.phase = "queued" if request else "closing"
@@ -1636,6 +1696,13 @@ class ImagePreviewPanel(Panel):
         if editor.bind(path, revision):
             self._mark_dirty()
         state = lf.ui.sam_preview_poll()
+        active = state.get("phase", "idle") != "idle"
+        if active != self._sam_session_active:
+            self._sam_session_active = active
+            self._mark_dirty()
+        if state.get("phase") == "closing" and editor.phase != "closing":
+            editor.phase = "closing"
+            self._mark_dirty()
         target = self._sam_apply_target
         if state.get("phase") == "mask_ready":
             if not target or state.get("request") != target[0]:
@@ -1671,23 +1738,27 @@ class ImagePreviewPanel(Panel):
         if toggle:
             toggle.set_attribute("aria-pressed", "true" if editor.enabled else "false")
             toggle.set_attribute("class", "btn btn--primary" if editor.enabled else "btn")
-        bar = doc.get_element_by_id("sam-controls")
-        if bar:
-            bar.set_attribute("class", "" if editor.enabled else "hidden")
-        for key in ("positive", "negative", "box", "edit", "pan", "undo", "clear", "remove", "flip", "generate", "cancel", "show"):
+        for element_id in ("sam-controls", "sam-apply-controls"):
+            bar = doc.get_element_by_id(element_id)
+            if bar:
+                bar.set_attribute("class", "" if editor.enabled else "hidden")
+        for key in ("positive", "negative", "box", "pan", "undo", "clear", "remove", "flip", "generate", "cancel", "show"):
             element = doc.get_element_by_id("sam-" + key)
             if element:
                 element.set_text(lf.ui.tr(_sam_key(key)))
                 element.set_attribute("aria-pressed", "true" if editor.tool == key else "false")
         _set_text(doc, "btn-sam", lf.ui.tr("image_preview.sam_title"))
-        for key in ("heading", "proposals-heading", "edit-hint"):
+        for key in ("heading", "proposals-heading", "apply-heading", "edit-hint"):
             _set_text(doc, "sam-" + key, lf.ui.tr(_sam_key(key.replace("-", "_"))))
-        _set_text(doc, "sam-refine", lf.ui.tr("image_preview.sam_recompute"))
-        _set_text(doc, "sam-generate", lf.ui.tr("image_preview.sam_update" if editor.can_refine else "image_preview.sam_generate"))
+        _set_text(doc, "sam-step-hint", lf.ui.tr("image_preview.sam_drag_hint" if editor.draft and (editor.draft.points or editor.draft.box) else "image_preview.sam_idle"))
+        refine = doc.get_element_by_id("sam-refine")
+        if refine:
+            refine.set_text(lf.ui.tr("image_preview.sam_refine"))
+            refine.set_attribute("class", "btn" if editor.can_refine else "btn hidden")
         for element_id, key in (("sam-positive", "positive_hint"), ("sam-negative", "negative_hint"),
                                 ("sam-box", "box_hint"), ("sam-pan", "pan_hint"),
-                                ("sam-generate", "generate_hint"), ("sam-refine", "recompute_hint"),
-                                ("sam-edit", "edit_hint"), ("sam-remove", "edit_hint")):
+                                ("sam-generate", "generate_hint"), ("sam-refine", "refine_hint"),
+                                ("sam-remove", "edit_hint"), ("sam-undo", "undo_hint")):
             element = doc.get_element_by_id(element_id)
             if element:
                 element.set_attribute("title", lf.ui.tr(_sam_key(key)))
@@ -1715,23 +1786,21 @@ class ImagePreviewPanel(Panel):
         self._set_disabled(doc.get_element_by_id("sam-apply"), not applicable)
         self._set_disabled(doc.get_element_by_id("sam-exclude"), not applicable)
         phase = editor.phase if not editor.error else "error"
-        status = lf.ui.tr(_sam_key(phase))
+        has_controls = bool(editor.draft and (editor.draft.points or editor.draft.box))
+        status = ("" if phase == "idle" and not has_controls else
+                  lf.ui.tr(_sam_key("generate_hint" if phase == "idle" else phase)))
         _set_text(doc, "sam-status", status + (": " + editor.error if editor.error else ""))
         ready = bool(editor.draft and (editor.draft.points or editor.draft.box) and self._preview_state == "ready")
         busy = editor.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
         self._set_disabled(doc.get_element_by_id("sam-generate"), not ready or busy)
         self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy)
+        self._set_disabled(doc.get_element_by_id("sam-cancel"), not self._sam_session_active or editor.phase == "closing")
+        self._set_disabled(doc.get_element_by_id("sam-clear"), not bool(editor.draft and (editor.draft.points or editor.draft.box)))
         self._set_disabled(doc.get_element_by_id("sam-remove"), editor.selected is None)
         self._set_disabled(doc.get_element_by_id("sam-flip"), not isinstance(editor.selected, int))
         self._set_disabled(doc.get_element_by_id("sam-undo"), not lf.undo.can_undo())
         self._set_disabled(doc.get_element_by_id("sam-show"), not bool(editor.overlays))
-        selection = lf.ui.tr("image_preview.sam_selection_none")
-        if editor.selected == "box":
-            selection = lf.ui.tr("image_preview.sam_box")
-        elif isinstance(editor.selected, int) and editor.draft:
-            label = "positive" if editor.draft.points[editor.selected][2] else "negative"
-            selection = f"{editor.selected + 1} · {lf.ui.tr(_sam_key(label))}"
-        _set_text(doc, "sam-selection", selection)
+        self._update_sam_selection(doc)
         _set_text(doc, "sam-quality", (lf.ui.tr("image_preview.sam_quality").format(score=round(100 * editor.scores[editor.candidate]))
                                        if editor.scores else ""))
         show = doc.get_element_by_id("sam-show")
@@ -1743,9 +1812,51 @@ class ImagePreviewPanel(Panel):
                 available = index < len(editor.scores)
                 text = str(index + 1)
                 button.set_text(text)
-                button.set_attribute("title", lf.ui.tr("image_preview.sam_candidate"))
+                description = lf.ui.tr("image_preview.sam_candidate")
+                if available:
+                    description += f": {round(100 * editor.scores[index])}%"
+                button.set_attribute("title", description)
+                button.set_attribute("aria-label", f"{index + 1} · {description}")
                 button.set_attribute("aria-pressed", "true" if index == editor.candidate and available else "false")
                 self._set_disabled(button, not available)
+        legend = doc.get_element_by_id("mask-legend")
+        if legend:
+            proposal = editor.enabled and editor.show_proposal and editor.overlay is not None
+            applied = not editor.enabled and self._show_overlay and self._has_valid_overlay()
+            legend.set_attribute("class", "sam-note" if proposal or applied else "sam-note hidden")
+            key = ("image_preview.sam_proposal_legend" if proposal else
+                   "image_preview.mask_excluded_legend" if self._mask_inverted else "image_preview.mask_kept_legend")
+            legend.set_text(lf.ui.tr(key))
+        self._update_sam_geometry(doc)
+
+    def _update_sam_selection(self, doc):
+        editor = self._mask_editor
+        selection = doc.get_element_by_id("sam-selection")
+        if not selection:
+            return
+        options = [("", lf.ui.tr("image_preview.sam_selection_none"))]
+        if editor.draft:
+            options += [(str(i), f"{i + 1} · {lf.ui.tr(_sam_key('positive' if label else 'negative'))}")
+                        for i, (_, _, label) in enumerate(editor.draft.points)]
+            if editor.draft.box:
+                options.append(("box", lf.ui.tr("image_preview.sam_box")))
+        # RmlUI emits change events even for programmatic option/value updates.
+        # The model remains the owner while synchronizing its selection to the view.
+        self._sam_syncing_selection = True
+        try:
+            if options != self._sam_selection_options:
+                selection.set_inner_rml("".join(f'<option value="{value}">{escape(text)}</option>' for value, text in options))
+                self._sam_selection_options = options
+            value = "" if editor.selected is None else str(editor.selected)
+            if selection.get_attribute("value", "") != value:
+                selection.set_attribute("value", value)
+            selection.set_attribute("aria-label", lf.ui.tr("image_preview.sam_heading"))
+            self._set_disabled(selection, len(options) == 1)
+        finally:
+            self._sam_syncing_selection = False
+
+    def _update_sam_geometry(self, doc):
+        editor = self._mask_editor
         overlay = doc.get_element_by_id("sam-overlay")
         if overlay:
             visible = bool(editor.enabled and editor.show_proposal and editor.overlay is not None and self._preview_state == "ready")
@@ -1764,8 +1875,8 @@ class ImagePreviewPanel(Panel):
                     self._sam_texture_key = texture_key
                 self._set_decorator(overlay, "sam-overlay", f"image({self._sam_texture_source})")
                 self._apply_zoom(overlay, path)
-            else:
-                self._sam_release_texture()
+            elif not editor.enabled or editor.overlay is None:
+                self._sam_release_texture(destroy=not editor.enabled)
         markers = doc.get_element_by_id("sam-markers")
         if markers:
             html = []
@@ -1781,12 +1892,17 @@ class ImagePreviewPanel(Panel):
                         selected = " sam-point-selected" if editor.selected == index else ""
                         html.append(f'<span class="sam-point sam-point-{label}{selected}" style="left: {vx:.3f}dp; top: {vy:.3f}dp;">{"+" if label else "−"}</span>')
                     box = editor.draft.box
-                    if editor.drag_start and editor.drag_end:
+                    if editor.box_drag and editor.drag_end:
+                        box = editor.dragged_box(editor.drag_end)
+                    elif editor.drag_start and editor.drag_end:
                         box = (*editor.drag_start, *editor.drag_end)
                     if box:
                         a, b = view(*box[:2]), view(*box[2:])
                         selected = " sam-box-selected" if editor.selected == "box" else ""
                         html.append(f'<div class="sam-box{selected}" style="left: {min(a[0], b[0]):.3f}dp; top: {min(a[1], b[1]):.3f}dp; width: {abs(a[0]-b[0]):.3f}dp; height: {abs(a[1]-b[1]):.3f}dp;"></div>')
+                        if selected:
+                            for x, y in ((a[0], a[1]), (b[0], a[1]), (a[0], b[1]), (b[0], b[1])):
+                                html.append(f'<span class="sam-box-handle" style="left: {x:.3f}dp; top: {y:.3f}dp;"></span>')
             content = "".join(html)
             if content != self._sam_markers_rml:
                 markers.set_inner_rml(content)
@@ -1877,7 +1993,7 @@ class ImagePreviewPanel(Panel):
             if action == keymap.Action.IMAGE_PREVIEW_DELETE:
                 self._sam_edit("remove_selected")
             elif action == keymap.Action.IMAGE_PREVIEW_GENERATE:
-                self._sam_generate(self._mask_editor.can_refine)
+                self._sam_generate()
             else:
                 action = keymap.Action.NONE
             if action != keymap.Action.NONE:
@@ -1944,9 +2060,10 @@ class ImagePreviewPanel(Panel):
             event.stop_propagation()
         elif key == KI_ESCAPE:
             if self._mask_editor.enabled:
-                if self._mask_editor.drag_start is not None or self._mask_editor.point_drag is not None:
+                if self._mask_editor.dragging:
                     self._mask_editor.drag_start = self._mask_editor.drag_end = None
                     self._mask_editor.point_drag = None
+                    self._mask_editor.box_drag = None
                     self._mark_dirty()
                 elif self._mask_editor.selected is not None:
                     self._mask_editor.selected = None

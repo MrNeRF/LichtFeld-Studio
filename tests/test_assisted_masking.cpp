@@ -3,6 +3,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/native_fs.hpp"
+#include "core/nn/models/sam2.hpp"
 #include "core/path_utils.hpp"
 #include "gui/assisted_masking.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
@@ -89,6 +90,38 @@ namespace {
         EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
     }
 
+    TEST(AssistedMasking, DestructorRetiresAnActiveSessionWithoutExplicitClose) {
+        JobRegistry jobs;
+        {
+            AssistedMasking service(jobs, [] { return true; });
+            ASSERT_NE(service.submit(missing_source()), 0);
+        }
+        EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
+    }
+
+    TEST(AssistedMasking, ImmediateResubmitCannotReuseARetiringJob) {
+        JobRegistry jobs;
+        AssistedMasking service(jobs, [] { return true; });
+        ASSERT_NE(service.submit(missing_source()), 0);
+        for (int session = 0; session < 256; ++session) {
+            const auto old = jobs.active(JobType::AssistedMask)->handle;
+            service.close();
+            uint64_t next = 0;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!next && std::chrono::steady_clock::now() < deadline) {
+                next = service.submit(missing_source());
+                std::this_thread::yield();
+            }
+            ASSERT_NE(next, 0);
+            const auto active = jobs.active(JobType::AssistedMask);
+            ASSERT_TRUE(active);
+            EXPECT_NE(active->handle, old);
+            EXPECT_FALSE(active->cancel_requested);
+        }
+        service.shutdown();
+        EXPECT_FALSE(jobs.anyRunning(JobType::AssistedMask));
+    }
+
     TEST(AssistedMasking, ExtractorReviewUsesCompletedFramesInSourceOrderAndPreservesWeights) {
         using Event = lfs::core::events::cmd::OpenImagePreview;
         struct Subscription {
@@ -120,6 +153,29 @@ namespace {
         const auto weights = lfs::preprocessing::ensure_sam2_weights(false);
         if (!weights)
             GTEST_SKIP() << "SAM2.1 weights are not cached; this regression never downloads models";
+        {
+            // Preview can omit the original-size outputs without changing the
+            // decoder's logits or scores. Existing callers keep their full masks.
+            auto model = lfs::core::nn::models::Sam2::load(*weights, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            ASSERT_TRUE(model);
+            ASSERT_TRUE(model->set_image(lfs::core::Tensor::zeros({1, 3, 64, 96}, lfs::core::Device::CUDA)));
+            const std::vector<lfs::core::nn::models::Sam2PointPrompt> points{{48, 32, 1}};
+            const auto full = model->predict(points, std::nullopt);
+            ASSERT_TRUE(full);
+            ASSERT_EQ(full->masks.ndim(), 3);
+            EXPECT_EQ(full->masks.size(0), 3);
+            EXPECT_EQ(full->masks.size(1), 64);
+            EXPECT_EQ(full->masks.size(2), 96);
+            const auto low = model->predict(points, std::nullopt, true, nullptr,
+                                            lfs::core::nn::models::Sam2MaskOutput::LowResolutionOnly);
+            ASSERT_TRUE(low);
+            EXPECT_FALSE(low->masks.is_valid());
+            const auto expected = full->low_res_logits.cpu().contiguous().to_vector();
+            const auto actual = low->low_res_logits.cpu().contiguous().to_vector();
+            ASSERT_EQ(actual.size(), expected.size());
+            for (size_t i = 0; i < actual.size(); ++i)
+                ASSERT_NEAR(actual[i], expected[i], 1e-3f);
+        }
         AssistedMaskRequest input{};
         const auto fixture = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
         if (!lfs::core::native_fs::is_regular_file(fixture))

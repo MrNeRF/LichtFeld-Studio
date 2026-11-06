@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
+#include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/path_utils.hpp"
@@ -90,7 +91,8 @@ namespace lfs::vis::gui {
                         lock.lock();
                         release = false;
                         closing_job = {};
-                        result = {};
+                        // Keep Closing visible until poll() finalizes the old job.
+                        // A new request must never inherit its retiring handle.
                         const bool stop = stopping;
                         const auto finished = active;
                         active = {};
@@ -260,7 +262,8 @@ namespace lfs::vis::gui {
                     }
                     stage("predicting", 0.7f);
                     model_failure = true;
-                    auto prediction = model->predict(points, box, true, refinement.is_valid() ? &refinement : nullptr);
+                    auto prediction = model->predict(points, box, true, refinement.is_valid() ? &refinement : nullptr,
+                                                     core::nn::models::Sam2MaskOutput::LowResolutionOnly);
                     if (!prediction)
                         throw std::runtime_error(std::string(prediction.error().user_message()));
                     model_failure = false;
@@ -310,7 +313,13 @@ namespace lfs::vis::gui {
 
     AssistedMasking::AssistedMasking(JobRegistry& jobs, std::function<bool()> admission)
         : impl_(std::make_unique<Impl>(jobs, std::move(admission))) {}
-    AssistedMasking::~AssistedMasking() { shutdown(); }
+    AssistedMasking::~AssistedMasking() {
+        try {
+            shutdown();
+        } catch (const std::exception& error) {
+            LOG_ERROR("Assisted mask shutdown failed: {}", error.what());
+        }
+    }
     uint64_t AssistedMasking::submit(AssistedMaskRequest input) {
         {
             std::lock_guard lock(impl_->mutex);
@@ -356,6 +365,8 @@ namespace lfs::vis::gui {
                 impl_->jobs.canceled(impl_->job);
                 impl_->jobs.free(impl_->job);
                 impl_->job = {};
+                std::lock_guard lock(impl_->mutex);
+                impl_->result = {};
             }
         }
         std::lock_guard lock(impl_->mutex);
@@ -375,12 +386,15 @@ namespace lfs::vis::gui {
         impl_->cv.notify_one();
     }
     void AssistedMasking::shutdown() {
-        close();
         {
             std::lock_guard lock(impl_->mutex);
             impl_->stopping = true;
+            impl_->closing_job = impl_->job;
+            impl_->pending.reset();
             impl_->cv.notify_one();
         }
+        // Stop and join before main-thread completion/snapshot operations, so
+        // a failure there cannot leave a live thread owned by the destructor.
         if (impl_->worker.joinable())
             impl_->worker.join();
         (void)poll();

@@ -989,27 +989,25 @@ namespace lfs::vis {
         if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
             viewer_->jobs().anyRunning(JobType::AssistedMask))
             return LOC("image_preview.sam_training_blocked");
+        if (action == TrainingAction::Resume && !trainer_ && viewer_ && getState() == TrainingState::Paused) {
+            const auto session = viewer_->projectTrainingSessionState();
+            if (session.available && !session.hydrated && !session.restoring && session.error.empty())
+                return {};
+            return LOC("runtime.training_session_not_ready");
+        }
         return state_machine_.getActionBlockedReason(action);
     }
 
     bool TrainerManager::canPerform(const TrainingAction action) const {
-        if ((action == TrainingAction::Start || action == TrainingAction::Resume) &&
-            !getActionBlockedReason(action).empty())
-            return false;
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
         }
-        if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
+        if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
-            if (action == TrainingAction::Stop) {
-                return session.available && !session.hydrated &&
-                       !session.restoring;
-            }
-            return session.available && !session.hydrated &&
-                   !session.restoring && session.error.empty();
+            return session.available && !session.hydrated && !session.restoring;
         }
-        return state_machine_.canPerform(action);
+        return getActionBlockedReason(action).empty();
     }
 
     TrainingState TrainerManager::getState() const {
@@ -1706,6 +1704,10 @@ namespace lfs::vis {
     }
 
     void TrainerManager::resumeTraining() {
+        if (!canResume()) {
+            LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
+            return;
+        }
         if (!trainer_ && viewer_) {
             const auto session =
                 viewer_->projectTrainingSessionState();
@@ -1720,10 +1722,6 @@ namespace lfs::vis {
                 }
                 return;
             }
-        }
-        if (!canResume()) {
-            LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
-            return;
         }
         if (!trainer_)
             return;

@@ -182,6 +182,8 @@ namespace {
     TEST_P(ImagePreviewLayoutTest, SamControlsWrapWithoutCoveringTheCanvas) {
         auto* controls = doc->GetElementById("sam-controls");
         controls->SetClass("hidden", false);
+        auto* apply = doc->GetElementById("sam-apply-controls");
+        apply->SetClass("hidden", false);
         auto* sidebar = doc->GetElementById("sidebar");
         sidebar->SetClass("sam-sidebar", true);
         doc->GetElementById("metadata-info")->SetClass("hidden", true);
@@ -190,7 +192,6 @@ namespace {
             {"sam-positive", "sam_positive"},
             {"sam-negative", "sam_negative"},
             {"sam-box", "sam_box"},
-            {"sam-edit", "sam_edit"},
             {"sam-pan", "sam_pan"},
             {"sam-remove", "sam_remove"},
             {"sam-flip", "sam_flip"},
@@ -198,14 +199,15 @@ namespace {
             {"sam-undo", "sam_undo"},
             {"sam-clear", "sam_clear"},
             {"sam-generate", "sam_generate"},
-            {"sam-refine", "sam_recompute"},
+            {"sam-refine", "sam_refine"},
             {"sam-cancel", "sam_cancel"},
             {"sam-apply", "sam_apply"},
             {"sam-exclude", "sam_exclude"},
             {"sam-heading", "sam_heading"},
             {"sam-proposals-heading", "sam_proposals_heading"},
+            {"sam-apply-heading", "sam_apply_heading"},
+            {"sam-step-hint", "sam_drag_hint"},
             {"sam-edit-hint", "sam_edit_hint"},
-            {"sam-selection", "sam_selection_none"},
             {"sam-quality", "sam_quality"},
             {"sam-status", "sam_ready"},
             {"sam-hint", "sam_hint"}};
@@ -226,25 +228,49 @@ namespace {
             sam_labels["sam-quality"] = Rml::StringUtilities::Replace(sam_labels["sam-quality"], "{score}", "97");
             for (const auto& [id, text] : sam_labels)
                 doc->GetElementById(id)->SetInnerRML(text);
-            for (int width : {600, 760, 1200}) {
-                SCOPED_TRACE(width);
-                resize(width);
-                EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
-                Rml::ElementList buttons;
-                controls->QuerySelectorAll(buttons, "button");
-                ASSERT_EQ(buttons.size(), 18u);
-                for (auto* button : buttons) {
-                    checkWithin(button, controls);
-                    EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
-                    EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
-                    const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
-                        button->GetFontFaceHandle(), sam_labels.at(button->GetId()),
-                        Rml::TextShapingContext{button->GetComputedValues().language()});
-                    EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+            doc->GetElementById("btn-sam")->SetInnerRML(locales.get("image_preview.sam_title"));
+            auto* selection = doc->GetElementById("sam-selection");
+            selection->SetInnerRML("<option value='0'>1</option><option value='box'>Box</option>");
+            for (const bool help : {false, true}) {
+                SCOPED_TRACE(help);
+                doc->GetElementById("shortcut-help")->SetClass("hidden", !help);
+                for (int width : {600, 760, 1200}) {
+                    SCOPED_TRACE(width);
+                    resize(width);
+                    EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
+                    Rml::ElementList buttons;
+                    controls->QuerySelectorAll(buttons, "button");
+                    Rml::ElementList apply_buttons;
+                    apply->QuerySelectorAll(apply_buttons, "button");
+                    buttons.insert(buttons.end(), apply_buttons.begin(), apply_buttons.end());
+                    ASSERT_EQ(buttons.size(), 17u);
+                    checkWithin(apply, sidebar);
+                    EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y + apply->GetBox().GetSize(Rml::BoxArea::Border).y,
+                                sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).y + sidebar->GetBox().GetSize(Rml::BoxArea::Border).y, 1.5f * GetParam());
+                    const float apply_top = apply->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                    checkWithin(doc->GetElementById("btn-sam"), doc->GetElementById("preview-toolbar"));
+                    for (auto* button : buttons) {
+                        button->ScrollIntoView(false);
+                        context->Update();
+                        EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y, apply_top, 0.5f);
+                        checkWithin(button, std::find(apply_buttons.begin(), apply_buttons.end(), button) != apply_buttons.end() ? apply : controls);
+                        EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
+                        EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
+                        const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
+                            button->GetFontFaceHandle(), sam_labels.at(button->GetId()),
+                            Rml::TextShapingContext{button->GetComputedValues().language()});
+                        EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+                    }
+                    EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
+                    EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
                 }
-                EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
-                EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
             }
+            doc->GetElementById("metadata-info")->SetClass("hidden", false);
+            resize(760);
+            checkWithin(apply, sidebar);
+            EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y + apply->GetBox().GetSize(Rml::BoxArea::Border).y,
+                        sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).y + sidebar->GetBox().GetSize(Rml::BoxArea::Border).y, 1.5f * GetParam());
+            doc->GetElementById("metadata-info")->SetClass("hidden", true);
         }
     }
 

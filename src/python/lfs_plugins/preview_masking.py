@@ -31,6 +31,7 @@ class FrameMaskEditor:
         self.submitted_signature = None
         self.selected = None
         self.point_drag = None
+        self.box_drag = None
         self.show_proposal = True
         self.drag_start = None
         self.drag_end = None
@@ -51,6 +52,22 @@ class FrameMaskEditor:
         self.drag_start = None
         self.drag_end = None
         self.point_drag = None
+        self.box_drag = None
+
+    @property
+    def dragging(self):
+        return self.point_drag is not None or self.drag_start is not None or self.box_drag is not None
+
+    def dragged_box(self, point):
+        box, start, edges = self.box_drag
+        if edges:
+            result = list(box)
+            for index in edges:
+                result[index] = point[index % 2]
+            return tuple(result)
+        dx = min(1 - box[2], max(-box[0], point[0] - start[0]))
+        dy = min(1 - box[3], max(-box[1], point[1] - start[1]))
+        return (box[0] + dx, box[1] + dy, box[2] + dx, box[3] + dy)
 
     @property
     def signature(self):
@@ -116,8 +133,11 @@ class FrameMaskEditor:
         if x1 <= x0 or y1 <= y0:
             return
         before = self.signature
+        keep_refinement = self.draft.box is None
+        if before[1] == (x0, y0, x1, y1):
+            return
         self.draft.box = (x0, y0, x1, y1)
-        self.invalidate(keep_refinement=True)
+        self.invalidate(keep_refinement=keep_refinement)
         self.selected = "box"
         self._edited(before)
 

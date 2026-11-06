@@ -177,6 +177,128 @@ def test_box_can_be_removed_without_deleting_the_points(panel_modules):
     assert value.draft.box == (0.1, 0.1, 0.8, 0.9)
 
 
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("rotation", range(4))
+def test_box_corner_resize_and_move_are_bounded_single_undo_edits(panel_modules, monkeypatch, scale, rotation):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._image_info_cache["frame.png"] = (400, 200, 3)
+    panel._displayed_index = 0
+    panel._rotation_quadrants = rotation
+    panel._mask_editor = value = editor(module)
+    value.set_box((0.1, 0.1), (0.8, 0.9))
+    value.tool = "box"
+    viewport = Element()
+    viewport.client_width, viewport.client_height = 900, 700
+    panel._doc = _DocumentStub({"image-viewport": viewport})
+    monkeypatch.setattr(module.lf.ui, "get_ui_scale", lambda: scale)
+    layout = panel._get_image_layout(panel._image_paths[0])
+    def mouse(x, y):
+        vx, vy = module.source_to_view(layout, rotation, x * 399, y * 199)
+        return event(mouse_x=vx * scale, mouse_y=vy * scale)
+    panel._on_img_mousedown(mouse(0.1, 0.1))
+    panel._on_img_mousemove(mouse(0.2, 0.3))
+    assert len(value.edits) == 1
+    panel._on_img_mouseup(mouse(0.2, 0.3))
+    assert value.draft.box == pytest.approx((0.2, 0.3, 0.8, 0.9))
+    assert len(value.edits) == 2
+    panel._on_img_mousedown(mouse(0.5, 0.6))
+    panel._on_img_mouseup(mouse(0.9, 0.95))
+    assert value.draft.box == pytest.approx((0.4, 0.4, 1.0, 1.0))
+    assert len(value.edits) == 3
+    undo(value)
+    assert value.draft.box == pytest.approx((0.2, 0.3, 0.8, 0.9))
+    undo(value)
+    assert value.draft.box == (0.1, 0.1, 0.8, 0.9)
+
+
+def test_selecting_an_unchanged_box_does_not_discard_its_proposal(panel_modules):
+    module, _ = panel_modules
+    value = editor(module)
+    value.set_box((0.1, 0.2), (0.8, 0.9))
+    value.phase, value.overlays = "ready", [object()]
+    value.set_box((0.1, 0.2), (0.8, 0.9))
+    assert value.phase == "ready" and value.overlay is not None
+
+
+def test_control_selector_supports_keyboard_selection_and_shared_edits(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.2, 0.4, 1)
+    value.point(0.7, 0.8, 0)
+    value.set_box((0.1, 0.1), (0.8, 0.9))
+    panel._sam_select_control(event(value="1"))
+    value.flip_selected()
+    assert value.draft.points[1][2] == 1
+    panel._sam_select_control(event(value="box"))
+    value.remove_selected()
+    assert value.draft.box is None
+    panel._sam_select_control(event(value="256"))
+    assert value.selected is None
+
+
+def test_native_select_change_feedback_preserves_selection_and_does_not_redraw_forever(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.2, 0.4, 1)
+    class Select(Element):
+        def get_attribute(self, name, default):
+            return self.attributes.get(name, default)
+
+        def set_inner_rml(self, text):
+            self.attributes["value"] = ""
+            panel._sam_select_control(event(value=""))
+
+        def set_attribute(self, name, text):
+            super().set_attribute(name, text)
+            if name == "value":
+                panel._sam_select_control(event(value=text))
+
+    select = Select()
+    doc = _DocumentStub({"sam-selection": select})
+    panel._dirty = False
+    panel._update_sam_selection(doc)
+    assert value.selected == 0
+    assert not panel._dirty
+    panel._update_sam_selection(doc)
+    assert not panel._dirty
+    select.set_attribute("value", "")
+    assert value.selected is None and panel._dirty
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("rotation", range(4))
+def test_settled_chrome_reflow_moves_image_proposal_and_markers_together(panel_modules, monkeypatch, scale, rotation):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._image_info_cache["frame.png"] = (400, 200, 3)
+    panel._rotation_quadrants = rotation
+    panel._mask_editor = value = editor(module)
+    value.point(0.5, 0.5, 1)
+    value.request, value.phase, value.overlays = 9, "ready", [object()]
+    panel._sam_texture_key, panel._sam_texture_source = (9, 0), "existing-texture"
+    viewport, image, overlay, markers = Element(), Element(), Element(), Element()
+    panel._doc = doc = _DocumentStub({"image-viewport": viewport, "main-image-a": image,
+                                      "sam-overlay": overlay, "sam-markers": markers})
+    monkeypatch.setattr(module.lf.ui, "get_ui_scale", lambda: scale)
+    panel._service_metadata = panel._service_sam = lambda: None
+    panel._update_filmstrip = lambda *args: None
+    panel._preview_state, panel._dirty = "ready", False
+    panel._sam_controls_state = (0, False)
+    panel._layout_pending = True
+    viewport.client_height = 400  # Help/sidebar layout has now settled.
+    assert panel.on_update(doc)
+    for property in ("left", "top", "width", "height", "transform"):
+        assert image.properties[property] == overlay.properties[property]
+    layout = panel._get_image_layout(panel._image_paths[0])
+    x, y = module.source_to_view(layout, rotation, 0.5 * 399, 0.5 * 199)
+    assert f"left: {x:.3f}dp; top: {y:.3f}dp;" in markers.inner_rml
+
+
 def test_refinement_only_uses_a_prior_after_prompt_changes(panel_modules):
     module, _ = panel_modules
     value = editor(module)
@@ -230,7 +352,6 @@ def test_select_drag_and_right_click_remove_existing_point(panel_modules, monkey
     panel._on_img_mousedown(mouse(0.25, 0.40))
     assert value.selected == 0
     assert len(value.draft.points) == 1, "clicking a marker must not add another point"
-    panel._sam_tool("edit")
     panel._on_img_mousedown(mouse(0.25, 0.40))
     panel._on_img_mousemove(mouse(0.6, 0.55))
     panel._on_img_mousemove(mouse(0.65, 0.6))
@@ -286,6 +407,21 @@ def test_prompt_edits_use_shared_history_and_expired_drafts_are_not_revived(pane
     value.bind("one.png", "replacement")
     entries[1][0]()
     assert not value.draft.points
+
+
+def test_reopening_preview_does_not_replay_old_edits_into_a_new_draft(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    entries = []
+    monkeypatch.setattr(module.lf.undo, "push", lambda name, undo, redo, **kw: entries.append((undo, redo)))
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor.bind("frame.png", "revision-a")
+    panel._mask_editor.point(0.2, 0.4, 1)
+    panel._mask_editor.point(0.8, 0.6, 0)
+    panel.open([module.Path("frame.png")], [], 0)
+    panel._mask_editor.bind("frame.png", "revision-a")
+    entries[-1][0]()
+    assert not panel._mask_editor.draft.points
+    panel._metadata.close()
 
 
 def test_mask_keymap_respects_rebinding_unbinding_modifiers_and_capture(panel_modules, monkeypatch):

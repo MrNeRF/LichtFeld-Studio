@@ -32,7 +32,7 @@
 }
 
 #mask-overlay {
-    image-color: @{alpha(error,0.50)};
+    image-color: @{alpha(primary,0.45)};
 }
 
 #no-image-text,
@@ -51,7 +51,8 @@
 }
 
 .sidebar-header-ip,
-.sidebar-section-ip {
+.sidebar-section-ip,
+#sam-controls {
     border-bottom-color: @{border};
 }
 
@@ -113,3 +114,4 @@
 .sam-point-0 { background-color: @{error}; }
 .sam-box { border-color: @{primary}; }
 .sam-point-selected, .sam-box-selected { border-color: @{warning}; }
+.sam-box-handle { background-color: @{primary}; border-color: @{white}; }

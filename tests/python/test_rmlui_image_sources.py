@@ -25,6 +25,7 @@ def _install_lf_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.get_scene = lambda: None
+    lf_stub.optimization_params = lambda: None
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -186,6 +187,9 @@ class _ElementStub:
 
     def set_text(self, value):
         self.text = value
+
+    def set_inner_rml(self, value):
+        self.inner_rml = value
 
     def query_selector(self, selector):
         if selector == ".card-body":

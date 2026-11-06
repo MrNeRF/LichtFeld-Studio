@@ -365,6 +365,8 @@ namespace lfs::python {
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_open_image_preview_callback;
+        lfs::event::HandlerId g_open_camera_preview_handler_id = 0;
+        lfs::event::HandlerId g_open_image_preview_handler_id = 0;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -4046,9 +4048,15 @@ namespace lfs::python {
             "on_open_camera_preview",
             [](nb::object callback) {
                 g_open_camera_preview_callback = callback;
-                lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
+                if (g_open_camera_preview_handler_id != 0) {
+                    lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                    g_open_camera_preview_handler_id = 0;
+                }
+                if (!callback || callback.is_none())
+                    return;
+                g_open_camera_preview_handler_id = lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
+                    nb::gil_scoped_acquire guard;
                     if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
-                        nb::gil_scoped_acquire guard;
                         try {
                             g_open_camera_preview_callback(e.cam_id);
                         } catch (const std::exception& ex) {
@@ -4855,7 +4863,13 @@ namespace lfs::python {
 
         m.def("on_open_image_preview", [](nb::object callback) {
             g_open_image_preview_callback = callback;
-            core::events::cmd::OpenImagePreview::when([](const auto& event) {
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
+            if (!callback || callback.is_none())
+                return;
+            g_open_image_preview_handler_id = core::events::cmd::OpenImagePreview::when([](const auto& event) {
                 nb::gil_scoped_acquire guard;
                 if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
                     try {
@@ -4917,7 +4931,10 @@ namespace lfs::python {
                 throw std::runtime_error(LOC("image_preview.sam_source_changed"));
             auto applied = viewer->applyCameraMask(*id, state.image, state.mask, state.width, state.height);
             if (!applied)
-                throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message())); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
+                throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message()));
+            gui->enqueueToast({.title = LOC("image_preview.sam_title"),
+                               .message = LOC("image_preview.sam_applied"),
+                               .level = vis::gui::ErrorNoticeLevel::Info}); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
 
         m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
             lfs::python::require_ui_texture_creation_thread();
@@ -6366,6 +6383,15 @@ namespace lfs::python {
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
+            g_open_image_preview_callback = nb::object();
+            if (g_open_camera_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                g_open_camera_preview_handler_id = 0;
+            }
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
         };
         set_bridge(bridge);
 

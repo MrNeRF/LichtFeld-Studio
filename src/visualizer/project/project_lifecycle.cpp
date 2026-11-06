@@ -6351,6 +6351,9 @@ namespace lfs::vis::project {
             };
             auto& camera = *node->camera;
             MaskState before{camera.mask_path(), camera.mask_asset_uuid(), {}, camera.raw_mask_tensor()};
+            // History owns a CPU snapshot; GPU memory must remain reclaimable before training.
+            if (before.raw.is_valid())
+                before.raw = before.raw.device() == core::Device::CUDA ? before.raw.cpu().contiguous() : before.raw.clone();
             if (before.asset) {
                 const auto* old = document_->find_dataset_source(*before.asset);
                 if (!old)
@@ -6413,7 +6416,7 @@ namespace lfs::vis::project {
                 size_t bytes_;
             };
             const size_t retained = after.payload->size() + (before.payload ? before.payload->size() : 0) +
-                                    (before.raw.is_valid() ? before.raw.numel() * sizeof(float) : 0);
+                                    (before.raw.is_valid() ? before.raw.bytes() : 0);
             auto undo = std::make_unique<MaskUndo>([apply, before, after](bool redo) { apply(redo ? after : before); }, retained);
             undo->redo();
             op::undoHistory().push(std::move(undo));

@@ -1685,6 +1685,19 @@ namespace lfs::vis {
         (void)op::undoHistory().redo();
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
         EXPECT_TRUE(camera->has_mask());
+
+        // A direct-scene caller may provide a GPU mask. Replacing it must not
+        // pin VRAM in history or lose its original values when undo restores it.
+        op::undoHistory().clear();
+        camera->set_mask_path({});
+        camera->set_mask_tensor(core::Tensor::full({64, 64}, 0.25f, core::Device::CUDA));
+        ASSERT_TRUE(viewer.applyCameraMask(uuid, image, replacement, 64, 64));
+        op::undoHistory().shrinkToFit(0);
+        EXPECT_EQ(op::undoHistory().totalMemory().gpu_bytes, 0);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_TRUE(camera->raw_mask_tensor().is_valid());
+        EXPECT_EQ(camera->raw_mask_tensor().device(), core::Device::CPU);
+        EXPECT_FLOAT_EQ(camera->raw_mask_tensor().to_vector().front(), 0.25f);
     }
 
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
@@ -20176,6 +20189,15 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(manager->getCurrentIteration(), 11);
             EXPECT_EQ(manager->getTotalIterations(), scenario.expected_total);
             EXPECT_EQ(manager->getState(), TrainingState::Paused);
+            EXPECT_TRUE(manager->canResume());
+            EXPECT_TRUE(manager->getActionBlockedReason(TrainingAction::Resume).empty());
+            const auto sam = viewer.jobs().init(JobType::AssistedMask, "ready");
+            ASSERT_TRUE(sam);
+            EXPECT_FALSE(manager->canResume());
+            manager->resumeTraining();
+            EXPECT_FALSE(viewer.projectTrainingSessionState().restoring);
+            viewer.jobs().canceled(*sam);
+            viewer.jobs().free(*sam);
             EXPECT_TRUE(manager->canResume());
             EXPECT_FALSE(manager->canStart());
             EXPECT_FALSE(manager->canPause());

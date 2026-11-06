@@ -60,6 +60,7 @@
     <div id="sam-hint" class="sam-note"></div>
   </div>
   <div id="preview-message" role="status"></div>
+  <div id="mask-legend" class="sam-note hidden" role="status"></div>
 
   <div id="main-area">
     <div id="filmstrip">
@@ -96,10 +97,10 @@
           <button type="button" class="btn" id="sam-positive"></button>
           <button type="button" class="btn" id="sam-negative"></button>
           <button type="button" class="btn" id="sam-box"></button>
-          <button type="button" class="btn" id="sam-edit"></button>
           <button type="button" class="btn" id="sam-pan"></button>
         </div>
-        <div id="sam-selection" role="status"></div>
+        <div id="sam-step-hint" class="sam-note"></div>
+        <select id="sam-selection"></select>
         <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-remove"></button>
           <button type="button" class="btn" id="sam-flip"></button>
@@ -121,10 +122,6 @@
           <button type="button" class="btn" id="sam-show"></button>
         </div>
         <div id="sam-quality" class="sam-note"></div>
-        <div class="sam-tool-row">
-          <button type="button" class="btn btn--primary" id="sam-apply"></button>
-          <button type="button" class="btn" id="sam-exclude"></button>
-        </div>
         <div id="sam-status" role="status"></div>
       </div>
       <div id="metadata-info">
@@ -189,6 +186,13 @@
           <label for="cb-mask" id="cb-mask-label"></label>
         </div>
       </div>
+      </div>
+      <div id="sam-apply-controls" class="hidden">
+        <span class="section-label-ip" id="sam-apply-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-apply"></button>
+          <button type="button" class="btn" id="sam-exclude"></button>
+        </div>
       </div>
     </div>
   </div>

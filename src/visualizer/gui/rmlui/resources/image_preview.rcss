@@ -185,6 +185,12 @@
     border-bottom-color: #454545;
 }
 #sam-controls.hidden { display: none; }
+#sam-apply-controls.hidden { display: none; }
+#sam-apply-controls { padding: 10dp; flex-shrink: 0; }
+#sam-controls .hidden { display: none; }
+#mask-legend { margin: 0; padding: 4dp 10dp; flex-shrink: 0; }
+#mask-legend.hidden { display: none; }
+#sam-selection { width: 100%; box-sizing: border-box; height: 28dp; }
 .sam-tool-row {
     display: flex;
     flex-wrap: wrap;
@@ -192,7 +198,7 @@
     gap: 4dp;
     margin-bottom: 4dp;
 }
-#sam-controls button {
+#sam-controls button, #sam-apply-controls button {
     box-sizing: border-box;
     display: inline-block;
     flex: 0 0 auto;
@@ -203,7 +209,9 @@
 }
 .sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
 #sam-selection, #sam-status { font-size: 12dp; margin: 6dp 0; }
-#sidebar.sam-sidebar { width: 260dp; }
+#sidebar.sam-sidebar { width: 260dp; display: flex; flex-direction: column; overflow: hidden; }
+.sam-sidebar #sam-controls { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.sam-sidebar #metadata-info { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 #sam-overlay, #sam-markers { pointer-events: none; }
 #sam-overlay { z-index: 2; }
 #image-container.sam-prompt { cursor: crosshair; }
@@ -224,6 +232,12 @@
 }
 .sam-point-selected { border-width: 3dp; line-height: 12dp; }
 .sam-box { position: absolute; border-width: 2dp; }
+.sam-box-handle {
+    position: absolute;
+    width: 8dp; height: 8dp;
+    margin-left: -4dp; margin-top: -4dp;
+    border-width: 1dp;
+}
 
 #no-image-text {
     font-size: 12dp;
