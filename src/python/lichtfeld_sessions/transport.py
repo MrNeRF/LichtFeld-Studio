@@ -209,10 +209,8 @@ def validate_session(record, expected_id=None):
             raise ValueError("Invalid training session counter: " + key)
     if "label" in record and (not isinstance(record["label"], str) or len(record["label"]) > 1024):
         raise ValueError("Invalid training session label")
-    # Older publishers expose a job-relative result without the optional import
-    # descriptor. They remain observable; only self-contained results can import.
-    if isinstance(record.get("result"), dict) and "root" in record["result"]:
-        validate_result(record["result"])
+    # Optional result metadata is validated by its consumer. A damaged artifact
+    # must not hide terminal status or keep an observer's lease alive.
     return record
 
 

@@ -27,6 +27,54 @@ def editor_wait(camera_runtime):
     _editor(camera_runtime, "import time\n" + inspect.getsource(wait_until))
 
 
+def test_invalid_saved_result_retains_preview_and_releases_lease(camera_runtime_with_numpy, tmp_path, monkeypatch):
+    endpoint = camera_runtime_with_numpy
+    from lichtfeld_sessions import transport
+    from test_training_sessions import arrays
+
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Invalid result", "state": "training"})
+    try:
+        first = producer.publish(arrays(8), 1)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        _ui_editor(endpoint, '''
+import lfs_plugins.external_training_panel as panel
+panel._current = panel.ExternalTraining(RECORD)
+controls = panel.ExternalTrainingPanel()
+'''.replace("RECORD", repr(record)))
+        _editor(endpoint, '''
+import time
+deadline = time.monotonic() + 10
+while panel._current.generation != FIRST and time.monotonic() < deadline:
+    time.sleep(.05)
+assert panel._current.generation == FIRST, panel._current.error
+'''.replace("FIRST", repr(first["id"])))
+        producer.finish("completed", result={"root": str(tmp_path), "iteration": "broken"})
+        _editor(endpoint, '''
+deadline = time.monotonic() + 10
+while not panel._current.stop.is_set() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert panel._current.stop.is_set(), panel._current.connection_error
+assert panel._current.status["state"] == "completed"
+assert not panel._current.connection_error
+''')
+        _ui_editor(endpoint, '''
+controls.on_update(None)
+assert controls._saved_result() == lf.ui.tr("external_training.result_invalid")
+assert not controls._can_import_result()
+assert panel._current.shown["count"] == 8
+assert lf.get_scene().get_node_by_uuid(panel._current.uuid)
+controls._remove()
+''')
+        deadline = time.monotonic() + 5
+        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert not list((producer.root / "clients").glob("*.json"))
+    finally:
+        producer.finish()
+        producer.pool.close()
+
+
 def test_completed_training_imports_full_model_with_result_coordinates(camera_runtime_with_numpy, tmp_path, monkeypatch):
     camera_runtime = camera_runtime_with_numpy
     import hashlib

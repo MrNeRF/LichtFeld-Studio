@@ -49,6 +49,11 @@ def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
     legacy = {"protocol": 1, "id": "legacy", "pid": os.getpid(), "state": "completed",
               "result": {"path": "artifacts/best.ply"}}
     assert transport.validate_session(legacy) is legacy
+    invalid_result = {**legacy, "result": {**result, "count": "invalid"}}
+    # A malformed optional artifact cannot hide a valid terminal session.
+    assert transport.validate_session(invalid_result) is invalid_result
+    with pytest.raises(ValueError, match="count"):
+        transport.resolve_result(invalid_result)
 
 
 @pytest.mark.parametrize("field,value", [("iteration", -1), ("iterations", True), ("count", "12"),

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import lichtfeld as lf
 from lichtfeld_sessions import ensure_numpy, geometry
-from lichtfeld_sessions.transport import TERMINAL, discover, resolve_result
+from lichtfeld_sessions.transport import TERMINAL, discover, resolve_result, validate_result
 from .external_training import ExternalTraining, presentation_transform
 from .types import Panel
 
@@ -221,16 +221,26 @@ class ExternalTrainingPanel(Panel):
         result = _current.status.get("result") if _current else None
         if not isinstance(result, dict) or "root" not in result:
             return ""
-        key = "external_training.result_best" if result.get("score") else "external_training.result_last"
+        try:
+            validate_result(result)
+        except ValueError:
+            return lf.ui.tr("external_training.result_invalid")
+        key = "external_training.result_best" if result["kind"] == "best" else "external_training.result_last"
         return lf.ui.tr(key).format(step=f"{result.get('iteration', 0):,}",
                                    count=f"{result.get('count', 0):,}", degree=result.get("sh_degree", 0))
 
     def _can_import_result(self):
-        return bool(_current and _current.status.get("state") in TERMINAL
+        if not (_current and _current.status.get("state") in TERMINAL
                     and isinstance(_current.status.get("result"), dict)
                     and "root" in _current.status["result"]
                     and not self._result_future and not self._result_load and not lf.ui.get_import_state().get("active")
-                    and lf.ui.get_content_type() != "dataset")
+                    and lf.ui.get_content_type() != "dataset"):
+            return False
+        try:
+            validate_result(_current.status["result"])
+        except ValueError:
+            return False
+        return True
 
     def _import_result(self):
         if not self._can_import_result():
