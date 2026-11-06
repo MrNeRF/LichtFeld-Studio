@@ -42,6 +42,7 @@ tests/data/nn/*
 !src/python/_lfs_path_io.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py
+!src/python/lichtfeld_sessions/**/*.py
 !src/python/scripts/manage_stubs.py
 !tests/real_bicycle_sh_degree_training.py
 !tests/python/**/*.py
