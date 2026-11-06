@@ -4246,7 +4246,9 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCollision() {
-        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
+        // Shutdown cancels after the strings are released; look one up only for a live job.
+        if (const auto state = collisionJob(); state && state->running())
+            jobs_.requestCancel(collision_job_, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         collision_stop_.request_stop();
         publish_viewport_toolbar_generation();
     }
