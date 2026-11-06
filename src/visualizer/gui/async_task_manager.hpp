@@ -160,9 +160,9 @@ namespace lfs::vis {
                 std::lock_guard lock(import_state_.mutex);
                 return import_state_.dataset_type;
             }
-            [[nodiscard]] std::string getImportPath() const {
+            [[nodiscard]] std::string getImportPath(bool full = false) const {
                 std::lock_guard lock(import_state_.mutex);
-                return lfs::core::path_to_utf8(import_state_.path.filename());
+                return lfs::core::path_to_utf8(full ? import_state_.path : import_state_.path.filename());
             }
             [[nodiscard]] bool getImportSuccess() const {
                 std::lock_guard lock(import_state_.mutex);
@@ -197,7 +197,8 @@ namespace lfs::vis {
                 bool replace_first,
                 std::vector<std::string> name_hints = {},
                 std::vector<bool> visibility = {},
-                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt, bool import_batch = false);
+                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt, bool import_batch = false,
+                std::optional<glm::mat4> initial_transform = std::nullopt);
 
             // Video export
             [[nodiscard]] bool isExportingVideo() const {
@@ -331,6 +332,7 @@ namespace lfs::vis {
                 bool replace_scene = false;
                 glm::mat4 transform{1.0f};
                 int active_sh_degree = -1;
+                bool preserve_raw = false;
             };
             struct SplatLoadCompletion {
                 SplatLoadRequest request;

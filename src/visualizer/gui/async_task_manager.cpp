@@ -1325,7 +1325,8 @@ namespace lfs::vis::gui {
                                           const bool replace_first,
                                           std::vector<std::string> name_hints,
                                           std::vector<bool> visibility,
-                                          std::optional<core::events::cmd::LoadGalleryScene> gallery, const bool import_batch) {
+                                          std::optional<core::events::cmd::LoadGalleryScene> gallery, const bool import_batch,
+                                          std::optional<glm::mat4> initial_transform) {
         if (paths.empty()) {
             LOG_WARN("Splat load requested without paths");
             return false;
@@ -1383,8 +1384,9 @@ namespace lfs::vis::gui {
                     .name_hint = index < name_hints.size() ? std::move(name_hints[index]) : std::string{},
                     .is_visible = index >= visibility.size() || visibility[index],
                     .replace_scene = replace_first && index == 0,
-                    .transform = splat_load_state_.gallery ? splat_load_state_.gallery->transforms[index] : glm::mat4{1.0f},
-                    .active_sh_degree = splat_load_state_.gallery ? splat_load_state_.gallery->sh_degrees[index] : -1});
+                    .transform = splat_load_state_.gallery ? splat_load_state_.gallery->transforms[index] : initial_transform.value_or(glm::mat4{1.0f}),
+                    .active_sh_degree = splat_load_state_.gallery ? splat_load_state_.gallery->sh_degrees[index] : -1,
+                    .preserve_raw = splat_load_state_.gallery.has_value() || initial_transform.has_value()});
             }
         }
 
@@ -1446,7 +1448,7 @@ namespace lfs::vis::gui {
                                 [this, job, &stop_token]() {
                                     return stop_token.stop_requested() || jobs_.cancelRequested(job);
                                 },
-                                request.active_sh_degree >= 0, &user_error),
+                                request.preserve_raw, &user_error),
                             lfs::LegacyErrorContext{
                                 .code = lfs::ErrorCode::Internal,
                                 .domain = lfs::ErrorDomain::IO,
@@ -1684,10 +1686,11 @@ namespace lfs::vis::gui {
                         completion.request.path,
                         completion.request.name_hint,
                         splat_load_state_.gallery ? false : completion.request.is_visible,
-                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group,
+                        std::move(*completion.result), completion.request.preserve_raw, gallery_group,
                         splat_load_state_.gallery.has_value(), &imported_uuid, &splat_load_state_.attachment_selection_generation);
-                    if (splat_load_state_.gallery) {
+                    if (completion.request.preserve_raw)
                         scene_manager->getScene().setNodeTransform(node_name, completion.request.transform);
+                    if (splat_load_state_.gallery) {
                         scene_manager->getScene().setNodeVisibility(node_name, true);
                     }
                 }

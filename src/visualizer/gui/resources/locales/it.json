@@ -3873,5 +3873,13 @@
   "external_training.dataset_open": "Apri una nuova scena o passa il dataset caricato alla modalità di modifica prima di visualizzare un trainer esterno.",
   "external_training.dependencies": "Preparazione di NumPy; installazione se necessaria…",
   "external_training.camera_overlay": "Frustum delle camere (intera scena)",
-  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo."
+  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo.",
+  "external_training.result_invalid": "Il modello salvato è incompleto, è stato modificato o contiene metadati non supportati.",
+  "external_training.result_unreadable": "Il modello salvato non è disponibile o non è leggibile. Mantieni disponibile la cartella di output e controlla i permessi del file.",
+  "external_training.result_name": "{name} · modello salvato",
+  "external_training.import_result": "Importa modello salvato",
+  "external_training.import_hint": "Disponibile al termine del training. Importa il miglior modello completo salvato, o l’ultimo modello valido, come modello locale modificabile. I limiti dell’anteprima non si applicano.",
+  "external_training.import_busy": "È già in corso un’importazione. Attendi che termini.",
+  "external_training.result_best": "Miglior valutato: passo {step} · {count} gaussiane · SH{degree}",
+  "external_training.result_last": "Ultimo salvato: passo {step} · {count} gaussiane · SH{degree}"
 }

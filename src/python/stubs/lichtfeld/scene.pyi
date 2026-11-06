@@ -554,6 +554,11 @@ class NodeCollection:
         """Return an iterator over all nodes"""
 
 class Scene:
+    def import_splat_file(self, path: str, name: str, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> bool:
+        """
+        Start an additive full-fidelity import with a row-major 4x4 initial transform on the UI thread. Uses the normal async loader; False while another import is running.
+        """
+
     def create_external_preview(self, name: str, model_name: str) -> str:
         """
         Create a protected transient group and model on the UI thread; returns its UUID

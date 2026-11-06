@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared protocol contracts independent of Blender, Python ABI and CUDA."""
 import threading
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,35 @@ def arrays(count=3):
     return {"means": np.zeros((count, 3), np.float32), "scale": np.zeros((count, 3), np.float32),
             "rotation": np.tile([1, 0, 0, 0], (count, 1)).astype(np.float32),
             "opacity": np.zeros((count, 1), np.float32), "sh": np.zeros((count, 1, 3), np.float32)}
+
+
+def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
+    path = tmp_path / "result-à.ply"
+    path.write_bytes(b"saved full model")
+    presentation = {"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP,
+                    "model_to_data": np.diag([2., 3., 4., 1.]).tolist()}
+    result = {"kind": "best", "root": str(tmp_path), "path": path.name, "bytes": path.stat().st_size,
+              "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "iteration": 10,
+              "count": 1234, "sh_degree": 3, "presentation": presentation}
+    record = {"state": "completed", "result": result}
+    loaded, coordinates = transport.resolve_result(record)
+    assert loaded == path.resolve()
+    assert coordinates == presentation
+    with pytest.raises(InterruptedError):
+        transport.resolve_result(record, lambda: True)
+    with pytest.raises(ValueError, match="finished"):
+        transport.resolve_result({**record, "state": "training"})
+    path.write_bytes(b"modified model!!")
+    with pytest.raises(ValueError, match="integrity"):
+        transport.resolve_result(record)
+    for field, value in (("path", "../outside.ply"), ("root", "relative"), ("bytes", True),
+                         ("count", -1), ("sh_degree", 4), ("sha256", "no checksum"),
+                         ("presentation", {"schema": 99})):
+        with pytest.raises(ValueError):
+            transport.resolve_result({**record, "result": {**result, field: value}})
+    legacy = {"protocol": 1, "id": "legacy", "pid": os.getpid(), "state": "completed",
+              "result": {"path": "artifacts/best.ply"}}
+    assert transport.validate_session(legacy) is legacy
 
 
 @pytest.mark.parametrize("field,value", [("iteration", -1), ("iterations", True), ("count", "12"),

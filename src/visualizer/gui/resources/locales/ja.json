@@ -3873,5 +3873,13 @@
   "external_training.dataset_open": "外部トレーナーを表示するには、新しいシーンを開くか、読み込んだデータセットを編集モードに切り替えてください。",
   "external_training.dependencies": "NumPy を準備中（必要に応じてインストール）…",
   "external_training.camera_overlay": "カメラの視錐台（シーン全体）",
-  "external_training.export_unavailable": "外部プレビューはエクスポートできません。トレーナーが保存したモデルを開いてエクスポートしてください。"
+  "external_training.export_unavailable": "外部プレビューはエクスポートできません。トレーナーが保存したモデルを開いてエクスポートしてください。",
+  "external_training.result_invalid": "保存済みモデルが不完全、変更済み、または未対応のメタデータを含んでいます。",
+  "external_training.result_unreadable": "保存済みモデルが見つからないか、読み取れません。出力フォルダーにアクセスできることと、ファイルのアクセス権限を確認してください。",
+  "external_training.result_name": "{name} · 保存済みモデル",
+  "external_training.import_result": "保存済みモデルをインポート",
+  "external_training.import_hint": "トレーニング終了後に利用できます。保存された最良の完全モデル、または最後の有効なモデルを、編集可能なローカルモデルとしてインポートします。プレビューの制限は適用されません。",
+  "external_training.import_busy": "別のインポートが進行中です。完了するまでお待ちください。",
+  "external_training.result_best": "最高評価：ステップ {step} · ガウシアン {count} 個 · SH{degree}",
+  "external_training.result_last": "最終保存：ステップ {step} · ガウシアン {count} 個 · SH{degree}"
 }

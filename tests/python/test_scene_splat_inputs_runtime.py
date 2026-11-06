@@ -27,6 +27,142 @@ def editor_wait(camera_runtime):
     _editor(camera_runtime, "import time\n" + inspect.getsource(wait_until))
 
 
+def test_completed_training_imports_full_model_with_result_coordinates(camera_runtime_with_numpy, tmp_path, monkeypatch):
+    camera_runtime = camera_runtime_with_numpy
+    import hashlib
+    from lichtfeld_sessions import geometry, transport
+    from test_training_sessions import arrays
+
+    artifact = tmp_path / "saved-full.ply"
+    _editor(camera_runtime, 'import lichtfeld as lf')
+    _ui_editor(camera_runtime, '''
+import numpy as np, time
+import lfs_plugins.external_training_panel as panel
+from lfs_plugins.external_training import ExternalTraining
+scene = lf.get_scene()
+def tensor(value):
+    return lf.Tensor.from_numpy(np.ascontiguousarray(value, dtype=np.float32))
+means = np.arange(24, dtype=np.float32).reshape(8, 3) * .01
+sh0 = np.full((8, 1, 3), .1234567, dtype=np.float32)
+shN = np.arange(8 * 45, dtype=np.float32).reshape(8, 15, 3) * .001234567
+scene.add_splat("Existing local model", tensor(means), tensor(sh0), tensor(shN),
+                tensor(np.full((8, 3), -3)), tensor(np.tile([1, 0, 0, 0], (8, 1))),
+                tensor(np.zeros((8, 1))), sh_degree=3)
+''')
+    _editor(camera_runtime, f'''
+source = lf.get_scene().get_node("Existing local model").splat_data()
+saved_sh0 = source.sh0_raw.cpu().numpy().copy()
+saved_shN = source.shN_raw.cpu().numpy().copy()
+lf.io.save_ply(source, {str(artifact)!r})
+''')
+    result = {"root": str(tmp_path), "path": artifact.name, "bytes": artifact.stat().st_size,
+              "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "kind": "best", "score": {"psnr": 30},
+              "iteration": 4, "count": 8, "sh_degree": 3,
+              "presentation": {"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP,
+                               "model_to_data": [[2, 0, 0, 3], [0, 3, 0, 4], [0, 0, 4, 5], [0, 0, 0, 1]]}}
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Result trainer", "state": "training"})
+    try:
+        producer.publish(arrays(2), 7)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        _ui_editor(camera_runtime, f'panel._current = ExternalTraining({record!r})\ncontrols = panel.ExternalTrainingPanel()')
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while not panel._current.shown and time.monotonic() < deadline:
+    time.sleep(.05)
+assert panel._current.shown
+''')
+        producer.finish("completed", result=result)
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while not panel._current.stop.is_set() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert panel._current.stop.is_set()
+assert panel._current.status["result"]["count"] == 8
+''')
+        # Integrity failure must not modify the preview or any existing model.
+        content = artifact.read_bytes()
+        artifact.write_bytes(content[:-1] + bytes([content[-1] ^ 1]))
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while not controls._result_future.done() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert controls._result_future.done()
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+assert controls._message() == lf.ui.tr("external_training.result_invalid"), controls._message()
+assert lf.get_scene().get_node("Existing local model").gaussian_count == 8
+assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
+''')
+        artifact.write_bytes(content)
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while not controls._result_future.done() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert controls._result_future.done()
+''')
+        _ui_editor(camera_runtime, 'controls.on_update(None)\nassert not controls._message(), controls._message()')
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 20
+while not lf.ui.get_import_state().get("success") and not lf.ui.get_import_state().get("error") and time.monotonic() < deadline:
+    time.sleep(.05)
+assert lf.ui.get_import_state()["success"], lf.ui.get_import_state()
+assert lf.ui.get_import_state()["path"] == "saved-full.ply"
+assert lf.ui.get_import_state()["source_path"].endswith("saved-full.ply")
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+scene = lf.get_scene()
+assert not scene.get_node_by_uuid(panel._current.uuid).get("visible")
+local = next(node for node in scene.nodes if node.name.startswith("Result trainer") and node.type == lf.scene.NodeType.SPLAT and not node.read_only)
+assert not local.read_only
+assert local.gaussian_count == 8
+assert local.splat_data().active_sh_degree == 3
+np.testing.assert_allclose(local.splat_data().sh0_raw.cpu().numpy(), saved_sh0, rtol=1e-6)
+np.testing.assert_allclose(local.splat_data().shN_raw.cpu().numpy(), saved_shN, rtol=1e-6, atol=1e-7)
+np.testing.assert_allclose(local.local_transform, [[2,0,0,3],[0,0,4,5],[0,-3,0,-4],[0,0,0,1]], atol=1e-6)
+edited_transform = np.asarray(local.local_transform, dtype=np.float32).copy()
+edited_transform[0, 3] += 1
+local.set_local_transform(edited_transform)
+np.testing.assert_allclose(lf.get_scene().get_node(local.name).local_transform, edited_transform)
+assert scene.get_node("Existing local model").gaussian_count == 8
+imported_name = local.name
+''')
+        artifact.unlink()
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while not controls._result_future.done() and time.monotonic() < deadline:
+    time.sleep(.05)
+assert controls._result_future.done()
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+assert controls._message() == lf.ui.tr("external_training.result_unreadable"), controls._message()
+assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+controls._remove()
+assert not controls._message()
+assert not any(node.read_only for node in lf.get_scene().nodes)
+assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+''')
+        project = tmp_path / "imported-result.licht"
+        _tool(camera_runtime, "project_save_as", {"path": str(project)})
+        _tool(camera_runtime, "project_open", {"path": str(project), "discard_changes": True})
+        _editor(camera_runtime, '''
+deadline = time.monotonic() + 10
+while (not lf.get_scene().get_node(imported_name) or lf.get_scene().get_node(imported_name).gaussian_count != 8) and time.monotonic() < deadline:
+    time.sleep(.05)
+assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+np.testing.assert_allclose(lf.get_scene().get_node(imported_name).local_transform, edited_transform)
+''')
+    finally:
+        producer.finish()
+        producer.pool.close()
+
+
 def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime_with_numpy, numpy, tmp_path, monkeypatch, request):
     camera_runtime, np = camera_runtime_with_numpy, numpy
     from lichtfeld_sessions import geometry, transport

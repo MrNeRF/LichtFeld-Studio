@@ -3873,5 +3873,13 @@
   "external_training.dataset_open": "Open een nieuwe scène of zet de geladen dataset in de bewerkingsmodus voordat je een externe trainer bekijkt.",
   "external_training.dependencies": "NumPy voorbereiden; installeren indien nodig…",
   "external_training.camera_overlay": "Camerafrustums (hele scène)",
-  "external_training.export_unavailable": "Externe voorbeelden kunnen niet worden geëxporteerd. Open het model dat door het trainingsproces is opgeslagen om het te exporteren."
+  "external_training.export_unavailable": "Externe voorbeelden kunnen niet worden geëxporteerd. Open het model dat door het trainingsproces is opgeslagen om het te exporteren.",
+  "external_training.result_invalid": "Het opgeslagen model is onvolledig, is gewijzigd of bevat niet-ondersteunde metagegevens.",
+  "external_training.result_unreadable": "Het opgeslagen model is niet beschikbaar of niet leesbaar. Houd de uitvoermap beschikbaar en controleer de bestandsrechten.",
+  "external_training.result_name": "{name} · opgeslagen model",
+  "external_training.import_result": "Opgeslagen model importeren",
+  "external_training.import_hint": "Beschikbaar nadat de training is afgerond. Importeer het volledig opgeslagen beste model of het laatste geldige model als een bewerkbaar lokaal model. Voorbeeldlimieten zijn niet van toepassing.",
+  "external_training.import_busy": "Er wordt al een ander model geïmporteerd. Wacht tot dit klaar is.",
+  "external_training.result_best": "Beste beoordeling: stap {step} · {count} Gaussianen · SH{degree}",
+  "external_training.result_last": "Laatst opgeslagen: stap {step} · {count} Gaussianen · SH{degree}"
 }

@@ -704,6 +704,7 @@ namespace lfs::vis {
                 state.stage = tasks.getImportStage();
                 state.dataset_type = tasks.getImportDatasetType();
                 state.path = tasks.getImportPath();
+                state.source_path = tasks.getImportPath(true);
                 state.success = tasks.getImportSuccess();
                 state.error = tasks.getImportError();
                 state.num_images = tasks.getImportNumImages();

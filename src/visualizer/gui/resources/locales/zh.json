@@ -3873,5 +3873,13 @@
   "external_training.dataset_open": "查看外部训练进程前，请打开新场景或将已加载的数据集切换到编辑模式。",
   "external_training.dependencies": "正在准备 NumPy；如有需要将进行安装…",
   "external_training.camera_overlay": "相机视锥体（整个场景）",
-  "external_training.export_unavailable": "无法导出外部预览。请打开训练器保存的模型后再导出。"
+  "external_training.export_unavailable": "无法导出外部预览。请打开训练器保存的模型后再导出。",
+  "external_training.result_invalid": "已保存的模型不完整、已被更改或包含不受支持的元数据。",
+  "external_training.result_unreadable": "已保存的模型不可用或无法读取。请保持输出文件夹可访问，并检查文件权限。",
+  "external_training.result_name": "{name} · 已保存的模型",
+  "external_training.import_result": "导入已保存的模型",
+  "external_training.import_hint": "训练结束后可用。将已保存的最佳完整模型或最后一个有效模型导入为可编辑的本地模型。预览限制不适用。",
+  "external_training.import_busy": "另一个导入正在进行。请等待其完成。",
+  "external_training.result_best": "最佳评估：步数 {step} · {count} 个高斯 · SH{degree}",
+  "external_training.result_last": "最后保存：步数 {step} · {count} 个高斯 · SH{degree}"
 }

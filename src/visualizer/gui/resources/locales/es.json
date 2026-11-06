@@ -3873,5 +3873,13 @@
   "external_training.dataset_open": "Abre una escena nueva o cambia el conjunto de datos cargado al modo de edición antes de ver un entrenador externo.",
   "external_training.dependencies": "Preparando NumPy; se instalará si es necesario…",
   "external_training.camera_overlay": "Frústums de cámara (toda la escena)",
-  "external_training.export_unavailable": "Las vistas previas externas no se pueden exportar. Abre el modelo guardado por el entrenador para exportarlo."
+  "external_training.export_unavailable": "Las vistas previas externas no se pueden exportar. Abre el modelo guardado por el entrenador para exportarlo.",
+  "external_training.result_invalid": "El modelo guardado está incompleto, ha cambiado o contiene metadatos no compatibles.",
+  "external_training.result_unreadable": "El modelo guardado no está disponible o no se puede leer. Mantén disponible la carpeta de salida y comprueba los permisos del archivo.",
+  "external_training.result_name": "{name} · modelo guardado",
+  "external_training.import_result": "Importar modelo guardado",
+  "external_training.import_hint": "Disponible al finalizar el entrenamiento. Importa el mejor modelo completo guardado, o el último modelo válido, como modelo local editable. No se aplican los límites de la vista previa.",
+  "external_training.import_busy": "Ya hay otra importación en curso. Espera a que termine.",
+  "external_training.result_best": "Mejor evaluado: paso {step} · {count} gaussianas · SH{degree}",
+  "external_training.result_last": "Último guardado: paso {step} · {count} gaussianas · SH{degree}"
 }
