@@ -7,13 +7,15 @@ Use an empty scene or a model scene for observation. A loaded training dataset u
 1. Start training from the LichtFeld Blender extension, or explicitly enable the session publisher in a LichtFeld Studio training script.
 2. Open **External training**, refresh the list and choose a running trainer. The list excludes completed runs, dead processes and the current LichtFeld Studio process.
 3. Click **View training**. Preview updates arrive automatically. **Frame preview** uses the normal viewport framing action; navigation and visibility remain available during updates.
-4. Expand the trainer group in the Scene tree to see the preview model and its capture cameras. Use **Camera frustums** to toggle the normal camera overlay. The cameras retain their calibration, including the principal point. Their geometry can arrive independently of the Gaussian snapshots.
+4. Expand the trainer group in the Scene tree to see the preview model and its capture cameras. **Camera frustums (whole scene)** controls the global camera overlay, including local cameras. Use the camera group's visibility in the Scene tree to hide only the trainer's cameras. The cameras retain their calibration, including the principal point. Their geometry can arrive independently of the Gaussian snapshots.
+
+On first use, the panel shows dependency preparation while the normal package manager installs NumPy if needed. Installation requires network access or a populated package cache. Errors appear in the panel and preparation retries automatically; **Disconnect** cancels it.
 
 The progress line belongs to the trainer. The preview line reports the step, Gaussian count and SH degree of the snapshot actually installed in the viewer. Quality and update frequency follow the publisher's preview settings.
 
 ## Ownership and persistence
 
-The preview is read-only. It cannot be transformed, renamed, unlocked, cropped or used as a local training model. Capture cameras cannot be enabled for local training. Preview nodes are transient: project saves and document undo history leave them out, and incoming updates do not make the document dirty.
+The preview is read-only. It cannot be transformed, renamed, unlocked, cropped, edited through the Gaussian API or used as a local training model. Capture cameras cannot be enabled for local training. Preview nodes are transient: project saves, exports and document undo history leave them out, and incoming updates do not make the document dirty. To export a trained model, open the file saved by its trainer. Local models remain editable and exportable while observation runs.
 
 **Disconnect** stops observation and keeps the last read-only preview. **Remove preview** also removes its scene group. Neither action pauses, stops or changes the external trainer. A completed or stopped trainer leaves its last installed preview available for inspection. The training output and checkpoints remain the responsibility of the owning process.
 

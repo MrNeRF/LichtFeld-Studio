@@ -74,14 +74,14 @@ namespace lfs::python {
         pkg.def(
             "list",
             []() { return PackageManager::instance().list_installed(); },
-            "List installed packages");
+            nb::call_guard<nb::gil_scoped_release>(), "List installed packages");
 
         pkg.def(
             "is_installed",
             [](const std::string& package) {
                 return PackageManager::instance().is_installed(package);
             },
-            nb::arg("package"), "Check if package is installed");
+            nb::arg("package"), nb::call_guard<nb::gil_scoped_release>(), "Check if package is installed");
 
         pkg.def(
             "is_uv_available",

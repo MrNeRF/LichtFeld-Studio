@@ -3806,5 +3806,8 @@
   "external_training.progress": "단계 {step} / {total}",
   "external_training.snapshot": "미리보기: 단계 {step} · 가우시안 {count}개 · SH{degree}",
   "external_training.waiting": "첫 미리보기를 기다리는 중…",
-  "external_training.dataset_open": "외부 트레이너를 보려면 새 장면을 열거나 불러온 데이터셋을 편집 모드로 전환하세요."
+  "external_training.dataset_open": "외부 트레이너를 보려면 새 장면을 열거나 불러온 데이터셋을 편집 모드로 전환하세요.",
+  "external_training.dependencies": "NumPy 준비 중; 필요한 경우 설치합니다…",
+  "external_training.camera_overlay": "카메라 절두체 (전체 장면)",
+  "external_training.export_unavailable": "외부 미리보기는 내보낼 수 없습니다. 학습 프로세스가 저장한 모델을 열어 내보내세요."
 }

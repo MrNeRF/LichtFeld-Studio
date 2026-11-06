@@ -6,14 +6,14 @@ import time
 
 import pytest
 
-from test_api_camera_project_runtime import camera_runtime, _editor, _ui_editor  # noqa: F401
+from test_api_camera_project_runtime import camera_runtime, camera_runtime_with_numpy, _editor, _ui_editor  # noqa: F401
 from test_render_on_demand_idle import _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
-def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime, tmp_path, monkeypatch, request):
-    import numpy as np
+def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime_with_numpy, numpy, tmp_path, monkeypatch, request):
+    camera_runtime, np = camera_runtime_with_numpy, numpy
     from lichtfeld_sessions import geometry, transport
     from test_training_sessions import arrays
 
@@ -305,7 +305,8 @@ assert lf.get_scene().get_node_by_uuid(preview) is None
 
 
 @pytest.mark.slow
-def test_external_preview_bulk_removal_preserves_another_ready_upload(camera_runtime):
+def test_external_preview_bulk_removal_preserves_another_ready_upload(camera_runtime_with_numpy):
+    camera_runtime = camera_runtime_with_numpy
     _editor(camera_runtime, '''
 import time, lichtfeld as lf
 from lichtfeld_sessions import ensure_numpy
@@ -349,7 +350,8 @@ lf.get_scene().remove_external_preview(other)
     print(output.strip())
 
 
-def test_external_preview_exit_cancels_dependency_download(camera_runtime, request):
+@pytest.mark.parametrize("query", ["list()", "is_installed('numpy')"])
+def test_external_preview_exit_cancels_dependency_download(camera_runtime, request, query):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -383,8 +385,17 @@ observer.ensure_numpy = stalled_dependency
 connection = observer.ExternalTraining({"id": "dependency-test", "label": "Dependency test"})
 ''')
         assert requested.wait(10), _editor(camera_runtime, 'print(connection.error)')
+        _editor(camera_runtime, '''
+query_started = threading.Event()
+def query_packages():
+    query_started.set()
+    lf.packages.QUERY
+threading.Thread(target=query_packages, daemon=True).start()
+assert query_started.wait(5)
+'''.replace("QUERY", query))
         _ui_editor(camera_runtime, '''
 assert not lf.project_is_dirty(), "The transient preview dirtied the document"
+assert connection.preparing_dependencies
 ''')
         _editor(camera_runtime, '''
 threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()
@@ -395,6 +406,102 @@ threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start
         server.shutdown()
         server.server_close()
         worker.join(5)
+
+
+
+def test_external_preview_recovers_failures_and_releases_failed_final_upload(camera_runtime_with_numpy, tmp_path, monkeypatch):
+    endpoint = camera_runtime_with_numpy
+    from lichtfeld_sessions import transport
+    from test_training_sessions import arrays
+
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Recovery", "state": "training"})
+    try:
+        first = producer.publish(arrays(8), 1)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        _editor(endpoint, '''
+import time
+import lfs_plugins.external_training as observer
+original_numpy = observer.ensure_numpy
+dependency_attempts = 0
+def unavailable_once(*args):
+    global dependency_attempts
+    dependency_attempts += 1
+    if dependency_attempts == 1:
+        raise RuntimeError("Dependency download unavailable")
+    return original_numpy(*args)
+observer.ensure_numpy = unavailable_once
+''')
+        _ui_editor(endpoint, "connection = observer.ExternalTraining(RECORD)".replace("RECORD", repr(record)))
+        _editor(endpoint, '''
+deadline = time.monotonic() + 5
+while not connection.error and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert connection.preparing_dependencies
+assert "Dependency download unavailable" in connection.error
+deadline = time.monotonic() + 10
+while connection.generation != FIRST and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert connection.generation == FIRST, connection.error
+assert dependency_attempts == 2
+assert not connection.preparing_dependencies
+assert not connection.error
+observer.ensure_numpy = original_numpy
+original_scene = observer.ExternalTraining.scene
+failed_installs = []
+reject_upload = True
+class RejectingScene:
+    def __init__(self, real):
+        self.real = real
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+    def apply_external_preview(self, *args):
+        if reject_upload:
+            failed_installs.append(time.monotonic())
+            raise RuntimeError("Injected renderer allocation failure")
+        return self.real.apply_external_preview(*args)
+observer.ExternalTraining.scene = property(lambda self: RejectingScene(original_scene.fget(self)))
+'''.replace("FIRST", repr(first["id"])))
+        second = producer.publish(arrays(9), 2)
+        _editor(endpoint, '''
+deadline = time.monotonic() + 8
+while len(failed_installs) < 2 and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert len(failed_installs) == 2, failed_installs
+assert failed_installs[1] - failed_installs[0] >= 1.9, failed_installs
+assert connection.generation == FIRST
+assert connection.shown["count"] == 8
+assert not connection.stop.is_set()
+reject_upload = False
+deadline = time.monotonic() + 8
+while connection.generation != SECOND and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert connection.generation == SECOND, connection.error
+assert not connection.error
+reject_upload = True
+'''.replace("FIRST", repr(first["id"])).replace("SECOND", repr(second["id"])))
+        producer.publish(arrays(10), 3)
+        producer.finish("completed")
+        _editor(endpoint, '''
+try:
+    deadline = time.monotonic() + 8
+    while not connection.stop.is_set() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert connection.stop.is_set(), connection.error
+    assert connection.generation == SECOND
+    assert connection.shown["count"] == 9
+    assert "Injected renderer allocation failure" in connection.error
+finally:
+    observer.ExternalTraining.scene = original_scene
+    observer.ensure_numpy = original_numpy
+'''.replace("SECOND", repr(second["id"])))
+        deadline = time.monotonic() + 5
+        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not list((producer.root / "clients").glob("*.json"))
+        _ui_editor(endpoint, "connection.close(remove=True)")
+    finally:
+        producer.finish("completed")
 
 
 def test_scene_center_and_deleted_mask_without_dataset(camera_runtime):

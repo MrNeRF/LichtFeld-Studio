@@ -3806,5 +3806,8 @@
   "external_training.progress": "Step {step} / {total}",
   "external_training.snapshot": "Preview: step {step} · {count} Gaussians · SH{degree}",
   "external_training.waiting": "Waiting for the first preview…",
-  "external_training.dataset_open": "Open a new scene or switch the loaded dataset to Edit Mode before viewing an external trainer."
+  "external_training.dataset_open": "Open a new scene or switch the loaded dataset to Edit Mode before viewing an external trainer.",
+  "external_training.dependencies": "Preparing NumPy; installing it if needed…",
+  "external_training.camera_overlay": "Camera frustums (whole scene)",
+  "external_training.export_unavailable": "External previews cannot be exported. Open the model saved by the trainer to export it."
 }

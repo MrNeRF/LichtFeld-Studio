@@ -3806,5 +3806,8 @@
   "external_training.progress": "Paso {step} / {total}",
   "external_training.snapshot": "Vista previa: paso {step} · {count} gaussianas · SH{degree}",
   "external_training.waiting": "Esperando la primera vista previa…",
-  "external_training.dataset_open": "Abre una escena nueva o cambia el conjunto de datos cargado al modo de edición antes de ver un entrenador externo."
+  "external_training.dataset_open": "Abre una escena nueva o cambia el conjunto de datos cargado al modo de edición antes de ver un entrenador externo.",
+  "external_training.dependencies": "Preparando NumPy; se instalará si es necesario…",
+  "external_training.camera_overlay": "Frústums de cámara (toda la escena)",
+  "external_training.export_unavailable": "Las vistas previas externas no se pueden exportar. Abre el modelo guardado por el entrenador para exportarlo."
 }

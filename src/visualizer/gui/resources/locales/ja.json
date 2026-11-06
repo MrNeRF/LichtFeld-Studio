@@ -3806,5 +3806,8 @@
   "external_training.progress": "ステップ {step} / {total}",
   "external_training.snapshot": "プレビュー：ステップ {step} · ガウシアン {count}個 · SH{degree}",
   "external_training.waiting": "最初のプレビューを待機中…",
-  "external_training.dataset_open": "外部トレーナーを表示するには、新しいシーンを開くか、読み込んだデータセットを編集モードに切り替えてください。"
+  "external_training.dataset_open": "外部トレーナーを表示するには、新しいシーンを開くか、読み込んだデータセットを編集モードに切り替えてください。",
+  "external_training.dependencies": "NumPy を準備中（必要に応じてインストール）…",
+  "external_training.camera_overlay": "カメラの視錐台（シーン全体）",
+  "external_training.export_unavailable": "外部プレビューはエクスポートできません。トレーナーが保存したモデルを開いてエクスポートしてください。"
 }

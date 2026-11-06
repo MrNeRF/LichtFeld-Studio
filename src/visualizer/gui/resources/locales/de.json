@@ -3806,5 +3806,8 @@
   "external_training.progress": "Schritt {step} / {total}",
   "external_training.snapshot": "Vorschau: Schritt {step} · {count} Gauß-Primitive · SH{degree}",
   "external_training.waiting": "Warten auf die erste Vorschau…",
-  "external_training.dataset_open": "Öffne eine neue Szene oder wechsle mit dem geladenen Datensatz in den Bearbeitungsmodus, bevor du einen externen Trainer anzeigst."
+  "external_training.dataset_open": "Öffne eine neue Szene oder wechsle mit dem geladenen Datensatz in den Bearbeitungsmodus, bevor du einen externen Trainer anzeigst.",
+  "external_training.dependencies": "NumPy wird vorbereitet und bei Bedarf installiert…",
+  "external_training.camera_overlay": "Kamerafrusten (gesamte Szene)",
+  "external_training.export_unavailable": "Externe Vorschauen können nicht exportiert werden. Öffnen Sie zum Exportieren das vom Trainer gespeicherte Modell."
 }

@@ -3806,5 +3806,8 @@
   "external_training.progress": "步数 {step} / {total}",
   "external_training.snapshot": "预览：步数 {step} · {count}个高斯 · SH{degree}",
   "external_training.waiting": "等待首次预览…",
-  "external_training.dataset_open": "查看外部训练进程前，请打开新场景或将已加载的数据集切换到编辑模式。"
+  "external_training.dataset_open": "查看外部训练进程前，请打开新场景或将已加载的数据集切换到编辑模式。",
+  "external_training.dependencies": "正在准备 NumPy；如有需要将进行安装…",
+  "external_training.camera_overlay": "相机视锥体（整个场景）",
+  "external_training.export_unavailable": "无法导出外部预览。请打开训练器保存的模型后再导出。"
 }

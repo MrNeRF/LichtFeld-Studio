@@ -266,7 +266,7 @@ namespace lfs::core {
         if (restore_staging_) {
             return;
         }
-        if (type == MutationType::MODEL_CHANGED)
+        if (type == MutationType::MODEL_CHANGED && !transient && transient_transaction_depth_ == 0)
             collision_content_generation_.fetch_add(1, std::memory_order_release);
         pending_mutations_ |= static_cast<uint32_t>(type);
         pending_document_change_ |= !transient && transient_transaction_depth_ == 0;

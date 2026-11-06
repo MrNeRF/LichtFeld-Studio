@@ -908,8 +908,6 @@ namespace lfs::vis::gui {
                 }
                 try {
                     if (update && update->model && !stop.stop_requested()) {
-                        if (!allocator)
-                            throw std::runtime_error("The renderer cannot import external preview tensors");
                         if (auto migrated = io::migrateSplatTensorsToAllocator(*update->model, allocator); !migrated)
                             throw std::runtime_error(migrated.error().format());
                     }
@@ -2179,6 +2177,10 @@ namespace lfs::vis::gui {
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
+            if (node && node->isExternalPreview()) {
+                publishExportFailureState(format, path, LOC("external_training.export_unavailable"));
+                return;
+            }
             if (node && node->type == core::NodeType::SPLAT && node->model) {
                 if (const auto& tree = node->model->lod_tree;
                     tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {

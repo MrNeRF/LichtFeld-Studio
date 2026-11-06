@@ -3806,5 +3806,8 @@
   "external_training.progress": "Stap {step} / {total}",
   "external_training.snapshot": "Voorbeeld: stap {step} · {count} Gauss-elementen · SH{degree}",
   "external_training.waiting": "Wachten op het eerste voorbeeld…",
-  "external_training.dataset_open": "Open een nieuwe scène of zet de geladen dataset in de bewerkingsmodus voordat je een externe trainer bekijkt."
+  "external_training.dataset_open": "Open een nieuwe scène of zet de geladen dataset in de bewerkingsmodus voordat je een externe trainer bekijkt.",
+  "external_training.dependencies": "NumPy voorbereiden; installeren indien nodig…",
+  "external_training.camera_overlay": "Camerafrustums (hele scène)",
+  "external_training.export_unavailable": "Externe voorbeelden kunnen niet worden geëxporteerd. Open het model dat door het trainingsproces is opgeslagen om het te exporteren."
 }

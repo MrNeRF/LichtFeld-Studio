@@ -3806,5 +3806,8 @@
   "external_training.progress": "Étape {step} / {total}",
   "external_training.snapshot": "Aperçu : étape {step} · {count} gaussiennes · SH{degree}",
   "external_training.waiting": "En attente du premier aperçu…",
-  "external_training.dataset_open": "Ouvrez une nouvelle scène ou passez le jeu de données chargé en mode édition avant d’afficher un entraîneur externe."
+  "external_training.dataset_open": "Ouvrez une nouvelle scène ou passez le jeu de données chargé en mode édition avant d’afficher un entraîneur externe.",
+  "external_training.dependencies": "Préparation de NumPy ; installation si nécessaire…",
+  "external_training.camera_overlay": "Frustums des caméras (scène entière)",
+  "external_training.export_unavailable": "Les aperçus externes ne peuvent pas être exportés. Ouvrez le modèle enregistré par le processus d’entraînement pour l’exporter."
 }

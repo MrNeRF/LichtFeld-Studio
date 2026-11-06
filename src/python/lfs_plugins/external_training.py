@@ -59,6 +59,9 @@ class ExternalTraining:
         self.geometry_revision = None
         self._geometry = None
         self._geometry_retry_at = 0.0
+        self._splat_retry_at = 0.0
+        self._failed_generation = None
+        self.preparing_dependencies = True
         self._pending = None
         self._install_pending = False
         self._unsubscribe = None
@@ -124,12 +127,11 @@ class ExternalTraining:
                 return
             try:
                 if not self.scene.upload_external_preview(update):
+                    if kind == "splat":
+                        self._splat_retry_at = time.monotonic() + 2
                     self._pending = None  # Next poll retries; no queue of uploads.
             except Exception as error:
-                if kind == "cameras":
-                    self.geometry_error = str(error)
-                else:
-                    self.error = str(error)
+                self._failed(kind, error, descriptor)
                 self._pending = None
 
         lf.ui.schedule_on_ui_thread(upload)
@@ -145,29 +147,44 @@ class ExternalTraining:
                 self.generation = descriptor["id"]
                 self.shown = dict(descriptor)
                 self.error = ""
+                self._failed_generation = None
             else:
                 self.geometry_revision, self._geometry = descriptor
                 self.geometry_error = ""
             lf.ui.request_redraw()
         except Exception as error:
-            if kind == "cameras":
-                self.geometry_error = str(error)
-            else:
-                self.error = str(error)
+            self._failed(kind, error, descriptor)
         finally:
             self._pending = None
             self._install_pending = False
+
+    def _failed(self, kind, error, descriptor=None):
+        if kind == "cameras":
+            self.geometry_error = str(error)
+        else:
+            self.error = str(error)
+            self._splat_retry_at = time.monotonic() + 2
+            self._failed_generation = descriptor.get("id") if descriptor else None
 
     def _read(self):
         if self.stop.is_set():
             return
         client = None
         try:
-            np = ensure_numpy(lf, self.stop.is_set)
+            while not self.stop.is_set():
+                try:
+                    np = ensure_numpy(lf, self.stop.is_set)
+                    self.error = ""
+                    break
+                except Exception as error:
+                    self.error = str(error)
+                    self.stop.wait(2)
+            self.preparing_dependencies = False
             if self.stop.is_set():
                 return
             client = SessionClient(self.record["directory"], "LichtFeld Studio")
             while not self.stop.wait(0.2):
+                snapshot = None
                 try:
                     try:
                         status = validate_session(client.status(), self.record["id"])
@@ -205,6 +222,12 @@ class ExternalTraining:
                             self.geometry_error = str(error)
                     snapshot = status.get("snapshot")
                     if snapshot and snapshot.get("id") != self.generation:
+                        if (snapshot.get("id") == self._failed_generation and
+                                (status.get("state") in TERMINAL or session_liveness(status) == "exited")):
+                            self.stop.set()  # A failed final upload must still release its lease.
+                            continue
+                        if time.monotonic() < self._splat_retry_at:
+                            continue
                         arrays = read_snapshot(snapshot)
                         def tensor(value):
                             return lf.Tensor.from_numpy(np.ascontiguousarray(value, dtype=np.float32))
@@ -219,7 +242,7 @@ class ExternalTraining:
                     if status.get("state") in TERMINAL or session_liveness(status) == "exited":
                         self.stop.set()
                 except Exception as error:
-                    self.error = str(error)  # A publication race retries automatically.
+                    self._failed("splat", error, snapshot)
                     if self.status.get("state") in TERMINAL or session_liveness(self.status) == "exited":
                         self.stop.set()
         except Exception as error:
@@ -227,6 +250,7 @@ class ExternalTraining:
                 self.error = str(error)
             self.stop.set()
         finally:
+            self.preparing_dependencies = False
             if client is not None:
                 try:
                     client.close()

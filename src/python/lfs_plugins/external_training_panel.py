@@ -154,6 +154,8 @@ class ExternalTrainingPanel(Panel):
             step=f"{status.get('iteration', 0):,}", total=f"{status.get('iterations', 0):,}")
 
     def _preview(self):
+        if _current and _current.preparing_dependencies:
+            return lf.ui.tr("external_training.dependencies")
         if not _current or not _current.shown:
             if _current and _current.stop.is_set():
                 return lf.ui.tr("status.empty")

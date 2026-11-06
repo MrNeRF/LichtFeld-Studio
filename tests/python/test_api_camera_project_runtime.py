@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -76,6 +77,21 @@ def _editor(endpoint, code):
     assert result.get("completed") and result.get("success"), result
     assert "Traceback" not in result.get("output", {}).get("text", ""), result
     return result.get("output", {}).get("text", "")
+
+
+@pytest.fixture
+def camera_runtime_with_numpy(camera_runtime, numpy):
+    # The test requirements provide NumPy. Share that explicit dependency with
+    # the matching embedded interpreter, without depending on a user's uv cache.
+    site = str(Path(numpy.__file__).resolve().parent.parent)
+    _editor(camera_runtime, f'''
+import sys
+assert sys.version_info[:2] == {sys.version_info[:2]!r}, "Run runtime tests with the build's Python interpreter"
+sys.path.insert(0, {site!r})
+import numpy
+assert numpy.__version__ == {numpy.__version__!r}
+''')
+    return camera_runtime
 
 
 def _ui_editor(endpoint, code):
