@@ -2227,6 +2227,8 @@
     "set": "Establecer",
     "set_start": "Establecer inicio en la posición actual",
     "set_end": "Establecer fin en la posición actual",
+    "remove_segment": "Quitar este segmento",
+    "timeline_hint": "Arrastra un borde para recortar; doble clic para dividir un segmento o unir dos contiguos",
     "reset": "Restablecer",
     "estimated_frames": "(~{} fotogramas)",
     "input_video": "Video de entrada",

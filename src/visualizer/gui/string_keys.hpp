@@ -715,6 +715,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SET = "video_extractor.set";
         inline constexpr const char* SET_START = "video_extractor.set_start";
         inline constexpr const char* SET_END = "video_extractor.set_end";
+        inline constexpr const char* REMOVE_SEGMENT = "video_extractor.remove_segment";
+        inline constexpr const char* TIMELINE_HINT = "video_extractor.timeline_hint";
         inline constexpr const char* RESET = "video_extractor.reset";
         inline constexpr const char* ESTIMATED_FRAMES = "video_extractor.estimated_frames";
         inline constexpr const char* INPUT_VIDEO = "video_extractor.input_video";

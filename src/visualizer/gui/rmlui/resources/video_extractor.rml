@@ -41,11 +41,9 @@
         </div>
 
         <div id="timeline">
-          <div id="timeline-trim"></div>
+          <div id="timeline-segments"></div>
           <div id="timeline-markers"></div>
           <div id="timeline-progress"></div>
-          <div id="timeline-start" class="timeline-handle timeline-handle--start"></div>
-          <div id="timeline-end" class="timeline-handle timeline-handle--end"></div>
           <div id="timeline-playhead"></div>
         </div>
 
