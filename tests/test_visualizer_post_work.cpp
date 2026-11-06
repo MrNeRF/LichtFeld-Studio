@@ -59,10 +59,8 @@
 #include "python/runner.hpp"
 #include "python_test_support.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/viewport_appearance_correction.hpp"
-#include "rendering/vulkan_view_render_state.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -80,10 +78,14 @@
 #include "visualizer/project/project_switch_error.hpp"
 #include "visualizer/project/session_state.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#if LFS_GRAPHICS_VULKAN
+#include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/vulkan_view_render_state.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include "window/vulkan_result.hpp"
 #include <vk_mem_alloc.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -7738,6 +7740,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_EQ(plyComparisonImportOffset(1, displayed_offset, 0), displayed_offset);
     }
 
+#if LFS_GRAPHICS_VULKAN
     TEST_F(VisualizerImplResetTest, ImportValidationReusesResidentMeshAllocations) {
         if (!core::gpu_backend_available(core::GpuBackend::CUDA))
             GTEST_SKIP() << "CUDA device unavailable";
@@ -7864,6 +7867,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         static_cast<void>(rendering->renderFrame(validation));
         EXPECT_EQ(rendering->getSplitViewInfo(), info);
     }
+#endif
 
     TEST_F(VisualizerImplResetTest, ComparisonDropDoesNotAllocateCombinedModel) {
         VisualizerImpl viewer(projectOptions());
@@ -7933,6 +7937,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_EQ(batches, 0u);
     }
 
+#if LFS_GRAPHICS_VULKAN
     TEST(ImportErrorTest, CapturesVulkanErrorsWithoutInterruptingCleanup) {
         std::string outer;
         {
@@ -7951,6 +7956,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto message = formatVkCheckFailure("allocate", VK_ERROR_OUT_OF_DEVICE_MEMORY, "direct log");
         EXPECT_EQ(direct, message);
     }
+#endif
 
     TEST(ImportErrorTest, UsesLocalePluralForms) {
         EXPECT_EQ(gui::importFailureTitleKey("en", 1), "runtime.import_batch_failed.one");
@@ -18150,8 +18156,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         P5SessionCaptureTestAccess::initializeInputController(viewer);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         ASSERT_TRUE(viewer.getWindowManager()->init());
-        const auto* context = vulkanContextOrNull(viewer.getWindowManager()->getGraphicsContext());
-        if (!context || !context->externalMemoryInteropEnabled())
+        const auto* context = viewer.getWindowManager()->getGraphicsContext();
+        if (!context || !context->capabilities().external_memory_interop)
             GTEST_SKIP() << "Vulkan external memory interop unavailable";
         const auto wait = [&](auto condition) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);

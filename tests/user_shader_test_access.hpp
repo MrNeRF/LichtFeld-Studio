@@ -10,6 +10,7 @@
 #include "rendering/vulkan_scene_renderer_factory.hpp"
 #include "rendering/vulkan_view_render_state.hpp"
 #include "user_shader_images.hpp"
+#include "user_shader_linker.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_graphics_context.hpp"
 #include <atomic>
@@ -18,20 +19,6 @@
 #include <thread>
 
 namespace lfs::vis {
-    // Fixture commands use production validation and installation without adding UI history or routing a timeline.
-    struct ShaderCommands {
-        shaders::ShaderService& service;
-        auto command(const shaders::ShaderCommand& cmd) {
-            return service.applyCommand(cmd, {}, false);
-        }
-        auto createAsset(std::string name, std::string source) { return command(shaders::SetShaderSource{{}, std::move(source), std::move(name), {}}); }
-        auto updateSource(core::Uuid id, std::string source) { return command(shaders::SetShaderSource{id, std::move(source), {}, {}}); }
-        auto renameAsset(core::Uuid id, std::string name) { return command(shaders::RenameShader{id, std::move(name)}); }
-        auto removeAsset(core::Uuid id) { return command(shaders::RemoveShader{id}); }
-        auto setParameter(core::Uuid id, std::string_view name, std::span<const float> values) { return command(shaders::SetShaderParameter{id, std::string(name), {values.begin(), values.end()}, {}}); }
-        auto bind(shaders::ShaderSlot slot, core::Uuid id) { return command(shaders::BindShader{slot, id}); }
-        auto unbind(shaders::ShaderSlot slot) { return command(shaders::UnbindShader{slot, {}}); }
-    };
     struct UserShaderTestAccess {
         using Source = VulkanGSRenderer::ComputeProgramSource;
         inline static std::unordered_map<VksplatViewportRenderer*, VulkanGSRenderer::ProgramSetHandle> fixture_sets;

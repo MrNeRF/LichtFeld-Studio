@@ -169,7 +169,9 @@ namespace lfs::vis {
                           "temporal_convergence_idle");
     }
 
-    bool RenderingManager::importUsesCombinedModel() const { return true; }
+    bool RenderingManager::importUsesCombinedModel() const {
+        return !splitViewUsesPLYComparison(getSettings().split_view_mode);
+    }
 
     std::optional<std::string> RenderingManager::prepareImportRenderCheck(
         const RenderContext& context, const std::function<void()>& prepare_viewport) {
@@ -262,13 +264,21 @@ namespace lfs::vis {
             return environment_map_path_;
         }();
         enforceProjectionBackend(frame_settings);
-        SceneRenderState scene_state = context.scene_manager->buildRenderState();
+        const auto comparison_nodes = splitViewUsesPLYComparison(frame_settings.split_view_mode)
+                                          ? plyComparisonNodes(context.scene_manager->getScene())
+                                          : std::vector<PlyComparisonNode>{};
+        const bool ply_split_pairs_models = comparison_nodes.size() >= 2;
+        // Comparison draws the owned node models, as the Vulkan viewer does. A
+        // full snapshot would also concatenate them into a hidden combined copy.
+        SceneRenderState scene_state =
+            context.scene_manager->buildRenderState({.metadata_only = ply_split_pairs_models});
         const auto* model = scene_state.combined_model;
         const bool has_model = hasRenderableGaussians(model);
+        const bool has_gaussians =
+            has_model || std::ranges::any_of(comparison_nodes, [](const PlyComparisonNode& entry) {
+                return entry.node && hasRenderableGaussians(entry.node->model.get());
+            });
         const bool has_points = scene_state.point_cloud && scene_state.point_cloud->size() > 0;
-        const bool ply_split_pairs_models =
-            splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
-            plyComparisonNodes(context.scene_manager->getScene()).size() >= 2;
         if (!has_model && !has_points && !ply_split_pairs_models && scene_state.meshes.empty()) {
             if (view.tensor_temporal_pipeline_)
                 view.tensor_temporal_pipeline_->resetAll();
@@ -306,7 +316,7 @@ namespace lfs::vis {
                                               splitViewUsesPLYComparison(frame_settings.split_view_mode);
         const bool temporal_mode_supported = !frame_settings.equirectangular &&
                                              !frame_settings.apply_appearance_correction &&
-                                             temporal_split_supported && has_model &&
+                                             temporal_split_supported && has_gaussians &&
                                              !frame_settings.point_cloud_mode;
         const bool spatial_mode_supported = !metalfx_requested || !splitViewUsesGTComparison(frame_settings.split_view_mode);
         const bool built_in_reconstruction =
@@ -329,7 +339,7 @@ namespace lfs::vis {
              .equirectangular = frame_settings.equirectangular,
              .appearance_correction = frame_settings.apply_appearance_correction,
              .split_supported = temporal_split_supported,
-             .raster_supported = has_model && !frame_settings.point_cloud_mode,
+             .raster_supported = has_gaussians && !frame_settings.point_cloud_mode,
              .lod_results_ready = lod_controller_ && lod_controller_->hasReadyResults(),
              .lod_transition_active = lod_controller_ && lod_controller_->transitionActive(),
              .frame_dirty = frame_dirty,
