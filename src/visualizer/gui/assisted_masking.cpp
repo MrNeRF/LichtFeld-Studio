@@ -4,15 +4,13 @@
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
-#include "core/user_paths.hpp"
-#include "core/uuid.hpp"
-#include "io/atomic_output.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "preprocessing/video_masking.hpp"
@@ -59,33 +57,19 @@ namespace lfs::vis::gui {
 
         void run() {
             std::optional<Sam2> model;
-            std::filesystem::path image, directory, model_key;
+            std::filesystem::path image, model_key;
             std::filesystem::file_time_type stamp{};
             uintmax_t bytes = 0;
             Tensor previous;
             uint64_t previous_id = 0;
-            std::vector<std::filesystem::path> files;
             cudaStream_t stream = nullptr;
             JobHandle active;
-            const auto clean_files = [&] {
-                for (const auto& path : files) {
-                    std::error_code ec;
-                    fs::remove(path, ec);
-                }
-                files.clear();
-            };
             const auto retire = [&] {
                 if (stream)
                     LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask drain");
                 previous = {};
                 model.reset();
                 image.clear();
-                clean_files();
-                if (!directory.empty()) {
-                    std::error_code ec;
-                    fs::remove(directory, ec); // Only this session's now-empty UUID directory.
-                    directory.clear();
-                }
                 if (stream) {
                     LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask retirement");
                     core::CudaMemoryPool::instance().release_stream(stream);
@@ -136,6 +120,7 @@ namespace lfs::vis::gui {
                     if (result.request == w.id)
                         result.phase = value;
                 };
+                bool model_failure = false;
                 try {
                     const auto current_stamp = fs::last_write_time(w.input.image);
                     const auto current_bytes = fs::file_size(w.input.image);
@@ -164,7 +149,10 @@ namespace lfs::vis::gui {
                         size_t available = 0, total = 0;
                         LFS_CUDA_CHECK(cudaMemGetInfo(&available, &total));
                         auto [width, height, channels] = core::probe_image_info(w.input.image);
-                        preprocessing::VideoMaskFrame frame{.image_path = w.input.image, .width = width, .height = height};
+                        preprocessing::VideoMaskFrame frame{};
+                        frame.image_path = w.input.image;
+                        frame.width = width;
+                        frame.height = height;
                         // Credit only allocations already owned by this model, not a second estimated model reserve.
                         const auto resident = model ? model->weights_bytes() + model->arena_bytes() : 0;
                         const auto plan = preprocessing::plan_video_mask_resources({&frame, 1}, {},
@@ -181,18 +169,22 @@ namespace lfs::vis::gui {
                             }
                             if (obsolete())
                                 continue;
+                            model_failure = true;
                             auto loaded = Sam2::load(weights, Device::CUDA, DataType::Float32);
                             if (!loaded)
                                 throw std::runtime_error(std::string(loaded.error().user_message()));
                             model.emplace(std::move(*loaded));
                             model->set_encoder_dtype(DataType::Float16);
                             model_key = w.input.weights;
+                            model_failure = false;
                         }
                         io::PipelinedLoaderConfig config;
                         config.jpeg_batch_size = config.prefetch_count = config.output_queue_size = config.decoder_pool_size = 1;
                         config.decode_frame_ring_capacity = 2;
                         io::PipelinedImageLoader loader(config);
-                        loader.prefetch(0, w.input.image, {.skip_blob_cache = true});
+                        io::LoadParams params{};
+                        params.skip_blob_cache = true;
+                        loader.prefetch(0, w.input.image, params);
                         auto decoded = loader.get();
                         const FrameDrain frame_drain{stream};
                         if (!decoded.error.empty())
@@ -200,10 +192,12 @@ namespace lfs::vis::gui {
                         core::waitForCUDAStream(stream, decoded.stream);
                         decoded.tensor.set_stream(stream);
                         stage("encoding", 0.3f);
+                        model_failure = true;
                         const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
                         LFS_CUDA_CHECK(cudaStreamSynchronize(stream)); // Decoder owns frame leases until this point.
                         if (!encoded)
                             throw std::runtime_error(std::string(encoded.error().user_message()));
+                        model_failure = false;
                         image = w.input.image;
                         stamp = current_stamp;
                         bytes = current_bytes;
@@ -231,14 +225,15 @@ namespace lfs::vis::gui {
                         std::vector<uint8_t> pixels(size_t(width) * height);
                         for (size_t p = 0; p < pixels.size(); ++p)
                             pixels[p] = ((selected.ptr<uint8_t>()[p] != 0) != w.input.exclude) ? 255 : 0;
-                        const auto path = directory / (std::to_string(w.id) + "-mask.png");
-                        io::ScopedAtomicOutputFile output(path);
-                        if (!core::save_png(output.temp_path(), pixels.data(), width, height, 1, 8, 1) || !output.commit())
+                        auto encoded = core::image_codecs::encode_png(pixels, width, height, 1);
+                        if (encoded.empty())
                             throw std::runtime_error(LOC("image_preview.sam_write_failed"));
-                        files.push_back(path);
+                        auto png = std::make_shared<const std::vector<std::byte>>(std::move(encoded));
                         std::lock_guard lock(mutex);
                         if (!release && result.request == w.id) {
-                            result.mask = path;
+                            result.mask = std::move(png);
+                            result.width = width;
+                            result.height = height;
                             result.image = image;
                             result.source_time = stamp;
                             result.source_bytes = bytes;
@@ -264,58 +259,45 @@ namespace lfs::vis::gui {
                         refinement = previous.slice(0, w.input.refine_candidate, w.input.refine_candidate + 1).reshape({1, 1, 256, 256});
                     }
                     stage("predicting", 0.7f);
+                    model_failure = true;
                     auto prediction = model->predict(points, box, true, refinement.is_valid() ? &refinement : nullptr);
                     if (!prediction)
                         throw std::runtime_error(std::string(prediction.error().user_message()));
+                    model_failure = false;
                     previous = prediction->low_res_logits;
                     previous_id = w.id;
                     const int ow = std::max(1, int(width * std::min(1.0, 1536.0 / std::max(width, height))));
                     const int oh = std::max(1, int(height * std::min(1.0, 1536.0 / std::max(width, height))));
                     auto masks = core::nn::resize2d(previous.unsqueeze(0), oh, ow, core::nn::ResizeMode::Bilinear,
                                                     core::nn::CoordTransform::HalfPixel)
-                                     .to(Device::CPU, stream)
-                                     .contiguous();
+                                     .gt(0)
+                                     .to(DataType::Float32);
                     auto scores = prediction->iou.to(Device::CPU, stream).contiguous();
                     LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                     if (obsolete())
                         continue;
                     if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
                         throw std::runtime_error(LOC("image_preview.sam_source_changed"));
-                    if (directory.empty()) {
-                        auto paths = core::UserPaths::resolve();
-                        if (!paths)
-                            throw std::runtime_error(std::string(paths.error().user_message()));
-                        directory = paths->cacheDir() / "mask-proposals" / core::generate_uuid_v4().to_string();
-                        fs::create_directories(directory);
-                    }
-                    clean_files(); // Bounded to three disposable, preview-sized overlays per session.
-                    std::vector<uint8_t> rgba(size_t(ow) * oh * 4, 0);
-                    for (int c = 0; c < int(previous.size(0)); ++c) {
-                        for (size_t p = 0; p < size_t(ow) * oh; ++p) {
-                            rgba[p * 4] = 255;
-                            rgba[p * 4 + 1] = 90;
-                            rgba[p * 4 + 2] = 40;
-                            rgba[p * 4 + 3] = masks.ptr<float>()[size_t(c) * ow * oh + p] > 0 ? 115 : 0;
-                        }
-                        const auto path = directory / (std::to_string(w.id) + "-" + std::to_string(c) + ".png");
-                        files.push_back(path);
-                        if (!core::save_png(path, rgba.data(), ow, oh, 4, 8, 1))
-                            throw std::runtime_error(LOC("image_preview.sam_write_failed"));
-                    }
+                    std::vector<Tensor> overlays;
+                    for (int c = 0; c < int(previous.size(0)); ++c)
+                        overlays.push_back(masks.slice(1, c, c + 1).reshape({oh, ow, 1}).expand({oh, ow, 4}));
                     stage("rendering", 0.95f);
                     std::lock_guard lock(mutex);
                     if (!release && result.request == w.id) {
-                        result.overlays = files;
+                        result.overlays = std::move(overlays);
                         result.scores.assign(scores.ptr<float>(), scores.ptr<float>() + previous.size(0));
                         result.phase = "ready";
                     }
                 } catch (const std::exception& error) {
                     if (stream)
                         LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask error drain");
-                    previous = {};
-                    model.reset();
-                    image.clear();
-                    clean_files();
+                    const auto* typed = dynamic_cast<const lfs::Exception*>(&error);
+                    if (model_failure || (typed && typed->error().domain() == lfs::ErrorDomain::CUDA)) {
+                        previous = {};
+                        previous_id = 0;
+                        model.reset();
+                        image.clear();
+                    }
                     std::lock_guard lock(mutex);
                     if (result.request == w.id) {
                         result.phase = "error";
@@ -359,7 +341,10 @@ namespace lfs::vis::gui {
         }
         std::lock_guard lock(impl_->mutex);
         const auto id = ++impl_->next;
-        impl_->result = {.request = id, .revision = input.revision, .phase = "queued"};
+        impl_->result = {};
+        impl_->result.request = id;
+        impl_->result.revision = input.revision;
+        impl_->result.phase = "queued";
         impl_->pending = Impl::Work{id, impl_->job, std::move(input)};
         impl_->cv.notify_one();
         return id;
@@ -385,7 +370,8 @@ namespace lfs::vis::gui {
         impl_->release = true;
         impl_->closing_job = impl_->job;
         impl_->pending.reset();
-        impl_->result = {.phase = "closing"};
+        impl_->result = {};
+        impl_->result.phase = "closing";
         impl_->cv.notify_one();
     }
     void AssistedMasking::shutdown() {

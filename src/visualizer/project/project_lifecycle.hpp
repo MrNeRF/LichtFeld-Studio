@@ -293,7 +293,7 @@ namespace lfs::vis::project {
                    const std::filesystem::path& expected_path = {},
                    std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
-        [[nodiscard]] lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, const std::filesystem::path& mask);
+        [[nodiscard]] lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height);
         [[nodiscard]] lfs::Result<ProjectTrainingSource> trainingSource();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;

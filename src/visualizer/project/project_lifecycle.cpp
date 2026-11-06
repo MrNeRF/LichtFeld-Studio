@@ -6324,7 +6324,7 @@ namespace lfs::vis::project {
     }
 
     lfs::Result<void> ProjectLifecycle::applyCameraMask(
-        const core::Uuid& uuid, const std::filesystem::path& image, const std::filesystem::path& mask) {
+        const core::Uuid& uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) {
         auto* manager = viewer_.getSceneManager();
         auto* trainer = viewer_.getTrainerManager();
         if (!document_ || !manager || project_write_job_ || project_open_job_ ||
@@ -6337,19 +6337,10 @@ namespace lfs::vis::project {
             return fail<void>(lfs::ErrorCode::FailedPrecondition, "The source camera has changed.", "Mask target no longer matches the source image", "camera.mask");
         try {
             const auto [width, height, channels] = core::probe_image_info(image);
-            const auto [mw, mh, mc] = core::probe_image_info(mask);
-            const auto size = core::native_fs::file_size(mask);
-            if (mw != width || mh != height || mc != 1 || size == 0 || size > 256ull * 1024 * 1024)
-                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask has invalid dimensions or format.", "Expected a bounded original-resolution grayscale PNG", "camera.mask");
-            std::vector<std::byte> bytes(size);
-            std::ifstream input(lfs::core::native_fs::native_path(mask), std::ios::binary);
-            if (!input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
-                return fail<void>(lfs::ErrorCode::Unavailable, "The image mask could not be read.", "PNG read failed", "camera.mask");
-            constexpr std::array<std::byte, 8> png_signature{std::byte{137}, std::byte{80}, std::byte{78}, std::byte{71}, std::byte{13}, std::byte{10}, std::byte{26}, std::byte{10}};
-            if (bytes.size() < png_signature.size() || !std::ranges::equal(png_signature, std::span(bytes).first(png_signature.size())))
-                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask is not a PNG.", "Camera-mask assets must contain PNG bytes", "camera.mask");
+            if (!png || png->empty() || png->size() > 256ull * 1024 * 1024 || mask_width != width || mask_height != height)
+                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask has invalid dimensions or format.", "Expected an original-resolution encoded mask", "camera.mask");
             const auto asset = core::generate_uuid_v4();
-            auto value = io::project::LazyChunkValue::from_owned(std::move(bytes), asset);
+            auto value = io::project::LazyChunkValue::from_owned(std::move(png), asset);
             if (!value)
                 return lfs::Status::failure(std::move(value).error());
             struct MaskState {

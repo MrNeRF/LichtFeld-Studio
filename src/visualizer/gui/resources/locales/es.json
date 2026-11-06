@@ -1927,7 +1927,11 @@
     "trigger.drag": " Arrastrar",
     "trigger.scroll": "Rueda",
     "trigger.unknown": "Desconocido",
-    "action.toggle_performance_hud": "Alternar HUD de rendimiento"
+    "action.toggle_performance_hud": "Alternar HUD de rendimiento",
+    "mode.image_preview": "Vista previa de imagen",
+    "action.image_preview_delete": "Eliminar punto o recuadro",
+    "action.image_preview_generate": "Generar máscara",
+    "action.image_preview_remove_point": "Eliminar control bajo el cursor"
   },
   "debug_info": {
     "free_memory": "Libre: %.2f GB",
@@ -2036,7 +2040,7 @@
     "sam_negative": "Fondo −",
     "sam_box": "Recuadro",
     "sam_pan": "Desplazar vista",
-    "sam_undo": "Deshacer cambio",
+    "sam_undo": "Deshacer",
     "sam_clear": "Borrar puntos y recuadro",
     "sam_generate": "Generar",
     "sam_cancel": "Cancelar",
@@ -2063,10 +2067,9 @@
     "sam_show": "Superposición",
     "sam_update": "Actualizar propuesta",
     "sam_recompute": "Recalcular",
-    "sam_edit_hint": "Haz clic en un punto o borde del recuadro para seleccionarlo. Editar: arrastra los puntos para moverlos. Supr o clic derecho elimina el punto o recuadro, no los píxeles de la máscara. Deshacer cambio restaura la modificación.",
-    "sam_text_hint": "La selección de objetos mediante descripciones de texto no está disponible en esta vista previa.",
+    "sam_edit_hint": "Selecciona un punto o el borde del recuadro. En Editar, arrastra los puntos para moverlos. Eliminar borra controles, no píxeles de la máscara.",
     "sam_selection_none": "Selecciona un punto o el borde del recuadro.",
-    "sam_quality": "Calidad estimada: {score}% · sin verificar",
+    "sam_quality": "Puntuación SAM: {score}%",
     "sam_generate_hint": "Genera a partir de puntos y un recuadro; los puntos añadidos refinan la propuesta seleccionada.",
     "sam_recompute_hint": "Genera a partir de los puntos y el recuadro actuales sin usar una máscara anterior.",
     "sam_positive_hint": "Punto positivo: marca el objeto que se va a segmentar. Guía a SAM sin pintar píxeles de la máscara.",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "Revisar fotogramas · SAM",
     "sam_source_changed": "La imagen ha cambiado. Actualízala antes de generar otra propuesta.",
     "sam_proposal_expired": "La propuesta seleccionada ya no está vigente. Genera una nueva propuesta.",
-    "sam_write_failed": "No se pudo guardar la vista previa de la propuesta.",
+    "sam_write_failed": "No se pudo codificar la máscara.",
     "sam_shutting_down": "El servicio de vista previa de SAM se está cerrando.",
     "sam_invalid_input": "Se requieren una revisión de la imagen y puntos o un recuadro (hasta 256 puntos).",
     "sam_invalid_point": "Las coordenadas de los puntos deben estar entre 0 y 1, con etiqueta 0 o 1.",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "Entrenador no restaurado",
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
-    }
+    },
+    "camera_masks_disabled": "Este conjunto de datos contiene máscaras de imagen, pero el enmascaramiento está desactivado. Elige un modo de máscara en los ajustes de entrenamiento para utilizarlas."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio se cerró inesperadamente",

@@ -201,10 +201,7 @@
     line-height: 26dp;
     padding: 0dp 8dp;
 }
-#sam-controls button[aria-pressed="true"] {
-    background-color: #365675;
-}
-.sam-note { color: #b8b8b8; font-size: 12dp; margin: 6dp 0 10dp; }
+.sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
 #sam-selection, #sam-status { font-size: 12dp; margin: 6dp 0; }
 #sidebar.sam-sidebar { width: 260dp; }
 #sam-overlay, #sam-markers { pointer-events: none; }
@@ -221,17 +218,12 @@
     width: 18dp; height: 18dp;
     margin-left: -9dp; margin-top: -9dp;
     border-width: 1dp;
-    border-color: #ffffff;
     border-radius: 9dp;
     text-align: center;
     line-height: 16dp;
-    color: white;
 }
-.sam-point-1 { background-color: #238344; }
-.sam-point-0 { background-color: #ae3030; }
-.sam-point-selected { border-width: 3dp; border-color: #ffd074; line-height: 12dp; }
-.sam-box { position: absolute; border-width: 2dp; border-color: #ffa050; }
-.sam-box-selected { border-color: #ffd074; }
+.sam-point-selected { border-width: 3dp; line-height: 12dp; }
+.sam-box { position: absolute; border-width: 2dp; }
 
 #no-image-text {
     font-size: 12dp;

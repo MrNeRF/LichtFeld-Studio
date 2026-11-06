@@ -207,7 +207,6 @@ namespace {
             {"sam-edit-hint", "sam_edit_hint"},
             {"sam-selection", "sam_selection_none"},
             {"sam-quality", "sam_quality"},
-            {"sam-text-hint", "sam_text_hint"},
             {"sam-status", "sam_ready"},
             {"sam-hint", "sam_hint"}};
         const auto root = std::filesystem::path(PROJECT_ROOT_PATH);

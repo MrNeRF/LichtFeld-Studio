@@ -292,7 +292,7 @@ namespace lfs::vis {
         projectPollWrite() {
             return ProjectWritePoll{};
         }
-        virtual lfs::Result<void> applyCameraMask(const lfs::core::Uuid&, const std::filesystem::path&, const std::filesystem::path&) {
+        virtual lfs::Result<void> applyCameraMask(const lfs::core::Uuid&, const std::filesystem::path&, std::shared_ptr<const std::vector<std::byte>>, int, int) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Unsupported,
                 .domain = lfs::ErrorDomain::App,

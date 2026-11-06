@@ -1938,7 +1938,11 @@
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
     "trigger.unknown": "Unknown",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "mode.image_preview": "Image Preview",
+    "action.image_preview_delete": "Remove point or box",
+    "action.image_preview_generate": "Generate mask",
+    "action.image_preview_remove_point": "Remove control at cursor"
   },
   "debug_info": {
     "free_memory": "Free: %.2f GB",
@@ -2047,7 +2051,7 @@
     "sam_negative": "Background −",
     "sam_box": "Box",
     "sam_pan": "Pan",
-    "sam_undo": "Undo edit",
+    "sam_undo": "Undo",
     "sam_clear": "Clear points and box",
     "sam_generate": "Generate",
     "sam_cancel": "Cancel",
@@ -2074,10 +2078,9 @@
     "sam_show": "Overlay",
     "sam_update": "Update proposal",
     "sam_recompute": "Recompute",
-    "sam_edit_hint": "Click a point or box edge to select it. Edit: drag points to move them. Delete or right-click removes a point or box, not mask pixels. Undo restores the change.",
-    "sam_text_hint": "Object selection using text descriptions is not available in this preview.",
+    "sam_edit_hint": "Select a point or box edge. In Edit, drag points to move them. Remove deletes controls, not mask pixels.",
     "sam_selection_none": "Select a point or a box edge to edit.",
-    "sam_quality": "Estimated quality: {score}% · not validated",
+    "sam_quality": "SAM score: {score}%",
     "sam_generate_hint": "Generate from points and a box; added points refine the selected proposal.",
     "sam_recompute_hint": "Generate from the current points and box without using a previous mask.",
     "sam_positive_hint": "Positive point: mark the object to segment. This guides SAM; it does not paint mask pixels.",
@@ -2087,7 +2090,7 @@
     "sam_review_frames": "Review frames · SAM",
     "sam_source_changed": "The image changed. Refresh it before generating another proposal.",
     "sam_proposal_expired": "The selected proposal is no longer current. Generate a new proposal.",
-    "sam_write_failed": "Unable to write the proposal preview.",
+    "sam_write_failed": "Unable to encode the mask.",
     "sam_shutting_down": "The SAM preview service is shutting down.",
     "sam_invalid_input": "An image revision and points or a box are required (up to 256 points).",
     "sam_invalid_point": "Point coordinates must be between 0 and 1, with label 0 or 1.",
@@ -3103,7 +3106,8 @@
     "trainer_not_restored": {
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
-    }
+    },
+    "camera_masks_disabled": "This dataset has image masks, but masking is disabled. Choose a mask mode in Training settings to use them."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio closed unexpectedly",

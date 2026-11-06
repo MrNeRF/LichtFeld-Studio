@@ -154,3 +154,19 @@ TEST(CameraTrainingNoticeTest, ChangeImmediatelyAfterRestartIsDelivered) {
     ASSERT_EQ(delivery.stack.entries.size(), 1u);
     EXPECT_EQ(delivery.stack.entries.front().count, 2u);
 }
+
+TEST(CameraTrainingNoticeTest, StoredMasksWarnOnlyWhenMaskingIsDisabled) {
+    using lfs::core::param::MaskMode;
+    lfs::core::Scene scene;
+    const auto camera = make_camera();
+    scene.addCamera("frame.png", scene.addGroup("Cameras"), camera);
+    std::size_t notices = 0;
+    const auto post = [&] { ++notices; };
+    EXPECT_FALSE(lfs::vis::detail::dispatch_unused_camera_mask_notice(scene, MaskMode::None, post));
+    camera->set_mask_path("asset.png", lfs::core::generate_uuid_v4());
+    for (const auto mode : {MaskMode::Segment, MaskMode::Ignore, MaskMode::SegmentAndIgnore, MaskMode::AlphaConsistent})
+        EXPECT_FALSE(lfs::vis::detail::dispatch_unused_camera_mask_notice(scene, mode, post));
+    EXPECT_EQ(notices, 0u);
+    EXPECT_TRUE(lfs::vis::detail::dispatch_unused_camera_mask_notice(scene, MaskMode::None, post));
+    EXPECT_EQ(notices, 1u);
+}

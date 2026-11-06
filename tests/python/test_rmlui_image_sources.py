@@ -41,6 +41,21 @@ def _install_lf_stub(monkeypatch):
         sam_preview_poll=lambda: {"phase": "idle"},
         sam_preview_close=lambda: None,
     )
+    actions = SimpleNamespace(NONE="none", IMAGE_PREVIEW_DELETE="delete",
+                              IMAGE_PREVIEW_GENERATE="generate", IMAGE_PREVIEW_REMOVE_POINT="remove")
+    keys = {(261, 0): actions.IMAGE_PREVIEW_DELETE, (257, 0): actions.IMAGE_PREVIEW_GENERATE}
+    mouse = {(1, 0): actions.IMAGE_PREVIEW_REMOVE_POINT}
+    lf_stub.keymap = SimpleNamespace(
+        Action=actions, ToolMode=SimpleNamespace(IMAGE_PREVIEW="image_preview"),
+        MouseButton=SimpleNamespace(LEFT=0, RIGHT=1, MIDDLE=2),
+        is_capturing=lambda: False,
+        bindings_revision=lambda: 0,
+        get_action_for_key=lambda scope, key, mods: keys.get((key, mods), actions.NONE),
+        get_action_for_mouse_button=lambda scope, button, mods, double=False: mouse.get((button, mods), actions.NONE) if not double else actions.NONE,
+        get_trigger_description=lambda action, scope: action,
+        get_action_name=lambda action: action,
+    )
+    lf_stub.undo = SimpleNamespace(push=lambda *a, **kw: None, undo=lambda: False, can_undo=lambda: False)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
 

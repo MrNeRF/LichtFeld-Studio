@@ -6,9 +6,12 @@
 #include "core/path_utils.hpp"
 #include "gui/assisted_masking.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "long_path_test_support.hpp"
+#include "preprocessing/preprocess.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <thread>
 
@@ -16,9 +19,13 @@ namespace lfs::gui {
     class VideoExtractorDialogTestAccess {
     public:
         static void completedFrames(VideoExtractorDialog& dialog) {
-            dialog.review_frames_ = {{.path = "late.png", .timestamp = 2, .source_frame = 8},
-                                     {.path = "second.png", .timestamp = 1, .source_frame = 5},
-                                     {.path = "first.png", .timestamp = 1, .source_frame = 3}};
+            dialog.review_frames_.resize(3);
+            for (int i = 0; i < 3; ++i) {
+                auto& frame = dialog.review_frames_[i];
+                frame.path = std::array{"late.png", "second.png", "first.png"}[i];
+                frame.timestamp = i == 0 ? 2 : 1;
+                frame.source_frame = std::array{8, 5, 3}[i];
+            }
             dialog.review_weights_ = "local-model.lfw";
         }
         static void review(VideoExtractorDialog& dialog, bool extracting) {
@@ -35,7 +42,11 @@ namespace {
     using namespace lfs::vis::gui;
 
     AssistedMaskRequest missing_source() {
-        return {.image = "missing-sam-preview-input", .revision = "r1", .points = {{0.5f, 0.5f, 1}}};
+        AssistedMaskRequest input{};
+        input.image = "missing-sam-preview-input";
+        input.revision = "r1";
+        input.points = {{0.5f, 0.5f, 1}};
+        return input;
     }
 
     TEST(AssistedMasking, InvalidInputAndAdmissionDoNotReserveAJob) {
@@ -103,13 +114,34 @@ namespace {
     }
 
     TEST(AssistedMaskingGpu, RepeatedPromptsPreserveMasksAfterArenaWarmup) {
-        const auto* image = std::getenv("LFS_SAM_TEST_IMAGE");
-        const auto* weights = std::getenv("LFS_SAM_TEST_WEIGHTS");
-        if (!image || !weights)
-            GTEST_SKIP() << "Set LFS_SAM_TEST_IMAGE and LFS_SAM_TEST_WEIGHTS for the real GPU regression";
-        AssistedMaskRequest input{.image = lfs::core::utf8_to_path(image),
-                                  .weights = lfs::core::utf8_to_path(weights),
-                                  .revision = "repeat"};
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || !devices)
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto weights = lfs::preprocessing::ensure_sam2_weights(false);
+        if (!weights)
+            GTEST_SKIP() << "SAM2.1 weights are not cached; this regression never downloads models";
+        AssistedMaskRequest input{};
+        const auto fixture = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
+        if (!lfs::core::native_fs::is_regular_file(fixture))
+            GTEST_SKIP() << "Missing versioned image fixture: " << fixture;
+        lfs::test::long_paths::LongPathDirectory temporary;
+        input.image = temporary.path / "source.png";
+        {
+            // Derive a large source from the versioned photo using the canonical
+            // resampler, exercising preview downsampling and original-size Apply.
+            auto [raw, width, height, channels] = lfs::core::load_image_float(fixture);
+            const std::unique_ptr<float, decltype(&lfs::core::free_image)> source(raw, lfs::core::free_image);
+            ASSERT_NE(raw, nullptr);
+            std::vector<float> enlarged(1792 * 1664 * channels);
+            lfs::core::resample_bilinear_f32(raw, width, height, channels, enlarged.data(), 1792, 1664);
+            std::vector<uint8_t> pixels(enlarged.size());
+            std::ranges::transform(enlarged, pixels.begin(), [](float value) {
+                return uint8_t(std::clamp(value * 255.0f, 0.0f, 255.0f));
+            });
+            ASSERT_TRUE(lfs::core::save_png(input.image, pixels.data(), 1792, 1664, channels, 8, 1));
+        }
+        input.weights = *weights;
+        input.revision = "repeat";
         const auto stamp = lfs::core::native_fs::last_write_time(input.image);
 #if defined(_MSC_VER)
         const auto system_stamp = std::chrono::clock_cast<std::chrono::system_clock>(stamp);
@@ -118,33 +150,37 @@ namespace {
 #endif
         input.mtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(system_stamp.time_since_epoch()).count();
         input.size_bytes = lfs::core::native_fs::file_size(input.image);
-        input.points = {{0.15875f, 0.42083f, 1}, {0.52813f, 0.46262f, 1}, {0.75218f, 0.48079f, 1}};
+        input.points = {{0.5f, 0.5f, 1}};
         JobRegistry jobs;
         AssistedMasking service(jobs, [] { return true; });
-        std::vector<std::vector<uint8_t>> reference;
-        uint64_t last_prediction = 0;
-        for (int repetition = 0; repetition < 6; ++repetition) {
-            const auto id = service.submit(input);
+        const auto wait = [&](const uint64_t id, const std::string& phase) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             AssistedMaskSnapshot state;
             do {
                 state = service.poll();
-                if (state.request == id && (state.phase == "ready" || state.phase == "error"))
+                if (state.request == id && (state.phase == phase || state.phase == "error"))
                     break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } while (std::chrono::steady_clock::now() < deadline);
+            return state;
+        };
+        std::vector<std::vector<uint8_t>> reference;
+        uint64_t last_prediction = 0;
+        for (int repetition = 0; repetition < 6; ++repetition) {
+            const auto id = service.submit(input);
+            const auto state = wait(id, "ready");
             ASSERT_EQ(state.phase, "ready") << state.error;
             ASSERT_EQ(state.request, id);
             last_prediction = id;
             ASSERT_EQ(state.overlays.size(), 3);
             for (int c = 0; c < 3; ++c) {
-                auto [raw, width, height, channels] = lfs::core::load_image_with_alpha(state.overlays[c]);
-                const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(raw, lfs::core::free_image);
-                ASSERT_NE(raw, nullptr);
-                ASSERT_EQ(channels, 4);
-                std::vector<uint8_t> alpha(size_t(width) * height);
-                for (size_t p = 0; p < alpha.size(); ++p)
-                    alpha[p] = raw[p * 4 + 3];
+                ASSERT_EQ(state.overlays[c].device(), lfs::core::Device::CUDA);
+                ASSERT_EQ(state.overlays[c].size(2), 4);
+                EXPECT_EQ(state.overlays[c].size(1), 1536);
+                EXPECT_LT(state.overlays[c].size(0), 1664);
+                const auto mask = state.overlays[c].slice(2, 3, 4).to(lfs::core::DataType::UInt8).to(lfs::core::Device::CPU).contiguous();
+                const auto* raw = mask.ptr<uint8_t>();
+                std::vector<uint8_t> alpha(raw, raw + mask.numel());
                 if (!repetition) {
                     reference.push_back(std::move(alpha));
                     continue;
@@ -156,6 +192,11 @@ namespace {
                 EXPECT_LT(double(changed) / alpha.size(), 0.0001) << "repeat=" << repetition << " candidate=" << c;
             }
         }
+        // A recoverable source-proof failure must preserve the current model and
+        // candidate, so Apply still works without loading or predicting again.
+        ++input.mtime_ns;
+        EXPECT_EQ(wait(service.submit(input), "error").phase, "error");
+        --input.mtime_ns;
         const auto [source_width, source_height, source_channels] = lfs::core::probe_image_info(input.image);
         std::vector<uint8_t> kept;
         for (const bool exclude : {false, true}) {
@@ -163,20 +204,16 @@ namespace {
             input.export_candidate = 0;
             input.exclude = exclude;
             const auto id = service.submit(input);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-            AssistedMaskSnapshot state;
-            do {
-                state = service.poll();
-                if (state.request == id && (state.phase == "mask_ready" || state.phase == "error"))
-                    break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            } while (std::chrono::steady_clock::now() < deadline);
+            const auto state = wait(id, "mask_ready");
             ASSERT_EQ(state.phase, "mask_ready") << state.error;
-            const auto [mw, mh, mc] = lfs::core::probe_image_info(state.mask);
-            EXPECT_EQ(mw, source_width);
-            EXPECT_EQ(mh, source_height);
-            EXPECT_EQ(mc, 1);
-            auto [raw, width, height, channels] = lfs::core::load_image(state.mask);
+            ASSERT_TRUE(state.mask);
+            EXPECT_EQ(state.width, source_width);
+            EXPECT_EQ(state.height, source_height);
+            auto [raw, width, height, channels] = lfs::core::load_image_from_memory(
+                reinterpret_cast<const uint8_t*>(state.mask->data()), state.mask->size());
+            EXPECT_EQ(width, source_width);
+            EXPECT_EQ(height, source_height);
+            EXPECT_EQ(channels, 3); // The public in-memory image loader expands grayscale to RGB.
             const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(raw, lfs::core::free_image);
             ASSERT_NE(raw, nullptr);
             const size_t count = size_t(width) * height * channels;

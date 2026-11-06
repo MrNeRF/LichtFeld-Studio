@@ -55,6 +55,9 @@
       <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
       <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
     </div>
+    <div id="sam-edit-hint" class="sam-note"></div>
+    <div id="sam-shortcuts" class="sam-note"></div>
+    <div id="sam-hint" class="sam-note"></div>
   </div>
   <div id="preview-message" role="status"></div>
 
@@ -105,7 +108,6 @@
           <button type="button" class="btn" id="sam-undo"></button>
           <button type="button" class="btn" id="sam-clear"></button>
         </div>
-        <div id="sam-edit-hint" class="sam-note"></div>
         <span class="section-label-ip" id="sam-proposals-heading"></span>
         <div class="sam-tool-row">
           <button type="button" class="btn btn--primary" id="sam-generate"></button>
@@ -124,8 +126,6 @@
           <button type="button" class="btn" id="sam-exclude"></button>
         </div>
         <div id="sam-status" role="status"></div>
-        <div id="sam-hint" class="sam-note"></div>
-        <div id="sam-text-hint" class="sam-note"></div>
       </div>
       <div id="metadata-info">
       <div class="sidebar-header-ip">

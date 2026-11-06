@@ -2826,6 +2826,11 @@ class DynamicTexture:
 
     def destroy(self) -> None: ...
 
+    def rml_src(self, width: int = 0, height: int = 0) -> str:
+        """
+        RmlUI image source owned by this texture; release it before destroying the texture
+        """
+
     @property
     def id(self) -> int: ...
 

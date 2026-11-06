@@ -1927,7 +1927,11 @@
     "trigger.drag": " Slepen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Onbekend",
-    "action.toggle_performance_hud": "Prestatie-HUD omschakelen"
+    "action.toggle_performance_hud": "Prestatie-HUD omschakelen",
+    "mode.image_preview": "Afbeeldingsvoorbeeld",
+    "action.image_preview_delete": "Punt of kader verwijderen",
+    "action.image_preview_generate": "Masker genereren",
+    "action.image_preview_remove_point": "Besturingspunt onder cursor verwijderen"
   },
   "debug_info": {
     "free_memory": "Vrij: %.2f GB",
@@ -2063,10 +2067,9 @@
     "sam_show": "Overlay",
     "sam_update": "Voorstel bijwerken",
     "sam_recompute": "Herberekenen",
-    "sam_edit_hint": "Klik op een punt of rechthoekrand om deze te selecteren. Bewerken: versleep punten om ze te verplaatsen. Delete of rechtsklikken verwijdert een punt of rechthoek, geen maskerpixels. Ongedaan maken herstelt de wijziging.",
-    "sam_text_hint": "Objectselectie met tekstbeschrijvingen is niet beschikbaar in dit voorbeeld.",
+    "sam_edit_hint": "Selecteer een punt of kaderrand. Sleep punten in Bewerken om ze te verplaatsen. Verwijderen wist besturingspunten, geen maskerpixels.",
     "sam_selection_none": "Selecteer een punt of de rand van de rechthoek.",
-    "sam_quality": "Geschatte kwaliteit: {score}% · niet gecontroleerd",
+    "sam_quality": "SAM-score: {score}%",
     "sam_generate_hint": "Genereer op basis van punten en een rechthoek; toegevoegde punten verfijnen het geselecteerde voorstel.",
     "sam_recompute_hint": "Genereer op basis van de huidige punten en rechthoek zonder een vorig masker te gebruiken.",
     "sam_positive_hint": "Positief punt: markeer het te segmenteren object. Dit stuurt SAM aan zonder maskerpixels te schilderen.",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "Frames bekijken · SAM",
     "sam_source_changed": "De afbeelding is gewijzigd. Vernieuw deze voordat u een nieuw voorstel genereert.",
     "sam_proposal_expired": "Het geselecteerde voorstel is niet meer actueel. Genereer een nieuw voorstel.",
-    "sam_write_failed": "Het voorbeeld van het voorstel kon niet worden opgeslagen.",
+    "sam_write_failed": "Het masker kan niet worden gecodeerd.",
     "sam_shutting_down": "De SAM-voorbeelddienst wordt afgesloten.",
     "sam_invalid_input": "Een afbeeldingsrevisie en punten of een kader zijn vereist (maximaal 256 punten).",
     "sam_invalid_point": "Puntcoördinaten moeten tussen 0 en 1 liggen, met label 0 of 1.",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "Trainer niet hersteld",
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."
-    }
+    },
+    "camera_masks_disabled": "Deze dataset bevat afbeeldingsmaskers, maar maskering is uitgeschakeld. Kies een maskermodus in de trainingsinstellingen om ze te gebruiken."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio is onverwacht afgesloten",

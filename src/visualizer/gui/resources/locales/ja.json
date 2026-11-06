@@ -1927,7 +1927,11 @@
     "trigger.drag": " ドラッグ",
     "trigger.scroll": "スクロール",
     "trigger.unknown": "不明",
-    "action.toggle_performance_hud": "パフォーマンス HUD 切替"
+    "action.toggle_performance_hud": "パフォーマンス HUD 切替",
+    "mode.image_preview": "画像プレビュー",
+    "action.image_preview_delete": "点またはボックスを削除",
+    "action.image_preview_generate": "マスクを生成",
+    "action.image_preview_remove_point": "カーソル位置の制御点を削除"
   },
   "debug_info": {
     "free_memory": "空き: %.2f GB",
@@ -2036,7 +2040,7 @@
     "sam_negative": "背景 −",
     "sam_box": "矩形",
     "sam_pan": "パン",
-    "sam_undo": "変更を元に戻す",
+    "sam_undo": "元に戻す",
     "sam_clear": "点と矩形をクリア",
     "sam_generate": "生成",
     "sam_cancel": "キャンセル",
@@ -2063,10 +2067,9 @@
     "sam_show": "重ね表示",
     "sam_update": "候補を更新",
     "sam_recompute": "再計算",
-    "sam_edit_hint": "点または矩形の辺をクリックして選択します。編集：点をドラッグして移動します。Deleteキーまたは右クリックで点や矩形を削除します。マスクのピクセルは消去されません。「変更を元に戻す」で操作を取り消せます。",
-    "sam_text_hint": "このプレビューでは、テキストによる説明でオブジェクトを選択することはできません。",
+    "sam_edit_hint": "点またはボックスの端を選択します。編集モードでは点をドラッグして移動できます。削除の対象は制御点やボックスで、マスクの画素ではありません。",
     "sam_selection_none": "点または矩形の辺を選択して編集します。",
-    "sam_quality": "推定品質：{score}% · 未検証",
+    "sam_quality": "SAMスコア: {score}%",
     "sam_generate_hint": "点と矩形から生成します。点を追加すると、選択中の候補を調整できます。",
     "sam_recompute_hint": "以前のマスクを使用せず、現在の点と矩形から生成します。",
     "sam_positive_hint": "ポジティブポイント：セグメンテーションする対象を指定します。SAMへの指示であり、マスクのピクセルを塗る操作ではありません。",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "フレームを確認 · SAM",
     "sam_source_changed": "画像が変更されました。別の候補を生成する前に更新してください。",
     "sam_proposal_expired": "選択した候補は古くなっています。新しい候補を生成してください。",
-    "sam_write_failed": "候補のプレビューを保存できません。",
+    "sam_write_failed": "マスクをエンコードできません。",
     "sam_shutting_down": "SAMプレビューサービスを終了しています。",
     "sam_invalid_input": "画像のリビジョンと点または矩形が必要です（点は最大256個）。",
     "sam_invalid_point": "点の座標は0から1の範囲、ラベルは0または1で指定してください。",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "トレーナーを復元できませんでした",
       "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
-    }
+    },
+    "camera_masks_disabled": "このデータセットには画像マスクがありますが、マスク処理が無効です。使用するには、トレーニング設定でマスクモードを選択してください。"
   },
   "recovery": {
     "crash_title": "LichtFeld Studio が予期せず終了しました",

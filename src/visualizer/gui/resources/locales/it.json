@@ -1940,7 +1940,11 @@
     "trigger.drag": " Trascina",
     "trigger.scroll": "Scorri",
     "trigger.unknown": "Sconosciuto",
-    "action.toggle_performance_hud": "Attiva HUD prestazioni"
+    "action.toggle_performance_hud": "Attiva HUD prestazioni",
+    "mode.image_preview": "Anteprima immagine",
+    "action.image_preview_delete": "Rimuovi punto o riquadro",
+    "action.image_preview_generate": "Genera maschera",
+    "action.image_preview_remove_point": "Rimuovi controllo al cursore"
   },
   "debug_info": {
     "free_memory": "Libera: %.2f GB",
@@ -2049,7 +2053,7 @@
     "sam_negative": "Sfondo −",
     "sam_box": "Riquadro",
     "sam_pan": "Sposta vista",
-    "sam_undo": "Annulla modifica",
+    "sam_undo": "Annulla",
     "sam_clear": "Cancella punti e riquadro",
     "sam_generate": "Genera",
     "sam_cancel": "Annulla",
@@ -2076,10 +2080,9 @@
     "sam_show": "Overlay",
     "sam_update": "Aggiorna proposta",
     "sam_recompute": "Ricalcola",
-    "sam_edit_hint": "Clicca un punto o il bordo del riquadro per selezionarlo. Modifica: trascina i punti per spostarli. Canc o clic destro elimina il punto o il riquadro, non i pixel della maschera. Annulla modifica ripristina lo stato precedente.",
-    "sam_text_hint": "La selezione di oggetti tramite descrizioni testuali non è disponibile in questa anteprima.",
+    "sam_edit_hint": "Seleziona un punto o il bordo del riquadro. In Modifica, trascina i punti per spostarli. Rimuovi elimina i controlli, non i pixel della maschera.",
     "sam_selection_none": "Seleziona un punto o il bordo del riquadro.",
-    "sam_quality": "Qualità stimata: {score}% · non verificata",
+    "sam_quality": "Punteggio SAM: {score}%",
     "sam_generate_hint": "Genera da punti e riquadro; i punti aggiunti affinano la proposta selezionata.",
     "sam_recompute_hint": "Genera dai punti e dal riquadro attuali senza usare una maschera precedente.",
     "sam_positive_hint": "Punto positivo: indica l’oggetto da segmentare. Guida SAM, senza dipingere i pixel della maschera.",
@@ -2089,7 +2092,7 @@
     "sam_review_frames": "Rivedi frame · SAM",
     "sam_source_changed": "L’immagine è cambiata. Aggiornala prima di generare un’altra proposta.",
     "sam_proposal_expired": "La proposta selezionata non è più attuale. Genera una nuova proposta.",
-    "sam_write_failed": "Impossibile salvare l’anteprima della proposta.",
+    "sam_write_failed": "Impossibile codificare la maschera.",
     "sam_shutting_down": "Il servizio di anteprima SAM si sta chiudendo.",
     "sam_invalid_input": "Servono una revisione dell’immagine e punti o un riquadro (massimo 256 punti).",
     "sam_invalid_point": "Le coordinate dei punti devono essere tra 0 e 1, con etichetta 0 o 1.",
@@ -3104,7 +3107,8 @@
     "trainer_not_restored": {
       "title": "Trainer non ripristinato",
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."
-    }
+    },
+    "camera_masks_disabled": "Questo dataset contiene maschere immagine, ma il masking è disattivato. Scegli una modalità maschera nelle impostazioni di addestramento per utilizzarle."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio si è chiuso inaspettatamente",

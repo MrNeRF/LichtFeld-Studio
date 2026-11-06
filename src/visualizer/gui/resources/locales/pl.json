@@ -1927,7 +1927,11 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Przełącz HUD wydajności"
+    "action.toggle_performance_hud": "Przełącz HUD wydajności",
+    "mode.image_preview": "Podgląd obrazu",
+    "action.image_preview_delete": "Usuń punkt lub ramkę",
+    "action.image_preview_generate": "Wygeneruj maskę",
+    "action.image_preview_remove_point": "Usuń punkt sterujący pod kursorem"
   },
   "debug_info": {
     "free_memory": "Wolna: %.2f GB",
@@ -2036,7 +2040,7 @@
     "sam_negative": "Tło −",
     "sam_box": "Prostokąt",
     "sam_pan": "Przesuń widok",
-    "sam_undo": "Cofnij zmianę",
+    "sam_undo": "Cofnij",
     "sam_clear": "Wyczyść punkty i prostokąt",
     "sam_generate": "Generuj",
     "sam_cancel": "Anuluj",
@@ -2063,10 +2067,9 @@
     "sam_show": "Nakładka",
     "sam_update": "Aktualizuj",
     "sam_recompute": "Przelicz",
-    "sam_edit_hint": "Kliknij punkt lub krawędź prostokąta, aby go wybrać. Edytuj: przeciągnij punkty, aby je przesunąć. Delete lub prawy przycisk usuwa punkt lub prostokąt, a nie piksele maski. Cofnij zmianę przywraca poprzedni stan.",
-    "sam_text_hint": "Wybieranie obiektów za pomocą opisów tekstowych nie jest dostępne w tym podglądzie.",
+    "sam_edit_hint": "Wybierz punkt lub krawędź ramki. W trybie edycji przeciągaj punkty, aby je przenosić. Usuwanie dotyczy elementów sterujących, nie pikseli maski.",
     "sam_selection_none": "Wybierz punkt lub krawędź prostokąta.",
-    "sam_quality": "Szacowana jakość: {score}% · niezweryfikowana",
+    "sam_quality": "Ocena SAM: {score}%",
     "sam_generate_hint": "Generuj na podstawie punktów i prostokąta; dodane punkty dopracowują wybraną propozycję.",
     "sam_recompute_hint": "Generuj na podstawie bieżących punktów i prostokąta bez używania poprzedniej maski.",
     "sam_positive_hint": "Punkt dodatni: wskaż obiekt do segmentacji. Steruje to modelem SAM bez malowania pikseli maski.",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "Przejrzyj klatki · SAM",
     "sam_source_changed": "Obraz się zmienił. Odśwież go przed wygenerowaniem kolejnej propozycji.",
     "sam_proposal_expired": "Wybrana propozycja jest już nieaktualna. Wygeneruj nową propozycję.",
-    "sam_write_failed": "Nie można zapisać podglądu propozycji.",
+    "sam_write_failed": "Nie można zakodować maski.",
     "sam_shutting_down": "Usługa podglądu SAM jest zamykana.",
     "sam_invalid_input": "Wymagana jest rewizja obrazu oraz punkty lub prostokąt (maksymalnie 256 punktów).",
     "sam_invalid_point": "Współrzędne punktów muszą mieścić się między 0 a 1, a etykieta musi mieć wartość 0 lub 1.",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
-    }
+    },
+    "camera_masks_disabled": "Ten zbiór danych zawiera maski obrazów, ale maskowanie jest wyłączone. Wybierz tryb maski w ustawieniach treningu, aby ich użyć."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",

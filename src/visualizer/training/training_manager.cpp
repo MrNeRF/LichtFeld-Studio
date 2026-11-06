@@ -993,8 +993,8 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::canPerform(const TrainingAction action) const {
-        if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
-            viewer_->jobs().anyRunning(JobType::AssistedMask))
+        if ((action == TrainingAction::Start || action == TrainingAction::Resume) &&
+            !getActionBlockedReason(action).empty())
             return false;
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
@@ -1299,6 +1299,20 @@ namespace lfs::vis {
         return lfs::training::resolve_training_cropbox_geom(*scene_);
     }
 
+    void TrainerManager::notifyUnusedCameraMasks() {
+        auto* const gui = viewer_ ? viewer_->getGuiManager() : nullptr;
+        if (!gui || !scene_ || !trainer_)
+            return;
+        detail::dispatch_unused_camera_mask_notice(*scene_, trainer_->getParams().optimization.mask_mode, [gui] {
+            gui->enqueueToast({
+                .title = LOC("window.training"),
+                .message = LOC("toast.camera_masks_disabled"),
+                .level = gui::ErrorNoticeLevel::Warning,
+                .fingerprint = 0x4c46534d41530001ULL,
+            });
+        });
+    }
+
     bool TrainerManager::startTraining() {
         LOG_TIMER("TrainerManager::startTraining");
 
@@ -1352,6 +1366,7 @@ namespace lfs::vis {
             return false;
         }
         launchTrainingThread();
+        notifyUnusedCameraMasks();
 
         return true;
     }
@@ -1730,6 +1745,7 @@ namespace lfs::vis {
             launchTrainingThread();
         }
 
+        notifyUnusedCameraMasks();
         state::TrainingResumed{.iteration = iter}.emit();
         LOG_INFO("Training resumed at iteration {}", iter);
     }

@@ -10,15 +10,11 @@ class MaskDraft:
     revision: str
     points: list = field(default_factory=list)
     box: tuple | None = None
-    history: list = field(default_factory=list)
-
-    def remember(self):
-        self.history.append((list(self.points), self.box))
-        self.history = self.history[-64:]
 
 
 class FrameMaskEditor:
-    def __init__(self):
+    def __init__(self, on_edit=None):
+        self.on_edit = on_edit
         self.enabled = False
         self.weights = ""
         self.tool = "positive"
@@ -77,36 +73,40 @@ class FrameMaskEditor:
 
     def point(self, x, y, label):
         if self.draft and len(self.draft.points) < 256:
-            self.draft.remember()
+            before = self.signature
             self.draft.points.append((x, y, label))
             self.invalidate(keep_refinement=True)
             self.selected = len(self.draft.points) - 1
+            self._edited(before)
 
     def remove_selected(self):
         if not self.draft or self.selected is None:
             return
-        self.draft.remember()
+        before = self.signature
         if self.selected == "box":
             self.draft.box = None
         else:
             self.draft.points.pop(self.selected)
         self.selected = None
         self.invalidate()
+        self._edited(before)
 
     def move_selected(self, x, y):
         if self.draft and isinstance(self.selected, int):
             old = self.draft.points[self.selected]
             if old[:2] != (x, y):
-                self.draft.remember()
+                before = self.signature
                 self.draft.points[self.selected] = (x, y, old[2])
                 self.invalidate()
+                self._edited(before)
 
     def flip_selected(self):
         if self.draft and isinstance(self.selected, int):
-            self.draft.remember()
+            before = self.signature
             x, y, label = self.draft.points[self.selected]
             self.draft.points[self.selected] = (x, y, 1 - label)
             self.invalidate()
+            self._edited(before)
 
     def set_box(self, start, end):
         if not self.draft:
@@ -115,24 +115,34 @@ class FrameMaskEditor:
         y0, y1 = sorted((start[1], end[1]))
         if x1 <= x0 or y1 <= y0:
             return
-        self.draft.remember()
+        before = self.signature
         self.draft.box = (x0, y0, x1, y1)
         self.invalidate(keep_refinement=True)
         self.selected = "box"
+        self._edited(before)
 
-    def undo(self):
-        if self.draft and self.draft.history:
-            self.draft.points, self.draft.box = self.draft.history.pop()
+    def _edited(self, before):
+        if self.on_edit and before != self.signature:
+            self.on_edit(self.key, before, self.signature)
+
+    def restore(self, key, state):
+        draft = self.drafts.get(key[0])
+        if not draft or draft.revision != key[1]:
+            return False
+        draft.points, draft.box = list(state[0]), state[1]
+        if key == self.key:
             self.selected = None
             self.invalidate()
+        return True
 
     def clear(self):
+        before = self.signature
         if self.draft:
-            self.draft.remember()
             self.draft.points = []
             self.draft.box = None
         self.invalidate()
         self.selected = None
+        self._edited(before)
 
     def accept(self, snapshot):
         if (not self.key or not self.request or snapshot.get("request") != self.request
@@ -142,7 +152,7 @@ class FrameMaskEditor:
         changed = phase != self.phase
         self.phase = phase
         self.error = snapshot.get("error", "")
-        if phase == "ready" and snapshot.get("overlays") != self.overlays:
+        if phase == "ready" and not self.overlays:
             self.overlays = list(snapshot["overlays"])
             self.scores = list(snapshot.get("scores", ()))
             self.candidate = min(self.candidate, max(0, len(self.overlays) - 1))

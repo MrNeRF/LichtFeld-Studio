@@ -1927,7 +1927,11 @@
     "trigger.drag": " Ziehen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Unbekannt",
-    "action.toggle_performance_hud": "Leistungs-HUD umschalten"
+    "action.toggle_performance_hud": "Leistungs-HUD umschalten",
+    "mode.image_preview": "Bildvorschau",
+    "action.image_preview_delete": "Punkt oder Rahmen entfernen",
+    "action.image_preview_generate": "Maske erzeugen",
+    "action.image_preview_remove_point": "Kontrollpunkt am Zeiger entfernen"
   },
   "debug_info": {
     "free_memory": "Frei: %.2f GB",
@@ -2063,10 +2067,9 @@
     "sam_show": "Überlagerung",
     "sam_update": "Vorschlag aktualisieren",
     "sam_recompute": "Neu berechnen",
-    "sam_edit_hint": "Punkt oder Rahmenkante zum Auswählen anklicken. Bearbeiten: Punkte zum Verschieben ziehen. Entf oder Rechtsklick entfernt Punkte oder Rahmen, keine Maskenpixel. Rückgängig stellt die Änderung wieder her.",
-    "sam_text_hint": "Die Objektauswahl anhand von Textbeschreibungen ist in dieser Vorschau nicht verfügbar.",
+    "sam_edit_hint": "Punkt oder Rahmenrand auswählen. Unter Bearbeiten lassen sich Punkte ziehen. Entfernen löscht Steuerelemente, keine Maskenpixel.",
     "sam_selection_none": "Punkt oder Rahmenkante zum Bearbeiten auswählen.",
-    "sam_quality": "Geschätzte Qualität: {score}% · nicht geprüft",
+    "sam_quality": "SAM-Wert: {score}%",
     "sam_generate_hint": "Aus Punkten und Rahmen erzeugen; zusätzliche Punkte verfeinern den gewählten Vorschlag.",
     "sam_recompute_hint": "Aus den aktuellen Punkten und dem Rahmen ohne vorherige Maske erzeugen.",
     "sam_positive_hint": "Positiver Punkt: das zu segmentierende Objekt markieren. Dies steuert SAM, ohne Maskenpixel zu malen.",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "Frames prüfen · SAM",
     "sam_source_changed": "Das Bild wurde geändert. Aktualisieren Sie es, bevor Sie einen weiteren Vorschlag erzeugen.",
     "sam_proposal_expired": "Der ausgewählte Vorschlag ist nicht mehr aktuell. Erzeugen Sie einen neuen Vorschlag.",
-    "sam_write_failed": "Die Vorschau des Vorschlags konnte nicht gespeichert werden.",
+    "sam_write_failed": "Die Maske konnte nicht kodiert werden.",
     "sam_shutting_down": "Der SAM-Vorschaudienst wird beendet.",
     "sam_invalid_input": "Eine Bildrevision und Punkte oder ein Rahmen sind erforderlich (höchstens 256 Punkte).",
     "sam_invalid_point": "Punktkoordinaten müssen zwischen 0 und 1 liegen und die Kennzeichnung 0 oder 1 haben.",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "Trainer nicht wiederhergestellt",
       "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."
-    }
+    },
+    "camera_masks_disabled": "Dieser Datensatz enthält Bildmasken, aber die Maskierung ist deaktiviert. Wählen Sie in den Trainingseinstellungen einen Maskenmodus, um sie zu verwenden."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio wurde unerwartet beendet",

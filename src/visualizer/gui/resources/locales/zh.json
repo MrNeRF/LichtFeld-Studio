@@ -1927,7 +1927,11 @@
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
     "trigger.unknown": "未知",
-    "action.toggle_performance_hud": "切换性能 HUD"
+    "action.toggle_performance_hud": "切换性能 HUD",
+    "mode.image_preview": "图像预览",
+    "action.image_preview_delete": "删除点或边界框",
+    "action.image_preview_generate": "生成蒙版",
+    "action.image_preview_remove_point": "删除光标处的控制点"
   },
   "debug_info": {
     "free_memory": "可用：%.2f GB",
@@ -2036,7 +2040,7 @@
     "sam_negative": "背景 −",
     "sam_box": "矩形框",
     "sam_pan": "平移",
-    "sam_undo": "撤销更改",
+    "sam_undo": "撤销",
     "sam_clear": "清除点和矩形框",
     "sam_generate": "生成",
     "sam_cancel": "取消",
@@ -2063,10 +2067,9 @@
     "sam_show": "叠加",
     "sam_update": "更新候选",
     "sam_recompute": "重新计算",
-    "sam_edit_hint": "单击点或矩形框边缘以选中。编辑：拖动点以移动。按Delete键或右键单击会删除点或矩形框，而不是擦除掩码像素。撤销更改可恢复之前的状态。",
-    "sam_text_hint": "此预览不支持通过文本描述选择对象。",
+    "sam_edit_hint": "选择点或边界框的边缘。在编辑模式下可拖动点来移动。删除操作移除控制点或边界框，不会擦除蒙版像素。",
     "sam_selection_none": "选择一个点或矩形框的边缘进行编辑。",
-    "sam_quality": "预计质量：{score}% · 未验证",
+    "sam_quality": "SAM 评分：{score}%",
     "sam_generate_hint": "根据点和矩形框生成；新增的点会细化所选候选。",
     "sam_recompute_hint": "不使用之前的掩码，根据当前的点和矩形框生成。",
     "sam_positive_hint": "正向点：标记要分割的对象。这是在引导SAM，而不是涂绘掩码像素。",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "查看帧 · SAM",
     "sam_source_changed": "图像已更改。请先刷新，再生成其他候选。",
     "sam_proposal_expired": "所选候选已过期。请生成新候选。",
-    "sam_write_failed": "无法保存候选预览。",
+    "sam_write_failed": "无法编码蒙版。",
     "sam_shutting_down": "SAM预览服务正在关闭。",
     "sam_invalid_input": "需要图像修订版本以及点或矩形框（最多256个点）。",
     "sam_invalid_point": "点坐标必须介于0和1之间，标签必须为0或1。",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "未能恢复训练器",
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
-    }
+    },
+    "camera_masks_disabled": "此数据集包含图像蒙版，但蒙版功能已禁用。请在训练设置中选择蒙版模式以使用它们。"
   },
   "recovery": {
     "crash_title": "LichtFeld Studio 意外关闭",

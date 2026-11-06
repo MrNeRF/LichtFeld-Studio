@@ -4889,11 +4889,10 @@ namespace lfs::python {
             result["phase"] = state.phase;
             result["error"] = state.error;
             result["scores"] = state.scores;
-            result["mask"] = core::path_to_utf8(state.mask);
-            std::vector<std::string> paths;
-            for (const auto& path : state.overlays)
-                paths.push_back(core::path_to_utf8(path));
-            result["overlays"] = paths;
+            nb::list overlays;
+            for (const auto& mask : state.overlays)
+                overlays.append(nb::cast(PyTensor(mask)));
+            result["overlays"] = overlays;
             return result; }, "UI thread: inspect the current disposable SAM proposal.");
         m.def("sam_preview_close", [] {
             require_ui_texture_creation_thread();
@@ -4916,7 +4915,7 @@ namespace lfs::python {
             const auto size = core::native_fs::file_size(state.image, ec);
             if (ec || size != state.source_bytes)
                 throw std::runtime_error(LOC("image_preview.sam_source_changed"));
-            auto applied = viewer->applyCameraMask(*id, state.image, state.mask);
+            auto applied = viewer->applyCameraMask(*id, state.image, state.mask, state.width, state.height);
             if (!applied)
                 throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message())); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
 
@@ -5458,6 +5457,7 @@ namespace lfs::python {
                 nb::arg("tensor"), nb::arg("plugin_name") = "")
             .def("update", &PyDynamicTexture::update, nb::arg("tensor"))
             .def("destroy", &PyDynamicTexture::destroy)
+            .def("rml_src", &PyDynamicTexture::rml_src_url, nb::arg("width") = 0, nb::arg("height") = 0, "RmlUI image source owned by this texture; release it before destroying the texture")
             .def_prop_ro("id", &PyDynamicTexture::texture_id)
             .def_prop_ro("width", &PyDynamicTexture::width)
             .def_prop_ro("height", &PyDynamicTexture::height)

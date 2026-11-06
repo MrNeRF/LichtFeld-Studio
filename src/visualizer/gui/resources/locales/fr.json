@@ -1927,7 +1927,11 @@
     "trigger.drag": " Glisser",
     "trigger.scroll": "Défilement",
     "trigger.unknown": "Inconnu",
-    "action.toggle_performance_hud": "Basculer le HUD de performances"
+    "action.toggle_performance_hud": "Basculer le HUD de performances",
+    "mode.image_preview": "Aperçu de l’image",
+    "action.image_preview_delete": "Supprimer un point ou un cadre",
+    "action.image_preview_generate": "Générer le masque",
+    "action.image_preview_remove_point": "Supprimer le contrôle sous le curseur"
   },
   "debug_info": {
     "free_memory": "Libre : %.2f GB",
@@ -2036,7 +2040,7 @@
     "sam_negative": "Arrière-plan −",
     "sam_box": "Rectangle",
     "sam_pan": "Déplacer la vue",
-    "sam_undo": "Annuler la modification",
+    "sam_undo": "Annuler",
     "sam_clear": "Effacer points et rectangle",
     "sam_generate": "Générer",
     "sam_cancel": "Annuler",
@@ -2063,10 +2067,9 @@
     "sam_show": "Superposition",
     "sam_update": "Actualiser",
     "sam_recompute": "Recalculer",
-    "sam_edit_hint": "Cliquez sur un point ou le bord du rectangle pour le sélectionner. Modifier : faites glisser les points pour les déplacer. Suppr ou un clic droit supprime le point ou le rectangle, pas les pixels du masque. Annuler la modification rétablit l’état précédent.",
-    "sam_text_hint": "La sélection d’objets par description textuelle n’est pas disponible dans cet aperçu.",
+    "sam_edit_hint": "Sélectionnez un point ou le bord du cadre. En mode Modifier, faites glisser les points. Supprimer efface les contrôles, pas les pixels du masque.",
     "sam_selection_none": "Sélectionnez un point ou le bord du rectangle.",
-    "sam_quality": "Qualité estimée : {score}% · non vérifiée",
+    "sam_quality": "Score SAM : {score}%",
     "sam_generate_hint": "Générer à partir des points et du rectangle ; les points ajoutés affinent la proposition sélectionnée.",
     "sam_recompute_hint": "Générer à partir des points et du rectangle actuels sans utiliser de masque précédent.",
     "sam_positive_hint": "Point positif : marquez l’objet à segmenter. Cela guide SAM sans peindre les pixels du masque.",
@@ -2076,7 +2079,7 @@
     "sam_review_frames": "Vérifier les images · SAM",
     "sam_source_changed": "L’image a changé. Actualisez-la avant de générer une autre proposition.",
     "sam_proposal_expired": "La proposition sélectionnée n’est plus à jour. Générez une nouvelle proposition.",
-    "sam_write_failed": "Impossible d’enregistrer l’aperçu de la proposition.",
+    "sam_write_failed": "Impossible d’encoder le masque.",
     "sam_shutting_down": "Le service d’aperçu SAM est en cours d’arrêt.",
     "sam_invalid_input": "Une révision de l’image et des points ou un cadre sont nécessaires (256 points maximum).",
     "sam_invalid_point": "Les coordonnées des points doivent être comprises entre 0 et 1, avec une étiquette 0 ou 1.",
@@ -3091,7 +3094,8 @@
     "trainer_not_restored": {
       "title": "Entraîneur non restauré",
       "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."
-    }
+    },
+    "camera_masks_disabled": "Ce jeu de données contient des masques d’image, mais le masquage est désactivé. Choisissez un mode de masque dans les paramètres d’entraînement pour les utiliser."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio s'est fermé de façon inattendue",

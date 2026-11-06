@@ -11,12 +11,20 @@ from test_rmlui_image_sources import _DocumentStub
 
 def editor(module):
     value = module.FrameMaskEditor()
+    value.edits = []
+    value.on_edit = lambda key, before, after: value.edits.append((key, before, after))
     value.enabled = True
     value.bind("frame.png", "revision-a")
     return value
 
 
-def test_prompts_follow_their_image_and_undo_is_local(panel_modules):
+
+def undo(value):
+    key, before, _ = value.edits.pop()
+    value.restore(key, before)
+
+
+def test_edits_restore_their_source_draft_without_changing_the_active_image(panel_modules):
     module, _ = panel_modules
     value = editor(module)
     value.point(0.2, 0.4, 1)
@@ -26,11 +34,12 @@ def test_prompts_follow_their_image_and_undo_is_local(panel_modules):
     value.bind("frame.png", "revision-a")
     assert value.draft.points == [(0.2, 0.4, 1)]
     assert value.draft.box == (0.1, 0.2, 0.8, 0.9)
-    value.undo()
+    undo(value)  # Shared chronology undoes the most recent edit on the other image.
+    assert value.draft.box == (0.1, 0.2, 0.8, 0.9)
+    assert not value.drafts["other.png"].points
+    undo(value)
     assert value.draft.box is None
     assert value.draft.points == [(0.2, 0.4, 1)]
-    value.bind("other.png", "revision-b")
-    assert value.draft.points == [(0.6, 0.7, 0)]
 
 
 def test_replacement_invalidates_prompts_and_pending_results(panel_modules):
@@ -60,7 +69,7 @@ def test_newer_request_wins_and_refinement_survives_prompt_correction(panel_modu
                              "overlays": ["old.png"], "scores": [0.8]})
     value.clear()
     assert value.refinement is None
-    value.undo()
+    undo(value)
     assert value.draft.points == [(0.4, 0.6, 0)]
 
 
@@ -70,7 +79,6 @@ def test_prompt_memory_is_bounded_and_points_do_not_become_multiple_objects(pane
     for index in range(400):
         value.point(index / 400, 0.5, 1)
     assert len(value.draft.points) == 256
-    assert len(value.draft.history) == 64
     assert len(value.drafts) == 1
 
 
@@ -127,7 +135,7 @@ def test_apply_keeps_selected_polarity_with_inverted_training_masks(panel_module
     assert panel._sam_apply_target == (6, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
 
 
-def test_delete_move_and_change_label_have_local_undo_and_discard_old_mask_prior(panel_modules):
+def test_delete_move_and_change_label_restore_and_discard_old_mask_prior(panel_modules):
     module, _ = panel_modules
     value = editor(module)
     value.point(0.2, 0.4, 1)
@@ -142,10 +150,10 @@ def test_delete_move_and_change_label_have_local_undo_and_discard_old_mask_prior
     value.remove_selected()
     assert value.draft.points == [(0.7, 0.8, 0)]
     assert value.selected is None
-    value.undo()
+    undo(value)
     assert value.draft.points == [(0.3, 0.5, 0), (0.7, 0.8, 0)]
-    value.undo()
-    value.undo()
+    undo(value)
+    undo(value)
     assert value.draft.points == [(0.2, 0.4, 1), (0.7, 0.8, 0)]
 
 
@@ -158,7 +166,7 @@ def test_box_can_be_removed_without_deleting_the_points(panel_modules):
     value.remove_selected()
     assert value.draft.points == [(0.2, 0.4, 1)]
     assert value.draft.box is None
-    value.undo()
+    undo(value)
     assert value.draft.box == (0.1, 0.1, 0.8, 0.9)
 
 
@@ -219,13 +227,13 @@ def test_select_drag_and_right_click_remove_existing_point(panel_modules, monkey
     panel._on_img_mousedown(mouse(0.25, 0.40))
     panel._on_img_mousemove(mouse(0.6, 0.55))
     panel._on_img_mousemove(mouse(0.65, 0.6))
-    assert len(value.draft.history) == 1, "a drag must create only one undo entry"
+    assert len(value.edits) == 1, "a drag must create only one undo entry"
     panel._on_img_mouseup(mouse(0.65, 0.6))
     assert value.draft.points[0][:2] == pytest.approx((0.65, 0.6))
-    assert len(value.draft.history) == 2
+    assert len(value.edits) == 2
     panel._on_img_mousedown(mouse(0.65, 0.6, button=1))
     assert not value.draft.points
-    value.undo()
+    undo(value)
     assert value.draft.points[0][:2] == pytest.approx((0.65, 0.6))
 
 
@@ -248,3 +256,117 @@ def test_sam_pointer_uses_original_pixels_after_fit_rotation_and_hidpi(panel_mod
     mouse = event(mouse_x=viewport.absolute_left + x * scale, mouse_y=viewport.absolute_top + y * scale)
     assert panel._sam_source_point(mouse) == pytest.approx((100.5 / 399, 75.25 / 199))
     assert panel._sam_source_point(event(mouse_x=-10000, mouse_y=-10000)) is None
+
+
+def test_prompt_edits_use_shared_history_and_expired_drafts_are_not_revived(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    entries = []
+    monkeypatch.setattr(module.lf.undo, "push", lambda name, undo, redo, **kw: entries.append((undo, redo)))
+    panel = module.ImagePreviewPanel()
+    value = panel._mask_editor
+    value.bind("one.png", "r1")
+    value.point(0.2, 0.4, 1)
+    value.move_selected(0.6, 0.7)
+    assert len(entries) == 2
+    value.bind("two.png", "r2")
+    value.point(0.5, 0.5, 0)
+    module.RuntimeState.scene_generation.value += 1  # Ordinary scene changes keep edits replayable.
+    entries[1][0]()
+    assert value.drafts["one.png"].points == [(0.2, 0.4, 1)]
+    assert value.draft.points == [(0.5, 0.5, 0)]
+    entries[1][1]()
+    assert value.drafts["one.png"].points == [(0.6, 0.7, 1)]
+    value.bind("one.png", "replacement")
+    entries[1][0]()
+    assert not value.draft.points
+
+
+def test_mask_keymap_respects_rebinding_unbinding_modifiers_and_capture(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.4, 0.5, 1)
+    keymap = module.lf.keymap
+    monkeypatch.setattr(keymap, "get_action_for_key", lambda scope, key, mods:
+                        keymap.Action.IMAGE_PREVIEW_DELETE if (scope, key, mods) == ("image_preview", 66, 2)
+                        else keymap.Action.NONE)
+    panel._on_keydown(event(key_identifier=module.KI_DELETE))
+    panel._on_keydown(event(key_identifier=13))
+    assert len(value.draft.points) == 1
+    monkeypatch.setattr(keymap, "is_capturing", lambda: True)
+    panel._on_keydown(event(key_identifier=13, ctrl_key=True))
+    assert len(value.draft.points) == 1
+    monkeypatch.setattr(keymap, "is_capturing", lambda: False)
+    panel._on_keydown(event(Element("textarea"), key_identifier=13, ctrl_key=True))
+    assert len(value.draft.points) == 1
+    panel._on_keydown(event(key_identifier=13, ctrl_key=True))
+    assert not value.draft.points
+
+
+def test_candidate_texture_is_reused_and_released_before_its_owner(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._image_info_cache["frame.png"] = (400, 200, 3)
+    panel._preview_state = "ready"
+    panel._mask_editor = value = editor(module)
+    value.overlays, value.scores, value.phase, value.request = [object(), object()], [0.8, 0.9], "ready", 9
+    overlay = Element()
+    doc = panel._doc = _DocumentStub({"sam-overlay": overlay})
+    calls = []
+
+    class Texture:
+        def __init__(self, tensor):
+            calls.append(("create", tensor))
+
+        def update(self, tensor):
+            calls.append(("update", tensor))
+
+        def rml_src(self, width, height):
+            assert (width, height) == (400, 200)
+            return "dynamic-texture-source"
+
+        def destroy(self):
+            calls.append(("destroy", overlay.properties["decorator"]))
+
+    monkeypatch.setattr(module.lf.ui, "DynamicTexture", Texture, raising=False)
+    monkeypatch.setattr(module.lf.ui, "release_rml_texture", lambda source: calls.append(("release", source)), raising=False)
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: None)
+    panel._update_sam(doc)
+    panel._update_sam(doc)
+    assert calls == [("create", value.overlays[0])]
+    panel._sam_candidate(1)
+    panel._update_sam(doc)
+    assert calls[1] == ("release", "dynamic-texture-source")
+    assert calls[2] == ("update", value.overlays[1])
+    panel._sam_cancel()
+    assert calls[-2:] == [("release", "dynamic-texture-source"), ("destroy", "none")]
+
+
+def test_failed_shared_history_push_rolls_back_prompt_edit(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor.bind("frame.png", "revision-a")
+    def reject(*args, **kwargs):
+        raise RuntimeError("history unavailable")
+    monkeypatch.setattr(module.lf.undo, "push", reject)
+    with pytest.raises(RuntimeError, match="history unavailable"):
+        panel._mask_editor.point(0.4, 0.5, 1)
+    assert not panel._mask_editor.draft.points
+
+
+def test_mouse_removal_respects_rebound_double_click_and_modifiers(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(0.4, 0.5, 1)
+    keymap = module.lf.keymap
+    monkeypatch.setattr(panel, "_sam_hit", lambda ev: 0)
+    monkeypatch.setattr(keymap, "get_action_for_mouse_button", lambda mode, button, mods, double:
+                        keymap.Action.IMAGE_PREVIEW_REMOVE_POINT if (button, mods, double) == (2, 2, True)
+                        else keymap.Action.NONE)
+    panel._on_img_mousedown(event(button=1))
+    panel._on_img_mousedown(event(button=2, ctrl_key=True))
+    assert len(value.draft.points) == 1
+    panel._on_img_mousedown(event(button=2, ctrl_key=True), double_click=True)
+    assert not value.draft.points

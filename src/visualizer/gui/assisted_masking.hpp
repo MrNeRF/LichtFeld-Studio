@@ -4,6 +4,7 @@
 
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
+#include "core/tensor.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -31,9 +32,10 @@ namespace lfs::vis::gui {
         std::string revision;
         std::string phase = "idle";
         std::string error;
-        std::vector<std::filesystem::path> overlays;
+        std::vector<core::Tensor> overlays;
         std::vector<float> scores;
-        std::filesystem::path mask;
+        std::shared_ptr<const std::vector<std::byte>> mask;
+        int width = 0, height = 0;
         std::filesystem::path image;
         std::filesystem::file_time_type source_time{};
         uint64_t source_bytes = 0;

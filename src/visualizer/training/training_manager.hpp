@@ -246,6 +246,8 @@ namespace lfs::vis {
         void applyPendingParams();
 
     private:
+        void notifyUnusedCameraMasks();
+
         struct TrainingCompletionData {
             int iteration = 0;
             float final_loss = 0.0f;

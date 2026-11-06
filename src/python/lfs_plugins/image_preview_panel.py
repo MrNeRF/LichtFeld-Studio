@@ -3,6 +3,7 @@
 """Image preview panel using RmlUI floating window."""
 
 import time
+import weakref
 from math import gcd
 from _lfs_path_io import Path
 from typing import Optional
@@ -19,7 +20,7 @@ from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DELETE, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
     KI_LEFT, KI_M, KI_OEM_MINUS, KI_OEM_PLUS, KI_R, KI_RIGHT, KI_SPACE,
-    KI_RETURN, KI_SUBTRACT, KI_T, KI_UP,
+    KI_RETURN, KI_SUBTRACT, KI_T, KI_UP, native_key,
 )
 
 __lfs_panel_classes__ = ["ImagePreviewPanel"]
@@ -36,39 +37,10 @@ ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0
 THUMB_MAX_PX = 256
 
-LOCALE_KEY = {
-    "positive": "image_preview.sam_positive",
-    "negative": "image_preview.sam_negative",
-    "box": "image_preview.sam_box",
-    "edit": "image_preview.sam_edit",
-    "pan": "image_preview.sam_pan",
-    "undo": "image_preview.sam_undo",
-    "clear": "image_preview.sam_clear",
-    "remove": "image_preview.sam_remove",
-    "flip": "image_preview.sam_flip",
-    "generate": "image_preview.sam_generate",
-    "cancel": "image_preview.sam_cancel",
-    "show": "image_preview.sam_show",
-    "heading": "image_preview.sam_heading",
-    "proposals_heading": "image_preview.sam_proposals_heading",
-    "edit_hint": "image_preview.sam_edit_hint",
-    "text_hint": "image_preview.sam_text_hint",
-    "generate_hint": "image_preview.sam_generate_hint",
-    "recompute_hint": "image_preview.sam_recompute_hint",
-    "positive_hint": "image_preview.sam_positive_hint",
-    "negative_hint": "image_preview.sam_negative_hint",
-    "box_hint": "image_preview.sam_box_hint",
-    "pan_hint": "image_preview.sam_pan_hint",
-    "idle": "image_preview.sam_idle",
-    "queued": "image_preview.sam_queued",
-    "loading": "image_preview.sam_loading",
-    "encoding": "image_preview.sam_encoding",
-    "predicting": "image_preview.sam_predicting",
-    "rendering": "image_preview.sam_rendering",
-    "closing": "image_preview.sam_closing",
-    "ready": "image_preview.sam_ready",
-    "error": "image_preview.sam_error",
-}
+
+def _sam_key(name):
+    return "image_preview.sam_" + name
+
 
 _instance = None
 _pending_open = None
@@ -101,7 +73,11 @@ class ImagePreviewPanel(Panel):
         self._show_help = False
         self._sampled_color = None
         self._sample_request = None
-        self._mask_editor = FrameMaskEditor()
+        self._mask_editor = FrameMaskEditor(self._sam_record_edit)
+        self._sam_texture = None
+        self._sam_texture_key = None
+        self._sam_texture_source = ""
+        self._sam_controls_state = None
         self._sam_apply_target = None
         self._sam_markers_rml = None
         self._metadata = PreviewMetadata()
@@ -259,7 +235,7 @@ class ImagePreviewPanel(Panel):
             ("sam-box", lambda _ev: self._sam_tool("box")),
             ("sam-edit", lambda _ev: self._sam_tool("edit")),
             ("sam-pan", lambda _ev: self._sam_tool("pan")),
-            ("sam-undo", lambda _ev: self._sam_edit("undo")),
+            ("sam-undo", lambda _ev: (lf.undo.undo(), self._mark_dirty())),
             ("sam-clear", lambda _ev: self._sam_edit("clear")),
             ("sam-remove", lambda _ev: self._sam_edit("remove_selected")),
             ("sam-flip", lambda _ev: self._sam_edit("flip_selected")),
@@ -300,6 +276,7 @@ class ImagePreviewPanel(Panel):
         if img_container:
             img_container.add_event_listener("mousescroll", self._on_wheel)
             img_container.add_event_listener("mousedown", self._on_img_mousedown)
+            img_container.add_event_listener("dblclick", lambda event: self._on_img_mousedown(event, double_click=True))
             img_container.add_event_listener("mouseup", self._on_img_mouseup)
             img_container.add_event_listener("mousemove", self._on_img_mousemove)
             img_container.add_event_listener("mouseover", self._on_img_mouseover)
@@ -324,6 +301,11 @@ class ImagePreviewPanel(Panel):
         self._service_sample()
         self._service_metadata()
         self._service_sam()
+        if self._mask_editor.enabled:
+            controls_state = (lf.keymap.bindings_revision(), lf.undo.can_undo())
+            if controls_state != self._sam_controls_state:
+                self._sam_controls_state = controls_state
+                self._dirty = True
         if (not self._color_picker_active and not self._fit_to_window and self._image_paths and self._hover_image
                 and (not self._mask_editor.enabled or self._mask_editor.tool == "pan")):
             lf.ui.set_mouse_cursor_hand()
@@ -769,19 +751,29 @@ class ImagePreviewPanel(Panel):
         self._pan_y += y - ny
         self._mark_dirty()
 
-    def _on_img_mousedown(self, event):
+    def _on_img_mousedown(self, event, double_click=False):
         button = int(event.get_parameter("button", "0"))
-        if self._mask_editor.enabled and button == 1:
-            self._mask_editor.selected = self._sam_hit(event)
-            self._sam_edit("remove_selected")
-            return
-        if button != 0:
-            return
         target = event.target()
         while target is not None:
-            if target.tag_name in ("button", "input", "select"):
+            if target.tag_name in ("button", "input", "textarea", "select"):
                 return
             target = target.parent()
+        if self._mask_editor.enabled:
+            keymap = lf.keymap
+            if keymap.is_capturing():
+                return
+            mouse = {0: keymap.MouseButton.LEFT, 1: keymap.MouseButton.RIGHT,
+                     2: keymap.MouseButton.MIDDLE}.get(button)
+            action = (keymap.get_action_for_mouse_button(keymap.ToolMode.IMAGE_PREVIEW, mouse,
+                                                        self._sam_modifiers(event), double_click)
+                      if mouse is not None else keymap.Action.NONE)
+            if action == keymap.Action.IMAGE_PREVIEW_REMOVE_POINT:
+                self._mask_editor.selected = self._sam_hit(event)
+                self._sam_edit("remove_selected")
+                event.stop_propagation()
+                return
+        if button != 0 or double_click:
+            return
 
         if self._mask_editor.enabled and self._mask_editor.tool != "pan":
             self._sam_pointer(event)
@@ -1474,6 +1466,47 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
         self._mark_dirty()
 
+    def _sam_record_edit(self, key, before, after):
+        panel_ref = weakref.ref(self)
+
+        def restore(state):
+            panel = panel_ref()
+            # Project replacement clears shared history; ordinary scene mutations
+            # (including Apply and its undo) must not invalidate these edits.
+            if panel is not None and panel._mask_editor.restore(key, state):
+                panel._mark_dirty()
+
+        try:
+            lf.undo.push(lf.ui.tr("image_preview.sam_title") + ": " + lf.ui.tr("image_preview.sam_edit"),
+                         lambda: restore(before), lambda: restore(after),
+                         scope="image_preview", dirty_flags=16,
+                         estimated_bytes=512 + 128 * (len(before[0]) + len(after[0])))
+        except Exception:
+            self._mask_editor.restore(key, before)
+            raise
+
+    def _sam_release_texture(self, destroy=True):
+        if self._sam_texture is None:
+            return
+        overlay = self._doc.get_element_by_id("sam-overlay") if self._doc else None
+        if overlay:
+            self._set_decorator(overlay, "sam-overlay", "none")
+        if self._sam_texture_source:
+            lf.ui.release_rml_texture(self._sam_texture_source)
+        if destroy:
+            self._sam_texture.destroy()
+            self._sam_texture = None
+        self._sam_texture_key = None
+        self._sam_texture_source = ""
+
+    @staticmethod
+    def _sam_modifiers(event):
+        return ((2 if event.get_bool_parameter("ctrl_key", False) else 0)
+                | (1 if event.get_bool_parameter("shift_key", False) else 0)
+                | (4 if event.get_bool_parameter("alt_key", False) else 0)
+                | (8 if (event.get_bool_parameter("meta_key", False)
+                         or event.get_bool_parameter("command_key", False)) else 0))
+
     def _sam_edit(self, action):
         getattr(self._mask_editor, action)()
         self._mark_dirty()
@@ -1484,6 +1517,7 @@ class ImagePreviewPanel(Panel):
 
     def _sam_cancel(self):
         self._sam_apply_target = None
+        self._sam_release_texture()
         lf.ui.sam_preview_close()
         self._mask_editor.invalidate()
         if self._mask_editor.enabled:
@@ -1639,11 +1673,11 @@ class ImagePreviewPanel(Panel):
         for key in ("positive", "negative", "box", "edit", "pan", "undo", "clear", "remove", "flip", "generate", "cancel", "show"):
             element = doc.get_element_by_id("sam-" + key)
             if element:
-                element.set_text(lf.ui.tr(LOCALE_KEY[key]))
+                element.set_text(lf.ui.tr(_sam_key(key)))
                 element.set_attribute("aria-pressed", "true" if editor.tool == key else "false")
         _set_text(doc, "btn-sam", lf.ui.tr("image_preview.sam_title"))
-        for key in ("heading", "proposals-heading", "edit-hint", "text-hint"):
-            _set_text(doc, "sam-" + key, lf.ui.tr(LOCALE_KEY[key.replace("-", "_")]))
+        for key in ("heading", "proposals-heading", "edit-hint"):
+            _set_text(doc, "sam-" + key, lf.ui.tr(_sam_key(key.replace("-", "_"))))
         _set_text(doc, "sam-refine", lf.ui.tr("image_preview.sam_recompute"))
         _set_text(doc, "sam-generate", lf.ui.tr("image_preview.sam_update" if editor.can_refine else "image_preview.sam_generate"))
         for element_id, key in (("sam-positive", "positive_hint"), ("sam-negative", "negative_hint"),
@@ -1652,16 +1686,32 @@ class ImagePreviewPanel(Panel):
                                 ("sam-edit", "edit_hint"), ("sam-remove", "edit_hint")):
             element = doc.get_element_by_id(element_id)
             if element:
-                element.set_attribute("title", lf.ui.tr(LOCALE_KEY[key]))
+                element.set_attribute("title", lf.ui.tr(_sam_key(key)))
+        for element_id, action in (("sam-remove", lf.keymap.Action.IMAGE_PREVIEW_DELETE),
+                                   ("sam-generate", lf.keymap.Action.IMAGE_PREVIEW_GENERATE)):
+            binding = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.IMAGE_PREVIEW)
+            element = doc.get_element_by_id(element_id)
+            if element:
+                hint = (lf.ui.tr(_sam_key("generate_hint")) if element_id == "sam-generate"
+                        else lf.keymap.get_action_name(action))
+                element.set_attribute("title", f"{hint} ({binding})" if binding else hint)
+        bindings = []
+        for action in (lf.keymap.Action.IMAGE_PREVIEW_DELETE,
+                       lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT,
+                       lf.keymap.Action.IMAGE_PREVIEW_GENERATE):
+            binding = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.IMAGE_PREVIEW)
+            if binding:
+                bindings.append(f"{binding}: {lf.keymap.get_action_name(action)}")
+        _set_text(doc, "sam-shortcuts", " · ".join(bindings))
         has_target = self._current_camera_node(resolve_unbound=True) is not None
         _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint" if has_target else "image_preview.sam_apply_dataset"))
         _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))
         _set_text(doc, "sam-exclude", lf.ui.tr("image_preview.sam_exclude"))
-        applicable = editor.phase == "ready" and bool(editor.overlay) and has_target
+        applicable = editor.phase == "ready" and (editor.overlay is not None) and has_target
         self._set_disabled(doc.get_element_by_id("sam-apply"), not applicable)
         self._set_disabled(doc.get_element_by_id("sam-exclude"), not applicable)
         phase = editor.phase if not editor.error else "error"
-        status = lf.ui.tr(LOCALE_KEY[phase])
+        status = lf.ui.tr(_sam_key(phase))
         _set_text(doc, "sam-status", status + (": " + editor.error if editor.error else ""))
         ready = bool(editor.draft and (editor.draft.points or editor.draft.box) and self._preview_state == "ready")
         busy = editor.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
@@ -1669,14 +1719,14 @@ class ImagePreviewPanel(Panel):
         self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy)
         self._set_disabled(doc.get_element_by_id("sam-remove"), editor.selected is None)
         self._set_disabled(doc.get_element_by_id("sam-flip"), not isinstance(editor.selected, int))
-        self._set_disabled(doc.get_element_by_id("sam-undo"), not bool(editor.draft and editor.draft.history))
+        self._set_disabled(doc.get_element_by_id("sam-undo"), not lf.undo.can_undo())
         self._set_disabled(doc.get_element_by_id("sam-show"), not bool(editor.overlays))
         selection = lf.ui.tr("image_preview.sam_selection_none")
         if editor.selected == "box":
             selection = lf.ui.tr("image_preview.sam_box")
         elif isinstance(editor.selected, int) and editor.draft:
             label = "positive" if editor.draft.points[editor.selected][2] else "negative"
-            selection = f"{editor.selected + 1} · {lf.ui.tr(LOCALE_KEY[label])}"
+            selection = f"{editor.selected + 1} · {lf.ui.tr(_sam_key(label))}"
         _set_text(doc, "sam-selection", selection)
         _set_text(doc, "sam-quality", (lf.ui.tr("image_preview.sam_quality").format(score=round(100 * editor.scores[editor.candidate]))
                                        if editor.scores else ""))
@@ -1694,15 +1744,24 @@ class ImagePreviewPanel(Panel):
                 self._set_disabled(button, not available)
         overlay = doc.get_element_by_id("sam-overlay")
         if overlay:
-            visible = bool(editor.enabled and editor.show_proposal and editor.overlay and self._preview_state == "ready")
+            visible = bool(editor.enabled and editor.show_proposal and editor.overlay is not None and self._preview_state == "ready")
             overlay.set_attribute("class", "image-layer" if visible else "image-layer hidden")
             if visible:
                 path = self._image_paths[self._current_index]
-                url = self._make_preview_url(Path(editor.overlay), -1, dimensions=self._get_image_info(path), mask_overlay=True)
-                self._set_decorator(overlay, "sam-overlay", f"image({url})")
+                texture_key = (editor.request, editor.candidate)
+                if texture_key != self._sam_texture_key:
+                    self._sam_release_texture(destroy=False)
+                    if self._sam_texture is None:
+                        self._sam_texture = lf.ui.DynamicTexture(editor.overlay)
+                    else:
+                        self._sam_texture.update(editor.overlay)
+                    info = self._get_image_info(path)
+                    self._sam_texture_source = self._sam_texture.rml_src(info[0], info[1])
+                    self._sam_texture_key = texture_key
+                self._set_decorator(overlay, "sam-overlay", f"image({self._sam_texture_source})")
                 self._apply_zoom(overlay, path)
             else:
-                self._set_decorator(overlay, "sam-overlay", "none")
+                self._sam_release_texture()
         markers = doc.get_element_by_id("sam-markers")
         if markers:
             html = []
@@ -1802,18 +1861,26 @@ class ImagePreviewPanel(Panel):
             if target.has_attribute("contenteditable"):
                 return
             target = target.parent()
-        if any(
-                event.get_bool_parameter(name, False)
-                for name in ("ctrl_key", "alt_key", "meta_key", "command_key")):
-            return
         key = int(event.get_parameter("key_identifier", "0"))
-
-        if self._mask_editor.enabled and key in (KI_DELETE, KI_RETURN):
-            if key == KI_DELETE:
+        if self._mask_editor.enabled:
+            keymap = lf.keymap
+            if keymap.is_capturing():
+                return
+            code = native_key(key)
+            action = (keymap.get_action_for_key(keymap.ToolMode.IMAGE_PREVIEW, code,
+                                                self._sam_modifiers(event))
+                      if code is not None else keymap.Action.NONE)
+            if action == keymap.Action.IMAGE_PREVIEW_DELETE:
                 self._sam_edit("remove_selected")
-            else:
+            elif action == keymap.Action.IMAGE_PREVIEW_GENERATE:
                 self._sam_generate(self._mask_editor.can_refine)
-            event.stop_propagation()
+            else:
+                action = keymap.Action.NONE
+            if action != keymap.Action.NONE:
+                event.stop_propagation()
+                return
+        if any(event.get_bool_parameter(name, False)
+               for name in ("ctrl_key", "alt_key", "meta_key", "command_key")):
             return
 
         if key == KI_SPACE:

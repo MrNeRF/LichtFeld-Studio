@@ -49,6 +49,15 @@ namespace lfs::io::project {
 
     namespace {
 
+        void set_camera_mask_capabilities(const SceneGraphChapter& scene, CommitOptions& commit) {
+            if (auto nodes = scene.nodes(); nodes && std::ranges::any_of(*nodes, [](const auto& node) {
+                                                return node.camera && node.camera->mask_asset_uuid;
+                                            })) {
+                commit.extra_reader_capabilities.set(CAMERA_MASK_ASSETS_V1);
+                commit.extra_writer_capabilities.set(CAMERA_MASK_ASSETS_V1);
+            }
+        }
+
         lfs::Error embedded_asset_error(std::string message) {
             return detail::project_error(lfs::ErrorCode::DataLoss, std::move(message), "Embedded scene asset failed");
         }
@@ -3213,12 +3222,7 @@ namespace lfs::io::project {
         }
         auto writer = std::move(*writer_result);
         CommitOptions commit = options.commit;
-        if (auto nodes = impl_->scene_graph.nodes(); nodes && std::ranges::any_of(*nodes, [](const auto& node) {
-                                                         return node.camera && node.camera->mask_asset_uuid;
-                                                     })) {
-            commit.extra_reader_capabilities.set(CAMERA_MASK_ASSETS_V1);
-            commit.extra_writer_capabilities.set(CAMERA_MASK_ASSETS_V1);
-        }
+        set_camera_mask_capabilities(impl_->scene_graph, commit);
         if (auto scene_nodes = impl_->scene_graph.nodes(); scene_nodes && std::ranges::any_of(*scene_nodes, [](const auto& node) {
                                                                return node.payload && node.payload->fourcc == "DSRC";
                                                            })) {
@@ -4319,12 +4323,7 @@ namespace lfs::io::project {
 
         CommitOptions commit = options.commit;
         const bool has_shaders = !impl_->shaders.dom().get_json("assets")->empty() || !impl_->shaders.dom().get_json("bindings")->empty();
-        if (auto nodes = impl_->scene_graph.nodes(); nodes && std::ranges::any_of(*nodes, [](const auto& node) {
-                                                         return node.camera && node.camera->mask_asset_uuid;
-                                                     })) {
-            commit.extra_reader_capabilities.set(CAMERA_MASK_ASSETS_V1);
-            commit.extra_writer_capabilities.set(CAMERA_MASK_ASSETS_V1);
-        }
+        set_camera_mask_capabilities(impl_->scene_graph, commit);
         const bool custom_reveal = impl_->sequencer.dom().get<int>("timeline.reveal_clip.effect") == 12;
         commit.recompute_shader_capabilities = true;
         commit.extra_reader_capabilities.set(USER_SHADERS_V1, custom_reveal);

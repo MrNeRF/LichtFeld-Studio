@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
@@ -1640,16 +1641,21 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         io::CacheLoader::getInstance(false);
         core::set_image_loader([](const core::ImageLoadParams& p) {
-            return io::CacheLoader::getInstance().load_cached_image(p.path,
-                                                                    {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream, .output_uint8 = p.output_uint8, .skip_blob_cache = p.skip_blob_cache, .mask_grayscale = p.mask_grayscale});
+            io::LoadParams params{};
+            params.resize_factor = p.resize_factor;
+            params.max_width = p.max_width;
+            params.cuda_stream = p.stream;
+            params.output_uint8 = p.output_uint8;
+            params.skip_blob_cache = p.skip_blob_cache;
+            params.mask_grayscale = p.mask_grayscale;
+            return io::CacheLoader::getInstance().load_cached_image(p.path, params);
         });
         const auto image = temporary_.path / "image.png";
-        const auto mask = temporary_.path / "mask.png";
         const auto wrong = temporary_.path / "wrong.png";
         std::vector<std::uint8_t> rgb(64 * 64 * 3, 127), pixels(64 * 64, 255);
         pixels[0] = 0;
         ASSERT_TRUE(core::save_png(image, rgb.data(), 64, 64, 3, 8, 1));
-        ASSERT_TRUE(core::save_png(mask, pixels.data(), 64, 64, 1, 8, 1));
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
         ASSERT_TRUE(core::save_png(wrong, pixels.data(), 32, 32, 1, 8, 1));
         VisualizerImpl viewer(projectOptions());
         auto& scene = viewer.getScene();
@@ -1657,20 +1663,19 @@ namespace lfs::vis {
         camera->set_image_dimensions(64, 64);
         const auto id = scene.addCamera("image.png", scene.addGroup("Cameras"), camera);
         const auto uuid = scene.getNodeUuid(id);
-        const auto applied = viewer.applyCameraMask(uuid, image, mask);
+        const auto applied = viewer.applyCameraMask(uuid, image, png, 64, 64);
         ASSERT_TRUE(applied) << lfs::format_for_developer(applied.error());
         ASSERT_TRUE(camera->has_mask());
         const auto asset = camera->mask_asset_uuid();
         ASSERT_TRUE(asset);
         EXPECT_EQ(scene.getNodeById(id)->mask_path, core::path_to_utf8(camera->mask_path()));
-        EXPECT_NE(camera->mask_path(), mask);
-        ASSERT_TRUE(core::native_fs::remove(mask));
+        png.reset(); // The project owns the bytes after the caller releases them.
         const auto decoded = camera->load_and_get_mask(-1, 0, false, 0.5f, true, false).cpu().to_vector_uint8();
         EXPECT_EQ(decoded[0], 0);
         EXPECT_EQ(decoded[1], 1);
-        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, wrong));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1)), 32, 32));
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
-        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, wrong));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, {}, 64, 64));
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
         (void)op::undoHistory().undo();
         EXPECT_FALSE(camera->has_mask());
