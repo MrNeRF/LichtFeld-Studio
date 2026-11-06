@@ -178,8 +178,9 @@ namespace lfs::vis::gui::rml_documents {
 
     std::string rewriteRelativeImageSources(std::string document_rml,
                                             const std::filesystem::path& document_path) {
+        // \s before src keeps data-attr-src bindings, which are not paths, as written.
         static const std::regex kImgSrcPattern(
-            R"((<img\b[^>]*\bsrc\s*=\s*)(["'])([^"']*)(["']))",
+            R"((<img\b[^>]*\ssrc\s*=\s*)(["'])([^"']*)(["']))",
             std::regex_constants::icase);
 
         std::string rewritten;
