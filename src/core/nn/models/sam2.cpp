@@ -252,14 +252,12 @@ namespace lfs::core::nn::models {
         }
         const std::size_t elem = dtype_size(like.dtype());
         const std::size_t count = (bytes + elem - 1) / elem;
-        // This scratch buffer survives arena.begin(). An arena view would be
-        // overwritten by later activations when a subsequent prediction reuses it.
-        struct RestoreArena {
-            ActivationArena* previous = ActivationArena::current();
-            ~RestoreArena() { ActivationArena::bind(previous); }
-        } restore;
+        // The workspace outlives the forward pass, so it must not come from the activation arena, which every forward
+        // rewinds and hands out again: the next predict's activations would alias the convolutions' scratch.
+        ActivationArena* prev = ActivationArena::current();
         ActivationArena::bind(nullptr);
         workspace_ = Tensor::empty(shape_of({count}), like.device(), like.dtype());
+        ActivationArena::bind(prev);
         workspace_.set_stream(like.stream());
         return workspace_;
     }

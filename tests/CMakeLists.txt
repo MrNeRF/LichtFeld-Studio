@@ -1675,6 +1675,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_operations.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_sessions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
@@ -1925,6 +1926,7 @@ add_test(NAME lichtfeld.python.gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_sessions.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_standalone_camera_load_image.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES

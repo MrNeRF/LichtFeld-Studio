@@ -28,10 +28,13 @@ namespace lfs::python {
             "init",
             []() {
                 auto& pm = PackageManager::instance();
-                if (!pm.is_uv_available())
-                    throw std::runtime_error("uv not found");
-                if (!pm.ensure_venv())
-                    throw std::runtime_error("Failed to create venv");
+                {
+                    const nb::gil_scoped_release release;
+                    if (!pm.is_uv_available())
+                        throw std::runtime_error("uv not found");
+                    if (!pm.ensure_venv())
+                        throw std::runtime_error("Failed to create venv");
+                }
                 update_python_path();
                 return lfs::core::path_to_utf8(pm.venv_dir());
             },
@@ -48,7 +51,7 @@ namespace lfs::python {
                     throw std::runtime_error(result.error);
                 return result.output;
             },
-            nb::arg("package"), "Install package from PyPI");
+            nb::arg("package"), nb::call_guard<nb::gil_scoped_release>(), "Install package from PyPI");
 
         pkg.def(
             "uninstall",
