@@ -28,8 +28,13 @@ namespace lfs::io::project {
     using CollisionPayloadResolver =
         std::function<lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>(
             const lfs::core::Uuid&)>;
+    struct ResolvedCameraMask {
+        std::filesystem::path path;
+        std::shared_ptr<const void> owner;
+    };
+
     using CameraMaskResolver =
-        std::function<lfs::Result<std::filesystem::path>(const lfs::core::Uuid&)>;
+        std::function<lfs::Result<ResolvedCameraMask>(const lfs::core::Uuid&)>;
 
     struct ScenePayloadResolver {
         std::function<lfs::Result<std::unique_ptr<lfs::core::SplatData>>(

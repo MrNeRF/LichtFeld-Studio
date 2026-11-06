@@ -1658,6 +1658,8 @@ namespace lfs::vis {
         auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
         ASSERT_TRUE(core::save_png(wrong, rgb.data(), 64, 64, 3, 8, 1));
         VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         auto& scene = viewer.getScene();
         auto camera = make_project_request_test_camera(image);
         camera->set_image_dimensions(64, 64);
@@ -1679,6 +1681,18 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, replacement, 64, 64));
         EXPECT_FALSE(viewer.applyCameraMask(uuid, image, {}, 64, 64));
         EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        const auto project = temporary_.path / "busy-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        const auto count = op::undoHistory().undoCount();
+        const auto memory = op::undoHistory().totalMemory().totalBytes();
+        EXPECT_FALSE(op::undoHistory().undo().success);
+        EXPECT_EQ(op::undoHistory().undoCount(), count);
+        EXPECT_EQ(op::undoHistory().totalMemory().totalBytes(), memory);
+        EXPECT_EQ(op::undoHistory().redoCount(), 0u);
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, replacement, 64, 64));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
         (void)op::undoHistory().undo();
         EXPECT_FALSE(camera->has_mask());
         EXPECT_FALSE(camera->mask_asset_uuid());
@@ -1698,6 +1712,105 @@ namespace lfs::vis {
         ASSERT_TRUE(camera->raw_mask_tensor().is_valid());
         EXPECT_EQ(camera->raw_mask_tensor().device(), core::Device::CPU);
         EXPECT_FLOAT_EQ(camera->raw_mask_tensor().to_vector().front(), 0.25f);
+    }
+
+    TEST_F(CameraMaskApplyTest, ResetPreservesProjectMasksByImageAndSavesTheirBinding) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = temporary_.path / "reset-mask-dataset";
+        write_minimal_transforms_dataset(dataset);
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        viewer.getDataLoader()->setParameters(params);
+        ASSERT_TRUE(viewer.getDataLoader()->loadDataset(dataset));
+        auto& scene = viewer.getScene();
+        const auto original_nodes = scene.getNodes();
+        const auto found = std::ranges::find_if(original_nodes, [](const auto* n) { return n && n->camera; });
+        ASSERT_NE(found, original_nodes.end());
+        const auto* node = *found;
+        const auto original_uuid = node->uuid;
+        const auto image = node->camera->image_path();
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(std::vector<std::uint8_t>{255}, 1, 1, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(original_uuid, image, png, 1, 1));
+        const auto asset = node->camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        ASSERT_TRUE(core::native_fs::remove(node->camera->mask_path()));
+        core::events::cmd::ResetTraining{}.emit();
+        const auto cameras = scene.getAllCameras();
+        ASSERT_EQ(cameras.size(), 1u);
+        EXPECT_EQ(cameras.front()->image_path(), image);
+        EXPECT_EQ(cameras.front()->mask_asset_uuid(), asset);
+        EXPECT_TRUE(core::native_fs::is_regular_file(cameras.front()->mask_path()));
+        const auto project = temporary_.path / "reset-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        const auto saved = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(saved);
+        EXPECT_NE(saved->find_dataset_source(*asset), nullptr);
+        const auto nodes = saved->scene_graph().nodes();
+        ASSERT_TRUE(nodes);
+        EXPECT_TRUE(std::ranges::any_of(*nodes, [&](const auto& n) { return n.camera && n.camera->mask_asset_uuid == asset; }));
+    }
+
+    TEST_F(CameraMaskApplyTest, DeletedCameraMaskIsPrunedButRetainedBySharedUndo) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto image = temporary_.path / "deleted-camera.png";
+        lfs::test::licht::write_file_bytes(image, lfs::test::licht::one_pixel_png());
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto& scene = viewer.getScene();
+        auto camera = make_project_request_test_camera(image);
+        camera->set_image_dimensions(1, 1);
+        const auto id = scene.addCamera("deleted-camera", scene.addGroup("Cameras"), camera);
+        const auto uuid = scene.getNodeUuid(id);
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(std::vector<std::uint8_t>{255}, 1, 1, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(uuid, image, png, 1, 1));
+        const auto asset = *camera->mask_asset_uuid();
+        const auto cache_path = camera->mask_path();
+        const auto project = temporary_.path / "delete-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        op::undoHistory().clear();
+        ASSERT_TRUE(viewer.getSceneManager()->removeNodeWithResult(id));
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        {
+            auto saved = io::project::ProjectDocument::open(project);
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->find_dataset_source(asset), nullptr);
+        }
+        EXPECT_TRUE(core::native_fs::is_regular_file(cache_path));
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        const auto* restored = scene.getNodeByUuid(uuid);
+        ASSERT_TRUE(restored && restored->camera);
+        EXPECT_EQ(restored->camera->mask_asset_uuid(), asset);
+        EXPECT_EQ(restored->camera->mask_path(), cache_path);
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        {
+            auto saved = io::project::ProjectDocument::open(project);
+            ASSERT_TRUE(saved);
+            EXPECT_NE(saved->find_dataset_source(asset), nullptr);
+        }
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        op::undoHistory().clear();
+        EXPECT_TRUE(core::native_fs::exists(cache_path)); // An external camera still owns its lease.
+        camera.reset();
+        EXPECT_FALSE(core::native_fs::exists(cache_path));
     }
 
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
@@ -20195,6 +20308,11 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             ASSERT_TRUE(sam);
             EXPECT_FALSE(manager->canResume());
             manager->resumeTraining();
+            EXPECT_FALSE(viewer.projectTrainingSessionState().restoring);
+            EXPECT_FALSE(viewer.startTraining());
+            EXPECT_FALSE(viewer.restoreProjectTrainingSession(true));
+            EXPECT_FALSE(viewer.restoreProjectTrainingSession(false));
+            EXPECT_FALSE(manager->hasTrainer());
             EXPECT_FALSE(viewer.projectTrainingSessionState().restoring);
             viewer.jobs().canceled(*sam);
             viewer.jobs().free(*sam);

@@ -218,7 +218,6 @@
 }
 .sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
 #sam-selection { font-size: 12dp; margin: 6dp 0; }
-#sam-step-hint { height: 32dp; line-height: 16dp; overflow-y: auto; }
 #sam-quality { height: 18dp; line-height: 18dp; }
 #sam-status { height: 48dp; line-height: 16dp; font-size: 12dp; overflow-y: auto; }
 #sidebar.sam-sidebar { width: 260dp; display: flex; flex-direction: column; overflow: hidden; }

@@ -50,6 +50,26 @@ namespace {
         return input;
     }
 
+    TEST(AssistedMasking, CancelledModelAcquisitionDoesNotReadOrDownloadWeights) {
+        const auto result = lfs::preprocessing::ensure_sam2_weights(true, [] { return true; });
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
+    }
+
+    TEST(AssistedMasking, CancellationDuringCachedModelVerificationKeepsVerifiedWeights) {
+        const auto weights = lfs::preprocessing::ensure_sam2_weights(false);
+        if (!weights)
+            GTEST_SKIP() << "Verified SAM2.1 model is not cached";
+        const auto stamp = lfs::core::native_fs::last_write_time(*weights);
+        int polls = 0;
+        const auto cancelled = lfs::preprocessing::ensure_sam2_weights(false, [&] { return ++polls > 2; });
+        ASSERT_FALSE(cancelled);
+        EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+        EXPECT_GT(polls, 2);
+        EXPECT_EQ(lfs::core::native_fs::last_write_time(*weights), stamp);
+        EXPECT_TRUE(lfs::preprocessing::ensure_sam2_weights(false));
+    }
+
     TEST(AssistedMasking, InvalidInputAndAdmissionDoNotReserveAJob) {
         JobRegistry jobs;
         AssistedMasking service(jobs, [] { return false; });

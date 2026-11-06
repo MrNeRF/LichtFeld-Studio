@@ -133,6 +133,7 @@ namespace lfs::vis {
         [[nodiscard]] const TrainingStateMachine& getStateMachine() const { return state_machine_; }
         [[nodiscard]] bool canPerform(TrainingAction action) const;
         [[nodiscard]] std::string_view getActionBlockedReason(TrainingAction action) const;
+        [[nodiscard]] std::string_view getResourceBlockedReason() const;
 
         // State queries (delegate to the state machine). getState() overlays
         // a stored, not-yet-hydrated project session as Paused or Finished.

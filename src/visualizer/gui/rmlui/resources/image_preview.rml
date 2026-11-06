@@ -98,7 +98,6 @@
           <button type="button" class="btn" id="sam-box"></button>
           <button type="button" class="btn" id="sam-pan"></button>
         </div>
-        <div id="sam-step-hint" class="sam-note"></div>
         <select id="sam-selection"></select>
         <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-remove"></button>

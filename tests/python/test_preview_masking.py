@@ -102,8 +102,8 @@ def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_mo
     panel = module.ImagePreviewPanel()
     panel._image_paths = [module.Path("frame.png")]
     panel._mask_editor = value = editor(module)
-    value.request, value.phase = 42, "rendering"
-    panel._sam_apply_target = (42, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+    value.request, value.phase = 41, "rendering"
+    panel._sam_apply_target = module.MaskApply(42, 41, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
     if changed_scene:
         module.RuntimeState.scene_generation.value += 1
     panel._path_revision_cache["frame.png"] = "changed" if changed_source else "revision-a"
@@ -138,8 +138,51 @@ def test_apply_keeps_selected_polarity_with_inverted_training_masks(panel_module
     submitted = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *args: submitted.append(args) or 6, raising=False)
     panel._sam_apply(exclude)
-    assert submitted[0][-1] == (exclude != inverted)
-    assert panel._sam_apply_target == (6, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+    assert submitted[0][-1] == exclude
+    assert value.request == 5
+    assert panel._sam_apply_target == module.MaskApply(6, 5, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+
+
+@pytest.mark.parametrize("export_error", [False, True])
+def test_apply_failure_preserves_prediction_for_retry_and_refinement(panel_modules, monkeypatch, export_error):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    panel._path_revision_cache["frame.png"] = "revision-a"
+    panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
+    panel._preview_state = "ready"
+    panel._mask_editor = value = editor(module)
+    value.point(0.5, 0.5, 1)
+    value.request, value.phase = 5, "ready"
+    value.overlays, value.scores = [object(), object()], [0.9, 0.8]
+    value.submitted_signature = value.signature
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid"))
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *args: submitted.append(args) or (5 + len(submitted)), raising=False)
+    panel._sam_apply(False)
+    panel._sam_candidate(1)
+    panel._sam_generate()
+    panel._sam_apply(True)
+    panel._sam_edit("clear")
+    assert len(submitted) == 1
+    assert value.candidate == 0 and value.draft.points
+    assert value.request == 5
+
+    def reject(*args):
+        raise RuntimeError("project busy")
+
+    monkeypatch.setattr(module.lf.ui, "sam_preview_apply", reject, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {
+        "request": 6, "phase": "error" if export_error else "mask_ready", "error": "render failed"}, raising=False)
+    panel._service_sam()
+    assert panel._sam_apply_target is None
+    assert value.phase == "ready" and value.error
+    assert value.request == 5 and len(value.overlays) == 2
+    panel._sam_candidate(1)
+    assert value.refinement == (5, 1)
+    panel._sam_apply(True)
+    assert submitted[-1][6] == 5  # Export always references the prediction, never the failed export.
+    assert submitted[-1][-2:] == (1, True)
 
 
 def test_delete_move_and_change_label_restore_and_discard_old_mask_prior(panel_modules):
@@ -265,6 +308,12 @@ def test_native_select_change_feedback_preserves_selection_and_does_not_redraw_f
     assert not panel._dirty
     panel._update_sam_selection(doc)
     assert not panel._dirty
+    panel._sam_apply_target = object()
+    panel._update_sam_selection(doc)
+    assert select.has_attribute("disabled")
+    panel._sam_apply_target = None
+    panel._update_sam_selection(doc)
+    assert not select.has_attribute("disabled")
     select.set_attribute("value", "")
     assert value.selected is None and panel._dirty
 

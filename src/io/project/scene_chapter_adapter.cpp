@@ -868,7 +868,7 @@ namespace lfs::io::project {
                         auto path = resolver.camera_mask(*record.camera->mask_asset_uuid);
                         if (!path)
                             return lfs::Result<void>::failure(std::move(path).error());
-                        desc.camera->set_mask_path(std::move(*path), record.camera->mask_asset_uuid);
+                        desc.camera->set_mask_path(std::move(path->path), record.camera->mask_asset_uuid, std::move(path->owner));
                     }
                 }
                 if (defer_geometry_payloads && is_geometry) {

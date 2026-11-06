@@ -206,7 +206,6 @@ namespace {
             {"sam-heading", "sam_heading"},
             {"sam-proposals-heading", "sam_proposals_heading"},
             {"sam-apply-heading", "sam_apply_heading"},
-            {"sam-step-hint", "sam_drag_hint"},
             {"sam-edit-hint", "sam_edit_hint"},
             {"sam-quality", "sam_quality"},
             {"sam-status", "sam_ready"},
@@ -276,7 +275,7 @@ namespace {
                     const auto viewport_bounds = geometry("image-viewport");
                     const auto generate_bounds = geometry("sam-generate");
                     const auto apply_bounds = geometry("sam-apply");
-                    for (const char* phase : {"sam_idle", "sam_loading", "sam_ready", "sam_closing", "sam_error"}) {
+                    for (const char* phase : {"sam_generate_hint", "sam_loading", "sam_ready", "sam_closing", "sam_error"}) {
                         SCOPED_TRACE(phase);
                         const bool ready = Rml::String(phase) == "sam_ready";
                         std::string text = locales.get("image_preview." + Rml::String(phase));
@@ -289,7 +288,6 @@ namespace {
                         status->SetInnerRML(text);
                         status->SetScrollTop(0);
                         doc->GetElementById("sam-quality")->SetInnerRML(ready ? sam_labels.at("sam-quality") : "");
-                        doc->GetElementById("sam-step-hint")->SetInnerRML(locales.get(ready ? "image_preview.sam_drag_hint" : "image_preview.sam_idle"));
                         auto* legend = doc->GetElementById("mask-legend");
                         legend->SetInnerRML(locales.get("image_preview.sam_proposal_legend"));
                         legend->SetClass("hidden", !ready);

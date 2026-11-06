@@ -12,6 +12,15 @@ class MaskDraft:
     box: tuple | None = None
 
 
+@dataclass(frozen=True)
+class MaskApply:
+    request: int
+    proposal_request: int
+    camera_uuid: str
+    key: tuple
+    scene_generation: int
+
+
 class FrameMaskEditor:
     def __init__(self, on_edit=None):
         self.on_edit = on_edit
@@ -39,6 +48,10 @@ class FrameMaskEditor:
     @property
     def draft(self):
         return self.drafts.get(self.key[0]) if self.key else None
+
+    @property
+    def busy(self):
+        return self.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
 
     def invalidate(self, keep_refinement=False):
         if not keep_refinement:

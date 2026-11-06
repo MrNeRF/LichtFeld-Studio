@@ -872,7 +872,7 @@ namespace lfs::vis::gui {
           jobs_(viewer->jobs()),
           assisted_masking_(std::make_unique<AssistedMasking>(jobs_, [this] {
               const auto* trainer = viewer_->getTrainerManager();
-              return !viewer_->isTrainingStartPending() && (!trainer || trainer->isDatasetEditable()) &&
+              return !viewer_->isTrainingStartPending() && !viewer_->projectTrainingSessionState().restoring && (!trainer || trainer->isDatasetEditable()) &&
                      !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport);
           })) {}
 

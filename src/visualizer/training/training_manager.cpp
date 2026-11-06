@@ -985,10 +985,16 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
-    std::string_view TrainerManager::getActionBlockedReason(const TrainingAction action) const {
-        if (viewer_ && (action == TrainingAction::Start || action == TrainingAction::Resume) &&
-            viewer_->jobs().anyRunning(JobType::AssistedMask))
+    std::string_view TrainerManager::getResourceBlockedReason() const {
+        if (viewer_ && viewer_->jobs().anyRunning(JobType::AssistedMask))
             return LOC("image_preview.sam_training_blocked");
+        return {};
+    }
+
+    std::string_view TrainerManager::getActionBlockedReason(const TrainingAction action) const {
+        if (action == TrainingAction::Start || action == TrainingAction::Resume)
+            if (const auto blocked = getResourceBlockedReason(); !blocked.empty())
+                return blocked;
         if (action == TrainingAction::Resume && !trainer_ && viewer_ && getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
             if (session.available && !session.hydrated && !session.restoring && session.error.empty())
@@ -1364,7 +1370,6 @@ namespace lfs::vis {
             return false;
         }
         launchTrainingThread();
-        notifyUnusedCameraMasks();
 
         return true;
     }
@@ -1630,6 +1635,11 @@ namespace lfs::vis {
                     }
                 }
 
+                // Initialization has applied the editable parameters and the
+                // worker is still behind this handoff's gate.
+                if (!stop_token.stop_requested() && !trainer_->has_stopped()) {
+                    notifyUnusedCameraMasks();
+                }
                 if (state_machine_.getState() == TrainingState::Starting &&
                     !stop_token.stop_requested() &&
                     !trainer_->has_stopped()) {
@@ -1730,6 +1740,7 @@ namespace lfs::vis {
         const bool need_thread = !isCompletionPending();
 
         if (!need_thread) {
+            notifyUnusedCameraMasks();
             trainer_->request_resume();
         }
 
@@ -1743,7 +1754,6 @@ namespace lfs::vis {
             launchTrainingThread();
         }
 
-        notifyUnusedCameraMasks();
         state::TrainingResumed{.iteration = iter}.emit();
         LOG_INFO("Training resumed at iteration {}", iter);
     }

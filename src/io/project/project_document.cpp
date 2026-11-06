@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstring>
@@ -34,6 +35,7 @@
 #include <istream>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <ranges>
@@ -577,7 +579,23 @@ namespace lfs::io::project {
         return {};
     }
 
+    struct MaterializedMaskFiles {
+        std::atomic<bool> camera_mask{false};
+        std::mutex mutex;
+        std::filesystem::path directory;
+        std::vector<std::filesystem::path> files;
+
+        ~MaterializedMaskFiles() {
+            std::error_code ignored;
+            for (const auto& file : files)
+                core::native_fs::remove(file, ignored);
+            if (!directory.empty())
+                core::native_fs::remove(directory, ignored); // Only our now-empty directory.
+        }
+    };
+
     struct LazyChunkValue::Impl {
+        std::shared_ptr<MaterializedMaskFiles> mask_files = std::make_shared<MaterializedMaskFiles>();
         std::shared_ptr<ProjectReader> reader;
         std::optional<ChunkInfo> source;
         std::optional<CleanProof> proof;
@@ -745,6 +763,7 @@ namespace lfs::io::project {
         clone->prepared = impl_->prepared;
         clone->prefix = impl_->prefix;
         clone->snapshot_uuid = impl_->snapshot_uuid;
+        clone->mask_files = impl_->mask_files;
         return LazyChunkValue(std::move(clone));
     }
 
@@ -1236,6 +1255,8 @@ namespace lfs::io::project {
                                       "A saved camera mask is missing.",
                                       "SCNG camera mask has no DSRC payload", "SCNG.camera.mask_asset_uuid");
                 }
+                if (node.camera && node.camera->mask_asset_uuid)
+                    dataset_sources.at(*node.camera->mask_asset_uuid).impl_->mask_files->camera_mask.store(true, std::memory_order_relaxed);
             }
             auto pending = parameters.snapshot();
             if (!pending) {
@@ -1946,6 +1967,10 @@ namespace lfs::io::project {
             }
             checkpoints = std::move(refreshed_checkpoints);
             ppisp_payloads = std::move(refreshed_ppisp);
+            for (auto& [uuid, payload] : refreshed_dataset_sources) {
+                if (const auto old = dataset_sources.find(uuid); old != dataset_sources.end())
+                    payload.impl_->mask_files = old->second.impl_->mask_files;
+            }
             dataset_sources = std::move(refreshed_dataset_sources);
             sfm_observations = std::move(refreshed_sfm_observations);
             dirty.clear();
@@ -2092,6 +2117,10 @@ namespace lfs::io::project {
             lazy_source_keys = std::move(disk_lazy_keys);
             checkpoints = std::move(staged_checkpoints);
             ppisp_payloads = std::move(staged_ppisp);
+            for (auto& [uuid, payload] : staged_dataset_sources) {
+                if (const auto old = dataset_sources.find(uuid); old != dataset_sources.end())
+                    payload.impl_->mask_files = old->second.impl_->mask_files;
+            }
             dataset_sources = std::move(staged_dataset_sources);
             sfm_observations = std::move(staged_sfm_observations);
             source_path = path;
@@ -3013,6 +3042,15 @@ namespace lfs::io::project {
                               "DSRC requires a non-null instance UUID and nonempty bytes",
                               "DSRC.instance_uuid");
         }
+        // A retained Undo payload may come from an older head (or another
+        // document). Its source bytes remain valid, but its CleanProof cannot
+        // authorize reuse in this generation. The writer copies the retained
+        // stored bytes without decoding them when the proof is absent.
+        if (payload.is_clean_reference() &&
+            (!impl_->source_reader ||
+             payload.impl_->reader->superblock().file_uuid != impl_->source_reader->superblock().file_uuid ||
+             payload.impl_->reader->commit().commit_uuid != impl_->source_reader->commit().commit_uuid))
+            payload.impl_->proof.reset();
         impl_->dataset_sources.insert_or_assign(instance_uuid, std::move(payload));
         impl_->mark(FOURCC_DSRC, instance_uuid);
         impl_->content_hashes.erase(ChunkKey{FOURCC_DSRC, instance_uuid});
@@ -3047,6 +3085,14 @@ namespace lfs::io::project {
         auto directory = embedded_asset_directory();
         if (!directory)
             return std::move(directory).error();
+        std::unique_lock<std::mutex> mask_lock;
+        const auto mask_files = payload->impl_->mask_files;
+        if (extension == "png") {
+            mask_lock = std::unique_lock(mask_files->mutex);
+            if (mask_files->directory.empty())
+                mask_files->directory = directory->parent_path() / core::generate_uuid_v4().to_string();
+            *directory = mask_files->directory;
+        }
         std::filesystem::path temporary;
         try {
             for (const auto& folder : {directory->parent_path().parent_path(), directory->parent_path(), *directory}) {
@@ -3058,11 +3104,11 @@ namespace lfs::io::project {
             const auto available = lfs::core::native_fs::space(*directory).available;
             if (payload->size() > available || available - payload->size() < 64ull * 1024 * 1024)
                 return embedded_asset_error("There is not enough disk space to open the embedded scene asset.");
-            if (const auto* reader = source_reader()) {
-                if (const auto* chunk = reader->find(FOURCC_DSRC, uuid)) {
-                    if (auto verified = reader->verify_chunk(*chunk); !verified)
-                        return std::move(verified).error();
-                }
+            // Undo may retain bytes from an earlier generation whose current
+            // row is now a tombstone. Verify the payload's own immutable source.
+            if (payload->impl_->reader && payload->impl_->source) {
+                if (auto verified = payload->impl_->reader->verify_chunk(*payload->impl_->source); !verified)
+                    return std::move(verified).error();
             }
             const auto destination = *directory / (uuid.to_string() + "." + std::string(extension));
             if (lfs::core::native_fs::is_symlink(destination))
@@ -3095,6 +3141,8 @@ namespace lfs::io::project {
             lfs::core::native_fs::rename(temporary, destination);
             lfs::core::native_fs::permissions(destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
                                               std::filesystem::perm_options::replace);
+            if (extension == "png" && std::ranges::find(mask_files->files, destination) == mask_files->files.end())
+                mask_files->files.push_back(destination);
             return destination;
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): return the failure as a typed embedded-asset error after cleanup.
@@ -3103,6 +3151,16 @@ namespace lfs::io::project {
                 lfs::core::native_fs::remove(temporary, ignored);
             return embedded_asset_error(error.what());
         }
+    }
+
+    lfs::Result<ResolvedCameraMask> ProjectDocument::resolve_camera_mask(const core::Uuid& uuid) const {
+        const auto* payload = find_dataset_source(uuid);
+        if (payload)
+            payload->impl_->mask_files->camera_mask.store(true, std::memory_order_relaxed);
+        auto path = materialize_embedded_asset(uuid, "png");
+        if (!path)
+            return std::move(path).error();
+        return ResolvedCameraMask{std::move(*path), payload->impl_->mask_files};
     }
 
     std::vector<lfs::core::Uuid> ProjectDocument::dataset_source_uuids() const {
@@ -3767,7 +3825,7 @@ namespace lfs::io::project {
         return {};
     }
 
-    void ProjectDocument::remove_geometry_payloads_not_bound_by_scene() {
+    void ProjectDocument::remove_geometry_payloads_not_bound_by_scene(std::span<const core::Uuid> previous_camera_masks) {
         auto nodes = impl_->scene_graph.nodes();
         if (!nodes) {
             return;
@@ -3775,6 +3833,10 @@ namespace lfs::io::project {
 
         std::set<ChunkKey, ChunkKeyLess> bound;
         for (const auto& node : *nodes) {
+            if (node.camera && node.camera->mask_asset_uuid)
+                bound.insert(ChunkKey{.fourcc = FOURCC_DSRC, .instance_uuid = *node.camera->mask_asset_uuid});
+            if (node.payload && node.payload->fourcc == "DSRC")
+                bound.insert(ChunkKey{.fourcc = FOURCC_DSRC, .instance_uuid = node.payload->instance_uuid});
             if (node.collision)
                 bound.insert(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = *node.collision});
             if (!node.payload) {
@@ -3855,6 +3917,25 @@ namespace lfs::io::project {
                 impl_->content_hashes.erase(key);
                 impl_->mark(key.fourcc, key.instance_uuid);
             }
+        }
+
+        // Only collect masks previously owned by cameras. DSRC also holds
+        // embedded images, calibration and opaque imported assets.
+        auto embedded = impl_->parameters.embedded_dataset();
+        if (!embedded)
+            return;
+        if (*embedded) {
+            for (const auto& entry : (**embedded).entries)
+                bound.insert(ChunkKey{.fourcc = FOURCC_DSRC, .instance_uuid = entry.chunk_uuid});
+        }
+        std::unordered_set<core::Uuid> masks(previous_camera_masks.begin(), previous_camera_masks.end());
+        for (const auto& [uuid, payload] : impl_->dataset_sources) {
+            if (payload.impl_->mask_files->camera_mask.load(std::memory_order_relaxed))
+                masks.insert(uuid);
+        }
+        for (const auto& uuid : masks) {
+            if (!bound.contains(ChunkKey{.fourcc = FOURCC_DSRC, .instance_uuid = uuid}))
+                (void)remove_dataset_source(uuid);
         }
     }
 
@@ -5987,7 +6068,7 @@ namespace lfs::io::project {
             stage_scene_shell(
                 impl_->scene_graph, destination, impl_->sfm_observation_source(),
                 [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); },
-                [this](const lfs::core::Uuid& uuid) { return materialize_embedded_asset(uuid, "png"); });
+                [this](const lfs::core::Uuid& uuid) { return resolve_camera_mask(uuid); });
         if (!shell) {
             return std::move(shell).error();
         }
@@ -6449,7 +6530,7 @@ namespace lfs::io::project {
                 }
             }
             ScenePayloadResolver resolver;
-            resolver.camera_mask = [this](const lfs::core::Uuid& uuid) { return materialize_embedded_asset(uuid, "png"); };
+            resolver.camera_mask = [this](const lfs::core::Uuid& uuid) { return resolve_camera_mask(uuid); };
             resolver.sfm_observations = impl_->sfm_observation_source();
             resolver.collision = [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); };
             resolver.splat =
