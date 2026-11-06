@@ -9,7 +9,6 @@
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/nn/models/sam2.hpp"
-#include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/pipelined_image_loader.hpp"
