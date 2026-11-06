@@ -570,6 +570,28 @@ namespace lfs::vis {
         EXPECT_EQ(std::memcmp(automatic.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
     }
 
+    // Fails if a capture while the resize settles returns the cached frame,
+    // which lf.capture_viewport() reports as no image.
+    TEST_F(GTComparisonAsyncTest, CaptureRightAfterResizeRendersAFrame) {
+        for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal}) {
+            settings.gt_comparison_mode = mode;
+            manager->updateSettings(settings);
+            refreshReference();
+            const int extent = viewport.frameBufferSize.x == 128 ? 192 : 128;
+            viewport.frameBufferSize = {extent, extent};
+            viewport.windowSize = {extent, extent};
+            render(); // This interactive frame starts the resize settle window.
+            const auto capture = manager->renderFrame({.view = manager_views.activeView(),
+                                                       .viewport = viewport,
+                                                       .settings = settings,
+                                                       .scene_manager = scene.get(),
+                                                       .graphics_context = window->getGraphicsContext(),
+                                                       .deterministic_export = true});
+            EXPECT_TRUE(capture.rendered) << "mode " << static_cast<int>(mode);
+            EXPECT_TRUE(manager->captureViewportImage()) << "mode " << static_cast<int>(mode);
+        }
+    }
+
     TEST_F(GTComparisonAsyncTest, RgbAndOverlayRefreshKeepSettledPixelsAndIdle) {
         for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal, GTComparisonMode::Depth}) {
             settings.gt_comparison_mode = mode;

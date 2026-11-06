@@ -841,12 +841,17 @@ namespace lfs::vis {
         if (!context.preparing_import)
             view_state.viewport_interaction_context_.updatePickContext(interaction_panels);
 
-        const auto resize_result =
+        auto resize_result =
             view_state.frame_lifecycle_service_.handleViewportResize(current_size);
         if (resize_result.dirty) {
             markViewDirty(context.view, resize_result.dirty, lfs::vis::FrameReason::SceneChange);
         }
-        const bool resize_deferring = !context.preparing_import && view_state.frame_lifecycle_service_.isResizeDeferring();
+        // A capture renders the new extent, also while training. Returning the
+        // cached frame while the resize settles leaves the capture without an image.
+        if (context.deterministic_export)
+            resize_result.require_immediate_output_resize = true;
+        const bool resize_deferring = !context.preparing_import && !context.deterministic_export &&
+                                      view_state.frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
         logSceneUpscalerRequest(view_state, frame_settings);
