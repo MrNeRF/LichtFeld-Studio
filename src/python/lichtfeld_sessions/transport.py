@@ -222,19 +222,26 @@ def prune_session(directory, record, max_age=86400):
                 if path.is_file() and not path.is_symlink():
                     path.unlink(missing_ok=True)
             if parent.exists():
-                try: parent.rmdir()
-                except OSError: pass
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
         geometry = directory / "view_geometry.json"
         if geometry.is_file() and not geometry.is_symlink():
             geometry.unlink(missing_ok=True)
         (directory / "session.json").unlink(missing_ok=True)
-        try: directory.rmdir()
-        except OSError: pass  # Never remove unrelated files.
+        try:
+            directory.rmdir()
+        except OSError:
+            pass  # Never remove unrelated files.
     except OSError:
         pass
 
 
 def discover():
+    def order(item):
+        return item.get("started", 0), item["id"]
+
     latest = {}
     for path in registry_root().glob("*/session.json"):
         if path.parent.is_symlink() or path.is_symlink():
@@ -254,11 +261,10 @@ def discover():
         # A LichtFeld process owns one current training run. A newer terminal
         # registration also supersedes earlier registrations from that process.
         previous = latest.get(record["pid"])
-        order = lambda item: (item.get("started", 0), item["id"])
         if previous is None or order(record) > order(previous):
             latest[record["pid"]] = record
     return sorted((item for item in latest.values() if item["active"]),
-                  key=lambda item: (item.get("started",0),item["id"]), reverse=True)
+                  key=order, reverse=True)
 
 
 class SnapshotPool:
@@ -458,8 +464,10 @@ class SessionPublisher:
             if liveness == "responsive":
                 clients.append(value)
             elif liveness == "exited":
-                try: path.unlink(missing_ok=True)
-                except OSError: pass
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self._clients_cache = clients
         return self._clients_cache
 
