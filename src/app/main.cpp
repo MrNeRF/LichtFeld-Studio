@@ -256,6 +256,10 @@ int main(int argc, char* argv[]) {
 
     publishResolvedUserPaths();
 
-    return lfs::core::run_with_exception_firewall(
+    const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
+    // Static destruction is too late to release GPU memory: on Windows the CUDA runtime has unloaded by then, and each
+    // release it refuses is reported as a failure after a command that succeeded.
+    lfs::core::teardown_gpu_before_exit();
+    return exit_code;
 }
