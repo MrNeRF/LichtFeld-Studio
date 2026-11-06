@@ -11,13 +11,14 @@ import importlib
 import sys
 
 
-def ensure_numpy(lf):
+def ensure_numpy(lf, should_cancel=None):
     """Prepare numerical dependencies on a worker, never in a capture callback."""
     try:
         import numpy
     except ImportError:
-        lf.packages.init()
-        lf.packages.install("numpy>=2,<3")
+        options = {"cancel": should_cancel} if should_cancel is not None else {}
+        lf.packages.init(**options)
+        lf.packages.install("numpy>=2,<3", **options)
         site = lf.packages.site_packages_dir()
         if site not in sys.path:
             sys.path.insert(0, site)

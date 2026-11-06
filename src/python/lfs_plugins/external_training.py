@@ -52,6 +52,7 @@ class ExternalTraining:
         self.record = dict(record)
         self.status = dict(record)
         self.error = ""
+        self.connection_error = ""
         self.geometry_error = ""
         self.shown = None
         self.generation = None
@@ -143,10 +144,10 @@ class ExternalTraining:
             if kind == "splat":
                 self.generation = descriptor["id"]
                 self.shown = dict(descriptor)
+                self.error = ""
             else:
                 self.geometry_revision, self._geometry = descriptor
                 self.geometry_error = ""
-            self.error = ""
             lf.ui.request_redraw()
         except Exception as error:
             if kind == "cameras":
@@ -162,14 +163,22 @@ class ExternalTraining:
             return
         client = None
         try:
-            np = ensure_numpy(lf)
+            np = ensure_numpy(lf, self.stop.is_set)
+            if self.stop.is_set():
+                return
             client = SessionClient(self.record["directory"], "LichtFeld Studio")
             while not self.stop.wait(0.2):
                 try:
-                    status = validate_session(client.status(), self.record["id"])
-                    if status["pid"] != self.record["pid"]:
-                        raise ValueError("Training process identity changed")
-                    self.status = status
+                    try:
+                        status = validate_session(client.status(), self.record["id"])
+                        if status["pid"] != self.record["pid"]:
+                            raise ValueError("Training process identity changed")
+                    except Exception as error:
+                        self.connection_error = str(error)
+                        if self.status.get("state") in TERMINAL or session_liveness(self.status) == "exited":
+                            self.stop.set()
+                        continue
+                    self.status, self.connection_error = status, ""
                     if self._pending is not None:
                         update, kind, descriptor = self._pending
                         if update.ready and not self._install_pending:
@@ -214,7 +223,8 @@ class ExternalTraining:
                     if self.status.get("state") in TERMINAL or session_liveness(self.status) == "exited":
                         self.stop.set()
         except Exception as error:
-            self.error = str(error)
+            if not self.stop.is_set():
+                self.error = str(error)
             self.stop.set()
         finally:
             if client is not None:

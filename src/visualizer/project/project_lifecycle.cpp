@@ -1976,6 +1976,14 @@ namespace lfs::vis::project {
             return summary;
         }
 
+        [[nodiscard]] bool hasPersistentSceneNodes(const core::Scene& scene) {
+            // A transient root and its descendants are omitted from project saves.
+            return std::ranges::any_of(scene.getRootNodes(), [&scene](const auto id) {
+                const auto* node = scene.getNodeById(id);
+                return node && !node->transient;
+            });
+        }
+
         [[nodiscard]] bool hasHardDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
@@ -11219,7 +11227,7 @@ namespace lfs::vis::project {
         const auto* manager =
             viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(
@@ -11241,7 +11249,7 @@ namespace lfs::vis::project {
         }
         const auto* manager = viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(

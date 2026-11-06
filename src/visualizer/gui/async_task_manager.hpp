@@ -65,6 +65,7 @@ namespace lfs::vis {
             void shutdown();
             bool uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update);
             void cancelExternalPreviewUpload();
+            void removeExternalPreview(const core::Uuid& uuid);
 
             void setupEvents();
             void startCollision(core::CollisionSettings settings);
@@ -287,9 +288,12 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<JobSnapshot> cameraSelectionStatus() const { return jobs_.peek(camera_selection_state_.job); }
 
         private:
+            bool startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update);
             std::optional<std::jthread> external_preview_thread_;
             std::atomic_bool external_preview_uploading_{false};
             std::shared_ptr<ExternalPreviewUpdate> external_preview_update_;
+            std::mutex external_preview_retirement_mutex_;
+            std::vector<std::shared_ptr<ExternalPreviewUpdate>> external_preview_retired_;
             friend class CollisionJobsTest;
             bool import_cancel_pending_ = false;
             bool importWorkersFinished() const;

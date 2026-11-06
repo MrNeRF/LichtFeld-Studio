@@ -1119,11 +1119,22 @@ namespace lfs::python {
     }
 
     std::optional<PySplatData> PyScene::combined_model() {
-        if (scene_->hasExternalPreview())
-            return std::nullopt;
         auto* model = const_cast<core::SplatData*>(scene_->getCombinedModel());
         if (!model)
             return std::nullopt;
+        // A merged cache owns its tensors; a single-model alias may still refer
+        // to the protected foreign source. Empty/hidden previews do not prevent
+        // access to local models, or analysis of an independently merged cache.
+        if (scene_->hasExternalPreview()) {
+            if (scene_->combinedModelBuildPending())
+                return std::nullopt;
+            for (const auto* node : scene_->getNodes()) {
+                if (node->isExternalPreview() && node->model.get() == model)
+                    return std::nullopt;
+            }
+        }
+        if (auto owner = scene_->sharePreparedCombinedModel(); owner && owner.get() == model)
+            return PySplatData(std::const_pointer_cast<core::SplatData>(std::move(owner)));
         return PySplatData(model);
     }
 
@@ -1584,8 +1595,11 @@ namespace lfs::python {
     void PyScene::remove_external_preview(const std::string& uuid) {
         if (!is_valid() || !on_graphics_thread())
             return;
-        if (const auto parsed = core::Uuid::from_string(uuid))
-            scene_->removeExternalPreview(*parsed);
+        if (const auto parsed = core::Uuid::from_string(uuid)) {
+            auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+            if (viewer && viewer->getGuiManager())
+                viewer->getGuiManager()->asyncTasks().removeExternalPreview(*parsed);
+        }
     }
 
     void register_scene(nb::module_& m) {
@@ -2090,7 +2104,7 @@ Returns:
             .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
             .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
-            .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
+            .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for visible splats (None if unavailable or aliasing a protected external source)")
             .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)")

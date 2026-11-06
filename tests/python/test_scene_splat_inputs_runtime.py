@@ -45,6 +45,31 @@ print("ready" if panel._current.shown else "pending", panel._current.error)
             time.sleep(0.1)
         assert output.startswith("ready"), output
 
+        # A recovered status read must clear only the connection error, even
+        # when no new snapshot arrives to trigger another installation.
+        _editor(camera_runtime, '''
+import lfs_plugins.external_training as observer
+import time
+original_status = observer.SessionClient.status
+status_reads = 0
+def status_with_one_failure(client):
+    global status_reads
+    status_reads += 1
+    return {} if status_reads == 1 else original_status(client)
+observer.SessionClient.status = status_with_one_failure
+panel._current.error = "Unrelated import error"
+try:
+    deadline = time.monotonic() + 5
+    while status_reads < 3 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert status_reads >= 3
+    assert not panel._current.connection_error
+    assert panel._current.error == "Unrelated import error"
+    assert panel._current.generation == SNAPSHOT_ID
+finally:
+    observer.SessionClient.status = original_status
+'''.replace("SNAPSHOT_ID", repr(snapshot["id"])))
+
         # New calibration must install without requiring a new Gaussian generation.
         pose = np.eye(4)
         pose[:3, :3] = [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]
@@ -79,6 +104,7 @@ root = scene.get_node_by_uuid(viewer.uuid)
 model = next(scene.get_node_by_id(i) for i in root.children if scene.get_node_by_id(i).type == lf.scene.NodeType.SPLAT)
 assert viewer.generation == SNAPSHOT_ID
 assert viewer.shown["iteration"] == 7
+assert viewer.error == "Unrelated import error"  # Camera success cannot hide a failed splat import.
 assert model.gaussian_count == 32 and model.read_only and root.read_only
 assert model.splat_data() is None and scene.combined_model() is None
 expected = presentation_transform(GEOMETRY, np) @ np.asarray(GEOMETRY["model_to_data"])
@@ -137,6 +163,11 @@ z = lambda shape: lf.Tensor.zeros(shape, device="cpu", dtype="float32")
 rotation = z([2, 4])
 rotation[0, 0] = rotation[1, 0] = 1
 scene.add_splat("Local model", z([2, 3]), z([2, 1, 3]), z([2, 0, 3]), z([2, 3]), rotation, z([2, 1]), sh_degree=0)
+assert scene.combined_model().num_points == 34
+scene.get_node_by_uuid(panel._current.uuid).set("visible", False)
+assert scene.combined_model().num_points == 2
+scene.get_node_by_uuid(panel._current.uuid).set("visible", True)
+assert scene.combined_model().num_points == 34
 ''')
         _ui_editor(camera_runtime, '''
 scene = lf.get_scene()
@@ -151,6 +182,7 @@ deadline = time.monotonic() + 5
 while panel._current.generation != NEXT_ID and time.monotonic() < deadline:
     time.sleep(0.05)
 assert panel._current.generation == NEXT_ID, panel._current.error
+assert not panel._current.error
 '''.replace("NEXT_ID", repr(next_snapshot["id"])))
         _ui_editor(camera_runtime, '''
 scene = lf.get_scene()
@@ -259,6 +291,110 @@ scene.add_splat("valid", z([n, 3]), z([n, 1, 3]), z([n, 0, 3]), z([n, 3]), rotat
 print("added", scene.get_node("valid").gaussian_count)
 ''')
     assert "added 4" in output
+    _ui_editor(camera_runtime, '''
+scene = lf.get_scene()
+assert lf.project_is_dirty()  # The persistent local model still needs saving.
+preview = scene.create_external_preview("Empty trainer", "Preview")
+scene = lf.get_scene()
+assert scene.combined_model().num_points == 4
+scene.get_node_by_uuid(preview).set("visible", False)
+assert lf.get_scene().combined_model().num_points == 4
+lf.get_scene().remove_external_preview(preview)
+assert lf.get_scene().get_node_by_uuid(preview) is None
+''')
+
+
+@pytest.mark.slow
+def test_external_preview_bulk_removal_preserves_another_ready_upload(camera_runtime):
+    _editor(camera_runtime, '''
+import time, lichtfeld as lf
+from lichtfeld_sessions import ensure_numpy
+np = ensure_numpy(lf)
+rows = np.tile(np.r_[np.eye(4).reshape(-1), [500, 500, 320, 240, 640, 480]], (1000, 1)).astype(np.float32)
+update = lf.scene.prepare_external_cameras(lf.Tensor.from_numpy(rows), np.eye(4, dtype=np.float32))
+''')
+    _ui_editor(camera_runtime, '''
+target = lf.get_scene().create_external_preview("Many cameras", "Preview")
+assert lf.get_scene().upload_external_preview(update)
+''')
+    _editor(camera_runtime, '''
+deadline = time.monotonic() + 20
+while not update.ready and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert update.ready
+replacement = lf.scene.prepare_external_cameras(lf.Tensor.zeros([0, 22], device="cpu"), np.eye(4, dtype=np.float32))
+''')
+    _ui_editor(camera_runtime, '''
+assert lf.get_scene().apply_external_preview(target, update, "Cameras")
+assert len(lf.get_scene().get_nodes(lf.scene.NodeType.CAMERA)) == 1000
+other = lf.get_scene().create_external_preview("Next trainer", "Preview")
+assert lf.get_scene().upload_external_preview(replacement)
+''')
+    _editor(camera_runtime, '''
+deadline = time.monotonic() + 5
+while not replacement.ready and time.monotonic() < deadline:
+    time.sleep(0.05)
+assert replacement.ready
+''')
+    output = _ui_editor(camera_runtime, '''
+started = time.perf_counter()
+lf.get_scene().remove_external_preview(target)
+print("camera_removal_ms", (time.perf_counter() - started) * 1000)
+assert lf.get_scene().get_node_by_uuid(target) is None
+assert not lf.get_scene().get_nodes(lf.scene.NodeType.CAMERA)
+assert lf.get_scene().apply_external_preview(other, replacement, "Cameras")
+lf.get_scene().remove_external_preview(other)
+''')
+    assert "camera_removal_ms" in output
+    print(output.strip())
+
+
+def test_external_preview_exit_cancels_dependency_download(camera_runtime, request):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    requested, release = threading.Event(), threading.Event()
+
+    class StalledDownload(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested.set()
+            release.wait(60)
+
+        do_HEAD = do_GET
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StalledDownload)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        _editor(camera_runtime, '''
+import os, lichtfeld as lf
+import lfs_plugins.external_training as observer
+lf.packages.init()
+os.environ.pop("UV_OFFLINE", None)
+os.environ["UV_CACHE_DIR"] = os.path.join(os.environ["LFS_HOME"], "download-cache")
+def stalled_dependency(lf, should_cancel):
+    lf.packages.install(PACKAGE, cancel=should_cancel)
+observer.ensure_numpy = stalled_dependency
+'''.replace("PACKAGE", repr(f"observer-cancel-test @ http://127.0.0.1:{server.server_port}/observer_cancel_test-1.0-py3-none-any.whl")))
+        _ui_editor(camera_runtime, '''
+connection = observer.ExternalTraining({"id": "dependency-test", "label": "Dependency test"})
+''')
+        assert requested.wait(10), _editor(camera_runtime, 'print(connection.error)')
+        _ui_editor(camera_runtime, '''
+assert not lf.project_is_dirty(), "The transient preview dirtied the document"
+''')
+        _editor(camera_runtime, '''
+threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()
+''')
+        assert request.node.camera_process.wait(timeout=10) == 0
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        worker.join(5)
 
 
 def test_scene_center_and_deleted_mask_without_dataset(camera_runtime):

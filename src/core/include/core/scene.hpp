@@ -387,7 +387,6 @@ namespace lfs::core {
         [[nodiscard]] std::unique_ptr<SplatData> updateExternalPreview(
             const Uuid& uuid, std::unique_ptr<SplatData> model,
             const glm::mat4& transform, const glm::vec3& centroid);
-        void removeExternalPreview(const Uuid& uuid);
         struct ExternalPreviewCamera {
             std::shared_ptr<Camera> camera;
             glm::mat4 transform{1.0f};
@@ -395,6 +394,9 @@ namespace lfs::core {
         bool updateExternalPreviewCameras(
             const Uuid& uuid, const std::string& group_name,
             std::vector<ExternalPreviewCamera>& cameras);
+        // Detach on the scene thread; the upload owner reclaims returned resources.
+        std::pair<std::unique_ptr<SplatData>, std::vector<ExternalPreviewCamera>>
+        removeExternalPreview(const Uuid& uuid);
         NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
         NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);

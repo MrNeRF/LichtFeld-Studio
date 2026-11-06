@@ -137,7 +137,7 @@ class ExternalTrainingPanel(Panel):
         return bool(settings and settings.show_camera_frustums)
 
     def _message(self):
-        return self._error or ((_current.error or _current.geometry_error) if _current else "")
+        return self._error or ((_current.connection_error or _current.error or _current.geometry_error) if _current else "")
 
     def _show_cameras(self, value):
         settings = lf.get_render_settings()

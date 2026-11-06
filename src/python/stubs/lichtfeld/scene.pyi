@@ -700,7 +700,9 @@ class Scene:
         """Set node local transform from a [4, 4] ndarray"""
 
     def combined_model(self) -> SplatData | None:
-        """Get the merged SplatData for all visible splats (None if empty)"""
+        """
+        Get the merged SplatData for visible splats (None if unavailable or aliasing a protected external source)
+        """
 
     def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
         """

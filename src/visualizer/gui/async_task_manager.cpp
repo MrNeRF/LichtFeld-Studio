@@ -876,19 +876,27 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update) {
-        if (!update || update->submitted || external_preview_uploading_.load(std::memory_order_acquire))
+        return update && startExternalPreviewWorker(std::move(update));
+    }
+
+    bool AsyncTaskManager::startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update) {
+        if ((update && update->submitted) || external_preview_uploading_.load(std::memory_order_acquire))
             return false;
         external_preview_thread_.reset(); // Previous worker is already finished.
         auto allocator = makeViewerSplatTensorAllocator(true);
         int first_uid = 0;
-        for (const auto& camera : *viewer_->getSceneManager()->getScene().getAllCamerasCached()) {
-            if (camera->uid() >= std::numeric_limits<int>::max() - 10000)
-                return false;
-            first_uid = std::max(first_uid, camera->uid() + 1);
+        if (update && update->replace_cameras) {
+            for (const auto& camera : *viewer_->getSceneManager()->getScene().getAllCamerasCached()) {
+                if (camera->uid() >= std::numeric_limits<int>::max() - 10000)
+                    return false;
+                first_uid = std::max(first_uid, camera->uid() + 1);
+            }
         }
-        update->submitted = true;
+        if (update)
+            update->submitted = true;
         external_preview_uploading_.store(true, std::memory_order_release);
-        auto retired = std::exchange(external_preview_update_, update);
+        // A retirement-only pass must not invalidate another connection's upload.
+        auto retired = update ? std::exchange(external_preview_update_, update) : nullptr;
         const bool was_invalidated = retired && retired->invalidated.exchange(true, std::memory_order_acq_rel);
         try {
             external_preview_thread_.emplace([this, update, retired,
@@ -899,13 +907,13 @@ namespace lfs::vis::gui {
                     retired->cameras.clear();
                 }
                 try {
-                    if (update->model && !stop.stop_requested()) {
+                    if (update && update->model && !stop.stop_requested()) {
                         if (!allocator)
                             throw std::runtime_error("The renderer cannot import external preview tensors");
                         if (auto migrated = io::migrateSplatTensorsToAllocator(*update->model, allocator); !migrated)
                             throw std::runtime_error(migrated.error().format());
                     }
-                    if (update->replace_cameras && !stop.stop_requested()) {
+                    if (update && update->replace_cameras && !stop.stop_requested()) {
                         auto rows = update->camera_rows.accessor<float, 2>();
                         for (size_t i = 0; i < update->camera_rows.size(0) && !stop.stop_requested(); ++i) {
                             glm::mat4 pose(1.0f);
@@ -923,28 +931,62 @@ namespace lfs::vis::gui {
                             update->cameras.push_back({std::move(camera), pose});
                         }
                     }
-                    if (stop.stop_requested()) {
+                    if (update && stop.stop_requested()) {
                         update->model.reset();
                         update->cameras.clear();
                         update->error = "Preview upload cancelled";
                     }
                 } catch (const std::exception& error) {
                     LOG_WARN("External preview upload failed: {}", error.what());
-                    update->error = error.what();
+                    if (update)
+                        update->error = error.what();
                 }
-                update->ready.store(true, std::memory_order_release);
-                external_preview_uploading_.store(false, std::memory_order_release);
+                if (update)
+                    update->ready.store(true, std::memory_order_release);
+                for (;;) {
+                    std::vector<std::shared_ptr<ExternalPreviewUpdate>> releases;
+                    {
+                        std::lock_guard lock(external_preview_retirement_mutex_);
+                        releases.swap(external_preview_retired_);
+                        if (releases.empty()) {
+                            external_preview_uploading_.store(false, std::memory_order_release);
+                            break;
+                        }
+                    }
+                    // Deletion and upload share the same worker and resource owner.
+                    for (const auto& resources : releases) {
+                        resources->model.reset();
+                        resources->cameras.clear();
+                    }
+                }
             });
         } catch (const std::exception& error) {
             LOG_WARN("Could not start external preview upload: {}", error.what());
-            external_preview_update_ = std::move(retired);
-            if (external_preview_update_)
+            if (update)
+                external_preview_update_ = std::move(retired);
+            if (update && external_preview_update_)
                 external_preview_update_->invalidated.store(was_invalidated, std::memory_order_release);
-            update->submitted = false;
+            if (update)
+                update->submitted = false;
             external_preview_uploading_.store(false, std::memory_order_release);
             throw;
         }
         return true;
+    }
+
+    void AsyncTaskManager::removeExternalPreview(const core::Uuid& uuid) {
+        auto resources = std::make_shared<ExternalPreviewUpdate>();
+        auto [model, cameras] = viewer_->getSceneManager()->getScene().removeExternalPreview(uuid);
+        resources->model = std::move(model);
+        resources->cameras = std::move(cameras);
+        if (!resources->model && resources->cameras.empty())
+            return;
+        {
+            std::lock_guard lock(external_preview_retirement_mutex_);
+            external_preview_retired_.push_back(std::move(resources));
+        }
+        if (!external_preview_uploading_.load(std::memory_order_acquire))
+            (void)startExternalPreviewWorker(nullptr);
     }
 
     void AsyncTaskManager::cancelExternalPreviewUpload() {

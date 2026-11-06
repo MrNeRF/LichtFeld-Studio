@@ -885,21 +885,39 @@ namespace lfs::core {
             }
         }
         group->gaussian_count.store(cameras.size(), std::memory_order_release);
+        {
+            // Drop cache references while the returned retirement batch still
+            // owns the old cameras, so a later UI lookup cannot destroy them.
+            std::lock_guard lock(camera_cache_mutex_);
+            cached_all_cameras_.reset();
+            cached_visible_cameras_.reset();
+        }
         cameras = std::move(retired); // The upload owner reclaims GPU resources on its worker.
         ++camera_list_generation_;
         notifyMutation(MutationType::TRANSFORM_CHANGED);
         return true;
     }
 
-    void Scene::removeExternalPreview(const Uuid& uuid) {
+    std::pair<std::unique_ptr<SplatData>, std::vector<Scene::ExternalPreviewCamera>>
+    Scene::removeExternalPreview(const Uuid& uuid) {
+        std::unique_ptr<SplatData> model;
+        std::vector<ExternalPreviewCamera> cameras;
         Transaction transaction(*this, true);
         if (const auto* node = getNodeByUuid(uuid); node && node->isExternalPreview() && node->type == NodeType::GROUP) {
             auto selection = hasSelection() ? capturePerNodeSelectionSlices() : PerNodeSelectionSlices{};
+            for (const auto id : node->children) {
+                auto* child = getNodeById(id);
+                if (child->type == NodeType::SPLAT)
+                    model = retireCombinedModelIfInFlight(std::move(child->model));
+                else if (child->type == NodeType::CAMERA_GROUP)
+                    updateExternalPreviewCameras(uuid, child->name, cameras);
+            }
             removeNodeInternal(node->id, false);
             std::erase_if(selection, [this](const auto& item) { return getNodeIdByUuid(item.first) == NULL_NODE; });
             if (!selection.empty())
                 applyPerNodeSelectionSlices(selection);
         }
+        return {std::move(model), std::move(cameras)};
     }
 
     bool Scene::setPayloadHydrationState(
