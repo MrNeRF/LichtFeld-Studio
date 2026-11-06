@@ -36,6 +36,20 @@ def tr_fallback(key, fallback):
     return result if result and result != key else fallback
 
 
+def _green_infill_mesh_available(params):
+    """Whether a mesh exists for the green infill of an evaluation."""
+    if params.noise_infill_mesh:
+        return True
+    return bool(params.eval_mask) and not params.eval_mask.startswith(
+        ("bbox:", "masks:", "depth:", "points", "splat:", "cropbox")
+    )
+
+
+def _green_infill_option_visible(params):
+    """An enabled option stays visible so it can be turned off once its mesh is gone."""
+    return params.enable_eval and (params.eval_green_infill or _green_infill_mesh_available(params))
+
+
 def _eval_mask_display(params):
     if not (params and params.has_params() and params.eval_mask):
         return tr("training.value.none")
@@ -438,6 +452,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_bg_color", lambda: tr("training_params.bg_color"))
         model.bind_func("label_bg_image", lambda: tr("training_params.bg_image"))
         model.bind_func("label_eval_mask", lambda: tr("training_params.eval_mask"))
+        model.bind_func("label_noise_infill_mesh", lambda: tr("training.init.noise_infill_mesh"))
         model.bind_func("label_use_cropbox", lambda: tr("training_params.eval_mask_use_cropbox"))
         model.bind_func("label_mask_folder", lambda: tr("training_params.eval_mask_folder"))
         model.bind_func("label_eval_mask_spec", lambda: tr("training_params.eval_mask_spec"))
@@ -585,6 +600,7 @@ class TrainingPanel(Panel):
             "dep_undistort": params.undistort,
             "dep_eval_mask": params.enable_eval and bool(params.eval_mask),
             "dep_eval_mask_splat": params.enable_eval and params.eval_mask.startswith("splat:"),
+            "dep_eval_green_infill": _green_infill_option_visible(params),
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -803,6 +819,14 @@ class TrainingPanel(Panel):
         model.bind_func(
             "has_eval_mask_clear",
             lambda: p() is not None and p().has_params() and bool(p().eval_mask),
+        )
+        model.bind_func(
+            "dep_noise_infill",
+            lambda: p() is not None and p().has_params() and bool(p().noise_infill_mesh),
+        )
+        model.bind_func(
+            "dep_eval_green_infill",
+            lambda: p() is not None and p().has_params() and _green_infill_option_visible(p()),
         )
         model.bind_func(
             "dep_eval_holdout",
@@ -1427,6 +1451,14 @@ class TrainingPanel(Panel):
             ),
         )
         model.bind_func("eval_mask_path_display", lambda: _eval_mask_display(p()))
+        model.bind_func(
+            "noise_infill_mesh_display",
+            lambda: (
+                os.path.basename(p().noise_infill_mesh)
+                if p() and p().has_params() and p().noise_infill_mesh
+                else tr("training.value.none")
+            ),
+        )
 
     def _bind_events(self, model):
         model.bind_event("toggle_section", self._on_toggle_section)
@@ -2785,12 +2817,30 @@ class TrainingPanel(Panel):
                 params.eval_mask = "cropbox"
                 if self._handle:
                     self._handle.dirty_all()
+        elif action == "browse_noise_infill_mesh":
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and os.path.isabs(params.noise_infill_mesh):
+                start_dir = os.path.dirname(params.noise_infill_mesh)
+            selected = lf.ui.open_mesh_file_dialog(start_dir)
+            if selected and params and params.has_params():
+                params.noise_infill_mesh = selected
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "clear_noise_infill_mesh":
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.noise_infill_mesh = ""
+                params.eval_green_infill = params.eval_green_infill and _green_infill_mesh_available(params)
+                if self._handle:
+                    self._handle.dirty_all()
         elif action == "clear_eval_mask":
             self._text_bufs["eval_mask_spec_str"] = None
             params = lf.optimization_params()
             if params and params.has_params():
                 params.eval_mask = ""
                 params.eval_mask_report = ""
+                params.eval_green_infill = params.eval_green_infill and _green_infill_mesh_available(params)
                 if self._handle:
                     self._handle.dirty_all()
         elif action == "clear_ppisp_sidecar":

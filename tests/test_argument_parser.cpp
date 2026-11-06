@@ -16,6 +16,7 @@ using lfs::core::param::apply_explicit_training_overrides;
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -68,6 +69,7 @@ TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
     std::filesystem::create_directories(launch / "scene");
     std::ofstream(launch / "scene" / "init.ply").put('\n');
     std::ofstream(launch / "scene" / "extra.ply").put('\n');
+    std::ofstream(launch / "scene" / "scan.obj").put('\n');
     const auto output = make_test_path("lfs_arg_parser_relative_inputs_output");
 
     const auto previous = std::filesystem::current_path();
@@ -75,7 +77,8 @@ TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
     const auto cwd = std::filesystem::current_path();
     const char* argv[] = {
         "LichtFeld-Studio", "--headless", "-d", "scene", "-o", output.c_str(),
-        "--init", "./scene/init.ply", "--add-splat", "scene/../scene/extra.ply"};
+        "--init", "./scene/init.ply", "--add-splat", "scene/../scene/extra.ply",
+        "--noise-infill-mesh", "./scene/scan.obj"};
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     std::filesystem::current_path(previous);
 
@@ -85,6 +88,7 @@ TEST(ArgumentParserTest, RelativeInputPathsAreStoredAbsolute) {
     EXPECT_EQ(lfs::core::utf8_to_path(*(*parsed)->init_path), cwd / "scene" / "init.ply");
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 1u);
     EXPECT_EQ((*parsed)->add_splat_paths[0], cwd / "scene" / "extra.ply");
+    EXPECT_EQ(lfs::core::utf8_to_path((*parsed)->optimization.noise_infill_mesh), cwd / "scene" / "scan.obj");
 }
 
 // Catches the flag not reaching the optimization parameters or values the converter cannot allocate passing parse.
@@ -102,6 +106,117 @@ TEST(ArgumentParserTest, InitMeshResolutionIsParsedAndBounded) {
         else
             EXPECT_NE(parsed.error().find("init_mesh_resolution"), std::string::npos) << parsed.error();
     }
+}
+
+// Catches the flag not reaching the optimization parameters, or a missing mesh passing parse.
+TEST(ArgumentParserTest, NoiseInfillMeshIsParsedAndMustExist) {
+    const auto data_path = make_test_path("lfs_arg_parser_noise_infill_data");
+    const auto output_path = make_test_path("lfs_arg_parser_noise_infill_output");
+    const auto mesh_path = (std::filesystem::path(make_test_path("lfs_arg_parser_noise_infill_mesh")) / "scan.obj").string();
+    std::filesystem::remove(mesh_path);
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+        "--output-path", output_path.c_str(), "--noise-infill-mesh", mesh_path.c_str()};
+    const auto missing = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(missing);
+    EXPECT_NE(missing.error().find("Noise infill mesh does not exist"), std::string::npos) << missing.error();
+
+    std::ofstream(mesh_path).put('\n');
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.noise_infill_mesh, mesh_path);
+    std::filesystem::remove(mesh_path);
+}
+
+// Catches an evaluation that would run without the mesh the green infill needs and only warn at its end, or a stop whose
+// message does not name the flags to add.
+TEST(ArgumentParserTest, EvalGreenInfillWithoutAMeshStopsNamingTheFlagsToAdd) {
+    const auto data_path = make_test_path("lfs_arg_parser_green_infill_data");
+    const auto output_path = make_test_path("lfs_arg_parser_green_infill_output");
+    {
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--eval-green-infill"};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("--noise-infill-mesh"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("--eval-mask mesh:"), std::string::npos) << parsed.error();
+    }
+    {
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--eval-green-infill", "--eval-mask", "bbox:0,0,0,1,1,1"};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed) << "a box is no mesh";
+        EXPECT_NE(parsed.error().find("needs a mesh"), std::string::npos) << parsed.error();
+    }
+}
+
+// Catches the mesh check running before the config file is read, which rejects a mesh only the config names, and a config
+// that turns the option on without a mesh passing the check.
+TEST(ArgumentParserTest, EvalGreenInfillTakesItsMeshFromTheConfigFile) {
+    const auto dir = std::filesystem::path(make_test_path("lfs_arg_parser_green_infill_config"));
+    const auto data_path = (dir / "data").string();
+    const auto output_path = (dir / "output").string();
+    const auto config_path = (dir / "optimization.json").string();
+    const auto mesh_path = (dir / "scan.obj").string();
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+    std::ofstream(mesh_path).put('\n');
+    const auto parse_with = [&](const nlohmann::json& fields) {
+        auto config = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+        config.update(fields);
+        std::ofstream(config_path) << config.dump(2);
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--config", config_path.c_str(), "--eval-green-infill"};
+        return lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    };
+    for (const nlohmann::json& fields : {nlohmann::json{{"noise_infill_mesh", mesh_path}},
+                                         nlohmann::json{{"enable_eval", true}, {"eval_mask", "mesh:" + mesh_path}}}) {
+        SCOPED_TRACE(fields.dump());
+        const auto parsed = parse_with(fields);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_TRUE((*parsed)->optimization.eval_green_infill);
+    }
+    const auto without_mesh = parse_with(nlohmann::json::object());
+    ASSERT_FALSE(without_mesh);
+    EXPECT_NE(without_mesh.error().find("needs a mesh"), std::string::npos) << without_mesh.error();
+}
+
+// Catches the flag not turning the evaluation on, or one of the two meshes not being taken.
+TEST(ArgumentParserTest, EvalGreenInfillTakesEitherMesh) {
+    const auto data_path = make_test_path("lfs_arg_parser_green_infill_data");
+    const auto output_path = make_test_path("lfs_arg_parser_green_infill_output");
+    const auto mesh_path = (std::filesystem::path(make_test_path("lfs_arg_parser_green_infill_mesh")) / "scan.obj").string();
+    std::ofstream(mesh_path).put('\n');
+    const auto eval_mask = "mesh:" + mesh_path;
+    for (const std::array<const char*, 2> mesh : {std::array<const char*, 2>{"--noise-infill-mesh", mesh_path.c_str()},
+                                                  std::array<const char*, 2>{"--eval-mask", eval_mask.c_str()}}) {
+        SCOPED_TRACE(mesh[0]);
+        const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                              "--output-path", output_path.c_str(), "--eval-green-infill", mesh[0], mesh[1]};
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_TRUE((*parsed)->optimization.eval_green_infill);
+        EXPECT_TRUE((*parsed)->optimization.enable_eval);
+        const auto found = lfs::core::param::eval_green_infill_mesh((*parsed)->optimization);
+        ASSERT_TRUE(found);
+        EXPECT_EQ(lfs::core::utf8_to_path(std::string(*found)), std::filesystem::path(mesh_path));
+    }
+    std::filesystem::remove(mesh_path);
+}
+
+// Catches an evaluation option missing from the eval command's help, or one without its description.
+TEST(ArgumentParserTest, EvalHelpDescribesTheEvaluationOptions) {
+    const char* argv[] = {"LichtFeld-Studio", "eval", "--help"};
+    testing::internal::CaptureStdout();
+    const auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    std::fflush(stdout);
+    const std::string help = testing::internal::GetCapturedStdout();
+    ASSERT_TRUE(parsed);
+    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    for (const char* flag : {"--eval-all", "--eval-mask", "--eval-mask-report", "--eval-mask-opacity", "--eval-flip",
+                             "--eval-green-infill", "--noise-infill-mesh", "--no-save-eval-images"})
+        EXPECT_NE(help.find(flag), std::string::npos) << flag;
+    EXPECT_NE(help.find("opaque green filling the inside of a mesh"), std::string::npos) << help;
 }
 
 TEST(ArgumentParserTest, RejectsUnknownLogLevels) {
@@ -379,7 +494,7 @@ TEST(ArgumentParserTest,
 
     EXPECT_EQ(
         (*parsed)->save_project_at_iteration,
-        std::optional<size_t>(7000));
+        std::vector<size_t>{7000});
     EXPECT_TRUE((*parsed)->save_project_path.empty());
 }
 
@@ -406,7 +521,7 @@ TEST(ArgumentParserTest,
 
     EXPECT_EQ(
         (*parsed)->save_project_at_iteration,
-        std::optional<size_t>(7000));
+        std::vector<size_t>{7000});
     EXPECT_TRUE((*parsed)->save_project_path.empty());
     EXPECT_NE(
         (*parsed)->save_project_path,
@@ -2554,6 +2669,38 @@ TEST(ArgumentParserTest, EvalStepsAcceptCommaListsAndRepeats) {
 
     EXPECT_TRUE((*parsed)->optimization.enable_eval);
     EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{1000, 7000, 30000}));
+}
+
+// Catches --save-project-at-iter dropping a value of its comma list or accepting something that is not
+// an iteration of the run or several iterations without --save-project-path, and --save-project-path being
+// accepted without it or without .licht.
+TEST(ArgumentParserTest, SaveProjectAtIterAcceptsCommaListsAndRejectsBadValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_save_project_list_data");
+    const auto output_path = make_test_path("lfs_arg_parser_save_project_list_output");
+    const auto parse = [&](std::vector<const char*> extra) {
+        std::vector<const char*> argv = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str()};
+        argv.insert(argv.end(), extra.begin(), extra.end());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    auto parsed = parse({"--save-project-at-iter", "15000, 7000,15000", "--save-project-path", "out.licht"});
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->save_project_at_iteration, (std::vector<size_t>{7000, 15000}));
+    EXPECT_EQ((*parsed)->save_project_path, std::filesystem::path("out.licht"));
+
+    for (const auto& bad : std::vector<std::vector<const char*>>{
+             {"--save-project-at-iter", "0"},
+             {"--save-project-at-iter", "7000,"},
+             {"--save-project-at-iter", "abc"},
+             {"--save-project-at-iter", "7000,999999999", "--save-project-path", "out.licht"},
+             {"--save-project-at-iter", "7000,15000"},
+             {"--save-project-path", "out.licht"},
+             {"--save-project-at-iter", "7000", "--save-project-path", "out"},
+         }) {
+        auto rejected = parse(bad);
+        ASSERT_FALSE(rejected.has_value()) << bad.back();
+        EXPECT_NE(rejected.error().find("--save-project-"), std::string::npos) << rejected.error();
+    }
 }
 
 // Catches a parser that accepts only one spelling or fails to store the selected enum value.

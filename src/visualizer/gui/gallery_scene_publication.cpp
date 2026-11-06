@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -477,16 +478,25 @@ namespace lfs::vis::gui {
                                   "Preparing scene for upload"))
                 throw std::runtime_error("Scene preparation canceled.");
             auto& published = request.nodes[i];
+            if (auto& live = published.snapshot; live.data && live.row_count == static_cast<size_t>(live.data->size())) {
+                if (auto without_noise = core::without_noise_infill(*live.data)) {
+                    live.row_count = without_noise->size();
+                    live.data = std::make_shared<core::SplatData>(std::move(*without_noise));
+                }
+            }
             // Metadata-only DSRC snapshots never need tensors. Decode one node
             // at a time when its metadata is absent or its encoding must change.
             std::shared_ptr<core::SplatData> loaded_payload;
             const auto materialize = [&] {
                 request.materialized_payload = true;
                 if (published.load_payload) {
-                    if (!loaded_payload)
+                    if (!loaded_payload) {
                         loaded_payload = published.load_payload();
-                    if (!loaded_payload)
-                        throw std::runtime_error("Embedded asset is not splat data.");
+                        if (!loaded_payload)
+                            throw std::runtime_error("Embedded asset is not splat data.");
+                        if (auto without_noise = core::without_noise_infill(*loaded_payload))
+                            loaded_payload = std::make_shared<core::SplatData>(std::move(*without_noise));
+                    }
                     published.snapshot.row_count = loaded_payload->size();
                     if (published.metadata_known)
                         loaded_payload->set_active_sh_degree(published.snapshot.active_sh_degree);

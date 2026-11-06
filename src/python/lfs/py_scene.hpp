@@ -335,6 +335,18 @@ namespace lfs::python {
                 return std::nullopt;
             return live.camera->focal_y();
         }
+        std::optional<float> camera_center_x() const {
+            const auto& live = node();
+            if (!live.camera)
+                return std::nullopt;
+            return live.camera->center_x();
+        }
+        std::optional<float> camera_center_y() const {
+            const auto& live = node();
+            if (!live.camera)
+                return std::nullopt;
+            return live.camera->center_y();
+        }
         std::optional<int> camera_width() const {
             const auto& live = node();
             if (!live.camera)
@@ -391,7 +403,7 @@ namespace lfs::python {
                                      "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
                                      "has_mask", "has_depth", "load_mask", "load_depth",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",
-                                     "camera_width", "camera_height",
+                                     "camera_center_x", "camera_center_y", "camera_width", "camera_height",
                                      "prop_info"}) {
                 result.append(attr);
             }
@@ -618,7 +630,7 @@ namespace lfs::python {
         bool has_training_data() const { return scene_->hasTrainingData(); }
         bool is_point_cloud_modified() const { return scene_->isPointCloudModified(); }
         void set_point_cloud_modified(bool modified) { scene_->setPointCloudModified(modified); }
-        PyTensor scene_center() const;
+        std::optional<PyTensor> scene_center() const;
 
         // Counts
         size_t node_count() const { return scene_->getNodeCount(); }

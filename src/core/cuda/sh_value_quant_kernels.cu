@@ -12,31 +12,21 @@
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cub/device/device_scan.cuh>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lfs::core::sh_value_quant {
     namespace {
 
         constexpr int kThreads = 256;
 
-        // Canonical host serialization and combined-model encoding require
-        // identical rounding, including when the CUDA target enables fast math.
-        __device__ __forceinline__ float decode_host_rounded(const uint16_t q, const float lo, const float hi) {
-            float range, normalized, value;
-            const float code = static_cast<float>(q);
-            constexpr float inv_q = 1.0f / 65535.0f;
-            // Explicit RN PTX also avoids fast-math's FTZ modifier.
-            asm("sub.rn.f32 %0, %1, %2;" : "=f"(range) : "f"(hi), "f"(lo));
-            asm("mul.rn.f32 %0, %1, %2;" : "=f"(normalized) : "f"(code), "f"(inv_q));
-            // Same fused RN operation as __fmaf_rn, without fast-math FTZ.
-            asm("fma.rn.f32 %0, %1, %2, %3;" : "=f"(value) : "f"(range), "f"(normalized), "f"(lo));
-            return value;
-        }
+        using lfs::core::sh_value::DeviceCodec16;
 
         __device__ __forceinline__ std::uint32_t shAtF4(
             std::uint32_t p, std::uint32_t k, std::uint32_t slots) {
@@ -202,7 +192,7 @@ namespace lfs::core::sh_value_quant {
             const auto cell = static_cast<std::uint32_t>(
                 canonical_index % floats_per_primitive);
             const float2 mm = bounds[primitive / 256u];
-            dst[output_index] = decode_host_rounded(
+            dst[output_index] = DeviceCodec16::decode_host_rounded(
                 src_u16[lfs::core::sh_value::shAtU16(primitive, cell, n_cells_per_primitive)],
                 mm.x,
                 mm.y);
@@ -311,7 +301,7 @@ namespace lfs::core::sh_value_quant {
                 const auto q = src_u16[lfs::core::sh_value::shAtU16(p_src, c, n_cells_per_prim)];
                 float v;
                 if (match_cpu_rounding) {
-                    v = decode_host_rounded(q, mm.x, mm.y);
+                    v = DeviceCodec16::decode_host_rounded(q, mm.x, mm.y);
                 } else {
                     v = DC::decode(q, mm.x, mm.y);
                 }
@@ -332,36 +322,34 @@ namespace lfs::core::sh_value_quant {
             }
         }
 
-        __global__ void decode_u16_gathered_to_canonical_kernel(
-            const std::uint16_t* __restrict__ src_u16,
-            const float2* __restrict__ src_bounds,
-            const std::int64_t* __restrict__ perm,
-            float* __restrict__ dst_canonical,
-            std::uint32_t n_dst,
-            std::uint32_t n_src,
-            std::uint32_t n_cells_per_prim) {
-            using DC = lfs::core::sh_value::DeviceCodec16;
-            const std::uint32_t p_local = blockIdx.x * blockDim.x + threadIdx.x;
-            if (p_local >= n_dst)
-                return;
-
-            float* row = dst_canonical +
-                         static_cast<std::size_t>(p_local) *
-                             static_cast<std::size_t>(n_cells_per_prim);
-            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
-                row[c] = 0.0f;
-            }
-
-            const std::int64_t src = perm[p_local];
-            if (src < 0 || src >= static_cast<std::int64_t>(n_src))
-                return;
-
-            const auto src_p = static_cast<std::uint32_t>(src);
-            const float2 mm = src_bounds[src_p / 256u];
-            for (std::uint32_t c = 0; c < n_cells_per_prim; ++c) {
-                row[c] = DC::decode(
-                    src_u16[lfs::core::sh_value::shAtU16(src_p, c, n_cells_per_prim)],
-                    mm.x, mm.y);
+        template <typename Source>
+        __global__ void decode_gathered_to_canonical_kernel(
+            const Source* __restrict__ source, const float2* __restrict__ bounds,
+            const std::int64_t* __restrict__ perm, float* __restrict__ output,
+            std::uint32_t n_dst, std::uint32_t n_src, std::uint32_t layout_cells,
+            std::uint32_t selected_cells, bool host_rounding) {
+            for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+                 i < static_cast<size_t>(n_dst) * selected_cells;
+                 i += static_cast<size_t>(gridDim.x) * blockDim.x) {
+                const auto src = perm[i / selected_cells];
+                if (src < 0 || src >= n_src) {
+                    output[i] = 0;
+                    continue;
+                }
+                const auto row = static_cast<uint32_t>(src);
+                const auto cell = static_cast<uint32_t>(i % selected_cells);
+                if constexpr (std::is_same_v<Source, uint16_t>) {
+                    const auto mm = bounds[row / 256u];
+                    const auto q = source[sh_value::shAtU16(row, cell, layout_cells)];
+                    output[i] = host_rounding ? DeviceCodec16::decode_host_rounded(q, mm.x, mm.y)
+                                              : DeviceCodec16::decode(q, mm.x, mm.y);
+                } else {
+                    const size_t offset = static_cast<size_t>(shAtF4(row, cell / 4u, (layout_cells + 3u) / 4u)) * 4u + cell % 4u;
+                    if constexpr (std::is_same_v<Source, __half>)
+                        output[i] = __half2float(source[offset]);
+                    else
+                        output[i] = source[offset];
+                }
             }
         }
 
@@ -807,31 +795,42 @@ namespace lfs::core::sh_value_quant {
     }
 
     void decode_shN_u16_gathered_to_canonical(
-        const std::uint16_t* src_u16,
-        const float* src_bounds_float2,
-        const std::int64_t* perm,
-        float* dst_canonical,
-        std::size_t n_dst,
-        std::size_t n_src_primitives,
-        std::uint32_t coeffs_rest,
-        cudaStream_t stream) {
+        const std::uint16_t* src_u16, const float* src_bounds_float2,
+        const std::int64_t* perm, float* dst_canonical, std::size_t n_dst,
+        std::size_t n_src_primitives, std::uint32_t coeffs_rest, cudaStream_t stream,
+        std::uint32_t selected_rest, bool host_rounding) {
         if (n_dst == 0 || coeffs_rest == 0)
             return;
-        if (!src_u16 || !src_bounds_float2 || !perm || !dst_canonical) {
+        if (!src_u16 || !src_bounds_float2 || !perm || !dst_canonical || selected_rest > coeffs_rest)
             throw std::invalid_argument("Invalid gathered q16 SH canonical decode arguments");
-        }
-        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
-        const unsigned blocks =
-            static_cast<unsigned>((n_dst + kThreads - 1) / kThreads);
-        decode_u16_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
-            src_u16,
-            reinterpret_cast<const float2*>(src_bounds_float2),
-            perm,
-            dst_canonical,
-            static_cast<std::uint32_t>(n_dst),
-            static_cast<std::uint32_t>(n_src_primitives),
-            n_cells);
+        const auto cells = sh_value_quant::n_value_cells_per_prim(coeffs_rest);
+        const auto selected = selected_rest ? selected_rest * 3u : cells;
+        const auto blocks = static_cast<unsigned>(std::min<size_t>(4096, (n_dst * selected + kThreads - 1) / kThreads));
+        decode_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
+            src_u16, reinterpret_cast<const float2*>(src_bounds_float2), perm, dst_canonical,
+            static_cast<uint32_t>(n_dst), static_cast<uint32_t>(n_src_primitives), cells, selected, host_rounding);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_gathered_to_canonical");
+    }
+
+    void decode_shN_float_gathered_to_canonical(
+        const void* source, bool half, const int64_t* rows, float* output, size_t count,
+        size_t n_src, uint32_t layout_rest, uint32_t selected_rest, cudaStream_t stream) {
+        if (count == 0 || selected_rest == 0)
+            return;
+        if (!source || !rows || !output || selected_rest > layout_rest)
+            throw std::invalid_argument("Invalid gathered floating-point SH canonical decode arguments");
+        const auto blocks = static_cast<unsigned>(std::min<size_t>(4096, (count * selected_rest * 3u + kThreads - 1) / kThreads));
+        if (half) {
+            decode_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
+                static_cast<const __half*>(source), nullptr, rows, output, static_cast<uint32_t>(count),
+                static_cast<uint32_t>(n_src), layout_rest * 3u, selected_rest * 3u, true);
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_float_gathered_to_canonical");
+        } else {
+            decode_gathered_to_canonical_kernel<<<blocks, kThreads, 0, stream>>>(
+                static_cast<const float*>(source), nullptr, rows, output, static_cast<uint32_t>(count),
+                static_cast<uint32_t>(n_src), layout_rest * 3u, selected_rest * 3u, true);
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_float_gathered_to_canonical");
+        }
     }
 
     void overlay_canonical_into_float4_chunk(

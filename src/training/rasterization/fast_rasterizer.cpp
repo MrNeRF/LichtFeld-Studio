@@ -21,6 +21,7 @@
 #include <cmath>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -407,6 +408,19 @@ namespace lfs::training {
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = "FastGS cannot render an empty Gaussian model.",
                 .detail = "n_primitives is 0 - model has no gaussians",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        // The blend reads the background with the strides of the rendered region, so any other size
+        // reads the wrong pixels.
+        if (has_background_image(bg_image) &&
+            (bg_image.ndim() != 3 || bg_image.shape()[0] != 3 || bg_image.shape()[1] != static_cast<size_t>(height) ||
+             bg_image.shape()[2] != static_cast<size_t>(width))) {
+            return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = "The background image does not match the size of the rendered image.",
+                .detail = std::format("background image {} for a {}x{} render", bg_image.shape().str(), width, height),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }

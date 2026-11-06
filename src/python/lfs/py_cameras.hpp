@@ -22,7 +22,8 @@ namespace lfs::python {
 
     class PyCamera {
     public:
-        explicit PyCamera(core::Camera* cam) : cam_(cam) {
+        // The handle shares ownership of whatever owns the camera, so the camera outlives its dataset in Python.
+        explicit PyCamera(std::shared_ptr<core::Camera> cam) : cam_(std::move(cam)) {
             assert(cam_ != nullptr);
         }
 
@@ -62,16 +63,16 @@ namespace lfs::python {
 
         // Load image/mask
         PyTensor load_image(int resize_factor = 1, int max_width = 0, bool output_uint8 = false);
-        PyTensor load_mask(int resize_factor = 1, int max_width = 0,
-                           bool invert = false, float threshold = 0.5f);
-        PyTensor load_depth(int resize_factor = 1, int max_width = 0);
+        std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
+                                          bool invert = false, float threshold = 0.5f);
+        std::optional<PyTensor> load_depth(int resize_factor = 1, int max_width = 0);
 
         // Access underlying camera
         core::Camera* camera();
         const core::Camera* camera() const;
 
     private:
-        core::Camera* cam_;
+        std::shared_ptr<core::Camera> cam_;
     };
 
     class PyCameraDataset {
@@ -87,14 +88,14 @@ namespace lfs::python {
             if (index >= dataset_->size()) {
                 throw std::out_of_range("Camera index out of range");
             }
-            return PyCamera(dataset_->get_camera(index));
+            return PyCamera(owned_by_dataset(dataset_->get_camera(index)));
         }
 
         std::optional<PyCamera> get_camera_by_filename(const std::string& filename) {
             auto cam_opt = dataset_->get_camera_by_filename(filename);
             if (!cam_opt)
                 return std::nullopt;
-            return PyCamera(*cam_opt);
+            return PyCamera(owned_by_dataset(*cam_opt));
         }
 
         std::vector<PyCamera> cameras() {
@@ -102,7 +103,7 @@ namespace lfs::python {
             const auto& cams = dataset_->get_cameras();
             result.reserve(cams.size());
             for (const auto& cam : cams) {
-                result.emplace_back(cam.get());
+                result.emplace_back(owned_by_dataset(cam.get()));
             }
             return result;
         }
@@ -114,6 +115,11 @@ namespace lfs::python {
         std::shared_ptr<training::CameraDataset> dataset() { return dataset_; }
 
     private:
+        // A camera handed to Python keeps the whole dataset alive, not just the camera.
+        std::shared_ptr<core::Camera> owned_by_dataset(core::Camera* cam) const {
+            return std::shared_ptr<core::Camera>(dataset_, cam);
+        }
+
         std::shared_ptr<training::CameraDataset> dataset_;
     };
 

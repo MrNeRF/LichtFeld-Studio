@@ -223,6 +223,26 @@ TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
     EXPECT_EQ((*result)->opacity_raw().size(1), size_t{1});
 }
 
+// Catches a mesh with more surface than the first estimate of the output losing the splats past it, which leaves holes.
+TEST_F(MeshDataTest, Mesh2SplatKeepsEverySplatOfAMeshWithMuchSurface) {
+    constexpr int layers = 8;
+    std::vector<float> vertices;
+    std::vector<int> indices;
+    for (int layer = 0; layer < layers; ++layer) {
+        const float z = 0.1f * static_cast<float>(layer);
+        const int first = layer * 4;
+        vertices.insert(vertices.end(), {0.0f, 0.0f, z, 1.0f, 0.0f, z, 1.0f, 1.0f, z, 0.0f, 1.0f, z});
+        indices.insert(indices.end(), {first, first + 1, first + 2, first, first + 2, first + 3});
+    }
+    const MeshData mesh(Tensor::from_vector(vertices, {vertices.size() / 3, 3}, Device::CPU),
+                        Tensor::from_vector(indices, {indices.size() / 3, 3}, Device::CPU));
+    Mesh2SplatOptions options;
+    options.resolution_target = 64;
+    const auto result = lfs::rendering::mesh_to_splat(mesh, options);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_GT((*result)->size(), 6u * 64u * 64u);
+}
+
 // Catches the converter's Vulkan device being destroyed by an exit handler after the driver has already shut
 // down, which crashed every process that converted a mesh when it exited.
 TEST_F(MeshDataTest, ProcessExitsCleanlyAfterMesh2Splat) {

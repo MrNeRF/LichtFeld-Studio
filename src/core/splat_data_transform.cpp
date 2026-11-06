@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
@@ -759,6 +760,36 @@ namespace lfs::core {
         return splat_data.soft_delete(delete_mask);
     }
 
+    std::optional<NoiseInfillRange> find_noise_infill(const SplatData& model) {
+        for (const auto& range : model.frozen_ranges()) {
+            if (range.start != 0 || range.count == 0)
+                continue;
+            const float opacity = model.opacity_raw().slice(0, 0, 1).item<float>();
+            if (opacity == kHiddenOpacity || opacity == kShownNoiseOpacity)
+                return NoiseInfillRange{range.count, opacity == kHiddenOpacity};
+        }
+        return std::nullopt;
+    }
+
+    std::size_t noise_infill_rows(const SplatData& model) {
+        const auto noise = find_noise_infill(model);
+        return noise ? noise->count : 0;
+    }
+
+    std::optional<SplatData> without_noise_infill(const SplatData& model) {
+        const std::size_t noise_rows = noise_infill_rows(model);
+        if (noise_rows == 0)
+            return std::nullopt;
+        const auto rows = static_cast<std::size_t>(model.size());
+        assert(noise_rows <= rows);
+        std::vector<bool> keep(rows, true);
+        std::fill_n(keep.begin(), noise_rows, false);
+        auto keep_mask = Tensor::from_vector(keep, TensorShape({rows}), model.means().device());
+        if (model.deleted_mask_matches_size())
+            keep_mask = keep_mask.logical_and(model.deleted().logical_not());
+        return extract_by_mask(model, keep_mask);
+    }
+
     void random_choose(SplatData& splat_data, int num_required_splat, int seed) {
         LOG_TIMER("random_choose");
 
@@ -835,6 +866,8 @@ namespace lfs::core {
                 }
                 selected_indices.push_back(idx);
             }
+            // In their order, so each frozen range stays whole and keeps its place among the others.
+            std::ranges::sort(selected_indices);
         }
 
         auto indices_tensor = Tensor::from_vector(

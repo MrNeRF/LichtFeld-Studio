@@ -114,6 +114,7 @@ BOOL_PROPS = (
     "enable_eval",
     "eval_all",
     "eval_flip",
+    "eval_green_infill",
 )
 
 SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space", "eval_space", "eval_bit_depth")
@@ -132,6 +133,7 @@ BESPOKE_OR_HIDDEN = {
     "headless": "runtime-only read-only flag",
     "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
     "eval_mask": "mesh file browser and path display",
+    "noise_infill_mesh": "mesh file browser and path display",
     "eval_mask_report": "headline set select and also-score checkboxes",
 }
 
@@ -312,6 +314,11 @@ EVALUATION_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
     _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
     _run("dataset_eval_flip", "eval_flip", visibility_condition_id="dep_eval"),
+    _run(
+        "dataset_eval_green_infill",
+        "eval_green_infill",
+        visibility_condition_id="dep_eval_green_infill",
+    ),
     _run("dataset_eval_space", "eval_space", visibility_condition_id="dep_undistort"),
     _run("dataset_eval_bit_depth", "eval_bit_depth", visibility_condition_id="dep_eval"),
     _run(

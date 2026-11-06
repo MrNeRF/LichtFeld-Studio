@@ -58,6 +58,25 @@ namespace {
         return radians * RAD_TO_DEG;
     }
 
+    // lichtfeld imported without the application has no image loader; images, masks and depth maps of a
+    // loaded dataset all go through it, so install the application's cached loader on first use.
+    void ensure_image_loader() {
+        if (lfs::core::has_image_loader()) {
+            return;
+        }
+        lfs::io::CacheLoader::getInstance(false);
+        lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& params) {
+            return lfs::io::CacheLoader::getInstance().load_cached_image(
+                params.path,
+                {.resize_factor = params.resize_factor,
+                 .max_width = params.max_width,
+                 .cuda_stream = params.stream,
+                 .output_uint8 = params.output_uint8,
+                 .skip_blob_cache = params.skip_blob_cache,
+                 .mask_grayscale = params.mask_grayscale});
+        });
+    }
+
     void warn_deprecated_camera_property(const std::string_view property,
                                          const std::string_view guidance) {
         const std::string message = std::format(
@@ -146,36 +165,26 @@ namespace lfs::python {
     }
 
     PyTensor PyCamera::load_image(int resize_factor, int max_width, const bool output_uint8) {
-        if (core::has_image_loader()) {
-            return PyTensor(
-                cam_->load_and_get_image(resize_factor, max_width, output_uint8), true);
-        }
-        return PyTensor(
-            cam_->load_and_get_image(
-                resize_factor, max_width, output_uint8, true,
-                [](const core::ImageLoadParams& params) {
-                    return io::CacheLoader::getInstance(false)
-                        .load_cached_image(
-                            params.path,
-                            {.resize_factor = params.resize_factor,
-                             .max_width = params.max_width,
-                             .cuda_stream = params.stream,
-                             .output_uint8 = params.output_uint8,
-                             .skip_blob_cache = params.skip_blob_cache});
-                }),
-            true);
+        ensure_image_loader();
+        return PyTensor(cam_->load_and_get_image(resize_factor, max_width, output_uint8), true);
     }
 
-    PyTensor PyCamera::load_mask(int resize_factor, int max_width, bool invert, float threshold) {
+    std::optional<PyTensor> PyCamera::load_mask(int resize_factor, int max_width, bool invert, float threshold) {
+        if (!cam_->has_mask())
+            return std::nullopt;
+        ensure_image_loader();
         return PyTensor(cam_->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
     }
 
-    PyTensor PyCamera::load_depth(int resize_factor, int max_width) {
+    std::optional<PyTensor> PyCamera::load_depth(int resize_factor, int max_width) {
+        if (!cam_->has_depth())
+            return std::nullopt;
+        ensure_image_loader();
         return PyTensor(cam_->load_and_get_depth(resize_factor, max_width), true);
     }
 
-    core::Camera* PyCamera::camera() { return cam_; }
-    const core::Camera* PyCamera::camera() const { return cam_; }
+    core::Camera* PyCamera::camera() { return cam_.get(); }
+    const core::Camera* PyCamera::camera() const { return cam_.get(); }
 
     void register_cameras(nb::module_& m) {
         // Camera class
@@ -224,10 +233,10 @@ namespace lfs::python {
             .def("load_mask", &PyCamera::load_mask,
                  nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
-                 "Load mask as tensor [1, H, W] on CUDA")
+                 "Load mask as tensor [1, H, W] on CUDA, or None if the camera has no mask")
             .def("load_depth", &PyCamera::load_depth,
                  nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
-                 "Load depth map as tensor [H, W] on CUDA");
+                 "Load depth map as tensor [H, W] on CUDA, or None if the camera has no depth map");
 
         // CameraDataset class
         nb::class_<PyCameraDataset>(m, "CameraDataset")

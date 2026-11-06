@@ -10,6 +10,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "strategy_utils.hpp"
 
 #include "core/tensor/internal/memory_pool.hpp"
@@ -209,8 +210,21 @@ namespace lfs::training {
         return values;
     }
 
+    void ImprovedGSPlus::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(params, _splat_data));
+    }
+
+    void ImprovedGSPlus::restart_mean_lr() {
+        if (!_optimizer || !_params || !_splat_data)
+            return;
+        _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
+        // The scheduler then takes the means to their final rate over the steps left; step() keeps the scaling's decay.
+        _scheduler = std::make_unique<ExponentialLR>(*_optimizer, restart_decay_gamma(*_params, *_optimizer, 0.1),
+                                                     std::vector<ParamType>{ParamType::Means});
+    }
+
     void ImprovedGSPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(optimParams, _splat_data));
 
         // Initialize Gaussians
         initialize_gaussians(*(_splat_data), _params->max_cap);
@@ -709,7 +723,8 @@ namespace lfs::training {
             _pending_failure_snapshot = {};
             // No edge scores reach the strategy while PPISP distillation freezes the Gaussians.
             if (_precompute_valid)
-                densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
+                densify_with_score(_precomputed_scores, _error_score_max,
+                                   _params->max_cap > 0 ? std::min<int64_t>(get_current_budget(), _params->max_cap) : get_current_budget());
 
             opacity_prune(iter);
 
@@ -791,6 +806,8 @@ namespace lfs::training {
             _optimizer->step(iter);
             _optimizer->zero_grad(iter);
             _scheduler->step();
+            if (!_scheduler->updates(ParamType::Scaling))
+                _optimizer->set_param_lr(ParamType::Scaling, _optimizer->get_param_lr(ParamType::Scaling) * std::pow(0.1, 1.0 / _params->iterations));
         }
     }
 

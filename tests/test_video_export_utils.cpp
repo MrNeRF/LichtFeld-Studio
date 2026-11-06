@@ -900,13 +900,16 @@ namespace {
     };
 } // namespace
 
+// x264 encodes every size up to the 8192-pixel export limit and only warns past the H.264 levels; libavcodec itself
+// refuses pictures this large, so NVENC and the fallback both do. Catches a refusal that leaves the output behind or
+// drops the size or either encoder's reason from the error.
 TEST(VideoEncoderOpenTest, RejectsUnsupportedDimensionsWithoutCreatingOutput) {
     VideoOutputDirectory directory;
     const auto path = directory.path / "unsupported.mp4";
     const lfs::io::video::VideoExportOptions options{
         .preset = lfs::io::video::VideoPreset::CUSTOM,
-        .width = 8192,
-        .height = 4096,
+        .width = 16384,
+        .height = 16384,
         .framerate = 2,
         .crf = 20,
     };
@@ -919,7 +922,7 @@ TEST(VideoEncoderOpenTest, RejectsUnsupportedDimensionsWithoutCreatingOutput) {
     }
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("8192x4096"), std::string::npos);
+    EXPECT_NE(result.error().find("16384x16384"), std::string::npos);
     EXPECT_NE(result.error().find("h264_nvenc"), std::string::npos);
     EXPECT_NE(result.error().find("H.264 fallback"), std::string::npos);
     EXPECT_NE(result.error().find("codec open failed"), std::string::npos);

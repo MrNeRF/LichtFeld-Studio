@@ -13,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "noise_infill.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -73,11 +74,12 @@ namespace lfs::training {
             if (!params.enable_sparsity || !controller.is_initialized() || controller.state_size() != rows)
                 throw std::runtime_error("Invalid POPSpa checkpoint: method or model row count disagrees");
             const auto& config = controller.config();
+            const size_t noise_rows = noise_infill_rows(model);
             const size_t expected_first_count = params.popspa_first_prune_count == 0
                                                     ? std::max(config.target_count, static_cast<size_t>(std::round(
                                                                                         std::sqrt(static_cast<long double>(controller.input_size()) * config.target_count))))
-                                                    : static_cast<size_t>(params.popspa_first_prune_count);
-            if (config.target_count != static_cast<size_t>(params.popspa_target_count) ||
+                                                    : static_cast<size_t>(params.popspa_first_prune_count) + noise_rows;
+            if (config.target_count != static_cast<size_t>(params.popspa_target_count) + noise_rows ||
                 config.first_prune_count != expected_first_count ||
                 config.sparsify_steps != static_cast<uint32_t>(params.popspa_sparsify_steps) ||
                 config.refine_steps != static_cast<uint32_t>(params.popspa_refine_steps) ||
@@ -809,11 +811,16 @@ namespace lfs::training {
             // its camera hull and far-field mask during initialization. Adopting
             // a candidate without cameras would disable those protections.
             loaded_strategy->set_training_dataset(strategy.get_training_dataset());
+            // The saved strategy state fits the cap it was saved under; the trainer cuts the rows over a lower one once loaded.
+            auto strategy_params = loaded_params.optimization;
+            if (strategy_params.max_cap > 0 &&
+                (saved_optimization.max_cap == 0 || saved_optimization.max_cap > strategy_params.max_cap))
+                strategy_params.max_cap = saved_optimization.max_cap;
             auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
             if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
-                loaded_strategy->initialize(loaded_params.optimization);
+                loaded_strategy->initialize(strategy_params);
             else
-                loaded_strategy->set_optimization_params(loaded_params.optimization);
+                loaded_strategy->set_optimization_params(strategy_params);
             const auto strategy_initialized_at = std::chrono::steady_clock::now();
             loaded_strategy->deserialize(file);
             const auto strategy_deserialized_at = std::chrono::steady_clock::now();

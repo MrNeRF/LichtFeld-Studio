@@ -49,8 +49,8 @@ namespace lfs::gui {
         io::ImageFormat format = io::ImageFormat::PNG;
         int jpg_quality = 95;
 
-        double start_time = 0.0;
-        double end_time = -1.0;
+        // Kept stretches in time order; never empty.
+        std::vector<io::VideoFrameExtractor::Segment> segments;
 
         io::ResolutionMode resolution_mode = io::ResolutionMode::Original;
         float scale = 1.0f;
@@ -119,6 +119,9 @@ namespace lfs::gui {
             TrimEnd,
         };
 
+        // A kept stretch of the preview video; what lies between two of them is cut.
+        using Segment = io::VideoFrameExtractor::Segment;
+
         enum class ExtractionStatusMessage {
             None,
             Complete,
@@ -142,8 +145,7 @@ namespace lfs::gui {
         struct BatchVideoItem {
             std::filesystem::path video_path;
             std::filesystem::path output_dir;
-            double start_time = 0.0;
-            double end_time = -1.0;
+            std::vector<Segment> segments; // empty keeps the whole video
             bool end_time_is_auto = true;
             int rotation = 0;
             double source_fps = 0.0;
@@ -207,7 +209,16 @@ namespace lfs::gui {
         void handleChange(const std::string& id, bool explicit_edit = true);
         void handleTimelineEvent(Rml::Event& event);
         void seekFromTimeline(float mouse_x);
+        [[nodiscard]] double timelineTime(float mouse_x) const;
         void setTrimFromTimeline(TimelineDragTarget target, float mouse_x);
+        void moveSegmentEdge(TimelineDragTarget target, std::size_t segment, double time);
+        void splitOrJoinSegments(double time);
+        void removeSegment(std::size_t segment);
+        void resetSegments();
+        void skipCutWhilePlaying();
+        [[nodiscard]] std::size_t activeSegment() const;
+        [[nodiscard]] static std::vector<Segment> extractionSegments(std::vector<Segment> segments, double duration,
+                                                                     bool allow_stream_end);
         void applyTextInput(const std::string& id);
         [[nodiscard]] bool resolveFilenamePattern(std::string& pattern, std::string& error) const;
         [[nodiscard]] bool resolveFilenamePattern(const std::filesystem::path& video_path,
@@ -281,8 +292,8 @@ namespace lfs::gui {
         std::string filename_pattern_ = "frame_%05d";
         int first_source_frame_number_ = 1;
 
-        float trim_start_ = 0.0f;
-        float trim_end_ = -1.0f;
+        std::vector<Segment> segments_{Segment{}};
+        // The last segment ends with the video until its end is set.
         bool trim_end_is_auto_ = true;
 
         std::atomic<bool> extracting_{false};
@@ -303,6 +314,7 @@ namespace lfs::gui {
         bool texture_needs_update_ = true;
 
         TimelineDragTarget timeline_drag_target_ = TimelineDragTarget::None;
+        std::size_t timeline_drag_segment_ = 0;
 
         std::optional<std::jthread> extraction_thread_;
 
@@ -329,11 +341,9 @@ namespace lfs::gui {
         Rml::Element* step_forward_btn_el_ = nullptr;
         Rml::Element* time_label_el_ = nullptr;
         Rml::Element* timeline_el_ = nullptr;
-        Rml::Element* timeline_trim_el_ = nullptr;
+        Rml::Element* timeline_segments_el_ = nullptr;
         Rml::Element* timeline_progress_el_ = nullptr;
         Rml::Element* timeline_playhead_el_ = nullptr;
-        Rml::Element* timeline_start_el_ = nullptr;
-        Rml::Element* timeline_end_el_ = nullptr;
         Rml::Element* timeline_markers_el_ = nullptr;
         Rml::Element* trim_start_input_el_ = nullptr;
         Rml::Element* trim_end_input_el_ = nullptr;

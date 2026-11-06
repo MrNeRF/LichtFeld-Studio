@@ -613,6 +613,29 @@ namespace lfs::python {
         require_float32("rotation", rotation);
         require_float32("opacity", opacity);
 
+        // Every input holds one row per Gaussian; a mismatch would only surface later, inside rendering or export.
+        const auto require_shape = [](const char* field, const PyTensor& tensor, const size_t rows,
+                                      std::initializer_list<int> trailing, const char* expected) {
+            const auto& shape = tensor.tensor().shape();
+            bool matches = shape.rank() == trailing.size() + 1 && shape[0] == rows;
+            for (size_t i = 0; const int size : trailing) {
+                ++i;
+                matches = matches && (size < 0 || shape[i] == static_cast<size_t>(size));
+            }
+            if (!matches) {
+                throw std::runtime_error(std::string("add_splat: ") + field + " must have shape " + expected +
+                                         " with N = " + std::to_string(rows) + ", got " + shape.str());
+            }
+        };
+        const auto& means_shape = means.tensor().shape();
+        const size_t rows = means_shape.rank() > 0 ? means_shape[0] : 0;
+        require_shape("means", means, rows, {3}, "[N, 3]");
+        require_shape("sh0", sh0, rows, {1, 3}, "[N, 1, 3]");
+        require_shape("shN", shN, rows, {-1, 3}, "[N, K, 3]");
+        require_shape("scaling", scaling, rows, {3}, "[N, 3]");
+        require_shape("rotation", rotation, rows, {4}, "[N, 4]");
+        require_shape("opacity", opacity, rows, {1}, "[N, 1]");
+
         // A transient node is not part of the document: it is never saved, and
         // adding it leaves nothing to undo.
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
@@ -1452,8 +1475,12 @@ namespace lfs::python {
         scene_->resetSelectionState();
     }
 
-    PyTensor PyScene::scene_center() const {
-        return PyTensor(scene_->getSceneCenter(), false);
+    std::optional<PyTensor> PyScene::scene_center() const {
+        // Only a loaded dataset defines a center.
+        const auto& center = scene_->getSceneCenter();
+        if (!center.is_valid())
+            return std::nullopt;
+        return PyTensor(center, false);
     }
 
     std::string PyScene::duplicate_node(const std::string& name) {
@@ -1741,6 +1768,8 @@ namespace lfs::python {
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
             .def_prop_ro("camera_focal_y", &PySceneNode::camera_focal_y, "Camera focal length in pixels (y)")
+            .def_prop_ro("camera_center_x", &PySceneNode::camera_center_x, "Camera principal point in pixels (x)")
+            .def_prop_ro("camera_center_y", &PySceneNode::camera_center_y, "Camera principal point in pixels (y)")
             .def_prop_ro("camera_width", &PySceneNode::camera_width, "Camera image width in pixels")
             .def_prop_ro("camera_height", &PySceneNode::camera_height, "Camera image height in pixels")
             // Property introspection
@@ -1966,7 +1995,7 @@ Returns:
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
             .def_prop_rw("is_point_cloud_modified", &PyScene::is_point_cloud_modified, &PyScene::set_point_cloud_modified, "Whether the point cloud has been modified since loading")
-            .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")
+            .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor, or None without a loaded dataset")
             // Counts
             .def_prop_ro("node_count", &PyScene::node_count, "Total number of nodes in the scene")
             .def_prop_ro("total_gaussian_count", &PyScene::total_gaussian_count, "Total number of Gaussians across all nodes")

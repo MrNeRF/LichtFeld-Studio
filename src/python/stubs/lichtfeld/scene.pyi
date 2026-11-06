@@ -112,6 +112,11 @@ class SplatData:
         Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
         """
 
+    def shN_rows(self, rows: lichtfeld.Tensor, degree: int) -> lichtfeld.Tensor:
+        """
+        Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.
+        """
+
 def generate_collision(voxel_size: float = 0.05000000074505806, opacity: float = 0.10000000149011612, auto_resolution: bool = False, cleanup: bool = True, max_gaussian_area: float = 0.0) -> None: ...
 
 def export_collision(uuid: str, path: str) -> None: ...
@@ -491,6 +496,14 @@ class SceneNode:
         """Camera focal length in pixels (y)"""
 
     @property
+    def camera_center_x(self) -> float | None:
+        """Camera principal point in pixels (x)"""
+
+    @property
+    def camera_center_y(self) -> float | None:
+        """Camera principal point in pixels (y)"""
+
+    @property
     def camera_width(self) -> int | None:
         """Camera image width in pixels"""
 
@@ -794,8 +807,10 @@ class Scene:
     def is_point_cloud_modified(self, arg: bool, /) -> None: ...
 
     @property
-    def scene_center(self) -> lichtfeld.Tensor:
-        """Scene center position as a [3] tensor"""
+    def scene_center(self) -> lichtfeld.Tensor | None:
+        """
+        Scene center position as a [3] tensor, or None without a loaded dataset
+        """
 
     @property
     def node_count(self) -> int:
@@ -939,11 +954,15 @@ class Camera:
         Load image as tensor [C, H, W] on CUDA. Set output_uint8=True to return uint8 [0,255] instead of float32 [0,1].
         """
 
-    def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor:
-        """Load mask as tensor [1, H, W] on CUDA"""
+    def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
+        """
+        Load mask as tensor [1, H, W] on CUDA, or None if the camera has no mask
+        """
 
-    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor:
-        """Load depth map as tensor [H, W] on CUDA"""
+    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor | None:
+        """
+        Load depth map as tensor [H, W] on CUDA, or None if the camera has no depth map
+        """
 
 class CameraDataset:
     def __len__(self) -> int:

@@ -55,6 +55,16 @@ namespace lfs::training {
         const lfs::core::param::OptimizationParameters& params,
         AdamOptimizer& optimizer);
 
+    // Decay per step that takes a rate restarted now to `final_fraction` of itself by the last iteration.
+    [[nodiscard]] double restart_decay_gamma(
+        const lfs::core::param::OptimizationParameters& params,
+        const AdamOptimizer& optimizer,
+        double final_fraction);
+
+    // Rows to remove at random so the live rows fit `max_cap`, as a run whose model starts above its cap keeps a random
+    // subset; never a frozen or deleted row. None when they fit.
+    [[nodiscard]] std::optional<lfs::core::Tensor> rows_over_cap(const lfs::core::SplatData& splat_data, int max_cap);
+
     // Gaussians the device can still add without running the rasterizer out
     // of memory. Each new Gaussian costs its persistent state (parameters,
     // optimizer moments, gradients, strategy buffers) and its share of the

@@ -10,6 +10,7 @@
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
+#include "core/sh_value_codec.cuh"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/shareable_allocation_limit.hpp"
@@ -31,6 +32,7 @@
 #include <format>
 #include <ios>
 #include <limits>
+#include <stdexcept>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vector>
@@ -1186,93 +1188,79 @@ namespace lfs::core {
     }
 
     Tensor SplatData::shN_canonical_cpu_rows(const Tensor& row_indices) const {
-        const size_t n = static_cast<size_t>(size());
-        const size_t k = max_sh_coeffs_rest();
-        LFS_ASSERT_MSG(_shN.is_valid() && _shN.dtype() == DataType::Float16,
-                       "shN_canonical_cpu_rows requires compact q16 or IEEE-f16 storage");
-        LFS_ASSERT_MSG(row_indices.is_valid() && row_indices.device() == Device::CPU &&
-                           row_indices.ndim() == 1 &&
-                           (row_indices.dtype() == DataType::Int32 ||
-                            row_indices.dtype() == DataType::Int64),
-                       "shN_canonical_cpu_rows requires rank-1 CPU integer row indices");
+        return shN_canonical_cpu_rows(row_indices, get_max_sh_degree());
+    }
 
-        const Tensor indices = row_indices.contiguous();
-        const size_t selected = static_cast<size_t>(indices.numel());
-        Tensor out = Tensor::empty_pageable_host({selected, k, SH_CHANNELS}, DataType::Float32);
-        out.zero_();
-        if (selected == 0 || k == 0) {
-            return out;
+    Tensor SplatData::shN_canonical_cpu_rows(const Tensor& row_indices, const int degree) const {
+        if (!row_indices.is_valid() || row_indices.device() != Device::CPU || row_indices.ndim() != 1 ||
+            (row_indices.dtype() != DataType::Int32 && row_indices.dtype() != DataType::Int64)) {
+            throw std::invalid_argument("SH rows must be a rank-1 CPU integer tensor");
         }
-
-        const Tensor codes_cpu = _shN.to_pageable_host().contiguous();
-        const bool quantized = shN_value_quantized() &&
-                               _shN_value_bounds.is_valid() &&
-                               _shN_value_bounds.numel() > 0;
-        Tensor bounds_cpu;
-        const float* bounds = nullptr;
-        if (quantized) {
-            bounds_cpu = _shN_value_bounds.to_pageable_host().contiguous();
-            bounds = bounds_cpu.ptr<float>();
+        if (degree < 0 || degree > get_max_sh_degree() || degree > MAX_SUPPORTED_SH_DEGREE) {
+            throw std::invalid_argument("SH degree is outside the model's supported range");
         }
+        // Own the indices before validation and asynchronous device transfer.
+        const auto indices = row_indices.to(DataType::Int64).contiguous().clone();
+        const auto* rows = indices.ptr<int64_t>();
+        const size_t selected = indices.numel();
+        const size_t n = size();
+        for (size_t i = 0; i < selected; ++i) {
+            if (rows[i] < 0 || static_cast<uint64_t>(rows[i]) >= n)
+                throw std::out_of_range("SH row index is outside the model");
+        }
+        const auto k = sh_rest_coefficients_for_degree(degree);
+        if (selected == 0 || k == 0)
+            return Tensor::empty_pageable_host({selected, k, SH_CHANNELS}, DataType::Float32);
 
-        const auto source_row = [&](const size_t index) -> size_t {
-            const int64_t row = indices.dtype() == DataType::Int32
-                                    ? static_cast<int64_t>(indices.ptr<int32_t>()[index])
-                                    : indices.ptr<int64_t>()[index];
-            LFS_ASSERT_MSG(row >= 0 && static_cast<size_t>(row) < n,
-                           "shN_canonical_cpu_rows row index is out of range");
-            return static_cast<size_t>(row);
-        };
-
-        auto* const dst = out.ptr<float>();
-        if (quantized) {
-            const auto* const codes = reinterpret_cast<const uint16_t*>(codes_cpu.data_ptr());
-            const uint32_t n_cells = sh_value_quant::n_value_cells_per_prim(
-                static_cast<uint32_t>(k));
-            tbb::parallel_for(
-                tbb::blocked_range<size_t>(0, selected),
-                [&](const tbb::blocked_range<size_t>& range) {
-                    for (size_t output_row = range.begin(); output_row != range.end(); ++output_row) {
-                        const size_t row = source_row(output_row);
-                        const size_t block = row / kShReorderSize;
-                        const size_t lane = row % kShReorderSize;
-                        const float lo = bounds[(row / 256u) * 2u];
-                        const float hi = bounds[(row / 256u) * 2u + 1u];
-                        float* const dst_row = dst + output_row * k * SH_CHANNELS;
-                        for (uint32_t cell = 0; cell < n_cells && cell < k * SH_CHANNELS; ++cell) {
-                            const size_t source_index =
-                                block * static_cast<size_t>(n_cells) * kShReorderSize +
-                                static_cast<size_t>(cell) * kShReorderSize + lane;
-                            dst_row[cell] = decode_q16_host(codes[source_index], lo, hi);
-                        }
+        const auto layout = static_cast<uint32_t>(max_sh_coeffs_rest());
+        const bool quantized = shN_value_quantized();
+        const bool half = _shN.is_valid() && _shN.dtype() == DataType::Float16;
+        const size_t storage_cells = quantized ? sh_swizzled_padded_n(n) * layout * SH_CHANNELS
+                                               : sh_swizzled_float_count(n, layout);
+        if (!_shN.is_valid() || !_shN.is_contiguous() ||
+            (!half && _shN.dtype() != DataType::Float32) || _shN.numel() < storage_cells ||
+            (quantized && (!_shN_value_bounds.is_contiguous() || _shN_value_bounds.dtype() != DataType::Float32 ||
+                           _shN_value_bounds.device() != _shN.device() ||
+                           _shN_value_bounds.numel() < ((n + 255u) / 256u) * 2u))) {
+            throw std::invalid_argument("SH rows require complete resident storage");
+        }
+        if (_shN.device() == Device::CUDA) {
+            const auto stream = prepare_inputs_for_stream({&_shN});
+            const CUDAStreamGuard guard(stream);
+            const auto device_rows = indices.to(Device::CUDA, stream);
+            device_rows.sync_to_stream(stream);
+            auto out = Tensor::empty({selected, k, SH_CHANNELS}, Device::CUDA, DataType::Float32);
+            if (quantized) {
+                _shN_value_bounds.sync_to_stream(stream);
+                sh_value_quant::decode_shN_u16_gathered_to_canonical(
+                    static_cast<const uint16_t*>(_shN.data_ptr()), _shN_value_bounds.ptr<float>(),
+                    device_rows.ptr<int64_t>(), out.ptr<float>(), selected, n, layout, stream, k, true);
+            } else {
+                sh_value_quant::decode_shN_float_gathered_to_canonical(
+                    _shN.data_ptr(), half, device_rows.ptr<int64_t>(), out.ptr<float>(), selected, n,
+                    layout, k, stream);
+            }
+            return out.to_pageable_host(stream);
+        }
+        auto out = Tensor::empty_pageable_host({selected, k, SH_CHANNELS}, DataType::Float32);
+        auto* dst = out.ptr<float>();
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, selected), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                const auto row = static_cast<uint32_t>(rows[i]);
+                for (uint32_t cell = 0; cell < k * SH_CHANNELS; ++cell) {
+                    float value;
+                    if (quantized) {
+                        const auto q = static_cast<const uint16_t*>(_shN.data_ptr())[sh_value::shAtU16(row, cell, layout * SH_CHANNELS)];
+                        value = decode_q16_host(q, _shN_value_bounds.ptr<float>()[row / 256u * 2u],
+                                                _shN_value_bounds.ptr<float>()[row / 256u * 2u + 1u]);
+                    } else {
+                        const size_t offset = static_cast<size_t>(sh_swizzled_index(row, cell / 4u, layout)) * 4u + cell % 4u;
+                        value = half ? static_cast<float>(_shN.ptr<__half>()[offset]) : _shN.ptr<float>()[offset];
                     }
-                });
-            return out;
-        }
-
-        const auto* const codes = codes_cpu.ptr<__half>();
-        const size_t source_floats = static_cast<size_t>(codes_cpu.numel());
-        const size_t active_floats = k * SH_CHANNELS;
-        tbb::parallel_for(
-            tbb::blocked_range<size_t>(0, selected),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t output_row = range.begin(); output_row != range.end(); ++output_row) {
-                    const size_t row = source_row(output_row);
-                    float* const dst_row = dst + output_row * active_floats;
-                    for (size_t offset = 0; offset < active_floats; ++offset) {
-                        const auto slot = static_cast<uint32_t>(offset / 4u);
-                        const auto component = static_cast<uint32_t>(offset % 4u);
-                        const size_t source_index =
-                            static_cast<size_t>(sh_swizzled_index(
-                                static_cast<uint32_t>(row), slot, static_cast<uint32_t>(k))) *
-                                4u +
-                            component;
-                        if (source_index < source_floats) {
-                            dst_row[offset] = static_cast<float>(codes[source_index]);
-                        }
-                    }
+                    dst[i * k * SH_CHANNELS + cell] = value;
                 }
-            });
+            }
+        });
         return out;
     }
 

@@ -121,7 +121,10 @@ namespace lfs::python {
     // Soft deletion
     PyTensor PySplatData::deleted() const {
         if (!data_->has_deleted_mask()) {
-            return PyTensor(core::Tensor(), false);
+            // Nothing deleted yet: hand out an all-false mask instead of an unusable invalid tensor.
+            const auto& means = data_->means();
+            const auto device = means.is_valid() ? means.device() : core::Device::CPU;
+            return PyTensor(core::Tensor::zeros({data_->size()}, device, core::DataType::Bool), true);
         }
         return PyTensor(data_->deleted(), false);
     }
@@ -219,7 +222,9 @@ namespace lfs::python {
             // Capacity
             .def("reserve_capacity", &PySplatData::reserve_capacity, nb::arg("capacity"),
                  "Reserve capacity for Gaussians (for densification). "
-                 "Raises if the model is renderer-backed.");
+                 "Raises if the model is renderer-backed.")
+            .def("shN_rows", [](const PySplatData& self, const PyTensor& rows, int degree) { return PyTensor(self.data()->shN_canonical_cpu_rows(rows.tensor(), degree), true); }, nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(), "Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. "
+                                                                                                                                                                                                                                                                 "Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.");
     }
 
 } // namespace lfs::python

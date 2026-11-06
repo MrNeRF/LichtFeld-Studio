@@ -52,6 +52,12 @@ namespace lfs::vis::gui {
     class SceneGraphElement;
     enum class RmlCursorRequest : uint8_t;
 
+    // Rml::ReleaseFontResources frees every font face handle but refreshes only those of RmlUi elements. Release
+    // through this instead, so that code holding a raw handle sees fontResourceGeneration() change and looks it up
+    // again.
+    LFS_VIS_API void releaseFontResources();
+    LFS_VIS_API std::uint64_t fontResourceGeneration();
+
     struct CachedVulkanContextRender {
         RenderInterface_VK* renderer = nullptr;
         Rml::TextureHandle texture = {};
@@ -146,6 +152,7 @@ namespace lfs::vis::gui {
         void activateTheme(const std::string& theme_id);
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
+        [[nodiscard]] LFS_VIS_API RenderInterface_VK* getVulkanRenderInterface(Rml::Context* context) const;
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
         [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }

@@ -41,6 +41,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
+#include "training/noise_infill.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/editor/python_editor.hpp"
@@ -1938,8 +1939,9 @@ namespace lfs::app {
             auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             const auto* const trainer_manager = scene_manager.getTrainerManager();
             const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
-            // A cropped copy of the training model; the scene model stays whole so a stopped run can resume.
-            std::optional<core::SplatData> cropped;
+            // Copies of the training model without its noise infill and cropped; the scene model stays whole so a stopped
+            // run can resume.
+            std::deque<core::SplatData> copies;
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
@@ -1951,11 +1953,14 @@ namespace lfs::app {
                             "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
                     }
                     const core::SplatData* data = node->model.get();
-                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
-                        (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
-                        if (cropped->size() == 0)
-                            continue;
-                        data = &*cropped;
+                    if (auto kept = training::without_noise_infill(*data))
+                        data = &copies.emplace_back(std::move(*kept));
+                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid()) {
+                        if (auto cropped = training::crop_copy_to_training_cropbox(*data, *export_crop)) {
+                            if (cropped->size() == 0)
+                                continue;
+                            data = &copies.emplace_back(std::move(*cropped));
+                        }
                     }
                     splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
@@ -2854,17 +2859,20 @@ namespace lfs::app {
                                                       : core::make_provenance_stamp())
                                                : core::make_minimal_provenance_stamp();
 
-                        // A cropped copy with "Crop to ROI at end" on; the model stays whole so a stopped run can resume.
+                        // Copies without the noise infill and cropped with "Crop to ROI at end" on; the model stays whole so
+                        // a stopped run can resume.
+                        const auto without_noise = training::without_noise_infill(*model);
+                        const core::SplatData* exported = without_noise ? &*without_noise : model;
                         std::optional<core::SplatData> cropped;
                         const auto* const trainer_manager =
                             viewer->getSceneManager() ? viewer->getSceneManager()->getTrainerManager() : nullptr;
                         if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
-                            cropped = training::crop_copy_to_training_cropbox(*model, *crop);
+                            cropped = training::crop_copy_to_training_cropbox(*exported, *crop);
                         if (cropped && cropped->size() == 0)
                             return std::unexpected("No splat lies inside the crop box or polygon");
 
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
-                        auto result = io::save_ply(cropped ? *cropped : *model, options);
+                        auto result = io::save_ply(cropped ? *cropped : *exported, options);
                         if (!result)
                             return std::unexpected(result.error().message);
                         return {};

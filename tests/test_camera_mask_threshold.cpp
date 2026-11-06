@@ -102,3 +102,30 @@ TEST_F(CameraMaskThreshold, ExhaustiveByteNormalizationAndCutoffs) {
         }
     }
 }
+
+TEST(CameraMoveKeepsModelAndAlpha, MoveAndCopyWithTransformKeepModelAndAlpha) {
+    auto make = [] {
+        auto camera = std::make_unique<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU), lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            55.f, 55.f, width / 2.f, height / 2.f, lfs::core::Tensor{}, lfs::core::Tensor{},
+            lfs::core::CameraModelType::FISHEYE, "frame.png", std::filesystem::path{}, std::filesystem::path{},
+            width, height, 0);
+        camera->set_has_alpha(true);
+        return camera;
+    };
+    auto source = make();
+    lfs::core::Camera moved(std::move(*source));
+    EXPECT_EQ(moved.camera_model_type(), lfs::core::CameraModelType::FISHEYE);
+    EXPECT_TRUE(moved.has_alpha());
+
+    lfs::core::Camera assigned;
+    auto other = make();
+    assigned = std::move(*other);
+    EXPECT_EQ(assigned.camera_model_type(), lfs::core::CameraModelType::FISHEYE);
+    EXPECT_TRUE(assigned.has_alpha());
+
+    auto original = make();
+    lfs::core::Camera transformed(*original, lfs::core::Tensor::eye(4, lfs::core::Device::CPU));
+    EXPECT_EQ(transformed.camera_model_type(), lfs::core::CameraModelType::FISHEYE);
+    EXPECT_TRUE(transformed.has_alpha());
+}

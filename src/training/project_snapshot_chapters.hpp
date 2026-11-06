@@ -74,6 +74,8 @@ namespace lfs::training {
         lfs::io::project::CollisionPayloads collisions;
         std::optional<ProjectSnapshotDocumentContext>
             document_context;
+        // Write a new project holding only this checkpoint, never appending to an existing file.
+        bool standalone = false;
     };
 
     // Detached source of truth captured inside the optimizer safe-point.

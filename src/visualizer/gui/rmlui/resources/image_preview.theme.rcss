@@ -4,12 +4,27 @@
     border-right-color: @{border};
 }
 
+#preview-toolbar, #sampled-color-controls, #shortcut-help {
+    border-bottom-color: @{border};
+    background-color: @{surface};
+}
+
+#preview-message {
+    color: @{error};
+}
+
 .thumb-item.selected {
     border-color: @{primary};
 }
 
 .thumb-index {
-    color: @{alpha(white,0.40)};
+    color: @{text};
+    background-color: @{alpha(background,0.85)};
+    padding: 1dp 3dp;
+}
+
+.thumb-item:focus-visible, .nav-arrow:focus-visible, .btn-copy:focus-visible {
+    border-color: @{primary};
 }
 
 #mask-overlay {

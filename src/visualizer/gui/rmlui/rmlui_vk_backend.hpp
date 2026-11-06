@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 
 #include <RmlUi/Core/RenderInterface.h>
 
@@ -57,6 +58,7 @@ class RenderInterface_VK : public Rml::RenderInterface {
     friend class RenderInterfaceVKTestAccess;
 
 public:
+    using PreviewTextureStatus = lfs::vis::gui::PreviewTextureStatus;
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 4 * 1024 * 1024; // [bytes]
 
@@ -134,6 +136,8 @@ public:
     [[nodiscard]] uint64_t previewTextureGeneration() const {
         return m_preview_texture_generation.load(std::memory_order_acquire);
     }
+    // Graphics thread only; source identity is the complete revisioned preview URL.
+    [[nodiscard]] LFS_VIS_API PreviewTextureStatus previewTextureStatus(const std::string& source) const;
     [[nodiscard]] bool currentContextUsedPreviewTexture() const {
         return m_current_context_used_preview_texture;
     }
@@ -201,6 +205,8 @@ private:
         int m_width = 0;
         int m_height = 0;
         bool m_is_async_preview = false;
+        std::string m_preview_source;
+        PreviewTextureStatus m_preview_status = PreviewTextureStatus::Unknown;
         // Resource identity for VulkanImageBarrierTracker (#1478).
         std::uint64_t m_barrier_generation = 0;
     };
@@ -236,6 +242,7 @@ private:
         std::filesystem::path path;
         int max_size = 0;
         bool embedded_project_preview = false;
+        bool mask_overlay = false;
     };
 
     class MemoryPool;
@@ -622,7 +629,8 @@ private:
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
     LFS_VIS_API static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
                                                                    int max_size,
-                                                                   bool embedded_project_preview);
+                                                                   bool embedded_project_preview,
+                                                                   bool mask_overlay = false);
 
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;
@@ -759,6 +767,7 @@ private:
     Rml::Vector<VkShaderModule> m_shaders;
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::unordered_set<texture_data_t*> m_live_textures;
+    std::unordered_map<std::string, texture_data_t*> m_preview_textures_by_source;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
     std::mutex m_preview_queue_mutex;
     std::condition_variable m_preview_queue_cv;

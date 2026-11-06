@@ -5,15 +5,70 @@
 </head>
 <body template="floating-window" data-model="image_preview">
 
+  <div id="preview-toolbar">
+    <div class="preview-tool-group">
+      <button type="button" class="btn" id="btn-fit"></button>
+      <button type="button" class="btn" id="btn-actual-size">100%</button>
+      <button type="button" class="view-btn" id="btn-zoom-out" title="@tr:image_preview.zoom">−</button>
+      <button type="button" class="view-btn" id="btn-zoom-in" title="@tr:image_preview.zoom">+</button>
+    </div>
+    <div id="view-controls">
+      <button type="button" class="view-btn" id="btn-rotate-left">&#x21BA;</button>
+      <button type="button" class="view-btn" id="btn-rotate-right">&#x21BB;</button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-go-to-camera">
+        <img src="../icon/scene/camera.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-gt-compare">
+        <img src="../icon/layout-columns.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-toggle-training">
+        <img id="btn-toggle-training-icon" src="../icon/scene/unlocked.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-show-in-folder">
+        <img src="../icon/scene/dataset.png" />
+      </button>
+    </div>
+    <div class="preview-tool-group">
+      <button type="button" class="btn" id="btn-thumbnails"></button>
+      <button type="button" class="btn" id="btn-info"></button>
+      <button type="button" class="btn" id="btn-picker"></button>
+      <button type="button" class="btn" id="btn-refresh"></button>
+      <button type="button" class="btn" id="btn-help"></button>
+    </div>
+  </div>
+  <div id="sampled-color-controls" class="hidden">
+    <span id="sampled-color-value"></span>
+    <button type="button" class="btn" id="btn-apply-render-color"></button>
+    <button type="button" class="btn" id="btn-apply-training-color"></button>
+  </div>
+  <div id="shortcut-help" class="hidden">
+    <div class="status-keys">
+      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
+      <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
+      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
+      <span class="hk"><span class="hk-key">@tr:image_preview.zoom_shortcut</span><span class="hk-label" id="hk-zoom"></span></span>
+      <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
+      <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
+      <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>
+      <span class="hk"><span class="hk-key">C</span><span class="hk-label" id="hk-color-picker"></span></span>
+      <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
+      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
+    </div>
+  </div>
+  <div id="preview-message" role="status"></div>
+
   <div id="main-area">
     <div id="filmstrip">
       <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_top_spacer_height"></div>
-      <div class="thumb-item"
-           data-for="thumb : thumbs"
-           data-class-selected="thumb.selected"
-           data-attr-data-index="thumb.index"
-           data-style-decorator="thumb.decorator ? thumb.decorator : 'none'">
-        <span class="thumb-index">{{ thumb.label }}</span>
+      <div class="thumb-row" data-for="thumb : thumbs">
+        <button type="button" class="thumb-item"
+                data-class-selected="thumb.selected"
+                data-attr-aria-pressed="thumb.selected"
+                data-attr-title="thumb.name"
+                data-attr-data-index="thumb.index"
+                data-style-decorator="thumb.decorator">
+          <span class="thumb-index">{{ thumb.label }}</span>
+        </button>
       </div>
       <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_bottom_spacer_height"></div>
     </div>
@@ -22,10 +77,10 @@
         <div id="main-image-a" class="image-layer"></div>
         <div id="main-image-b" class="image-layer hidden"></div>
         <div id="mask-overlay"></div>
-        <span id="no-image-text"></span>
+        <div id="no-image-text"><span id="preview-state-text"></span></div>
       </div>
-      <div class="nav-arrow" id="nav-prev">&#x25C0;</div>
-      <div class="nav-arrow" id="nav-next">&#x25B6;</div>
+      <button type="button" class="nav-arrow" id="nav-prev" title="@tr:image_preview.previous">&#x25C0;</button>
+      <button type="button" class="nav-arrow" id="nav-next" title="@tr:image_preview.next">&#x25B6;</button>
     </div>
     <div id="sidebar">
       <div class="sidebar-header-ip">
@@ -76,16 +131,9 @@
         <div class="meta-full-ip">
           <div class="meta-path-row">
             <span class="meta-key" id="meta-path-label"></span>
-            <span class="btn-copy" id="btn-copy-path"><img class="btn-copy-icon" src="../icon/copy.png"/></span>
+            <button type="button" class="btn-copy" id="btn-copy-path" title="@tr:image_preview.copy_full_path"><img class="btn-copy-icon" src="../icon/copy.png"/></button>
           </div>
           <span class="meta-val-secondary" id="sidebar-filepath"></span>
-        </div>
-      </div>
-      <div class="sidebar-section-ip">
-        <span class="section-label-ip" id="sidebar-view-label"></span>
-        <div class="sidebar-check-row">
-          <input type="checkbox" id="cb-fit" checked/>
-          <label for="cb-fit" id="cb-fit-label"></label>
         </div>
       </div>
       <div class="sidebar-section-ip" id="sidebar-mask-section">
@@ -100,38 +148,7 @@
   </div>
 
   <div id="status-bar">
-    <span class="status-item" id="st-w"></span>
-    <span class="status-item" id="st-h"></span>
-    <span class="status-item" id="st-ch"></span>
     <span class="status-item" id="st-zoom"></span>
-    <div id="view-controls">
-      <button type="button" class="view-btn" id="btn-rotate-left">&#x21BA;</button>
-      <button type="button" class="view-btn" id="btn-rotate-right">&#x21BB;</button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-go-to-camera">
-        <img src="../icon/scene/camera.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-gt-compare">
-        <img src="../icon/layout-columns.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-toggle-training">
-        <img id="btn-toggle-training-icon" src="../icon/scene/visible.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-show-in-folder">
-        <img src="../icon/scene/dataset.png" />
-      </button>
-    </div>
-    <span class="status-keys">
-      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
-      <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
-      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
-      <span class="hk"><span class="hk-key">@tr:image_preview.zoom_shortcut</span><span class="hk-label" id="hk-zoom"></span></span>
-      <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
-      <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
-      <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>
-      <span class="hk"><span class="hk-key">C</span><span class="hk-label" id="hk-color-picker"></span></span>
-      <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
-      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
-    </span>
     <span class="status-position" id="st-position"></span>
   </div>
 

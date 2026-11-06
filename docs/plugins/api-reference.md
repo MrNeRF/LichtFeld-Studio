@@ -333,6 +333,42 @@ callbacks, and `clear()` unregisters that session's callbacks on unload.
 The module-level decorators register callbacks until app shutdown; setting a
 Python variable to `None` does not unregister them.
 
+Hook payloads are dictionaries containing `iteration`, `loss`, `num_splats`
+(`num_gaussians` is an alias), `is_refining`, `is_paused`, and `iterations`
+(the planned total). `on_training_end` additionally receives `terminal_state`:
+`"completed"`, `"stopped"`, or `"failed"`. An unspecified native outcome is
+reported as `"unknown"`; adapters must not treat it as successful completion.
+
+Inside a model read boundary, `SplatData.shN_rows(rows, degree)` copies only the
+requested SH-rest rows and bands into owned Float32 CPU storage with shape
+`[len(rows), (degree + 1)**2 - 1, 3]`. It excludes SH0. `rows` must be a rank-1
+CPU Int32 or Int64 tensor; order and duplicates are preserved. Empty selections
+and degree zero produce correctly shaped empty results. Invalid rows/degrees
+are rejected. The model's SH storage is not modified or fully decoded.
+Long native transfers in `Tensor.cpu()`, `cuda()`, `sync()`, `index_select()`,
+and `numpy()` release the GIL; Python object construction retains it.
+
+### Local training sessions
+
+`lichtfeld_sessions` is the shared pure Python package for local, navigable
+Gaussian snapshots and camera calibration. Enable its publisher through an
+explicit `--python-script` containing:
+
+```python
+from lichtfeld_sessions.publisher import install
+install(dataset="/path/to/dataset", limit=100000, degree=1, interval=2.0)
+```
+
+Readers use `transport.discover()`, `SessionClient(directory, label)`,
+`client.status()` and `read_snapshot(status["snapshot"])`.
+`geometry.load(directory, status.get("geometry"))` reads camera and coordinate
+metadata. Close the client lease when finished. Expired generations can be retried;
+snapshot reads return owned NumPy arrays.
+
+The local protocol version is 1. Publication does not grant control over another
+trainer, detach its process or replace saved checkpoints. The Blender extension
+builds its bundled dependency from these canonical sources.
+
 ## Rendering
 
 | Function                                              | Returns          | Description                |

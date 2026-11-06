@@ -11,6 +11,7 @@
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
 #include <cassert>
@@ -730,8 +731,16 @@ namespace lfs::training {
         LOG_DEBUG("MCMC: soft-deleted {} Gaussians (rotation and optimizer state zeroed)", n_remove);
     }
 
+    void MCMC::restart_mean_lr() {
+        if (!_optimizer || !_params || !_splat_data)
+            return;
+        _optimizer->set_param_lr(ParamType::Means, _params->means_lr * _splat_data->get_scene_scale());
+        _scheduler = std::make_unique<ExponentialLR>(*_optimizer, restart_decay_gamma(*_params, *_optimizer, 0.01),
+                                                     std::vector<ParamType>{ParamType::Means});
+    }
+
     void MCMC::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(params, _splat_data));
         if (_splat_data) {
             publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
         }
@@ -740,7 +749,7 @@ namespace lfs::training {
     void MCMC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         using namespace lfs::core;
 
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(optimParams, _splat_data));
 
         // Pre-allocate tensor capacity if max_cap is specified
         if (_params->max_cap > 0) {

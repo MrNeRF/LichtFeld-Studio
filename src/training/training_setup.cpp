@@ -25,6 +25,7 @@
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "normal_auto_generate.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "strategies/strategy_utils.hpp"
@@ -554,6 +555,65 @@ namespace lfs::training {
             return std::move(model);
         }
 
+        // Replaces `model` by `parts` merged in their order. It keeps the model's scene scale so the means LR stays tied to
+        // the dataset scale.
+        [[nodiscard]] bool replaceWithMerged(
+            lfs::core::SplatData& model,
+            const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& parts,
+            std::vector<lfs::core::SplatData::FrozenRange> frozen_ranges,
+            const int sh_degree) {
+            auto merged = lfs::core::Scene::mergeSplatsWithTransforms(parts);
+            if (!merged) {
+                return false;
+            }
+            lfs::core::SplatData merged_with_base_scale(
+                merged->get_max_sh_degree(),
+                std::move(merged->means_raw()),
+                std::move(merged->sh0_raw()),
+                std::move(merged->shN_raw()),
+                std::move(merged->scaling_raw()),
+                std::move(merged->rotation_raw()),
+                std::move(merged->opacity_raw()),
+                model.get_scene_scale(),
+                lfs::core::SplatData::ShNLayout::Swizzled);
+            merged_with_base_scale.set_active_sh_degree(merged->get_active_sh_degree());
+            applyTrainingSHDegree(merged_with_base_scale, sh_degree);
+            merged_with_base_scale.set_frozen_ranges(std::move(frozen_ranges));
+            model = std::move(merged_with_base_scale);
+            return true;
+        }
+
+        // Noise guided splatting: the noise infill of the mesh's interior leads the model, frozen. Frozen rows are never
+        // removed and compaction keeps the order, so the noise stays rows [0, count).
+        lfs::Result<void> prependNoiseInfill(
+            const lfs::core::param::TrainingParameters& params,
+            lfs::core::SplatData& model,
+            const glm::vec3& dataset_origin) {
+            const auto& opt = params.optimization;
+            // A scored model needs no noise of its own: with --eval-green-infill the evaluator builds its own.
+            if (opt.noise_infill_mesh.empty() || params.evaluate_only || noise_infill_rows(model) > 0) {
+                return {};
+            }
+            auto noise = load_noise_infill(lfs::core::utf8_to_path(opt.noise_infill_mesh),
+                                           {dataset_origin.x, dataset_origin.y, dataset_origin.z});
+            if (!noise) {
+                return lfs::Result<void>::failure(std::move(noise.error()));
+            }
+            if (noise_infill_start_iteration(opt) > 0) {
+                noise->opacity_raw().fill_(kHiddenOpacity);
+            }
+            const size_t count = static_cast<size_t>(noise->size());
+            std::vector<lfs::core::SplatData::FrozenRange> frozen_ranges{{0, count}};
+            for (const auto& range : model.frozen_ranges()) {
+                frozen_ranges.push_back({range.start + count, range.count});
+            }
+            if (!replaceWithMerged(model, {{&*noise, glm::mat4{1.0f}}, {&model, glm::mat4{1.0f}}},
+                                   std::move(frozen_ranges), opt.sh_degree)) {
+                return lfs::Result<void>::failure(initFileError("Failed to merge the noise infill into the training model"));
+            }
+            return {};
+        }
+
         lfs::Result<std::vector<std::unique_ptr<lfs::core::SplatData>>> loadAddedSplats(
             const lfs::core::param::TrainingParameters& params) {
             std::vector<std::unique_ptr<lfs::core::SplatData>> added;
@@ -622,27 +682,9 @@ namespace lfs::training {
                     added_count, merged_count, max_cap));
             }
 
-            auto merged = lfs::core::Scene::mergeSplatsWithTransforms(splats);
-            if (!merged) {
+            if (!replaceWithMerged(model, splats, std::move(frozen_ranges), params.optimization.sh_degree)) {
                 return std::unexpected("Failed to merge added splats into training model");
             }
-
-            // Keep the base model scene scale so means LR remains tied to the dataset scale.
-            const float scene_scale = model.get_scene_scale();
-            lfs::core::SplatData merged_with_base_scale(
-                merged->get_max_sh_degree(),
-                std::move(merged->means_raw()),
-                std::move(merged->sh0_raw()),
-                std::move(merged->shN_raw()),
-                std::move(merged->scaling_raw()),
-                std::move(merged->rotation_raw()),
-                std::move(merged->opacity_raw()),
-                scene_scale,
-                lfs::core::SplatData::ShNLayout::Swizzled);
-            merged_with_base_scale.set_active_sh_degree(merged->get_active_sh_degree());
-            applyTrainingSHDegree(merged_with_base_scale, params.optimization.sh_degree);
-            merged_with_base_scale.set_frozen_ranges(std::move(frozen_ranges));
-            model = std::move(merged_with_base_scale);
 
             LOG_INFO("Added {} splat file{} to training model: {} + {} -> {} Gaussians",
                      params.add_splat_paths.size(),
@@ -1165,6 +1207,9 @@ namespace lfs::training {
             if (auto result = appendAddedSplats(params, model, dataset_origin); !result) {
                 return result;
             }
+            if (auto result = prependNoiseInfill(params, model, dataset_origin); !result) {
+                return std::unexpected(std::string(result.error().user_message()));
+            }
             if (auto result = migrateTrainingModelToAllocator(params, model, tensor_allocator); !result) {
                 return result;
             }
@@ -1195,6 +1240,9 @@ namespace lfs::training {
                              max_cap, loaded->model->size(), max_cap);
                     lfs::core::random_choose(*loaded->model, max_cap);
                 }
+                if (auto result = prependNoiseInfill(params, *loaded->model, dataset_origin); !result) {
+                    return std::unexpected(std::string(result.error().user_message()));
+                }
                 if (auto result = migrateTrainingModelToAllocator(
                         params, *loaded->model, tensor_allocator);
                     !result) {
@@ -1211,11 +1259,14 @@ namespace lfs::training {
                 return std::unexpected(std::move(result.error()));
             }
 
-            const int max_cap = params.optimization.max_cap;
+            const int max_cap = with_noise_outside_cap(params.optimization, model).max_cap;
             if (max_cap > 0 && model->size() > max_cap) {
                 LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
                          max_cap, model->size(), max_cap);
                 lfs::core::random_choose(*model, max_cap);
+            }
+            if (auto result = prependNoiseInfill(params, *model, dataset_origin); !result) {
+                return std::unexpected(std::string(result.error().user_message()));
             }
 
             if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
@@ -1779,6 +1830,8 @@ namespace lfs::training {
             if (!kept)
                 return lfs::Status::failure(std::move(kept).error());
             without_frozen = std::move(*kept);
+        } else {
+            without_frozen = without_noise_infill(trained);
         }
         const auto& unfrozen = without_frozen ? *without_frozen : trained;
         // A stopped run keeps every splat so it can resume; its exports still hold only the crop box.

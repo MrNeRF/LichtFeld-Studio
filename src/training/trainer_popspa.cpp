@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "noise_infill.hpp"
 #include "popspa_cameras.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat_rasterizer.hpp"
@@ -208,9 +209,11 @@ namespace lfs::training {
                 auto active = compute_near_zero_rotation_mask(model.rotation_raw()).logical_not();
                 if (model.has_deleted_mask())
                     active = active.logical_and(model.deleted().logical_not());
+                // The noise never reaches an export, so it takes no row from the surface.
+                const size_t noise_rows = noise_infill_rows(model);
                 const POPSpaController::Config config{
-                    .target_count = static_cast<size_t>(opt.popspa_target_count),
-                    .first_prune_count = static_cast<size_t>(opt.popspa_first_prune_count),
+                    .target_count = static_cast<size_t>(opt.popspa_target_count) + noise_rows,
+                    .first_prune_count = opt.popspa_first_prune_count == 0 ? 0 : static_cast<size_t>(opt.popspa_first_prune_count) + noise_rows,
                     .sparsify_steps = static_cast<uint32_t>(opt.popspa_sparsify_steps),
                     .refine_steps = static_cast<uint32_t>(opt.popspa_refine_steps),
                     .rho = opt.popspa_rho,

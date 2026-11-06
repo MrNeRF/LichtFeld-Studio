@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <istream>
 #include <ostream>
 #include <vector>
@@ -49,6 +50,10 @@ namespace lfs::training {
         }
 
         void step();
+
+        [[nodiscard]] bool updates(const ParamType type) const {
+            return std::find(params_to_update_.begin(), params_to_update_.end(), type) != params_to_update_.end();
+        }
 
         // Serialization for checkpoints
         void serialize(std::ostream& os) const;
