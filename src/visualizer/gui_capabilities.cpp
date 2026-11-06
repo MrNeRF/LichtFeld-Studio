@@ -1452,12 +1452,12 @@ namespace lfs::vis::cap {
         if (!node || !owner || !source || !target ||
             source->category != core::SplatOperationCategory::CropVolume || target->category != core::SplatOperationCategory::CropVolume ||
             (owner->type != core::NodeType::SPLAT && owner->type != core::NodeType::POINTCLOUD))
-            return fail(lfs::ErrorCode::InvalidArgument, "Invalid crop conversion target.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.invalid_conversion"));
         const auto* editor = services().editorOrNull();
         if (scene.isNodeEffectivelyLocked(node->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+            return fail(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.editing_unavailable"));
         if (std::find(owner->children.begin(), owner->children.end(), node->id) == owner->children.end())
-            return fail(lfs::ErrorCode::InvalidArgument, "The crop is not attached to its owner.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.owner_mismatch"));
         if (node->type == target_type)
             return node->id;
         glm::vec3 minimum(0.0f), maximum(0.0f), color(1.0f);
@@ -1490,12 +1490,12 @@ namespace lfs::vis::cap {
             maximum = glm::vec3(hi, node->crop_polygon->half_depth);
             style(*node->crop_polygon);
         } else {
-            return fail(lfs::ErrorCode::InvalidArgument, "The crop's shape data is invalid.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.invalid_shape"));
         }
         if (!std::isfinite(minimum.x) || !std::isfinite(minimum.y) || !std::isfinite(minimum.z) ||
             !std::isfinite(maximum.x) || !std::isfinite(maximum.y) || !std::isfinite(maximum.z) ||
             glm::any(glm::lessThanEqual(maximum, minimum)))
-            return fail(lfs::ErrorCode::InvalidArgument, "The crop's bounds are invalid.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.invalid_bounds"));
         const auto center = (minimum + maximum) * 0.5f;
         const auto half = glm::max((maximum - minimum) * 0.5f, glm::vec3(kCropVolumeMinExtent));
         const auto copy_style = [&](auto& data) {
@@ -1533,7 +1533,7 @@ namespace lfs::vis::cap {
         node->crop_polygon = std::move(polygon);
         scene.setNodeTransform(name, transform);
         scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
-        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Change Crop Shape", std::move(before),
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, LOC("splat_inspector.shape_history"), std::move(before),
                                                                           op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
         scene_manager.syncCropBoxToRenderSettings();
         if (rendering_manager)
@@ -1550,12 +1550,12 @@ namespace lfs::vis::cap {
         };
         const auto* owner = scene.getNodeByUuid(owner_uuid);
         if (!owner || owner->type != core::NodeType::SPLAT)
-            return fail(lfs::ErrorCode::InvalidArgument, "Select a single splat to add a crop.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.select_owner"));
         if (type != core::NodeType::CROPBOX && type != core::NodeType::ELLIPSOID)
-            return fail(lfs::ErrorCode::InvalidArgument, "Unsupported crop shape.");
+            return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.unsupported_shape"));
         const auto* editor = services().editorOrNull();
         if (scene.isNodeEffectivelyLocked(owner->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+            return fail(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.editing_unavailable"));
         const auto base = owner->name + (type == core::NodeType::CROPBOX ? "_cropbox" : "_ellipsoid");
         std::string name = base;
         for (size_t suffix = 2; scene.getNode(name); ++suffix)
@@ -1585,8 +1585,8 @@ namespace lfs::vis::cap {
         const auto id = scene.restoreNodeWithUuid(std::move(desc));
         const auto* created = scene.getNodeById(id);
         if (!created)
-            return fail(lfs::ErrorCode::Internal, "Cannot create crop volume.");
-        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Add Crop Volume", std::move(before), op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
+            return fail(lfs::ErrorCode::Internal, LOC("splat_inspector.create_failed"));
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, LOC("splat_inspector.add_history"), std::move(before), op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
         core::events::state::PLYAdded{.name = name, .uuid = created->uuid, .node_gaussians = 0, .total_gaussians = scene.getTotalGaussianCount(), .is_visible = true, .parent_name = owner->name, .is_group = false, .node_type = static_cast<int>(type)}.emit();
         if (rendering_manager)
             rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
@@ -1603,16 +1603,16 @@ namespace lfs::vis::cap {
         const auto* source = scene.getNodeByUuid(source_uuid);
         const auto* owner = source ? scene.getNodeById(source->parent_id) : nullptr;
         if (!source || !owner)
-            return fail(lfs::ErrorCode::NotFound, "Crop or owner no longer exists.");
+            return fail(lfs::ErrorCode::NotFound, LOC("splat_inspector.owner_missing"));
         auto snapshot = core::readSplatOperation(*owner, *source);
         if (!snapshot)
             return snapshot.error();
         const auto* descriptor = core::splatOperationDescriptor(source->type);
         if (!descriptor || descriptor->category != core::SplatOperationCategory::CropVolume)
-            return fail(lfs::ErrorCode::Unsupported, "Only splat crop volumes can be repeated.");
+            return fail(lfs::ErrorCode::Unsupported, LOC("splat_inspector.duplicate_unsupported"));
         const auto* editor = services().editorOrNull();
         if (scene.isNodeEffectivelyLocked(source->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+            return fail(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.editing_unavailable"));
         std::string name = source->name + "_copy";
         for (size_t suffix = 2; scene.getNode(name); ++suffix)
             name = source->name + "_copy_" + std::to_string(suffix);
@@ -1634,8 +1634,8 @@ namespace lfs::vis::cap {
         const auto id = scene.restoreNodeWithUuid(std::move(copy));
         const auto* node = scene.getNodeById(id);
         if (!node)
-            return fail(lfs::ErrorCode::Internal, "Cannot create crop instance.");
-        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Duplicate Crop Volume", std::move(before),
+            return fail(lfs::ErrorCode::Internal, LOC("splat_inspector.create_failed"));
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, LOC("splat_inspector.duplicate_history"), std::move(before),
                                                                           op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
         core::events::state::PLYAdded{.name = name, .uuid = node->uuid, .node_gaussians = 0, .total_gaussians = scene.getTotalGaussianCount(), .is_visible = node->visible, .parent_name = owner->name, .is_group = false, .node_type = static_cast<int>(node->type)}.emit();
         if (rendering_manager)
