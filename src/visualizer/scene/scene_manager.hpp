@@ -33,7 +33,7 @@ namespace lfs::vis {
     namespace op {
         class SceneSnapshot;
         struct CameraMaskAssetSnapshot;
-    }
+    } // namespace op
 
     class LFS_VIS_API SceneManager {
     public:
