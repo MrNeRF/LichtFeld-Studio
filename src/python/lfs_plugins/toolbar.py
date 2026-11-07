@@ -1150,26 +1150,12 @@ class _GizmoToolbarController:
 
         if action == "crop_object":
             if value in self._CROP_OBJECT_SHAPES:
-                change_shape = getattr(lf.ui, "change_crop_tool_shape", None)
-                if callable(change_shape):
-                    change_shape(value)
-                    return
-                current_gizmo = lf.ui.get_gizmo_type() if hasattr(lf.ui, "get_gizmo_type") else ""
-                set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
-                if callable(set_shape):
-                    set_shape(value)
-                self._activate_crop_tool(current_gizmo or "translate", infer_selection_shape=False)
+                lf.ui.change_crop_tool_shape(value)
             return
 
         if action == "crop_transform":
             if value in self._CROP_TRANSFORM_GIZMOS:
-                set_operation = getattr(lf.ui, "set_crop_tool_operation", None)
-                if callable(set_operation):
-                    set_operation(value)
-                    return
-                if self._selection_volume_active(lf.ui.get_active_tool()):
-                    return
-                self._activate_crop_tool(value, infer_selection_shape=False)
+                lf.ui.set_crop_tool_operation(value)
             return
 
         if action == "crop_fit":
@@ -1191,9 +1177,7 @@ class _GizmoToolbarController:
             return
 
         if action == "crop_finish":
-            finish_crop_tool = getattr(lf.ui, "finish_crop_tool", None)
-            if callable(finish_crop_tool):
-                finish_crop_tool()
+            lf.ui.finish_crop_tool()
             return
 
         if action == "align_toggle_preview":

@@ -2353,17 +2353,36 @@ def set_crop_tool_operation(operation: str) -> None:
 def get_crop_tool_operation() -> str:
     """Get the active crop or selection-volume gizmo operation"""
 
+def crop_group_enabled(owner_uuid: str) -> bool:
+    """Read the collective crop gate on an exact splat owner"""
+
+def set_crop_group_enabled(owner_uuid: str, enabled: bool) -> bool:
+    """Toggle the collective crop gate without changing individual flags"""
+
+def delete_crop_group(owner_uuid: str) -> bool:
+    """Remove all crop volumes as one undoable action"""
+
+def bake_crop_group(owner_uuid: str) -> bool:
+    """Apply enabled crop volumes as one undoable action"""
+
 def finish_crop_tool() -> None:
-    """Finish editing and retain the editable crop and original geometry."""
+    """
+    Finish crop editing while retaining the editable volume and original geometry
+    """
+
+def is_crop_tool_shape_locked() -> bool:
+    """Whether editing an existing crop keeps its saved shape type"""
 
 def change_crop_tool_shape(shape: str) -> bool:
-    """Convert only the crop being edited, retaining identity, flags and siblings."""
+    """
+    Change only the crop being edited, preserving its identity and siblings
+    """
 
 def edit_crop_tool(uuid: str) -> None:
-    """Edit an existing crop volume without creating another."""
+    """Edit an existing crop volume without creating another"""
 
 def new_crop_tool(shape: str) -> None:
-    """Create another independent box, ellipsoid or polygon crop on the selected splat."""
+    """Create another independent crop on the selected splat"""
 
 def apply_crop_tool() -> None:
     """
@@ -3271,13 +3290,3 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
-
-def is_crop_tool_shape_locked() -> bool:
-    """Whether editing an existing crop keeps its saved shape type."""
-    ...
-
-
-def crop_group_enabled(owner_uuid: str) -> bool: ...
-def set_crop_group_enabled(owner_uuid: str, enabled: bool) -> bool: ...
-def bake_crop_group(owner_uuid: str) -> bool: ...
-def delete_crop_group(owner_uuid: str) -> bool: ...

@@ -3338,7 +3338,7 @@ namespace lfs::vis::gui {
         const auto* crop_owner = scene->getNodeById(node->parent_id);
         const auto* crop_desc = core::splatOperationDescriptor(node->type);
         if (selected_ids_.size() <= 1 && crop_owner && crop_desc &&
-            crop_desc->category == core::SplatOperationCategory::CropVolume && core::readSplatOperation(*crop_owner, *node)) {
+            crop_desc->category == core::SplatOperationCategory::CropVolume && core::validateSplatOperation(*crop_owner, *node)) {
             for (const auto& [action, key] : {std::pair{"edit", "splat_inspector.edit"}, {"duplicate", "splat_inspector.duplicate"}, {"bake", "splat_inspector.bake"}})
                 items.push_back(makeAction(tr(key), prefixedAction(std::format("crop_action:{}:{}", action, node->uuid.to_string()))));
         }
@@ -3722,7 +3722,7 @@ namespace lfs::vis::gui {
                     const auto& current_scene = sm->getScene();
                     const auto* target = current_scene.getNodeByUuid(element_uuid);
                     const auto* parent = current_scene.getNodeByUuid(owner_uuid);
-                    if (!target || !parent || !core::readSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id))
+                    if (!target || !parent || !core::validateSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id))
                         return;
                     sm->selectNode(target->id);
                     gm->gizmo().editCropTool(target->uuid);

@@ -239,15 +239,12 @@ The native test targets are:
 
 | Target | Coverage |
 | --- | --- |
-| `lichtfeld_splat_operation_tests` | Descriptor and detached reader contracts |
-| `lichtfeld_splat_crop_workflow_tests` | Registered operators, retained scene-tree events, repeated crops, collective state, packing and clipboard |
-| `lichtfeld_visualizer_tests` | GUI integration, crop lifecycle, bake transactions, locks and persistence |
+| `lichtfeld_tests` / `lichtfeld_visualizer_tests` | Operation contracts, registered operators, retained scene-tree events, repeated crops, collective state, packing, lifecycle, locks and persistence |
 | `lichtfeld_rmlui_tests` / `lichtfeld_sidebar_input_tests` | Retained UI and input contracts |
 
-Enable `BUILD_SPLAT_WORKFLOW_TESTS=ON` for the focused workflow target and
-`BUILD_VISUALIZER_TESTS=ON` for GUI integration targets. The focused suite runs
-without a window or GPU renderer; its clipboard hydration regression opts into
-CUDA with `LFS_TEST_CROP_CLIPBOARD_GPU=1`.
+Enable `BUILD_TESTS=ON` for the full native suite or
+`BUILD_VISUALIZER_TESTS=ON` for GUI integration targets. GPU clipboard and
+selection regressions run in the existing GPU tier and skip without a CUDA device.
 
 Windows validation uses MSVC, sccache and FAST_COMPILE. Coverage includes
 creation and explicit editing, locked shape on reopen, single and collective

@@ -556,7 +556,7 @@ namespace lfs::vis::op {
         const auto* node = uuid ? ctx.scene().getScene().getNodeByUuid(*uuid) : nullptr;
         const auto* owner = node ? ctx.scene().getScene().getNodeById(node->parent_id) : nullptr;
         const auto* descriptor = node ? core::splatOperationDescriptor(node->type) : nullptr;
-        return owner && descriptor && !descriptor->duplicate_operator.empty() && core::readSplatOperation(*owner, *node);
+        return owner && descriptor && !descriptor->duplicate_operator.empty() && core::validateSplatOperation(*owner, *node);
     }
     OperatorResult CropVolumeDuplicateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         const auto uuid = core::Uuid::from_string(props.get_or<std::string>("node_uuid", ""));

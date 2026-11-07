@@ -23,7 +23,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include <RmlUi/Core.h>
 #include <algorithm>
-#include <cstdlib>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -665,11 +665,10 @@ namespace {
         EXPECT_TRUE(vksplat_overlay::buildParams(request, false, false, false, 0, false).empty());
     }
 
-    // Clipboard tensor hydration uses CUDA. Keep the focused default suite CPU-only;
-    // explicitly opt in on a GPU validation host.
     TEST_F(SplatCropWorkflowTest, ClipboardGpuPreservesEveryRepeatedChildAndSupportsUndo) {
-        if (!std::getenv("LFS_TEST_CROP_CLIPBOARD_GPU"))
-            GTEST_SKIP() << "Set LFS_TEST_CROP_CLIPBOARD_GPU=1 for the GPU clipboard regression";
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+            GTEST_SKIP() << "CUDA device unavailable";
         using core::Device;
         using core::Tensor;
         auto data = std::make_unique<core::SplatData>(
@@ -725,8 +724,9 @@ namespace {
     }
 
     TEST_F(SplatCropWorkflowTest, SelectionGpuUsesEveryCropOnlyOnItsOwnerAndHonorsCollectiveGate) {
-        if (!std::getenv("LFS_TEST_CROP_CLIPBOARD_GPU"))
-            GTEST_SKIP() << "Set LFS_TEST_CROP_CLIPBOARD_GPU=1 for CUDA selection checks";
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+            GTEST_SKIP() << "CUDA device unavailable";
         auto& scene = sm->getScene();
         const auto first = scene.addSplat("Selection first", groupTestSplat(core::Device::CUDA));
         const auto second = scene.addSplat("Selection second", groupTestSplat(core::Device::CUDA));

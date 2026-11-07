@@ -821,6 +821,9 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         raising=False,
     )
 
+    monkeypatch.setattr(lf_stub.ui, "change_crop_tool_shape", lambda shape: (setattr(state, "crop_shape", shape), state.calls.append(("change_crop_tool_shape", shape))), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_crop_tool_operation", lambda value: (setattr(state, "gizmo_type", value), state.calls.append(("set_crop_tool_operation", value))), raising=False)
+
     controller = module._GizmoToolbarController()
     snapshot = controller.snapshot()
 
@@ -859,15 +862,14 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
 
     controller.dispatch("crop_object", "ellipsoid")
 
-    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
-    assert ("set_active_operator", "builtin.cropbox", "rotate") in state.calls
+    assert ("change_crop_tool_shape", "ellipsoid") in state.calls
     snapshot = controller.snapshot()
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "ellipsoid")["selected"] is True
 
     controller.dispatch("crop_transform", "scale")
 
     assert state.gizmo_type == "scale"
-    assert state.calls[-1] == ("set_active_operator", "builtin.cropbox", "scale")
+    assert state.calls[-1] == ("set_crop_tool_operation", "scale")
 
     controller.dispatch("crop_fit", "")
 
@@ -958,6 +960,9 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
         raising=False,
     )
 
+    monkeypatch.setattr(lf_stub.ui, "change_crop_tool_shape", lambda shape: (setattr(state, "crop_shape", shape), state.calls.append(("change_crop_tool_shape", shape))), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_crop_tool_operation", lambda value: (setattr(state, "gizmo_type", value), state.calls.append(("set_crop_tool_operation", value))), raising=False)
+
     controller = module._GizmoToolbarController()
     polygon_button = next(button for button in controller.snapshot()["crop_object_buttons"] if button["value"] == "polygon")
     # The selection tool's polygon icon is reused; the label is localized.
@@ -969,9 +974,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     controller.dispatch("crop_object", "polygon")
 
     assert state.calls == [
-        ("set_crop_tool_shape", "polygon"),
-        ("start_crop_polygon",),
-        ("set_active_operator", "builtin.cropbox", "translate"),
+        ("change_crop_tool_shape", "polygon"),
     ]
     snapshot = controller.snapshot()
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "polygon")["selected"] is True
@@ -1411,6 +1414,9 @@ def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar
         raising=False,
     )
 
+    monkeypatch.setattr(lf_stub.ui, "change_crop_tool_shape", lambda shape: (setattr(state, "crop_shape", shape), state.calls.append(("change_crop_tool_shape", shape))), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_crop_tool_operation", lambda value: (setattr(state, "gizmo_type", value), state.calls.append(("set_crop_tool_operation", value))), raising=False)
+
     controller = module._GizmoToolbarController()
 
     controller.snapshot()
@@ -1425,8 +1431,8 @@ def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar
     assert len([call for call in state.calls if call[0].startswith("add_")]) == add_call_count
 
     controller.dispatch("crop_object", "ellipsoid")
-    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
-    assert ("add_ellipsoid", "target") in state.calls
+    assert ("change_crop_tool_shape", "ellipsoid") in state.calls
+    assert ("add_ellipsoid", "target") not in state.calls
 
 
 def test_crop_tool_activation_infers_selected_ellipsoid(toolbar_module, monkeypatch):

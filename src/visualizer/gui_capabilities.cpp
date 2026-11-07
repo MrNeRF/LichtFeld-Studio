@@ -1604,9 +1604,9 @@ namespace lfs::vis::cap {
         const auto* owner = source ? scene.getNodeById(source->parent_id) : nullptr;
         if (!source || !owner)
             return fail(lfs::ErrorCode::NotFound, LOC("splat_inspector.owner_missing"));
-        auto snapshot = core::readSplatOperation(*owner, *source);
-        if (!snapshot)
-            return snapshot.error();
+        auto valid = core::validateSplatOperation(*owner, *source);
+        if (!valid)
+            return valid.error();
         const auto* descriptor = core::splatOperationDescriptor(source->type);
         if (!descriptor || descriptor->category != core::SplatOperationCategory::CropVolume)
             return fail(lfs::ErrorCode::Unsupported, LOC("splat_inspector.duplicate_unsupported"));
@@ -1621,8 +1621,8 @@ namespace lfs::vis::cap {
         copy.type = source->type;
         copy.name = name;
         copy.parent = owner->id;
-        copy.local_transform = snapshot->local_transform;
-        copy.visible = snapshot->node_visible;
+        copy.local_transform = source->transform();
+        copy.visible = source->visible.get();
         if (source->cropbox && source->type == core::NodeType::CROPBOX)
             copy.cropbox = std::make_unique<core::CropBoxData>(*source->cropbox);
         if (source->ellipsoid && source->type == core::NodeType::ELLIPSOID)

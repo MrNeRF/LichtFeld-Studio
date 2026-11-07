@@ -77,6 +77,9 @@ namespace lfs::core {
 
     // No selection fallback, name lookup, ancestor traversal, hydration,
     // persistence mutation or synthetic operation UUID generation.
+    [[nodiscard]] LFS_CORE_API lfs::Result<void>
+    validateSplatOperation(const SceneNode& owner, const SceneNode& element);
+
     [[nodiscard]] LFS_CORE_API lfs::Result<SplatOperationSnapshot>
     readSplatOperation(const SceneNode& owner, const SceneNode& element);
 
