@@ -2099,19 +2099,17 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape.elements() == data.size(),
                        std::format("from_vector shape has {} elements but input has {}",
                                    shape.elements(), data.size()));
-        auto t = Tensor::empty(shape, device, dtype);
-        if (!t.is_valid() || t.numel() == 0)
+        // Tensor::to owns the pinned upload and orders it on the destination
+        // stream. A legacy-stream upload can overwrite a recycled GPU block
+        // before that stream's previous readers/writers have finished.
+        auto t = Tensor::empty(shape, device == Device::CUDA ? Device::CPU : device, dtype);
+        if (!t.is_valid())
             return t;
 
         if (t.numel() > 0 && data.data() != nullptr) {
-            if (device == Device::CUDA) {
-                LFS_CUDA_CHECK(memcpy_ordered(t.data_ptr(), data.data(), t.bytes(),
-                                              cudaMemcpyHostToDevice, t.stream()));
-            } else {
-                std::memcpy(t.data_ptr(), data.data(), t.bytes());
-            }
+            std::memcpy(t.data_ptr(), data.data(), t.bytes());
         }
-        return t;
+        return device == Device::CUDA ? t.to(Device::CUDA) : t;
     }
 
     Tensor Tensor::from_vector(const std::vector<float>& data, TensorShape shape, Device device) {

@@ -121,6 +121,50 @@ protected:
     size_t original_cache_limit_ = 0;
 };
 
+TEST_F(TensorMultiStreamTest, DeviceCopyStaysOrderedWithItsNonBlockingStream) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    auto source = Tensor::zeros({1024}, Device::CUDA, DataType::UInt8);
+    auto copied = Tensor::zeros({1024}, Device::CUDA, DataType::UInt8);
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(source.data_ptr(), 0x55, source.bytes(), producer.get()), cudaSuccess);
+    ASSERT_EQ(memcpy_ordered(copied.data_ptr(), source.data_ptr(), source.bytes(),
+                             cudaMemcpyDeviceToDevice, producer.get()),
+              cudaSuccess);
+    ASSERT_EQ(cudaMemsetAsync(source.data_ptr(), 0xAA, source.bytes(), producer.get()), cudaSuccess);
+    producer.release();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    const auto values = copied.to(Device::CPU).to_vector_uint8();
+    for (const auto value : values)
+        ASSERT_EQ(value, 0x55);
+}
+
+TEST_F(TensorMultiStreamTest, VectorUploadWaitsForRecycledDestinationStorage) {
+    GateStream producer;
+    CUDAStreamGuard guard(producer.get());
+    ASSERT_NO_FATAL_FAILURE(seedPinnedCache(16 * sizeof(float)));
+    auto previous = Tensor::empty({16}, Device::CUDA);
+    const void* recycled = previous.data_ptr();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    producer.close();
+    ASSERT_EQ(cudaMemsetAsync(previous.data_ptr(), 0, previous.bytes(), producer.get()), cudaSuccess);
+    previous = {};
+    // Host allocation may synchronize CUDA. Release independently of upload's
+    // return; the contract under test is the copied value, not host latency.
+    std::jthread release([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        producer.release();
+    });
+    const auto uploaded = Tensor::from_vector(std::vector<float>(16, 5.0f), {16}, Device::CUDA);
+    EXPECT_EQ(uploaded.data_ptr(), recycled);
+    release.join();
+    ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
+    const auto values = uploaded.to(Device::CPU).to_vector();
+    for (const auto value : values)
+        ASSERT_FLOAT_EQ(value, 5.0f);
+}
+
 TEST_F(TensorMultiStreamTest, SlabSameStreamReuseIsImmediateAndStealFree) {
     cudaStream_t stream;
     ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
@@ -363,12 +407,15 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     void* device_buffer = nullptr;
     ASSERT_EQ(cudaMalloc(&device_buffer, kBytes), cudaSuccess);
 
-    h2d_stream.close();
-    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
-              cudaSuccess);
+    // Finish the earlier D2H use before gating H2D. Opposite transfers on the
+    // same buffers may serialize, making a D2H wait depend on the closed gate.
+    ASSERT_EQ(cudaMemsetAsync(device_buffer, 0, kBytes, d2h_stream), cudaSuccess);
     ASSERT_EQ(cudaMemcpyAsync(host_block, device_buffer, kBytes, cudaMemcpyDeviceToHost, d2h_stream),
               cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(d2h_stream), cudaSuccess);
+    h2d_stream.close();
+    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
+              cudaSuccess);
 
     pinned.record_stream(host_block, h2d_stream.get());
     pinned.deallocate(host_block, d2h_stream);

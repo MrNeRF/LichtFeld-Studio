@@ -25,7 +25,8 @@ namespace lfs::core {
         std::initializer_list<const Tensor*> inputs,
         std::optional<cudaStream_t> execution_stream = std::nullopt);
 
-    // Synchronous host<->device copy ordered against `stream`, the tensor's
+    // Device copies are enqueued directly on `stream`. Host<->device copies
+    // use the synchronous API ordered against `stream`, the tensor's
     // home stream. cudaMemcpy runs on the legacy default stream, which a
     // non-blocking home stream neither waits for nor is waited on by: an
     // upload from pageable memory returns while its DMA is still in flight,
