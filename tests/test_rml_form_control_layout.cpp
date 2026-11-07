@@ -149,6 +149,44 @@ namespace {
         EXPECT_EQ(top, popup);
     }
 
+    TEST_P(RmlFormControlLayoutTest, MinimizedWindowKeepsOnlyChromeAndRestoresItsContent) {
+        auto* doc = load("<div id='window-frame'><div id='title-bar'><span id='title-text'>Preferences</span>"
+                         "<button id='minimize-btn' class='window-control'>-</button>"
+                         "<button id='maximize-btn' class='window-control'>[]</button>"
+                         "<span id='close-btn'>x</span></div><div id='content-wrap'><div id='content'>"
+                         "<input id='retained' value='unchanged'/></div></div></div>");
+        ASSERT_NE(doc, nullptr);
+        std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/components.rcss");
+        ASSERT_TRUE(file);
+        const std::string css((std::istreambuf_iterator<char>(file)), {});
+        doc->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(css));
+        doc->SetClass("window-controls", true);
+        auto* content = doc->GetElementById("content-wrap");
+        auto* retained = doc->GetElementById("retained");
+        const float scale = GetParam();
+        context->SetDimensions({int(240 * scale), int(32 * scale)});
+        doc->SetClass("window-minimized", true);
+        context->Update();
+        EXPECT_FALSE(content->IsVisible());
+        EXPECT_FALSE(doc->GetElementById("minimize-btn")->IsVisible());
+        for (const auto* id : {"title-text", "maximize-btn", "close-btn"}) {
+            auto* element = doc->GetElementById(id);
+            EXPECT_TRUE(element->IsVisible());
+            const auto pos = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(pos.x, 0);
+            EXPECT_LE(pos.x + size.x, 240 * scale + 1);
+            EXPECT_LE(pos.y + size.y, 32 * scale + 1);
+        }
+        doc->SetClass("window-minimized", false);
+        doc->SetClass("window-maximized", true);
+        context->SetDimensions({int(800 * scale), int(500 * scale)});
+        context->Update();
+        EXPECT_TRUE(content->IsVisible());
+        EXPECT_EQ(doc->GetElementById("retained"), retained);
+        EXPECT_EQ(retained->GetAttribute<Rml::String>("value", ""), "unchanged");
+    }
+
     INSTANTIATE_TEST_SUITE_P(UiScales, RmlFormControlLayoutTest,
                              ::testing::Values(1.f, 1.25f, 1.5f, 1.75f, 2.f, 3.f));
 } // namespace

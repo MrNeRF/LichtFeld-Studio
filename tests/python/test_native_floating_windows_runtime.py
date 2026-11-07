@@ -483,3 +483,91 @@ def test_reset_discards_closed_external_panel_reopen_position(native_client, pan
     native_client.until(lambda: native_client.call("ui_panel_describe", panel_id=panel_id)["panel"].get("floating_bounds"))
     time.sleep(.2)
     assert not any(window["title"] == native["title"] for window in native_client.windows())
+
+
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace"])
+def test_native_window_actions_minimize_maximize_and_restore(native_client, panel_id):
+    window = native_client.open(panel_id)
+    hwnd = window["hwnd"]
+    native_client.user32.IsIconic.argtypes = [wintypes.HWND]
+    native_client.user32.IsZoomed.argtypes = [wintypes.HWND]
+
+    def click(identifier):
+        x, y, width, height = native_client.panel_elements(panel_id, [identifier])[identifier]
+        assert width > 0 and height > 0
+        coordinates = (int(y + height / 2) << 16) | int(x + width / 2)
+        # The control belongs to the client area, not the native drag region.
+        point = wintypes.POINT(int(x + width / 2), int(y + height / 2))
+        assert native_client.user32.ClientToScreen(hwnd, ctypes.byref(point))
+        hit_point = ((point.y & 0xffff) << 16) | (point.x & 0xffff)
+        assert native_client.user32.SendMessageW(hwnd, 0x0084, 0, hit_point) == 1
+        for message, buttons in ((0x0200, 0), (0x0201, 1), (0x0202, 0)):
+            assert native_client.user32.PostMessageW(hwnd, message, buttons, coordinates)
+
+    assert native_client.user32.SetWindowPos(hwnd, 0, 40, 50, 760, 540, 0x0014)
+    native_client.until(lambda: abs(native_client.panel_elements(panel_id, ["window-frame"])["window-frame"][2] - 760) <= 2)
+    click("maximize-btn")
+    native_client.until(lambda: native_client.user32.IsZoomed(hwnd))
+    click("maximize-btn")
+    native_client.until(lambda: not native_client.user32.IsZoomed(hwnd))
+    rect = wintypes.RECT()
+    assert native_client.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    assert abs(rect.right - rect.left - 760) <= 2
+    assert abs(rect.bottom - rect.top - 540) <= 2
+    click("minimize-btn")
+    native_client.until(lambda: native_client.user32.IsIconic(hwnd))
+    assert native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["enabled"]
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
+    native_client.until(lambda: not native_client.user32.IsIconic(hwnd))
+    assert native_client.user32.IsWindow(hwnd)
+    native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.until(lambda: not native_client.user32.IsWindow(hwnd))
+
+
+def test_embedded_window_actions_preserve_content_and_restore_geometry(native_client):
+    for panel_id in ("lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"):
+        native_client.call("ui_panel_update", panel_id=panel_id, enabled=False)
+    native_client.python("import lichtfeld as lf,json\nlf.ui.reset_window_state()\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(True))")
+    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=True)
+    main = next(window for window in native_client.windows() if window["title"].startswith("LichtFeld Studio"))
+
+    def bounds():
+        return native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"].get("floating_bounds")
+
+    original = native_client.until(bounds)
+    native_client.python("import lichtfeld as lf,json\ndoc=lf.ui.rml.get_document('lfs.preferences')\ndoc.get_element_by_id('content').set_attribute('window-test-marker','retained')\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(True))")
+
+    def click(identifier):
+        b = bounds()
+        elements = native_client.panel_elements("lfs.preferences", [identifier, "window-frame"])
+        x, y, width, height = elements[identifier]
+        frame_x, frame_y = elements["window-frame"][:2]
+        assert width > 0 and height > 0
+        coordinates = (int(b["y"] + y - frame_y + height / 2) << 16) | int(b["x"] + x - frame_x + width / 2)
+        for message, buttons in ((0x0200, 0), (0x0201, 1), (0x0202, 0)):
+            assert native_client.user32.PostMessageW(main["hwnd"], message, buttons, coordinates)
+
+    click("maximize-btn")
+    maximized = native_client.until(lambda: (b := bounds()) and b["width"] > original["width"] + 100 and b)
+    assert maximized["y"] >= 20, "maximized panel covered the menu"
+    client_rect = wintypes.RECT()
+    assert native_client.user32.GetClientRect(main["hwnd"], ctypes.byref(client_rect))
+    assert maximized["y"] + maximized["height"] < client_rect.bottom, "maximized panel covered status bar"
+    click("minimize-btn")
+    minimized = native_client.until(lambda: (b := bounds()) and b["height"] < 60 and b)
+    assert minimized["y"] > maximized["y"] + 100
+    assert native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"]
+    click("title-text")
+    native_client.until(lambda: (b := bounds()) and abs(b["width"] - maximized["width"]) < 2)
+    click("maximize-btn")
+    restored = native_client.until(lambda: (b := bounds()) and abs(b["width"] - original["width"]) < 2 and b)
+    for key in ("x", "y", "width", "height"):
+        assert abs(restored[key] - original[key]) < 2
+    retained = native_client.python("import lichtfeld as lf,json\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(lf.ui.rml.get_document('lfs.preferences').get_element_by_id('content').get_attribute('window-test-marker')))")
+    assert retained == "retained"
+    click("minimize-btn")
+    native_client.until(lambda: (b := bounds()) and b["height"] < 60)
+    native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=True)
+    native_client.until(lambda: (b := bounds()) and abs(b["width"] - original["width"]) < 2)
+    click("close-btn")
+    native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])

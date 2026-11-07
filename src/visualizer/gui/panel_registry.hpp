@@ -256,7 +256,16 @@ namespace lfs::vis::gui {
         }
     };
 
+    enum class FloatingWindowState : uint8_t {
+        Normal,
+        Minimized,
+        Maximized
+    };
+
     struct FloatingPanelInteraction {
+        FloatingWindowState window_state = FloatingWindowState::Normal;
+        FloatingWindowState before_minimize = FloatingWindowState::Normal;
+        std::optional<PanelDrawBounds> normal_bounds;
         float x = NAN;
         float y = NAN;
         bool auto_center = true;
@@ -427,6 +436,9 @@ namespace lfs::vis::gui {
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
+        [[nodiscard]] std::optional<FloatingWindowState> floating_window_state(const std::string& id) const;
+        bool set_floating_window_state(const std::string& id, FloatingWindowState state);
+        bool restore_floating_window(const std::string& id);
         bool is_panel_enabled(const std::string& id) const;
         // Prepare a registered panel without requiring it to be enabled or
         // visible. Used for small, opt-in startup warmups.
@@ -493,6 +505,7 @@ namespace lfs::vis::gui {
         uint64_t registration_revision_ = 0;
         uint64_t visibility_revision_ = 0;
         uint64_t localized_label_generation_ = 0;
+        int minimized_first_row_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };

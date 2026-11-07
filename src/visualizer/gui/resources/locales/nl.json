@@ -2906,6 +2906,7 @@
     "show_ui": "Interface tonen",
     "hide_ui": "Interface verbergen",
     "minimize": "Minimaliseren",
+    "minimized_window_hint": "Klik op de titel om te herstellen. Scrol om andere geminimaliseerde vensters te zien.",
     "restore_window": "Venster herstellen",
     "maximize_window": "Venster maximaliseren",
     "rad_lod": "RAD LOD",

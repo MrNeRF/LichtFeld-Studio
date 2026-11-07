@@ -133,6 +133,8 @@ namespace lfs::vis::gui {
         SDL_Window* nativeWindow(const Rml::Context* context) const;
         VulkanContext* nativeGraphics(const Rml::Context* context) const;
         void showNativeWindow(Rml::Context* context);
+        void minimizeNativeWindow(Rml::Context* context);
+        void toggleNativeWindowMaximized(Rml::Context* context);
         void renderNativeWindows();
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();

@@ -2918,6 +2918,7 @@
     "show_ui": "Show UI",
     "hide_ui": "Hide UI",
     "minimize": "Minimize",
+    "minimized_window_hint": "Click the title to restore. Scroll to show other minimized windows.",
     "restore_window": "Restore Window",
     "maximize_window": "Maximize Window",
     "rad_lod": "RAD LOD",

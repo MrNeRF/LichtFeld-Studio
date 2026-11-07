@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
@@ -292,6 +293,7 @@ namespace lfs::vis::gui {
         if (!ensureContext() || !loadDocument())
             return false;
         syncLocalizedContent();
+        syncWindowControls();
         return true;
     }
 
@@ -327,6 +329,9 @@ namespace lfs::vis::gui {
         // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
         close_button_ = nullptr;
+        minimize_button_ = maximize_button_ = nullptr;
+        window_state_ = FloatingWindowState::Normal;
+        controls_allowed_ = false;
         close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
@@ -522,7 +527,7 @@ namespace lfs::vis::gui {
         if (!need_layout)
             return;
 
-        const float saved_scroll = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
+        const float saved_scroll = window_scroll_top_.value_or(scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f);
         if (!updateContextLayout(pw, ph))
             return;
 
@@ -578,10 +583,10 @@ namespace lfs::vis::gui {
             content_dirty_ || render_needed_ || theme_dirty || size_dirty;
 
         const bool need_content_measure =
-            height_mode_ == PanelHeightMode::Content &&
+            window_state_ == FloatingWindowState::Normal && height_mode_ == PanelHeightMode::Content &&
             (pw != last_measure_w_ || ph != last_layout_h_ || content_dirty_ ||
              last_content_height_ <= 0.0f);
-        const float saved_scroll = scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f;
+        const float saved_scroll = window_scroll_top_.value_or(scroll_el_ ? scroll_el_->GetScrollTop() : 0.0f);
         float converged_content_h = last_content_height_;
 
         if (need_content_measure) {
@@ -663,8 +668,10 @@ namespace lfs::vis::gui {
         if (needs_post_layout_update)
             rml_context_->Update();
 
+        if (window_state_ != FloatingWindowState::Minimized)
+            window_scroll_top_.reset();
         content_dirty_ = false;
-        if (height_mode_ != PanelHeightMode::Content)
+        if (window_state_ == FloatingWindowState::Normal && height_mode_ != PanelHeightMode::Content)
             last_content_height_ = display_h;
 
         const double next_delay = rml_context_->GetNextUpdateDelay();
@@ -681,7 +688,7 @@ namespace lfs::vis::gui {
         last_fbo_padding_ = padding;
         render_needed_ = false;
 
-        if (height_mode_ == PanelHeightMode::Content) {
+        if (window_state_ == FloatingWindowState::Normal && height_mode_ == PanelHeightMode::Content) {
             const float actual_content_h = computeContentHeight();
             last_content_height_ = actual_content_h;
 
@@ -785,7 +792,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const {
-        if (nativeWindow()) {
+        if (nativeWindow() || window_state_ != FloatingWindowState::Normal) {
             ph = std::clamp(static_cast<int>(requested_h), 1, kMaxFboSize);
             display_h = static_cast<float>(ph);
             return;
@@ -872,6 +879,7 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPanelHost::drawDirectCached(float x, float y, float w, float h) {
+        syncWindowControls();
         if (w <= 0 || h <= 0)
             return false;
         if (nativeWindow())
@@ -1217,7 +1225,107 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::CloseButtonListener::ProcessEvent(Rml::Event&) {
-        PanelRegistry::instance().set_panel_enabled(host_->context_name_, false);
+        PanelRegistry::instance().set_panel_enabled(std::string(host_->panelId()), false);
+    }
+
+    void RmlPanelHost::WindowControlListener::ProcessEvent(Rml::Event& event) {
+        const auto* target = event.GetCurrentElement();
+        if (!target)
+            return;
+        const auto& id = target->GetId();
+        auto& registry = PanelRegistry::instance();
+        const std::string panel_id(host_->panelId());
+        if (id == "minimize-btn") {
+            if (host_->nativeWindow())
+                host_->manager_->minimizeNativeWindow(host_->rml_context_);
+            else
+                registry.set_floating_window_state(panel_id, FloatingWindowState::Minimized);
+        } else if (id == "maximize-btn") {
+            if (host_->nativeWindow())
+                host_->manager_->toggleNativeWindowMaximized(host_->rml_context_);
+            else
+                registry.set_floating_window_state(panel_id, host_->window_state_ == FloatingWindowState::Maximized ? FloatingWindowState::Normal : FloatingWindowState::Maximized);
+        } else if (id == "title-text" && host_->window_state_ == FloatingWindowState::Minimized) {
+            registry.restore_floating_window(panel_id);
+        }
+        if (id != "title-text" || host_->window_state_ == FloatingWindowState::Minimized)
+            event.StopPropagation();
+    }
+
+    void RmlPanelHost::syncWindowControls() {
+        if (!document_)
+            return;
+        const auto state = PanelRegistry::instance().floating_window_state(std::string(panelId()));
+        const bool allowed = floating_ && state.has_value();
+        auto* title = document_->GetElementById("title-bar");
+        auto* close = document_->GetElementById("close-btn");
+        if (allowed && title && close && !minimize_button_) {
+            for (const auto* id : {"minimize-btn", "maximize-btn"}) {
+                auto button = document_->CreateElement("button");
+                button->SetId(id);
+                button->SetClass("window-control", true);
+                button->SetAttribute("type", "button");
+                button->SetInnerRML(std::string_view(id) == "minimize-btn" ? "&#x2212;" : "&#x25A1;");
+                auto* element = title->InsertBefore(std::move(button), close);
+                element->AddEventListener("click", &window_control_listener_);
+                if (std::string_view(id) == "minimize-btn")
+                    minimize_button_ = element;
+                else
+                    maximize_button_ = element;
+            }
+            if (auto* text = document_->GetElementById("title-text"))
+                text->AddEventListener("click", &window_control_listener_);
+            content_dirty_ = render_needed_ = direct_cache_dirty_ = true;
+        }
+        auto desired = allowed ? *state : FloatingWindowState::Normal;
+        if (auto* native = nativeWindow())
+            desired = (SDL_GetWindowFlags(native) & SDL_WINDOW_MAXIMIZED) ? FloatingWindowState::Maximized : FloatingWindowState::Normal;
+        if (desired != window_state_) {
+            const bool was_minimized = window_state_ == FloatingWindowState::Minimized;
+            if (was_minimized)
+                if (auto* title_text = document_->GetElementById("title-text"))
+                    title_text->RemoveAttribute("title");
+            if (desired == FloatingWindowState::Minimized && scroll_el_)
+                window_scroll_top_ = scroll_el_->GetScrollTop();
+            window_state_ = desired;
+            document_->SetClass("window-minimized", desired == FloatingWindowState::Minimized);
+            document_->SetClass("window-maximized", desired == FloatingWindowState::Maximized);
+            if (desired == FloatingWindowState::Minimized) {
+                if (auto* focused = rml_context_->GetFocusElement())
+                    focused->Blur();
+                manager_->deactivateInput(rml_context_, true);
+                has_text_focus_ = wants_keyboard_ = false;
+            }
+            if (was_minimized || desired == FloatingWindowState::Normal)
+                last_content_height_ = 0.0f;
+            content_dirty_ = render_needed_ = direct_cache_dirty_ = true;
+        }
+        if (controls_allowed_ != allowed) {
+            controls_allowed_ = allowed;
+            document_->SetClass("window-controls", allowed);
+            render_needed_ = direct_cache_dirty_ = true;
+        }
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        const auto set_title = [&](Rml::Element* element, const char* key) {
+            const std::string text(localization.get(key));
+            if (element->GetAttribute<Rml::String>("title", "") != text)
+                element->SetAttribute("title", text);
+        };
+        if (auto* title_text = document_->GetElementById("title-text")) {
+            if (desired == FloatingWindowState::Minimized)
+                set_title(title_text, "ui.minimized_window_hint");
+        }
+        if (minimize_button_) {
+            set_title(minimize_button_, "ui.minimize");
+        }
+        if (maximize_button_) {
+            const bool maximized = desired == FloatingWindowState::Maximized;
+            if (maximize_button_->IsClassSet("maximized") != maximized) {
+                maximize_button_->SetClass("maximized", maximized);
+                maximize_button_->SetInnerRML(maximized ? "&#x2750;" : "&#x25A1;");
+            }
+            set_title(maximize_button_, desired == FloatingWindowState::Maximized ? "ui.restore_window" : "ui.maximize_window");
+        }
     }
 
     void RmlPanelHost::bindCloseButton() {

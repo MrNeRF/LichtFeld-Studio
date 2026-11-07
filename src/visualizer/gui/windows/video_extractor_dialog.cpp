@@ -448,6 +448,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setPanelId("native.video_extractor");
         host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
         host_->setForeground(true);
         host_->setFloating(floating_);
@@ -1301,6 +1302,7 @@ namespace lfs::gui {
         if (!host_) {
             host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(
                 manager, "video_extractor", "rmlui/video_extractor.rml");
+            host_->setPanelId("native.video_extractor");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
             host_->setForeground(true);
             host_->setFloating(floating_);

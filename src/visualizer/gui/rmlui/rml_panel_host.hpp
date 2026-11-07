@@ -78,6 +78,7 @@ namespace lfs::vis::gui {
         }
         void setForeground(bool fg) { foreground_ = fg; }
         void setFloating(bool floating);
+        void setPanelId(std::string id) { panel_id_ = std::move(id); }
         void setInputClipY(float y_min, float y_max) {
             clip_y_min_ = y_min;
             clip_y_max_ = y_max;
@@ -114,6 +115,23 @@ namespace lfs::vis::gui {
         };
 
         void bindCloseButton();
+        void syncWindowControls();
+        std::string_view panelId() const { return panel_id_.empty() ? std::string_view(context_name_) : std::string_view(panel_id_); }
+        class WindowControlListener final : public Rml::EventListener {
+        public:
+            explicit WindowControlListener(RmlPanelHost* host) : host_(host) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            RmlPanelHost* host_;
+        };
+        WindowControlListener window_control_listener_{this};
+        Rml::Element* minimize_button_ = nullptr;
+        Rml::Element* maximize_button_ = nullptr;
+        FloatingWindowState window_state_ = FloatingWindowState::Normal;
+        std::string panel_id_;
+        bool controls_allowed_ = false;
+        std::optional<float> window_scroll_top_;
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }

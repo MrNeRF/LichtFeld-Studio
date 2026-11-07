@@ -20,3 +20,11 @@ body.native-panel {
     background-color: transparent;
     decorator: none;
 }
+
+button.window-control {
+    color: @{text};
+    background-color: transparent;
+}
+button.window-control:hover {
+    background-color: @{menu.hover};
+}

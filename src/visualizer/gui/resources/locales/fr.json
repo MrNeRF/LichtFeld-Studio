@@ -2906,6 +2906,7 @@
     "show_ui": "Afficher l’interface",
     "hide_ui": "Masquer l’interface",
     "minimize": "Réduire",
+    "minimized_window_hint": "Cliquez sur le titre pour restaurer. Faites défiler pour afficher les autres fenêtres réduites.",
     "restore_window": "Restaurer la fenêtre",
     "maximize_window": "Agrandir la fenêtre",
     "rad_lod": "RAD LOD",

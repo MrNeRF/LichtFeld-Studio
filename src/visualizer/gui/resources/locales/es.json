@@ -2906,6 +2906,7 @@
     "show_ui": "Mostrar interfaz",
     "hide_ui": "Ocultar interfaz",
     "minimize": "Minimizar",
+    "minimized_window_hint": "Haz clic en el título para restaurar. Desplázate para ver otras ventanas minimizadas.",
     "restore_window": "Restaurar ventana",
     "maximize_window": "Maximizar ventana",
     "rad_lod": "RAD LOD",

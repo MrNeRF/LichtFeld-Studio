@@ -2906,6 +2906,7 @@
     "show_ui": "Pokaż interfejs",
     "hide_ui": "Ukryj interfejs",
     "minimize": "Minimalizuj",
+    "minimized_window_hint": "Kliknij tytuł, aby przywrócić. Przewiń, aby zobaczyć inne zminimalizowane okna.",
     "restore_window": "Przywróć okno",
     "maximize_window": "Maksymalizuj okno",
     "rad_lod": "RAD LOD",

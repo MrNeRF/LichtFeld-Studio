@@ -943,3 +943,151 @@ TEST_F(PanelRegistryAnimationDemandTest, LateRegisterAppliesPendingPanelPayload)
     EXPECT_NE(panel->chrome.find("opacity"), std::string::npos);
     EXPECT_NE(panel->chrome.find("log_scale"), std::string::npos);
 }
+
+TEST_F(PanelRegistryAnimationDemandTest, WindowMaximizePreservesNormalGeometryAndProtectsShell) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.window");
+    PanelDrawContext ctx;
+    ViewportLayout viewport;
+    viewport.pos = {0, 70};
+    viewport.size = {900, 500};
+    ctx.viewport = &viewport;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1200, 800};
+    auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx); };
+    draw();
+    const auto original = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(original);
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Maximized));
+    draw();
+    const auto maximized = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(maximized);
+    EXPECT_FLOAT_EQ(maximized->x, 0);
+    EXPECT_FLOAT_EQ(maximized->y, 70);
+    EXPECT_FLOAT_EQ(maximized->width, 1200);
+    EXPECT_LE(maximized->y + maximized->height, 800 - PanelLayoutManager::STATUS_BAR_HEIGHT);
+    const auto saved = registry.capture_project_state();
+    const auto found = std::ranges::find(saved, std::string("test.window"), &PanelProjectState::id);
+    ASSERT_NE(found, saved.end());
+    EXPECT_FLOAT_EQ(found->float_last_w, original->width);
+    EXPECT_FLOAT_EQ(found->float_last_h, original->height);
+    ASSERT_TRUE(registry.restore_floating_window("test.window"));
+    draw();
+    const auto restored = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(restored);
+    EXPECT_FLOAT_EQ(restored->x, original->x);
+    EXPECT_FLOAT_EQ(restored->y, original->y);
+    EXPECT_FLOAT_EQ(restored->width, original->width);
+    EXPECT_FLOAT_EQ(restored->height, original->height);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, MinimizedWindowsKeepTheirInstanceAndRestoreFromMenu) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.window");
+    const auto instance = registry.get_panel_instance("test.window");
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Maximized));
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Minimized));
+    EXPECT_TRUE(registry.is_panel_enabled("test.window"));
+    EXPECT_EQ(registry.get_panel_instance("test.window"), instance);
+    registry.set_panel_enabled("test.window", true);
+    EXPECT_EQ(registry.floating_window_state("test.window"), FloatingWindowState::Maximized);
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Minimized));
+    ASSERT_TRUE(registry.bring_panel_to_front("test.window"));
+    EXPECT_EQ(registry.floating_window_state("test.window"), FloatingWindowState::Maximized);
+    registry.set_panel_enabled("test.window", false);
+    registry.set_panel_enabled("test.window", true);
+    EXPECT_EQ(registry.floating_window_state("test.window"), FloatingWindowState::Normal);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, WindowControlsRejectOverlaysDockedAndSelfManagedPanels) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    EXPECT_FALSE(registry.set_floating_window_state("missing", FloatingWindowState::Minimized));
+    for (const auto option : {PanelOption::SELF_MANAGED, PanelOption::HIDE_HEADER, PanelOption::FLOAT_IN_VIEWPORT}) {
+        PanelInfo info;
+        info.id = "test.excluded." + std::to_string(static_cast<int>(option));
+        const auto id = info.id;
+        info.label = id;
+        info.space = PanelSpace::Floating;
+        info.options = static_cast<uint32_t>(option);
+        info.panel = std::make_shared<RecordingPanel>();
+        ASSERT_TRUE(registry.register_panel(std::move(info)));
+        EXPECT_FALSE(registry.floating_window_state(id));
+        EXPECT_FALSE(registry.set_floating_window_state(id, FloatingWindowState::Maximized));
+    }
+    registerRecordingPanel("test.docked");
+    ASSERT_TRUE(registry.set_panel_space("test.docked", PanelSpace::MainPanelTab));
+    EXPECT_FALSE(registry.floating_window_state("test.docked"));
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfWrapsAndScrollsWithoutCoveringStatusBar) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    for (int i = 0; i < 12; ++i) {
+        const auto id = "test.shelf." + std::to_string(i);
+        registerRecordingPanel(id);
+        ASSERT_TRUE(registry.set_floating_window_state(id, FloatingWindowState::Minimized));
+    }
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 40, 500, 360};
+    PanelInputState input;
+    input.screen_w = 500;
+    input.screen_h = 400;
+    auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, ctx); };
+    draw();
+    const auto newest = registry.live_floating_bounds("test.shelf.11");
+    ASSERT_TRUE(newest);
+    input.mouse_x = newest->x + 20;
+    input.mouse_y = newest->y + 10;
+    input.mouse_wheel = 20;
+    for (int row = 0; row < 12; ++row)
+        draw();
+    input.mouse_wheel = 0;
+    const auto first = registry.live_floating_bounds("test.shelf.0");
+    const auto second = registry.live_floating_bounds("test.shelf.1");
+    ASSERT_TRUE(first);
+    ASSERT_TRUE(second);
+    EXPECT_GE(second->x, first->x + first->width);
+    EXPECT_LE(first->y + first->height, 400 - PanelLayoutManager::STATUS_BAR_HEIGHT);
+    EXPECT_FALSE(registry.live_floating_bounds("test.shelf.9"));
+    input.mouse_x = first->x + 20;
+    input.mouse_y = first->y + 10;
+    input.mouse_wheel = -20;
+    for (int row = 0; row < 12; ++row)
+        draw();
+    EXPECT_TRUE(registry.live_floating_bounds("test.shelf.11"));
+    EXPECT_FALSE(registry.live_floating_bounds("test.shelf.0"));
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, MaximizedWindowTracksResizeAndDoesNotDetachOnTitlePress) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.window");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.window"));
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 50, 800, 500};
+    PanelInputState input;
+    input.screen_w = 800;
+    input.screen_h = 550;
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Maximized));
+    auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, ctx); };
+    draw();
+    input.mouse_x = 80;
+    input.mouse_y = 65;
+    input.mouse_clicked[0] = input.mouse_down[0] = true;
+    draw();
+    input.mouse_clicked[0] = false;
+    input.mouse_x = 1200;
+    draw();
+    EXPECT_FALSE(registry.has_active_floating_drag());
+    EXPECT_EQ(panel->detach_count, 0);
+    ctx.screen_bounds->width = 420;
+    ctx.screen_bounds->height = 300;
+    draw();
+    const auto bounds = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(bounds);
+    EXPECT_FLOAT_EQ(bounds->width, 420);
+    EXPECT_GE(bounds->y, 50);
+    EXPECT_LE(bounds->y + bounds->height, 350 - PanelLayoutManager::STATUS_BAR_HEIGHT);
+}

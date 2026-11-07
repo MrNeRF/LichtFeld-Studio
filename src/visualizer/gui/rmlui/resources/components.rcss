@@ -73,6 +73,52 @@ body.docked-panel {
     background-color: rgba(255, 255, 255, 18);
 }
 
+/* Window actions are installed by the floating panel host. */
+button.window-control {
+    display: none;
+    width: 22dp;
+    min-width: 22dp;
+    height: 22dp;
+    min-height: 22dp;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 5dp;
+    font-size: 15dp;
+    line-height: 20dp;
+    text-align: center;
+    cursor: pointer;
+}
+body.window-controls button.window-control {
+    display: block;
+}
+body.window-minimized #minimize-btn {
+    display: none;
+}
+body.window-minimized #window-frame > * {
+    display: none;
+}
+body.window-minimized #window-frame > #title-bar {
+    display: flex;
+}
+body.window-minimized #title-text {
+    cursor: pointer;
+}
+body.window-controls #title-text {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+body.window-minimized,
+body.window-maximized,
+body.window-minimized #window-frame,
+body.window-maximized #window-frame {
+    min-height: 0;
+    height: 100%;
+    max-height: none;
+}
+
 #content-wrap {
     display: flex;
     flex-direction: column;

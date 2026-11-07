@@ -2906,6 +2906,7 @@
     "show_ui": "显示界面",
     "hide_ui": "隐藏界面",
     "minimize": "最小化",
+    "minimized_window_hint": "点击标题还原窗口。滚动可查看其他已最小化的窗口。",
     "restore_window": "还原窗口",
     "maximize_window": "最大化窗口",
     "rad_lod": "RAD LOD",
