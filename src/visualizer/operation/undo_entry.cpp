@@ -2996,9 +2996,23 @@ namespace lfs::vis::op {
         }
 
         const int flat_size = static_cast<int>(element_count_);
-        auto flat = current->contiguous().reshape({flat_size}).clone();
-        applyTensorSwapStorage(flat, storage_);
-        *current = flat.reshape(tensor_shape_).contiguous();
+        if (current->is_view() || !current->is_contiguous()) {
+            // A view's storage belongs to someone else: rebind the target to a fresh tensor.
+            auto flat = current->contiguous().reshape({flat_size}).clone();
+            applyTensorSwapStorage(flat, storage_);
+            *current = flat.reshape(tensor_shape_).contiguous();
+        } else {
+            // Write into the tensor's own storage. Model tensors share it with the renderer, and a
+            // replacement tensor would make VkSplat refuse to draw the model.
+            auto flat = current->contiguous().reshape({flat_size});
+            if (storage_.mode == TensorSwapStorageMode::DENSE) {
+                auto swapped = flat.clone();
+                applyTensorSwapStorage(swapped, storage_);
+                flat.copy_from(swapped);
+            } else {
+                applyTensorSwapStorage(flat, storage_);
+            }
+        }
         if (scene_) {
             scene_->getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             expected_topology_ =
