@@ -1545,6 +1545,129 @@ TEST(ArgumentParserTest, TrainingRejectsFrozenLrScaleOutsideUnitInterval) {
     }
 }
 
+TEST(ArgumentParserTest, AutoTileKeepsExportsAndOutsideLossWhenRequested) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_options_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_options_output");
+    const char* default_argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2x2"};
+    auto defaults = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(default_argv)), default_argv);
+    ASSERT_TRUE(defaults.has_value()) << defaults.error();
+    EXPECT_TRUE((*defaults)->auto_tile_crop);
+    EXPECT_TRUE((*defaults)->auto_tile_merge);
+    EXPECT_FLOAT_EQ((*defaults)->tile_outside_loss_weight, 0.0f);
+    EXPECT_EQ((*defaults)->tile_coarse_iterations, 5000);
+    EXPECT_EQ((*defaults)->tile_coarse_resize_factor, 4);
+    EXPECT_TRUE((*defaults)->tile_require_dense_masks);
+
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2x2", "--no-tile-crop", "--no-tile-merge",
+        "--tile-outside-loss-weight", "0.25"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FALSE((*parsed)->auto_tile_crop);
+    EXPECT_FALSE((*parsed)->auto_tile_merge);
+    EXPECT_FLOAT_EQ((*parsed)->tile_outside_loss_weight, 0.25f);
+}
+
+TEST(ArgumentParserTest, AutoTileParsesCoarsePriorSettings) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_coarse_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_coarse_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-coarse-iterations", "1200", "--tile-coarse-resize", "2"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->tile_coarse_iterations, 1200);
+    EXPECT_EQ((*parsed)->tile_coarse_resize_factor, 2);
+}
+
+TEST(ArgumentParserTest, AutoTileParsesFeasibilityBoundaryAndDenseMaskSettings) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_feasibility_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_feasibility_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "4", "--tile-min-cameras", "4", "--tile-min-multiview-cells", "5",
+        "--no-tile-merge-infeasible", "--tile-boundary-padding", "3.5",
+        "--tile-visibility-mask-resolution", "128", "--tile-visibility-min-alpha", "0.2",
+        "--tile-visibility-foreign-weight", "0.3", "--no-tile-require-dense-masks",
+        "--tile-lock-exposure-correction"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->tile_min_cameras, 4);
+    EXPECT_EQ((*parsed)->tile_min_multi_view_cells, 5);
+    EXPECT_FALSE((*parsed)->tile_merge_infeasible);
+    EXPECT_FLOAT_EQ((*parsed)->tile_boundary_padding, 3.5f);
+    EXPECT_EQ((*parsed)->tile_visibility_mask_resolution, 128);
+    EXPECT_FLOAT_EQ((*parsed)->tile_visibility_min_alpha, 0.2f);
+    EXPECT_FLOAT_EQ((*parsed)->tile_visibility_foreign_weight, 0.3f);
+    EXPECT_FALSE((*parsed)->tile_require_dense_masks);
+    EXPECT_TRUE((*parsed)->tile_lock_exposure_correction);
+}
+
+TEST(ArgumentParserTest, AutoTileRejectsInvalidDenseMaskSettings) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_mask_invalid_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_mask_invalid_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-visibility-mask-resolution", "12"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--tile-visibility-mask-resolution"), std::string::npos)
+        << parsed.error();
+}
+
+TEST(ArgumentParserTest, TileChildSuppressesInheritedAutoTileOrchestration) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_child_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_child_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-child"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->tile_child_job);
+    EXPECT_EQ((*parsed)->auto_tile_count, 0);
+    EXPECT_FALSE((*parsed)->auto_tile_grid.has_value());
+    EXPECT_FLOAT_EQ((*parsed)->auto_tile_size, 0.0f);
+}
+
+TEST(ArgumentParserTest, AutoTileAcceptsAdaptiveCount) {
+    const auto data_path = make_test_path("lfs_arg_parser_adaptive_data");
+    const auto output_path = make_test_path("lfs_arg_parser_adaptive_output");
+    const char* argv[] = {"LichtFeld-Studio", "--headless", "-d", data_path.c_str(),
+                          "-o", output_path.c_str(), "--auto-tile", "4"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->auto_tile_count, 4);
+    EXPECT_FALSE((*parsed)->auto_tile_grid.has_value());
+}
+
+TEST(ArgumentParserTest, AutoTileRejectsExcessiveAdaptiveCount) {
+    const auto data_path = make_test_path("lfs_arg_parser_adaptive_limit_data");
+    const auto output_path = make_test_path("lfs_arg_parser_adaptive_limit_output");
+    const char* argv[] = {"LichtFeld-Studio", "--headless", "-d", data_path.c_str(),
+                          "-o", output_path.c_str(), "--auto-tile", "101"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--auto-tile"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, AutoTileRejectsInvalidOutsideLossWeight) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_weight_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_weight_output");
+    for (const char* weight : {"-0.1", "1.1"}) {
+        SCOPED_TRACE(weight);
+        const char* argv[] = {
+            "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+            "--auto-tile", "2x2", "--tile-outside-loss-weight", weight};
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_NE(parsed.error().find("--tile-outside-loss-weight"), std::string::npos) << parsed.error();
+    }
+}
+
 TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_output");

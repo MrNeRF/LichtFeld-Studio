@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Training Panel - RmlUI with native data binding."""
 
+import json
+import math
 import os
+import subprocess
 import threading
 import time
 
@@ -212,6 +215,7 @@ SECTIONS = [
     "evaluation",
     "save_steps",
     "advanced_registry",
+    "auto_tiles",
 ]
 
 INITIALLY_COLLAPSED = {
@@ -225,6 +229,7 @@ INITIALLY_COLLAPSED = {
     "init",
     "evaluation",
     "save_steps",
+    "auto_tiles",
 }
 
 
@@ -261,6 +266,41 @@ class TrainingPanel(Panel):
         self._auto_scale_steps_locked = True
         self._auto_scale_user_override = False
         self._auto_scale_dataset_path = ""
+        self._auto_tile_mode = "adaptive"
+        self._auto_tile_columns = "2"
+        self._auto_tile_rows = "2"
+        self._auto_tile_count = "4"
+        self._auto_tile_target_size = "10"
+        self._auto_tile_overlap = 0.15
+        self._auto_tile_align_mode = "obb_3d"
+        self._auto_tile_source = "points"
+        self._auto_tile_quantile = 0.02
+        self._auto_tile_outside_loss = 0.0
+        self._auto_tile_coarse_iterations = "5000"
+        self._auto_tile_coarse_resize = "4"
+        self._auto_tile_min_cameras = "2"
+        self._auto_tile_min_multiview_cells = "2"
+        self._auto_tile_merge_infeasible = True
+        self._auto_tile_boundary_padding = "0"
+        self._auto_tile_visibility_mask_resolution = "64"
+        self._auto_tile_visibility_min_alpha = "0.15"
+        self._auto_tile_visibility_foreign_weight = "0.15"
+        self._auto_tile_require_dense_masks = True
+        self._auto_tile_lock_exposure_correction = False
+        self._auto_tile_crop = True
+        self._auto_tile_merge = True
+        self._auto_tile_run_merge = True
+        self._auto_tile_process = None
+        self._auto_tile_status = ""
+        self._auto_tile_output = ""
+        self._auto_tile_preview_group = -1
+        self._auto_tile_preview_settings = None
+        self._auto_tile_preview_dataset = ""
+        self._auto_tile_preview_tiles = []
+        self._auto_tile_selected_index = 0
+        self._auto_tile_preview_running = False
+        self._auto_tile_preview_poll_generation = 0
+        self._auto_tile_preview_request = None
         self._last_state = ""
         self._last_session = None
         self._last_save_steps = None
@@ -348,6 +388,66 @@ class TrainingPanel(Panel):
         d = lf.dataset_params
 
         self._bind_labels(model)
+        model.bind("auto_tile_mode", lambda: self._auto_tile_mode,
+                   lambda value: setattr(self, "_auto_tile_mode", str(value)))
+        model.bind("auto_tile_columns", lambda: self._auto_tile_columns,
+                   lambda value: setattr(self, "_auto_tile_columns", str(value)))
+        model.bind("auto_tile_rows", lambda: self._auto_tile_rows,
+                   lambda value: setattr(self, "_auto_tile_rows", str(value)))
+        model.bind("auto_tile_count", lambda: self._auto_tile_count,
+                   lambda value: setattr(self, "_auto_tile_count", str(value)))
+        model.bind("auto_tile_target_size", lambda: self._auto_tile_target_size,
+                   lambda value: setattr(self, "_auto_tile_target_size", str(value)))
+        model.bind("auto_tile_overlap_steps", lambda: round(self._auto_tile_overlap * 100),
+                   lambda value: setattr(self, "_auto_tile_overlap", round(float(value)) / 100))
+        model.bind_func("auto_tile_overlap_label", lambda: f"{self._auto_tile_overlap:.2f}")
+        model.bind("auto_tile_align_mode", lambda: self._auto_tile_align_mode,
+                   lambda value: setattr(self, "_auto_tile_align_mode", str(value)))
+        model.bind("auto_tile_source", lambda: self._auto_tile_source,
+                   lambda value: setattr(self, "_auto_tile_source", str(value)))
+        model.bind("auto_tile_quantile_steps", lambda: round(self._auto_tile_quantile * 1000),
+                   lambda value: setattr(self, "_auto_tile_quantile", round(float(value)) / 1000))
+        model.bind_func("auto_tile_quantile_label", lambda: f"{self._auto_tile_quantile:.3f}")
+        model.bind("auto_tile_outside_loss_steps", lambda: round(self._auto_tile_outside_loss * 100),
+                   lambda value: setattr(self, "_auto_tile_outside_loss", round(float(value)) / 100))
+        model.bind_func("auto_tile_outside_loss_label", lambda: f"{self._auto_tile_outside_loss:.2f}")
+        model.bind("auto_tile_crop", lambda: self._auto_tile_crop,
+                   lambda value: setattr(self, "_auto_tile_crop", bool(value)))
+        model.bind("auto_tile_merge", lambda: self._auto_tile_merge,
+                   lambda value: setattr(self, "_auto_tile_merge", bool(value)))
+        model.bind("auto_tile_coarse_iterations", lambda: self._auto_tile_coarse_iterations,
+                   lambda value: setattr(self, "_auto_tile_coarse_iterations", str(value)))
+        model.bind("auto_tile_coarse_resize", lambda: self._auto_tile_coarse_resize,
+                   lambda value: setattr(self, "_auto_tile_coarse_resize", str(value)))
+        model.bind("auto_tile_min_cameras", lambda: self._auto_tile_min_cameras,
+                   lambda value: setattr(self, "_auto_tile_min_cameras", str(value)))
+        model.bind("auto_tile_min_multiview_cells", lambda: self._auto_tile_min_multiview_cells,
+                   lambda value: setattr(self, "_auto_tile_min_multiview_cells", str(value)))
+        model.bind("auto_tile_merge_infeasible", lambda: self._auto_tile_merge_infeasible,
+                   lambda value: setattr(self, "_auto_tile_merge_infeasible", bool(value)))
+        model.bind("auto_tile_boundary_padding", lambda: self._auto_tile_boundary_padding,
+                   lambda value: setattr(self, "_auto_tile_boundary_padding", str(value)))
+        model.bind("auto_tile_visibility_mask_resolution", lambda: self._auto_tile_visibility_mask_resolution,
+                   lambda value: setattr(self, "_auto_tile_visibility_mask_resolution", str(value)))
+        model.bind("auto_tile_visibility_min_alpha", lambda: self._auto_tile_visibility_min_alpha,
+                   lambda value: setattr(self, "_auto_tile_visibility_min_alpha", str(value)))
+        model.bind("auto_tile_visibility_foreign_weight", lambda: self._auto_tile_visibility_foreign_weight,
+                   lambda value: setattr(self, "_auto_tile_visibility_foreign_weight", str(value)))
+        model.bind("auto_tile_require_dense_masks", lambda: self._auto_tile_require_dense_masks,
+                   lambda value: setattr(self, "_auto_tile_require_dense_masks", bool(value)))
+        model.bind("auto_tile_lock_exposure_correction", lambda: self._auto_tile_lock_exposure_correction,
+                   lambda value: setattr(self, "_auto_tile_lock_exposure_correction", bool(value)))
+        model.bind("auto_tile_selected_index", lambda: str(self._auto_tile_selected_index),
+                   self._set_auto_tile_selected_index)
+        model.bind_func("auto_tile_has_preview", lambda: bool(self._auto_tile_preview_tiles))
+        model.bind_func("auto_tile_preview_tiles", lambda: self._auto_tile_preview_tiles)
+        model.bind_func("auto_tile_cameras_short", lambda: tr("auto_tiles.cameras_short"))
+        model.bind_func("auto_tile_selected_cameras", self._auto_tile_selected_cameras)
+        model.bind_func("auto_tile_selected_camera_count",
+                        lambda: len(self._auto_tile_selected_cameras()))
+        model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
+        model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
+        model.bind_func("auto_tile_preview_running", lambda: self._auto_tile_preview_running)
         self._bind_property_search(model)
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
@@ -1473,6 +1573,8 @@ class TrainingPanel(Panel):
         model.bind_event("pv_blur", self._on_pv_number_input_blur)
         model.bind_event("pv_escape", self._on_pv_number_input_escape)
         model.bind_event("pv_value_change", self._on_pv_value_change)
+        model.bind_event("auto_tile_slider_change", self._on_auto_tile_slider_change)
+        model.bind_event("auto_tile_select", self._on_auto_tile_select)
         model.bind_event("pv_search_clear", self._on_pv_search_clear)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
@@ -1680,6 +1782,37 @@ class TrainingPanel(Panel):
     def on_update(self, doc):
         if not self._handle:
             return False
+        auto_tile_finished = False
+        if self._auto_tile_process is not None:
+            exit_code = self._auto_tile_process.poll()
+            if exit_code is not None:
+                self._auto_tile_process = None
+                if exit_code == 0:
+                    requested_count = resolved_count = None
+                    try:
+                        with open(os.path.join(self._auto_tile_output, "tiles.json"),
+                                  encoding="utf-8") as manifest_file:
+                            manifest = json.load(manifest_file)
+                        requested_count = manifest.get("requested_tile_count")
+                        resolved_count = manifest.get("resolved_tile_count")
+                    except (OSError, ValueError, TypeError):
+                        pass
+                    if (isinstance(requested_count, int) and
+                            isinstance(resolved_count, int) and
+                            resolved_count > 0 and resolved_count != requested_count):
+                        self._auto_tile_status = tr("auto_tiles.completed_coalesced").format(
+                            requested_count, resolved_count, self._auto_tile_output)
+                    else:
+                        self._auto_tile_status = tr(
+                            "auto_tiles.completed" if self._auto_tile_run_merge else
+                            "auto_tiles.completed_separate").format(self._auto_tile_output)
+                else:
+                    self._auto_tile_status = tr("auto_tiles.failed").format(self._auto_tile_output)
+                self._handle.dirty("auto_tile_status")
+                self._handle.dirty("auto_tile_running")
+                auto_tile_finished = True
+            else:
+                self._schedule_deferred_update(0.25)
         self._sync_auto_scale_markers()
 
         params_changed = self._params_refresh_pending
@@ -1688,7 +1821,7 @@ class TrainingPanel(Panel):
             changed, self._params_changed = self._params_changed, set()
             self._sync_text_bufs(changed)
             self._handle.dirty_all()
-        dirty = self._flush_pv_publish() or params_changed
+        dirty = self._flush_pv_publish() or params_changed or auto_tile_finished
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1845,6 +1978,14 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
 
     def on_unmount(self, doc):
+        # The native worker retains no Scene and validates its scene generation
+        # before applying a completed plan; this panel must stop polling it.
+        self._auto_tile_preview_poll_generation += 1
+        self._auto_tile_preview_running = False
+        self._auto_tile_preview_request = None
+        restore_auto_tile_preview = getattr(lf, "restore_auto_tile_preview", None)
+        if callable(restore_auto_tile_preview):
+            restore_auto_tile_preview()
         self._unsubscribe_reactive_state()
         self._cancel_deferred_updates()
         doc.remove_data_model("training")
@@ -2735,6 +2876,17 @@ class TrainingPanel(Panel):
 
         if action == "start":
             self._action_start()
+        elif action == "auto_tile_preview":
+            self._auto_tile_preview()
+        elif action == "auto_tile_focus":
+            self._auto_tile_focus()
+        elif action == "auto_tile_restore":
+            self._auto_tile_restore()
+        elif action == "auto_tile_train":
+            self._auto_tile_train()
+        elif action == "auto_tile_cancel":
+            if self._auto_tile_process is not None:
+                self._auto_tile_process.terminate()
         elif action == "pause":
             lf.pause_training()
         elif action == "resume":
@@ -2869,6 +3021,330 @@ class TrainingPanel(Panel):
                     self._add_save_steps_to_eval_steps(params)
                 self._refresh_save_steps_model(params)
 
+    def _auto_tile_settings(self):
+        try:
+            mode = str(self._auto_tile_mode)
+            overlap = float(self._auto_tile_overlap)
+            quantile = float(self._auto_tile_quantile)
+            coarse_iterations = int(self._auto_tile_coarse_iterations)
+            coarse_resize = int(self._auto_tile_coarse_resize)
+            min_cameras = int(self._auto_tile_min_cameras)
+            min_multiview_cells = int(self._auto_tile_min_multiview_cells)
+            boundary_padding = float(self._auto_tile_boundary_padding)
+            visibility_mask_resolution = int(self._auto_tile_visibility_mask_resolution)
+            visibility_min_alpha = float(self._auto_tile_visibility_min_alpha)
+            visibility_foreign_weight = float(self._auto_tile_visibility_foreign_weight)
+        except (TypeError, ValueError):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        if -1e-6 <= overlap < 0.0:
+            overlap = 0.0
+        if -1e-6 <= quantile < 0.0:
+            quantile = 0.0
+        if mode not in ("adaptive", "grid", "size") or self._auto_tile_source not in ("points", "both", "cameras"):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        if not (0.0 <= overlap <= 0.3 and 0.0 <= quantile < 0.5 and
+                coarse_iterations >= 100 and coarse_resize in (1, 2, 4, 8) and
+                2 <= min_cameras <= 10000 and 0 <= min_multiview_cells <= 32 and
+                math.isfinite(boundary_padding) and boundary_padding >= 0.0 and
+                16 <= visibility_mask_resolution <= 256 and
+                math.isfinite(visibility_min_alpha) and 0.0 < visibility_min_alpha <= 1.0 and
+                math.isfinite(visibility_foreign_weight) and 0.0 <= visibility_foreign_weight <= 1.0):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        columns = rows = 1
+        count = 0
+        target_size = 0.0
+        try:
+            if mode == "adaptive":
+                count = int(self._auto_tile_count)
+                if not 1 <= count <= 100:
+                    raise ValueError
+            elif mode == "grid":
+                columns = int(self._auto_tile_columns)
+                rows = int(self._auto_tile_rows)
+                if not (1 <= columns <= 100 and 1 <= rows <= 100 and columns * rows <= 1000):
+                    raise ValueError
+            else:
+                target_size = float(self._auto_tile_target_size)
+                if not math.isfinite(target_size) or target_size <= 0.0:
+                    raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        return (mode, columns, rows, count, target_size, overlap, quantile,
+                coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+                bool(self._auto_tile_merge_infeasible), boundary_padding,
+                visibility_mask_resolution, visibility_min_alpha,
+                visibility_foreign_weight,
+                bool(self._auto_tile_require_dense_masks),
+                bool(self._auto_tile_lock_exposure_correction))
+
+    def _on_auto_tile_slider_change(self, handle, _event, args):
+        if len(args) < 2:
+            return
+        try:
+            steps = round(float(args[1]))
+        except (TypeError, ValueError):
+            return
+        if args[0] == "overlap":
+            self._auto_tile_overlap = min(30, max(0, steps)) / 100
+            handle.dirty("auto_tile_overlap_steps")
+            handle.dirty("auto_tile_overlap_label")
+        elif args[0] == "quantile":
+            self._auto_tile_quantile = min(490, max(0, steps)) / 1000
+            handle.dirty("auto_tile_quantile_steps")
+            handle.dirty("auto_tile_quantile_label")
+        elif args[0] == "outside_loss":
+            self._auto_tile_outside_loss = min(100, max(0, steps)) / 100
+            handle.dirty("auto_tile_outside_loss_steps")
+            handle.dirty("auto_tile_outside_loss_label")
+
+    def _on_auto_tile_select(self, _handle, _event, args):
+        if args:
+            self._set_auto_tile_selected_index(args[0])
+
+    def _set_auto_tile_status(self, status):
+        self._auto_tile_status = status
+        if self._handle:
+            self._handle.dirty("auto_tile_status")
+
+    def _dirty_auto_tile_preview(self):
+        if not self._handle:
+            return
+        self._handle.dirty("auto_tile_has_preview")
+        self._handle.dirty("auto_tile_preview_tiles")
+        self._handle.dirty("auto_tile_selected_index")
+        self._handle.dirty("auto_tile_selected_cameras")
+        self._handle.dirty("auto_tile_selected_camera_count")
+        self._handle.dirty("auto_tile_preview_running")
+
+    def _set_auto_tile_selected_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            index = 0
+        self._auto_tile_selected_index = max(0, min(index, len(self._auto_tile_preview_tiles) - 1)) \
+            if self._auto_tile_preview_tiles else 0
+        self._dirty_auto_tile_preview()
+
+    def _auto_tile_selected_cameras(self):
+        if not self._auto_tile_preview_tiles:
+            return []
+        index = min(self._auto_tile_selected_index, len(self._auto_tile_preview_tiles) - 1)
+        return self._auto_tile_preview_tiles[index].get("cameras", [])
+
+    def _refresh_auto_tile_preview_details(self):
+        details = lf.auto_tile_preview_details(self._auto_tile_preview_group)
+        self._auto_tile_preview_tiles = list(details)
+        self._auto_tile_selected_index = 0
+        self._dirty_auto_tile_preview()
+
+    def _auto_tile_focus(self):
+        if not self._auto_tile_preview_tiles or self._auto_tile_preview_group < 0:
+            self._set_auto_tile_status(tr("auto_tiles.preview_before_inspect"))
+            return
+        try:
+            lf.focus_auto_tile_preview_tile(self._auto_tile_preview_group,
+                                            self._auto_tile_selected_index)
+            selected = self._auto_tile_preview_tiles[self._auto_tile_selected_index]
+            self._set_auto_tile_status(tr("auto_tiles.inspecting").format(
+                selected.get("name", ""), selected.get("camera_count", 0)))
+        except RuntimeError as error:
+            self._set_auto_tile_status(str(error))
+
+    def _auto_tile_restore(self):
+        restore = getattr(lf, "restore_auto_tile_preview", None)
+        if callable(restore):
+            restore()
+        self._set_auto_tile_status(tr("auto_tiles.inspection_restored"))
+
+    def _schedule_auto_tile_preview_poll(self):
+        self._auto_tile_preview_poll_generation += 1
+        generation = self._auto_tile_preview_poll_generation
+
+        def request_poll():
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if scheduler is None:
+                scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(lambda: self._poll_auto_tile_preview(generation))
+
+        timer = threading.Timer(0.05, request_poll)
+        timer.daemon = True
+        timer.start()
+
+    def _poll_auto_tile_preview(self, generation):
+        if generation != self._auto_tile_preview_poll_generation or not self._auto_tile_preview_running:
+            return
+        finished = False
+        try:
+            group_id = lf.finish_auto_tile_preview()
+            if group_id is None:
+                self._schedule_auto_tile_preview_poll()
+                return
+            finished = True
+            self._auto_tile_preview_group = group_id
+            request = self._auto_tile_preview_request
+            self._auto_tile_preview_settings = request[0]
+            self._auto_tile_preview_dataset = request[1]
+            self._refresh_auto_tile_preview_details()
+            self._set_auto_tile_status(tr("auto_tiles.previewed").format(
+                len(self._auto_tile_preview_tiles)))
+        except (RuntimeError, ValueError) as error:
+            finished = True
+            self._set_auto_tile_status(str(error))
+        finally:
+            if finished:
+                self._auto_tile_preview_running = False
+                self._auto_tile_preview_request = None
+                self._dirty_auto_tile_preview()
+
+    def _auto_tile_preview(self):
+        if self._auto_tile_preview_running:
+            return
+        try:
+            (mode, columns, rows, count, target_size, overlap, quantile,
+             coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+             merge_infeasible, boundary_padding, visibility_mask_resolution,
+             visibility_min_alpha, visibility_foreign_weight,
+             require_dense_masks,
+             lock_exposure_correction) = self._auto_tile_settings()
+            dataset = lf.dataset_params()
+            if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
+                raise ValueError(tr("auto_tiles.dataset_required"))
+            if dataset.centralize_dataset != "off":
+                raise ValueError(tr("auto_tiles.centralize_off"))
+            resize_factor = getattr(dataset, "resize_factor", -1)
+            max_width = getattr(dataset, "max_width", 3840)
+            preview_args = (
+                columns if mode == "grid" else 1, rows if mode == "grid" else 1, overlap,
+            )
+            preview_kwargs = dict(
+                align_mode=self._auto_tile_align_mode, source=self._auto_tile_source,
+                quantile=quantile, replace_group_id=self._auto_tile_preview_group,
+                count=count if mode == "adaptive" else 0,
+                target_size=target_size if mode == "size" else 0.0,
+                outside_loss_weight=self._auto_tile_outside_loss,
+                boundary_padding=boundary_padding,
+                resize_factor=resize_factor, max_width=max_width)
+            preview_settings = (
+                mode, columns, rows, count, target_size, overlap, quantile,
+                self._auto_tile_align_mode, self._auto_tile_source,
+                self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width
+            )
+            start = getattr(lf, "start_auto_tile_preview", None)
+            finish = getattr(lf, "finish_auto_tile_preview", None)
+            if callable(start) and callable(finish):
+                if not start(*preview_args, **preview_kwargs):
+                    raise RuntimeError("Automatic tile planning is already running")
+                self._auto_tile_preview_running = True
+                self._auto_tile_preview_request = (preview_settings, dataset.data_path)
+                self._dirty_auto_tile_preview()
+                self._set_auto_tile_status(tr("auto_tiles.previewing"))
+                self._schedule_auto_tile_preview_poll()
+                return
+            self._auto_tile_preview_group = lf.preview_auto_tiles(*preview_args, **preview_kwargs)
+            self._auto_tile_preview_settings = preview_settings
+            self._auto_tile_preview_dataset = dataset.data_path
+            self._refresh_auto_tile_preview_details()
+            self._set_auto_tile_status(tr("auto_tiles.previewed").format(
+                len(self._auto_tile_preview_tiles)))
+        except (RuntimeError, ValueError) as error:
+            self._set_auto_tile_status(str(error))
+
+    def _auto_tile_train(self):
+        if self._auto_tile_process is not None or self._auto_tile_preview_running:
+            return
+        if RuntimeState.trainer_state.value != "ready":
+            self._set_auto_tile_status(tr("auto_tiles.training_active"))
+            return
+        try:
+            (mode, columns, rows, count, target_size, overlap, quantile,
+             coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+             merge_infeasible, boundary_padding, visibility_mask_resolution,
+             visibility_min_alpha, visibility_foreign_weight,
+             require_dense_masks,
+             lock_exposure_correction) = self._auto_tile_settings()
+            dataset = lf.dataset_params()
+            if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
+                raise ValueError(tr("auto_tiles.dataset_required"))
+            if dataset.centralize_dataset != "off":
+                raise ValueError(tr("auto_tiles.centralize_off"))
+            dataset_path = os.path.abspath(dataset.data_path)
+            output = os.path.abspath(dataset.output_path or
+                                     os.path.join(dataset_path, "output"))
+            resize_factor = getattr(dataset, "resize_factor", -1)
+            max_width = getattr(dataset, "max_width", 3840)
+            command = [lf.studio_executable_path(), "-d", dataset_path, "-o", output]
+            if mode == "size":
+                command.extend(["--tile-size", f"{target_size:.6g}"])
+            else:
+                command.extend(["--auto-tile", str(count) if mode == "adaptive" else f"{columns}x{rows}"])
+            command.extend([
+                       "--tile-overlap", f"{overlap:.4g}",
+                       "--tile-align", self._auto_tile_align_mode,
+                       "--tile-source", self._auto_tile_source,
+                       "--tile-quantile", f"{quantile:.4g}",
+                       "--tile-outside-loss-weight", f"{self._auto_tile_outside_loss:.4g}",
+                       "--tile-coarse-iterations", str(coarse_iterations),
+                       "--tile-coarse-resize", str(coarse_resize),
+                       "--tile-min-cameras", str(min_cameras),
+                       "--tile-min-multiview-cells", str(min_multiview_cells),
+                       "--tile-boundary-padding", f"{boundary_padding:.6g}",
+                       "--tile-visibility-mask-resolution", str(visibility_mask_resolution),
+                       "--tile-visibility-min-alpha", f"{visibility_min_alpha:.4g}",
+                       "--tile-visibility-foreign-weight", f"{visibility_foreign_weight:.4g}",
+                       "-r", "auto" if resize_factor <= 1 else str(resize_factor),
+                       "--max-width", str(max_width)])
+            if not merge_infeasible:
+                command.append("--no-tile-merge-infeasible")
+            if not require_dense_masks:
+                command.append("--no-tile-require-dense-masks")
+            if lock_exposure_correction:
+                command.append("--tile-lock-exposure-correction")
+            if not self._auto_tile_crop:
+                command.append("--no-tile-crop")
+            if not self._auto_tile_merge:
+                command.append("--no-tile-merge")
+            if (self._auto_tile_preview_group >= 0 and
+                    self._auto_tile_preview_dataset == dataset.data_path and
+                    self._auto_tile_preview_settings ==
+                    (mode, columns, rows, count, target_size, overlap, quantile,
+                     self._auto_tile_align_mode, self._auto_tile_source,
+                     self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width)):
+                tile_plan = os.path.join(output, "auto_tile_plan.json")
+                saved_count = lf.save_auto_tile_plan(self._auto_tile_preview_group,
+                                                     columns if mode == "grid" else max(1, count), tile_plan,
+                                                     boundary_padding)
+                expected_count = count if mode == "adaptive" else columns * rows if mode == "grid" else saved_count
+                if saved_count != expected_count:
+                    raise ValueError(tr("auto_tiles.invalid_preview"))
+                command.extend(["--tile-plan", tile_plan])
+            if self._auto_tile_align_mode == "axis_aligned":
+                command.append("--no-tile-pca")
+            if dataset.images != "images":
+                command.extend(["--images", dataset.images])
+            params = lf.optimization_params()
+            if params and params.has_params():
+                command.extend(["--strategy", params.strategy,
+                                "--iter", str(params.iterations),
+                                "--sh-degree", str(params.sh_degree),
+                                "--max-cap", str(params.max_cap)])
+                if getattr(params, "use_exposure_correction", False):
+                    command.append("--exposure-correction")
+            os.makedirs(output, exist_ok=True)
+            self._auto_tile_output = output
+            with open(os.path.join(output, "auto_tiles.log"), "w", encoding="utf-8") as log:
+                self._auto_tile_process = subprocess.Popen(
+                    command, stdout=log, stderr=subprocess.STDOUT)
+            self._auto_tile_run_merge = self._auto_tile_merge
+            display_count = (count if mode == "adaptive" else columns * rows
+                             if mode == "grid" else len(self._auto_tile_preview_tiles))
+            self._set_auto_tile_status(tr("auto_tiles.running").format(display_count))
+            self._schedule_deferred_update(0.25)
+            if self._handle:
+                self._handle.dirty("auto_tile_running")
+        except (OSError, RuntimeError, ValueError) as error:
+            self._set_auto_tile_status(str(error))
+
     def _action_reset(self):
         def _reset(_stop_training):
             _restore_stored_session_if_needed()
@@ -2881,6 +3357,9 @@ class TrainingPanel(Panel):
         )
 
     def _action_start(self):
+        if self._auto_tile_process is not None:
+            self._set_auto_tile_status(tr("auto_tiles.training_active"))
+            return
         if _training_session_state().get("restoring"):
             return
         if _restore_stored_session_if_needed(then_start=True):
