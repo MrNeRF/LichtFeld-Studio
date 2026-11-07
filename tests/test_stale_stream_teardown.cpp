@@ -71,6 +71,30 @@ TEST_F(StaleStreamTeardownTest, DeadHomeStreamCpuDoesNotPoisonThread) {
     EXPECT_EQ(cudaGetLastError(), cudaSuccess);
 }
 
+TEST_F(StaleStreamTeardownTest, RetiredHomeStreamDeviceCopyPreservesDataAndRetirement) {
+    cudaStream_t user_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&user_stream, cudaStreamNonBlocking), cudaSuccess);
+    Tensor source, destination;
+    {
+        CUDAStreamGuard guard(user_stream);
+        source = Tensor::full({8}, 3.25f, Device::CUDA);
+        destination = Tensor::empty({8}, Device::CUDA);
+    }
+    CudaMemoryPool::instance().release_stream(user_stream);
+    ASSERT_EQ(cudaStreamDestroy(user_stream), cudaSuccess);
+    ASSERT_TRUE(is_stream_retired(user_stream));
+
+    ASSERT_EQ(memcpy_ordered(destination.data_ptr(), source.data_ptr(), source.bytes(),
+                             cudaMemcpyDeviceToDevice, user_stream),
+              cudaSuccess);
+    const auto values = destination.cpu().to_vector();
+    ASSERT_EQ(values.size(), 8u);
+    for (const float value : values)
+        EXPECT_FLOAT_EQ(value, 3.25f);
+    EXPECT_TRUE(is_stream_retired(user_stream));
+    EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
 TEST_F(StaleStreamTeardownTest, DetachFromStreamsCoversBoundsThenCanonicalSucceeds) {
     cudaStream_t user_stream = nullptr;
     ASSERT_EQ(cudaStreamCreate(&user_stream), cudaSuccess);

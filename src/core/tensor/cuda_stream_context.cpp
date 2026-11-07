@@ -72,7 +72,9 @@ namespace lfs::core {
 
     cudaError_t memcpy_ordered(void* const dst, const void* const src, const size_t bytes,
                                const cudaMemcpyKind kind, const cudaStream_t stream) {
-        if (kind == cudaMemcpyDeviceToDevice) {
+        // release_stream drains a home stream before retiring it. Preserve the
+        // legacy-copy fallback without passing its destroyed handle to CUDA.
+        if (kind == cudaMemcpyDeviceToDevice && !is_stream_retired(stream)) {
             return cudaMemcpyAsync(dst, src, bytes, kind, stream);
         }
         if (stream != nullptr && kind == cudaMemcpyDeviceToHost) {
