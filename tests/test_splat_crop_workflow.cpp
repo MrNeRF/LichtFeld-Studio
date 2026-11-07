@@ -22,6 +22,8 @@
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/Factory.h>
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -463,21 +465,34 @@ namespace {
         void SetScissorRegion(Rml::Rectanglei) override {}
     };
 
+    class TreeSystemInterface final : public Rml::SystemInterface {
+        bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
+            if (type == Rml::Log::LT_ASSERT || message.find("Leak detected:") != Rml::String::npos)
+                ADD_FAILURE() << message;
+            return true;
+        }
+    };
+
     class SplatCropTreeTest : public SplatCropWorkflowTest {
     protected:
         TreeRenderer renderer;
+        TreeSystemInterface system;
+        Rml::ElementInstancerGeneric<gui::SceneGraphElement> tree_instancer;
         Rml::Context* context = nullptr;
         gui::SceneGraphElement* tree = nullptr;
         uint64_t generation = 1;
         void SetUp() override {
             SplatCropWorkflowTest::SetUp();
+            Rml::SetSystemInterface(&system);
             ASSERT_TRUE(Rml::Initialise());
+            Rml::Factory::RegisterElementInstancer("scene-graph", &tree_instancer);
             ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/fonts/Inter-Regular.ttf").generic_string()));
             context = Rml::CreateContext("crop-tree-test", {500, 700}, &renderer);
             ASSERT_NE(context, nullptr);
             auto* doc = context->LoadDocumentFromMemory("<rml><head><style>body{font-family:Inter;font-size:12px;} scene-graph{display:block;width:480px;height:600px;}</style></head><body/></rml>");
             ASSERT_NE(doc, nullptr);
-            Rml::ElementPtr element(new gui::SceneGraphElement("scene-graph"));
+            auto element = doc->CreateElement("scene-graph");
+            ASSERT_NE(element, nullptr);
             tree = static_cast<gui::SceneGraphElement*>(element.get());
             doc->AppendChild(std::move(element));
             doc->Show();
