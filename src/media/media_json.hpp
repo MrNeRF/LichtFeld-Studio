@@ -10,6 +10,7 @@
 #include <cmath>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <sstream>
 #include <type_traits>
 #include <vector>
 namespace lfs::media::json_detail {
@@ -382,11 +383,51 @@ namespace lfs::media::json_detail {
             facts.push_back({{"semantic", fact.semantic}, {"unit", fact.unit}, {"value", optional(fact.value)}, {"state", fact.value ? "present" : "invalid"}, {"ambiguous", fact.ambiguous}, {"text_offset", fact.offset}, {"text_bytes", fact.bytes}});
         return {{"profile", cue.dji_bracket_profile ? "dji_bracket_fields_v1" : "raw_text"}, {"sample_kind", cue.start_milliseconds == cue.end_milliseconds ? "point" : "interval"}, {"start_ms", cue.start_milliseconds}, {"end_ms", cue.end_milliseconds}, {"source_offset", cue.source_offset}, {"text", cue.text}, {"text_bytes", hexBytes(cue.text)}, {"facts", std::move(facts)}};
     }
-    inline json srtMetadata(const SrtMetadataCatalog& catalog) {
-        json cues = json::array();
-        for (const auto& cue : catalog.cues())
-            cues.push_back(srtCue(cue));
-        return {{"schema_version", 1}, {"success", true}, {"scope", "timed_srt"}, {"parser", "ffmpeg_srt"}, {"interpreter", "dji_bracket_fields_v1"}, {"source_locator", catalog.source().display}, {"source_locator_bytes", hexBytes(catalog.source().native_bytes)}, {"source_locator_encoding", catalog.source().encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"}, {"original_bytes", hexBytes(catalog.originalBytes())}, {"cues", std::move(cues)}};
+    inline bool writeSrtMetadataJson(std::ostream& stream, const SrtMetadataCatalog& catalog) {
+        // Keep the shared JSON ordering, escaping, numeric formatting and UTF-8
+        // replacement policy, retaining only one cue DOM at a time.
+        if (!stream)
+            return false;
+        const json header{{"schema_version", 1}, {"success", true}, {"scope", "timed_srt"}, {"parser", "ffmpeg_srt"}, {"interpreter", "dji_bracket_fields_v1"}, {"source_locator", catalog.source().display}, {"source_locator_bytes", hexBytes(catalog.source().native_bytes)}, {"source_locator_encoding", catalog.source().encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"}, {"original_bytes", nullptr}, {"cues", nullptr}};
+        stream.put('{');
+        bool first = true;
+        for (const auto& item : header.items()) {
+            if (!first)
+                stream.put(',');
+            first = false;
+            stream << dump(json(item.key())) << ':';
+            if (!stream)
+                return false;
+            if (item.key() == "cues") {
+                stream.put('[');
+                bool first_cue = true;
+                for (const auto& cue : catalog.cues()) {
+                    if (!stream)
+                        return false;
+                    if (!first_cue)
+                        stream.put(',');
+                    first_cue = false;
+                    if (!stream)
+                        return false;
+                    stream << dump(srtCue(cue));
+                }
+                stream.put(']');
+            } else if (item.key() == "original_bytes") {
+                stream << dump(json(hexBytes(catalog.originalBytes())));
+            } else {
+                stream << dump(item.value());
+            }
+            if (!stream)
+                return false;
+        }
+        stream.put('}');
+        return static_cast<bool>(stream);
+    }
+    inline Result<std::string> srtMetadataJson(const SrtMetadataCatalog& catalog) {
+        std::ostringstream stream;
+        if (!writeSrtMetadataJson(stream, catalog))
+            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON string allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
+        return std::move(stream).str();
     }
     inline Result<json> srtLookup(const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance = std::nullopt) {
         const auto match = catalog.lookup(timestamp, offset, tolerance);

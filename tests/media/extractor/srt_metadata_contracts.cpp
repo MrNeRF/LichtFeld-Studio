@@ -28,8 +28,12 @@ int runSrtMetadataContracts() {
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() {
-            std::error_code error;
-            std::filesystem::remove_all(path, error);
+            try {
+                std::error_code error;
+                std::filesystem::remove_all(path, error);
+            } catch (const std::exception&) {
+                // Best-effort cleanup must not replace the test's own failure.
+            }
         }
     } cleanup{root};
     const auto path = root / "telemetry.srt";
@@ -270,7 +274,8 @@ int runSrtMetadataContracts() {
             for (const auto& fact : cue.facts)
                 require(fact.offset <= cue.text.size() && fact.bytes <= cue.text.size() - fact.offset, "corrupted fact ranges remain inside owned text");
         }
-        require(!json_detail::dump(json_detail::srtMetadata(*observed)).empty(), "corrupted non-UTF8 input remains serializable with retained raw bytes");
+        const auto serialized = json_detail::srtMetadataJson(*observed);
+        require(serialized && !serialized->empty(), "corrupted non-UTF8 input remains serializable with retained raw bytes");
         const auto lookup = observed->lookup({250, {1, 1000}}, 0, 1);
         require(!lookup || !*lookup || **lookup < observed->cues().size(), "corrupted input cannot produce an out-of-range lookup index");
     }

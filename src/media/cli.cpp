@@ -154,7 +154,9 @@ namespace {
                             return failed(result.error());
                         std::cout << json_detail::dump(*result) << '\n';
                     } else {
-                        std::cout << json_detail::dump(json_detail::srtMetadata(*catalog)) << '\n';
+                        if (!json_detail::writeSrtMetadataJson(std::cout, *catalog))
+                            return failed(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::IO, .detail = "Write SRT metadata JSON failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                        std::cout << '\n';
                     }
                     std::cout.flush();
                     if (!std::cout)

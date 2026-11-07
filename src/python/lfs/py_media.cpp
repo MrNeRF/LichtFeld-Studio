@@ -145,7 +145,9 @@ namespace lfs::python {
             .def_prop_ro("cue_count", [](const SrtMetadataCatalog& catalog) { return catalog.cues().size(); })
             .def("metadata_json", [](const SrtMetadataCatalog& catalog) {
                 nb::gil_scoped_release release;
-                try { return json_detail::dump(json_detail::srtMetadata(catalog)); }
+                try { auto result = json_detail::srtMetadataJson(catalog);
+                if (!result) throw Exception(result.error());
+                return std::move(*result); }
                 catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the owned SRT observation and retained raw bytes as JSON.")
             .def("lookup_json", [](const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance) {
                 nb::gil_scoped_release release;

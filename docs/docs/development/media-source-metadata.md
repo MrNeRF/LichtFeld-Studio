@@ -1001,7 +1001,7 @@ Before FFmpeg opens the memory input, a bounded guard counts timing lines and
 checks their numeric ranges. It refuses reversed intervals, components outside
 their clock ranges, durations above 2,147,483,647 milliseconds, and malformed or
 out-of-range optional `X1/X2/Y1/Y2` subtitle coordinates. These checks prevent the
-provider from repairing a negative duration or narrowing an oversized one. Cue
+provider from repairing a negative duration or narrowing an oversized one. Cue-count
 and physical-line budgets apply before the provider materializes its subtitle
 queue. CRLF, LF and CR line endings and an initial UTF-8 BOM are supported.
 The `:60` second carry used at minute boundaries by Matrice sidecars retains
@@ -1061,6 +1061,10 @@ for frame in frames:
 `telemetry.metadata_json()` returns the full observation and original bytes.
 `lookup_json` returns only the selected cue and query mapping. Both use the
 shared JSON formatting rules; collection and serialization release the GIL.
+Full-observation output serializes one cue at a time through the same formatter,
+without retaining a DOM for every cue. The Python method still returns a complete
+string, while the CLI writes to its output stream. Retained raw bytes, hexadecimal
+expansion and the returned string require memory beyond the input file size.
 This read-only observation does not alter pixels, poses, training or exported
 image metadata. Raw output can contain coordinates and identifiers, so callers
 must include it in their privacy decisions.
@@ -1078,8 +1082,10 @@ callers can lower budgets; cue text can be raised to 1 MiB. Each cue retains at
 most 64 interpreted facts. Budget exhaustion returns an error rather than a
 truncated complete observation. The input and record limits are not a process
 memory ceiling: FFmpeg's subtitle queue, owned cue strings, the interval index
-and JSON have separate allocations. Original byte and cue-text budgets are
-checked independently; no whole-file JSON is copied for a lookup.
+and JSON have separate allocations. Cue-text and interpreted-fact limits are
+checked during collection after demux; they do not cap the provider's allocations.
+Original byte and cue-text budgets are checked independently; no whole-file JSON
+is copied for a lookup.
 
 Timed subtitle/data streams inside video files remain a separate demux consumer.
 Enumeration of static stream metadata does not imply timed packet collection.
