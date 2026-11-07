@@ -1940,7 +1940,11 @@
     "trigger.drag": " Trascina",
     "trigger.scroll": "Scorri",
     "trigger.unknown": "Sconosciuto",
-    "action.toggle_performance_hud": "Attiva HUD prestazioni"
+    "action.toggle_performance_hud": "Attiva HUD prestazioni",
+    "mode.image_preview": "Anteprima immagine",
+    "action.image_preview_delete": "Rimuovi punto o riquadro",
+    "action.image_preview_generate": "Genera maschera",
+    "action.image_preview_remove_point": "Rimuovi controllo al cursore"
   },
   "debug_info": {
     "free_memory": "Libera: %.2f GB",
@@ -2044,6 +2048,54 @@
     "disabled": "Disabilitato"
   },
   "image_preview": {
+    "sam_title": "Maschera · SAM2.1",
+    "sam_positive": "Primo piano +",
+    "sam_negative": "Sfondo −",
+    "sam_box": "Riquadro",
+    "sam_pan": "Sposta vista",
+    "sam_undo": "Annulla",
+    "sam_clear": "Cancella punti e riquadro",
+    "sam_generate": "Genera",
+    "sam_cancel": "Rilascia SAM",
+    "sam_candidate": "Candidata · qualità prevista SAM",
+    "sam_apply_failed": "Impossibile applicare la maschera",
+    "sam_apply_dataset": "Per applicare la maschera, l’immagine deve appartenere al dataset corrente.",
+    "sam_apply": "Applica: mantieni selezione",
+    "sam_exclude": "Applica: escludi selezione",
+    "sam_hint": "Applica sostituisce la maschera di questa immagine. Viene salvata nel progetto .licht; scegli la modalità maschera nelle impostazioni di training. Chiudi SAM prima del training.",
+    "sam_queued": "In coda",
+    "sam_loading": "Caricamento modello",
+    "sam_encoding": "Codifica immagine",
+    "sam_predicting": "Predizione",
+    "sam_rendering": "Preparazione overlay",
+    "sam_closing": "Rilascio risorse",
+    "sam_ready": "Proposta pronta",
+    "sam_error": "Operazione non riuscita",
+    "sam_heading": "1 · Punti e riquadro",
+    "sam_proposals_heading": "2 · Proposta",
+    "sam_edit": "Modifica controlli",
+    "sam_remove": "Elimina",
+    "sam_flip": "Scambia +/−",
+    "sam_show": "Overlay",
+    "sam_edit_hint": "Trascina i punti per spostarli. Trascina bordi o angoli del riquadro per ridimensionarlo; in Riquadro, trascina al suo interno per spostarlo. Usa l’elenco dei controlli per selezionarli da tastiera. Elimina rimuove i controlli, non i pixel della maschera.",
+    "sam_selection_none": "Seleziona un controllo",
+    "sam_quality": "Punteggio SAM: {score}%",
+    "sam_generate_hint": "Genera una nuova proposta dai punti e dal riquadro correnti.",
+    "sam_positive_hint": "Punto positivo sull’oggetto.",
+    "sam_negative_hint": "Punto negativo sullo sfondo.",
+    "sam_box_hint": "Disegna o modifica un riquadro.",
+    "sam_pan_hint": "Sposta la vista senza aggiungere punti. Trascina per spostare l’immagine quando è ingrandita.",
+    "sam_review_frames": "Rivedi frame · SAM",
+    "sam_source_changed": "L’immagine è cambiata. Aggiornala prima di generare un’altra proposta.",
+    "sam_proposal_expired": "La proposta selezionata non è più attuale. Genera una nuova proposta.",
+    "sam_write_failed": "Impossibile codificare la maschera.",
+    "sam_shutting_down": "Il servizio di anteprima SAM si sta chiudendo.",
+    "sam_invalid_input": "Servono una revisione dell’immagine e punti o un riquadro (massimo 256 punti).",
+    "sam_invalid_point": "Le coordinate dei punti devono essere tra 0 e 1, con etichetta 0 o 1.",
+    "sam_invalid_box": "I limiti del riquadro devono essere tra 0 e 1, con larghezza e altezza positive.",
+    "sam_unavailable": "Ferma il training e attendi la fine delle importazioni o esportazioni video attive prima di usare SAM.",
+    "sam_reset_training": "Reimposta il training prima di modificare le maschere delle immagini.",
+    "sam_training_blocked": "Chiudi l’anteprima SAM prima di avviare il training.",
     "source_changed": "L’immagine è cambiata. Aggiorna e preleva di nuovo il colore.",
     "scene_changed": "La scena è cambiata. Preleva di nuovo il colore.",
     "color_sample_failed": "Impossibile prelevare il colore: {}",
@@ -2115,7 +2167,15 @@
     "overlay_status": "Sovrapposizione: %s",
     "file_label": "File: %s",
     "visible": "Visibile",
-    "hidden": "Nascosto"
+    "hidden": "Nascosto",
+    "sam_refine": "Affina precedente",
+    "sam_refine_hint": "Affina la proposta selezionata in precedenza usando i controlli aggiunti.",
+    "sam_apply_heading": "3 · Applica a questa immagine",
+    "sam_undo_hint": "Annulla l’ultima azione nella cronologia condivisa, anche su altre immagini.",
+    "sam_proposal_legend": "Proposta · selezione evidenziata · non applicata",
+    "mask_kept_legend": "Maschera immagine · pixel evidenziati: mantieni",
+    "mask_excluded_legend": "Maschera immagine · pixel evidenziati: escludi (invertita)",
+    "sam_applied": "Maschera applicata a questa immagine. Salva il progetto per conservarla."
   },
   "startup": {
     "supported_by": "Supportato da",
@@ -3024,7 +3084,8 @@
     "viewer_shutting_down": "Chiusura del visualizzatore in corso",
     "viewer_work_failed": "Operazione del visualizzatore non riuscita",
     "colmap_min_track_length": "min-track-length non può essere usato con --init; il filtraggio dei punti sparsi COLMAP non verrà applicato perché l’inizializzazione usa '{}'",
-    "no_splat_node_named": "Nessun nodo splat denominato '{}'"
+    "no_splat_node_named": "Nessun nodo splat denominato '{}'",
+    "training_session_not_ready": "La sessione di training non è pronta per essere ripresa."
   },
   "align": {
     "preview": "Anteprima allineamento",
@@ -3054,7 +3115,8 @@
     "trainer_not_restored": {
       "title": "Trainer non ripristinato",
       "message": "Il modello del progetto è disponibile per la visualizzazione, ma non è stato possibile riprendere l'addestramento. Controlla il percorso del dataset e i log."
-    }
+    },
+    "camera_masks_disabled": "Questo dataset contiene maschere immagine, ma il masking è disattivato. Scegli una modalità maschera nelle impostazioni di addestramento per utilizzarle."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio si è chiuso inaspettatamente",

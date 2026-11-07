@@ -1927,7 +1927,11 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Przełącz HUD wydajności"
+    "action.toggle_performance_hud": "Przełącz HUD wydajności",
+    "mode.image_preview": "Podgląd obrazu",
+    "action.image_preview_delete": "Usuń punkt lub ramkę",
+    "action.image_preview_generate": "Wygeneruj maskę",
+    "action.image_preview_remove_point": "Usuń punkt sterujący pod kursorem"
   },
   "debug_info": {
     "free_memory": "Wolna: %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "Wyłączony"
   },
   "image_preview": {
+    "sam_title": "Maska · SAM2.1",
+    "sam_positive": "Pierwszy plan +",
+    "sam_negative": "Tło −",
+    "sam_box": "Prostokąt",
+    "sam_pan": "Przesuń widok",
+    "sam_undo": "Cofnij",
+    "sam_clear": "Wyczyść punkty i prostokąt",
+    "sam_generate": "Generuj",
+    "sam_cancel": "Zwolnij SAM",
+    "sam_candidate": "Kandydat · jakość przewidywana przez SAM",
+    "sam_apply_failed": "Nie można zastosować maski",
+    "sam_apply_dataset": "Aby zastosować maskę, obraz musi należeć do bieżącego zbioru danych.",
+    "sam_apply": "Zastosuj: zachowaj zaznaczenie",
+    "sam_exclude": "Zastosuj: wyklucz zaznaczenie",
+    "sam_hint": "Zastosowanie zastępuje maskę tego obrazu. Maska jest zapisywana w projekcie .licht; wybierz tryb maskowania w ustawieniach treningu. Zamknij SAM przed treningiem.",
+    "sam_queued": "W kolejce",
+    "sam_loading": "Ładowanie modelu",
+    "sam_encoding": "Kodowanie obrazu",
+    "sam_predicting": "Przewidywanie",
+    "sam_rendering": "Przygotowanie nakładki",
+    "sam_closing": "Zwalnianie zasobów",
+    "sam_ready": "Propozycja gotowa",
+    "sam_error": "Operacja nie powiodła się",
+    "sam_heading": "1 · Punkty i prostokąt",
+    "sam_proposals_heading": "2 · Propozycja",
+    "sam_edit": "Edytuj punkty kontrolne",
+    "sam_remove": "Usuń",
+    "sam_flip": "Zamień +/−",
+    "sam_show": "Nakładka",
+    "sam_edit_hint": "Przeciągaj punkty, aby je przesuwać. Przeciągaj krawędzie lub narożniki ramki, aby zmienić jej rozmiar; w trybie Prostokąt przeciągaj jej wnętrze, aby ją przesunąć. Lista pozwala wybierać elementy klawiaturą. Usuń usuwa elementy sterujące, nie piksele maski.",
+    "sam_selection_none": "Wybierz element sterujący",
+    "sam_quality": "Ocena SAM: {score}%",
+    "sam_generate_hint": "Wygeneruj nową propozycję z bieżących punktów i ramki.",
+    "sam_positive_hint": "Punkt dodatni na obiekcie.",
+    "sam_negative_hint": "Punkt ujemny na tle.",
+    "sam_box_hint": "Narysuj lub dostosuj jedną ramkę.",
+    "sam_pan_hint": "Przesuwaj widok bez dodawania punktów. Przeciągnij, aby przesunąć powiększony obraz.",
+    "sam_review_frames": "Przejrzyj klatki · SAM",
+    "sam_source_changed": "Obraz się zmienił. Odśwież go przed wygenerowaniem kolejnej propozycji.",
+    "sam_proposal_expired": "Wybrana propozycja jest już nieaktualna. Wygeneruj nową propozycję.",
+    "sam_write_failed": "Nie można zakodować maski.",
+    "sam_shutting_down": "Usługa podglądu SAM jest zamykana.",
+    "sam_invalid_input": "Wymagana jest rewizja obrazu oraz punkty lub prostokąt (maksymalnie 256 punktów).",
+    "sam_invalid_point": "Współrzędne punktów muszą mieścić się między 0 a 1, a etykieta musi mieć wartość 0 lub 1.",
+    "sam_invalid_box": "Granice prostokąta muszą mieścić się między 0 a 1, a szerokość i wysokość muszą być dodatnie.",
+    "sam_unavailable": "Zatrzymaj trening i poczekaj na zakończenie aktywnych importów lub eksportów wideo przed użyciem SAM.",
+    "sam_reset_training": "Zresetuj trening przed zmianą masek obrazów.",
+    "sam_training_blocked": "Zamknij podgląd SAM przed rozpoczęciem treningu.",
     "source_changed": "Obraz został zmieniony. Odśwież go i ponownie pobierz kolor.",
     "scene_changed": "Scena została zmieniona. Ponownie pobierz kolor.",
     "color_sample_failed": "Nie można pobrać koloru: {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "Nakładka: %s",
     "file_label": "Plik: %s",
     "visible": "Widoczny",
-    "hidden": "Ukryty"
+    "hidden": "Ukryty",
+    "sam_refine": "Ulepsz poprzednią",
+    "sam_refine_hint": "Ulepsz wcześniej wybraną propozycję za pomocą dodanych elementów sterujących.",
+    "sam_apply_heading": "3 · Zastosuj do tego obrazu",
+    "sam_undo_hint": "Cofa ostatnią czynność we wspólnej historii, także na innych obrazach.",
+    "sam_proposal_legend": "Propozycja · wyróżnione zaznaczenie · niezastosowana",
+    "mask_kept_legend": "Maska obrazu · wyróżnione piksele: zachowaj",
+    "mask_excluded_legend": "Maska obrazu · wyróżnione piksele: wyklucz (odwrócona)",
+    "sam_applied": "Maskę zastosowano do tego obrazu. Zapisz projekt, aby ją zachować."
   },
   "startup": {
     "supported_by": "Wspierane przez",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "Zamykanie przeglądarki",
     "viewer_work_failed": "Zadanie przeglądarki nie powiodło się",
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
-    "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
+    "no_splat_node_named": "Brak węzła splat o nazwie '{}'",
+    "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia."
   },
   "align": {
     "preview": "Podgląd wyrównania",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "Nie przywrócono trenera",
       "message": "Model projektu jest dostępny do podglądu, ale nie udało się wznowić treningu. Sprawdź ścieżkę zestawu danych i logi."
-    }
+    },
+    "camera_masks_disabled": "Ten zbiór danych zawiera maski obrazów, ale maskowanie jest wyłączone. Wybierz tryb maski w ustawieniach treningu, aby ich użyć."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio zostało nieoczekiwanie zamknięte",

@@ -17,9 +17,15 @@
 #include "training_snapshot_service.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
+
+namespace lfs::io::project {
+    class LazyChunkValue;
+}
 
 namespace lfs::core {
     class Scene;
@@ -62,6 +68,9 @@ namespace lfs::training {
         std::optional<
             lfs::io::project::WriterLockLease>
             writer_lock_lease = std::nullopt;
+        // Retain unsaved mask bytes independently of the mutable GUI document.
+        std::vector<std::pair<lfs::core::Uuid, std::shared_ptr<const lfs::io::project::LazyChunkValue>>>
+            camera_mask_sources{};
     };
 
     struct ProjectSnapshotChapters {

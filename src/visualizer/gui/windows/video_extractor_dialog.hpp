@@ -317,6 +317,9 @@ namespace lfs::gui {
         std::size_t timeline_drag_segment_ = 0;
 
         std::optional<std::jthread> extraction_thread_;
+        std::mutex review_mutex_;
+        std::vector<io::VideoFrameExtractor::WrittenFrame> review_frames_;
+        std::filesystem::path review_weights_;
 
         std::unique_ptr<lfs::vis::gui::RmlPanelHost> host_;
         EventListener listener_;

@@ -63,6 +63,7 @@ def _install_recording_lf(monkeypatch):
         "WALK",
         "VR",
         "EDITOR",
+        "IMAGE_PREVIEW",
     )
     action_names = (
         "NONE",
@@ -142,6 +143,9 @@ def _install_recording_lf(monkeypatch):
         "SELECT_MODE_BOX",
         "SELECT_MODE_SPHERE",
         "CUT_SELECTION",
+        "IMAGE_PREVIEW_DELETE",
+        "IMAGE_PREVIEW_GENERATE",
+        "IMAGE_PREVIEW_REMOVE_POINT",
     )
     tool_mode = IntEnum("ToolMode", {name: i for i, name in enumerate(tool_mode_names)})
     action_enum = IntEnum("Action", {name: i for i, name in enumerate(action_names)})

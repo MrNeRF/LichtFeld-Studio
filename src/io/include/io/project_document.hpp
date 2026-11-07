@@ -346,9 +346,14 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<void>
+        set_dataset_source(const lfs::core::Uuid& instance_uuid, LazyChunkValue payload);
+        [[nodiscard]] bool
+        remove_dataset_source(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
         [[nodiscard]] lfs::Result<std::filesystem::path>
         materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;
+        [[nodiscard]] lfs::Result<ResolvedCameraMask> resolve_camera_mask(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
@@ -408,7 +413,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         preload_collision_payloads(const std::function<bool()>& canceled = {});
         // Drop SPLT/PCLD/MESH/COLV payloads the current scene graph no longer binds.
-        void remove_geometry_payloads_not_bound_by_scene();
+        void remove_geometry_payloads_not_bound_by_scene(std::span<const lfs::core::Uuid> previous_camera_masks = {});
 
         [[nodiscard]] std::vector<lfs::core::Uuid> splat_uuids() const;
         [[nodiscard]] std::vector<lfs::core::Uuid> point_cloud_uuids() const;

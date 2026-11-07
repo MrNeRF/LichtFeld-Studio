@@ -17,6 +17,7 @@
 #include "core/tensor.hpp"
 #include "depth_anchor_cache.hpp"
 
+#include "io/atomic_output.hpp"
 #include "io/loader.hpp"
 #include <cuda_runtime.h>
 
@@ -39,6 +40,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -280,7 +282,17 @@ namespace {
         using std::runtime_error::runtime_error;
     };
 
-    std::string sha256_file(const fs::path& path) {
+    class DownloadCancelled final : public std::runtime_error {
+    public:
+        DownloadCancelled() : std::runtime_error("Model download cancelled") {}
+    };
+
+    void check_download_cancelled(const std::function<bool()>& cancel_requested) {
+        if (cancel_requested && cancel_requested())
+            throw DownloadCancelled();
+    }
+
+    std::string sha256_file(const fs::path& path, const std::function<bool()>& cancel_requested) {
         std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!input)
             throw std::runtime_error("Could not open " + path_to_string(path) + " for hashing");
@@ -293,6 +305,7 @@ namespace {
 
         std::vector<char> buffer(1 << 20);
         while (input) {
+            check_download_cancelled(cancel_requested);
             input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
             const auto count = input.gcount();
             if (count > 0 && EVP_DigestUpdate(ctx.get(), buffer.data(), static_cast<std::size_t>(count)) != 1)
@@ -320,8 +333,9 @@ namespace {
 
     void require_sha256(const fs::path& path,
                         std::string_view expected_hash,
-                        std::string_view label) {
-        const auto hash = sha256_file(path);
+                        std::string_view label,
+                        const std::function<bool()>& cancel_requested = {}) {
+        const auto hash = sha256_file(path, cancel_requested);
         if (hash == expected_hash)
             return;
 
@@ -366,50 +380,64 @@ namespace {
 
     struct DownloadProgress {
         std::unique_ptr<indicators::ProgressBar> bar;
+        std::function<bool()> cancel_requested;
+        std::exception_ptr failure;
         int last_percent = -1;
         int next_plain_print = 10;
     };
 
     int curl_progress(void* userdata, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t) {
         auto* progress = static_cast<DownloadProgress*>(userdata);
-        if (dltotal <= 0)
+        try {
+            check_download_cancelled(progress->cancel_requested);
+            if (dltotal <= 0)
+                return 0;
+            const int percent = static_cast<int>(dlnow * 100 / dltotal);
+            if (percent == progress->last_percent)
+                return 0;
+            progress->last_percent = percent;
+            if (progress->bar) {
+                progress->bar->set_option(indicators::option::PostfixText(
+                    std::format("{}/{} MiB", dlnow >> 20, dltotal >> 20)));
+                progress->bar->set_progress(static_cast<size_t>(percent));
+            } else if (percent >= progress->next_plain_print) {
+                std::cout << "  " << percent << "% (" << (dlnow >> 20) << "/" << (dltotal >> 20) << " MiB)\n";
+                progress->next_plain_print = percent - percent % 10 + 10;
+            }
             return 0;
-        const int percent = static_cast<int>(dlnow * 100 / dltotal);
-        if (percent == progress->last_percent)
-            return 0;
-        progress->last_percent = percent;
-        if (progress->bar) {
-            progress->bar->set_option(indicators::option::PostfixText(
-                std::format("{}/{} MiB", dlnow >> 20, dltotal >> 20)));
-            progress->bar->set_progress(static_cast<size_t>(percent));
-        } else if (percent >= progress->next_plain_print) {
-            std::cout << "  " << percent << "% (" << (dlnow >> 20) << "/" << (dltotal >> 20) << " MiB)\n";
-            progress->next_plain_print = percent - percent % 10 + 10;
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): never unwind through libcurl's C callback; rethrow after cleanup.
+            progress->failure = std::current_exception();
+            return 1;
         }
-        return 0;
     }
 
     void download_verified_file(std::string_view url,
                                 const fs::path& destination,
                                 std::string_view expected_hash,
-                                std::string_view label) {
+                                std::string_view label,
+                                const std::function<bool()>& cancel_requested = {}) {
+        check_download_cancelled(cancel_requested);
         fs::create_directories(destination.parent_path());
-        fs::path tmp_path = destination;
-        tmp_path += ".tmp";
+        lfs::io::ScopedAtomicOutputFile download(destination);
+        const auto& tmp_path = download.temp_path();
 
         std::ofstream output;
         lfs::core::open_file_for_write(tmp_path, std::ios::binary | std::ios::trunc, output);
         if (!output)
             throw std::runtime_error("Could not open " + path_to_string(tmp_path) + " for writing");
 
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-        CURL* curl = curl_easy_init();
-        if (!curl) {
-            curl_global_cleanup();
-            output.close();
-            remove_file_if_exists(tmp_path);
+        struct CurlGlobal {
+            CurlGlobal() {
+                if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+                    throw std::runtime_error("curl_global_init failed");
+            }
+            ~CurlGlobal() { curl_global_cleanup(); }
+        } global;
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
+        CURL* curl = handle.get();
+        if (!curl)
             throw std::runtime_error("curl_easy_init failed");
-        }
 
         const std::string url_string(url);
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
@@ -423,6 +451,7 @@ namespace {
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output);
 
         DownloadProgress progress;
+        progress.cancel_requested = cancel_requested;
         if (stdout_is_tty()) {
             progress.bar = std::make_unique<indicators::ProgressBar>();
             style_progress_bar(*progress.bar, "Downloading ");
@@ -432,33 +461,24 @@ namespace {
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);
 
         const CURLcode result = curl_easy_perform(curl);
+        long response_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+        handle.reset();
+        output.close();
+        if (progress.failure)
+            std::rethrow_exception(progress.failure);
         if (progress.bar && !progress.bar->is_completed()) {
             progress.bar->mark_as_completed();
             std::cout << "\n";
         }
-        long response_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-        curl_easy_cleanup(curl);
-        curl_global_cleanup();
-        output.close();
-
-        if (result != CURLE_OK) {
-            remove_file_if_exists(tmp_path);
+        if (result != CURLE_OK)
             throw std::runtime_error("Download failed: " + std::string(curl_easy_strerror(result)));
-        }
-        if (response_code >= 400) {
-            remove_file_if_exists(tmp_path);
+        if (response_code >= 400)
             throw std::runtime_error("Download failed with HTTP " + std::to_string(response_code));
-        }
-
-        try {
-            require_sha256(tmp_path, expected_hash, label);
-        } catch (...) {
-            remove_file_if_exists(tmp_path);
-            throw;
-        }
-
-        replace_file(tmp_path, destination);
+        require_sha256(tmp_path, expected_hash, label, cancel_requested);
+        check_download_cancelled(cancel_requested);
+        if (const auto committed = download.commit(); !committed)
+            throw std::runtime_error(committed.error().message);
     }
 
     fs::path cached_model_path(const std::string_view filename) {
@@ -469,12 +489,15 @@ namespace {
                                               const std::string_view url,
                                               const std::string_view expected_hash,
                                               const bool allow_download,
-                                              const std::string_view label) {
+                                              const std::string_view label,
+                                              const std::function<bool()>& cancel_requested = {}) {
         try {
+            check_download_cancelled(cancel_requested);
             const fs::path path = cached_model_path(filename);
             if (fs::is_regular_file(path)) {
                 try {
-                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label), cancel_requested);
+                    check_download_cancelled(cancel_requested);
                     return path;
                 } catch (const DownloadIntegrityError& e) {
                     if (!allow_download)
@@ -490,8 +513,7 @@ namespace {
 
             std::cout << "Downloading " << label << " weights to " << path_to_string(path) << "\n";
             download_verified_file(url, path, expected_hash,
-                                   std::string("Downloaded ") + std::string(label));
-            require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+                                   std::string("Downloaded ") + std::string(label), cancel_requested);
             std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
             return path;
         } catch (const std::exception& e) {
@@ -499,7 +521,7 @@ namespace {
             return lfs::Result<fs::path>(lfs::make_legacy_error(
                 e.what(),
                 lfs::LegacyErrorContext{
-                    .code = lfs::ErrorCode::Unavailable,
+                    .code = dynamic_cast<const DownloadCancelled*>(&e) ? lfs::ErrorCode::Cancelled : lfs::ErrorCode::Unavailable,
                     .domain = lfs::ErrorDomain::Preprocess,
                     .operation = "ensure_cached_model",
                     .source = LFS_SOURCE_SITE_CURRENT(),
@@ -1375,9 +1397,9 @@ namespace lfs::preprocessing {
                                    allow_download, "LPIPS");
     }
 
-    lfs::Result<std::filesystem::path> ensure_sam2_weights(const bool allow_download) {
+    lfs::Result<std::filesystem::path> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
         return ensure_cached_model(kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256,
-                                   allow_download, "SAM2.1");
+                                   allow_download, "SAM2.1", cancel_requested);
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

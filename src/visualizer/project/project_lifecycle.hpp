@@ -32,6 +32,9 @@ namespace lfs::training {
 }
 
 namespace lfs::vis {
+    namespace op {
+        struct CameraMaskAssetSnapshot;
+    }
     class VisualizerImpl;
     class CollisionProjectOpenTest;
     class PayloadRecaptureTest;
@@ -293,6 +296,9 @@ namespace lfs::vis::project {
                    const std::filesystem::path& expected_path = {},
                    std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
+        [[nodiscard]] lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height);
+        [[nodiscard]] lfs::Result<lfs::io::project::ResolvedCameraMask> materializeCameraMask(const lfs::core::Uuid& asset_uuid) const;
+        [[nodiscard]] std::shared_ptr<op::CameraMaskAssetSnapshot> retainCameraMaskAsset(const lfs::core::Uuid& asset_uuid);
         [[nodiscard]] lfs::Result<ProjectTrainingSource> trainingSource();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
