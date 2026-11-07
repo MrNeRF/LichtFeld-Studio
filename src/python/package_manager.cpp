@@ -44,6 +44,19 @@ namespace lfs::python {
 #endif
         constexpr const char* PYTORCH_INDEX = "https://download.pytorch.org/whl/";
 
+        bool lock_unless_cancelled(std::unique_lock<std::mutex>& lock, const std::function<bool()>& should_cancel) {
+            if (!should_cancel) {
+                lock.lock();
+                return true;
+            }
+            while (!lock.try_lock()) {
+                if (should_cancel())
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            return !should_cancel();
+        }
+
         std::filesystem::path get_executable_dir() {
 #ifdef _WIN32
             return core::getExecutableDir();
@@ -364,12 +377,7 @@ namespace lfs::python {
 
     bool PackageManager::ensure_venv(const std::function<bool()>& should_cancel) {
         std::unique_lock lock(m_mutex, std::defer_lock);
-        while (!lock.try_lock()) {
-            if (should_cancel && should_cancel())
-                return false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (should_cancel && should_cancel())
+        if (!lock_unless_cancelled(lock, should_cancel))
             return false;
 
         if (m_venv_ready && lfs::core::native_fs::exists(venv_python()))
@@ -485,11 +493,8 @@ namespace lfs::python {
             return {.error = "Failed to create venv"};
 
         std::unique_lock lock(m_mutex, std::defer_lock);
-        while (!lock.try_lock()) {
-            if (should_cancel && should_cancel())
-                return {.error = "Package operation cancelled"};
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
+        if (!lock_unless_cancelled(lock, should_cancel))
+            return {.error = "Package operation cancelled"};
         LOG_INFO("Installing {}", package);
         return execute_uv({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())}, should_cancel);
     }

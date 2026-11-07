@@ -17,6 +17,10 @@ from .ui import RuntimeState
 _reader_executor = None
 
 
+def _session_finished(status):
+    return status.get("state") in TERMINAL or session_liveness(status) == "exited"
+
+
 def presentation_transform(value, np):
     """Compose source presentation once, before the renderer's data/display flip."""
     value = value or {}
@@ -192,7 +196,7 @@ class ExternalTraining:
                             raise ValueError("Training process identity changed")
                     except Exception as error:
                         self.connection_error = str(error)
-                        if self.status.get("state") in TERMINAL or session_liveness(self.status) == "exited":
+                        if _session_finished(self.status):
                             self.stop.set()
                         continue
                     self.status, self.connection_error = status, ""
@@ -222,8 +226,7 @@ class ExternalTraining:
                             self.geometry_error = str(error)
                     snapshot = status.get("snapshot")
                     if snapshot and snapshot.get("id") != self.generation:
-                        if (snapshot.get("id") == self._failed_generation and
-                                (status.get("state") in TERMINAL or session_liveness(status) == "exited")):
+                        if snapshot.get("id") == self._failed_generation and _session_finished(status):
                             self.stop.set()  # A failed final upload must still release its lease.
                             continue
                         if time.monotonic() < self._splat_retry_at:
@@ -239,11 +242,11 @@ class ExternalTraining:
                             snapshot["sh_degree"], np.asarray(transform, dtype=np.float32))
                         self._submit(update, "splat", dict(snapshot))
                         continue
-                    if status.get("state") in TERMINAL or session_liveness(status) == "exited":
+                    if _session_finished(status):
                         self.stop.set()
                 except Exception as error:
                     self._failed("splat", error, snapshot)
-                    if self.status.get("state") in TERMINAL or session_liveness(self.status) == "exited":
+                    if _session_finished(self.status):
                         self.stop.set()
         except Exception as error:
             if not self.stop.is_set():
@@ -262,7 +265,7 @@ class ExternalTraining:
                     pending = self._pending
                     while (pending is not None and self._pending is pending and not pending[0].ready
                            and self._is_active()):
-                        threading.Event().wait(0.1)
+                        time.sleep(0.1)
                     lf.ui.schedule_on_ui_thread(self._retire)
                 except RuntimeError:
                     pass  # The native owner drains uploads during application shutdown.

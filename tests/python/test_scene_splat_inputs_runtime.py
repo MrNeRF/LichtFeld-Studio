@@ -7,7 +7,7 @@ import time
 import pytest
 
 from test_api_camera_project_runtime import camera_runtime, camera_runtime_with_numpy, _editor, _ui_editor  # noqa: F401
-from test_render_on_demand_idle import _tool
+from test_render_on_demand_idle import _ledger, _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
@@ -248,6 +248,81 @@ threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start
         assert request.node.camera_process.wait(timeout=10) == 0
         assert not list((producer.root / "clients").glob("*.json"))
         assert transport.read_json(producer.root / "session.json")["state"] == "training"
+    finally:
+        producer.finish("stopped")
+        producer.thread.join(3)
+
+
+def test_remove_preview_with_collision_and_degraded_splats(camera_runtime_with_numpy, tmp_path, monkeypatch, numpy, request):
+    from lichtfeld_sessions import transport
+    from test_selection_outline_runtime import _write_splat
+    from test_training_sessions import arrays
+
+    endpoint = camera_runtime_with_numpy
+    source = tmp_path / "local.ply"
+    _write_splat(source, 0., (.5, .5, .15), dense=True)
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Trainer", "state": "training"})
+    try:
+        data = arrays(100_000)
+        data["means"][:] = numpy.random.default_rng(42).uniform(-.5, .5, data["means"].shape)
+        data["scale"][:] = -5
+        producer.publish(data, 1)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        _ui_editor(endpoint, f"""
+import time, lfs_plugins.external_training_panel as panel
+settings = lf.get_render_settings()
+settings.raster_backend = 2
+settings.point_cloud_mode = settings.lod_enabled = False
+lf.set_camera((0., 0., 4.), (0., 0., 0.))
+panel._current = panel.ExternalTraining({record!r})
+target = panel._current.uuid
+""")
+        _editor(endpoint, """
+deadline = time.monotonic() + 15
+while not panel._current.shown and time.monotonic() < deadline: time.sleep(.05)
+assert panel._current.shown, panel._current.error
+""")
+        _ui_editor(endpoint, f"lf.load_file({str(source)!r})")
+        _editor(endpoint, """
+deadline = time.monotonic() + 15
+while not lf.get_scene().get_node("local") and time.monotonic() < deadline: time.sleep(.05)
+assert lf.get_scene().get_node("local")
+""")
+        _ui_editor(endpoint, 'lf.select_node("local")\nlf.generate_collision(.03, .1, False, False, 0.)')
+        _editor(endpoint, """
+deadline = time.monotonic() + 15
+while not lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION) and time.monotonic() < deadline: time.sleep(.05)
+assert lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION)
+assert lf.capture_viewport() is not None
+""")
+        assert _tool(endpoint, "gaussians_write", {
+            "node": "local", "field": "opacities", "indices": [0], "values": [1.],
+        })["success"]
+        _ui_editor(endpoint, "assert lf.undo.undo()")
+        _ui_editor(endpoint, """
+assert lf.get_scene().get_node_by_uuid(target)
+panel.ExternalTrainingPanel()._remove()
+assert lf.get_scene().get_node_by_uuid(target) is None
+assert lf.get_scene().get_node("local") and lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION)
+""")
+        # Undo restores opacity in ordinary CUDA storage. The next frame must
+        # still present, even though VkSplat cannot produce a new depth image.
+        start = _ledger(endpoint)["frames_presented"]
+        deadline = time.monotonic() + 15
+        app_log = tmp_path / "app.log"
+        while time.monotonic() < deadline:
+            _ui_editor(endpoint, "lf.ui.request_redraw()")
+            degraded = "missing_opacity" in app_log.read_text(encoding="utf-8", errors="replace")
+            if degraded and _ledger(endpoint)["frames_presented"] >= start + 4:
+                break
+            time.sleep(.1)
+        else:
+            pytest.fail("Viewport did not present frames after losing its splat depth image")
+        assert _tool(endpoint, "project_save_as", {"path": str(tmp_path / "local.licht")})["success"]
+        _editor(endpoint, "threading.Timer(.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()")
+        assert request.node.camera_process.wait(timeout=10) == 0
+        assert "VK_ERROR_DEVICE_LOST" not in app_log.read_text(encoding="utf-8", errors="replace")
     finally:
         producer.finish("stopped")
         producer.thread.join(3)
