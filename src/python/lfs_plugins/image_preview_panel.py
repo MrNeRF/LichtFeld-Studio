@@ -457,6 +457,8 @@ class ImagePreviewPanel(Panel):
         if sequence and self._sam_sequence and sequence["run"] == self._sam_sequence["run"]:
             self._mask_editor.enabled = assisted
             self._mark_dirty()
+            if assisted:
+                lf.ui.set_panel_enabled("native.video_extractor", False)
             return
         self._reset_preview()
         self._sam_cancel()
@@ -513,6 +515,10 @@ class ImagePreviewPanel(Panel):
         self._decorator_cache = {}
         self._update_picker_cursor()
         self._mark_dirty()
+        # Hide the source only after the review has accepted its frames, including
+        # a deferred open during construction. Failures leave extraction available.
+        if assisted:
+            lf.ui.set_panel_enabled("native.video_extractor", False)
 
     def _reset_pan(self):
         self._pan_x = 0.0
@@ -2400,8 +2406,6 @@ class ImagePreviewPanel(Panel):
             button.set_text(lf.ui.tr(_sam_key(key)))
             button.set_attribute("title", self._sam_save_message())
             self._set_disabled(button, busy or not self._sam_progress[2])
-        if self._show_help:
-            _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint") + " " + lf.ui.tr("image_preview.sam_tracking_hint"))
 
     def _update_sam_selection(self, doc):
         editor = self._mask_editor

@@ -13,6 +13,44 @@ from test_rmlui_image_sources import panel_modules, _DocumentStub, _ElementStub
 from test_preview_file_revision import settle_metadata
 
 
+def test_extracted_review_hides_extractor_only_after_success_and_can_retry(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    monkeypatch.setattr(module, "_instance", panel)
+    changes = []
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: changes.append(args))
+    with monkeypatch.context() as patch:
+        def fail():
+            raise RuntimeError("preview initialization failed")
+        patch.setattr(panel, "_reset_preview", fail)
+        with pytest.raises(RuntimeError, match="preview initialization failed"):
+            module.open_extracted_frame_preview(["frame.png"])
+    assert ("native.video_extractor", False) not in changes
+    module.open_extracted_frame_preview(["frame.png"])
+    assert panel._image_paths == [module.Path("frame.png")]
+    assert panel._mask_editor.enabled
+    assert changes[-1] == ("native.video_extractor", False)
+    panel._metadata.close()
+
+
+def test_pending_or_empty_review_keeps_extractor_available(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    changes = []
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: changes.append(args))
+    empty = module.ImagePreviewPanel()
+    empty.open([], [], 0, assisted=True)
+    assert not changes
+    empty._metadata.close()
+    monkeypatch.setattr(module, "_instance", None)
+    module.open_extracted_frame_preview(["frame.png"])
+    assert changes == [("lfs.image_preview", True)]
+    panel = module.ImagePreviewPanel()
+    assert module._pending_open is None
+    assert panel._image_paths == [module.Path("frame.png")]
+    assert changes[-1] == ("native.video_extractor", False)
+    panel._metadata.close()
+
+
 class Element(_ElementStub):
     def __init__(self, tag="div"):
         super().__init__()

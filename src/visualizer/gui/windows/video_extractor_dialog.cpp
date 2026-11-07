@@ -2413,7 +2413,6 @@ namespace lfs::gui {
                 paths.push_back(frame.path);
             if (!extracting_.load() && !paths.empty()) {
                 core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights), .frames = std::move(frames), .video = std::move(video), .output = std::move(output), .run = run}.emit();
-                disablePanel();
             }
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();

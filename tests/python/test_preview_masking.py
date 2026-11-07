@@ -654,9 +654,12 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     controls = {name: Control() for name in (
         "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls",
         "sam-tracking", "sam-track-first", "sam-track-last", "sam-track-direction",
-        "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading")}
+        "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading", "sam-hint")}
     panel._doc = doc = _DocumentStub(controls)
+    panel._show_help = True
+    controls["sam-hint"].set_text("image_preview.sam_tracking_hint")
     panel._update_sam_sequence(doc, False)
+    assert controls["sam-hint"].text == "image_preview.sam_tracking_hint"
     last = controls["sam-track-last"]
     assert last.get_attribute("value", "") == "7"
     assert controls["sam-apply-heading"].text.endswith("1 / 7")

@@ -356,6 +356,15 @@ namespace {
         ASSERT_EQ(eh, oh);
         for (size_t i = 0; i < size_t(ow) * oh; ++i)
             ASSERT_EQ(original[i * oc] + excluded[i * ec], 255) << i;
+        // Retiring a completed publication must preserve the exported asset
+        // and its review bookkeeping after the request snapshot is cleared.
+        service.close();
+        state = wait(0, "idle");
+        ASSERT_EQ(state.phase, "idle");
+        EXPECT_EQ(state.approved, 1);
+        EXPECT_EQ(service.sequenceFrames(run)[1].mask_path, destination);
+        EXPECT_EQ(service.sequenceFrames(run)[1].revision, revision);
+        EXPECT_TRUE(lfs::core::native_fs::exists(destination));
         auto thumbnail = service.sequencePreview(preview_key);
         ASSERT_FALSE(thumbnail.expired());
         input.publish_approved = false;
