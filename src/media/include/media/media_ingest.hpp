@@ -5,6 +5,7 @@
 #include "media/file_frame_sink.hpp"
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
+#include "media/srt_metadata.hpp"
 #include <functional>
 #include <string_view>
 
@@ -116,6 +117,9 @@ namespace lfs::media {
             const SourceMetadataIndexLimits& = {}, std::size_t max_bytes = 32u * 1024 * 1024);
         [[nodiscard]] static Result<SourceMetadataCatalog> sourceContainerMetadata(
             const std::filesystem::path&, const ProbeOptions& = {}, const SourceMetadataIndexLimits& = {});
+        // Explicit temporal sidecar observation; callers supply the clock mapping.
+        [[nodiscard]] static Result<SrtMetadataCatalog> sourceSrtMetadata(
+            const std::filesystem::path&, const SrtMetadataLimits& = {});
         [[nodiscard]] static Result<IngestReport> extract(const IngestRequest&, FrameSink&);
         [[nodiscard]] static Result<IngestReport> extractFiles(const IngestRequest&, const FileExtraction&);
     };

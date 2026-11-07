@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "core/image_codecs.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "media/frame_sink.hpp"
@@ -16,6 +15,7 @@
 #include <unistd.h>
 #endif
 namespace lfs::media::detail {
+    inline constexpr std::size_t max_metadata_sidecar_bytes = 32u * 1024 * 1024;
     inline Error sidecarError(ErrorCode code, std::string message) {
         return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
     }
@@ -62,7 +62,8 @@ namespace lfs::media::detail {
 #endif
         }
     };
-    // A bounded private reader, not a second XML parser. Validate the opened
+    // Bounded I/O for explicit metadata companions. Format parsers validate
+    // their payload separately. Validate the opened
     // object, not only a pathname checked before opening. Nonblocking open
     // prevents a substituted FIFO from hanging the caller on POSIX.
     class SidecarFile {
@@ -176,8 +177,8 @@ namespace lfs::media::detail {
     // owns its file; no callback or borrowed byte view survives this call.
     template <class Reader>
     Result<std::vector<std::uint8_t>> readSidecarBytes(Reader& file, std::size_t size) {
-        if (size > core::image_codecs::max_xmp_packet_bytes)
-            return sidecarError(ErrorCode::ResourceExhausted, "XMP sidecar exceeds its byte limit (size=" + std::to_string(size) + ", limit=" + std::to_string(core::image_codecs::max_xmp_packet_bytes) + ")");
+        if (size > max_metadata_sidecar_bytes)
+            return sidecarError(ErrorCode::ResourceExhausted, "Metadata sidecar exceeds its byte limit (size=" + std::to_string(size) + ", limit=" + std::to_string(max_metadata_sidecar_bytes) + ")");
         try {
             std::vector<std::uint8_t> bytes(size);
             std::size_t offset = 0;
@@ -187,7 +188,7 @@ namespace lfs::media::detail {
                 if (!count)
                     return count.error();
                 if (!*count || *count > buffer.size())
-                    return sidecarError(ErrorCode::DataLoss, "XMP sidecar was truncated or returned an invalid read size");
+                    return sidecarError(ErrorCode::DataLoss, "Metadata sidecar was truncated or returned an invalid read size");
                 offset += *count;
             }
             std::array<std::uint8_t, 1> extra{};
@@ -195,12 +196,12 @@ namespace lfs::media::detail {
             if (!count)
                 return count.error();
             if (*count)
-                return sidecarError(ErrorCode::DataLoss, "XMP sidecar grew while being read");
+                return sidecarError(ErrorCode::DataLoss, "Metadata sidecar grew while being read");
             if (const auto stable = file.verifyUnchanged(); !stable)
                 return stable.error();
             return bytes;
         } catch (const std::bad_alloc&) {
-            return sidecarError(ErrorCode::ResourceExhausted, "XMP sidecar read allocation failed");
+            return sidecarError(ErrorCode::ResourceExhausted, "Metadata sidecar read allocation failed");
         }
     }
 } // namespace lfs::media::detail
