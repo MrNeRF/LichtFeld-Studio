@@ -545,7 +545,9 @@ def test_candidate_texture_is_reused_and_released_before_its_owner(panel_modules
     panel._mask_editor = value = editor(module)
     value.overlays, value.scores, value.phase, value.request = [object(), object()], [0.8, 0.9], "ready", 9
     overlay = Element()
-    doc = panel._doc = _DocumentStub({"sam-overlay": overlay})
+    legend = Element()
+    panel._sam_frame_summaries = {0: {"mask_path": "previously-saved.png"}}
+    doc = panel._doc = _DocumentStub({"sam-overlay": overlay, "mask-legend": legend})
     calls = []
 
     class Texture:
@@ -567,6 +569,7 @@ def test_candidate_texture_is_reused_and_released_before_its_owner(panel_modules
     monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: None)
     panel._update_sam(doc)
     panel._update_sam(doc)
+    assert legend.attributes["title"] == "image_preview.sam_proposal_legend"
     assert calls == [("create", value.overlays[0])]
     panel._sam_candidate(1)
     panel._update_sam(doc)
@@ -743,18 +746,22 @@ def test_saving_requires_confirmation_of_the_same_review_revision(panel_modules,
     panel._sam_progress = (3, 3, 2)
     panel._path_stat_cache["frame.png"] = (True, 11, 22)
     dialogs, requests = [], []
-    revision = {"sequence_revision": 10}
+    revision = {"sequence_revision": 10, "approved": 3}
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: revision, raising=False)
     monkeypatch.setattr(module.lf.ui, "form_dialog", lambda *a: dialogs.append(a), raising=False)
     monkeypatch.setattr(module.lf.ui, "tr", lambda key: "Approved: {approved}\n\n{output}\n\nReplace masks. Saving cannot be undone."
                         if key.endswith("sam_save_hint") else key)
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: requests.append(kw) or 20, raising=False)
+    revision["phase"] = "tracking"
+    panel._sam_save(True)
+    assert not dialogs and not requests
+    revision["phase"] = "ready"
     panel._sam_save(True)
     assert not requests
     revision["sequence_revision"] = 11
     assert dialogs[0][1] == "image_preview.sam_save_excluded"
     assert module.escape(str(module.Path("frames<&>") / "masks")) in dialogs[0][2]
-    assert '<strong>Approved: 2</strong>' in dialogs[0][2]
+    assert '<strong>Approved: 3</strong>' in dialogs[0][2]
     assert dialogs[0][2].count('class="modal-note"') == 3
     dialogs[0][4](dialogs[0][3][1]["label"], {})
     assert not requests
@@ -953,6 +960,7 @@ def test_source_revision_waits_for_native_work_then_revokes_old_proposal(panel_m
     assert value.key == ("a.png", "new")
     assert invalidated == [("clip-a", 0)]
     assert not panel._sam_frame_summaries[0]["approved"]
+    assert not panel._sam_sequence_error
     panel._service_sam()
     assert len(invalidated) == 1
 

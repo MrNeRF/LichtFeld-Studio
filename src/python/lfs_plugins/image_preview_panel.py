@@ -1805,9 +1805,10 @@ class ImagePreviewPanel(Panel):
             editor.phase, editor.error = "ready", str(error)
         self._mark_dirty()
 
-    def _sam_save_message(self):
+    def _sam_save_message(self, approved=None):
         return lf.ui.tr("image_preview.sam_save_hint").format(
-            output=str(Path(self._sam_sequence["output"]) / "masks"), approved=self._sam_progress[2])
+            output=str(Path(self._sam_sequence["output"]) / "masks"),
+            approved=self._sam_progress[2] if approved is None else approved)
 
     def _sam_save(self, exclude, confirmed=False):
         editor = self._mask_editor
@@ -1816,7 +1817,10 @@ class ImagePreviewPanel(Panel):
             return
         if not confirmed:
             run = self._sam_sequence["run"]
-            revision = lf.ui.sam_preview_poll().get("sequence_revision")
+            snapshot = lf.ui.sam_preview_poll()
+            revision, approved = snapshot.get("sequence_revision"), snapshot.get("approved", 0)
+            if not approved or snapshot.get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                return
             label = lf.ui.tr("image_preview.sam_save_excluded" if exclude else "image_preview.sam_save_approved")
             answered = False
             panel_ref = weakref.ref(self)
@@ -1835,7 +1839,7 @@ class ImagePreviewPanel(Panel):
                 else:
                     panel._sam_sequence_error = lf.ui.tr("image_preview.sam_proposal_expired")
                     panel._mark_dirty()
-            message = self._sam_save_message()
+            message = self._sam_save_message(approved)
             lf.ui.form_dialog(f"sam-save:{run}", label, _sam_confirmation_rml(message),
                               [{"label": lf.ui.tr("common.cancel")}, {"label": label, "style": "primary"}], selected)
             return
@@ -2080,6 +2084,8 @@ class ImagePreviewPanel(Panel):
                 self._request_async_update()
                 return
             self._sam_invalidate_sequence_frame(old_key)
+            if self._sam_sequence_error == lf.ui.tr("image_preview.sam_source_changed"):
+                self._sam_sequence_error = ""
             state = lf.ui.sam_preview_poll()
         bound = editor.bind(path, revision)
         if bound:
@@ -2293,8 +2299,6 @@ class ImagePreviewPanel(Panel):
             legend.set_attribute("class", "sam-note" if proposal or applied else "sam-note hidden")
             key = ("image_preview.sam_proposal_legend" if proposal else
                    "image_preview.mask_excluded_legend" if self._mask_inverted else "image_preview.mask_kept_legend")
-            if proposal and self._sam_frame_summaries.get(self._current_index, {}).get("mask_path"):
-                key = "image_preview.sam_saved"
             description = lf.ui.tr(key)
             legend.set_text(description)
             legend.set_attribute("title", description)
