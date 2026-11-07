@@ -429,7 +429,7 @@ namespace lfs::media::json_detail {
     // Let the JSON library format every key/scalar (including replacement UTF-8).
     // Count the XML-escaped output first, then allocate exactly once. Neither
     // pass retains a second complete JSON serialization alongside the XML.
-    inline std::optional<std::string> sourceMetadataXmlProperty(const json& value, std::size_t max_value_bytes) {
+    inline std::optional<std::string> sourceMetadataXmlProperty(const json& value, std::size_t max_value_bytes, std::string_view name = "SourceMetadata") {
         const auto visit = [&](const auto& self, const json& node, auto&& emit) -> bool {
             if (node.is_object()) {
                 if (!emit("{"))
@@ -470,7 +470,7 @@ namespace lfs::media::json_detail {
         };
         if (!visit(visit, value, count))
             return std::nullopt;
-        constexpr std::string_view prefix = "<lfs:SourceMetadata>", suffix = "</lfs:SourceMetadata>";
+        const auto prefix = "<lfs:" + std::string(name) + ">", suffix = "</lfs:" + std::string(name) + ">";
         std::string result;
         if (bytes > result.max_size() - prefix.size() - suffix.size())
             return std::nullopt;

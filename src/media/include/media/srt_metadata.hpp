@@ -3,6 +3,7 @@
 #pragma once
 #include "media/source_metadata.hpp"
 #include <span>
+#include <utility>
 
 namespace lfs::media {
     struct SrtMetadataLimits {
@@ -33,6 +34,11 @@ namespace lfs::media {
         std::vector<DjiSrtFact> facts;
         bool dji_bracket_profile = false;
     };
+    class SrtMetadataCatalog;
+    namespace detail {
+        // Internal writer guard against replacing the observed source path.
+        [[nodiscard]] Result<void> protectSrtMetadataSource(const SrtMetadataCatalog&, const std::filesystem::path&);
+    } // namespace detail
     struct SrtMetadataStorage;
     // Copies share one immutable observation. Views require a live catalog.
     class LFS_MEDIA_API SrtMetadataCatalog {
@@ -51,5 +57,16 @@ namespace lfs::media {
         explicit SrtMetadataCatalog(std::shared_ptr<const SrtMetadataStorage> storage) : storage_(std::move(storage)) {}
         std::shared_ptr<const SrtMetadataStorage> storage_;
         friend class MediaIngest;
+        friend Result<void> detail::protectSrtMetadataSource(const SrtMetadataCatalog&, const std::filesystem::path&);
+    };
+    // Explicit association with the video's source timestamp clock. Copies
+    // share the immutable catalog; tolerance never extends interval coverage.
+    struct SrtFrameMetadata {
+        SrtFrameMetadata(SrtMetadataCatalog observation, std::int64_t offset,
+                         std::optional<std::int64_t> tolerance = std::nullopt)
+            : catalog(std::move(observation)), offset_milliseconds(offset), point_tolerance_milliseconds(tolerance) {}
+        SrtMetadataCatalog catalog;
+        std::int64_t offset_milliseconds;
+        std::optional<std::int64_t> point_tolerance_milliseconds;
     };
 } // namespace lfs::media

@@ -51,6 +51,10 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::AVIF)
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
+        if (options_.srt_metadata && (!options_.embed_source_metadata && !options_.write_source_metadata_sidecars))
+            return sinkError(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars");
+        if (options_.srt_metadata && options_.srt_metadata->point_tolerance_milliseconds && *options_.srt_metadata->point_tolerance_milliseconds < 0)
+            return sinkError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative");
         source_metadata_.reset();
         sidecar_metadata_ = std::move(sidecar);
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
@@ -79,6 +83,9 @@ namespace lfs::media {
             for (const auto& path : io::generatedExtractionFiles(options_.output_directory, options_.filename_pattern)) {
                 if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
                     continue;
+                if (options_.srt_metadata)
+                    if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, path); !protected_source)
+                        return protected_source;
                 existing_frames_.push_back({path, lfs::core::native_fs::last_write_time(path), lfs::core::native_fs::file_size(path)});
                 if (path.filename() != "extraction_metadata.json" && detail::PreviousSourceSidecar::inspect(path)) {
                     auto sidecar = path;
@@ -119,11 +126,19 @@ namespace lfs::media {
                                                                                                                              : ".jpg";
         const auto filename = options_.output_directory /
                               core::utf8_to_path(io::formatFrameFilenameStem(options_.filename_pattern, output_frame_number) + extension);
+        if (options_.srt_metadata) {
+            if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, filename); !protected_source)
+                return protected_source;
+            auto companion = filename;
+            companion += detail::sidecar_metadata_suffix;
+            if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, companion); !protected_source)
+                return protected_source;
+        }
         if (!filenames_.insert(filename).second)
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (source_metadata_) {
             auto prepared =
-                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, !options_.embed_source_metadata);
+                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, !options_.embed_source_metadata, options_.srt_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             auto metadata = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared));
@@ -133,7 +148,7 @@ namespace lfs::media {
                 if (metadata->extended_markers.empty()) {
                     sidecar_metadata_ = std::move(metadata);
                 } else {
-                    auto sidecar = detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, true);
+                    auto sidecar = detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, true, options_.srt_metadata);
                     if (!sidecar)
                         return SinkResult::failure(sidecar.error());
                     sidecar_metadata_ = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*sidecar));

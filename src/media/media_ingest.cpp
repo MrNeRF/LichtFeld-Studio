@@ -126,6 +126,11 @@ namespace lfs::media {
                     p.embed_source_metadata = files->files.embed_source_metadata;
                     p.write_source_metadata_sidecars = files->write_source_metadata_sidecars;
                     p.jpeg_metadata_output = files->files.image_output;
+                    p.srt_metadata = files->files.srt_metadata;
+                    if (p.srt_metadata && (!p.embed_source_metadata && !p.write_source_metadata_sidecars))
+                        return failure(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars", 0);
+                    if (p.srt_metadata && p.srt_metadata->point_tolerance_milliseconds && *p.srt_metadata->point_tolerance_milliseconds < 0)
+                        return failure(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative", 0);
                     if ((p.embed_source_metadata || p.write_source_metadata_sidecars) && detail::embeddedMetadataPolicy(files->files.format).empty())
                         return failure(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output", 0);
                     p.generate_metadata = files->write_metadata || p.preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;

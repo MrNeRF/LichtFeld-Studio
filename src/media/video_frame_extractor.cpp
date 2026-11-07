@@ -1037,6 +1037,20 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
+            if (params.srt_metadata && ((!params.embed_source_metadata && !params.write_source_metadata_sidecars) ||
+                                        (params.srt_metadata->point_tolerance_milliseconds && *params.srt_metadata->point_tolerance_milliseconds < 0))) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "SRT frame metadata requires image metadata output and nonnegative tolerance", .detection = LFS_SOURCE_SITE_CURRENT()});
+                error = std::string(failure_->detail());
+                return false;
+            }
+            if (params.srt_metadata) {
+                auto protected_source = media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, params.output_dir / "extraction_metadata.json");
+                if (!protected_source) {
+                    failure_ = protected_source.error();
+                    error = std::string(failure_->detail());
+                    return false;
+                }
+            }
             const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
@@ -1058,6 +1072,7 @@ namespace lfs::io {
             const bool custom_sink = external_sink && !legacy_file_policy;
             media::FileFrameSinkOptions file_options{params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number};
             file_options.embed_source_metadata = params.embed_source_metadata;
+            file_options.srt_metadata = params.srt_metadata;
             file_options.image_output = params.jpeg_metadata_output;
             media::FileFrameSink file_sink(std::move(file_options));
             auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
@@ -1863,6 +1878,12 @@ namespace lfs::io {
                         throw_if_cancelled();
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
+                            if (params.srt_metadata) {
+                                check_sink(media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, batch_filenames[i]));
+                                auto companion = batch_filenames[i];
+                                companion += media::detail::sidecar_metadata_suffix;
+                                check_sink(media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, companion));
+                            }
                             auto previous_sidecar = media::detail::PreviousSourceSidecar::inspect(batch_filenames[i]);
                             auto options = params.jpeg_metadata_output;
                             const auto cancelled = options.cancelled;
@@ -1871,12 +1892,13 @@ namespace lfs::io {
                             };
                             if (params.embed_source_metadata) {
                                 if (!jpeg_metadata) {
-                                    auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG);
+                                    auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG, false, params.srt_metadata);
                                     if (!prepared)
                                         check_sink(media::SinkResult::failure(prepared.error()));
                                     jpeg_metadata = std::move(*prepared);
                                 }
                                 media::FrameInfo info;
+                                info.origin = media::FrameOrigin::Decoded;
                                 info.legacy_source_frame = batch_meta[i].source_frame;
                                 info.timestamp_origin = batch_meta[i].timestamp_origin;
                                 if (batch_meta[i].source_pts)
@@ -2679,6 +2701,15 @@ namespace lfs::io {
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
+                        if (params.srt_metadata) {
+                            const auto& binding = *params.srt_metadata;
+                            root["srt_metadata"] = {{"policy", media::detail::srt_frame_metadata_policy},
+                                                    {"source_locator", binding.catalog.source().display},
+                                                    {"source_locator_bytes", media::json_detail::hexBytes(binding.catalog.source().native_bytes)},
+                                                    {"source_locator_encoding", binding.catalog.source().encoding == media::MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"},
+                                                    {"offset_ms", binding.offset_milliseconds},
+                                                    {"point_tolerance_ms", media::json_detail::optional(binding.point_tolerance_milliseconds)}};
+                        }
                         if (params.embed_source_metadata)
                             root["embedded_metadata_policy"] = embeddedMetadataPolicy(params.format);
                         if (params.write_source_metadata_sidecars) {

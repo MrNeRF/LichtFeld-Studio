@@ -371,6 +371,44 @@ class ExtractionContracts(unittest.TestCase):
                 if expected and mode != "memory":
                     self.assertEqual({p.name:p.read_bytes() for p in written}, {p.name:p.read_bytes() for p in files.glob("*.jpg")})
 
+    def test_srt_frame_metadata_optional_jpeg_backend_and_resume(self):
+        from srt_metadata_fixture import packet
+        from jpeg_metadata_fixture import read
+        reference, files = self.extract(format="jpg")
+        self.assertTrue(reference["success"], reference["error"])
+        encoded = next(files.glob("*.jpg"))
+        sidecar = self.root / "backend telemetry.srt"
+        sidecar.write_bytes(packet())
+        for hardware, resume in ((False, False), (True, False), (True, True)):
+            with self.subTest(hardware=hardware, resume=resume):
+                work = Path(tempfile.mkdtemp(prefix="timed-jpeg-", dir=self.root))
+                output = work / "output"
+                request = {"operation": "jpeg-backend", "input": str(self.corpus / "cfr-asymmetric.nut"), "output": str(output),
+                           "backend_mode": "normal", "allow_hardware": hardware, "encoded_reference": str(encoded),
+                           "embed_metadata": True, "resume": resume, "srt_path": str(sidecar), "srt_offset_ms": 0}
+                path = work / "request.json"
+                path.write_text(json.dumps(request), encoding="utf-8")
+                result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                actual = json.loads(result.stdout)
+                self.assertTrue(actual["success"], actual)
+                self.assertEqual(actual["accepted"], 4)
+                self.assertEqual(actual["batches"] > 0, hardware)
+                observed = [json.loads(read(image.read_bytes())[3]["SrtObservation"])["match"] for image in sorted(output.glob("*.jpg"))]
+                self.assertEqual([value["cue"] if value else None for value in observed], [0, 0, None, None])
+                if resume:
+                    previous = {image.name: image.read_bytes() for image in output.glob("*.jpg")}
+                    result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+                    actual = json.loads(result.stdout)
+                    self.assertTrue(actual["success"], actual)
+                    self.assertEqual(actual["batches"], 0)
+                    (output / sorted(previous)[0]).unlink()
+                    result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+                    actual = json.loads(result.stdout)
+                    self.assertTrue(actual["success"], actual)
+                    self.assertGreater(actual["batches"], 0)
+                    self.assertEqual({image.name: image.read_bytes() for image in output.glob("*.jpg")}, previous)
+
     def test_source_metadata_sidecars_optional_jpeg_backend_replacement(self):
         reference, files = self.extract(format="jpg")
         self.assertTrue(reference["success"], reference["error"])

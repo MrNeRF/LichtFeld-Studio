@@ -74,7 +74,27 @@ namespace lfs::python {
         nb::class_<AvifOutputOptions>(m, "AvifOutputOptions").def(nb::init<>()).def_rw("lossless", &AvifOutputOptions::lossless).def_rw("quality", &AvifOutputOptions::quality).def_rw("speed", &AvifOutputOptions::speed).def_rw("bit_depth", &AvifOutputOptions::bit_depth).def_rw("overwrite", &AvifOutputOptions::overwrite);
         nb::enum_<JxlPrecision>(m, "JxlPrecision").value("Float32", JxlPrecision::Float32).value("UInt16", JxlPrecision::UInt16);
         nb::class_<JxlOutputOptions>(m, "JxlOutputOptions").def(nb::init<>()).def_rw("lossless", &JxlOutputOptions::lossless).def_rw("distance", &JxlOutputOptions::distance).def_rw("effort", &JxlOutputOptions::effort).def_rw("precision", &JxlOutputOptions::precision).def_rw("transfer", &JxlOutputOptions::transfer).def_rw("overwrite", &JxlOutputOptions::overwrite);
-        nb::class_<FileFrameSinkOptions>(m, "FileFrameSinkOptions").def(nb::init<>()).def_rw("output_directory", &FileFrameSinkOptions::output_directory).def_rw("filename_pattern", &FileFrameSinkOptions::filename_pattern).def_rw("format", &FileFrameSinkOptions::format).def_rw("jpeg_quality", &FileFrameSinkOptions::jpeg_quality).def_rw("exr", &FileFrameSinkOptions::exr).def_rw("tiff16", &FileFrameSinkOptions::tiff16).def_rw("jxl", &FileFrameSinkOptions::jxl).def_rw("avif", &FileFrameSinkOptions::avif).def_rw("embed_source_metadata", &FileFrameSinkOptions::embed_source_metadata);
+        nb::class_<SrtMetadataCatalog>(m, "SrtMetadataCatalog")
+            .def_prop_ro("cue_count", [](const SrtMetadataCatalog& catalog) { return catalog.cues().size(); })
+            .def("metadata_json", [](const SrtMetadataCatalog& catalog) {
+                nb::gil_scoped_release release;
+                try { auto result = json_detail::srtMetadataJson(catalog);
+                if (!result) throw Exception(result.error());
+                return std::move(*result); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the owned SRT observation and retained raw bytes as JSON.")
+            .def("lookup_json", [](const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance) {
+                nb::gil_scoped_release release;
+                try {
+                const auto result = json_detail::srtLookup(catalog, timestamp, offset, tolerance);
+                if (!result) throw Exception(result.error());
+                return json_detail::dump(*result); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT lookup JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, nb::arg("timestamp"), nb::arg("offset_milliseconds"), nb::arg("point_tolerance_milliseconds") = nb::none(), "Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.");
+        nb::class_<SrtFrameMetadata>(m, "SrtFrameMetadata")
+            .def(nb::init<SrtMetadataCatalog, std::int64_t, std::optional<std::int64_t>>(), nb::arg("catalog"), nb::arg("offset_milliseconds"), nb::arg("point_tolerance_milliseconds") = nb::none())
+            .def_ro("catalog", &SrtFrameMetadata::catalog)
+            .def_ro("offset_milliseconds", &SrtFrameMetadata::offset_milliseconds)
+            .def_ro("point_tolerance_milliseconds", &SrtFrameMetadata::point_tolerance_milliseconds);
+        nb::class_<FileFrameSinkOptions>(m, "FileFrameSinkOptions").def(nb::init<>()).def_rw("output_directory", &FileFrameSinkOptions::output_directory).def_rw("filename_pattern", &FileFrameSinkOptions::filename_pattern).def_rw("format", &FileFrameSinkOptions::format).def_rw("jpeg_quality", &FileFrameSinkOptions::jpeg_quality).def_rw("exr", &FileFrameSinkOptions::exr).def_rw("tiff16", &FileFrameSinkOptions::tiff16).def_rw("jxl", &FileFrameSinkOptions::jxl).def_rw("avif", &FileFrameSinkOptions::avif).def_rw("embed_source_metadata", &FileFrameSinkOptions::embed_source_metadata).def_rw("srt_metadata", &FileFrameSinkOptions::srt_metadata);
         nb::class_<FileExtraction>(m, "FileExtraction").def(nb::init<>()).def_rw("files", &FileExtraction::files).def_rw("write_metadata", &FileExtraction::write_metadata).def_rw("resume", &FileExtraction::resume).def_rw("preserve_source_metadata", &FileExtraction::preserve_source_metadata).def_rw("write_source_metadata_sidecars", &FileExtraction::write_source_metadata_sidecars);
         nb::class_<Rational>(m, "Rational").def(nb::init<>()).def_rw("numerator", &Rational::numerator).def_rw("denominator", &Rational::denominator);
         nb::class_<Timestamp>(m, "Timestamp").def(nb::init<>()).def_rw("ticks", &Timestamp::ticks).def_rw("time_base", &Timestamp::time_base);
@@ -141,21 +161,6 @@ namespace lfs::python {
                 { nb::gil_scoped_release release; result.emplace(ImageOutput::writeAvif(path, frame.view(), copy)); }
                 if (callbacks->error) std::rethrow_exception(callbacks->error);
                 if (!*result) throw Exception(result->error()); }, nb::arg("path"), nb::arg("frame"), nb::arg("options") = AvifOutputOptions{}, nb::arg("cancelled") = nb::none());
-        nb::class_<SrtMetadataCatalog>(m, "SrtMetadataCatalog")
-            .def_prop_ro("cue_count", [](const SrtMetadataCatalog& catalog) { return catalog.cues().size(); })
-            .def("metadata_json", [](const SrtMetadataCatalog& catalog) {
-                nb::gil_scoped_release release;
-                try { auto result = json_detail::srtMetadataJson(catalog);
-                if (!result) throw Exception(result.error());
-                return std::move(*result); }
-                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the owned SRT observation and retained raw bytes as JSON.")
-            .def("lookup_json", [](const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance) {
-                nb::gil_scoped_release release;
-                try {
-                const auto result = json_detail::srtLookup(catalog, timestamp, offset, tolerance);
-                if (!result) throw Exception(result.error());
-                return json_detail::dump(*result); }
-                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT lookup JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, nb::arg("timestamp"), nb::arg("offset_milliseconds"), nb::arg("point_tolerance_milliseconds") = nb::none(), "Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.");
         nb::class_<MediaIngest>(m, "MediaIngest")
             .def_static("source_srt_metadata", [](const std::filesystem::path& path) {
                 nb::gil_scoped_release release;

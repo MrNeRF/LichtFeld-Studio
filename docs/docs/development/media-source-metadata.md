@@ -1074,3 +1074,89 @@ separately. Text views share the original bytes; lookup copies no whole-file JSO
 
 Timed subtitle/data streams inside video files remain a separate demux consumer.
 Enumeration of static stream metadata does not imply timed packet collection.
+
+
+### Associating SRT observations with extracted images
+
+`FileFrameSinkOptions::srt_metadata` optionally holds `SrtFrameMetadata(catalog,
+offset_milliseconds, point_tolerance_milliseconds)`. The offset argument is
+required, including when its value is zero. The binding shares the immutable
+catalog and uses each decoded frame's source `Timestamp`; reading the SRT and
+choosing the clock mapping remain explicit caller actions.
+
+Enable embedded source metadata, source XMP sidecars, or both to export the
+observation. Supplying a binding without an enabled destination is an error.
+The file extraction API passes the same binding to the CPU writers, optional
+GPU JPEG output and verified checkpoint replay. Pixel conversion and encoding
+continue through their existing paths.
+
+```python
+import lichtfeld as lf
+
+catalog = lf.media.MediaIngest.source_srt_metadata("flight.srt")
+output = lf.media.FileExtraction()
+output.files.output_directory = "frames"
+output.files.embed_source_metadata = True
+output.write_source_metadata_sidecars = True
+output.files.srt_metadata = lf.media.SrtFrameMetadata(
+    catalog, offset_milliseconds=1000)
+report = lf.media.MediaIngest.extract_files(request, output)
+```
+
+The binding is also available to native callers through the public file-sink
+options. The `SrtFrameMetadata` constructor takes the owned catalog and explicit
+integer clock offset. Python exposes read-only catalog, offset and tolerance
+properties; replace the optional binding to choose another association.
+
+The image XMP contains `lfs:SrtObservation` in the existing
+`https://lichtfeld.io/ns/media/1.0/` namespace. Its value is XML-escaped ASCII
+JSON with policy `srt-frame-observation-v1`. It retains the query ticks and
+rational time base, explicit offset/tolerance, source locator and the selected
+cue's timing, normalized text bytes and interpreted DJI fields. Gaps are
+represented by `match: null`. The selected cue can include unknown producer
+fields and identifiers. Original whole-file SRT bytes remain owned by the input
+catalog rather than being repeated in every exported image.
+
+This is the same lookup used by `lookup_json`: half-open intervals, exact point
+samples by default, optional nearest-point tolerance and errors for ambiguity or
+unrepresentable clock arithmetic. Export requires a decoded frame with a source
+timestamp and a known timestamp origin. Rendered frames, missing timestamps
+and ambiguous associations fail rather than receiving an invented observation.
+
+The shared image writers carry the property in PNG, JPEG, TIFF16, EXR, JPEG XL
+and AVIF. JPEG uses the existing Extended XMP packetizer when the combined static
+and per-frame properties exceed Standard APP1 capacity. Existing output geometry,
+color handling, atomic image publication and companion policies still apply.
+The values are vendor declarations: altitude units/datum and camera-versus-flight
+position are not inferred, and the property does not populate standard EXIF GPS
+or alter scene poses. Choosing to export the binding includes its selected cue
+text/bytes in privacy decisions alongside the static source observation.
+
+`extraction_metadata.json` records the SRT policy, source locator/native bytes
+and explicit clock mapping once, alongside the existing frame source PTS and
+rational time base. Per-frame XMP carries the actual lookup result. With
+`resume=True`, checkpoint identity additionally hashes the original SRT bytes
+and checks the locator, offset and tolerance. A changed input or mapping is
+refused before adopting existing output. The catalog remains usable after its
+source file is removed; a resumed call can pass that same owned observation.
+
+Output and cleanup paths identifying the still-existing SRT input are refused
+before replacing that source, including native filesystem aliases. The catalog
+remains usable when its original file has been removed. Existing filesystem
+publication and concurrent-writer contracts continue to apply.
+
+Images and their XMP companions remain separate atomic publications. The existing
+checkpoint verifies encoded bytes and companion bytes, preserves accepted frames
+and reconstructs missing generated output through the same writer and lookup.
+
+CLI extraction accepts an explicit SRT path and offset:
+
+```sh
+media-ingest extract flight.mp4 --output frames --interval 10 \
+  --embed-source-metadata --source-metadata-sidecars \
+  --srt-metadata flight.srt --srt-offset-ms 1000
+```
+
+`--srt-point-tolerance-ms N` additionally enables the catalog's nearest-point
+fallback. Missing path/offset/output policy, duplicate SRT options and negative
+tolerance are refused. Adjacent subtitle filenames are not searched automatically.

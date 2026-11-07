@@ -2002,6 +2002,23 @@ class IngestCLI(unittest.TestCase):
         self.assertIn("\ufffd", result["cues"][0]["text"])
         self.assertEqual(result["cues"][0]["facts"][0]["value"], 12)
 
+    def test_source_srt_frame_metadata_cli_requires_explicit_mapping(self):
+        import xml.etree.ElementTree as ET
+        path = self.root / "frame telemetry é 日本語.srt"
+        path.write_bytes(srt_metadata_fixture.packet(offset_ms=1000))
+        output = self.root / "srt frame output"
+        arguments = ("extract", self.source(), "--output", output, "--interval", "1", "--end", "0.1")
+        for flags in (("--srt-metadata", path), ("--srt-offset-ms", "0"),
+                      ("--srt-metadata", path, "--srt-offset-ms", "1000"),
+                      ("--srt-metadata", path, "--srt-offset-ms", "1000", "--srt-point-tolerance-ms", "-1", "--source-metadata-sidecars")):
+            self.invoke(*arguments, *flags, code=2)
+            self.assertFalse(output.exists())
+        result, _ = self.invoke(*arguments, "--srt-metadata", path, "--srt-offset-ms", "1000", "--source-metadata-sidecars")
+        self.assertTrue(result["success"])
+        record = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))["frames"][0]
+        node = ET.fromstring((output / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
+        self.assertEqual(json.loads(node.text)["match"]["cue"], 0)
+
     def test_source_srt_metadata_raw_and_explicit_clock_lookup(self):
         path = self.root / "DJI telemetry é 日本語.srt"
         packet = srt_metadata_fixture.packet(offset_ms=1000)

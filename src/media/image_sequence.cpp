@@ -44,8 +44,8 @@ namespace lfs::media {
             // Keep renderer cleanup independent of extraction metadata and files.
             if (files.remove_stale_frames || files.preserve_metadata)
                 return sequenceError(ErrorCode::InvalidArgument, "Image sequences do not own extraction metadata or stale frames");
-            if (files.embed_source_metadata || files.write_source_metadata_sidecars)
-                return sequenceError(ErrorCode::InvalidArgument, "Rendered sequences require render metadata rather than source-camera metadata (embed_source_metadata=" + std::to_string(files.embed_source_metadata) + ", write_source_metadata_sidecars=" + std::to_string(files.write_source_metadata_sidecars) + ")");
+            if (files.embed_source_metadata || files.write_source_metadata_sidecars || files.srt_metadata)
+                return sequenceError(ErrorCode::InvalidArgument, "Rendered sequences require render metadata rather than source-camera metadata (embed_source_metadata=" + std::to_string(files.embed_source_metadata) + ", write_source_metadata_sidecars=" + std::to_string(files.write_source_metadata_sidecars) + ", srt_metadata=" + std::to_string(files.srt_metadata.has_value()) + ")");
             if (options.write_metadata_sidecars && options.provenance.size() > detail::max_render_provenance_bytes)
                 return sequenceError(ErrorCode::ResourceExhausted, "Render provenance exceeds its input byte limit (size=" + std::to_string(options.provenance.size()) + ", limit=" + std::to_string(detail::max_render_provenance_bytes) + ")");
             if (files.filename_pattern.empty() || files.filename_pattern.find_first_of("/\\:") != std::string::npos ||
