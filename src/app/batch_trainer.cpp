@@ -13,11 +13,13 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/scene_partitioner.hpp"
+#include "core/splat_data.hpp"
 #include "core/tile_exposure.hpp"
 #include "core/camera.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/ply_stream_merge.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,14 +28,19 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <print>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -41,6 +48,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 
 #ifdef _WIN32
 #include "python/windows_process_utils.hpp"
@@ -110,6 +119,298 @@ namespace lfs::app {
             struct sigaction old_sa_term_ {};
 #endif
         };
+
+        struct TileFeasibility {
+            bool feasible = false;
+            int camera_count = 0;
+            int multi_view_cells = 0;
+            std::vector<std::string> reasons;
+        };
+
+        TileFeasibility assess_tile_feasibility(
+            const std::vector<int>& cameras,
+            const lfs::core::TileCameraSelectionDiagnostics& diagnostics,
+            const lfs::core::param::TrainingParameters& params) {
+            TileFeasibility result;
+            result.camera_count = static_cast<int>(cameras.size());
+            result.multi_view_cells = diagnostics.multi_view_covered_cells;
+            if (result.camera_count < params.tile_min_cameras) {
+                result.reasons.push_back(std::format(
+                    "selected cameras {} < required {}", result.camera_count,
+                    params.tile_min_cameras));
+            }
+            if (result.multi_view_cells < params.tile_min_multi_view_cells) {
+                result.reasons.push_back(std::format(
+                    "multi-view cells {} < required {}", result.multi_view_cells,
+                    params.tile_min_multi_view_cells));
+            }
+            result.feasible = result.reasons.empty();
+            return result;
+        }
+
+        float tile_geometry_epsilon(const lfs::core::TileSpec& a,
+                                    const lfs::core::TileSpec& b) {
+            float scale = 1.0f;
+            for (int axis = 0; axis < 3; ++axis) {
+                scale = std::max(scale, std::abs(a.min[axis]));
+                scale = std::max(scale, std::abs(a.max[axis]));
+                scale = std::max(scale, std::abs(b.min[axis]));
+                scale = std::max(scale, std::abs(b.max[axis]));
+            }
+            // Allows the nextafter ownership convention on interior faces
+            // without treating visibly separated boxes as adjacent.
+            return std::max(1e-5f, scale * 1e-5f);
+        }
+
+        bool tiles_make_rectangular_union(const lfs::core::TileSpec& a,
+                                          const lfs::core::TileSpec& b) {
+            const float epsilon = tile_geometry_epsilon(a, b);
+            if (glm::length(a.rotation_degrees - b.rotation_degrees) > epsilon)
+                return false;
+            for (int join_axis = 0; join_axis < 3; ++join_axis) {
+                const bool faces_touch =
+                    std::abs(a.max[join_axis] - b.min[join_axis]) <= epsilon ||
+                    std::abs(b.max[join_axis] - a.min[join_axis]) <= epsilon;
+                if (!faces_touch) continue;
+                bool same_other_intervals = true;
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (axis == join_axis) continue;
+                    same_other_intervals = same_other_intervals &&
+                        std::abs(a.min[axis] - b.min[axis]) <= epsilon &&
+                        std::abs(a.max[axis] - b.max[axis]) <= epsilon;
+                }
+                if (same_other_intervals) return true;
+            }
+            return false;
+        }
+
+        lfs::core::TileSpec coalesce_tiles(const lfs::core::TileSpec& a,
+                                           const lfs::core::TileSpec& b) {
+            lfs::core::TileSpec merged = a;
+            for (int axis = 0; axis < 3; ++axis) {
+                merged.min[axis] = std::min(a.min[axis], b.min[axis]);
+                merged.max[axis] = std::max(a.max[axis], b.max[axis]);
+            }
+            if (a.has_context_bounds || b.has_context_bounds) {
+                const auto a_context_min = a.has_context_bounds ? a.context_min : a.min;
+                const auto a_context_max = a.has_context_bounds ? a.context_max : a.max;
+                const auto b_context_min = b.has_context_bounds ? b.context_min : b.min;
+                const auto b_context_max = b.has_context_bounds ? b.context_max : b.max;
+                for (int axis = 0; axis < 3; ++axis) {
+                    merged.context_min[axis] = std::min(a_context_min[axis], b_context_min[axis]);
+                    merged.context_max[axis] = std::max(a_context_max[axis], b_context_max[axis]);
+                }
+                merged.has_context_bounds = true;
+            }
+            return merged;
+        }
+
+        // Extend only outer ownership faces.  This happens strictly after
+        // camera allocation, so a boundary safety margin cannot cause one tile
+        // to steal another tile's cameras or alter feasibility decisions.
+        std::vector<std::array<bool, 4>> extend_boundary_tile_cores(
+            std::vector<lfs::core::TileSpec>& tiles, const float padding) {
+            std::vector<std::array<bool, 4>> expanded(tiles.size());
+            if (padding <= 0.0f || tiles.empty()) return expanded;
+            glm::vec3 global_min = tiles.front().min;
+            glm::vec3 global_max = tiles.front().max;
+            for (const auto& tile : tiles) {
+                global_min = glm::min(global_min, tile.min);
+                global_max = glm::max(global_max, tile.max);
+            }
+            const float scale = std::max(1.0f, glm::length(global_max - global_min));
+            const float epsilon = std::max(1e-5f, scale * 1e-5f);
+            // Auto tiling splits the horizontal local plane.  Extending Z for
+            // every tile would duplicate the same safety margin everywhere.
+            for (size_t index = 0; index < tiles.size(); ++index) {
+                auto& tile = tiles[index];
+                for (int axis = 0; axis < 2; ++axis) {
+                    if (std::abs(tile.min[axis] - global_min[axis]) <= epsilon) {
+                        tile.min[axis] -= padding;
+                        expanded[index][static_cast<size_t>(axis) * 2] = true;
+                    }
+                    if (std::abs(tile.max[axis] - global_max[axis]) <= epsilon) {
+                        tile.max[axis] += padding;
+                        expanded[index][static_cast<size_t>(axis) * 2 + 1] = true;
+                    }
+                }
+            }
+            return expanded;
+        }
+
+        struct DenseCoarseRender {
+            int width = 0;
+            int height = 0;
+            std::vector<float> alpha;
+            std::vector<float> depth;
+        };
+
+        // A full-model render is reused by overlapping tiles, but keeping one
+        // for every image makes a high-resolution dataset consume unbounded
+        // host memory.  At the largest supported mask size this cap is about
+        // 32 MiB for the two float planes.
+        constexpr size_t DENSE_MASK_FULL_RENDER_CACHE_LIMIT = 64;
+
+        glm::mat3 cropbox_rotation(const glm::vec3& degrees) {
+            return glm::mat3(glm::eulerAngleXYZ(glm::radians(degrees.x),
+                                                glm::radians(degrees.y),
+                                                glm::radians(degrees.z)));
+        }
+
+        bool point_in_tile_core(const glm::vec3& point,
+                                const lfs::core::TileSpec& tile) {
+            const auto inverse = glm::transpose(cropbox_rotation(tile.rotation_degrees));
+            const glm::vec3 center = (tile.min + tile.max) * 0.5f;
+            const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+            const glm::vec3 local = inverse * (point - center);
+            return local.x >= -half.x && local.x <= half.x &&
+                   local.y >= -half.y && local.y <= half.y &&
+                   local.z >= -half.z && local.z <= half.z;
+        }
+
+        std::unique_ptr<lfs::core::SplatData> coarse_owner_model(
+            const lfs::core::SplatData& coarse,
+            const lfs::core::TileSpec& tile) {
+            const auto means = coarse.get_means().cpu().contiguous();
+            if (means.ndim() != 2 || means.size(1) < 3) return {};
+            const auto* values = means.ptr<float>();
+            const size_t count = means.size(0);
+            const size_t stride = means.size(1);
+            std::vector<int> selected;
+            selected.reserve(std::min<size_t>(count, 100000));
+            for (size_t index = 0; index < count; ++index) {
+                const glm::vec3 point{values[index * stride], values[index * stride + 1],
+                                      values[index * stride + 2]};
+                if (std::isfinite(point.x) && std::isfinite(point.y) &&
+                    std::isfinite(point.z) && point_in_tile_core(point, tile)) {
+                    selected.push_back(static_cast<int>(index));
+                }
+            }
+            if (selected.empty()) return {};
+            const auto indices = lfs::core::Tensor::from_vector(
+                selected, lfs::core::TensorShape({selected.size()}), coarse.means().device());
+            auto canonical_sh = coarse.shN_canonical();
+            auto selected_sh = canonical_sh.is_valid() && canonical_sh.numel() > 0
+                                   ? canonical_sh.index_select(0, indices)
+                                   : lfs::core::Tensor{};
+            auto result = std::make_unique<lfs::core::SplatData>(
+                coarse.get_max_sh_degree(),
+                coarse.means().index_select(0, indices),
+                coarse.sh0().index_select(0, indices),
+                std::move(selected_sh),
+                coarse.scaling_raw().index_select(0, indices),
+                coarse.rotation_raw().index_select(0, indices),
+                coarse.opacity_raw().index_select(0, indices),
+                coarse.get_scene_scale(), lfs::core::SplatData::ShNLayout::Canonical);
+            result->set_active_sh_degree(coarse.get_active_sh_degree());
+            return result;
+        }
+
+        std::optional<DenseCoarseRender> rasterize_coarse_depth_opacity(
+            const lfs::core::SplatData& model,
+            const lfs::core::TileCameraEvidence& view,
+            const int resolution,
+            lfs::core::Tensor& background) {
+            if (!view.source || !view.pinhole || view.width <= 0 || view.height <= 0 ||
+                resolution < 16 || resolution > 256 || model.size() == 0) {
+                return std::nullopt;
+            }
+            const int width = resolution;
+            const int height = std::max(16, static_cast<int>(std::lround(
+                static_cast<double>(resolution) * view.height / view.width)));
+            if (height > 256) return std::nullopt;
+            const float sx = static_cast<float>(width) / static_cast<float>(view.width);
+            const float sy = static_cast<float>(height) / static_cast<float>(view.height);
+            const auto empty_distortion = lfs::core::Tensor::empty(
+                {0}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+            lfs::core::Camera render_camera(
+                view.source->R().cpu().contiguous(), view.source->T().cpu().contiguous(),
+                view.fx * sx, view.fy * sy, view.cx * sx, view.cy * sy,
+                empty_distortion, empty_distortion,
+                lfs::core::CameraModelType::PINHOLE,
+                std::format("{}_coarse_mask", view.image_name), {}, {}, width, height,
+                view.uid, view.source->camera_id());
+            auto rendered = lfs::training::fast_rasterize(render_camera,
+                                                           const_cast<lfs::core::SplatData&>(model),
+                                                           background);
+            if (!rendered.alpha.is_valid() || !rendered.depth.is_valid() ||
+                rendered.alpha.numel() != static_cast<size_t>(width) * height ||
+                rendered.depth.numel() != static_cast<size_t>(width) * height) {
+                return std::nullopt;
+            }
+            const auto alpha = rendered.alpha.cpu().contiguous();
+            const auto depth = rendered.depth.cpu().contiguous();
+            DenseCoarseRender result;
+            result.width = width;
+            result.height = height;
+            result.alpha.assign(alpha.ptr<float>(), alpha.ptr<float>() + alpha.numel());
+            result.depth.assign(depth.ptr<float>(), depth.ptr<float>() + depth.numel());
+            return result;
+        }
+
+        lfs::core::TileVisibilityMask dense_tile_visibility_mask(
+            const lfs::core::TileSpec& tile,
+            const lfs::core::TileCameraEvidence& view,
+            const lfs::core::SplatData& coarse,
+            const int resolution,
+            const float minimum_alpha,
+            const float foreign_weight,
+            lfs::core::Tensor& background,
+            std::unordered_map<int, DenseCoarseRender>& full_render_cache,
+            bool* const rasterized_successfully = nullptr) {
+            if (rasterized_successfully) *rasterized_successfully = false;
+            DenseCoarseRender full;
+            if (const auto cached = full_render_cache.find(view.uid);
+                cached != full_render_cache.end()) {
+                full = cached->second;
+            } else {
+                const auto rendered = rasterize_coarse_depth_opacity(
+                    coarse, view, resolution, background);
+                if (!rendered) return {};
+                full = *rendered;
+                if (full_render_cache.size() >= DENSE_MASK_FULL_RENDER_CACHE_LIMIT)
+                    full_render_cache.clear();
+                full_render_cache.emplace(view.uid, full);
+            }
+            auto owner = coarse_owner_model(coarse, tile);
+            if (!owner) return {};
+            const auto owner_render = rasterize_coarse_depth_opacity(
+                *owner, view, resolution, background);
+            if (!owner_render || owner_render->width != full.width ||
+                owner_render->height != full.height ||
+                owner_render->alpha.size() != full.alpha.size()) {
+                return {};
+            }
+            if (rasterized_successfully) *rasterized_successfully = true;
+            lfs::core::TileVisibilityMask result;
+            result.width = full.width;
+            result.height = full.height;
+            result.weights.assign(full.alpha.size(), 1.0f);
+            bool masked_any = false;
+            for (size_t index = 0; index < result.weights.size(); ++index) {
+                const float full_alpha = full.alpha[index];
+                const float owner_alpha = owner_render->alpha[index];
+                const float full_depth = full.depth[index];
+                const float owner_depth = owner_render->depth[index];
+                if (!std::isfinite(full_alpha) || !std::isfinite(owner_alpha) ||
+                    full_alpha < minimum_alpha) continue;
+                const bool foreign_dominates =
+                    owner_alpha < std::max(minimum_alpha * 0.5f, full_alpha * 0.35f);
+                const bool owner_is_behind =
+                    owner_alpha >= minimum_alpha && std::isfinite(full_depth) &&
+                    std::isfinite(owner_depth) && owner_depth > full_depth * 1.01f;
+                if (foreign_dominates || owner_is_behind) {
+                    result.weights[index] = foreign_weight;
+                    masked_any = true;
+                }
+            }
+            // Preserve an all-one dense mask too.  Its presence tells the
+            // worker that rasterization succeeded and prevents it from
+            // silently replacing a valid "no foreign surface" result with a
+            // separate sparse fallback estimate.
+            (void)masked_any;
+            return result;
+        }
 
         std::string format_duration(const double total_seconds) {
             if (total_seconds < 0.0)
@@ -1320,6 +1621,14 @@ namespace lfs::app {
                                      name == "--tile-coarse-resize" || name == "--tile-depth-masks" ||
                                      name == "--tile-camera-uids" || name == "--tile-exposure-gains" ||
                                      name == "--tile-contextbox" || name == "--tile-child" ||
+                                     name == "--tile-min-cameras" ||
+                                     name == "--tile-min-multiview-cells" ||
+                                     name == "--no-tile-merge-infeasible" ||
+                                     name == "--tile-boundary-padding" ||
+                                     name == "--tile-visibility-mask-resolution" ||
+                                     name == "--tile-visibility-min-alpha" ||
+                                     name == "--tile-visibility-foreign-weight" ||
+                                     name == "--tile-lock-exposure-correction" ||
                                      name == "--train";
             if (!parent_only)
                 shared.insert(shared.end(), command_line.begin() + n, command_line.begin() + n + count);
@@ -1329,6 +1638,7 @@ namespace lfs::app {
         std::vector<lfs::core::TileSpec> tiles;
         std::vector<lfs::core::TileCameraEvidence> camera_evidence;
         std::vector<lfs::core::TilePlanDiagnostics> planning_diagnostics;
+        bool plan_has_boundary_padding = false;
         try {
             if (params.tile_plan_path) {
                 std::ifstream input(lfs::core::native_fs::native_path(*params.tile_plan_path));
@@ -1336,6 +1646,10 @@ namespace lfs::app {
                 const auto plan = json::parse(input);
                 if (!plan.contains("tiles") || !plan["tiles"].is_array())
                     throw std::runtime_error("Tile plan needs a tiles array");
+                if (plan.contains("boundary_padding_applied") &&
+                    !plan["boundary_padding_applied"].is_boolean())
+                    throw std::runtime_error("Tile plan boundary_padding_applied must be a boolean");
+                plan_has_boundary_padding = plan.value("boundary_padding_applied", false);
                 if (plan["tiles"].size() == 0 || plan["tiles"].size() > 1000)
                     throw std::runtime_error("Tile plan must have 1 to 1000 boxes");
                 std::unordered_set<std::string> tile_names;
@@ -1468,21 +1782,137 @@ namespace lfs::app {
             return 1;
         }
 
+        const size_t requested_tile_count = tiles.size();
         std::vector<std::vector<int>> tile_cameras;
-        tile_cameras.reserve(tiles.size());
         std::vector<lfs::core::TileCameraSelectionDiagnostics> camera_selection_diagnostics;
-        camera_selection_diagnostics.reserve(tiles.size());
+        std::vector<TileFeasibility> tile_feasibility;
+        std::vector<std::vector<std::string>> coalesced_from;
+        coalesced_from.reserve(tiles.size());
+        for (const auto& tile : tiles)
+            coalesced_from.push_back({tile.name});
         std::unordered_map<int, const lfs::core::TileCameraEvidence*> views_by_uid;
         for (const auto& view : camera_evidence)
             if (!views_by_uid.emplace(view.uid, &view).second) {
                 LOG_ERROR("Dataset contains duplicate camera UID {}", view.uid);
                 return 1;
             }
-        for (const auto& tile : tiles) {
-            lfs::core::TileCameraSelectionDiagnostics diagnostics;
-            tile_cameras.push_back(lfs::core::select_tile_camera_uids(
-                tile, camera_evidence, &diagnostics));
-            camera_selection_diagnostics.push_back(diagnostics);
+        const auto assign_tile_cameras = [&] {
+            tile_cameras.clear();
+            camera_selection_diagnostics.clear();
+            tile_feasibility.clear();
+            tile_cameras.reserve(tiles.size());
+            camera_selection_diagnostics.reserve(tiles.size());
+            tile_feasibility.reserve(tiles.size());
+            for (const auto& tile : tiles) {
+                lfs::core::TileCameraSelectionDiagnostics diagnostics;
+                auto selected = lfs::core::select_tile_camera_uids(
+                    tile, camera_evidence, &diagnostics);
+                tile_feasibility.push_back(assess_tile_feasibility(selected, diagnostics, params));
+                tile_cameras.push_back(std::move(selected));
+                camera_selection_diagnostics.push_back(std::move(diagnostics));
+            }
+        };
+        assign_tile_cameras();
+
+        // Coalesce only cells whose cores make a rectangular union.  That
+        // preserves the no-overlap ownership proof; a nearest arbitrary tile
+        // could make an L shape, which a single crop box cannot represent.
+        while (true) {
+            const auto unfeasible = std::ranges::find_if(
+                tile_feasibility, [](const TileFeasibility& status) { return !status.feasible; });
+            if (unfeasible == tile_feasibility.end()) break;
+            const size_t failing_index = static_cast<size_t>(unfeasible - tile_feasibility.begin());
+            if (!params.tile_merge_infeasible || tiles.size() <= 1) break;
+
+            size_t best_index = tiles.size();
+            float best_distance = std::numeric_limits<float>::infinity();
+            const glm::vec3 failing_center = (tiles[failing_index].min + tiles[failing_index].max) * 0.5f;
+            for (size_t candidate = 0; candidate < tiles.size(); ++candidate) {
+                if (candidate == failing_index ||
+                    !tiles_make_rectangular_union(tiles[failing_index], tiles[candidate]))
+                    continue;
+                const glm::vec3 candidate_center =
+                    (tiles[candidate].min + tiles[candidate].max) * 0.5f;
+                const float distance = glm::length(candidate_center - failing_center);
+                if (distance < best_distance ||
+                    (distance == best_distance &&
+                     (best_index == tiles.size() ||
+                      tiles[candidate].name < tiles[best_index].name))) {
+                    best_distance = distance;
+                    best_index = candidate;
+                }
+            }
+            if (best_index == tiles.size()) break;
+
+            const size_t keep = std::min(failing_index, best_index);
+            const size_t remove = std::max(failing_index, best_index);
+            const std::string failing_name = tiles[failing_index].name;
+            const std::string neighbour_name = tiles[best_index].name;
+            auto merged = coalesce_tiles(tiles[keep], tiles[remove]);
+            // Keep a stable name from the lower ordered cell and make the
+            // change explicit in the plan manifest rather than hiding it.
+            merged.name = tiles[keep].name;
+            tiles[keep] = std::move(merged);
+            coalesced_from[keep].insert(coalesced_from[keep].end(),
+                                        coalesced_from[remove].begin(),
+                                        coalesced_from[remove].end());
+            tiles.erase(tiles.begin() + static_cast<std::ptrdiff_t>(remove));
+            coalesced_from.erase(coalesced_from.begin() + static_cast<std::ptrdiff_t>(remove));
+            // Adaptive work estimates describe the pre-coalescing leaves and
+            // must not be incorrectly attached to their union.
+            planning_diagnostics.clear();
+            LOG_WARN("Auto-tile feasibility: coalesced '{}' with adjacent '{}' ({} requested -> {} current tiles)",
+                     failing_name, neighbour_name, requested_tile_count, tiles.size());
+            assign_tile_cameras();
+        }
+
+        json feasibility_report;
+        feasibility_report["requested_tile_count"] = requested_tile_count;
+        feasibility_report["resolved_tile_count"] = tiles.size();
+        feasibility_report["minimum_cameras"] = params.tile_min_cameras;
+        feasibility_report["minimum_multi_view_cells"] = params.tile_min_multi_view_cells;
+        feasibility_report["coalesce_infeasible"] = params.tile_merge_infeasible;
+        feasibility_report["tiles"] = json::array();
+        bool all_tiles_feasible = true;
+        for (size_t index = 0; index < tiles.size(); ++index) {
+            const auto& status = tile_feasibility[index];
+            feasibility_report["tiles"].push_back({
+                {"name", tiles[index].name},
+                {"feasible", status.feasible},
+                {"camera_count", status.camera_count},
+                {"multi_view_cells", status.multi_view_cells},
+                {"reasons", status.reasons},
+                {"coalesced_from", coalesced_from[index]}});
+            all_tiles_feasible = all_tiles_feasible && status.feasible;
+        }
+        if (!write_batch_report(output / "tile_feasibility.json", feasibility_report.dump(2) + "\n"))
+            return 1;
+        if (!all_tiles_feasible) {
+            for (size_t index = 0; index < tiles.size(); ++index) {
+                if (!tile_feasibility[index].feasible) {
+                    LOG_ERROR("Tile '{}' remains infeasible: {}", tiles[index].name,
+                              tile_feasibility[index].reasons.empty()
+                                  ? "unknown feasibility error"
+                                  : tile_feasibility[index].reasons.front());
+                }
+            }
+            LOG_ERROR("Auto-tile feasibility gate failed before the coarse pass; see {}",
+                      path_to_utf8(output / "tile_feasibility.json"));
+            return 1;
+        }
+        if (tiles.size() != requested_tile_count) {
+            LOG_WARN("Auto-tile feasibility resolved {} requested tiles to {} rectangular tiles",
+                     requested_tile_count, tiles.size());
+        }
+
+        // Keep the unextended cores in the manifest as the exact region used
+        // for camera feasibility.  Boundary crop padding is applied only now.
+        const std::vector<lfs::core::TileSpec> camera_assignment_tiles = tiles;
+        const auto boundary_extensions = plan_has_boundary_padding
+            ? std::vector<std::array<bool, 4>>(tiles.size())
+            : extend_boundary_tile_cores(tiles, params.tile_boundary_padding);
+        if (plan_has_boundary_padding && params.tile_boundary_padding > 0.0f) {
+            LOG_INFO("Auto-tile plan already contains boundary padding; not applying it a second time");
         }
 
         // Solve this once from SfM before the coarse pass.  The same normalized
@@ -1566,6 +1996,12 @@ namespace lfs::app {
             "--tile-camera-uids", path_to_utf8(coarse_camera_path),
             "--tile-exposure-gains", path_to_utf8(exposure_path),
             "--tile-child", "--output-name", "coarse", "--export", "ply"};
+        if (params.tile_lock_exposure_correction) {
+            // A PLY transfers Gaussian appearance but not optimizer-owned
+            // appearance modules. Keep the coarse model in the same globally
+            // calibrated photometric space as locked tile workers.
+            coarse_job.extra_args.push_back("--no-exposure-correction");
+        }
         std::string coarse_error;
         if (!validate_job_arguments(coarse_job, batch, coarse_error)) {
             LOG_ERROR("Invalid coarse auto-tile pass: {}", coarse_error);
@@ -1585,13 +2021,15 @@ namespace lfs::app {
             return 1;
         }
 
+        std::shared_ptr<lfs::core::SplatData> coarse_model;
         std::vector<glm::vec3> coarse_points;
         try {
             auto loaded = lfs::io::Loader::create()->load(coarse_export);
             if (!loaded) throw std::runtime_error(loaded.error().format());
             const auto* splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&loaded->data);
             if (!splat || !*splat) throw std::runtime_error("coarse export is not a Gaussian splat PLY");
-            const auto means = (*splat)->get_means().cpu().contiguous();
+            coarse_model = *splat;
+            const auto means = coarse_model->get_means().cpu().contiguous();
             if (means.ndim() != 2 || means.size(1) < 3)
                 throw std::runtime_error("coarse export has invalid Gaussian means");
             const size_t count = means.size(0);
@@ -1606,34 +2044,70 @@ namespace lfs::app {
                     coarse_points.push_back(point);
             }
             if (coarse_points.empty()) throw std::runtime_error("coarse export has no finite Gaussian means");
-            LOG_INFO("Using {} sampled coarse Gaussian centres for depth-aware tile masks", coarse_points.size());
+            LOG_INFO("Loaded {} coarse Gaussians; retaining {} sampled centres only as a visibility-mask fallback",
+                     coarse_model->size(), coarse_points.size());
         } catch (const std::exception& error) {
             LOG_ERROR("Cannot prepare coarse depth masks: {}", error.what());
             return 1;
         }
 
+        lfs::core::Tensor mask_background;
+        try {
+            mask_background = lfs::core::Tensor::zeros(
+                {3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Cannot initialize CUDA for mandatory dense coarse visibility masks: {}", error.what());
+            return 1;
+        }
+        std::unordered_map<int, DenseCoarseRender> dense_full_render_cache;
         std::vector<path> tile_depth_mask_paths(tiles.size());
         for (size_t tile_index = 0; tile_index < tiles.size(); ++tile_index) {
             json depth_masks = {
-                {"version", 1},
-                {"method", "coarse_gaussian_center_zbuffer_conservative_3x3"},
+                {"version", 2},
+                {"method", "coarse_gaussian_dense_depth_opacity"},
                 {"coarse_model", path_to_utf8(coarse_export)},
+                {"resolution", params.tile_visibility_mask_resolution},
+                {"minimum_alpha", params.tile_visibility_min_alpha},
+                {"foreign_weight", params.tile_visibility_foreign_weight},
                 {"masks", json::array()}};
             for (const int uid : tile_cameras[tile_index]) {
                 const auto view = views_by_uid.find(uid);
                 if (view == views_by_uid.end()) continue;
-                const auto mask = lfs::core::estimate_tile_depth_visibility_mask(
-                    tiles[tile_index], *view->second, coarse_points);
+                lfs::core::TileVisibilityMask mask;
+                std::string method = "dense_gaussian_depth_opacity";
+                bool dense_rasterized = false;
+                try {
+                    mask = dense_tile_visibility_mask(
+                        tiles[tile_index], *view->second, *coarse_model,
+                        params.tile_visibility_mask_resolution,
+                        params.tile_visibility_min_alpha,
+                        params.tile_visibility_foreign_weight,
+                        mask_background, dense_full_render_cache, &dense_rasterized);
+                } catch (const std::exception& error) {
+                    LOG_WARN("Dense coarse visibility rasterization failed for tile '{}' camera {}: {}; using centre fallback",
+                             tiles[tile_index].name, uid, error.what());
+                }
+                if (mask.weights.empty() && !dense_rasterized) {
+                    method = "gaussian_center_zbuffer_fallback";
+                    mask = lfs::core::estimate_tile_depth_visibility_mask(
+                        tiles[tile_index], *view->second, coarse_points,
+                        params.tile_visibility_mask_resolution,
+                        params.tile_visibility_mask_resolution);
+                }
                 if (!mask.weights.empty()) {
                     depth_masks["masks"].push_back({
                         {"uid", uid}, {"width", mask.width}, {"height", mask.height},
-                        {"weights", mask.weights}});
+                        {"method", method}, {"weights", mask.weights}});
                 }
             }
             tile_depth_mask_paths[tile_index] = output / "tiles" / tiles[tile_index].name / "tile_depth_masks.json";
             if (!write_batch_report(tile_depth_mask_paths[tile_index], depth_masks.dump() + "\n"))
                 return 1;
         }
+        // Dense mask rendering belongs to the parent only. Release its large
+        // model and thread-local raster cache before starting local workers.
+        coarse_model.reset();
+        lfs::training::release_fast_rasterizer_thread_local_caches();
         // The parent needs only UID/name metadata after planning. Release loaded
         // camera payloads before starting a separate training process.
         for (auto& view : camera_evidence) {
@@ -1643,6 +2117,13 @@ namespace lfs::app {
         }
         json manifest;
         manifest["dataset"] = path_to_utf8(dataset);
+        manifest["requested_tile_count"] = requested_tile_count;
+        manifest["resolved_tile_count"] = tiles.size();
+        manifest["feasibility"] = {
+            {"path", "tile_feasibility.json"},
+            {"minimum_cameras", params.tile_min_cameras},
+            {"minimum_multi_view_cells", params.tile_min_multi_view_cells},
+            {"coalesced", tiles.size() != requested_tile_count}};
         manifest["overlap_ratio"] = params.tile_overlap;
         manifest["outside_loss_weight"] = params.tile_outside_loss_weight;
         manifest["crop_after_training"] = params.auto_tile_crop;
@@ -1652,8 +2133,15 @@ namespace lfs::app {
             {"path", "coarse/coarse.ply"},
             {"iterations", params.tile_coarse_iterations},
             {"resize_factor", params.tile_coarse_resize_factor},
-            {"training_seconds", coarse_result.duration_seconds}};
-        manifest["depth_masks"] = "conservative coarse Gaussian-centre z-buffer; sparse SfM fallback in tile trainer";
+            {"training_seconds", coarse_result.duration_seconds},
+            {"transferred_attributes", {"means", "scales", "rotations", "opacity", "spherical_harmonics"}},
+            {"tile_initialization", "core_plus_context_gaussian_filter"}};
+        manifest["depth_masks"] = "dense coarse Gaussian depth/opacity raster mask when available; sparse SfM fallback in tile trainer";
+        manifest["boundary_padding"] = {
+            {"distance", params.tile_boundary_padding},
+            {"timing", "after_camera_assignment"},
+            {"axes", "partition X/Y only"},
+            {"already_present_in_plan", plan_has_boundary_padding}};
         manifest["partition_mode"] = params.auto_tile_count > 0 ? "adaptive" : "grid";
         manifest["camera_selection"] = "sfm_image_support_tile_coverage_and_projected_airspace";
         manifest["airspace_view_threshold"] = lfs::core::TILE_AIRSPACE_VIEW_THRESHOLD;
@@ -1662,6 +2150,7 @@ namespace lfs::app {
             {"connected_cameras", exposure.connected_cameras},
             {"shared_points", exposure.shared_points},
             {"reliable_view_pairs", exposure.reliable_edges}};
+        manifest["tile_exposure_correction_locked"] = params.tile_lock_exposure_correction;
         if (!planning_diagnostics.empty())
             manifest["planning_work_units"] = "relative SfM-point and image-resolution proxy";
         manifest["tiles"] = json::array();
@@ -1676,6 +2165,21 @@ namespace lfs::app {
                           {"rotation_degrees", {tile.rotation_degrees.x,
                                                  tile.rotation_degrees.y,
                                                  tile.rotation_degrees.z}}};
+            const auto& assignment_tile = camera_assignment_tiles[index];
+            entry["camera_assignment_core_min"] = {
+                assignment_tile.min.x, assignment_tile.min.y, assignment_tile.min.z};
+            entry["camera_assignment_core_max"] = {
+                assignment_tile.max.x, assignment_tile.max.y, assignment_tile.max.z};
+            entry["coalesced_from"] = coalesced_from[index];
+            entry["feasibility"] = {
+                {"camera_count", tile_feasibility[index].camera_count},
+                {"multi_view_cells", tile_feasibility[index].multi_view_cells},
+                {"feasible", tile_feasibility[index].feasible}};
+            entry["boundary_extension"] = {
+                {"min_x", boundary_extensions[index][0]},
+                {"max_x", boundary_extensions[index][1]},
+                {"min_y", boundary_extensions[index][2]},
+                {"max_y", boundary_extensions[index][3]}};
             if (tile.has_context_bounds) {
                 entry["context_min"] = {tile.context_min.x, tile.context_min.y, tile.context_min.z};
                 entry["context_max"] = {tile.context_max.x, tile.context_max.y, tile.context_max.z};
@@ -1751,6 +2255,13 @@ namespace lfs::app {
                                                      tile.rotation_degrees.x,
                                                      tile.rotation_degrees.y,
                                                      tile.rotation_degrees.z));
+            }
+            if (params.tile_lock_exposure_correction) {
+                // The global SfM gains are still applied to every target image
+                // through --tile-exposure-gains.  This only removes the
+                // independent learned residual that could otherwise diverge
+                // between separately optimized tiles.
+                job.extra_args.push_back("--no-exposure-correction");
             }
             std::string error;
             if (!validate_job_arguments(job, batch, error)) {

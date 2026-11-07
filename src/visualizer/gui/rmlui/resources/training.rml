@@ -1057,6 +1057,25 @@
             <span class="slider-value">{{auto_tile_quantile_label}}</span>
           </div>
         </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.boundary_padding</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_boundary_padding" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.boundary_help</span>
+        <span class="status-text text-accent">@tr:auto_tiles.section_feasibility</span>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.min_cameras</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_min_cameras" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.min_multiview_cells</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_min_multiview_cells" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.merge_infeasible</span></span>
+          <input type="checkbox" data-value="auto_tile_merge_infeasible" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.feasibility_help</span>
         <span class="status-text text-accent">@tr:auto_tiles.section_coarse</span>
         <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.coarse_iterations</span></span>
@@ -1072,6 +1091,26 @@
           </select>
         </div>
         <span class="status-text status-muted">@tr:auto_tiles.coarse_help</span>
+        <span class="status-text text-accent">@tr:auto_tiles.section_visibility</span>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.visibility_resolution</span></span>
+          <select data-value="auto_tile_visibility_mask_resolution">
+            <option value="16">16</option>
+            <option value="32">32</option>
+            <option value="64">64</option>
+            <option value="128">128</option>
+            <option value="256">256</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.visibility_min_alpha</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_visibility_min_alpha" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.visibility_foreign_weight</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_visibility_foreign_weight" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.visibility_help</span>
         <span class="status-text text-accent">@tr:auto_tiles.section_output</span>
         <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.outside_loss_weight</span></span>
@@ -1088,6 +1127,11 @@
           <span class="prop-label"><span>@tr:auto_tiles.merge_after_training</span></span>
           <input type="checkbox" data-value="auto_tile_merge" />
         </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.lock_exposure_correction</span></span>
+          <input type="checkbox" data-value="auto_tile_lock_exposure_correction" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.lock_exposure_help</span>
         <span class="status-text status-muted">@tr:auto_tiles.outside_loss_help</span>
         <button class="btn btn--secondary btn--full" data-attrif-disabled="auto_tile_preview_running" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
         <div data-if="auto_tile_has_preview">

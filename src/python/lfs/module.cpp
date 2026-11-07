@@ -988,6 +988,7 @@ namespace {
         float overlap = 0.15f;
         float quantile = 0.02f;
         float outside_loss_weight = 0.0f;
+        float boundary_padding = 0.0f;
         int resize_factor = -1;
         int max_width = 3840;
         int replace_group_id = lfs::core::NULL_NODE;
@@ -1085,14 +1086,36 @@ namespace {
             request.options.overlap,
             request.options.orientation != lfs::core::OrientationMode::AxisAligned,
             request.options.orientation, request.options.quantile};
-        if (request.options.count <= 0)
-            return lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
-        return lfs::core::generate_adaptive_tiles(
-            bounds, request.options.count, request.options.overlap, outer_bounds, points,
-            lfs::core::collect_tile_camera_evidence(request.cameras), nullptr,
-            {.all_cameras_for_training = request.options.outside_loss_weight > 0.0f,
-             .resize_factor = request.options.resize_factor,
-             .max_width = request.options.max_width});
+        auto tiles = request.options.count <= 0
+            ? lfs::core::generate_tile_grid(bounds, grid, outer_bounds)
+            : lfs::core::generate_adaptive_tiles(
+                  bounds, request.options.count, request.options.overlap, outer_bounds, points,
+                  lfs::core::collect_tile_camera_evidence(request.cameras), nullptr,
+                  {.all_cameras_for_training = request.options.outside_loss_weight > 0.0f,
+                   .resize_factor = request.options.resize_factor,
+                   .max_width = request.options.max_width});
+        // Context bounds retain their pre-extension values, so preview camera
+        // assignment matches the training path: select first, then extend only
+        // scene-facing ownership faces for the final crop.
+        if (request.options.boundary_padding > 0.0f && !tiles.empty()) {
+            glm::vec3 scene_min = tiles.front().min;
+            glm::vec3 scene_max = tiles.front().max;
+            for (const auto& tile : tiles) {
+                scene_min = glm::min(scene_min, tile.min);
+                scene_max = glm::max(scene_max, tile.max);
+            }
+            const float epsilon = std::max(1e-5f,
+                glm::length(scene_max - scene_min) * 1e-5f);
+            for (auto& tile : tiles) {
+                for (int axis = 0; axis < 2; ++axis) {
+                    if (std::abs(tile.min[axis] - scene_min[axis]) <= epsilon)
+                        tile.min[axis] -= request.options.boundary_padding;
+                    if (std::abs(tile.max[axis] - scene_max[axis]) <= epsilon)
+                        tile.max[axis] += request.options.boundary_padding;
+                }
+            }
+        }
+        return tiles;
     }
 
     [[nodiscard]] int apply_auto_tile_preview(lfs::core::Scene& scene,
@@ -4029,12 +4052,13 @@ NB_MODULE(lichtfeld, m) {
                                     int count,
                                     float target_size,
                                     float outside_loss_weight,
+                                    float boundary_padding,
                                     int resize_factor,
                                     int max_width) {
         auto* scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
         AutoTilePreviewOptions options{
-            columns, rows, count, target_size, overlap, quantile, outside_loss_weight,
+            columns, rows, count, target_size, overlap, quantile, outside_loss_weight, boundary_padding,
             resize_factor, max_width, replace_group_id,
             auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
         const auto request = make_auto_tile_preview_request(*scene, options);
@@ -4045,6 +4069,7 @@ NB_MODULE(lichtfeld, m) {
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
        nb::arg("count") = 0, nb::arg("target_size") = 0.0f,
        nb::arg("outside_loss_weight") = 0.0f,
+       nb::arg("boundary_padding") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
        "Preview auto-tile boxes in the current scene");
 
@@ -4054,11 +4079,12 @@ NB_MODULE(lichtfeld, m) {
                                          float quantile, int replace_group_id,
                                          int count, float target_size,
                                          float outside_loss_weight,
+                                         float boundary_padding,
                                          int resize_factor, int max_width) {
         auto* const scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
         AutoTilePreviewOptions options{
-            columns, rows, count, target_size, overlap, quantile, outside_loss_weight,
+            columns, rows, count, target_size, overlap, quantile, outside_loss_weight, boundary_padding,
             resize_factor, max_width, replace_group_id,
             auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
         const auto request = make_auto_tile_preview_request(*scene, options);
@@ -4084,6 +4110,7 @@ NB_MODULE(lichtfeld, m) {
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
        nb::arg("count") = 0, nb::arg("target_size") = 0.0f,
        nb::arg("outside_loss_weight") = 0.0f,
+       nb::arg("boundary_padding") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
        "Start automatic tile planning on a worker; call finish_auto_tile_preview on the UI thread");
 
@@ -4296,7 +4323,8 @@ NB_MODULE(lichtfeld, m) {
         restore_auto_tile_preview_visibility();
     }, "Restore visibility after inspecting an automatic tile preview");
 
-    m.def("save_auto_tile_plan", [](int group_id, int columns, const std::string& destination) {
+    m.def("save_auto_tile_plan", [](int group_id, int columns, const std::string& destination,
+                                     float boundary_padding) {
         auto* scene = get_scene_internal();
         if (!scene || columns < 1 || columns > 100)
             throw std::runtime_error("Cannot save tile preview from this scene");
@@ -4306,6 +4334,7 @@ NB_MODULE(lichtfeld, m) {
             throw std::runtime_error("Preview tile boxes before training");
         const auto tiles = resolve_auto_tile_preview(*scene, group_id);
         nlohmann::json plan;
+        plan["boundary_padding_applied"] = boundary_padding > 0.0f;
         plan["tiles"] = nlohmann::json::array();
         for (size_t index = 0; index < tiles.size(); ++index) {
             const auto& tile = tiles[index].tile;
@@ -4334,6 +4363,7 @@ NB_MODULE(lichtfeld, m) {
         if (!output) throw std::runtime_error("Could not write tile plan");
         return static_cast<int>(tiles.size());
     }, nb::arg("group_id"), nb::arg("columns"), nb::arg("destination"),
+       nb::arg("boundary_padding") = 0.0f,
        "Save edited preview boxes for a headless auto-tile run");
 
     // Get scene generation counter for validity checking

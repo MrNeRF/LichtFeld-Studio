@@ -65,11 +65,16 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         for key in (
             "partition_mode", "mode_adaptive", "mode_grid", "mode_target_size",
             "partition_help", "section_bounds", "section_coarse", "section_output",
-            "section_inspect", "overlap_help",
+            "section_inspect", "section_feasibility", "section_visibility", "overlap_help",
             "target_size", "source", "source_points", "source_both", "source_cameras",
             "coarse_iterations", "coarse_resize", "coarse_help", "inspect_tile",
             "inspect_selected", "restore_scene", "associated_cameras", "cameras_short",
             "preview_before_inspect", "previewing", "inspecting", "inspection_restored",
+            "boundary_padding", "boundary_help", "min_cameras", "min_multiview_cells",
+            "merge_infeasible", "feasibility_help", "visibility_resolution",
+            "visibility_min_alpha", "visibility_foreign_weight", "visibility_help",
+            "lock_exposure_correction", "lock_exposure_help",
+            "completed_coalesced",
         ):
             assert data["auto_tiles"][key]
 
@@ -239,6 +244,49 @@ def test_auto_tile_gui_forwards_target_size_mode(
     command = started[0]
     assert command[command.index("--tile-size") + 1] == "12.5"
     assert "--auto-tile" not in command
+
+
+def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_lock(
+    training_panel_module, monkeypatch, tmp_path
+):
+    module = training_panel_module
+    dataset = SimpleNamespace(
+        has_params=lambda: True, data_path=str(tmp_path),
+        output_path=str(tmp_path / "output"), centralize_dataset="off", images="images",
+        resize_factor=1, max_width=3840
+    )
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", iterations=100,
+        sh_degree=3, max_cap=10_000_000, use_exposure_correction=True
+    )
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "studio_executable_path", lambda: "LichtFeld-Studio", raising=False)
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(trainer_state=_make_signal("ready")))
+    started = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: started.append(command) or object())
+
+    panel = module.TrainingPanel()
+    panel._auto_tile_min_cameras = "4"
+    panel._auto_tile_min_multiview_cells = "6"
+    panel._auto_tile_merge_infeasible = False
+    panel._auto_tile_boundary_padding = "2.5"
+    panel._auto_tile_visibility_mask_resolution = "128"
+    panel._auto_tile_visibility_min_alpha = "0.2"
+    panel._auto_tile_visibility_foreign_weight = "0.35"
+    panel._auto_tile_lock_exposure_correction = True
+    panel._schedule_deferred_update = lambda _delay: None
+    panel._auto_tile_train()
+
+    command = started[0]
+    assert command[command.index("--tile-min-cameras") + 1] == "4"
+    assert command[command.index("--tile-min-multiview-cells") + 1] == "6"
+    assert "--no-tile-merge-infeasible" in command
+    assert command[command.index("--tile-boundary-padding") + 1] == "2.5"
+    assert command[command.index("--tile-visibility-mask-resolution") + 1] == "128"
+    assert command[command.index("--tile-visibility-min-alpha") + 1] == "0.2"
+    assert command[command.index("--tile-visibility-foreign-weight") + 1] == "0.35"
+    assert "--tile-lock-exposure-correction" in command
 
 
 def test_auto_tile_gui_starts_preview_without_blocking_on_native_plan(

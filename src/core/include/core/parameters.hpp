@@ -626,6 +626,14 @@ namespace lfs::core {
             float auto_tile_quantile = 0.02f;
             bool auto_tile_crop = true;
             bool auto_tile_merge = true;
+            // Reject or coalesce cells that do not have enough independent
+            // multi-view evidence before the expensive coarse pass starts.
+            int tile_min_cameras = 2;
+            int tile_min_multi_view_cells = 2;
+            bool tile_merge_infeasible = true;
+            // Extra final ownership extent on the scene-facing X/Y sides of
+            // boundary tiles. Camera assignment deliberately happens first.
+            float tile_boundary_padding = 0.0f;
             // Internal: prevents a worker launched by the auto-tile parent from
             // recursively becoming another auto-tile parent through --config.
             bool tile_child_job = false;
@@ -633,12 +641,25 @@ namespace lfs::core {
             // A low-resolution global pass anchors each local optimization.
             int tile_coarse_iterations = 5000;
             int tile_coarse_resize_factor = 4;
+            // The coarse model is rasterized with its actual Gaussian
+            // footprints to make conservative tile loss masks.  This is kept
+            // intentionally low resolution because the result is resized in
+            // each worker before it is applied to a training image.
+            int tile_visibility_mask_resolution = 64;
+            float tile_visibility_min_alpha = 0.15f;
+            float tile_visibility_foreign_weight = 0.15f;
+            // Global SfM gain calibration is always applied to the targets.
+            // This optional lock additionally disables per-tile learned
+            // appearance correction so individual tiles cannot drift away
+            // from that shared reference.
+            bool tile_lock_exposure_correction = false;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
             std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
             std::optional<std::filesystem::path> tile_exposure_gains_path = std::nullopt;
             std::optional<std::array<float, 6>> tile_contextbox = std::nullopt;
-            // Internal: per-camera conservative masks derived from the global
-            // coarse model's z-buffer.  Tile jobs only consume this file.
+            // Internal: per-camera conservative masks derived from dense
+            // global-coarse Gaussian depth/opacity rasterization. Tile jobs
+            // only consume this file.
             std::optional<std::filesystem::path> tile_depth_masks_path = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization

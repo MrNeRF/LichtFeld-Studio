@@ -822,6 +822,14 @@ namespace {
             ::args::ValueFlag<float> tile_outside_loss_weight(training_group, "weight", "Loss weight outside each tile from 0 to 1 (default 0)", {"tile-outside-loss-weight"});
             ::args::ValueFlag<int> tile_coarse_iterations(training_group, "iterations", "Global coarse-pass iterations used to initialize every tile (default 5000)", {"tile-coarse-iterations"});
             ::args::ValueFlag<int> tile_coarse_resize(training_group, "factor", "Global coarse-pass image resize factor: 1, 2, 4, or 8 (default 4)", {"tile-coarse-resize"});
+            ::args::ValueFlag<int> tile_min_cameras(training_group, "count", "Minimum selected cameras required for a feasible tile (default 2)", {"tile-min-cameras"});
+            ::args::ValueFlag<int> tile_min_multi_view_cells(training_group, "count", "Minimum coarse cells with selected multi-view support per tile (default 2)", {"tile-min-multiview-cells"});
+            ::args::Flag no_tile_merge_infeasible(training_group, "no_tile_merge_infeasible", "Fail instead of coalescing an infeasible tile with a rectangular neighbour", {"no-tile-merge-infeasible"});
+            ::args::ValueFlag<float> tile_boundary_padding(training_group, "distance", "Extend scene-facing boundary tile crop faces by this distance after camera assignment (default 0)", {"tile-boundary-padding"});
+            ::args::ValueFlag<int> tile_visibility_mask_resolution(training_group, "pixels", "Coarse Gaussian depth/opacity mask width from 16 to 256 (default 64; height keeps camera aspect)", {"tile-visibility-mask-resolution"});
+            ::args::ValueFlag<float> tile_visibility_min_alpha(training_group, "alpha", "Minimum coarse rendered opacity used to mark foreign tile coverage (default 0.15)", {"tile-visibility-min-alpha"});
+            ::args::ValueFlag<float> tile_visibility_foreign_weight(training_group, "weight", "Loss weight in confidently foreign coarse-rendered pixels from 0 to 1 (default 0.15)", {"tile-visibility-foreign-weight"});
+            ::args::Flag tile_lock_exposure_correction(training_group, "tile_lock_exposure_correction", "Keep per-tile learned exposure correction disabled after global SfM calibration", {"tile-lock-exposure-correction"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
             ::args::Flag no_tile_crop(training_group, "no_tile_crop", "Keep splats outside each tile after training", {"no-tile-crop"});
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
@@ -1450,6 +1458,41 @@ namespace {
                     params.tile_coarse_resize_factor != 4 && params.tile_coarse_resize_factor != 8)
                     return std::unexpected("--tile-coarse-resize must be 1, 2, 4, or 8");
             }
+            if (tile_min_cameras) {
+                params.tile_min_cameras = ::args::get(tile_min_cameras);
+                if (params.tile_min_cameras < 2 || params.tile_min_cameras > 10000)
+                    return std::unexpected("--tile-min-cameras must be between 2 and 10000");
+            }
+            if (tile_min_multi_view_cells) {
+                params.tile_min_multi_view_cells = ::args::get(tile_min_multi_view_cells);
+                if (params.tile_min_multi_view_cells < 0 || params.tile_min_multi_view_cells > 32)
+                    return std::unexpected("--tile-min-multiview-cells must be between 0 and 32");
+            }
+            if (tile_boundary_padding) {
+                params.tile_boundary_padding = ::args::get(tile_boundary_padding);
+                if (!std::isfinite(params.tile_boundary_padding) || params.tile_boundary_padding < 0.0f)
+                    return std::unexpected("--tile-boundary-padding must be finite and non-negative");
+            }
+            if (tile_visibility_mask_resolution) {
+                params.tile_visibility_mask_resolution = ::args::get(tile_visibility_mask_resolution);
+                if (params.tile_visibility_mask_resolution < 16 ||
+                    params.tile_visibility_mask_resolution > 256)
+                    return std::unexpected("--tile-visibility-mask-resolution must be between 16 and 256");
+            }
+            if (tile_visibility_min_alpha) {
+                params.tile_visibility_min_alpha = ::args::get(tile_visibility_min_alpha);
+                if (!std::isfinite(params.tile_visibility_min_alpha) ||
+                    params.tile_visibility_min_alpha <= 0.0f || params.tile_visibility_min_alpha > 1.0f)
+                    return std::unexpected("--tile-visibility-min-alpha must be in (0, 1]");
+            }
+            if (tile_visibility_foreign_weight) {
+                params.tile_visibility_foreign_weight = ::args::get(tile_visibility_foreign_weight);
+                if (!std::isfinite(params.tile_visibility_foreign_weight) ||
+                    params.tile_visibility_foreign_weight < 0.0f || params.tile_visibility_foreign_weight > 1.0f)
+                    return std::unexpected("--tile-visibility-foreign-weight must be between 0 and 1");
+            }
+            params.tile_merge_infeasible = !no_tile_merge_infeasible;
+            params.tile_lock_exposure_correction = tile_lock_exposure_correction;
             params.auto_tile_crop = !no_tile_crop;
             params.auto_tile_merge = !no_tile_merge;
             params.tile_child_job = tile_child;
