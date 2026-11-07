@@ -830,6 +830,110 @@ def test_rejected_history_rolls_back_group_approval(panel_modules, monkeypatch):
     assert writes == [("clip-a", [(0, 7, True), (1, 9, True)]), ("clip-a", previous)]
 
 
+@pytest.mark.parametrize("refusal", ["busy", "native_busy"])
+def test_approval_history_refusal_raises_and_can_be_retried(panel_modules, monkeypatch, refusal):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._sam_sequence = {"run": "clip-a"}
+    accepted, history, writes, phase = [True], [], [], ["ready"]
+    def approve(run, values):
+        writes.append(values)
+        return accepted[0]
+    monkeypatch.setattr(module.lf.ui, "sam_preview_approve_frames", approve, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": phase[0]}, raising=False)
+    monkeypatch.setattr(module.lf.undo, "push", lambda label, undo, redo, **kw: history.append((undo, redo)))
+    previous = [(0, 7, False)]
+    panel._sam_commit_approvals("clip-a", previous, True, "approve")
+    assert len(history) == 1
+    panel._sam_worker_busy = refusal == "busy"
+    phase[0] = "tracking" if refusal == "native_busy" else "ready"
+    accepted[0] = False
+    for callback in history[0]:
+        with pytest.raises(RuntimeError):
+            callback()
+    panel._sam_worker_busy = False
+    phase[0] = "ready"
+    accepted[0] = True
+    history[0][0]()
+    assert writes[-1] == previous
+    history[0][1]()
+    assert writes[-1] == [(0, 7, True)]
+    accepted[0] = False
+    history[0][0]()  # A replaced proposal is reported, but cannot trap older history.
+    assert panel._sam_sequence_error == "image_preview.sam_proposal_expired"
+    panel._sam_sequence = {"run": "clip-b"}
+    count = len(writes)
+    history[0][0]()
+    assert len(writes) == count  # Closed/replaced documents remain harmless.
+
+
+def test_undo_of_another_frame_preserves_current_proposal(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._sam_sequence = {"run": "clip-a"}
+    panel._image_paths = [module.Path("a.png"), module.Path("b.png")]
+    invalidated, history = [], []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": "ready"}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_invalidate_frame", lambda *a: invalidated.append(a), raising=False)
+    monkeypatch.setattr(module.lf.undo, "push", lambda label, undo, redo, **kw: history.append((undo, redo)))
+    value = panel._mask_editor
+    value.bind("a.png", "ra")
+    value.point(.2, .2, 1)
+    panel._current_index = 1
+    value.bind("b.png", "rb")
+    overlay = object()
+    value.request, value.phase, value.overlays = 44, "ready", [overlay]
+    for callback in history[0]:
+        callback()
+        assert invalidated[-1] == ("clip-a", 0)
+        assert value.key == ("b.png", "rb")
+        assert value.request == 44 and value.phase == "ready"
+        assert value.overlays == [overlay]
+        assert not panel._sam_inspect_pending
+
+
+def test_source_revision_waits_for_native_work_then_revokes_old_proposal(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._sam_sequence = {"run": "clip-a"}
+    panel._image_paths, panel._mask_paths = [module.Path("a.png")], [None]
+    value = panel._mask_editor
+    value.enabled = True
+    value.bind("a.png", "old")
+    value.request, value.phase, value.overlays = 22, "ready", [object()]
+    panel._path_revision_cache["a.png"] = "new"
+    phase, invalidated, frames, updates = ["tracking"], [], [{"revision": 7, "approved": True}], []
+    def invalidate(*args):
+        assert phase[0] == "ready"
+        invalidated.append(args)
+        frames[0] = {"revision": 0, "approved": False}
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": phase[0]}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_invalidate_frame", invalidate, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_sequence_frames", lambda *a: frames, raising=False)
+    monkeypatch.setattr(panel, "_request_async_update", lambda: updates.append(True))
+    panel._path_revision_cache.pop("a.png")
+    phase[0] = "ready"
+    panel._service_sam()
+    assert value.key == ("a.png", "old") and value.request == 22
+    assert not invalidated  # Missing metadata is not a confirmed source change.
+    panel._path_revision_cache["a.png"] = "new"
+    phase[0] = "tracking"
+    for _ in range(2):
+        panel._service_sam()
+        assert value.key == ("a.png", "old")
+        assert not invalidated
+        assert not value.overlays and not value.request
+        assert panel._sam_sequence_error == "image_preview.sam_source_changed"
+    assert updates
+    phase[0] = "ready"
+    panel._service_sam()
+    assert value.key == ("a.png", "new")
+    assert invalidated == [("clip-a", 0)]
+    assert not panel._sam_frame_summaries[0]["approved"]
+    panel._service_sam()
+    assert len(invalidated) == 1
+
+
 def test_thumbnail_overlays_use_only_visible_proposals_and_release_old_revisions(panel_modules, monkeypatch):
     module, _ = panel_modules
     panel, film, doc, records = browsing_panel(module)

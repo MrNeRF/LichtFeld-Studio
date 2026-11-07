@@ -1611,10 +1611,11 @@ class ImagePreviewPanel(Panel):
         if index is not None:
             lf.ui.sam_preview_invalidate_frame(self._sam_sequence["run"], index)
             self._sam_sequence_revision = -1
-            self._sam_apply_target = None
-            self._sam_inspect_pending = False
-            self._sam_tracking_request = 0
-            self._mask_editor.invalidate(keep_refinement=True)
+            if key == self._mask_editor.key:
+                self._sam_apply_target = None
+                self._sam_inspect_pending = False
+                self._sam_tracking_request = 0
+                self._mask_editor.invalidate(keep_refinement=True)
 
     def _sam_release_texture(self, destroy=True):
         if self._sam_texture is None:
@@ -1950,7 +1951,7 @@ class ImagePreviewPanel(Panel):
         def write(values):
             panel = panel_ref()
             if panel is not None and panel._sam_sequence and panel._sam_sequence["run"] == run:
-                if panel._mask_editor.busy:
+                if panel._mask_editor.busy or panel._sam_worker_busy:
                     # Shared history retains the entry when playback is refused.
                     raise RuntimeError(lf.ui.tr("projects.gallery.error.busy"))
                 try:
@@ -1971,8 +1972,20 @@ class ImagePreviewPanel(Panel):
                 return
         except Exception:
             return
+        def restore(values):
+            panel = panel_ref()
+            if panel is None or not panel._sam_sequence or panel._sam_sequence["run"] != run:
+                return
+            # PyUndoEntry ignores callback return values. Refuse busy playback
+            # explicitly, including work started since the last panel update.
+            if lf.ui.sam_preview_poll().get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                raise RuntimeError(lf.ui.tr("projects.gallery.error.busy"))
+            # On the UI thread no new work can start between this poll and write.
+            # A stale proposal is reported by write(), then skipped like an
+            # expired draft; it must not trap unrelated history behind it.
+            write(values)
         try:
-            lf.undo.push(label, lambda: write(previous), lambda: write(updates),
+            lf.undo.push(label, lambda: restore(previous), lambda: restore(updates),
                          scope="image_preview", estimated_bytes=256 * len(previous) + 1024)
         except Exception as error:
             self._sam_sequence_error = str(error)
@@ -2041,16 +2054,34 @@ class ImagePreviewPanel(Panel):
         path = self._image_paths[self._current_index] if self._image_paths else None
         revision = self._path_revision_cache.get(str(path)) if path else None
         old_key = editor.key
-        bound = editor.bind(path, revision)
-        if bound:
-            self._sam_inspect_pending = bool(self._sam_sequence and editor.key)
-            if old_key and editor.key and old_key[0] == editor.key[0] and old_key[1] != editor.key[1]:
-                self._sam_invalidate_sequence_frame(editor.key)
-            self._mark_dirty()
         state = lf.ui.sam_preview_poll()
         worker_busy = state.get("phase", "idle") in FrameMaskEditor.BUSY_PHASES
         if worker_busy != self._sam_worker_busy:
             self._sam_worker_busy = worker_busy
+            self._mark_dirty()
+        if old_key and path and old_key[0] == str(path) and revision is None:
+            # Metadata refresh has not established a new source revision yet.
+            self._request_async_update()
+            return
+        if old_key and path and old_key[0] == str(path) and old_key[1] != revision:
+            if worker_busy:
+                # Keep the old binding until invalidation is admitted. The next
+                # poll retries the same revision change without losing its edge.
+                if editor.request or editor.overlays:
+                    editor.invalidate()
+                    self._sam_release_texture()
+                    self._mark_dirty()
+                message = lf.ui.tr("image_preview.sam_source_changed")
+                if self._sam_sequence_error != message:
+                    self._sam_sequence_error = message
+                    self._mark_dirty()
+                self._request_async_update()
+                return
+            self._sam_invalidate_sequence_frame(old_key)
+            state = lf.ui.sam_preview_poll()
+        bound = editor.bind(path, revision)
+        if bound:
+            self._sam_inspect_pending = bool(self._sam_sequence and editor.key)
             self._mark_dirty()
         self._sam_sync_sequence(state)
         if self._sam_sequence and state.get("phase") == "error" and state.get("error"):

@@ -357,7 +357,18 @@ namespace {
             ASSERT_EQ(original[i * oc] + excluded[i * ec], 255) << i;
         auto thumbnail = service.sequencePreview(preview_key);
         ASSERT_FALSE(thumbnail.expired());
+        input.publish_approved = false;
+        input.review_frame = 1;
+        state = wait(service.submit(input), "ready");
+        ASSERT_EQ(state.phase, "ready") << state.error;
+        // Revoking another frame must preserve the current result and its
+        // source identity, even after publishing masks for the sequence.
+        const auto current = service.poll();
+        ASSERT_EQ(current.image, frames[1].path);
         service.invalidateFrame(run, 0);
+        EXPECT_EQ(service.poll().request, current.request);
+        EXPECT_EQ(service.poll().phase, current.phase);
+        EXPECT_EQ(service.poll().overlays.size(), 1);
         EXPECT_TRUE(thumbnail.expired());
         EXPECT_TRUE(service.sequencePreview(preview_key).expired());
         service.invalidateFrame(run, 1);

@@ -762,6 +762,7 @@ namespace lfs::vis::gui {
         const auto id = ++impl_->next;
         impl_->result = {};
         impl_->result.request = id;
+        impl_->result.image = input.image;
         impl_->result.revision = input.revision;
         impl_->result.phase = "queued";
         impl_->pending = Impl::Work{id, impl_->job, std::move(input), std::move(sequence)};
@@ -945,8 +946,9 @@ namespace lfs::vis::gui {
         frame = {};
         frame.summary.mask_path = std::move(saved_path);
         ++sequence->revision;
-        impl_->pending.reset();
-        impl_->result = {};
-        impl_->result.phase = impl_->job ? "editing" : "idle";
+        if (impl_->result.image == sequence->sources[index].path) {
+            impl_->result = {};
+            impl_->result.phase = impl_->job ? "editing" : "idle";
+        }
     }
 } // namespace lfs::vis::gui
