@@ -64,10 +64,12 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_blue_prefix"] == "B:"
         for key in (
             "partition_mode", "mode_adaptive", "mode_grid", "mode_target_size",
+            "partition_help", "section_bounds", "section_coarse", "section_output",
+            "section_inspect", "overlap_help",
             "target_size", "source", "source_points", "source_both", "source_cameras",
             "coarse_iterations", "coarse_resize", "coarse_help", "inspect_tile",
             "inspect_selected", "restore_scene", "associated_cameras", "cameras_short",
-            "preview_before_inspect", "inspecting", "inspection_restored",
+            "preview_before_inspect", "previewing", "inspecting", "inspection_restored",
         ):
             assert data["auto_tiles"][key]
 
@@ -237,6 +239,48 @@ def test_auto_tile_gui_forwards_target_size_mode(
     command = started[0]
     assert command[command.index("--tile-size") + 1] == "12.5"
     assert "--auto-tile" not in command
+
+
+def test_auto_tile_gui_starts_preview_without_blocking_on_native_plan(
+    training_panel_module, monkeypatch, tmp_path
+):
+    module = training_panel_module
+    dataset = SimpleNamespace(
+        has_params=lambda: True, data_path=str(tmp_path), centralize_dataset="off",
+        resize_factor=2, max_width=2048,
+    )
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    started = []
+    monkeypatch.setattr(
+        module.lf, "start_auto_tile_preview",
+        lambda *args, **kwargs: started.append((args, kwargs)) or True,
+        raising=False,
+    )
+    monkeypatch.setattr(module.lf, "finish_auto_tile_preview", lambda: None, raising=False)
+
+    panel = module.TrainingPanel()
+    panel._schedule_auto_tile_preview_poll = lambda: None
+    panel._auto_tile_preview()
+
+    assert len(started) == 1
+    assert panel._auto_tile_preview_running is True
+    assert panel._auto_tile_status == "auto_tiles.previewing"
+
+
+def test_auto_tile_inspector_selection_accepts_any_preview_index(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    panel._auto_tile_preview_tiles = [
+        {"name": "Tile 0", "cameras": [{"uid": 10}]},
+        {"name": "Tile 1", "cameras": [{"uid": 11}, {"uid": 12}]},
+        {"name": "Tile 2", "cameras": []},
+    ]
+
+    panel._on_auto_tile_select(None, None, ["2"])
+
+    assert panel._auto_tile_selected_index == 2
+    assert panel._auto_tile_selected_cameras() == []
+    assert "auto_tile_selected_index" in panel._handle.dirty_fields
 
 
 class _ParamsStub:

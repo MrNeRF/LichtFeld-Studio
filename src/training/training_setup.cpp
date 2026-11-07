@@ -1131,7 +1131,8 @@ namespace lfs::training {
 
                 auto cameras = data.cameras;
                 if (params.tile_camera_uids_path) {
-                    std::ifstream input(lfs::core::native_fs::native_path(*params.tile_camera_uids_path));
+                    std::ifstream input(lfs::core::native_fs::native_path(*params.tile_camera_uids_path),
+                                        std::ios::binary);
                     if (!input) return std::unexpected("Cannot open tile camera allowlist");
                     nlohmann::json allowlist;
                     try { input >> allowlist; }

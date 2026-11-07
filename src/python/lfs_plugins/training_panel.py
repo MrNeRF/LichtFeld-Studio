@@ -288,6 +288,9 @@ class TrainingPanel(Panel):
         self._auto_tile_preview_dataset = ""
         self._auto_tile_preview_tiles = []
         self._auto_tile_selected_index = 0
+        self._auto_tile_preview_running = False
+        self._auto_tile_preview_poll_generation = 0
+        self._auto_tile_preview_request = None
         self._last_state = ""
         self._last_session = None
         self._last_save_steps = None
@@ -410,11 +413,13 @@ class TrainingPanel(Panel):
                    self._set_auto_tile_selected_index)
         model.bind_func("auto_tile_has_preview", lambda: bool(self._auto_tile_preview_tiles))
         model.bind_func("auto_tile_preview_tiles", lambda: self._auto_tile_preview_tiles)
+        model.bind_func("auto_tile_cameras_short", lambda: tr("auto_tiles.cameras_short"))
         model.bind_func("auto_tile_selected_cameras", self._auto_tile_selected_cameras)
         model.bind_func("auto_tile_selected_camera_count",
                         lambda: len(self._auto_tile_selected_cameras()))
         model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
         model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
+        model.bind_func("auto_tile_preview_running", lambda: self._auto_tile_preview_running)
         self._bind_property_search(model)
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
@@ -1930,6 +1935,11 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
 
     def on_unmount(self, doc):
+        # The native worker retains no Scene and validates its scene generation
+        # before applying a completed plan; this panel must stop polling it.
+        self._auto_tile_preview_poll_generation += 1
+        self._auto_tile_preview_running = False
+        self._auto_tile_preview_request = None
         restore_auto_tile_preview = getattr(lf, "restore_auto_tile_preview", None)
         if callable(restore_auto_tile_preview):
             restore_auto_tile_preview()
@@ -3044,6 +3054,7 @@ class TrainingPanel(Panel):
         self._handle.dirty("auto_tile_selected_index")
         self._handle.dirty("auto_tile_selected_cameras")
         self._handle.dirty("auto_tile_selected_camera_count")
+        self._handle.dirty("auto_tile_preview_running")
 
     def _set_auto_tile_selected_index(self, value):
         try:
@@ -3085,7 +3096,50 @@ class TrainingPanel(Panel):
             restore()
         self._set_auto_tile_status(tr("auto_tiles.inspection_restored"))
 
+    def _schedule_auto_tile_preview_poll(self):
+        self._auto_tile_preview_poll_generation += 1
+        generation = self._auto_tile_preview_poll_generation
+
+        def request_poll():
+            scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+            if scheduler is None:
+                scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+            if callable(scheduler):
+                scheduler(lambda: self._poll_auto_tile_preview(generation))
+
+        timer = threading.Timer(0.05, request_poll)
+        timer.daemon = True
+        timer.start()
+
+    def _poll_auto_tile_preview(self, generation):
+        if generation != self._auto_tile_preview_poll_generation or not self._auto_tile_preview_running:
+            return
+        finished = False
+        try:
+            group_id = lf.finish_auto_tile_preview()
+            if group_id is None:
+                self._schedule_auto_tile_preview_poll()
+                return
+            finished = True
+            self._auto_tile_preview_group = group_id
+            request = self._auto_tile_preview_request
+            self._auto_tile_preview_settings = request[0]
+            self._auto_tile_preview_dataset = request[1]
+            self._refresh_auto_tile_preview_details()
+            self._set_auto_tile_status(tr("auto_tiles.previewed").format(
+                len(self._auto_tile_preview_tiles)))
+        except (RuntimeError, ValueError) as error:
+            finished = True
+            self._set_auto_tile_status(str(error))
+        finally:
+            if finished:
+                self._auto_tile_preview_running = False
+                self._auto_tile_preview_request = None
+                self._dirty_auto_tile_preview()
+
     def _auto_tile_preview(self):
+        if self._auto_tile_preview_running:
+            return
         try:
             (mode, columns, rows, count, target_size, overlap, quantile,
              coarse_iterations, coarse_resize) = self._auto_tile_settings()
@@ -3096,23 +3150,35 @@ class TrainingPanel(Panel):
                 raise ValueError(tr("auto_tiles.centralize_off"))
             resize_factor = getattr(dataset, "resize_factor", -1)
             max_width = getattr(dataset, "max_width", 3840)
-            self._auto_tile_preview_group = lf.preview_auto_tiles(
+            preview_args = (
                 columns if mode == "grid" else 1, rows if mode == "grid" else 1, overlap,
-                align_mode=self._auto_tile_align_mode,
-                source=self._auto_tile_source,
-                quantile=quantile,
-                replace_group_id=self._auto_tile_preview_group,
+            )
+            preview_kwargs = dict(
+                align_mode=self._auto_tile_align_mode, source=self._auto_tile_source,
+                quantile=quantile, replace_group_id=self._auto_tile_preview_group,
                 count=count if mode == "adaptive" else 0,
                 target_size=target_size if mode == "size" else 0.0,
                 outside_loss_weight=self._auto_tile_outside_loss,
-                resize_factor=resize_factor,
-                max_width=max_width)
-            self._auto_tile_preview_settings = (
+                resize_factor=resize_factor, max_width=max_width)
+            preview_settings = (
                 mode, columns, rows, count, target_size, overlap, quantile,
                 self._auto_tile_align_mode, self._auto_tile_source,
                 self._auto_tile_outside_loss, resize_factor, max_width
             )
-            self._auto_tile_preview_dataset = dataset.data_path if dataset and dataset.has_params() else ""
+            start = getattr(lf, "start_auto_tile_preview", None)
+            finish = getattr(lf, "finish_auto_tile_preview", None)
+            if callable(start) and callable(finish):
+                if not start(*preview_args, **preview_kwargs):
+                    raise RuntimeError("Automatic tile planning is already running")
+                self._auto_tile_preview_running = True
+                self._auto_tile_preview_request = (preview_settings, dataset.data_path)
+                self._dirty_auto_tile_preview()
+                self._set_auto_tile_status(tr("auto_tiles.previewing"))
+                self._schedule_auto_tile_preview_poll()
+                return
+            self._auto_tile_preview_group = lf.preview_auto_tiles(*preview_args, **preview_kwargs)
+            self._auto_tile_preview_settings = preview_settings
+            self._auto_tile_preview_dataset = dataset.data_path
             self._refresh_auto_tile_preview_details()
             self._set_auto_tile_status(tr("auto_tiles.previewed").format(
                 len(self._auto_tile_preview_tiles)))
@@ -3120,7 +3186,7 @@ class TrainingPanel(Panel):
             self._set_auto_tile_status(str(error))
 
     def _auto_tile_train(self):
-        if self._auto_tile_process is not None:
+        if self._auto_tile_process is not None or self._auto_tile_preview_running:
             return
         if RuntimeState.trainer_state.value != "ready":
             self._set_auto_tile_status(tr("auto_tiles.training_active"))

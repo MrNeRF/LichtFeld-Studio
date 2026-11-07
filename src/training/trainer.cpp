@@ -2062,7 +2062,8 @@ namespace lfs::training {
             tile_visibility_masks_initialized_ = true;
             if (params_.tile_depth_masks_path) {
                 try {
-                    std::ifstream input(lfs::core::native_fs::native_path(*params_.tile_depth_masks_path));
+                    std::ifstream input(lfs::core::native_fs::native_path(*params_.tile_depth_masks_path),
+                                        std::ios::binary);
                     const auto document = nlohmann::json::parse(input);
                     if (!document.contains("masks") || !document["masks"].is_array())
                         throw std::runtime_error("missing masks array");
@@ -3246,7 +3247,8 @@ namespace lfs::training {
             train_dataset_size_ = train_dataset_->size();
             tile_exposure_gains_.clear();
             if (params.tile_exposure_gains_path) {
-                std::ifstream input(lfs::core::native_fs::native_path(*params.tile_exposure_gains_path));
+                std::ifstream input(lfs::core::native_fs::native_path(*params.tile_exposure_gains_path),
+                                    std::ios::binary);
                 if (!input) return std::unexpected("Cannot open tile exposure gains file");
                 const auto calibration = nlohmann::json::parse(input);
                 if (calibration.value("version", 0) != 1 ||

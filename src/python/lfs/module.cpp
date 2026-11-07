@@ -115,6 +115,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -122,6 +124,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <span>
@@ -975,6 +978,136 @@ namespace {
             throw std::runtime_error("Could not retain the auto-tile preview");
         }
         auto_tile_preview_cache.child_ids = group->children;
+    }
+
+    struct AutoTilePreviewOptions {
+        int columns = 1;
+        int rows = 1;
+        int count = 0;
+        float target_size = 0.0f;
+        float overlap = 0.15f;
+        float quantile = 0.02f;
+        float outside_loss_weight = 0.0f;
+        int resize_factor = -1;
+        int max_width = 3840;
+        int replace_group_id = lfs::core::NULL_NODE;
+        lfs::core::OrientationMode orientation = lfs::core::OrientationMode::Obb3D;
+        lfs::core::BoundsSource source = lfs::core::BoundsSource::Points;
+    };
+
+    struct AutoTilePreviewRequest {
+        std::shared_ptr<lfs::core::PointCloud> points;
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        AutoTilePreviewOptions options;
+    };
+
+    struct AutoTilePreviewJob {
+        std::mutex mutex;
+        bool active = false;
+        lfs::core::Scene* scene = nullptr;
+        uint64_t scene_generation = 0;
+        int replace_group_id = lfs::core::NULL_NODE;
+        std::future<std::vector<lfs::core::TileSpec>> future;
+    };
+
+    AutoTilePreviewJob auto_tile_preview_job;
+
+    [[nodiscard]] lfs::core::OrientationMode auto_tile_orientation_mode(
+        const std::string& align_mode) {
+        if (align_mode == "planar_yaw" || align_mode == "yaw")
+            return lfs::core::OrientationMode::PlanarYaw;
+        if (align_mode == "planar_pitch" || align_mode == "pitch")
+            return lfs::core::OrientationMode::PlanarPitch;
+        if (align_mode == "planar_roll" || align_mode == "roll")
+            return lfs::core::OrientationMode::PlanarRoll;
+        if (align_mode == "axis_aligned" || align_mode == "none")
+            return lfs::core::OrientationMode::AxisAligned;
+        if (align_mode == "obb_3d" || align_mode == "3d")
+            return lfs::core::OrientationMode::Obb3D;
+        throw std::invalid_argument("Unknown tile orientation mode");
+    }
+
+    [[nodiscard]] lfs::core::BoundsSource auto_tile_bounds_source(
+        const std::string& source) {
+        if (source == "points") return lfs::core::BoundsSource::Points;
+        if (source == "cameras") return lfs::core::BoundsSource::Cameras;
+        if (source == "both") return lfs::core::BoundsSource::Both;
+        throw std::invalid_argument("Unknown tile data source");
+    }
+
+    [[nodiscard]] AutoTilePreviewRequest make_auto_tile_preview_request(
+        lfs::core::Scene& scene, AutoTilePreviewOptions options) {
+        AutoTilePreviewRequest request;
+        request.options = options;
+        request.points = scene.getInitialPointCloud();
+        if (!request.points) {
+            for (const auto* const node : scene.getNodes()) {
+                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
+                    request.points = node->point_cloud;
+                    break;
+                }
+            }
+        }
+        for (const auto* const node : scene.getNodes()) {
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+                request.cameras.push_back(node->camera);
+        }
+        return request;
+    }
+
+    [[nodiscard]] std::vector<lfs::core::TileSpec> compute_auto_tile_preview(
+        const AutoTilePreviewRequest& request) {
+        const lfs::core::PointCloud empty_points;
+        const auto& points = request.points ? *request.points : empty_points;
+        std::vector<glm::vec3> centers;
+        centers.reserve(request.cameras.size());
+        for (const auto& camera : request.cameras) {
+            if (!camera) continue;
+            const auto position = camera->cam_position().cpu().contiguous();
+            if (position.numel() >= 3) {
+                const auto* const p = position.ptr<float>();
+                centers.emplace_back(p[0], p[1], p[2]);
+            }
+        }
+        auto bounds = lfs::core::compute_robust_scene_bounds_obb(
+            points, centers, request.options.quantile, request.options.orientation,
+            request.options.source);
+        const auto outer_bounds = lfs::core::compute_outer_scene_bounds(
+            points, centers, bounds, request.options.quantile, request.options.source);
+        if (request.options.quantile > 0.0f) {
+            const auto padding = glm::max(
+                (bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
+            bounds.min -= padding;
+            bounds.max += padding;
+        }
+        const lfs::core::TileGridConfig grid{
+            request.options.columns, request.options.rows, request.options.target_size,
+            request.options.overlap,
+            request.options.orientation != lfs::core::OrientationMode::AxisAligned,
+            request.options.orientation, request.options.quantile};
+        if (request.options.count <= 0)
+            return lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
+        return lfs::core::generate_adaptive_tiles(
+            bounds, request.options.count, request.options.overlap, outer_bounds, points,
+            lfs::core::collect_tile_camera_evidence(request.cameras), nullptr,
+            {.all_cameras_for_training = request.options.outside_loss_weight > 0.0f,
+             .resize_factor = request.options.resize_factor,
+             .max_width = request.options.max_width});
+    }
+
+    [[nodiscard]] int apply_auto_tile_preview(lfs::core::Scene& scene,
+                                               const int replace_group_id,
+                                               const std::vector<lfs::core::TileSpec>& tiles) {
+        restore_auto_tile_preview_visibility();
+        if (const auto* const old = scene.getNodeById(replace_group_id);
+            old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
+            scene.removeNode(old->name);
+        }
+        const auto group_id = scene.createTileCropBoxes(tiles);
+        if (group_id == lfs::core::NULL_NODE)
+            throw std::runtime_error("Could not create tile preview boxes");
+        cache_auto_tile_preview(scene, group_id, tiles);
+        return group_id;
     }
 
     [[nodiscard]] std::optional<size_t> cached_auto_tile_index(
@@ -3900,77 +4033,13 @@ NB_MODULE(lichtfeld, m) {
                                     int max_width) {
         auto* scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
-        auto point_cloud = scene->getInitialPointCloud();
-        if (!point_cloud) {
-            for (const auto* node : scene->getNodes()) {
-                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
-                    point_cloud = node->point_cloud;
-                    break;
-                }
-            }
-        }
-        const lfs::core::PointCloud empty_points;
-        const auto& points = point_cloud ? *point_cloud : empty_points;
-        std::vector<glm::vec3> centers;
-        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
-        for (const auto* node : scene->getNodes()) {
-            if (node->type != lfs::core::NodeType::CAMERA || !node->camera) continue;
-            cameras.push_back(node->camera);
-            const auto position = node->camera->cam_position().cpu().contiguous();
-            if (position.numel() < 3) continue;
-            const auto* p = position.ptr<float>();
-            centers.emplace_back(p[0], p[1], p[2]);
-        }
-        lfs::core::OrientationMode mode = lfs::core::OrientationMode::Obb3D;
-        if (align_mode == "planar_yaw" || align_mode == "yaw") {
-            mode = lfs::core::OrientationMode::PlanarYaw;
-        } else if (align_mode == "planar_pitch" || align_mode == "pitch") {
-            mode = lfs::core::OrientationMode::PlanarPitch;
-        } else if (align_mode == "planar_roll" || align_mode == "roll") {
-            mode = lfs::core::OrientationMode::PlanarRoll;
-        } else if (align_mode == "axis_aligned" || align_mode == "none") {
-            mode = lfs::core::OrientationMode::AxisAligned;
-        } else if (align_mode != "obb_3d" && align_mode != "3d") {
-            throw std::invalid_argument("Unknown tile orientation mode");
-        }
-
-        lfs::core::BoundsSource source = lfs::core::BoundsSource::Points;
-        if (source_str == "points") {
-            source = lfs::core::BoundsSource::Points;
-        } else if (source_str == "cameras") {
-            source = lfs::core::BoundsSource::Cameras;
-        } else if (source_str != "both") {
-            throw std::invalid_argument("Unknown tile data source");
-        }
-
-        auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, quantile, mode, source);
-        const auto outer_bounds = lfs::core::compute_outer_scene_bounds(points, centers, bounds, quantile, source);
-        if (quantile > 0.0f) {
-            const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
-            bounds.min -= padding;
-            bounds.max += padding;
-        }
-        lfs::core::TileGridConfig grid{columns, rows, target_size, overlap,
-                                       mode != lfs::core::OrientationMode::AxisAligned,
-                                       mode, quantile};
-        const auto tiles = count > 0
-            ? lfs::core::generate_adaptive_tiles(bounds, count, overlap, outer_bounds,
-                                                 points, lfs::core::collect_tile_camera_evidence(cameras),
-                                                 nullptr,
-                                                 {.all_cameras_for_training = outside_loss_weight > 0.0f,
-                                                  .resize_factor = resize_factor,
-                                                  .max_width = max_width})
-            : lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
-        restore_auto_tile_preview_visibility();
-        if (const auto* old = scene->getNodeById(replace_group_id);
-            old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
-            scene->removeNode(old->name);
-        }
-        const auto group_id = scene->createTileCropBoxes(tiles);
-        if (group_id == lfs::core::NULL_NODE)
-            throw std::runtime_error("Could not create tile preview boxes");
-        cache_auto_tile_preview(*scene, group_id, tiles);
-        return group_id;
+        AutoTilePreviewOptions options{
+            columns, rows, count, target_size, overlap, quantile, outside_loss_weight,
+            resize_factor, max_width, replace_group_id,
+            auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
+        const auto request = make_auto_tile_preview_request(*scene, options);
+        return apply_auto_tile_preview(*scene, replace_group_id,
+                                       compute_auto_tile_preview(request));
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
        nb::arg("align_mode") = "obb_3d", nb::arg("source") = "points",
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
@@ -3978,6 +4047,71 @@ NB_MODULE(lichtfeld, m) {
        nb::arg("outside_loss_weight") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
        "Preview auto-tile boxes in the current scene");
+
+    m.def("start_auto_tile_preview", [](int columns, int rows, float overlap,
+                                         const std::string& align_mode,
+                                         const std::string& source_str,
+                                         float quantile, int replace_group_id,
+                                         int count, float target_size,
+                                         float outside_loss_weight,
+                                         int resize_factor, int max_width) {
+        auto* const scene = get_scene_internal();
+        if (!scene) throw std::runtime_error("No scene is loaded");
+        AutoTilePreviewOptions options{
+            columns, rows, count, target_size, overlap, quantile, outside_loss_weight,
+            resize_factor, max_width, replace_group_id,
+            auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
+        const auto request = make_auto_tile_preview_request(*scene, options);
+        std::lock_guard lock(auto_tile_preview_job.mutex);
+        if (auto_tile_preview_job.active) {
+            if (auto_tile_preview_job.future.wait_for(std::chrono::milliseconds(0)) !=
+                std::future_status::ready)
+                return false;
+            auto completed = std::move(auto_tile_preview_job.future);
+            auto_tile_preview_job.active = false;
+            completed.get(); // Discard an unclaimed completed plan before replacing it.
+        }
+        auto_tile_preview_job.scene = scene;
+        auto_tile_preview_job.scene_generation = lfs::python::get_scene_generation();
+        auto_tile_preview_job.replace_group_id = replace_group_id;
+        auto_tile_preview_job.future = std::async(std::launch::async, [request] {
+            return compute_auto_tile_preview(request);
+        });
+        auto_tile_preview_job.active = true;
+        return true;
+    }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
+       nb::arg("align_mode") = "obb_3d", nb::arg("source") = "points",
+       nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
+       nb::arg("count") = 0, nb::arg("target_size") = 0.0f,
+       nb::arg("outside_loss_weight") = 0.0f,
+       nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
+       "Start automatic tile planning on a worker; call finish_auto_tile_preview on the UI thread");
+
+    m.def("finish_auto_tile_preview", []() -> nb::object {
+        std::future<std::vector<lfs::core::TileSpec>> completed;
+        lfs::core::Scene* planned_scene = nullptr;
+        uint64_t planned_scene_generation = 0;
+        int replace_group_id = lfs::core::NULL_NODE;
+        {
+            std::lock_guard lock(auto_tile_preview_job.mutex);
+            if (!auto_tile_preview_job.active ||
+                auto_tile_preview_job.future.wait_for(std::chrono::milliseconds(0)) !=
+                    std::future_status::ready)
+                return nb::none();
+            completed = std::move(auto_tile_preview_job.future);
+            planned_scene = auto_tile_preview_job.scene;
+            planned_scene_generation = auto_tile_preview_job.scene_generation;
+            replace_group_id = auto_tile_preview_job.replace_group_id;
+            auto_tile_preview_job.active = false;
+            auto_tile_preview_job.scene = nullptr;
+        }
+        const auto tiles = completed.get();
+        auto* const scene = get_scene_internal();
+        if (scene != planned_scene ||
+            lfs::python::get_scene_generation() != planned_scene_generation)
+            throw std::runtime_error("Scene changed while automatic tiles were being planned");
+        return nb::cast(apply_auto_tile_preview(*scene, replace_group_id, tiles));
+    }, "Apply a completed automatic tile plan on the UI thread, or return None while it is running");
 
     m.def("preview_auto_tiles", [](int columns, int rows, float overlap, bool align_pca,
                                     int replace_group_id) {

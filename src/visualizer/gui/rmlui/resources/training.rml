@@ -1089,13 +1089,13 @@
           <input type="checkbox" data-value="auto_tile_merge" />
         </div>
         <span class="status-text status-muted">@tr:auto_tiles.outside_loss_help</span>
-        <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
+        <button class="btn btn--secondary btn--full" data-attrif-disabled="auto_tile_preview_running" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
         <div data-if="auto_tile_has_preview">
           <span class="status-text text-accent">@tr:auto_tiles.section_inspect</span>
           <div class="setting-row">
             <span class="prop-label"><span>@tr:auto_tiles.inspect_tile</span></span>
             <select data-value="auto_tile_selected_index" data-event-change="auto_tile_select(ev.value)">
-              <option data-for="tile : auto_tile_preview_tiles" data-attr-value="tile.index">{{tile.name}} — {{tile.camera_count}} @tr:auto_tiles.cameras_short</option>
+              <option data-for="tile : auto_tile_preview_tiles" data-attr-value="tile.index">{{tile.name}} — {{tile.camera_count}} {{auto_tile_cameras_short}}</option>
             </select>
           </div>
           <div class="setting-row">
@@ -1108,7 +1108,7 @@
           <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_focus')">@tr:auto_tiles.inspect_selected</button>
           <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_restore')">@tr:auto_tiles.restore_scene</button>
         </div>
-        <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
+        <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-attrif-disabled="auto_tile_preview_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
         <button class="btn btn--warning btn--full" data-if="auto_tile_running" data-event-click="action('auto_tile_cancel')">@tr:auto_tiles.cancel</button>
         <span class="status-text">{{auto_tile_status}}</span>
       </div>
