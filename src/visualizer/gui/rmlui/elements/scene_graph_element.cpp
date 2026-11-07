@@ -33,6 +33,7 @@
 #include "gui/utils/splat_drag_selection.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "gui/utils/splat_transfer.hpp"
+#include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "operator/operator_registry.hpp"
@@ -1056,7 +1057,7 @@ namespace lfs::vis::gui {
             slot.crop_toggle = visibility_slot_el->AppendChild(std::move(crop_toggle));
             auto dot = doc->CreateElement("span");
             dot->SetClass("crop-effect-dot", true);
-            slot.crop_toggle_dot = slot.crop_toggle->AppendChild(std::move(dot));
+            slot.crop_toggle->AppendChild(std::move(dot));
 
             auto delete_slot = doc->CreateElement("span");
             delete_slot->SetClass("row-action-slot", true);
@@ -1283,6 +1284,10 @@ namespace lfs::vis::gui {
         }
 
         real_node_count_ = nodes.size();
+        std::erase_if(crop_group_ids_, [&](const auto& entry) {
+            const auto* owner = scene.getNodeByUuid(entry.first);
+            return !owner || owner->type != core::NodeType::SPLAT;
+        });
         // These are presentation rows, never Scene nodes or transformation parents.
         for (const auto* owner : nodes) {
             if (owner->type != core::NodeType::SPLAT)
@@ -3711,7 +3716,7 @@ namespace lfs::vis::gui {
                 request.style = core::ModalStyle::Warning;
                 request.body_rml = encode(tr("splat_inspector.bake_note"));
                 request.buttons = {{tr("common.cancel"), "secondary"}, {apply_label, "warning"}};
-                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label](const core::ModalResult& result) {
+                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label, expected_generation = scene->renderGeneration()](const core::ModalResult& result) {
                     if (result.button_label != apply_label)
                         return;
                     auto* sm = services().sceneOrNull();
@@ -3720,6 +3725,8 @@ namespace lfs::vis::gui {
                     if (!sm || !gm || (ed && ed->isToolsDisabled()) || op::operators().hasModalOperator())
                         return;
                     const auto& current_scene = sm->getScene();
+                    if (current_scene.renderGeneration() != expected_generation)
+                        return;
                     const auto* target = current_scene.getNodeByUuid(element_uuid);
                     const auto* parent = current_scene.getNodeByUuid(owner_uuid);
                     if (!target || !parent || !core::validateSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id))
@@ -4123,9 +4130,18 @@ namespace lfs::vis::gui {
             case Rml::Input::KI_RETURN: {
                 if (const auto* editor = services().editorOrNull();
                     editor && editor->getActiveOperator() == "builtin.cropbox") {
-                    if (auto* gui = services().guiOrNull())
-                        gui->gizmo().finishCropTool();
-                    event.StopPropagation();
+                    const auto* controller = InputController::instance();
+                    const bool event_alt = event.GetParameter<int>("alt_key", 0) != 0;
+                    const bool event_meta = event.GetParameter<int>("meta_key", 0) != 0;
+                    const int modifiers = (event_ctrl ? input::KEYMOD_CTRL : 0) |
+                                          (event_shift ? input::KEYMOD_SHIFT : 0) |
+                                          (event_alt ? input::KEYMOD_ALT : 0) |
+                                          (event_meta ? input::KEYMOD_SUPER : 0);
+                    if (controller && controller->getBindings().getActionForKey(input::ToolMode::CROP_BOX, input::KEY_ENTER, modifiers) == input::Action::APPLY_CROP_BOX) {
+                        if (auto* gui = services().guiOrNull())
+                            gui->gizmo().finishCropTool();
+                        event.StopPropagation();
+                    }
                     break;
                 }
                 const core::NodeId node_id = selectionCursor();

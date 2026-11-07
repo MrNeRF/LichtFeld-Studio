@@ -4543,8 +4543,11 @@ namespace lfs::python {
             "Finish crop editing while retaining the editable volume and original geometry");
         m.def(
             "is_crop_tool_shape_locked", [] {
-                auto* gui = lfs::python::get_gui_manager();
-                return gui && gui->gizmo().isCropToolShapeLocked();
+                return invoke_on_viewer([] {
+                    auto* gui = lfs::python::get_gui_manager();
+                    return gui && gui->gizmo().isCropToolShapeLocked();
+                },
+                                        false);
             },
             "Whether editing an existing crop keeps its saved shape type");
         m.def(

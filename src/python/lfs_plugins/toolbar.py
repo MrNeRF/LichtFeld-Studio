@@ -615,8 +615,7 @@ class _GizmoToolbarController:
         import lichtfeld as lf
 
         active = active_tool_id == self._CROP_TOOL_ID
-        locked_getter = getattr(lf.ui, "is_crop_tool_shape_locked", None)
-        shape_locked = active and callable(locked_getter) and locked_getter()
+        shape_locked = active and lf.ui.is_crop_tool_shape_locked()
         active_shape = self._active_crop_shape() if active else "box"
         return [
             _button_record(
@@ -1006,10 +1005,8 @@ class _GizmoToolbarController:
         if self._node_type_name(node) == "SPLAT" or (
             infer_selection_shape and self._node_type_name(node) in ("CROPBOX", "ELLIPSOID", "CROP_POLYGON")
         ):
-            create = getattr(lf.ui, "new_crop_tool", None)
-            if callable(create):
-                create(shape)
-                return
+            lf.ui.new_crop_tool(shape)
+            return
         if shape == "box" and selected:
             add_cropbox = getattr(lf.ui, "add_cropbox", None)
             if callable(add_cropbox):

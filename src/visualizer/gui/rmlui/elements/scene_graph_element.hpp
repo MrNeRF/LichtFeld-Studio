@@ -174,7 +174,6 @@ namespace lfs::vis::gui {
             Rml::Element* selection_checkbox = nullptr;
             Rml::Element* vis_icon = nullptr;
             Rml::Element* crop_toggle = nullptr;
-            Rml::Element* crop_toggle_dot = nullptr;
             Rml::Element* delete_icon = nullptr;
             Rml::Element* training_toggle_icon = nullptr;
             Rml::Element* training_mixed_mark = nullptr;

@@ -850,6 +850,30 @@ namespace {
         EXPECT_NE(scene.getNodeByUuid(uuid), nullptr);
     }
 
+    TEST_F(SplatCropTreeTest, RepeatedOwnerRemovalReleasesRowsAndKeepsRemainingOwnerUsable) {
+        auto& scene = sm->getScene();
+        const auto original_count = scene.getNodeCount();
+        for (int cycle = 0; cycle < 128; ++cycle) {
+            const auto transient_owner = scene.addSplatPlaceholder("cycle_owner");
+            ASSERT_NE(scene.addCropBox("cycle_crop", transient_owner), core::NULL_NODE);
+            sync();
+            ASSERT_NE(tree->QuerySelector(".crop-group[data-crop-owner='" + std::to_string(transient_owner) + "']"), nullptr);
+            ASSERT_TRUE(sm->removeNodesByIdsWithResult({transient_owner}, false));
+            op::undoHistory().clear();
+            sync();
+            EXPECT_EQ(scene.getNodeCount(), original_count);
+            EXPECT_EQ(tree->nodeCount(), original_count);
+            // The retained tree reuses a bounded row pool; unused rows may
+            // retain attributes but must no longer be visible or interactive.
+            if (auto* retired_row = tree->QuerySelector(".crop-group[data-crop-owner='" + std::to_string(transient_owner) + "']"))
+                EXPECT_FALSE(retired_row->IsVisible());
+        }
+        auto* group = tree->QuerySelector(".crop-group[data-crop-owner='" + std::to_string(owner) + "']");
+        ASSERT_NE(group, nullptr);
+        group->QuerySelector(".crop-effect-toggle")->DispatchEvent("click", {});
+        EXPECT_FALSE(scene.getNodeById(owner)->crop_effects_enabled);
+    }
+
     TEST_F(SplatCropTreeTest, VirtualContainerDoesNotReparentOrEnterEditingAndItsSwitchUsesOneGate) {
         auto& scene = sm->getScene();
         const auto count = scene.getNodeCount();

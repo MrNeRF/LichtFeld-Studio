@@ -27,6 +27,7 @@ def _install_stub_modules(monkeypatch):
         remove_hook=lambda panel, section, callback: remove_calls.append(
             (panel, section, callback)
         ),
+        is_crop_tool_shape_locked=lambda: False,
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
         get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
@@ -963,6 +964,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     monkeypatch.setattr(lf_stub.ui, "change_crop_tool_shape", lambda shape: (setattr(state, "crop_shape", shape), state.calls.append(("change_crop_tool_shape", shape))), raising=False)
     monkeypatch.setattr(lf_stub.ui, "set_crop_tool_operation", lambda value: (setattr(state, "gizmo_type", value), state.calls.append(("set_crop_tool_operation", value))), raising=False)
 
+    monkeypatch.setattr(lf_stub.ui, "new_crop_tool", lambda shape: state.calls.append(("new_crop_tool", shape)), raising=False)
     controller = module._GizmoToolbarController()
     polygon_button = next(button for button in controller.snapshot()["crop_object_buttons"] if button["value"] == "polygon")
     # The selection tool's polygon icon is reused; the label is localized.
@@ -1001,7 +1003,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
         ("delete_crop_tool_volume",),
     ]
 
-    # A selected polygon node reopens the tool on the polygon shape.
+    # Toolbar activation creates a new polygon even with an existing polygon selected.
     polygon_node = SimpleNamespace(id=2, name="Model_crop_polygon", type=SimpleNamespace(name="CROP_POLYGON"), children=())
     splat.children = (polygon_node.id,)
     scene.get_node_by_id = lambda node_id: {1: splat, 2: polygon_node}.get(node_id)
@@ -1012,7 +1014,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     state.active_tool = ""
     controller.dispatch("tool", "builtin.cropbox")
     assert ("set_crop_tool_shape", "polygon") in state.calls
-    assert ("start_crop_polygon",) in state.calls
+    assert ("new_crop_tool", "polygon") in state.calls
     assert ("add_cropbox", "Model") not in state.calls
 
 
@@ -1488,11 +1490,12 @@ def test_crop_tool_activation_infers_selected_ellipsoid(toolbar_module, monkeypa
         raising=False,
     )
 
+    monkeypatch.setattr(lf_stub.ui, "new_crop_tool", lambda shape: state.calls.append(("new_crop_tool", shape)), raising=False)
     controller = module._GizmoToolbarController()
     controller.dispatch("tool", "builtin.cropbox")
 
     assert ("set_crop_tool_shape", "ellipsoid") in state.calls
-    assert ("add_ellipsoid", "Model_ellipsoid") in state.calls
+    assert ("new_crop_tool", "ellipsoid") in state.calls
     assert ("add_cropbox", "Model_ellipsoid") not in state.calls
     assert state.crop_shape == "ellipsoid"
 
