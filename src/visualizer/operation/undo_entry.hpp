@@ -528,6 +528,7 @@ namespace lfs::vis::op {
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool crop_effects_enabled = true;
         bool payload_diverged = false;
         bool point_cloud_source = false;
         bool transient = false;
@@ -579,6 +580,7 @@ namespace lfs::vis::op {
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool crop_effects_enabled = true;
         bool payload_diverged = false;
         bool point_cloud_source = false;
         std::optional<std::filesystem::path> source_path;

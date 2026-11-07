@@ -1168,6 +1168,12 @@ namespace lfs::vis {
                     found = gui::isTranslationGizmoHovered();
                 }
             }
+            if (!crop_tool) {
+                EXPECT_FALSE(found) << "Selecting a crop must not expose legacy transform handles";
+                EXPECT_FALSE(gui::isTranslationGizmoActive());
+                gizmo.deactivateAllTools();
+                return;
+            }
             ASSERT_TRUE(found) << "no crop " << shape << " translation handle found";
 
             const glm::mat4 before_transform = scene.getNodeTransform(volume);
@@ -1655,11 +1661,11 @@ namespace lfs::vis {
         exerciseCropToolGizmoEscape(true);
     }
 
-    TEST_F(WindowInputDispatchTest, EscapeCancelsPassiveCropBoxGizmoDragAndAddsNoUndo) {
+    TEST_F(WindowInputDispatchTest, SelectedCropBoxHasNoLegacyTransformHandles) {
         exerciseCropToolGizmoEscape(false, false);
     }
 
-    TEST_F(WindowInputDispatchTest, EscapeCancelsPassiveEllipsoidGizmoDragAndAddsNoUndo) {
+    TEST_F(WindowInputDispatchTest, SelectedEllipsoidHasNoLegacyTransformHandles) {
         exerciseCropToolGizmoEscape(true, false);
     }
 

@@ -1091,6 +1091,7 @@
                             data-class-selected="button.selected"
                             data-attr-title="button.tooltip_text"
                             data-attrif-disabled="!button.enabled"
+                            data-class-disabled="!button.enabled"
                             data-event-click="toolbar_action(button.action, button.value)">
                         <img data-attr-src="button.icon_src" />
                     </button>

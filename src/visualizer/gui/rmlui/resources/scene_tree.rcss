@@ -600,3 +600,10 @@ scene-graph,
 .empty-state {
     padding: 6dp 0;
 }
+
+/* Slightly smaller graph variant of the shared compact switch. */
+.crop-effect-toggle { width: 18dp; height: 9dp; }
+.crop-effect-dot { width: 5dp; height: 5dp; }
+.crop-effect-toggle.active .crop-effect-dot { left: 10dp; }
+
+.crop-effect-suspended .crop-effect-toggle { opacity: 0.45; }

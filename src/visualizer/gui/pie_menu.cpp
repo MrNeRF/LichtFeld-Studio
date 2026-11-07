@@ -72,7 +72,7 @@ namespace lfs::vis::gui {
             {"crop.translate", "Move", "translation"},
             {"crop.rotate", "Rotate", "rotation"},
             {"crop.scale", "Scale", "scaling"},
-            {"crop.apply", "Apply", "check"},
+            {"crop.apply", "Finish Editing", "check"},
             {"crop.fit", "Fit", "arrows-maximize"},
             {"crop.fit_trim", "Fit Trim", "arrows-minimize"},
             {"crop.invert", "Invert", "select-invert"},

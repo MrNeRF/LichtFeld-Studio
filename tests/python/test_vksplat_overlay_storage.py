@@ -148,8 +148,8 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
 
 
     def test_overlay_param_layout_matches_between_host_and_shader(self):
-        # The host table and utils.slang name every slot twice; the polygon
-        # region must stay in step with both copies.
+        # The fixed prefix and dynamic crop record layout share an ABI. Check
+        # every declared host index/stride against its shader counterpart.
         def evaluate(expression, values):
             tree = ast.parse(expression.replace("/", "//"), mode="eval")
             allowed = (ast.Expression, ast.BinOp, ast.Constant, ast.Name, ast.Load,
@@ -170,18 +170,38 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
                                            read(SHADERS / "utils.slang")):
             shader_values[name] = evaluate(expression, shader_values)
         pairs = {
-            "EllipsoidExtraBase": "OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE",
-            "CropPolygonBase": "OVERLAY_PARAM_CROP_POLYGON_BASE",
+            "CropFlags": "OVERLAY_PARAM_CROP_FLAGS",
+            "CropMin": "OVERLAY_PARAM_CROP_MIN",
+            "CropMax": "OVERLAY_PARAM_CROP_MAX",
+            "CropTransform": "OVERLAY_PARAM_CROP_TRANSFORM",
+            "EllipsoidFlags": "OVERLAY_PARAM_ELLIPSOID_FLAGS",
+            "EllipsoidRadii": "OVERLAY_PARAM_ELLIPSOID_RADII",
+            "EllipsoidTransform": "OVERLAY_PARAM_ELLIPSOID_TRANSFORM",
+            "ViewFlags": "OVERLAY_PARAM_VIEW_FLAGS",
+            "ViewMin": "OVERLAY_PARAM_VIEW_MIN",
+            "ViewMax": "OVERLAY_PARAM_VIEW_MAX",
+            "ViewTransform": "OVERLAY_PARAM_VIEW_TRANSFORM",
+            "EmphasisFlags": "OVERLAY_PARAM_EMPHASIS_FLAGS",
+            "CursorFlags": "OVERLAY_PARAM_CURSOR_FLAGS",
+            "MarkerFlags": "OVERLAY_PARAM_MARKER_FLAGS",
+            "SelectionCursor": "OVERLAY_PARAM_SELECTION_CURSOR",
+            "SelectionFlags": "OVERLAY_PARAM_SELECTION_FLAGS",
+            "VisibilityFlags": "OVERLAY_PARAM_VISIBILITY_FLAGS",
+            "RevealParams": "OVERLAY_PARAM_REVEAL",
+            "RevealEffectBounds": "OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS",
+            "CropDirectory": "OVERLAY_PARAM_CROP_DIRECTORY",
+            "ParamCount": "OVERLAY_PARAM_COUNT",
+            "CropDirectoryStride": "OVERLAY_PARAM_CROP_DIRECTORY_STRIDE",
+            "CropParamStride": "OVERLAY_PARAM_CROP_STRIDE",
+            "EllipsoidParamStride": "OVERLAY_PARAM_ELLIPSOID_STRIDE",
             "CropPolygonParams": "OVERLAY_PARAM_CROP_POLYGON_PARAMS",
             "CropPolygonTransform": "OVERLAY_PARAM_CROP_POLYGON_TRANSFORM",
             "CropPolygonVertices": "OVERLAY_PARAM_CROP_POLYGON_VERTICES",
             "CropPolygonParamStride": "OVERLAY_PARAM_CROP_POLYGON_STRIDE",
-            "CropPolygonCount": "OVERLAY_PARAM_CROP_POLYGON_COUNT",
-            "RevealParams": "OVERLAY_PARAM_REVEAL",
-            "RevealEffectBounds": "OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS",
-            "ParamCount": "OVERLAY_PARAM_COUNT",
             "kMaxVertices": "OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES",
         }
+        self.assertEqual(set(host_values), set(pairs), "Unmapped host layout constants")
+        self.assertEqual(set(shader_values), set(pairs.values()), "Unmapped shader layout constants")
         for host_name, shader_name in pairs.items():
             with self.subTest(slot=host_name):
                 self.assertEqual(host_values[host_name], shader_values[shader_name])

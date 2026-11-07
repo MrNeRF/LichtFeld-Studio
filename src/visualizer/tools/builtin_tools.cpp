@@ -6,6 +6,7 @@
 #include "core/editor_context.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "scene/scene_manager.hpp"
 #include "unified_tool_registry.hpp"
 
 #include <initializer_list>
@@ -59,6 +60,13 @@ namespace lfs::vis {
             desc.source = ToolSource::CPP;
             desc.poll_fn = [] {
                 const auto* editor = services().editorOrNull();
+                if (const auto* manager = services().sceneOrNull()) {
+                    for (const auto id : manager->getSelectedNodeIds()) {
+                        const auto* node = manager->getScene().getNodeById(id);
+                        if (node && node->type == core::NodeType::GROUP)
+                            return false;
+                    }
+                }
                 return editor && editor->hasSelection() && !editor->isToolsDisabled();
             };
             UnifiedToolRegistry::instance().registerTool(std::move(desc));

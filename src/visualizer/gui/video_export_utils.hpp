@@ -85,6 +85,7 @@ namespace lfs::vis::gui {
         std::vector<VideoExportCropBoxSnapshot> cropboxes;
         int selected_cropbox_index = -1;
         std::optional<VideoExportEllipsoidSnapshot> active_ellipsoid;
+        std::vector<VideoExportEllipsoidSnapshot> ellipsoids;
         // Every crop polygon filters its own splat; point clouds take the selected one, else the only enabled one.
         std::vector<VideoExportCropPolygonSnapshot> crop_polygons;
         int selected_crop_polygon_index = -1;

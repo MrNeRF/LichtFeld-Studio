@@ -558,3 +558,20 @@ scrollbarhorizontal sliderbar:hover {
     background-color: @{alpha(surface,0.94)};
     border-color: @{alpha(border,0.50)};
 }
+
+/* Shared compact switch colors. */
+.mcp-switch-track,
+.preferences-mcp-switch-track,
+.crop-effect-toggle {
+    border-color: @{border};
+    background-color: @{surface_bright};
+}
+.mcp-switch-knob,
+.preferences-mcp-switch-knob,
+.crop-effect-dot { background-color: @{text_dim}; }
+#mcp-toggle.is-on .mcp-switch-track,
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-track,
+.crop-effect-toggle.active { border-color: @{success}; }
+#mcp-toggle.is-on .mcp-switch-knob,
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob,
+.crop-effect-toggle.active .crop-effect-dot { background-color: @{success}; }
