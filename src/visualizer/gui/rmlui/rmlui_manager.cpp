@@ -259,11 +259,20 @@ namespace lfs::vis::gui {
             return {};
         }
         result->renderer = std::make_unique<RenderInterface_VK>();
+        result->renderer->setPreviewMemoryProvider(preview_memory_provider_);
         if (!result->renderer->InitializeExternal(nativeRenderContext(*result->graphics)))
             return {};
         LOG_INFO("External RmlUi host '{}' initialized in {:.2f} ms", name,
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
         return result;
+    }
+
+    void RmlUIManager::setPreviewMemoryProvider(PreviewMemoryProvider provider) {
+        preview_memory_provider_ = std::move(provider);
+        if (vulkan_render_interface_)
+            vulkan_render_interface_->setPreviewMemoryProvider(preview_memory_provider_);
+        for (const auto& [context, native] : native_windows_)
+            native->renderer->setPreviewMemoryProvider(preview_memory_provider_);
     }
 
     bool RmlUIManager::restoredExternalBounds(const std::string& name, float* bounds) {

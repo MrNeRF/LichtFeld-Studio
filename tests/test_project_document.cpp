@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
@@ -68,6 +69,18 @@
 #endif
 
 namespace {
+    TEST(ProjectDocumentTime, FileClockConversionPreservesUnixEpochAndSubseconds) {
+        for (const auto seconds : {-1LL, 0LL, 1'700'000'000LL}) {
+            const auto expected = std::chrono::sys_seconds{std::chrono::seconds{seconds}} +
+                                  std::chrono::microseconds{123456};
+#if defined(_MSC_VER)
+            const auto file_time = std::chrono::clock_cast<std::filesystem::file_time_type::clock>(expected);
+#else
+            const auto file_time = std::filesystem::file_time_type::clock::from_sys(expected);
+#endif
+            EXPECT_EQ(lfs::core::file_time_to_system_clock(file_time), expected);
+        }
+    }
 
     namespace fs = std::filesystem;
     using lfs::core::DataType;

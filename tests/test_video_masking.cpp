@@ -3,10 +3,13 @@
 
 #include "core/argument_parser.hpp"
 #include "core/image_io.hpp"
+#include "core/native_fs.hpp"
+#include "core/nn/models/sam2.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/video/video_encoder.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "preprocessing/video_mask_cells.hpp"
 #include "preprocessing/video_mask_extraction.hpp"
 #include "preprocessing/video_mask_recovery.hpp"
@@ -16,6 +19,8 @@
 #include <filesystem>
 #include <format>
 #include <gtest/gtest.h>
+#include <mutex>
+#include <set>
 
 namespace {
     using namespace lfs;
@@ -74,6 +79,81 @@ TEST(VideoMaskingValidation, InvalidInputsAndMemoryAdmission) {
     const auto cancelled = mask_video_sequence(frames, {}, options, nullptr);
     ASSERT_FALSE(cancelled.has_value());
     EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled);
+}
+
+TEST(VideoMaskingValidation, SubjectRequiresAReviewedSingleObjectSeed) {
+    OutputDirectory output;
+    const std::vector frames{frame(output.path, 0)};
+    VideoMaskOptions options;
+    options.profile = VideoMaskProfile::Subject;
+    EXPECT_FALSE(mask_video_sequence(frames, {}, options, nullptr));
+    options.prompt.emplace();
+    options.prompt->mask = core::Tensor::ones({1, 2, 32, 32}, core::Device::CPU);
+    const auto invalid = mask_video_sequence(frames, {}, options, nullptr);
+    ASSERT_FALSE(invalid);
+    EXPECT_EQ(invalid.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(core::native_fs::exists(frames.front().mask_path));
+}
+
+TEST(VideoMaskingPipeline, ReviewedSubjectTracksRequestedDirectionsWithoutPublishingFiles) {
+    int devices = 0;
+    if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+    const auto weights = ensure_sam2_weights(false);
+    if (!weights)
+        GTEST_SKIP() << "SAM2.1 weights are not cached";
+    Stream stream;
+    const core::CUDAStreamGuard guard(stream.value);
+    auto model = core::nn::models::Sam2::load(*weights, core::Device::CUDA, core::DataType::Float32);
+    ASSERT_TRUE(model);
+    OutputDirectory output;
+    const std::vector frames{frame(output.path, 0), frame(output.path, 1), frame(output.path, 2)};
+    for (const auto direction : {VideoMaskDirection::Both, VideoMaskDirection::Forward, VideoMaskDirection::Reverse}) {
+        SCOPED_TRACE(int(direction));
+        VideoMaskOptions options;
+        options.profile = VideoMaskProfile::Subject;
+        options.direction = direction;
+        options.keep_subject = true;
+        options.dilation_radius = 0;
+        options.prompt.emplace();
+        options.prompt->frame = 1;
+        // An explicitly reviewed full-frame subject must survive the operator's
+        // 40% heuristic, and the seed must not be inferred again from dummy points.
+        options.prompt->mask = core::Tensor::ones({1, 1, 64, 64}, core::Device::CPU);
+        if (direction == VideoMaskDirection::Reverse)
+            options.prompt->mask = core::Tensor::full({1, 1, 64, 64}, 255, core::Device::CPU, core::DataType::UInt8);
+        std::mutex mutex;
+        std::set<size_t> seen;
+        options.mask_ready = [&](size_t index, const core::Tensor& mask, float, bool) {
+            EXPECT_EQ(mask.device(), core::Device::CPU);
+            EXPECT_EQ(mask.dtype(), core::DataType::UInt8);
+            EXPECT_EQ(mask.numel(), size_t(frames[index].width) * frames[index].height);
+            if (index == 1)
+                EXPECT_GT(mask.to(core::DataType::Float32).sum().item<float>() / (255.0f * mask.numel()), 0.95f);
+            std::lock_guard lock(mutex);
+            EXPECT_TRUE(seen.insert(index).second);
+        };
+        const auto result = mask_video_sequence(frames, {}, options, stream.value, &*model);
+        ASSERT_TRUE(result) << result.error().user_message();
+        const std::set<size_t> expected = direction == VideoMaskDirection::Forward ? std::set<size_t>{1, 2} : direction == VideoMaskDirection::Reverse ? std::set<size_t>{0, 1}
+                                                                                                                                                       : std::set<size_t>{0, 1, 2};
+        EXPECT_EQ(seen, expected);
+        for (const auto& item : frames)
+            EXPECT_FALSE(core::native_fs::exists(item.mask_path));
+        model->reset_video();
+        if (direction == VideoMaskDirection::Both) {
+            options.mask_ready = [](size_t index, const core::Tensor&, float, bool) {
+                if (index != 1)
+                    throw std::runtime_error("retained mask budget exhausted");
+            };
+            const auto failed = mask_video_sequence(frames, {}, options, stream.value, &*model);
+            ASSERT_FALSE(failed);
+            EXPECT_NE(failed.error().detail().find("retained mask budget exhausted"), std::string_view::npos);
+            ASSERT_EQ(failed.error().suppressed().size(), 1);
+            EXPECT_NE(failed.error().suppressed()[0].detail().find("retained mask budget exhausted"), std::string_view::npos);
+            model->reset_video();
+        }
+    }
 }
 
 TEST(VideoMaskingRecovery, PatienceAndRealMaskBounds) {
