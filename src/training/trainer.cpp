@@ -2058,6 +2058,11 @@ namespace lfs::training {
             camera.is_undistort_prepared())
             return {};
 
+        if (params_.tile_require_dense_masks && !params_.tile_depth_masks_path) {
+            throw std::runtime_error(
+                "Dense tile masks are required, but this tile worker has no --tile-depth-masks file");
+        }
+
         if (!tile_visibility_masks_initialized_) {
             tile_visibility_masks_initialized_ = true;
             if (params_.tile_depth_masks_path) {
@@ -2090,9 +2095,14 @@ namespace lfs::training {
                              tile_visibility_masks_.size(),
                              lfs::core::path_to_utf8(*params_.tile_depth_masks_path));
                 } catch (const std::exception& error) {
-                    // The sparse SfM estimator below is intentionally retained as
-                    // a safe fallback for interrupted or manually edited runs.
                     tile_visibility_masks_.clear();
+                    if (params_.tile_require_dense_masks) {
+                        throw std::runtime_error(std::format(
+                            "Required dense coarse tile masks '{}' are invalid: {}",
+                            lfs::core::path_to_utf8(*params_.tile_depth_masks_path), error.what()));
+                    }
+                    // Sparse masks are only an explicit recovery path for
+                    // interrupted or manually edited legacy runs.
                     LOG_WARN("Cannot load coarse-depth tile masks '{}': {}; using sparse SfM masks",
                              lfs::core::path_to_utf8(*params_.tile_depth_masks_path), error.what());
                 }
@@ -2101,6 +2111,11 @@ namespace lfs::training {
 
         auto [it, inserted] = tile_visibility_masks_.try_emplace(camera.uid());
         if (inserted) {
+            if (params_.tile_require_dense_masks && params_.tile_depth_masks_path) {
+                throw std::runtime_error(std::format(
+                    "Required dense coarse tile mask is missing for camera {} in '{}'",
+                    camera.uid(), lfs::core::path_to_utf8(*params_.tile_depth_masks_path)));
+            }
             core::TileSpec tile;
             for (int axis = 0; axis < 3; ++axis) {
                 tile.min[axis] = (*params_.cropbox)[axis];

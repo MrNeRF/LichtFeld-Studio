@@ -631,8 +631,8 @@ namespace lfs::core {
             int tile_min_cameras = 2;
             int tile_min_multi_view_cells = 2;
             bool tile_merge_infeasible = true;
-            // Extra final ownership extent on the scene-facing X/Y sides of
-            // boundary tiles. Camera assignment deliberately happens first.
+            // Extra final ownership extent on the scene-facing local OBB X/Y
+            // sides of boundary tiles. Camera assignment deliberately happens first.
             float tile_boundary_padding = 0.0f;
             // Internal: prevents a worker launched by the auto-tile parent from
             // recursively becoming another auto-tile parent through --config.
@@ -648,6 +648,10 @@ namespace lfs::core {
             int tile_visibility_mask_resolution = 64;
             float tile_visibility_min_alpha = 0.15f;
             float tile_visibility_foreign_weight = 0.15f;
+            // A first-class partitioning run must prove that its masks came
+            // from dense Gaussian rasterization. Disable only for recovery of
+            // old/manual jobs where the sparse estimator is acceptable.
+            bool tile_require_dense_masks = true;
             // Global SfM gain calibration is always applied to the targets.
             // This optional lock additionally disables per-tile learned
             // appearance correction so individual tiles cannot drift away

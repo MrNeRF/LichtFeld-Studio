@@ -825,10 +825,11 @@ namespace {
             ::args::ValueFlag<int> tile_min_cameras(training_group, "count", "Minimum selected cameras required for a feasible tile (default 2)", {"tile-min-cameras"});
             ::args::ValueFlag<int> tile_min_multi_view_cells(training_group, "count", "Minimum coarse cells with selected multi-view support per tile (default 2)", {"tile-min-multiview-cells"});
             ::args::Flag no_tile_merge_infeasible(training_group, "no_tile_merge_infeasible", "Fail instead of coalescing an infeasible tile with a rectangular neighbour", {"no-tile-merge-infeasible"});
-            ::args::ValueFlag<float> tile_boundary_padding(training_group, "distance", "Extend scene-facing boundary tile crop faces by this distance after camera assignment (default 0)", {"tile-boundary-padding"});
+            ::args::ValueFlag<float> tile_boundary_padding(training_group, "distance", "Extend scene-facing local-OBB boundary tile crop faces by this distance after camera assignment (default 0)", {"tile-boundary-padding"});
             ::args::ValueFlag<int> tile_visibility_mask_resolution(training_group, "pixels", "Coarse Gaussian depth/opacity mask width from 16 to 256 (default 64; height keeps camera aspect)", {"tile-visibility-mask-resolution"});
             ::args::ValueFlag<float> tile_visibility_min_alpha(training_group, "alpha", "Minimum coarse rendered opacity used to mark foreign tile coverage (default 0.15)", {"tile-visibility-min-alpha"});
             ::args::ValueFlag<float> tile_visibility_foreign_weight(training_group, "weight", "Loss weight in confidently foreign coarse-rendered pixels from 0 to 1 (default 0.15)", {"tile-visibility-foreign-weight"});
+            ::args::Flag no_tile_require_dense_masks(training_group, "no_tile_require_dense_masks", "Allow sparse fallback when a selected camera cannot receive a dense coarse Gaussian mask", {"no-tile-require-dense-masks"});
             ::args::Flag tile_lock_exposure_correction(training_group, "tile_lock_exposure_correction", "Keep per-tile learned exposure correction disabled after global SfM calibration", {"tile-lock-exposure-correction"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
             ::args::Flag no_tile_crop(training_group, "no_tile_crop", "Keep splats outside each tile after training", {"no-tile-crop"});
@@ -1492,6 +1493,7 @@ namespace {
                     return std::unexpected("--tile-visibility-foreign-weight must be between 0 and 1");
             }
             params.tile_merge_infeasible = !no_tile_merge_infeasible;
+            params.tile_require_dense_masks = !no_tile_require_dense_masks;
             params.tile_lock_exposure_correction = tile_lock_exposure_correction;
             params.auto_tile_crop = !no_tile_crop;
             params.auto_tile_merge = !no_tile_merge;
@@ -1541,6 +1543,12 @@ namespace {
                     return std::unexpected("--tile-depth-masks needs --tile-camera-uids");
                 if (params.auto_tile_grid || params.auto_tile_count || params.auto_tile_size > 0.0f)
                     return std::unexpected("--tile-depth-masks is for one tile job only");
+            }
+            if (params.tile_child_job && params.cropbox && params.tile_require_dense_masks &&
+                !params.tile_depth_masks_path) {
+                return std::unexpected(
+                    "A cropped --tile-child job requires --tile-depth-masks; "
+                    "use --no-tile-require-dense-masks only for explicit sparse recovery");
             }
             if ((params.auto_tile_grid || params.auto_tile_count > 0 || params.auto_tile_size > 0.0f) &&
                 (params.cropbox || params.resume_checkpoint || params.resume_project))

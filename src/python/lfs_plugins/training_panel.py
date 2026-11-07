@@ -285,6 +285,7 @@ class TrainingPanel(Panel):
         self._auto_tile_visibility_mask_resolution = "64"
         self._auto_tile_visibility_min_alpha = "0.15"
         self._auto_tile_visibility_foreign_weight = "0.15"
+        self._auto_tile_require_dense_masks = True
         self._auto_tile_lock_exposure_correction = False
         self._auto_tile_crop = True
         self._auto_tile_merge = True
@@ -432,6 +433,8 @@ class TrainingPanel(Panel):
                    lambda value: setattr(self, "_auto_tile_visibility_min_alpha", str(value)))
         model.bind("auto_tile_visibility_foreign_weight", lambda: self._auto_tile_visibility_foreign_weight,
                    lambda value: setattr(self, "_auto_tile_visibility_foreign_weight", str(value)))
+        model.bind("auto_tile_require_dense_masks", lambda: self._auto_tile_require_dense_masks,
+                   lambda value: setattr(self, "_auto_tile_require_dense_masks", bool(value)))
         model.bind("auto_tile_lock_exposure_correction", lambda: self._auto_tile_lock_exposure_correction,
                    lambda value: setattr(self, "_auto_tile_lock_exposure_correction", bool(value)))
         model.bind("auto_tile_selected_index", lambda: str(self._auto_tile_selected_index),
@@ -1796,7 +1799,7 @@ class TrainingPanel(Panel):
                         pass
                     if (isinstance(requested_count, int) and
                             isinstance(resolved_count, int) and
-                            0 < resolved_count < requested_count):
+                            resolved_count > 0 and resolved_count != requested_count):
                         self._auto_tile_status = tr("auto_tiles.completed_coalesced").format(
                             requested_count, resolved_count, self._auto_tile_output)
                     else:
@@ -3071,6 +3074,7 @@ class TrainingPanel(Panel):
                 bool(self._auto_tile_merge_infeasible), boundary_padding,
                 visibility_mask_resolution, visibility_min_alpha,
                 visibility_foreign_weight,
+                bool(self._auto_tile_require_dense_masks),
                 bool(self._auto_tile_lock_exposure_correction))
 
     def _on_auto_tile_slider_change(self, handle, _event, args):
@@ -3085,7 +3089,7 @@ class TrainingPanel(Panel):
             handle.dirty("auto_tile_overlap_steps")
             handle.dirty("auto_tile_overlap_label")
         elif args[0] == "quantile":
-            self._auto_tile_quantile = min(100, max(0, steps)) / 1000
+            self._auto_tile_quantile = min(490, max(0, steps)) / 1000
             handle.dirty("auto_tile_quantile_steps")
             handle.dirty("auto_tile_quantile_label")
         elif args[0] == "outside_loss":
@@ -3201,6 +3205,7 @@ class TrainingPanel(Panel):
              coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
              merge_infeasible, boundary_padding, visibility_mask_resolution,
              visibility_min_alpha, visibility_foreign_weight,
+             require_dense_masks,
              lock_exposure_correction) = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
@@ -3256,6 +3261,7 @@ class TrainingPanel(Panel):
              coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
              merge_infeasible, boundary_padding, visibility_mask_resolution,
              visibility_min_alpha, visibility_foreign_weight,
+             require_dense_masks,
              lock_exposure_correction) = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
@@ -3290,6 +3296,8 @@ class TrainingPanel(Panel):
                        "--max-width", str(max_width)])
             if not merge_infeasible:
                 command.append("--no-tile-merge-infeasible")
+            if not require_dense_masks:
+                command.append("--no-tile-require-dense-masks")
             if lock_exposure_correction:
                 command.append("--tile-lock-exposure-correction")
             if not self._auto_tile_crop:

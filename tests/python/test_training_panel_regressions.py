@@ -73,6 +73,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
             "boundary_padding", "boundary_help", "min_cameras", "min_multiview_cells",
             "merge_infeasible", "feasibility_help", "visibility_resolution",
             "visibility_min_alpha", "visibility_foreign_weight", "visibility_help",
+            "require_dense_masks", "require_dense_masks_help",
             "lock_exposure_correction", "lock_exposure_help",
             "completed_coalesced",
         ):
@@ -274,6 +275,7 @@ def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_loc
     panel._auto_tile_visibility_mask_resolution = "128"
     panel._auto_tile_visibility_min_alpha = "0.2"
     panel._auto_tile_visibility_foreign_weight = "0.35"
+    panel._auto_tile_require_dense_masks = False
     panel._auto_tile_lock_exposure_correction = True
     panel._schedule_deferred_update = lambda _delay: None
     panel._auto_tile_train()
@@ -286,6 +288,7 @@ def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_loc
     assert command[command.index("--tile-visibility-mask-resolution") + 1] == "128"
     assert command[command.index("--tile-visibility-min-alpha") + 1] == "0.2"
     assert command[command.index("--tile-visibility-foreign-weight") + 1] == "0.35"
+    assert "--no-tile-require-dense-masks" in command
     assert "--tile-lock-exposure-correction" in command
 
 
@@ -329,6 +332,16 @@ def test_auto_tile_inspector_selection_accepts_any_preview_index(training_panel_
     assert panel._auto_tile_selected_index == 2
     assert panel._auto_tile_selected_cameras() == []
     assert "auto_tile_selected_index" in panel._handle.dirty_fields
+
+
+def test_auto_tile_quantile_slider_exposes_the_full_cli_range(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    handle = _HandleStub()
+
+    panel._on_auto_tile_slider_change(handle, None, ["quantile", "490"])
+
+    assert panel._auto_tile_quantile == 0.49
+    assert "auto_tile_quantile_steps" in handle.dirty_fields
 
 
 class _ParamsStub:

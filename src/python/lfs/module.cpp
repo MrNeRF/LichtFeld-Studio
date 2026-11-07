@@ -123,6 +123,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -1056,6 +1057,70 @@ namespace {
         return request;
     }
 
+    struct AutoTileLocalBounds {
+        glm::vec3 low{0.0f};
+        glm::vec3 high{0.0f};
+    };
+
+    [[nodiscard]] glm::mat3 auto_tile_rotation(const glm::vec3& degrees) {
+        return glm::mat3(glm::eulerAngleXYZ(glm::radians(degrees.x),
+                                            glm::radians(degrees.y),
+                                            glm::radians(degrees.z)));
+    }
+
+    [[nodiscard]] AutoTileLocalBounds auto_tile_local_bounds(
+        const lfs::core::TileSpec& tile) {
+        const glm::vec3 world_center = (tile.min + tile.max) * 0.5f;
+        const glm::vec3 local_center = glm::transpose(auto_tile_rotation(tile.rotation_degrees)) * world_center;
+        const glm::vec3 half = (tile.max - tile.min) * 0.5f;
+        return {local_center - half, local_center + half};
+    }
+
+    void set_auto_tile_local_bounds(lfs::core::TileSpec& tile,
+                                    const AutoTileLocalBounds bounds) {
+        const glm::vec3 local_center = (bounds.low + bounds.high) * 0.5f;
+        const glm::vec3 world_center = auto_tile_rotation(tile.rotation_degrees) * local_center;
+        const glm::vec3 half = (bounds.high - bounds.low) * 0.5f;
+        tile.min = world_center - half;
+        tile.max = world_center + half;
+    }
+
+    void extend_auto_tile_preview_boundaries(std::vector<lfs::core::TileSpec>& tiles,
+                                             const float padding) {
+        if (padding <= 0.0f || tiles.empty()) return;
+        // Generated automatic tiles always share this orientation.  If a
+        // caller supplies mixed-frame tiles later, skip the incomparable
+        // frames rather than applying a world-axis padding to an OBB.
+        constexpr float rotation_epsilon_degrees = 1e-3f;
+        const glm::vec3 rotation = tiles.front().rotation_degrees;
+        AutoTileLocalBounds scene_bounds = auto_tile_local_bounds(tiles.front());
+        for (const auto& tile : tiles) {
+            if (glm::length(tile.rotation_degrees - rotation) > rotation_epsilon_degrees)
+                continue;
+            const auto bounds = auto_tile_local_bounds(tile);
+            scene_bounds.low = glm::min(scene_bounds.low, bounds.low);
+            scene_bounds.high = glm::max(scene_bounds.high, bounds.high);
+        }
+        const float coordinate_scale = std::max({
+            std::abs(scene_bounds.low.x), std::abs(scene_bounds.low.y), std::abs(scene_bounds.low.z),
+            std::abs(scene_bounds.high.x), std::abs(scene_bounds.high.y), std::abs(scene_bounds.high.z)});
+        const float epsilon = std::max({1e-5f,
+            glm::length(scene_bounds.high - scene_bounds.low) * 1e-5f,
+            coordinate_scale * std::numeric_limits<float>::epsilon() * 4.0f});
+        for (auto& tile : tiles) {
+            if (glm::length(tile.rotation_degrees - rotation) > rotation_epsilon_degrees)
+                continue;
+            auto bounds = auto_tile_local_bounds(tile);
+            for (int axis = 0; axis < 2; ++axis) {
+                if (std::abs(bounds.low[axis] - scene_bounds.low[axis]) <= epsilon)
+                    bounds.low[axis] -= padding;
+                if (std::abs(bounds.high[axis] - scene_bounds.high[axis]) <= epsilon)
+                    bounds.high[axis] += padding;
+            }
+            set_auto_tile_local_bounds(tile, bounds);
+        }
+    }
+
     [[nodiscard]] std::vector<lfs::core::TileSpec> compute_auto_tile_preview(
         const AutoTilePreviewRequest& request) {
         const lfs::core::PointCloud empty_points;
@@ -1097,24 +1162,7 @@ namespace {
         // Context bounds retain their pre-extension values, so preview camera
         // assignment matches the training path: select first, then extend only
         // scene-facing ownership faces for the final crop.
-        if (request.options.boundary_padding > 0.0f && !tiles.empty()) {
-            glm::vec3 scene_min = tiles.front().min;
-            glm::vec3 scene_max = tiles.front().max;
-            for (const auto& tile : tiles) {
-                scene_min = glm::min(scene_min, tile.min);
-                scene_max = glm::max(scene_max, tile.max);
-            }
-            const float epsilon = std::max(1e-5f,
-                glm::length(scene_max - scene_min) * 1e-5f);
-            for (auto& tile : tiles) {
-                for (int axis = 0; axis < 2; ++axis) {
-                    if (std::abs(tile.min[axis] - scene_min[axis]) <= epsilon)
-                        tile.min[axis] -= request.options.boundary_padding;
-                    if (std::abs(tile.max[axis] - scene_max[axis]) <= epsilon)
-                        tile.max[axis] += request.options.boundary_padding;
-                }
-            }
-        }
+        extend_auto_tile_preview_boundaries(tiles, request.options.boundary_padding);
         return tiles;
     }
 
@@ -4283,8 +4331,11 @@ NB_MODULE(lichtfeld, m) {
             }
         }
         if (!source_points || source_points->size() == 0) {
-            restore_auto_tile_preview_visibility();
-            throw std::runtime_error("The scene has no sparse points to inspect for this tile");
+            // Camera-only datasets are still useful to inspect: retain the
+            // isolated crop box and exact camera set even when there is no
+            // sparse cloud from which to construct an auxiliary point node.
+            scene_manager->selectNode(tiles[static_cast<size_t>(index)].node_id);
+            return;
         }
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
         for (const auto* const node : scene->getNodes()) {
@@ -4296,8 +4347,10 @@ NB_MODULE(lichtfeld, m) {
         const auto selected_points = lfs::core::select_tile_initial_point_indices(
             *source_points, tiles[static_cast<size_t>(index)].tile, evidence);
         if (selected_points.empty()) {
-            restore_auto_tile_preview_visibility();
-            throw std::runtime_error("No sparse points are associated with this tile");
+            // Do not turn a valid crop/camera inspection into an error just
+            // because this particular tile has no sparse support.
+            scene_manager->selectNode(tiles[static_cast<size_t>(index)].node_id);
+            return;
         }
         const auto point_indices = lfs::core::Tensor::from_vector(
             selected_points, lfs::core::TensorShape({selected_points.size()}), source_points->means.device());
@@ -4309,8 +4362,11 @@ NB_MODULE(lichtfeld, m) {
         }
         const auto points_id = scene->addPointCloud("AutoTileInspectionPoints", inspection_points);
         if (points_id == lfs::core::NULL_NODE) {
-            restore_auto_tile_preview_visibility();
-            throw std::runtime_error("Could not create the temporary tile point preview");
+            // The crop box and associated cameras are already isolated. Keep
+            // that useful inspection state if only the optional point overlay
+            // cannot be created.
+            scene_manager->selectNode(tiles[static_cast<size_t>(index)].node_id);
+            return;
         }
         if (source_node)
             scene->setNodeTransform(points_id, scene->getWorldTransform(source_node->id));

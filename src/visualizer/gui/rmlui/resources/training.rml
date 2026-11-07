@@ -1053,7 +1053,7 @@
         <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.quantile</span></span>
           <div class="setting-row__control-col setting-row__control-col--slider">
-            <input type="range" class="setting-slider" min="0" max="100" step="5" data-value="auto_tile_quantile_steps" data-event-change="auto_tile_slider_change('quantile', ev.value)" />
+            <input type="range" class="setting-slider" min="0" max="490" step="5" data-value="auto_tile_quantile_steps" data-event-change="auto_tile_slider_change('quantile', ev.value)" />
             <span class="slider-value">{{auto_tile_quantile_label}}</span>
           </div>
         </div>
@@ -1110,6 +1110,11 @@
           <span class="prop-label"><span>@tr:auto_tiles.visibility_foreign_weight</span></span>
           <input type="text" class="number-input" data-value="auto_tile_visibility_foreign_weight" />
         </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.require_dense_masks</span></span>
+          <input type="checkbox" data-value="auto_tile_require_dense_masks" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.require_dense_masks_help</span>
         <span class="status-text status-muted">@tr:auto_tiles.visibility_help</span>
         <span class="status-text text-accent">@tr:auto_tiles.section_output</span>
         <div class="setting-row">
