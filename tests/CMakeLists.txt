@@ -249,6 +249,7 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_camera_training_notice.cpp
         test_analog_navigation.cpp
         test_gamepad_service.cpp
         test_gamepad_navigation.cpp
@@ -291,6 +292,7 @@ if(BUILD_VISUALIZER_TESTS)
     )
     # Focused RmlUi migration contracts for the retained master interface.
     add_executable(lichtfeld_rmlui_tests
+        test_assisted_masking.cpp
         test_rml_text_input_handler.cpp
         test_rml_text_input_native_keys.cpp
         test_rml_path_utils.cpp
@@ -307,13 +309,16 @@ if(BUILD_VISUALIZER_TESTS)
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
     target_compile_definitions(lichtfeld_rmlui_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
     target_link_libraries(lichtfeld_rmlui_tests PRIVATE
-        lfs_visualizer lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+        lfs_visualizer lfs_preprocessing lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
     if(MSVC)
         target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
     endif()
-    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
+    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests --gtest_filter=-AssistedMaskingGpu.*)
     set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    add_test(NAME lichtfeld.rmlui_gpu COMMAND lichtfeld_rmlui_tests --gtest_filter=AssistedMaskingGpu.*)
+    set_tests_properties(lichtfeld.rmlui_gpu PROPERTIES LABELS "gpu;ui" TIMEOUT 420
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE

@@ -5319,6 +5319,13 @@ namespace lfs::training {
                                     document_context
                                         ->view;
                                 document->edit_shaders() = document_context->shaders;
+                                for (const auto& [asset, source] : document_context->camera_mask_sources) {
+                                    auto shared = source->share();
+                                    if (!shared)
+                                        return lfs::Status::failure(std::move(shared).error());
+                                    if (auto stored = document->set_dataset_source(asset, std::move(*shared)); !stored)
+                                        return lfs::Status::failure(std::move(stored).error());
+                                }
                                 document->edit_editor() =
                                     document_context
                                         ->editor;

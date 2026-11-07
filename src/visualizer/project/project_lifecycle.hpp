@@ -13,6 +13,7 @@
 #include "visualizer/core/job_registry.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -32,6 +33,9 @@ namespace lfs::training {
 }
 
 namespace lfs::vis {
+    namespace op {
+        struct CameraMaskAssetSnapshot;
+    }
     class VisualizerImpl;
     class CollisionProjectOpenTest;
     class PayloadRecaptureTest;
@@ -274,6 +278,9 @@ namespace lfs::vis::project {
         [[nodiscard]] std::uint64_t documentEpoch() const noexcept {
             return epoch_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] std::array<std::uint64_t, 2> documentSceneRevision() const noexcept {
+            return {documentEpoch(), scene_mutation_serial_.load(std::memory_order_acquire)};
+        }
         void recoverDeferredPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);
         [[nodiscard]] bool isScratchBoundSession() const;
@@ -293,6 +300,9 @@ namespace lfs::vis::project {
                    const std::filesystem::path& expected_path = {},
                    std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
+        [[nodiscard]] lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height);
+        [[nodiscard]] lfs::Result<lfs::io::project::ResolvedCameraMask> materializeCameraMask(const lfs::core::Uuid& asset_uuid) const;
+        [[nodiscard]] std::shared_ptr<op::CameraMaskAssetSnapshot> retainCameraMaskAsset(const lfs::core::Uuid& asset_uuid);
         [[nodiscard]] lfs::Result<ProjectTrainingSource> trainingSource();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;

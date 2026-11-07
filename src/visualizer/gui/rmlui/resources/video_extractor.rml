@@ -41,11 +41,9 @@
         </div>
 
         <div id="timeline">
-          <div id="timeline-trim"></div>
+          <div id="timeline-segments"></div>
           <div id="timeline-markers"></div>
           <div id="timeline-progress"></div>
-          <div id="timeline-start" class="timeline-handle timeline-handle--start"></div>
-          <div id="timeline-end" class="timeline-handle timeline-handle--end"></div>
           <div id="timeline-playhead"></div>
         </div>
 
@@ -314,6 +312,7 @@
         <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
         <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
         <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
+        <button id="btn-review-frames" class="btn btn--secondary action-btn" type="button">@tr:image_preview.sam_review_frames</button>
         <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
       </div>
       <div class="status-row">

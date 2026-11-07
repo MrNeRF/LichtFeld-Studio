@@ -56,6 +56,7 @@ namespace lfs::vis {
         class CollisionJobsTest;
         struct VideoExportEnvironmentState;
         struct VideoExportMeshRendererState;
+        class AssistedMasking;
 
         class LFS_VIS_API AsyncTaskManager {
         public:
@@ -63,6 +64,7 @@ namespace lfs::vis {
             ~AsyncTaskManager();
 
             void shutdown();
+            AssistedMasking& assistedMasking() { return *assisted_masking_; }
             bool uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update);
             void cancelExternalPreviewUpload();
             void removeExternalPreview(const core::Uuid& uuid);
@@ -413,6 +415,7 @@ namespace lfs::vis {
             AprilTagScanState apriltag_state_;
 
             JobRegistry& jobs_;
+            std::unique_ptr<AssistedMasking> assisted_masking_;
             JobHandle collision_job_;
             std::future<void> collision_worker_;
             std::stop_source collision_stop_;

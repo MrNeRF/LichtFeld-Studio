@@ -690,6 +690,8 @@ namespace lfs::vis::op {
             total += tensorMemory(camera.T);
             total += tensorMemory(camera.radial_distortion);
             total += tensorMemory(camera.tangential_distortion);
+            if (camera.mask_asset)
+                total.cpu_bytes += camera.mask_asset->bytes;
             return total;
         }
 
@@ -772,6 +774,8 @@ namespace lfs::vis::op {
             snapshot.image_name = camera.image_name();
             snapshot.image_path = camera.image_path();
             snapshot.mask_path = camera.mask_path();
+            snapshot.mask_asset_uuid = camera.mask_asset_uuid();
+            snapshot.mask_asset_owner = camera.mask_asset_owner();
             snapshot.depth_path = camera.depth_path();
             snapshot.split = camera.split();
             snapshot.focal_x = camera.focal_x();
@@ -788,6 +792,8 @@ namespace lfs::vis::op {
         }
 
         std::shared_ptr<lfs::core::Camera> restoreCamera(const SceneGraphCameraSnapshot& snapshot) {
+            if (snapshot.mask_asset)
+                snapshot.mask_asset->restore();
             auto camera = std::make_shared<lfs::core::Camera>(
                 snapshot.R.clone(),
                 snapshot.T.clone(),
@@ -807,6 +813,7 @@ namespace lfs::vis::op {
                 snapshot.camera_id,
                 snapshot.depth_path);
             camera->set_split(snapshot.split);
+            camera->set_mask_path(snapshot.mask_path, snapshot.mask_asset_uuid, snapshot.mask_asset_owner);
             camera->set_image_dimensions(snapshot.image_width, snapshot.image_height);
             return camera;
         }
@@ -999,6 +1006,8 @@ namespace lfs::vis::op {
             }
             if (capture_payload && node.camera) {
                 snapshot.camera = captureCameraSnapshot(*node.camera);
+                if (snapshot.camera->mask_asset_uuid)
+                    snapshot.camera->mask_asset = scene_manager.retainCameraMaskAsset(*snapshot.camera->mask_asset_uuid);
             }
 
             for (const auto child_id : node.children) {
@@ -1500,6 +1509,8 @@ namespace lfs::vis::op {
                 total += tensorBytes(snapshot.camera->T);
                 total += tensorBytes(snapshot.camera->radial_distortion);
                 total += tensorBytes(snapshot.camera->tangential_distortion);
+                if (snapshot.camera->mask_asset)
+                    total += snapshot.camera->mask_asset->bytes;
             }
             for (const auto& child : snapshot.children) {
                 total += estimateSnapshotBytes(child);

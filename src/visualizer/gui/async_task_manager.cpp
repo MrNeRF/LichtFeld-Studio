@@ -19,6 +19,7 @@
 #include "core/scene.hpp"
 #include "core/scene_export_path.hpp"
 #include "core/services.hpp"
+#include "gui/assisted_masking.hpp"
 #include "gui/camera_selection_algorithms.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
@@ -869,7 +870,14 @@ namespace lfs::vis::gui {
 
     AsyncTaskManager::AsyncTaskManager(VisualizerImpl* viewer)
         : viewer_(viewer),
-          jobs_(viewer->jobs()) {}
+          jobs_(viewer->jobs()),
+          assisted_masking_(std::make_unique<AssistedMasking>(jobs_, [this] {
+              const auto* trainer = viewer_->getTrainerManager();
+              return !viewer_->isTrainingStartPending() && !viewer_->projectTrainingSessionState().restoring && (!trainer || trainer->isDatasetEditable()) &&
+                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport); }, [this]() -> std::optional<std::array<uint64_t, 2>> {
+              if (const auto& project = viewer_->project_lifecycle_)
+                  return project->documentSceneRevision();
+              return std::nullopt; })) {}
 
     AsyncTaskManager::~AsyncTaskManager() {
         shutdown();
@@ -1104,6 +1112,7 @@ namespace lfs::vis::gui {
             external_preview_update_->invalidated.store(true, std::memory_order_release);
         if (external_preview_thread_)
             external_preview_thread_->request_stop();
+        assisted_masking_->shutdown();
         external_preview_thread_.reset();
         if (external_preview_update_) {
             external_preview_update_->model.reset();
@@ -2057,6 +2066,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::pollImportCompletion() {
+        if (jobs_.anyRunning(JobType::AssistedMask))
+            (void)assisted_masking_->poll();
         pollCollision();
         pollAprilTagScanCompletion();
         if (import_cancel_pending_) {
@@ -2072,6 +2083,8 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = jobs_.active(JobType::AssistedMask); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)
             return true;
         if (import_cancel_pending_)

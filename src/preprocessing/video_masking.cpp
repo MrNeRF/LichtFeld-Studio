@@ -1042,7 +1042,7 @@ namespace lfs::preprocessing {
             std::optional<Sam2> model;
             std::filesystem::path model_path = options.weights;
             if (!sequence.empty() && model_path.empty()) {
-                auto ensured = ensure_sam2_weights(options.allow_download);
+                auto ensured = ensure_sam2_weights(options.allow_download, options.cancel_requested);
                 if (!ensured)
                     return std::unexpected(ensured.error());
                 model_path = std::move(*ensured);
