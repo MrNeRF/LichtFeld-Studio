@@ -310,7 +310,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::minimizeNativeWindow(Rml::Context* context) {
-        if (auto* window = nativeWindow(context)) {
+        if (const auto it = native_windows_.find(context); it != native_windows_.end()) {
+            auto* window = it->second->window;
+            recordNativeGeometry(*it->second);
             cancelPointerInput(context);
             if (!SDL_MinimizeWindow(window))
                 LOG_WARN("Failed to minimize external panel: {}", SDL_GetError());
@@ -318,7 +320,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::toggleNativeWindowMaximized(Rml::Context* context) {
-        if (auto* window = nativeWindow(context)) {
+        if (const auto it = native_windows_.find(context); it != native_windows_.end()) {
+            auto* window = it->second->window;
+            recordNativeGeometry(*it->second);
             cancelPointerInput(context);
             const bool maximized = SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED;
             if (!(maximized ? SDL_RestoreWindow(window) : SDL_MaximizeWindow(window)))

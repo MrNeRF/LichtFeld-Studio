@@ -168,6 +168,9 @@ namespace {
         doc->SetClass("window-minimized", true);
         context->Update();
         EXPECT_FALSE(content->IsVisible());
+        const auto frame_size = doc->GetElementById("window-frame")->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_LE(frame_size.x, 240 * scale + 1);
+        EXPECT_LE(frame_size.y, 32 * scale + 1);
         EXPECT_FALSE(doc->GetElementById("minimize-btn")->IsVisible());
         for (const auto* id : {"title-text", "maximize-btn", "close-btn"}) {
             auto* element = doc->GetElementById(id);

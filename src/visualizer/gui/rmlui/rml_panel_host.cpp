@@ -407,7 +407,7 @@ namespace lfs::vis::gui {
     }
 
     int RmlPanelHost::renderPadding() const {
-        if (!floating_ || !manager_ || nativeWindow())
+        if (!floating_ || !manager_ || nativeWindow() || window_state_ != FloatingWindowState::Normal)
             return 0;
         return static_cast<int>(std::ceil(
             rml_theme::layeredShadowPadding(lfs::vis::theme(), 4) *
@@ -1225,7 +1225,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::CloseButtonListener::ProcessEvent(Rml::Event&) {
-        PanelRegistry::instance().set_panel_enabled(std::string(host_->panelId()), false);
+        PanelRegistry::instance().set_panel_enabled(host_->context_name_, false);
     }
 
     void RmlPanelHost::WindowControlListener::ProcessEvent(Rml::Event& event) {
@@ -1253,7 +1253,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::syncWindowControls() {
-        if (!document_)
+        if (!document_ || (!floating_ && !controls_allowed_ && window_state_ == FloatingWindowState::Normal))
             return;
         const auto state = PanelRegistry::instance().floating_window_state(std::string(panelId()));
         const bool allowed = floating_ && state.has_value();
@@ -1265,7 +1265,11 @@ namespace lfs::vis::gui {
                 button->SetId(id);
                 button->SetClass("window-control", true);
                 button->SetAttribute("type", "button");
-                button->SetInnerRML(std::string_view(id) == "minimize-btn" ? "&#x2212;" : "&#x25A1;");
+                button->SetInnerRML(std::string_view(id) == "minimize-btn"
+                                        ? "<div class='window-icon'><div class='window-minimize-line'/></div>"
+                                        : "<div class='window-icon window-icon-maximize'><div class='window-maximize-box'/></div>"
+                                          "<div class='window-icon window-icon-restore'><div class='window-restore-box window-restore-back'/>"
+                                          "<div class='window-restore-box window-restore-front'/></div>");
                 auto* element = title->InsertBefore(std::move(button), close);
                 element->AddEventListener("click", &window_control_listener_);
                 if (std::string_view(id) == "minimize-btn")
@@ -1320,10 +1324,8 @@ namespace lfs::vis::gui {
         }
         if (maximize_button_) {
             const bool maximized = desired == FloatingWindowState::Maximized;
-            if (maximize_button_->IsClassSet("maximized") != maximized) {
+            if (maximize_button_->IsClassSet("maximized") != maximized)
                 maximize_button_->SetClass("maximized", maximized);
-                maximize_button_->SetInnerRML(maximized ? "&#x2750;" : "&#x25A1;");
-            }
             set_title(maximize_button_, desired == FloatingWindowState::Maximized ? "ui.restore_window" : "ui.maximize_window");
         }
     }

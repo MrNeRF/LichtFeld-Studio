@@ -216,7 +216,11 @@ the intended control geometry instead of creating another row layout per panel.
 
 Use the floating template for an independent window. It supplies the shared
 title bar, close affordance, content padding, scroll behavior, border, radius,
-and theme-driven shadow. A retained Python panel normally looks like this:
+and theme-driven shadow. The shared host adds minimize and maximize controls for
+standard floating panels. Keep the `title-bar`, `title-text`, and `close-btn`
+identifiers so the host can install the controls without replacing the panel's
+content or close handler. The window icons share the main window's CSS shapes
+and theme colors. A retained Python panel normally looks like this:
 
 ```python
 from pathlib import Path

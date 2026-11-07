@@ -763,6 +763,7 @@ apply_registered_chrome:
         const int visible_shelf_rows = std::min(shelf_rows, std::max(1, static_cast<int>(shelf_anchor.height / (3.0f * (kTitleH + 4.0f * dpi)))));
         const float shelf_height = visible_shelf_rows * (kTitleH + 4.0f * dpi);
         const float shelf_top = shelf_anchor.y + shelf_anchor.height - shelf_height;
+        int first_shelf_row = 0;
         if (space == PanelSpace::Floating) {
             std::lock_guard lock(mutex_);
             if (input && !minimized_ids.empty() && input->mouse_x >= shelf_anchor.x &&
@@ -772,6 +773,7 @@ apply_registered_chrome:
                 guiFocusState().want_capture_mouse = true;
             }
             minimized_first_row_ = std::clamp(minimized_first_row_, 0, std::max(0, shelf_rows - visible_shelf_rows));
+            first_shelf_row = minimized_first_row_;
         }
 
         auto prepare_floating_direct_layout = [&](const PanelSnapshot& snap,
@@ -813,7 +815,7 @@ apply_registered_chrome:
                         return;
                     }
                     const int slot = static_cast<int>(found - minimized_ids.begin());
-                    const int row = slot / shelf_columns - minimized_first_row_;
+                    const int row = slot / shelf_columns - first_shelf_row;
                     if (row < 0 || row >= visible_shelf_rows) {
                         layout.valid = false;
                         return;
@@ -1718,12 +1720,11 @@ apply_registered_chrome:
             };
             if (interaction && interaction->window_state != FloatingWindowState::Normal) {
                 state.float_last_bounds_valid = interaction->normal_bounds.has_value();
-                if (interaction->normal_bounds) {
-                    state.float_last_x = interaction->normal_bounds->x;
-                    state.float_last_y = interaction->normal_bounds->y;
-                    state.float_last_w = interaction->normal_bounds->width;
-                    state.float_last_h = interaction->normal_bounds->height;
-                }
+                const auto normal = interaction->normal_bounds.value_or(PanelDrawBounds{});
+                state.float_last_x = normal.x;
+                state.float_last_y = normal.y;
+                state.float_last_w = normal.width;
+                state.float_last_h = normal.height;
             }
             if (const auto requested =
                     requested_project_floating_state_.find(panel.id);
@@ -2199,6 +2200,10 @@ apply_registered_chrome:
 
             if (interaction.user_height > 0.0f)
                 interaction.user_height = std::max(1.0f, std::round(interaction.user_height * ratio));
+            if (interaction.normal_bounds) {
+                interaction.normal_bounds->width = std::round(interaction.normal_bounds->width * ratio);
+                interaction.normal_bounds->height = std::round(interaction.normal_bounds->height * ratio);
+            }
 
             interaction.dragging = false;
             interaction.resizing = false;
@@ -2208,10 +2213,16 @@ apply_registered_chrome:
         }
     }
 
+    bool PanelRegistry::floating_presentation_visible_locked(const PanelInfo& panel) const {
+        const auto it = floating_interactions_.find(panel.id);
+        return it == floating_interactions_.end() ||
+               it->second.window_state != FloatingWindowState::Minimized || it->second.last_bounds_valid;
+    }
+
     bool PanelRegistry::needsAnimationFrame() const {
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel)
+            if (!p.enabled || p.error_disabled || !p.panel || !floating_presentation_visible_locked(p))
                 continue;
             if (p.panel->needsAnimationFrame())
                 return true;
@@ -2307,7 +2318,7 @@ apply_registered_chrome:
         PanelAnimationDemand demand;
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel)
+            if (!p.enabled || p.error_disabled || !p.panel || !floating_presentation_visible_locked(p))
                 continue;
             if (p.panel->needsAnimationFrame())
                 markVisibleAnimationDemand(demand, p, visibility);
@@ -2325,7 +2336,7 @@ apply_registered_chrome:
         std::string result;
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel ||
+            if (!p.enabled || p.error_disabled || !p.panel || !floating_presentation_visible_locked(p) ||
                 !isPanelVisibleForAnimation(p, visibility) ||
                 !p.panel->needsAnimationFrame())
                 continue;
@@ -2347,7 +2358,7 @@ apply_registered_chrome:
         const PanelAnimationVisibility visibility) const {
         std::lock_guard lock(mutex_);
         return std::any_of(panels_.begin(), panels_.end(), [&](const auto& p) {
-            return p.enabled && !p.error_disabled && p.panel &&
+            return p.enabled && !p.error_disabled && p.panel && floating_presentation_visible_locked(p) &&
                    isPanelVisibleForAnimation(p, visibility) &&
                    p.panel->needsImmediateAnimationFrame();
         });
@@ -2358,7 +2369,7 @@ apply_registered_chrome:
         std::optional<double> min_delay;
         std::lock_guard lock(mutex_);
         for (const auto& p : panels_) {
-            if (!p.enabled || p.error_disabled || !p.panel)
+            if (!p.enabled || p.error_disabled || !p.panel || !floating_presentation_visible_locked(p))
                 continue;
             if (!isPanelVisibleForAnimation(p, visibility))
                 continue;

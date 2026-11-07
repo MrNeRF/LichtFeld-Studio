@@ -484,6 +484,7 @@ namespace lfs::vis::gui {
         void render_space_panels(PanelSpace space, const PanelDrawContext& ctx,
                                  const PanelInputState* input);
         uint64_t alloc_float_stack_order_locked();
+        bool floating_presentation_visible_locked(const PanelInfo& panel) const;
         FloatingPanelInteraction& ensure_floating_interaction_locked(const PanelInfo& panel);
         void bring_floating_panel_to_front_locked(const PanelInfo& panel);
         void reset_project_state_locked();

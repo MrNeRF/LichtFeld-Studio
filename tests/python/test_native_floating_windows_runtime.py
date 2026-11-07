@@ -485,16 +485,32 @@ def test_reset_discards_closed_external_panel_reopen_position(native_client, pan
     assert not any(window["title"] == native["title"] for window in native_client.windows())
 
 
-@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace"])
+@pytest.mark.parametrize("panel_id", ["lfs.preferences", "lfs.plugin_marketplace", "native.video_extractor"])
 def test_native_window_actions_minimize_maximize_and_restore(native_client, panel_id):
     window = native_client.open(panel_id)
     hwnd = window["hwnd"]
     native_client.user32.IsIconic.argtypes = [wintypes.HWND]
     native_client.user32.IsZoomed.argtypes = [wintypes.HWND]
 
+    def rendered_size():
+        capture = native_client.call("render_capture_window", panel_id=panel_id)
+        assert capture["success"]
+        png = base64.b64decode(capture["data"])
+        return struct.unpack_from(">II", png, 16)
+
     def click(identifier):
-        x, y, width, height = native_client.panel_elements(panel_id, [identifier])[identifier]
-        assert width > 0 and height > 0
+        client_width, _ = rendered_size()  # Wait for the Rml layout at the current native size.
+        if panel_id == "native.video_extractor":
+            # C++ panels do not register a Python Rml document. Probe their shared
+            # title controls in client coordinates, then verify the native hit test.
+            preference = native_client.python("import lichtfeld as lf,json\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(lf.ui.get_ui_scale_preference()))")
+            native_client.user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+            scale = preference if preference > 0 else native_client.user32.GetDpiForWindow(hwnd) / 96
+            x = client_width - (82 if identifier == "minimize-btn" else 52) * scale
+            y, width, height = 16 * scale, 0, 0
+        else:
+            x, y, width, height = native_client.panel_elements(panel_id, [identifier])[identifier]
+            assert width > 0 and height > 0
         coordinates = (int(y + height / 2) << 16) | int(x + width / 2)
         # The control belongs to the client area, not the native drag region.
         point = wintypes.POINT(int(x + width / 2), int(y + height / 2))
@@ -505,9 +521,12 @@ def test_native_window_actions_minimize_maximize_and_restore(native_client, pane
             assert native_client.user32.PostMessageW(hwnd, message, buttons, coordinates)
 
     assert native_client.user32.SetWindowPos(hwnd, 0, 40, 50, 760, 540, 0x0014)
-    native_client.until(lambda: abs(native_client.panel_elements(panel_id, ["window-frame"])["window-frame"][2] - 760) <= 2)
+    native_client.until(lambda: abs(rendered_size()[0] - 760) <= 2)
     click("maximize-btn")
     native_client.until(lambda: native_client.user32.IsZoomed(hwnd))
+    assert_rendered_capture(native_client, panel_id)
+    capture_name = "preferences-rendered.png" if panel_id == "lfs.preferences" else f"capture-{panel_id}.png"
+    (native_client.profile.parent / capture_name).replace(native_client.profile.parent / f"maximized-{panel_id}.png")
     click("maximize-btn")
     native_client.until(lambda: not native_client.user32.IsZoomed(hwnd))
     rect = wintypes.RECT()
@@ -517,6 +536,15 @@ def test_native_window_actions_minimize_maximize_and_restore(native_client, pane
     click("minimize-btn")
     native_client.until(lambda: native_client.user32.IsIconic(hwnd))
     assert native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["enabled"]
+
+    def normal_geometry_saved():
+        try:
+            preferences = json.loads((native_client.profile / "config/preferences.json").read_text(encoding="utf-8"))
+            return preferences.get("floating_window_geometry", {}).get("video_extractor" if panel_id == "native.video_extractor" else panel_id, [])[2:] == [760, 540]
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    native_client.until(normal_geometry_saved)
     native_client.call("ui_panel_update", panel_id=panel_id, enabled=True)
     native_client.until(lambda: not native_client.user32.IsIconic(hwnd))
     assert native_client.user32.IsWindow(hwnd)
@@ -553,9 +581,13 @@ def test_embedded_window_actions_preserve_content_and_restore_geometry(native_cl
     client_rect = wintypes.RECT()
     assert native_client.user32.GetClientRect(main["hwnd"], ctypes.byref(client_rect))
     assert maximized["y"] + maximized["height"] < client_rect.bottom, "maximized panel covered status bar"
+    assert_rendered_capture(native_client, None)
+    (native_client.profile.parent / "capture-main.png").replace(native_client.profile.parent / "embedded-maximized.png")
     click("minimize-btn")
     minimized = native_client.until(lambda: (b := bounds()) and b["height"] < 60 and b)
     assert minimized["y"] > maximized["y"] + 100
+    assert_rendered_capture(native_client, None)
+    (native_client.profile.parent / "capture-main.png").replace(native_client.profile.parent / "embedded-minimized.png")
     assert native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"]
     click("title-text")
     native_client.until(lambda: (b := bounds()) and abs(b["width"] - maximized["width"]) < 2)
@@ -569,5 +601,7 @@ def test_embedded_window_actions_preserve_content_and_restore_geometry(native_cl
     native_client.until(lambda: (b := bounds()) and b["height"] < 60)
     native_client.call("ui_panel_update", panel_id="lfs.preferences", enabled=True)
     native_client.until(lambda: (b := bounds()) and abs(b["width"] - original["width"]) < 2)
+    click("minimize-btn")
+    native_client.until(lambda: (b := bounds()) and b["height"] < 60)
     click("close-btn")
     native_client.until(lambda: not native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"])

@@ -104,6 +104,8 @@ namespace {
             return false; // Record the request without allocating desktop/GPU resources.
         }
 
+        bool needsAnimationFrame() const override { return animation; }
+        bool animation = false;
         int draw_count = 0;
         int preload_count = 0;
         int cached_count = 0;
@@ -1038,6 +1040,15 @@ TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfWrapsAndScrollsWithoutCov
     draw();
     const auto newest = registry.live_floating_bounds("test.shelf.11");
     ASSERT_TRUE(newest);
+    // A panel minimized before its first normal draw has no restore rectangle;
+    // its shelf dimensions must not become project geometry, even as invalid data.
+    for (const auto& saved : registry.capture_project_state()) {
+        if (!saved.id.starts_with("test.shelf."))
+            continue;
+        EXPECT_FALSE(saved.float_last_bounds_valid);
+        EXPECT_FLOAT_EQ(saved.float_last_w, 0);
+        EXPECT_FLOAT_EQ(saved.float_last_h, 0);
+    }
     input.mouse_x = newest->x + 20;
     input.mouse_y = newest->y + 10;
     input.mouse_wheel = 20;
@@ -1090,4 +1101,52 @@ TEST_F(PanelRegistryAnimationDemandTest, MaximizedWindowTracksResizeAndDoesNotDe
     EXPECT_FLOAT_EQ(bounds->width, 420);
     EXPECT_GE(bounds->y, 50);
     EXPECT_LE(bounds->y + bounds->height, 350 - PanelLayoutManager::STATUS_BAR_HEIGHT);
+    ASSERT_TRUE(registry.restore_floating_window("test.window"));
+    draw();
+    const auto restored = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(restored);
+    EXPECT_LE(restored->width, 420);
+    EXPECT_GE(restored->y, 50);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, ScalingWhileMinimizedPreservesNormalProjectGeometry) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.scaled_window");
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 40, 1200, 760};
+    registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx);
+    const auto normal = registry.live_floating_bounds("test.scaled_window");
+    ASSERT_TRUE(normal);
+    ASSERT_TRUE(registry.set_floating_window_state("test.scaled_window", FloatingWindowState::Minimized));
+    registry.rescale_floating_panels(1, 2);
+    const auto saved = registry.capture_project_state();
+    const auto found = std::ranges::find(saved, std::string("test.scaled_window"), &PanelProjectState::id);
+    ASSERT_NE(found, saved.end());
+    ASSERT_TRUE(found->float_last_bounds_valid);
+    EXPECT_FLOAT_EQ(found->float_last_w, normal->width * 2);
+    EXPECT_FLOAT_EQ(found->float_last_h, normal->height * 2);
+    EXPECT_EQ(registry.floating_window_state("test.scaled_window"), FloatingWindowState::Minimized);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, HiddenMinimizedPageDoesNotPinAnimationFrames) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    for (int i = 0; i < 12; ++i) {
+        const auto id = "test.hidden_animation." + std::to_string(i);
+        registerRecordingPanel(id);
+        const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance(id));
+        panel->animation = i == 0;
+        ASSERT_TRUE(registry.set_floating_window_state(id, FloatingWindowState::Minimized));
+    }
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 40, 500, 360};
+    registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx);
+    ASSERT_FALSE(registry.live_floating_bounds("test.hidden_animation.0"));
+    EXPECT_FALSE(registry.needsAnimationFrame());
+    EXPECT_FALSE(registry.animationDemandForVisiblePanels({}).any());
+    EXPECT_TRUE(registry.describeAnimationDemand({}).empty());
+    ASSERT_TRUE(registry.bring_panel_to_front("test.hidden_animation.0"));
+    EXPECT_TRUE(registry.needsAnimationFrame());
+    EXPECT_TRUE(registry.animationDemandForVisiblePanels({}).floating);
 }
