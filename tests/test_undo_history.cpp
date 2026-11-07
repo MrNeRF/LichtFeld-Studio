@@ -32,6 +32,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -1309,6 +1310,40 @@ TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
     undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
+}
+
+TEST_F(UndoHistoryTest, GaussianFieldUndoWritesIntoTheModelStorage) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(64));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto original = node->model->opacity_raw().clone();
+    const float* const storage = node->model->opacity_raw().ptr<float>();
+
+    // One row is replayed as a sparse swap, every row as a dense one.
+    std::vector<int> every_row(64);
+    std::iota(every_row.begin(), every_row.end(), 0);
+    for (const auto& rows : {std::vector<int>{7}, every_row}) {
+        auto write_result = lfs::vis::cap::writeGaussianField(
+            *scene_manager, rendering_manager.get(), "model", "opacity_raw", rows,
+            std::vector<float>(rows.size(), 0.75f));
+        ASSERT_TRUE(write_result) << write_result.error();
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(node->model->opacity_raw().ptr<float>(), storage);
+        EXPECT_TRUE((node->model->opacity_raw() == original).all().item<bool>());
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(node->model->opacity_raw().ptr<float>(), storage);
+        EXPECT_FLOAT_EQ(node->model->opacity_raw().cpu().to_vector()[rows.back()], 0.75f);
+
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    }
 }
 
 TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation) {
