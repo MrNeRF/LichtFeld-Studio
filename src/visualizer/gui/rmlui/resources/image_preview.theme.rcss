@@ -27,7 +27,7 @@
     border-color: @{primary};
 }
 
-#sam-overlay {
+#sam-overlay, .thumb-mask {
     image-color: @{alpha(primary,0.45)};
 }
 

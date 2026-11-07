@@ -365,6 +365,7 @@ namespace lfs::python {
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_open_image_preview_callback;
+        bool g_open_image_preview_with_sequence = false;
         lfs::event::HandlerId g_open_camera_preview_handler_id = 0;
         lfs::event::HandlerId g_open_image_preview_handler_id = 0;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
@@ -4871,8 +4872,9 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
-        m.def("on_open_image_preview", [](nb::object callback) {
+        m.def("on_open_image_preview", [](nb::object callback, bool include_sequence) {
             g_open_image_preview_callback = callback;
+            g_open_image_preview_with_sequence = include_sequence;
             if (g_open_image_preview_handler_id != 0) {
                 lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
                 g_open_image_preview_handler_id = 0;
@@ -4882,25 +4884,131 @@ namespace lfs::python {
             g_open_image_preview_handler_id = core::events::cmd::OpenImagePreview::when([](const auto& event) {
                 nb::gil_scoped_acquire guard;
                 if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
+                    bool sequence_opened = false;
                     try {
                         std::vector<std::string> paths;
                         for (const auto& path : event.paths)
                             paths.push_back(core::path_to_utf8(path));
-                        g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                        if (g_open_image_preview_with_sequence) {
+                            nb::object sequence = nb::none();
+                            if (!event.run.is_nil() && !event.frames.empty()) {
+                                require_ui_texture_creation_thread();
+                                auto* gui = get_gui_manager();
+                                if (!gui || event.frames.size() != event.paths.size())
+                                    throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                for (size_t i = 0; i < event.frames.size(); ++i)
+                                    if (event.frames[i].path.lexically_normal() != event.paths[i].lexically_normal())
+                                        throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                auto& masking = gui->asyncTasks().assistedMasking();
+                                const bool new_sequence = masking.sequenceFrames(event.run, 0, 1).empty();
+                                masking.beginSequence(event.run, event.frames, event.output, event.weights);
+                                sequence_opened = new_sequence;
+                                nb::dict data;
+                                data["run"] = event.run.to_string();
+                                data["video"] = core::path_to_utf8(event.video);
+                                data["output"] = core::path_to_utf8(event.output);
+                                nb::list frames;
+                                for (const auto& frame : event.frames) {
+                                    nb::dict item;
+                                    item["time"] = frame.timestamp;
+                                    item["source_frame"] = frame.source_frame;
+                                    frames.append(std::move(item));
+                                }
+                                data["frames"] = std::move(frames);
+                                sequence = std::move(data);
+                            }
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights), sequence);
+                        } else {
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                        }
                     } catch (const std::exception& error) {
                         LOG_ERROR("OpenImagePreview callback error: {}", error.what());
+                        if (auto* gui = get_gui_manager()) {
+                            if (sequence_opened)
+                                gui->asyncTasks().assistedMasking().endSequence(event.run);
+                            gui->enqueueToast({.title = LOC("image_preview.sam_title"), .message = error.what(),
+                                               .level = vis::gui::ErrorNoticeLevel::Error});
+                        }
                     }
                 }
-            }); }, nb::arg("callback"), "Register the preview callback for extracted images.");
+            }); }, nb::arg("callback"), nb::arg("include_sequence") = false, "Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.");
 
-        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude) {
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
                 throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
-            return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
+            vis::gui::AssistedMaskRequest input{.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
                 .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
-                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, "UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.");
+                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude};
+            if (!sequence.is_none()) {
+                const auto context = nb::cast<nb::dict>(sequence);
+                const auto run = core::Uuid::from_string(nb::cast<std::string>(context["run"]));
+                if (!run || run->is_nil())
+                    throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                input.run = *run;
+                if (context.contains("inspect"))
+                    input.review_frame = nb::cast<int>(context["inspect"]);
+                if (context.contains("retain"))
+                    input.retain_frame = nb::cast<bool>(context["retain"]);
+                if (context.contains("publish"))
+                    input.publish_approved = nb::cast<bool>(context["publish"]);
+                if (context.contains("first")) {
+                    const auto direction = nb::cast<std::string>(context["direction"]);
+                    if (direction != "both" && direction != "forward" && direction != "reverse")
+                        throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                    input.tracking = vis::gui::AssistedMaskTracking{.run = *run,
+                        .first = nb::cast<int>(context["first"]), .last = nb::cast<int>(context["last"]),
+                        .seed = nb::cast<int>(context["seed"]),
+                        .direction = direction == "both" ? preprocessing::VideoMaskDirection::Both :
+                                     direction == "forward" ? preprocessing::VideoMaskDirection::Forward : preprocessing::VideoMaskDirection::Reverse};
+                }
+            }
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), "UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.");
+        m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
+            require_ui_texture_creation_thread();
+            nb::list result;
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (gui && id) {
+                for (const auto& frame : gui->asyncTasks().assistedMasking().sequenceFrames(*id, first, count)) {
+                    nb::dict item;
+                    item["revision"] = frame.revision;
+                    item["score"] = frame.score;
+                    item["reliable"] = frame.reliable;
+                    item["approved"] = frame.approved;
+                    item["mask_path"] = core::path_to_utf8(frame.mask_path);
+                    item["keyframe"] = frame.keyframe;
+                    result.append(std::move(item));
+                }
+            }
+            return result; }, nb::arg("run"), nb::arg("first") = 0, nb::arg("count") = 64, "UI thread: read at most 256 current frame summaries from an extraction run.");
+        m.def("sam_preview_approve_frame", [](const std::string& run, size_t index, uint64_t revision, bool approved) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            return gui && id && gui->asyncTasks().assistedMasking().approveFrame(*id, index, revision, approved); }, nb::arg("run"), nb::arg("index"), nb::arg("revision"), nb::arg("approved"), "UI thread: approve/revoke exactly one retained frame revision; stale revisions are rejected.");
+        m.def("sam_preview_approve_frames", [](const std::string& run, const std::vector<std::tuple<size_t, uint64_t, bool>>& updates) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (!gui || !id)
+                return false;
+            std::vector<vis::gui::AssistedMaskApproval> approvals;
+            approvals.reserve(updates.size());
+            for (const auto& [index, revision, approved] : updates)
+                approvals.push_back({index, revision, approved});
+            return gui->asyncTasks().assistedMasking().approveFrames(*id, approvals); }, nb::arg("run"), nb::arg("updates"), "UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.");
+        m.def("sam_preview_end_sequence", [](const std::string& run) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().endSequence(*id); }, nb::arg("run"), "UI thread: release an extraction review document; old run IDs cannot close a new document.");
+        m.def("sam_preview_invalidate_frame", [](const std::string& run, size_t index) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().invalidateFrame(*id, index); }, nb::arg("run"), nb::arg("index"), "UI thread: revoke a changed frame's proposal/approval while idle. Reject active work and preserve saved masks.");
         m.def("sam_preview_poll", [] {
             require_ui_texture_creation_thread();
             nb::dict result;
@@ -4913,6 +5021,10 @@ namespace lfs::python {
             result["phase"] = state.phase;
             result["error"] = state.error;
             result["scores"] = state.scores;
+            result["sequence_revision"] = state.sequence_revision;
+            result["completed"] = state.completed;
+            result["total"] = state.total;
+            result["approved"] = state.approved;
             nb::list overlays;
             for (const auto& mask : state.overlays)
                 overlays.append(nb::cast(PyTensor(mask)));
@@ -6394,6 +6506,7 @@ namespace lfs::python {
                 nb::object();
             g_open_camera_preview_callback = nb::object();
             g_open_image_preview_callback = nb::object();
+            g_open_image_preview_with_sequence = false;
             if (g_open_camera_preview_handler_id != 0) {
                 lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
                 g_open_camera_preview_handler_id = 0;

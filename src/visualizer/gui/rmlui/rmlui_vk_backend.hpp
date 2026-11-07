@@ -40,6 +40,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef DEBUG_BUILD
@@ -138,6 +139,8 @@ public:
     }
     // Graphics thread only; source identity is the complete revisioned preview URL.
     [[nodiscard]] LFS_VIS_API PreviewTextureStatus previewTextureStatus(const std::string& source) const;
+    // Graphics/UI owner thread, like LoadTexture; workers receive only weak bytes.
+    void setPreviewMemoryProvider(lfs::vis::gui::PreviewMemoryProvider provider) { m_preview_memory_provider = std::move(provider); }
     [[nodiscard]] bool currentContextUsedPreviewTexture() const {
         return m_current_context_used_preview_texture;
     }
@@ -226,6 +229,7 @@ private:
         std::vector<Rml::byte> pixels;
         int width = 0;
         int height = 0;
+        bool expired = false;
     };
 
     struct async_preview_state_t {
@@ -243,6 +247,7 @@ private:
         int max_size = 0;
         bool embedded_project_preview = false;
         bool mask_overlay = false;
+        std::weak_ptr<const std::vector<std::byte>> encoded;
     };
 
     class MemoryPool;
@@ -630,7 +635,8 @@ private:
     LFS_VIS_API static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
                                                                    int max_size,
                                                                    bool embedded_project_preview,
-                                                                   bool mask_overlay = false);
+                                                                   bool mask_overlay = false,
+                                                                   std::shared_ptr<const std::vector<std::byte>> encoded = {});
 
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;
@@ -769,6 +775,7 @@ private:
     std::unordered_set<texture_data_t*> m_live_textures;
     std::unordered_map<std::string, texture_data_t*> m_preview_textures_by_source;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
+    lfs::vis::gui::PreviewMemoryProvider m_preview_memory_provider;
     std::mutex m_preview_queue_mutex;
     std::condition_variable m_preview_queue_cv;
     std::deque<preview_work_t> m_preview_queue;

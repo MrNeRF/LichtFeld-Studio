@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/uuid.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
@@ -27,6 +28,9 @@ class RenderInterfaceVKTestAccess {
 public:
     static auto decode(const std::filesystem::path& path, int max_size, bool overlay) {
         return RenderInterface_VK::DecodePreviewTexture(path, max_size, false, overlay);
+    }
+    static auto decodeMask(const std::shared_ptr<const std::vector<std::byte>>& encoded, int max_size) {
+        return RenderInterface_VK::DecodePreviewTexture({}, max_size, false, true, encoded);
     }
 
     static void checkRendererLocalStatus() {
@@ -87,6 +91,16 @@ protected:
     std::filesystem::path directory;
 };
 
+TEST_F(PreviewOverlayDecode, ExpiredMemoryProposalIsNotADecodeFailure) {
+    const auto expired = RenderInterfaceVKTestAccess::decodeMask({}, 64);
+    EXPECT_TRUE(expired.expired);
+    EXPECT_TRUE(expired.pixels.empty());
+    const auto corrupt = RenderInterfaceVKTestAccess::decodeMask(
+        std::make_shared<const std::vector<std::byte>>(3, std::byte{0}), 64);
+    EXPECT_FALSE(corrupt.expired);
+    EXPECT_TRUE(corrupt.pixels.empty());
+}
+
 TEST_F(PreviewOverlayDecode, GrayscaleCoverageIsPremultipliedButOrdinaryPhotoStaysOpaque) {
     const auto path = directory / "gray.png";
     const std::array<unsigned char, 3> source{0, 128, 255};
@@ -104,6 +118,14 @@ TEST_F(PreviewOverlayDecode, GrayscaleCoverageIsPremultipliedButOrdinaryPhotoSta
     EXPECT_EQ(small.width, 1);
     EXPECT_EQ(small.height, 1);
     EXPECT_EQ(small.pixels, (std::vector<Rml::byte>{128, 128, 128, 128}));
+    const auto encoded = std::make_shared<const std::vector<std::byte>>(
+        lfs::core::image_codecs::encode_png(source, 3, 1, 1));
+    ASSERT_FALSE(encoded->empty());
+    const auto memory_mask = RenderInterfaceVKTestAccess::decodeMask(encoded, 64);
+    EXPECT_EQ(memory_mask.width, mask.width);
+    EXPECT_EQ(memory_mask.height, mask.height);
+    EXPECT_EQ(memory_mask.pixels, mask.pixels);
+    EXPECT_EQ(RenderInterfaceVKTestAccess::decodeMask(encoded, 1).pixels, small.pixels);
 }
 
 TEST_F(PreviewOverlayDecode, RgbaDownscaleDoesNotBleedTransparentColor) {

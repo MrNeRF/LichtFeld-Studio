@@ -71,6 +71,7 @@
                 data-attr-title="thumb.name"
                 data-attr-data-index="thumb.index"
                 data-style-decorator="thumb.decorator">
+          <span class="thumb-mask" data-style-decorator="thumb.mask_decorator"></span>
           <span class="thumb-index">{{ thumb.label }}</span>
         </button>
       </div>
@@ -89,8 +90,12 @@
       <button type="button" class="nav-arrow" id="nav-next" title="@tr:image_preview.next">&#x25B6;</button>
     </div>
     <div id="sidebar">
-
+      <div id="sam-pages" class="hidden">
+        <button type="button" class="btn" id="sam-page-frame"></button>
+        <button type="button" class="btn" id="sam-page-sequence"></button>
+      </div>
       <div id="sam-controls" class="hidden">
+        <div id="sam-frame-controls">
         <span class="section-label-ip" id="sam-heading"></span>
         <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-positive"></button>
@@ -102,8 +107,6 @@
         <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-remove"></button>
           <button type="button" class="btn" id="sam-flip"></button>
-        </div>
-        <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-undo"></button>
           <button type="button" class="btn" id="sam-clear"></button>
         </div>
@@ -120,6 +123,33 @@
           <button type="button" class="btn" id="sam-show"></button>
         </div>
         <div id="sam-quality" class="sam-note"></div>
+        </div>
+        <div id="sam-tracking" class="hidden">
+          <span class="section-label-ip" id="sam-tracking-heading"></span>
+          <div class="sam-tool-row sam-range-row">
+            <div class="sam-range-field">
+              <label for="sam-track-first" id="sam-track-first-label"></label>
+              <input type="text" maxlength="10" id="sam-track-first"/>
+            </div>
+            <div class="sam-range-field">
+              <label for="sam-track-last" id="sam-track-last-label"></label>
+              <input type="text" maxlength="10" id="sam-track-last"/>
+            </div>
+          </div>
+          <label for="sam-track-direction" id="sam-track-direction-label"></label>
+          <select id="sam-track-direction"></select>
+          <div class="sam-tool-row">
+            <button type="button" class="btn" id="sam-track"></button>
+          </div>
+          <div class="sidebar-check-row">
+            <input type="checkbox" id="sam-approve"/>
+            <label for="sam-approve" id="sam-approve-label"></label>
+          </div>
+          <div class="sam-tool-row">
+            <button type="button" class="btn" id="sam-approve-range"></button>
+          </div>
+          <div id="sam-sequence-status" class="sam-note" role="status"></div>
+        </div>
       </div>
       <div id="metadata-info">
       <div class="sidebar-header-ip">
@@ -189,6 +219,10 @@
         <div class="sam-tool-row">
           <button type="button" class="btn btn--primary" id="sam-apply"></button>
           <button type="button" class="btn" id="sam-exclude"></button>
+        </div>
+        <div class="sam-tool-row hidden" id="sam-save-controls">
+          <button type="button" class="btn btn--primary" id="sam-save"></button>
+          <button type="button" class="btn" id="sam-save-exclude"></button>
         </div>
         <div id="sam-status" role="status"></div>
       </div>
