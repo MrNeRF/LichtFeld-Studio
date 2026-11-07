@@ -143,7 +143,7 @@ class ImagePreviewPanel(Panel):
         self._path_revision_cache: dict[str, str] = {}
         self._filmstrip_top_spacer = 0.0
         self._filmstrip_bottom_spacer = 0.0
-        self._last_training_params: tuple[int, int, bool] = (1, 0, False)
+        self._last_training_params: tuple[int, int, bool, bool] = (1, 0, False, False)
         self._decorator_cache: dict[str, str] = {}
         self._reactive_unsubscribers = []
         self._pending_view_chrome = None
@@ -357,9 +357,7 @@ class ImagePreviewPanel(Panel):
         if current_params != self._last_training_params:
             self._last_training_params = current_params
             self._dirty = True
-        params = lf.optimization_params()
-        inverted = bool(params and params.has_params() and params.invert_masks
-                        and params.mask_mode != lf.MaskMode.SEGMENT_AND_IGNORE)
+        inverted = current_params[3]
         if inverted != self._mask_inverted:
             self._mask_inverted = inverted
             self._dirty = True
@@ -728,19 +726,23 @@ class ImagePreviewPanel(Panel):
             return f"{w / h:.2f}:1"
         return f"{rw}:{rh}"
 
-    def _get_training_params(self) -> tuple[int, int, bool]:
+    def _get_training_params(self) -> tuple[int, int, bool, bool]:
+        inverted = False
         try:
+            op = lf.optimization_params()
+            inverted = bool(op and op.has_params() and op.invert_masks
+                            and op.mask_mode != lf.MaskMode.SEGMENT_AND_IGNORE)
             dp = lf.dataset_params()
             if dp.has_params():
-                op = lf.optimization_params()
-                return (dp.resize_factor, dp.max_width, op.undistort)
+                return (dp.resize_factor, dp.max_width, op.undistort, inverted)
+            return (1, 0, False, inverted)
         except Exception:
             pass
-        return (1, 0, False)
+        return (1, 0, False, inverted)
 
     def _make_preview_url(self, path: Path, cam_uid: int,
                           thumb: int = 0, preview_mw: int = 0, dimensions=None, mask_overlay=False) -> str:
-        rf, mw, ud = self._last_training_params
+        rf, mw, ud = self._last_training_params[:3]
         revision = self._path_revision_cache.get(str(path), "missing")
         width, height, _ = dimensions or self._image_info_cache.get(str(path), (0, 0, 0))
         return (f"preview://cam={cam_uid}&thumb={thumb}&w={width}&h={height}"

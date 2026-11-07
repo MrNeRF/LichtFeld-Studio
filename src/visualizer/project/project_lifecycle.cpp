@@ -26,6 +26,7 @@
 #include "core/path_utils.hpp"
 #include "core/persisted_settings.hpp"
 #include "core/user_paths.hpp"
+#include "core/utc_time.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
@@ -2037,10 +2038,7 @@ namespace lfs::vis::project {
                     lfs::core::native_fs::last_write_time(
                         path, error);
                 if (!error) {
-                    const auto system_time =
-                        std::chrono::clock_cast<
-                            std::chrono::system_clock>(
-                            file_time);
+                    const auto system_time = core::file_time_to_system_clock(file_time);
                     unix_seconds =
                         std::chrono::system_clock::to_time_t(
                             system_time);

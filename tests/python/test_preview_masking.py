@@ -18,6 +18,29 @@ def editor(module):
     return value
 
 
+@pytest.mark.parametrize("has_dataset", [False, True])
+@pytest.mark.parametrize("invert,ignore,expected", [(False, False, False), (True, False, True), (True, True, False)])
+def test_update_reads_optimization_once_and_preserves_mask_polarity(panel_modules, monkeypatch, has_dataset, invert, ignore, expected):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._preview_state = "ready"
+    reads = []
+    monkeypatch.setattr(module.lf, "MaskMode", SimpleNamespace(SEGMENT_AND_IGNORE=3), raising=False)
+    params = SimpleNamespace(has_params=lambda: True, undistort=True, invert_masks=invert,
+                             mask_mode=module.lf.MaskMode.SEGMENT_AND_IGNORE if ignore else object())
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: reads.append(True) or params)
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: SimpleNamespace(
+        has_params=lambda: has_dataset, resize_factor=2, max_width=3840), raising=False)
+    monkeypatch.setattr(panel, "_current_camera_node", lambda: None)
+    for name in ("_service_sample", "_service_metadata", "_service_sam", "_update_filmstrip", "_refresh_ui"):
+        monkeypatch.setattr(panel, name, lambda *args: None)
+    panel.on_update(None)
+    assert len(reads) == 1
+    assert panel._mask_inverted is expected
+    assert panel._last_training_params == ((2, 3840, True, expected) if has_dataset else (1, 0, False, expected))
+    panel._metadata.close()
+
+
 
 def undo(value):
     key, before, _ = value.edits.pop()

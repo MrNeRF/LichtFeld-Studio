@@ -11,6 +11,7 @@
 #include "core/nn/models/sam2.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "core/utc_time.hpp"
 #include "io/atomic_output.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -272,11 +273,7 @@ namespace lfs::vis::gui {
                     }
                     const auto current_stamp = fs::last_write_time(w.input.image);
                     const auto current_bytes = fs::file_size(w.input.image);
-#if defined(_MSC_VER)
-                    const auto system_stamp = std::chrono::clock_cast<std::chrono::system_clock>(current_stamp);
-#else
-                    const auto system_stamp = std::filesystem::file_time_type::clock::to_sys(current_stamp);
-#endif
+                    const auto system_stamp = core::file_time_to_system_clock(current_stamp);
                     const auto mtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(system_stamp.time_since_epoch()).count();
                     if (mtime_ns != w.input.mtime_ns || current_bytes != w.input.size_bytes)
                         throw std::runtime_error(LOC("image_preview.sam_source_changed"));
