@@ -2489,11 +2489,6 @@ def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> li
     UI thread: read at most 256 current frame summaries from an extraction run.
     """
 
-def sam_preview_approve_frame(run: str, index: int, revision: int, approved: bool) -> bool:
-    """
-    UI thread: approve/revoke exactly one retained frame revision; stale revisions are rejected.
-    """
-
 def sam_preview_approve_frames(run: str, updates: Sequence[tuple[int, int, bool]]) -> bool:
     """
     UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.

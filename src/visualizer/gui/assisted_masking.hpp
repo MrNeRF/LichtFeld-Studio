@@ -19,7 +19,6 @@
 
 namespace lfs::vis::gui {
     struct AssistedMaskTracking {
-        core::Uuid run{};
         int first = 0, last = 0, seed = 0;
         preprocessing::VideoMaskDirection direction = preprocessing::VideoMaskDirection::Both;
     };
@@ -83,7 +82,6 @@ namespace lfs::vis::gui {
         void beginSequence(core::Uuid run, std::vector<core::ExtractedFrame> frames,
                            std::filesystem::path output, std::filesystem::path weights);
         std::vector<AssistedMaskFrameSummary> sequenceFrames(core::Uuid run, size_t first = 0, size_t count = 64);
-        bool approveFrame(core::Uuid run, size_t index, uint64_t revision, bool approved);
         // Validate the complete group before changing any approval.
         bool approveFrames(core::Uuid run, std::span<const AssistedMaskApproval> approvals);
         std::weak_ptr<const std::vector<std::byte>> sequencePreview(std::string_view key);

@@ -4957,11 +4957,13 @@ namespace lfs::python {
                     const auto direction = nb::cast<std::string>(context["direction"]);
                     if (direction != "both" && direction != "forward" && direction != "reverse")
                         throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
-                    input.tracking = vis::gui::AssistedMaskTracking{.run = *run,
-                        .first = nb::cast<int>(context["first"]), .last = nb::cast<int>(context["last"]),
+                    input.tracking = vis::gui::AssistedMaskTracking{
+                        .first = nb::cast<int>(context["first"]),
+                        .last = nb::cast<int>(context["last"]),
                         .seed = nb::cast<int>(context["seed"]),
-                        .direction = direction == "both" ? preprocessing::VideoMaskDirection::Both :
-                                     direction == "forward" ? preprocessing::VideoMaskDirection::Forward : preprocessing::VideoMaskDirection::Reverse};
+                        .direction = direction == "both" ? preprocessing::VideoMaskDirection::Both : direction == "forward" ? preprocessing::VideoMaskDirection::Forward
+                                                                                                                            : preprocessing::VideoMaskDirection::Reverse,
+                    };
                 }
             }
             return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), "UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.");
@@ -4983,11 +4985,6 @@ namespace lfs::python {
                 }
             }
             return result; }, nb::arg("run"), nb::arg("first") = 0, nb::arg("count") = 64, "UI thread: read at most 256 current frame summaries from an extraction run.");
-        m.def("sam_preview_approve_frame", [](const std::string& run, size_t index, uint64_t revision, bool approved) {
-            require_ui_texture_creation_thread();
-            auto* gui = get_gui_manager();
-            const auto id = core::Uuid::from_string(run);
-            return gui && id && gui->asyncTasks().assistedMasking().approveFrame(*id, index, revision, approved); }, nb::arg("run"), nb::arg("index"), nb::arg("revision"), nb::arg("approved"), "UI thread: approve/revoke exactly one retained frame revision; stale revisions are rejected.");
         m.def("sam_preview_approve_frames", [](const std::string& run, const std::vector<std::tuple<size_t, uint64_t, bool>>& updates) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();

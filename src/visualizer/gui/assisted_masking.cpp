@@ -730,7 +730,7 @@ namespace lfs::vis::gui {
             throw std::invalid_argument(LOC("image_preview.sam_invalid_box"));
         if (input.tracking) {
             const auto& track = *input.tracking;
-            if (!sequence || track.run != input.run || track.first < 0 || track.last < track.first ||
+            if (!sequence || track.first < 0 || track.last < track.first ||
                 track.seed < track.first || track.seed > track.last || track.last >= int(sequence->sources.size()) ||
                 sequence->sources[size_t(track.seed)].path.lexically_normal() != input.image.lexically_normal())
                 throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
@@ -853,11 +853,6 @@ namespace lfs::vis::gui {
                 result.push_back(impl_->sequence->frames[i].summary);
         }
         return result;
-    }
-
-    bool AssistedMasking::approveFrame(core::Uuid run, size_t index, uint64_t revision, bool approved) {
-        const std::array approvals{AssistedMaskApproval{index, revision, approved}};
-        return approveFrames(run, approvals);
     }
 
     bool AssistedMasking::approveFrames(core::Uuid run, std::span<const AssistedMaskApproval> approvals) {

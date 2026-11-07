@@ -2149,7 +2149,7 @@ class ImagePreviewPanel(Panel):
             elif not self._sam_inspect_pending:
                 self._sam_cancel()
         if (self._sam_inspect_pending and editor.key and self._preview_state == "ready"
-                and state.get("phase") not in ("queued", "loading", "encoding", "predicting", "rendering", "tracking", "closing", "saving", "storing")):
+                and state.get("phase") not in FrameMaskEditor.BUSY_PHASES):
             frame = self._sam_frame_summaries.get(self._current_index, {})
             if frame.get("revision"):
                 self._sam_inspect_current()

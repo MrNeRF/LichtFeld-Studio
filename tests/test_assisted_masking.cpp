@@ -11,6 +11,7 @@
 #include "preprocessing/preprocess.hpp"
 #include "preprocessing/video_mask_extraction.hpp"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -130,7 +131,7 @@ namespace {
         service.beginSequence(first, equivalent, "out", {});
         EXPECT_EQ(service.sequenceFrames(first, 1, 999).size(), 1);
         EXPECT_TRUE(service.sequenceFrames(first, 99).empty());
-        EXPECT_FALSE(service.approveFrame(first, 0, 1, true));
+        EXPECT_FALSE(service.approveFrames(first, std::array{AssistedMaskApproval{0, 1, true}}));
         service.beginSequence(second, frames, "other", {});
         service.endSequence(first);
         EXPECT_EQ(service.sequenceFrames(second).size(), 2);
@@ -255,12 +256,12 @@ namespace {
         auto state = wait(initial_request, "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
         const auto revision = service.sequenceFrames(run)[1].revision;
-        ASSERT_TRUE(service.approveFrame(run, 1, revision, true));
+        ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{1, revision, true}}));
         service.beginSequence(run, frames, directory.path, *weights);
         EXPECT_TRUE(service.sequenceFrames(run)[1].approved);
         input.refine_request = state.request;
         input.refine_candidate = 0;
-        input.tracking = AssistedMaskTracking{.run = run, .first = 0, .last = 2, .seed = 1};
+        input.tracking = AssistedMaskTracking{.first = 0, .last = 2, .seed = 1};
         state = wait(service.submit(input), "tracked");
         ASSERT_EQ(state.phase, "tracked") << state.error;
         auto summaries = service.sequenceFrames(run);
@@ -304,7 +305,7 @@ namespace {
         input.review_frame = -1;
         input.refine_request = state.request;
         input.refine_candidate = 0;
-        input.tracking = AssistedMaskTracking{.run = run, .first = 0, .last = 2, .seed = 1, .direction = lfs::preprocessing::VideoMaskDirection::Forward};
+        input.tracking = AssistedMaskTracking{.first = 0, .last = 2, .seed = 1, .direction = lfs::preprocessing::VideoMaskDirection::Forward};
         state = wait(service.submit(input), "tracked");
         ASSERT_EQ(state.phase, "tracked") << state.error;
         input.tracking.reset();
@@ -373,7 +374,7 @@ namespace {
         EXPECT_TRUE(service.sequencePreview(preview_key).expired());
         service.invalidateFrame(run, 1);
         EXPECT_EQ(service.poll().approved, 0);
-        EXPECT_FALSE(service.approveFrame(run, 1, revision, true));
+        EXPECT_FALSE(service.approveFrames(run, std::array{AssistedMaskApproval{1, revision, true}}));
         EXPECT_TRUE(lfs::core::native_fs::exists(destination)); // Draft edits do not delete saved masks.
         EXPECT_EQ(service.sequenceFrames(run)[1].mask_path, destination);
     }
