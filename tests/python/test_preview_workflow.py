@@ -308,6 +308,19 @@ def test_open_has_no_filesystem_reads_and_metadata_runs_off_ui_thread(panel_modu
     panel._metadata.close()
 
 
+def test_saved_view_keeps_the_requested_image_on_first_open(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel.apply_chrome({"camera_index": 0, "zoom": 2.0, "fit_to_window": False, "show_filmstrip": False})
+    panel.open([module.Path(f"frame_{i}.png") for i in range(8)], [], 5)
+    assert panel._current_index == 5
+    assert (panel._zoom, panel._fit_to_window, panel._show_filmstrip) == (2.0, False, False)
+
+    panel.apply_chrome({"camera_index": 2})
+    assert panel._current_index == 2
+    panel._metadata.close()
+
+
 def test_overlay_waits_for_current_image_texture(panel_modules, monkeypatch):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()

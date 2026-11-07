@@ -382,13 +382,14 @@ class ImagePreviewPanel(Panel):
         )
         self._filmstrip_range = None
         self._ensure_selection_visible = True
-        self._current_index = max(0, min(start_index, len(image_paths) - 1))
         self._last_training_params = self._get_training_params()
         self._rotation_quadrants = 0
         self._reset_view()
         if self._pending_view_chrome:
             self._apply_view_chrome(self._pending_view_chrome)
             self._pending_view_chrome = None
+        # A restored view keeps zoom and toggles; the image the caller asked for still wins.
+        self._current_index = max(0, min(start_index, len(image_paths) - 1))
         self._decorator_cache = {}
         self._update_picker_cursor()
         self._mark_dirty()
