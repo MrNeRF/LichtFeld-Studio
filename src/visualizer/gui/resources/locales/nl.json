@@ -1927,7 +1927,11 @@
     "trigger.drag": " Slepen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Onbekend",
-    "action.toggle_performance_hud": "Prestatie-HUD omschakelen"
+    "action.toggle_performance_hud": "Prestatie-HUD omschakelen",
+    "mode.image_preview": "Afbeeldingsvoorbeeld",
+    "action.image_preview_delete": "Punt of kader verwijderen",
+    "action.image_preview_generate": "Masker genereren",
+    "action.image_preview_remove_point": "Besturingspunt onder cursor verwijderen"
   },
   "debug_info": {
     "free_memory": "Vrij: %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {
+    "sam_title": "Masker · SAM2.1",
+    "sam_positive": "Voorgrond +",
+    "sam_negative": "Achtergrond −",
+    "sam_box": "Rechthoek",
+    "sam_pan": "Beeld verschuiven",
+    "sam_undo": "Ongedaan maken",
+    "sam_clear": "Punten en rechthoek wissen",
+    "sam_generate": "Genereren",
+    "sam_cancel": "SAM vrijgeven",
+    "sam_candidate": "Kandidaat · door SAM geschatte kwaliteit",
+    "sam_apply_failed": "Kan het masker niet toepassen",
+    "sam_apply_dataset": "Om het masker toe te passen, moet de afbeelding tot de huidige dataset behoren.",
+    "sam_apply": "Toepassen: selectie behouden",
+    "sam_exclude": "Toepassen: selectie uitsluiten",
+    "sam_hint": "Toepassen vervangt het masker van deze afbeelding. Het wordt opgeslagen in het .licht-project; kies de maskermodus in de trainingsinstellingen. Sluit SAM vóór de training.",
+    "sam_queued": "In wachtrij",
+    "sam_loading": "Model laden",
+    "sam_encoding": "Afbeelding coderen",
+    "sam_predicting": "Voorspellen",
+    "sam_rendering": "Overlay voorbereiden",
+    "sam_closing": "Bronnen vrijgeven",
+    "sam_ready": "Voorstel gereed",
+    "sam_error": "Bewerking mislukt",
+    "sam_heading": "1 · Punten en rechthoek",
+    "sam_proposals_heading": "2 · Voorstel",
+    "sam_edit": "Besturingspunten bewerken",
+    "sam_remove": "Verwijderen",
+    "sam_flip": "+/− wisselen",
+    "sam_show": "Overlay",
+    "sam_edit_hint": "Sleep punten om ze te verplaatsen. Sleep randen of hoeken van het kader om het formaat te wijzigen; sleep in de modus Rechthoek binnen het kader om het te verplaatsen. Gebruik de lijst om met het toetsenbord te selecteren. Verwijderen wist besturingspunten, geen maskerpixels.",
+    "sam_selection_none": "Besturingselement kiezen",
+    "sam_quality": "SAM-score: {score}%",
+    "sam_generate_hint": "Genereer een nieuw voorstel op basis van de huidige punten en het kader.",
+    "sam_positive_hint": "Positief punt op het object.",
+    "sam_negative_hint": "Negatief punt op de achtergrond.",
+    "sam_box_hint": "Teken of pas één begrenzingskader aan.",
+    "sam_pan_hint": "Verschuif het beeld zonder punten toe te voegen. Sleep om de afbeelding te verschuiven wanneer deze is ingezoomd.",
+    "sam_review_frames": "Frames bekijken · SAM",
+    "sam_source_changed": "De afbeelding is gewijzigd. Vernieuw deze voordat u een nieuw voorstel genereert.",
+    "sam_proposal_expired": "Het geselecteerde voorstel is niet meer actueel. Genereer een nieuw voorstel.",
+    "sam_write_failed": "Het masker kan niet worden gecodeerd.",
+    "sam_shutting_down": "De SAM-voorbeelddienst wordt afgesloten.",
+    "sam_invalid_input": "Een afbeeldingsrevisie en punten of een kader zijn vereist (maximaal 256 punten).",
+    "sam_invalid_point": "Puntcoördinaten moeten tussen 0 en 1 liggen, met label 0 of 1.",
+    "sam_invalid_box": "De kadergrenzen moeten tussen 0 en 1 liggen, met een positieve breedte en hoogte.",
+    "sam_unavailable": "Stop de training en wacht tot actieve importen of video-exporten klaar zijn voordat u SAM gebruikt.",
+    "sam_reset_training": "Reset de training voordat je afbeeldingsmaskers wijzigt.",
+    "sam_training_blocked": "Sluit het SAM-voorbeeld voordat u de training start.",
     "source_changed": "De afbeelding is gewijzigd. Vernieuw en neem de kleur opnieuw op.",
     "scene_changed": "De scène is gewijzigd. Neem de kleur opnieuw op.",
     "color_sample_failed": "De kleur kon niet worden opgenomen: {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "Overlay: %s",
     "file_label": "Bestand: %s",
     "visible": "Zichtbaar",
-    "hidden": "Verborgen"
+    "hidden": "Verborgen",
+    "sam_refine": "Vorige verfijnen",
+    "sam_refine_hint": "Verfijn het eerder geselecteerde voorstel met de toegevoegde besturingspunten.",
+    "sam_apply_heading": "3 · Op deze afbeelding toepassen",
+    "sam_undo_hint": "Maak de laatste actie in de gedeelde geschiedenis ongedaan, ook op andere afbeeldingen.",
+    "sam_proposal_legend": "Voorstel · gemarkeerde selectie · niet toegepast",
+    "mask_kept_legend": "Afbeeldingsmasker · gemarkeerde pixels: behouden",
+    "mask_excluded_legend": "Afbeeldingsmasker · gemarkeerde pixels: uitsluiten (omgekeerd)",
+    "sam_applied": "Masker toegepast op deze afbeelding. Sla het project op om het te bewaren."
   },
   "startup": {
     "supported_by": "Ondersteund door",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "Viewer wordt afgesloten",
     "viewer_work_failed": "Viewer-taak mislukt",
     "colmap_min_track_length": "min-track-length kan niet met --init worden gebruikt; COLMAP-sparsepuntfiltering wordt niet toegepast omdat de initialisatie '{}' gebruikt",
-    "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'"
+    "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'",
+    "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
   },
   "align": {
     "preview": "Uitlijning vooraf bekijken",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "Trainer niet hersteld",
       "message": "Het projectmodel is beschikbaar om te bekijken, maar training kon niet worden hervat. Controleer het datasetpad en de logboeken."
-    }
+    },
+    "camera_masks_disabled": "Deze dataset bevat afbeeldingsmaskers, maar maskering is uitgeschakeld. Kies een maskermodus in de trainingsinstellingen om ze te gebruiken."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio is onverwacht afgesloten",

@@ -1927,7 +1927,11 @@
     "trigger.drag": " Arrastrar",
     "trigger.scroll": "Rueda",
     "trigger.unknown": "Desconocido",
-    "action.toggle_performance_hud": "Alternar HUD de rendimiento"
+    "action.toggle_performance_hud": "Alternar HUD de rendimiento",
+    "mode.image_preview": "Vista previa de imagen",
+    "action.image_preview_delete": "Eliminar punto o recuadro",
+    "action.image_preview_generate": "Generar máscara",
+    "action.image_preview_remove_point": "Eliminar control bajo el cursor"
   },
   "debug_info": {
     "free_memory": "Libre: %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "Desactivado"
   },
   "image_preview": {
+    "sam_title": "Máscara · SAM2.1",
+    "sam_positive": "Primer plano +",
+    "sam_negative": "Fondo −",
+    "sam_box": "Recuadro",
+    "sam_pan": "Desplazar vista",
+    "sam_undo": "Deshacer",
+    "sam_clear": "Borrar puntos y recuadro",
+    "sam_generate": "Generar",
+    "sam_cancel": "Liberar SAM",
+    "sam_candidate": "Candidata · calidad estimada por SAM",
+    "sam_apply_failed": "No se pudo aplicar la máscara",
+    "sam_apply_dataset": "Para aplicar la máscara, la imagen debe pertenecer al conjunto de datos actual.",
+    "sam_apply": "Aplicar: conservar selección",
+    "sam_exclude": "Aplicar: excluir selección",
+    "sam_hint": "Aplicar sustituye la máscara de esta imagen. Se guarda con el proyecto .licht; elige el modo de máscara en los ajustes de entrenamiento. Cierra SAM antes de entrenar.",
+    "sam_queued": "En cola",
+    "sam_loading": "Cargando modelo",
+    "sam_encoding": "Codificando imagen",
+    "sam_predicting": "Predicción",
+    "sam_rendering": "Preparando superposición",
+    "sam_closing": "Liberando recursos",
+    "sam_ready": "Propuesta lista",
+    "sam_error": "La operación ha fallado",
+    "sam_heading": "1 · Puntos y recuadro",
+    "sam_proposals_heading": "2 · Propuesta",
+    "sam_edit": "Editar controles",
+    "sam_remove": "Eliminar",
+    "sam_flip": "Cambiar +/−",
+    "sam_show": "Superposición",
+    "sam_edit_hint": "Arrastra los puntos para moverlos. Arrastra los bordes o las esquinas del recuadro para cambiar su tamaño; en Recuadro, arrastra dentro para moverlo. Usa la lista de controles para seleccionar con el teclado. Eliminar quita controles, no píxeles de la máscara.",
+    "sam_selection_none": "Seleccionar un control",
+    "sam_quality": "Puntuación SAM: {score}%",
+    "sam_generate_hint": "Genera una nueva propuesta a partir de los puntos y el recuadro actuales.",
+    "sam_positive_hint": "Punto positivo sobre el objeto.",
+    "sam_negative_hint": "Punto negativo sobre el fondo.",
+    "sam_box_hint": "Dibuja o ajusta un recuadro.",
+    "sam_pan_hint": "Desplaza la vista sin añadir puntos. Arrastra para mover la imagen cuando esté ampliada.",
+    "sam_review_frames": "Revisar fotogramas · SAM",
+    "sam_source_changed": "La imagen ha cambiado. Actualízala antes de generar otra propuesta.",
+    "sam_proposal_expired": "La propuesta seleccionada ya no está vigente. Genera una nueva propuesta.",
+    "sam_write_failed": "No se pudo codificar la máscara.",
+    "sam_shutting_down": "El servicio de vista previa de SAM se está cerrando.",
+    "sam_invalid_input": "Se requieren una revisión de la imagen y puntos o un recuadro (hasta 256 puntos).",
+    "sam_invalid_point": "Las coordenadas de los puntos deben estar entre 0 y 1, con etiqueta 0 o 1.",
+    "sam_invalid_box": "Los límites del recuadro deben estar entre 0 y 1, con anchura y altura positivas.",
+    "sam_unavailable": "Detén el entrenamiento y espera a que terminen las importaciones o exportaciones de vídeo activas antes de usar SAM.",
+    "sam_reset_training": "Restablece el entrenamiento antes de modificar las máscaras de las imágenes.",
+    "sam_training_blocked": "Cierra la vista previa de SAM antes de iniciar el entrenamiento.",
     "source_changed": "La imagen ha cambiado. Actualiza y vuelve a muestrear el color.",
     "scene_changed": "La escena ha cambiado. Vuelve a muestrear el color.",
     "color_sample_failed": "No se pudo muestrear el color: {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "Superposición: %s",
     "file_label": "Archivo: %s",
     "visible": "Visible",
-    "hidden": "Oculto"
+    "hidden": "Oculto",
+    "sam_refine": "Refinar anterior",
+    "sam_refine_hint": "Refina la propuesta seleccionada anteriormente con los controles añadidos.",
+    "sam_apply_heading": "3 · Aplicar a esta imagen",
+    "sam_undo_hint": "Deshace la última acción del historial compartido, incluidas otras imágenes.",
+    "sam_proposal_legend": "Propuesta · selección resaltada · sin aplicar",
+    "mask_kept_legend": "Máscara de imagen · píxeles resaltados: conservar",
+    "mask_excluded_legend": "Máscara de imagen · píxeles resaltados: excluir (invertida)",
+    "sam_applied": "Máscara aplicada a esta imagen. Guarda el proyecto para conservarla."
   },
   "startup": {
     "supported_by": "Con el apoyo de",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "Cerrando el visor",
     "viewer_work_failed": "El trabajo del visor falló",
     "colmap_min_track_length": "min-track-length no se puede usar con --init; no se aplicará el filtrado de puntos dispersos de COLMAP porque la inicialización usa '{}'",
-    "no_splat_node_named": "No hay ningún nodo splat llamado '{}'"
+    "no_splat_node_named": "No hay ningún nodo splat llamado '{}'",
+    "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse."
   },
   "align": {
     "preview": "Vista previa de alineación",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "Entrenador no restaurado",
       "message": "El modelo del proyecto está disponible para visualización, pero no se pudo reanudar el entrenamiento. Compruebe la ruta del conjunto de datos y los registros."
-    }
+    },
+    "camera_masks_disabled": "Este conjunto de datos contiene máscaras de imagen, pero el enmascaramiento está desactivado. Elige un modo de máscara en los ajustes de entrenamiento para utilizarlas."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio se cerró inesperadamente",

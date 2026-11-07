@@ -312,6 +312,7 @@
         <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
         <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
         <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
+        <button id="btn-review-frames" class="btn btn--secondary action-btn" type="button">@tr:image_preview.sam_review_frames</button>
         <span id="select-hint" class="inline-warning">@tr:video_extractor.select_both</span>
       </div>
       <div class="status-row">

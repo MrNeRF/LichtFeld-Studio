@@ -1927,7 +1927,11 @@
     "trigger.drag": " Glisser",
     "trigger.scroll": "Défilement",
     "trigger.unknown": "Inconnu",
-    "action.toggle_performance_hud": "Basculer le HUD de performances"
+    "action.toggle_performance_hud": "Basculer le HUD de performances",
+    "mode.image_preview": "Aperçu de l’image",
+    "action.image_preview_delete": "Supprimer un point ou un cadre",
+    "action.image_preview_generate": "Générer le masque",
+    "action.image_preview_remove_point": "Supprimer le contrôle sous le curseur"
   },
   "debug_info": {
     "free_memory": "Libre : %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "Désactivé"
   },
   "image_preview": {
+    "sam_title": "Masque · SAM2.1",
+    "sam_positive": "Premier plan +",
+    "sam_negative": "Arrière-plan −",
+    "sam_box": "Rectangle",
+    "sam_pan": "Déplacer la vue",
+    "sam_undo": "Annuler",
+    "sam_clear": "Effacer points et rectangle",
+    "sam_generate": "Générer",
+    "sam_cancel": "Libérer SAM",
+    "sam_candidate": "Candidate · qualité estimée par SAM",
+    "sam_apply_failed": "Impossible d’appliquer le masque",
+    "sam_apply_dataset": "Pour appliquer le masque, l’image doit appartenir au jeu de données actuel.",
+    "sam_apply": "Appliquer : conserver la sélection",
+    "sam_exclude": "Appliquer : exclure la sélection",
+    "sam_hint": "Appliquer remplace le masque de cette image. Il est enregistré dans le projet .licht ; choisis le mode de masquage dans les paramètres d’entraînement. Ferme SAM avant l’entraînement.",
+    "sam_queued": "En attente",
+    "sam_loading": "Chargement du modèle",
+    "sam_encoding": "Encodage de l’image",
+    "sam_predicting": "Prédiction",
+    "sam_rendering": "Préparation de la superposition",
+    "sam_closing": "Libération des ressources",
+    "sam_ready": "Proposition prête",
+    "sam_error": "Échec de l’opération",
+    "sam_heading": "1 · Points et rectangle",
+    "sam_proposals_heading": "2 · Proposition",
+    "sam_edit": "Modifier les contrôles",
+    "sam_remove": "Supprimer",
+    "sam_flip": "Inverser +/−",
+    "sam_show": "Superposition",
+    "sam_edit_hint": "Faites glisser les points pour les déplacer. Faites glisser les bords ou les coins du cadre pour le redimensionner ; en mode Rectangle, faites glisser à l’intérieur pour le déplacer. La liste permet une sélection au clavier. Supprimer retire les contrôles, pas les pixels du masque.",
+    "sam_selection_none": "Sélectionner un contrôle",
+    "sam_quality": "Score SAM : {score}%",
+    "sam_generate_hint": "Générer une nouvelle proposition à partir des points et du cadre actuels.",
+    "sam_positive_hint": "Point positif sur l’objet.",
+    "sam_negative_hint": "Point négatif sur l’arrière-plan.",
+    "sam_box_hint": "Dessinez ou ajustez un cadre.",
+    "sam_pan_hint": "Déplacez la vue sans ajouter de points. Faites glisser pour déplacer l’image lorsqu’elle est agrandie.",
+    "sam_review_frames": "Vérifier les images · SAM",
+    "sam_source_changed": "L’image a changé. Actualisez-la avant de générer une autre proposition.",
+    "sam_proposal_expired": "La proposition sélectionnée n’est plus à jour. Générez une nouvelle proposition.",
+    "sam_write_failed": "Impossible d’encoder le masque.",
+    "sam_shutting_down": "Le service d’aperçu SAM est en cours d’arrêt.",
+    "sam_invalid_input": "Une révision de l’image et des points ou un cadre sont nécessaires (256 points maximum).",
+    "sam_invalid_point": "Les coordonnées des points doivent être comprises entre 0 et 1, avec une étiquette 0 ou 1.",
+    "sam_invalid_box": "Les limites du cadre doivent être comprises entre 0 et 1, avec une largeur et une hauteur positives.",
+    "sam_unavailable": "Arrêtez l’entraînement et attendez la fin des importations ou exportations vidéo en cours avant d’utiliser SAM.",
+    "sam_reset_training": "Réinitialisez l’entraînement avant de modifier les masques des images.",
+    "sam_training_blocked": "Fermez l’aperçu SAM avant de démarrer l’entraînement.",
     "source_changed": "L’image a changé. Actualisez et prélevez à nouveau la couleur.",
     "scene_changed": "La scène a changé. Prélevez à nouveau la couleur.",
     "color_sample_failed": "Impossible de prélever la couleur : {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "Superposition : %s",
     "file_label": "Fichier : %s",
     "visible": "Visible",
-    "hidden": "Masqué"
+    "hidden": "Masqué",
+    "sam_refine": "Affiner la précédente",
+    "sam_refine_hint": "Affiner la proposition précédemment sélectionnée avec les contrôles ajoutés.",
+    "sam_apply_heading": "3 · Appliquer à cette image",
+    "sam_undo_hint": "Annule la dernière action de l’historique partagé, y compris sur d’autres images.",
+    "sam_proposal_legend": "Proposition · sélection surlignée · non appliquée",
+    "mask_kept_legend": "Masque de l’image · pixels surlignés : conserver",
+    "mask_excluded_legend": "Masque de l’image · pixels surlignés : exclure (inversé)",
+    "sam_applied": "Masque appliqué à cette image. Enregistrez le projet pour le conserver."
   },
   "startup": {
     "supported_by": "Soutenu par",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "Fermeture du visualiseur",
     "viewer_work_failed": "Échec d’une opération du visualiseur",
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
-    "no_splat_node_named": "Aucun nœud splat nommé '{}'"
+    "no_splat_node_named": "Aucun nœud splat nommé '{}'",
+    "training_session_not_ready": "La session d’entraînement n’est pas prête à reprendre."
   },
   "align": {
     "preview": "Aperçu de l’alignement",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "Entraîneur non restauré",
       "message": "Le modèle du projet est disponible pour la visualisation, mais l'entraînement n'a pas pu être repris. Vérifiez le chemin du jeu de données et les journaux."
-    }
+    },
+    "camera_masks_disabled": "Ce jeu de données contient des masques d’image, mais le masquage est désactivé. Choisissez un mode de masque dans les paramètres d’entraînement pour les utiliser."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio s'est fermé de façon inattendue",

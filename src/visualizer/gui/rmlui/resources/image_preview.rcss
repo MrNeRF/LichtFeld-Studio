@@ -178,6 +178,78 @@
     display: block;
 }
 
+#sam-controls {
+    padding: 10dp;
+    flex-shrink: 0;
+    border-bottom-width: 1dp;
+    border-bottom-color: #454545;
+}
+#sam-controls.hidden { display: none; }
+#sam-apply-controls.hidden { display: none; }
+#sam-apply-controls { padding: 10dp; flex-shrink: 0; }
+#sam-controls .hidden { display: none; }
+#mask-legend {
+    flex: 1;
+    min-width: 0;
+    height: 18dp;
+    line-height: 18dp;
+    margin: 0 16dp 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#mask-legend.hidden { display: none; }
+#sam-selection { width: 100%; box-sizing: border-box; height: 28dp; }
+.sam-tool-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4dp;
+    margin-bottom: 4dp;
+}
+#sam-controls button, #sam-apply-controls button {
+    box-sizing: border-box;
+    display: inline-block;
+    flex: 0 0 auto;
+    min-width: 28dp;
+    height: 28dp;
+    line-height: 26dp;
+    padding: 0dp 8dp;
+}
+.sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
+#sam-selection { font-size: 12dp; margin: 6dp 0; }
+#sam-quality { height: 18dp; line-height: 18dp; }
+#sam-status { height: 48dp; line-height: 16dp; font-size: 12dp; overflow-y: auto; }
+#sidebar.sam-sidebar { width: 260dp; display: flex; flex-direction: column; overflow: hidden; }
+.sam-sidebar #sam-controls { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.sam-sidebar #metadata-info { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#sam-overlay, #sam-markers { pointer-events: none; }
+#sam-overlay { z-index: 2; }
+#image-container.sam-prompt { cursor: crosshair; }
+#sam-markers {
+    position: absolute;
+    z-index: 3;
+    left: 0; top: 0; right: 0; bottom: 0;
+}
+.sam-point {
+    box-sizing: border-box;
+    position: absolute;
+    width: 18dp; height: 18dp;
+    margin-left: -9dp; margin-top: -9dp;
+    border-width: 1dp;
+    border-radius: 9dp;
+    text-align: center;
+    line-height: 16dp;
+}
+.sam-point-selected { border-width: 3dp; line-height: 12dp; }
+.sam-box { position: absolute; border-width: 2dp; }
+.sam-box-handle {
+    position: absolute;
+    width: 8dp; height: 8dp;
+    margin-left: -4dp; margin-top: -4dp;
+    border-width: 1dp;
+}
+
 #no-image-text {
     font-size: 12dp;
     z-index: 3;

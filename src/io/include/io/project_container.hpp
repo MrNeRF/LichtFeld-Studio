@@ -155,6 +155,7 @@ namespace lfs::io::project {
         TILESET_REFERENCES = 10,
         COLLISION_VOLUMES_V1 = 11,
         USER_SHADERS_V1 = 12,
+        CAMERA_MASK_ASSETS_V1 = 13,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();

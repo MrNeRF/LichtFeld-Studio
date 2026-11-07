@@ -1927,7 +1927,11 @@
     "trigger.drag": " ドラッグ",
     "trigger.scroll": "スクロール",
     "trigger.unknown": "不明",
-    "action.toggle_performance_hud": "パフォーマンス HUD 切替"
+    "action.toggle_performance_hud": "パフォーマンス HUD 切替",
+    "mode.image_preview": "画像プレビュー",
+    "action.image_preview_delete": "点またはボックスを削除",
+    "action.image_preview_generate": "マスクを生成",
+    "action.image_preview_remove_point": "カーソル位置の制御点を削除"
   },
   "debug_info": {
     "free_memory": "空き: %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "無効"
   },
   "image_preview": {
+    "sam_title": "マスク · SAM2.1",
+    "sam_positive": "前景 +",
+    "sam_negative": "背景 −",
+    "sam_box": "矩形",
+    "sam_pan": "パン",
+    "sam_undo": "元に戻す",
+    "sam_clear": "点と矩形をクリア",
+    "sam_generate": "生成",
+    "sam_cancel": "SAMを解放",
+    "sam_candidate": "候補 · SAMの推定品質",
+    "sam_apply_failed": "マスクを適用できませんでした",
+    "sam_apply_dataset": "マスクを適用するには、画像が現在のデータセットに含まれている必要があります。",
+    "sam_apply": "適用：選択範囲を保持",
+    "sam_exclude": "適用：選択範囲を除外",
+    "sam_hint": "適用すると、この画像のマスクが置き換わります。マスクは .licht プロジェクトに保存されます。学習設定でマスクモードを選択し、学習前に SAM を閉じてください。",
+    "sam_queued": "待機中",
+    "sam_loading": "モデルを読み込み中",
+    "sam_encoding": "画像を符号化中",
+    "sam_predicting": "推論中",
+    "sam_rendering": "オーバーレイを準備中",
+    "sam_closing": "リソースを解放中",
+    "sam_ready": "候補の準備完了",
+    "sam_error": "操作に失敗しました",
+    "sam_heading": "1 · 点と矩形",
+    "sam_proposals_heading": "2 · 候補",
+    "sam_edit": "制御点を編集",
+    "sam_remove": "削除",
+    "sam_flip": "+/−を切替",
+    "sam_show": "重ね表示",
+    "sam_edit_hint": "点をドラッグして移動します。ボックスの辺や角をドラッグするとサイズを変更できます。「矩形」では内側をドラッグして移動できます。一覧からキーボードで制御点を選択できます。「削除」は制御点を削除し、マスクのピクセルは消しません。",
+    "sam_selection_none": "制御点を選択",
+    "sam_quality": "SAMスコア: {score}%",
+    "sam_generate_hint": "現在の点とボックスから新しい候補を生成します。",
+    "sam_positive_hint": "対象物に正の点を追加します。",
+    "sam_negative_hint": "背景に負の点を追加します。",
+    "sam_box_hint": "1つのボックスを描画・調整します。",
+    "sam_pan_hint": "点を追加せずに表示位置を移動します。拡大時にドラッグすると画像をパンできます。",
+    "sam_review_frames": "フレームを確認 · SAM",
+    "sam_source_changed": "画像が変更されました。別の候補を生成する前に更新してください。",
+    "sam_proposal_expired": "選択した候補は古くなっています。新しい候補を生成してください。",
+    "sam_write_failed": "マスクをエンコードできません。",
+    "sam_shutting_down": "SAMプレビューサービスを終了しています。",
+    "sam_invalid_input": "画像のリビジョンと点または矩形が必要です（点は最大256個）。",
+    "sam_invalid_point": "点の座標は0から1の範囲、ラベルは0または1で指定してください。",
+    "sam_invalid_box": "矩形の境界は0から1の範囲で、幅と高さが正である必要があります。",
+    "sam_unavailable": "SAMを使う前に学習を停止し、実行中のインポートや動画エクスポートの完了を待ってください。",
+    "sam_reset_training": "画像マスクを変更する前にトレーニングをリセットしてください。",
+    "sam_training_blocked": "学習を開始する前にSAMプレビューを閉じてください。",
     "source_changed": "画像が変更されました。更新して色を再取得してください。",
     "scene_changed": "シーンが変更されました。色を再取得してください。",
     "color_sample_failed": "色を取得できませんでした: {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "オーバーレイ: %s",
     "file_label": "ファイル: %s",
     "visible": "表示中",
-    "hidden": "非表示"
+    "hidden": "非表示",
+    "sam_refine": "前の候補を調整",
+    "sam_refine_hint": "追加した制御点を使って、前に選択した候補を調整します。",
+    "sam_apply_heading": "3 · この画像に適用",
+    "sam_undo_hint": "他の画像も含め、共有履歴の最後の操作を元に戻します。",
+    "sam_proposal_legend": "候補 · 強調表示された選択範囲 · 未適用",
+    "mask_kept_legend": "画像マスク · 強調表示されたピクセル：保持",
+    "mask_excluded_legend": "画像マスク · 強調表示されたピクセル：除外（反転）",
+    "sam_applied": "この画像にマスクを適用しました。保存するにはプロジェクトを保存してください。"
   },
   "startup": {
     "supported_by": "サポート",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "ビューアーを終了しています",
     "viewer_work_failed": "ビューアーの処理に失敗しました",
     "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
-    "no_splat_node_named": "'{}' という名前のスプラットノードがありません"
+    "no_splat_node_named": "'{}' という名前のスプラットノードがありません",
+    "training_session_not_ready": "トレーニングセッションはまだ再開できません。"
   },
   "align": {
     "preview": "位置合わせをプレビュー",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "トレーナーを復元できませんでした",
       "message": "プロジェクトモデルは表示できますが、学習を再開できませんでした。データセットのパスとログを確認してください。"
-    }
+    },
+    "camera_masks_disabled": "このデータセットには画像マスクがありますが、マスク処理が無効です。使用するには、トレーニング設定でマスクモードを選択してください。"
   },
   "recovery": {
     "crash_title": "LichtFeld Studio が予期せず終了しました",

@@ -27,8 +27,12 @@
     border-color: @{primary};
 }
 
+#sam-overlay {
+    image-color: @{alpha(primary,0.45)};
+}
+
 #mask-overlay {
-    image-color: @{alpha(error,0.50)};
+    image-color: @{alpha(primary,0.45)};
 }
 
 #no-image-text,
@@ -47,7 +51,8 @@
 }
 
 .sidebar-header-ip,
-.sidebar-section-ip {
+.sidebar-section-ip,
+#sam-controls {
     border-bottom-color: @{border};
 }
 
@@ -101,3 +106,12 @@
     color: @{text};
     background-color: @{surface_bright};
 }
+
+#sam-controls button[aria-pressed="true"] { background-color: @{alpha(primary,0.3)}; }
+.sam-note { color: @{text_dim}; }
+.sam-point { border-color: @{white}; color: @{white}; }
+.sam-point-1 { background-color: @{success}; }
+.sam-point-0 { background-color: @{error}; }
+.sam-box { border-color: @{primary}; }
+.sam-point-selected, .sam-box-selected { border-color: @{warning}; }
+.sam-box-handle { background-color: @{primary}; border-color: @{white}; }

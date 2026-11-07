@@ -1938,7 +1938,11 @@
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
     "trigger.unknown": "Unknown",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "mode.image_preview": "Image Preview",
+    "action.image_preview_delete": "Remove point or box",
+    "action.image_preview_generate": "Generate mask",
+    "action.image_preview_remove_point": "Remove control at cursor"
   },
   "debug_info": {
     "free_memory": "Free: %.2f GB",
@@ -2042,6 +2046,54 @@
     "disabled": "Disabled"
   },
   "image_preview": {
+    "sam_title": "Mask · SAM2.1",
+    "sam_positive": "Foreground +",
+    "sam_negative": "Background −",
+    "sam_box": "Box",
+    "sam_pan": "Pan",
+    "sam_undo": "Undo",
+    "sam_clear": "Clear points and box",
+    "sam_generate": "Generate",
+    "sam_cancel": "Release SAM",
+    "sam_candidate": "Candidate · SAM predicted quality",
+    "sam_apply_failed": "Could not apply the mask",
+    "sam_apply_dataset": "Apply requires an image in the current dataset.",
+    "sam_apply": "Apply: keep selection",
+    "sam_exclude": "Apply: exclude selection",
+    "sam_hint": "Apply replaces this image’s mask. Saved with the .licht project; use the masking mode in Training settings. Close SAM before training.",
+    "sam_queued": "Queued",
+    "sam_loading": "Loading model",
+    "sam_encoding": "Encoding image",
+    "sam_predicting": "Predicting",
+    "sam_rendering": "Preparing overlay",
+    "sam_closing": "Releasing resources",
+    "sam_ready": "Proposal ready",
+    "sam_error": "Operation failed",
+    "sam_heading": "1 · Points and box",
+    "sam_proposals_heading": "2 · Proposal",
+    "sam_edit": "Edit controls",
+    "sam_remove": "Delete",
+    "sam_flip": "Swap +/−",
+    "sam_show": "Overlay",
+    "sam_edit_hint": "Drag points to move them. Drag box edges or corners to resize; in Box, drag inside to move it. Use the control list to select with the keyboard. Delete removes controls, not mask pixels.",
+    "sam_selection_none": "Select a control",
+    "sam_quality": "SAM score: {score}%",
+    "sam_generate_hint": "Generate a new proposal from the current points and box.",
+    "sam_positive_hint": "Positive point on the object.",
+    "sam_negative_hint": "Negative point on the background.",
+    "sam_box_hint": "Draw or adjust one bounding box.",
+    "sam_pan_hint": "Move the image view without adding points. Drag to pan when zoomed in.",
+    "sam_review_frames": "Review frames · SAM",
+    "sam_source_changed": "The image changed. Refresh it before generating another proposal.",
+    "sam_proposal_expired": "The selected proposal is no longer current. Generate a new proposal.",
+    "sam_write_failed": "Unable to encode the mask.",
+    "sam_shutting_down": "The SAM preview service is shutting down.",
+    "sam_invalid_input": "An image revision and points or a box are required (up to 256 points).",
+    "sam_invalid_point": "Point coordinates must be between 0 and 1, with label 0 or 1.",
+    "sam_invalid_box": "Box bounds must be between 0 and 1, with positive width and height.",
+    "sam_unavailable": "Stop training and wait for active imports or video exports to finish before using SAM.",
+    "sam_reset_training": "Reset training before changing image masks.",
+    "sam_training_blocked": "Close the SAM preview before starting training.",
     "source_changed": "Image changed. Refresh and sample the color again.",
     "scene_changed": "The scene changed. Sample the color again.",
     "color_sample_failed": "Could not sample the color: {}",
@@ -2113,7 +2165,15 @@
     "overlay_status": "Overlay: %s",
     "file_label": "File: %s",
     "visible": "Visible",
-    "hidden": "Hidden"
+    "hidden": "Hidden",
+    "sam_refine": "Refine previous",
+    "sam_refine_hint": "Refine the previously selected proposal using the added controls.",
+    "sam_apply_heading": "3 · Apply to this image",
+    "sam_undo_hint": "Undo the latest action in the shared history, including other images.",
+    "sam_proposal_legend": "Proposal · highlighted selection · not applied",
+    "mask_kept_legend": "Image mask · highlighted pixels: keep",
+    "mask_excluded_legend": "Image mask · highlighted pixels: exclude (inverted)",
+    "sam_applied": "Mask applied to this image. Save the project to keep it."
   },
   "startup": {
     "supported_by": "Supported by",
@@ -3023,7 +3083,8 @@
     "viewer_shutting_down": "Viewer is shutting down",
     "viewer_work_failed": "Viewer work failed",
     "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
-    "no_splat_node_named": "No splat node named '{}'"
+    "no_splat_node_named": "No splat node named '{}'",
+    "training_session_not_ready": "The training session is not ready to resume."
   },
   "align": {
     "preview": "Preview alignment",
@@ -3053,7 +3114,8 @@
     "trainer_not_restored": {
       "title": "Trainer not restored",
       "message": "The project model is available for viewing, but training could not be resumed. Check the dataset path and logs."
-    }
+    },
+    "camera_masks_disabled": "This dataset has image masks, but masking is disabled. Choose a mask mode in Training settings to use them."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio closed unexpectedly",

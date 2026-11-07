@@ -478,6 +478,11 @@ namespace lfs::vis::op {
         std::optional<std::vector<lfs::core::Uuid>> payload_uuids = std::nullopt;
     };
 
+    struct CameraMaskAssetSnapshot {
+        size_t bytes = 0;
+        std::function<void()> restore;
+    };
+
     struct SceneGraphCameraSnapshot {
         lfs::core::Tensor R;
         lfs::core::Tensor T;
@@ -488,6 +493,9 @@ namespace lfs::vis::op {
         std::string image_name;
         std::filesystem::path image_path;
         std::filesystem::path mask_path;
+        std::optional<lfs::core::Uuid> mask_asset_uuid;
+        std::shared_ptr<const void> mask_asset_owner;
+        std::shared_ptr<CameraMaskAssetSnapshot> mask_asset;
         std::filesystem::path depth_path;
         lfs::core::CameraSplit split = lfs::core::CameraSplit::Train;
         float focal_x = 0.0f;

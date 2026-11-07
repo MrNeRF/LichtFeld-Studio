@@ -67,6 +67,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -368,6 +369,9 @@ namespace lfs::vis {
             std::make_unique<project::ProjectLifecycle>(
                 *this,
                 options_.project_lifecycle_settings_path);
+        scene_manager_->setCameraMaskSnapshotCallback([this](const auto& uuid) {
+            return project_lifecycle_->retainCameraMaskAsset(uuid);
+        });
         scene_manager_->setImportLicenseCallback([this](const auto& bytes) {
             if (auto adopted = project_lifecycle_->adoptImportLicense(bytes); !adopted)
                 LOG_WARN("Cannot set project license during splat import: {}",
@@ -4491,6 +4495,22 @@ namespace lfs::vis {
             return {};
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
+        const auto action = trainer_manager_->getState() == TrainingState::Paused ? TrainingAction::Resume : TrainingAction::Start;
+        if (!trainer_manager_->canPerform(action)) {
+            const std::string message =
+                trainer_manager_->isFinished()
+                    ? std::format(
+                          "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
+                          trainer_manager_->getCurrentIteration())
+                    : std::string(trainer_manager_->getActionBlockedReason(action));
+            lfs::ErrorBus::instance().publish(makeFrameNotification(
+                lfs::ErrorCode::FailedPrecondition,
+                lfs::ErrorDomain::Training,
+                lfs::Severity::Error,
+                lfs::ErrorSurface::Modal,
+                message, message, {}, LFS_SOURCE_SITE_CURRENT(), "training.start"));
+            return std::unexpected(message);
+        }
         if (project_lifecycle_ &&
             !trainer_manager_->hasTrainer()) {
             const auto session =
@@ -4534,27 +4554,6 @@ namespace lfs::vis {
             }
             trainer_manager_->resumeTraining();
             return {};
-        }
-        if (!trainer_manager_->canStart()) {
-            const std::string message =
-                trainer_manager_->isFinished()
-                    ? std::format(
-                          "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
-                          trainer_manager_->getCurrentIteration())
-                    : std::string(
-                          trainer_manager_->getActionBlockedReason(
-                              TrainingAction::Start));
-            lfs::ErrorBus::instance().publish(makeFrameNotification(
-                lfs::ErrorCode::FailedPrecondition,
-                lfs::ErrorDomain::Training,
-                lfs::Severity::Error,
-                lfs::ErrorSurface::Modal,
-                message,
-                message,
-                {},
-                LFS_SOURCE_SITE_CURRENT(),
-                "training.start"));
-            return std::unexpected(message);
         }
         if (project_lifecycle_) {
             if (auto prepared =
@@ -4896,6 +4895,12 @@ namespace lfs::vis {
             std::move(expected_project_uuid));
     }
 
+    lfs::Result<void> VisualizerImpl::applyCameraMask(const core::Uuid& uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) {
+        if (!project_lifecycle_)
+            return visualizerFailure<void>(lfs::ErrorCode::Unavailable, "Project lifecycle is unavailable.", "Cannot apply camera mask without project lifecycle", "project.lifecycle");
+        return project_lifecycle_->applyCameraMask(uuid, image, std::move(png), mask_width, mask_height);
+    }
+
     lfs::Result<ProjectWritePoll>
     VisualizerImpl::projectPollWrite() {
         if (!project_lifecycle_) {
@@ -5033,7 +5038,7 @@ namespace lfs::vis {
     void VisualizerImpl::performReset() {
         assert(scene_manager_ && scene_manager_->hasDataset());
 
-        const auto& path = scene_manager_->getDatasetPath();
+        const auto path = scene_manager_->getDatasetPath();
         if (path.empty()) {
             LOG_ERROR("Cannot reset: empty path");
             return;
@@ -5041,6 +5046,25 @@ namespace lfs::vis {
 
         const auto preserved_camera = viewport_.camera;
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
+        // Reloading the source dataset reconstructs cameras, but project-only
+        // masks belong to those images, not to the newly generated node UUIDs.
+        struct CameraMask {
+            core::Uuid asset;
+            std::filesystem::path path;
+            std::shared_ptr<const void> owner;
+        };
+        std::map<std::filesystem::path, CameraMask> preserved_masks;
+        for (const auto* node : scene_manager_->getScene().getNodes()) {
+            if (!node || !node->camera || !node->camera->mask_asset_uuid())
+                continue;
+            const auto asset = *node->camera->mask_asset_uuid();
+            auto materialized = project_lifecycle_->materializeCameraMask(asset);
+            if (!materialized) {
+                LOG_ERROR("Reset could not preserve camera mask: {}", lfs::format_for_developer(materialized.error()));
+                return;
+            }
+            preserved_masks.insert_or_assign(node->camera->image_path().lexically_normal(), CameraMask{asset, std::move(materialized->path), std::move(materialized->owner)});
+        }
 
         const auto& previous_params = data_loader_->getParameters();
         const auto& init_path = previous_params.init_path;
@@ -5100,6 +5124,24 @@ namespace lfs::vis {
                     scene.setNodeTransform(name, transform);
                 }
             }
+        }
+
+        if (!preserved_masks.empty()) {
+            auto& scene = scene_manager_->getScene();
+            core::Scene::Transaction transaction(scene);
+            bool restored = false;
+            for (auto* node : scene.getNodes()) {
+                if (!node || !node->camera)
+                    continue;
+                const auto found = preserved_masks.find(node->camera->image_path().lexically_normal());
+                if (found == preserved_masks.end())
+                    continue;
+                node->camera->set_mask_path(found->second.path, found->second.asset, found->second.owner);
+                scene.getNodeByUuid(node->uuid)->mask_path = core::path_to_utf8(found->second.path);
+                restored = true;
+            }
+            if (restored)
+                scene.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED);
         }
 
         restore_camera();

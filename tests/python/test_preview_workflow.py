@@ -308,6 +308,19 @@ def test_open_has_no_filesystem_reads_and_metadata_runs_off_ui_thread(panel_modu
     panel._metadata.close()
 
 
+def test_saved_view_keeps_the_requested_image_on_first_open(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel.apply_chrome({"camera_index": 0, "zoom": 2.0, "fit_to_window": False, "show_filmstrip": False})
+    panel.open([module.Path(f"frame_{i}.png") for i in range(8)], [], 5)
+    assert panel._current_index == 5
+    assert (panel._zoom, panel._fit_to_window, panel._show_filmstrip) == (2.0, False, False)
+
+    panel.apply_chrome({"camera_index": 2})
+    assert panel._current_index == 2
+    panel._metadata.close()
+
+
 def test_overlay_waits_for_current_image_texture(panel_modules, monkeypatch):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
@@ -333,6 +346,12 @@ def test_overlay_waits_for_current_image_texture(panel_modules, monkeypatch):
     assert "preview://" in doc.get_element_by_id("mask-overlay").properties["decorator"]
     assert "&mode=mask&" in doc.get_element_by_id("mask-overlay").properties["decorator"]
     assert "&mode=mask&" not in doc.get_element_by_id("main-image-a").properties["decorator"]
+    panel._mask_editor.enabled = True
+    panel._update_main_image(doc, True)
+    assert doc.get_element_by_id("mask-overlay").properties["decorator"] == "none"
+    panel._mask_editor.enabled = False
+    panel._update_main_image(doc, True)
+    assert "&mode=mask&" in doc.get_element_by_id("mask-overlay").properties["decorator"]
     monkeypatch.setattr(module.lf.ui, "preview_texture_status", lambda source, document: "error")
     panel._update_main_image(doc, True)
     assert panel._preview_state == "error" and panel._displayed_index == -1
@@ -355,6 +374,30 @@ def test_remount_restarts_readiness_timeout_for_the_new_document(panel_modules, 
     panel._update_main_image(doc, True)
     assert panel._preview_state == "loading"
     assert module.time.monotonic() - panel._requested_at < 5
+    panel.on_unmount(doc)
+
+
+@pytest.mark.parametrize("element_id", ["sam-controls", "metadata-info", "sam-status"])
+def test_nested_sidebar_content_receives_precise_scroll(panel_modules, element_id):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    content = Element()
+    content.id, content.client_height, content.scroll_height = element_id, 200, 300
+    listeners = {}
+    content.add_event_listener = lambda name, callback: listeners.setdefault(name, callback)
+    doc = _DocumentStub({element_id: content})
+    doc.add_event_listener = lambda *args: None
+    panel.on_mount(doc)
+    listeners["mousescroll"](event(content, wheel_delta_y=1))
+    assert 0 < content.scroll_top <= 100
+    listeners["mousescroll"](event(content, wheel_delta_y=10000))
+    assert content.scroll_top == 100
+    content.scroll_height = content.client_height
+    stopped = []
+    wheel = event(content, wheel_delta_y=1)
+    wheel.stop_propagation = lambda: stopped.append(True)
+    listeners["mousescroll"](wheel)
+    assert not stopped, "content without overflow must let its parent sidebar scroll"
     panel.on_unmount(doc)
 
 
