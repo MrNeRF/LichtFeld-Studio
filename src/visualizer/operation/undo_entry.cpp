@@ -880,6 +880,45 @@ namespace lfs::vis::op {
                    });
         }
 
+        size_t documentSelectionSize(const lfs::core::Scene& scene) {
+            size_t count = 0;
+            for (const auto* node : scene.getNodes()) {
+                if (node->type == lfs::core::NodeType::SPLAT && !isTransientSubtree(scene, *node))
+                    count += node->gaussian_count.load(std::memory_order_acquire);
+            }
+            return count;
+        }
+
+        // Rendering uses scene-wide offsets. History stores only document rows,
+        // then restores their current offsets after transient nodes change.
+        std::shared_ptr<lfs::core::Tensor> mapDocumentSelection(
+            const lfs::core::Scene& scene,
+            const std::shared_ptr<lfs::core::Tensor>& mask,
+            const bool to_document) {
+            const auto document_size = documentSelectionSize(scene);
+            const auto scene_size = scene.getSelectionGaussianCount();
+            if (!mask || !mask->is_valid() || document_size == scene_size)
+                return mask;
+            if (mask->ndim() != 1 || mask->numel() != (to_document ? scene_size : document_size))
+                throw HistoryStaleEntryError("Cannot map selection history after scene topology changed");
+            auto result = lfs::core::Tensor::zeros(
+                {to_document ? document_size : scene_size}, mask->device(), mask->dtype());
+            size_t scene_offset = 0, document_offset = 0;
+            for (const auto* node : scene.getNodes()) {
+                if (node->type != lfs::core::NodeType::SPLAT)
+                    continue;
+                const auto count = node->gaussian_count.load(std::memory_order_acquire);
+                if (count && !isTransientSubtree(scene, *node)) {
+                    const auto source = to_document ? scene_offset : document_offset;
+                    const auto target = to_document ? document_offset : scene_offset;
+                    result.slice(0, target, target + count).copy_from(mask->slice(0, source, source + count));
+                    document_offset += count;
+                }
+                scene_offset += count;
+            }
+            return std::make_shared<lfs::core::Tensor>(std::move(result));
+        }
+
         // The training model as the document knows it: none while a transient
         // preview is bound.
         [[nodiscard]] lfs::core::Uuid documentTrainingModelUuid(const lfs::core::Scene& scene) {
@@ -2414,6 +2453,7 @@ namespace lfs::vis::op {
 
     void SceneSnapshot::captureSelection() {
         selection_before_ = scene_.getScene().captureSelectionState();
+        selection_before_.mask = mapDocumentSelection(scene_.getScene(), selection_before_.mask, true);
         captured_ = captured_ | ModifiesFlag::SELECTION;
     }
 
@@ -2485,8 +2525,9 @@ namespace lfs::vis::op {
             selection_after_metadata_ = scene_.getScene().captureSelectionStateMetadata();
         }
 
-        const auto selection_after = after_mask ? after_mask : scene_.getScene().getSelectionMask();
-        const size_t total_size = std::max({scene_.getScene().getTotalGaussianCount(),
+        const auto selection_after = mapDocumentSelection(
+            scene_.getScene(), after_mask ? after_mask : scene_.getScene().getSelectionMask(), true);
+        const size_t total_size = std::max({documentSelectionSize(scene_.getScene()),
                                             tensorNumel(selection_before_.mask),
                                             tensorNumel(selection_after)});
         const auto fallback_device =
@@ -2654,8 +2695,8 @@ namespace lfs::vis::op {
                                            }
                                          : selection_after_metadata_;
 
-        auto current_selection = scene_.getScene().getSelectionMask();
-        const size_t current_total = scene_.getScene().getSelectionGaussianCount();
+        auto current_selection = mapDocumentSelection(scene_.getScene(), scene_.getScene().getSelectionMask(), true);
+        const size_t current_total = documentSelectionSize(scene_.getScene());
         if (selection_mask_storage_.hasChanges() &&
             current_total !=
                 selection_mask_storage_.total_size) {
@@ -2680,7 +2721,8 @@ namespace lfs::vis::op {
         snapshot.next_group_id = target_metadata.next_group_id;
         snapshot.has_selection = target_metadata.has_selection;
         if (target_metadata.has_selection) {
-            snapshot.mask = std::make_shared<lfs::core::Tensor>(std::move(working_mask));
+            snapshot.mask = mapDocumentSelection(
+                scene_.getScene(), std::make_shared<lfs::core::Tensor>(std::move(working_mask)), false);
         }
         scene_.getScene().restoreSelectionState(snapshot);
     }

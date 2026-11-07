@@ -1,0 +1,6 @@
+#content-wrap { padding: 12dp; }
+.et-current { border-left-width: 3dp; padding-left: 10dp; }
+.et-current span { display: block; margin-bottom: 8dp; }
+select { width: 100%; margin-bottom: 8dp; }
+button { margin-top: 6dp; }
+.status-error { display: block; margin-top: 8dp; }

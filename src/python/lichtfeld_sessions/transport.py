@@ -203,6 +203,11 @@ def validate_session(record, expected_id=None):
         raise ValueError("Invalid training session identity")
     if expected_id is not None and record["id"] != expected_id:
         raise ValueError("Training session identity changed; select the trainer again")
+    for key in ("iteration", "iterations", "count"):
+        if key in record and (type(record[key]) is not int or not 0 <= record[key] <= 2**63 - 1):
+            raise ValueError("Invalid training session counter: " + key)
+    if "label" in record and (not isinstance(record["label"], str) or len(record["label"]) > 1024):
+        raise ValueError("Invalid training session label")
     return record
 
 

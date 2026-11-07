@@ -103,12 +103,13 @@ def test_apply_targets_only_the_reviewed_image_and_ignores_late_results(panel_mo
     panel._image_paths = [module.Path("frame.png")]
     panel._mask_editor = value = editor(module)
     value.request, value.phase = 41, "rendering"
-    panel._sam_apply_target = module.MaskApply(42, 41, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
-    if changed_scene:
-        module.RuntimeState.scene_generation.value += 1
+    panel._sam_apply_target = module.MaskApply(42, 41, "camera-uuid", value.key)
+    # A transient preview also advances the UI generation. Only the native
+    # document revision expires a mask prepared for a changed scene.
+    module.RuntimeState.scene_generation.value += 1
     panel._path_revision_cache["frame.png"] = "changed" if changed_source else "revision-a"
     applied = []
-    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "mask_ready"}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "expired" if changed_scene else "mask_ready"}, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_apply", lambda *args: applied.append(args), raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: None, raising=False)
     monkeypatch.setattr(panel, "_refresh_sources", lambda: None)
@@ -133,14 +134,14 @@ def test_apply_keeps_selected_polarity_with_inverted_training_masks(panel_module
             raise AssertionError("An image tensor is not a scalar boolean")
     value.request, value.phase, value.overlays = 5, "ready", [Proposal()]
     panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
-    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid"))
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid", read_only=False))
     monkeypatch.setattr(module.lf, "optimization_params", lambda: SimpleNamespace(invert_masks=inverted), raising=False)
     submitted = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *args: submitted.append(args) or 6, raising=False)
     panel._sam_apply(exclude)
     assert submitted[0][-1] == exclude
     assert value.request == 5
-    assert panel._sam_apply_target == module.MaskApply(6, 5, "camera-uuid", value.key, module.RuntimeState.scene_generation.value)
+    assert panel._sam_apply_target == module.MaskApply(6, 5, "camera-uuid", value.key)
 
 
 @pytest.mark.parametrize("export_error", [False, True])
@@ -156,7 +157,7 @@ def test_apply_failure_preserves_prediction_for_retry_and_refinement(panel_modul
     value.request, value.phase = 5, "ready"
     value.overlays, value.scores = [object(), object()], [0.9, 0.8]
     value.submitted_signature = value.signature
-    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid"))
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera-uuid", read_only=False))
     submitted = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *args: submitted.append(args) or (5 + len(submitted)), raising=False)
     panel._sam_apply(False)

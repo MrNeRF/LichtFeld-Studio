@@ -228,7 +228,8 @@ namespace {
         input.size_bytes = lfs::core::native_fs::file_size(input.image);
         input.points = {{0.5f, 0.5f, 1}};
         JobRegistry jobs;
-        AssistedMasking service(jobs, [] { return true; });
+        std::array<uint64_t, 2> document_revision{1, 1};
+        AssistedMasking service(jobs, [] { return true; }, [&] { return document_revision; });
         const auto wait = [&](const uint64_t id, const std::string& phase) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             AssistedMaskSnapshot state;
@@ -302,6 +303,8 @@ namespace {
                 for (size_t i = 0; i < count; ++i)
                     ASSERT_EQ(raw[i], 255 - kept[i]) << i;
             }
+            ++document_revision[exclude ? 0 : 1]; // Replaced document or persistent scene edit.
+            EXPECT_EQ(service.poll().phase, "expired");
         }
     }
 } // namespace

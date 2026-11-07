@@ -225,7 +225,7 @@ namespace lfs::core {
             EVENT(SceneReplacing, const Scene* scene;);
             EVENT(CombinedModelBuildReady, const Scene* scene;);
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
-            EVENT(SceneChanged, uint32_t mutation_flags = 0;);
+            EVENT(SceneChanged, uint32_t mutation_flags = 0; bool document_changed = true;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type stores core::NodeType as int.
             EVENT(PLYAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);

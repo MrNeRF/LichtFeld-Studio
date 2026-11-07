@@ -647,7 +647,7 @@ class ExportPanel(Panel):
         return node.type == lf.scene.NodeType.GROUP
 
     def _is_exportable_splat(self, node):
-        return node.type == lf.scene.NodeType.SPLAT and int(node.gaussian_count) > 0
+        return node.type == lf.scene.NodeType.SPLAT and not node.read_only and int(node.gaussian_count) > 0
 
     def _node_id(self, node):
         value = getattr(node, "id", None)

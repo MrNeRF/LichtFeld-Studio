@@ -699,6 +699,7 @@ namespace lfs::python {
         }
 
         // Create CPU tensor and copy data
+        nb::gil_scoped_release release;
         Tensor tensor = Tensor::empty(shape, Device::CPU, dtype, false);
 
         size_t elem_size = 4;

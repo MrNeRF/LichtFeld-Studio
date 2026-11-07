@@ -18,7 +18,6 @@ class MaskApply:
     proposal_request: int
     camera_uuid: str
     key: tuple
-    scene_generation: int
 
 
 class FrameMaskEditor:

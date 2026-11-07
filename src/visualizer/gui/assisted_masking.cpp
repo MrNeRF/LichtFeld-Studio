@@ -37,6 +37,8 @@ namespace lfs::vis::gui {
     struct AssistedMasking::Impl {
         JobRegistry& jobs;
         std::function<bool()> admission;
+        RevisionReader document_revision;
+        std::optional<std::array<uint64_t, 2>> apply_revision;
         JobHandle job;
         struct Work {
             uint64_t id;
@@ -52,8 +54,8 @@ namespace lfs::vis::gui {
         bool release = false, stopping = false;
         std::thread worker;
 
-        Impl(JobRegistry& registry, std::function<bool()> check)
-            : jobs(registry), admission(std::move(check)) {}
+        Impl(JobRegistry& registry, std::function<bool()> check, RevisionReader revision)
+            : jobs(registry), admission(std::move(check)), document_revision(std::move(revision)) {}
 
         void run() {
             std::optional<Sam2> model;
@@ -310,8 +312,8 @@ namespace lfs::vis::gui {
         }
     };
 
-    AssistedMasking::AssistedMasking(JobRegistry& jobs, std::function<bool()> admission)
-        : impl_(std::make_unique<Impl>(jobs, std::move(admission))) {}
+    AssistedMasking::AssistedMasking(JobRegistry& jobs, std::function<bool()> admission, RevisionReader revision)
+        : impl_(std::make_unique<Impl>(jobs, std::move(admission), std::move(revision))) {}
     AssistedMasking::~AssistedMasking() {
         try {
             shutdown();
@@ -349,6 +351,9 @@ namespace lfs::vis::gui {
         }
         std::lock_guard lock(impl_->mutex);
         const auto id = ++impl_->next;
+        impl_->apply_revision.reset();
+        if (input.export_candidate >= 0 && impl_->document_revision)
+            impl_->apply_revision = impl_->document_revision();
         impl_->result = {};
         impl_->result.request = id;
         impl_->result.revision = input.revision;
@@ -369,6 +374,11 @@ namespace lfs::vis::gui {
             }
         }
         std::lock_guard lock(impl_->mutex);
+        if (impl_->result.phase == "mask_ready" && impl_->document_revision &&
+            (!impl_->apply_revision || impl_->apply_revision != impl_->document_revision())) {
+            impl_->result.phase = "expired";
+            impl_->result.mask.reset();
+        }
         return impl_->result;
     }
     void AssistedMasking::close() {

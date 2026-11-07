@@ -13,6 +13,7 @@
 #include "visualizer/core/job_registry.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -276,6 +277,9 @@ namespace lfs::vis::project {
         }
         [[nodiscard]] std::uint64_t documentEpoch() const noexcept {
             return epoch_.load(std::memory_order_acquire);
+        }
+        [[nodiscard]] std::array<std::uint64_t, 2> documentSceneRevision() const noexcept {
+            return {documentEpoch(), scene_mutation_serial_.load(std::memory_order_acquire)};
         }
         void recoverDeferredPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);

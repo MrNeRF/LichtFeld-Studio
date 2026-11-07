@@ -1,0 +1,2 @@
+.et-current { border-left-color: @{primary}; }
+.et-readonly { color: @{text_dim}; }
