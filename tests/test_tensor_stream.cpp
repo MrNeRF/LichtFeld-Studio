@@ -491,8 +491,7 @@ TEST_F(TensorStreamTest, BoolToUInt8OrderedAgainstGatedProducerStream) {
         ASSERT_EQ(flags.dtype(), DataType::Bool);
 
         // Warm every in-place fill path this test will use; end at zeros.
-        // Stream-aware fill_ is required: the no-arg overload uses blocking
-        // H2D cudaMemcpy and would not enqueue on S.
+        // Exercise the explicit-stream overload; default fill_ also uses S.
         flags.fill_(0.0f, stream);
         flags.fill_(1.0f, stream);
         flags.fill_(0.0f, stream);
