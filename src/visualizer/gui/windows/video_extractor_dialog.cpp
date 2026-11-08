@@ -1223,8 +1223,6 @@ namespace lfs::gui {
                                     Rml::StringUtilities::EncodeRml(status));
             }
         }
-        if (rows.empty())
-            rows = std::format("<span class=\"inline-note\">{}</span>", LOC(VideoExtractor::NO_FILE));
         const bool changed = setCachedInnerRml(batch_video_list_el_, rows);
         const int total = static_cast<int>(batch_items_.size());
         const std::string summary = probing_count > 0
@@ -2006,7 +2004,7 @@ namespace lfs::gui {
         changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
         changed |= setCachedDisabled(remove_video_el_, extracting || pending_params_set_ || !selected_batch_item_);
         changed |= setCachedDisabled(clear_videos_el_, extracting || pending_params_set_ || probing_batch ||
-                                                           batch_items_.empty());
+                                                           (batch_items_.empty() && !has_video));
         changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
@@ -2031,6 +2029,8 @@ namespace lfs::gui {
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
         changed |= setCachedChecked(continue_batch_on_failure_el_, continue_batch_on_failure_);
         changed |= setCachedDisabled(continue_batch_on_failure_el_, extracting);
+        if (auto* row = document_->GetElementById("batch-failure-options"))
+            changed |= setCachedProperty(row, "display", batch_items_.size() > 1 ? "flex" : "none");
 
         const bool masking_on = masking_toggle_el_ && masking_toggle_el_->HasAttribute("checked");
         const bool circle_on = mask_circle_el_ && mask_circle_el_->HasAttribute("checked");
@@ -2123,6 +2123,8 @@ namespace lfs::gui {
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
+        changed |= setCachedAttribute(video_value_el_, "title", lfs::core::path_to_utf8(video_path_));
+        changed |= setCachedAttribute(output_value_el_, "title", lfs::core::path_to_utf8(output_dir_));
         const bool inputs_missing = (batch_items_.empty() ? !player_->isOpen() : false) || output_dir_.empty();
         changed |= setCachedProperty(select_hint_el_, "display", inputs_missing ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, LOC(VideoExtractor::SELECT_BOTH));
