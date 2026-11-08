@@ -754,29 +754,39 @@ apply_registered_chrome:
         const float kResizeEdge = floatingResizeEdge();
         constexpr float kVisibleFrac = 0.1f;
 
-        auto shelf_anchor = floatingAnchorRect(ctx);
-        shelf_anchor.height = std::max(0.0f, shelf_anchor.height - PanelLayoutManager::STATUS_BAR_HEIGHT * dpi);
+        auto shelf_anchor = floatingAnchorRect(ctx, true);
+        if (ctx.viewport) {
+            shelf_anchor = {ctx.viewport->pos.x, ctx.viewport->pos.y,
+                            std::max(0.0f, ctx.viewport->size.x), std::max(0.0f, ctx.viewport->size.y)};
+        }
+        const auto screen_anchor = floatingAnchorRect(ctx);
+        const float shelf_bottom = std::min(shelf_anchor.y + shelf_anchor.height,
+                                            screen_anchor.y + screen_anchor.height - PanelLayoutManager::STATUS_BAR_HEIGHT * dpi);
+        shelf_anchor.height = std::max(0.0f, shelf_bottom - shelf_anchor.y);
         std::vector<std::string_view> minimized_ids;
         for (size_t i = 0; i < snapshots.size(); ++i) {
             if (space == PanelSpace::Floating && should_draw[i] &&
                 snapshots[i].float_window_state == FloatingWindowState::Minimized)
                 minimized_ids.push_back(snapshots[i].id);
         }
-        const int shelf_columns = std::max(1, static_cast<int>(shelf_anchor.width / (240.0f * dpi)));
-        const int shelf_rows = (static_cast<int>(minimized_ids.size()) + shelf_columns - 1) / shelf_columns;
-        const int visible_shelf_rows = std::min(shelf_rows, std::max(1, static_cast<int>(shelf_anchor.height / (3.0f * (kTitleH + 4.0f * dpi)))));
-        const float shelf_height = visible_shelf_rows * (kTitleH + 4.0f * dpi);
+        const int shelf_columns = std::max(1, std::min(static_cast<int>(minimized_ids.size()),
+                                                       static_cast<int>(shelf_anchor.width / (120.0f * dpi))));
+        const float shelf_slot_width = std::min(240.0f * dpi, shelf_anchor.width / shelf_columns);
+        const float shelf_height = minimized_ids.empty() ? 0.0f : kTitleH + 4.0f * dpi;
         const float shelf_top = shelf_anchor.y + shelf_anchor.height - shelf_height;
         int first_shelf_row = 0;
         if (space == PanelSpace::Floating) {
             std::lock_guard lock(mutex_);
-            if (input && !minimized_ids.empty() && input->mouse_x >= shelf_anchor.x &&
+            if (input && !minimized_ids.empty() && shelf_anchor.height >= kTitleH + 2.0f * dpi &&
+                input->mouse_x >= shelf_anchor.x &&
                 input->mouse_x < shelf_anchor.x + shelf_anchor.width && input->mouse_y >= shelf_top &&
-                input->mouse_y < shelf_anchor.y + shelf_anchor.height && input->mouse_wheel != 0.0f) {
-                minimized_first_row_ += input->mouse_wheel > 0 ? -1 : 1;
+                input->mouse_y < shelf_anchor.y + shelf_anchor.height &&
+                (input->mouse_wheel != 0.0f || input->mouse_wheel_x != 0.0f)) {
+                const float scroll = input->mouse_wheel != 0.0f ? -input->mouse_wheel : input->mouse_wheel_x;
+                minimized_first_row_ += scroll < 0 ? -1 : 1;
                 guiFocusState().want_capture_mouse = true;
             }
-            minimized_first_row_ = std::clamp(minimized_first_row_, 0, std::max(0, shelf_rows - visible_shelf_rows));
+            minimized_first_row_ = std::clamp(minimized_first_row_, 0, std::max(0, static_cast<int>(minimized_ids.size()) - shelf_columns));
             first_shelf_row = minimized_first_row_;
         }
 
@@ -813,21 +823,24 @@ apply_registered_chrome:
                 layout.valid = true;
                 layout.has_user_height = true;
                 if (layout.window_state == FloatingWindowState::Minimized) {
+                    if (shelf_anchor.width <= 0.0f || shelf_anchor.height < kTitleH + 2.0f * dpi) {
+                        layout.valid = false;
+                        return;
+                    }
                     const auto found = std::ranges::find(minimized_ids, snap.id);
                     if (found == minimized_ids.end()) {
                         layout.valid = false;
                         return;
                     }
-                    const int slot = static_cast<int>(found - minimized_ids.begin());
-                    const int row = slot / shelf_columns - first_shelf_row;
-                    if (row < 0 || row >= visible_shelf_rows) {
+                    const int slot = static_cast<int>(found - minimized_ids.begin()) - first_shelf_row;
+                    if (slot < 0 || slot >= shelf_columns) {
                         layout.valid = false;
                         return;
                     }
-                    layout.width = shelf_anchor.width / shelf_columns - 4.0f * dpi;
+                    layout.width = std::max(0.0f, shelf_slot_width - 4.0f * dpi);
                     layout.height = kTitleH + 2.0f * dpi;
-                    layout.pos_x = shelf_anchor.x + (slot % shelf_columns) * (shelf_anchor.width / shelf_columns);
-                    layout.pos_y = shelf_top + row * (kTitleH + 4.0f * dpi);
+                    layout.pos_x = shelf_anchor.x + slot * shelf_slot_width;
+                    layout.pos_y = shelf_top;
                 } else {
                     layout.width = anchor.width;
                     layout.height = std::max(kTitleH, shelf_anchor.height - shelf_height);

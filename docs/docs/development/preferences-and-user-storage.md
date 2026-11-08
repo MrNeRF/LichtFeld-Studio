@@ -29,9 +29,11 @@ The Preferences panel currently exposes:
 Standard floating windows provide minimize, maximize, and restore controls in
 their title bar. Embedded windows maximize within the application work area,
 leaving the top commands and status bar accessible. Minimized windows remain
-open as title bars along the bottom of that area; scroll over the bars when
-more rows are available. Click a minimized title, or open the panel again from
-its menu, to restore it. Restore returns to the previous presentation and keeps
+open as a single row of title bars at the bottom of the viewport, outside the
+docked sidebars. The bars shorten as space decreases; scroll over them to reach
+additional windows when their controls would no longer fit. Status-bar popups
+and tooltips appear above these bars. Click a minimized title, or open the panel
+again from its menu, to restore it. Restore returns to the previous presentation and keeps
 the normal window geometry. Minimized windows suppress hover hints and hidden
 content animation. These presentation states are session-local;
 project layouts retain the normal geometry. Popups, viewport overlays, and

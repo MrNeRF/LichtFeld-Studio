@@ -1042,7 +1042,7 @@ TEST_F(PanelRegistryAnimationDemandTest, WindowControlsRejectOverlaysDockedAndSe
     EXPECT_FALSE(registry.floating_window_state("test.docked"));
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfWrapsAndScrollsWithoutCoveringStatusBar) {
+TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfShrinksAndScrollsInOneRowWithoutCoveringStatusBar) {
     using namespace lfs::vis::gui;
     auto& registry = PanelRegistry::instance();
     for (int i = 0; i < 12; ++i) {
@@ -1079,6 +1079,8 @@ TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfWrapsAndScrollsWithoutCov
     ASSERT_TRUE(first);
     ASSERT_TRUE(second);
     EXPECT_GE(second->x, first->x + first->width);
+    EXPECT_FLOAT_EQ(second->y, first->y);
+    EXPECT_LT(first->width, 240);
     EXPECT_LE(first->y + first->height, 400 - PanelLayoutManager::STATUS_BAR_HEIGHT);
     EXPECT_FALSE(registry.live_floating_bounds("test.shelf.9"));
     input.mouse_x = first->x + 20;
@@ -1088,6 +1090,68 @@ TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfWrapsAndScrollsWithoutCov
         draw();
     EXPECT_TRUE(registry.live_floating_bounds("test.shelf.11"));
     EXPECT_FALSE(registry.live_floating_bounds("test.shelf.0"));
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, MinimizedShelfTracksTheViewportBetweenDockedPanels) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    for (int i = 0; i < 5; ++i) {
+        const auto id = "test.viewport_shelf." + std::to_string(i);
+        registerRecordingPanel(id);
+        ASSERT_TRUE(registry.set_floating_window_state(id, FloatingWindowState::Minimized));
+    }
+    ViewportLayout viewport;
+    viewport.pos = {80, 40};
+    viewport.size = {650, 500};
+    PanelDrawContext ctx;
+    ctx.viewport = &viewport;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1100, 700};
+    PanelInputState input;
+    input.screen_w = 1100;
+    input.screen_h = 700;
+    auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, ctx); };
+    draw();
+    std::optional<float> row_y;
+    for (int i = 0; i < 5; ++i) {
+        const auto bounds = registry.live_floating_bounds("test.viewport_shelf." + std::to_string(i));
+        ASSERT_TRUE(bounds);
+        EXPECT_GE(bounds->x, viewport.pos.x);
+        EXPECT_LE(bounds->x + bounds->width, viewport.pos.x + viewport.size.x);
+        EXPECT_LE(bounds->y + bounds->height, viewport.pos.y + viewport.size.y);
+        if (row_y)
+            EXPECT_FLOAT_EQ(bounds->y, *row_y);
+        row_y = bounds->y;
+        EXPECT_LT(bounds->width, 240);
+    }
+    viewport.pos.x = 120;
+    viewport.size = {400, 250};
+    draw();
+    const auto first = registry.live_floating_bounds("test.viewport_shelf.0");
+    ASSERT_TRUE(first);
+    EXPECT_GE(first->x, 120);
+    EXPECT_LE(first->x + first->width, 520);
+    EXPECT_FALSE(registry.live_floating_bounds("test.viewport_shelf.4"));
+    input.mouse_x = first->x + 10;
+    input.mouse_y = first->y + 10;
+    input.mouse_wheel = -1;
+    draw();
+    draw();
+    const auto newest = registry.live_floating_bounds("test.viewport_shelf.4");
+    ASSERT_TRUE(newest);
+    EXPECT_GE(newest->x, 120);
+    EXPECT_LE(newest->x + newest->width, 520);
+    EXPECT_LE(newest->y + newest->height, 290);
+    EXPECT_FALSE(registry.live_floating_bounds("test.viewport_shelf.0"));
+    input.mouse_wheel = 0;
+    input.mouse_wheel_x = -1;
+    draw();
+    draw();
+    EXPECT_TRUE(registry.live_floating_bounds("test.viewport_shelf.0"));
+    EXPECT_FALSE(registry.live_floating_bounds("test.viewport_shelf.4"));
+    viewport.size.x = 0;
+    draw();
+    EXPECT_FALSE(registry.live_floating_bounds("test.viewport_shelf.4"));
+    EXPECT_EQ(registry.floating_window_state("test.viewport_shelf.4"), FloatingWindowState::Minimized);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, MaximizedWindowTracksResizeAndDoesNotDetachOnTitlePress) {
