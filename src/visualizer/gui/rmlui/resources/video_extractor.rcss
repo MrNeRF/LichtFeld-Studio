@@ -292,7 +292,7 @@ body {
 }
 
 .field-label {
-    width: 112dp;
+    width: 58dp;
 }
 
 #masking-options .field-label {
@@ -424,7 +424,7 @@ body {
 
 .path-value {
     min-width: 0;
-    flex: 1;
+    max-width: 360dp;
     color: #a6adc8;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -439,7 +439,8 @@ body {
     min-width: 38dp;
 }
 
-.video-extractor-window .action-btn {
+.action-btn {
+    width: 150dp;
     min-width: 150dp;
     height: 30dp;
     min-height: 30dp;
@@ -589,8 +590,7 @@ body {
 }
 
 .status-row {
-    min-height: 30dp;
-    flex-wrap: wrap;
+    min-height: 0;
 }
 
 .status-section {
@@ -602,9 +602,6 @@ body {
     border-width: 1dp;
     border-color: rgba(88, 91, 112, 150);
     background-color: rgba(49, 50, 68, 120);
-    min-width: 0;
-    max-width: 100%;
-    box-sizing: border-box;
 }
 
 .status-section progress {
@@ -636,8 +633,6 @@ body {
 
 .status-text {
     color: #cdd6f4;
-    min-width: 0;
-    overflow-wrap: break-word;
 }
 
 button[disabled],
