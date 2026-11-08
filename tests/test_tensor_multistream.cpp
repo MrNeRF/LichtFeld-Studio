@@ -728,7 +728,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HTransferGuardsDroppedPinnedDestination)
     EXPECT_EQ(reused_after_completion.data_ptr(), destination_ptr);
 }
 
-TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromGuardsDroppedPinnedSource) {
+TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromSurvivesDroppedPinnedSource) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
@@ -743,20 +743,20 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromGuardsDroppedPinnedSource) 
     destination_view.set_stream(transfer.get());
     transfer.close();
 
-    void* source_ptr = nullptr;
     {
         auto source = Tensor::full({kElements}, 3.0f, Device::CPU);
-        source_ptr = source.data_ptr();
         ASSERT_EQ(source.shape(), destination_view.shape());
         ASSERT_FLOAT_EQ(source.ptr<float>()[0], 3.0f);
         destination_view.copy_from(source);
         EXPECT_EQ(destination_view.device(), Device::CUDA);
         EXPECT_TRUE(destination_view.is_view());
+        // copy_from owns its staging; the caller can overwrite and release the source.
+        source.fill_(-7.0f);
     }
 
     auto replacement = Tensor::empty({kElements}, Device::CPU);
     ASSERT_NE(replacement.data_ptr(), nullptr);
-    EXPECT_NE(replacement.data_ptr(), source_ptr);
+    replacement.fill_(-11.0f); // Reuse of the original source block is valid.
 
     transfer.release();
     ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);
