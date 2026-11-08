@@ -54,6 +54,32 @@ def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
     assert transport.validate_session(invalid_result) is invalid_result
     with pytest.raises(ValueError, match="count"):
         transport.resolve_result(invalid_result)
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        transport.resolve_result(record)
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_saved_result_rejects_non_regular_files(tmp_path, kind):
+    path = tmp_path / "result.ply"
+    descriptor = None
+    if kind == "directory":
+        path.mkdir()
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("Named pipes require POSIX")
+        os.mkfifo(path)
+        # Keep the regression bounded even if a reader incorrectly opens it.
+        descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    result = {"kind": "last", "root": str(tmp_path), "path": path.name, "bytes": 1,
+              "sha256": "0" * 64, "iteration": 1, "count": 1, "sh_degree": 0,
+              "presentation": {"schema": 1}}
+    try:
+        with pytest.raises(ValueError, match="regular file"):
+            transport.resolve_result({"state": "completed", "result": result})
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 @pytest.mark.parametrize("field,value", [("iteration", -1), ("iterations", True), ("count", "12"),

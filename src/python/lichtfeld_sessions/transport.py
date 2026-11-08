@@ -8,6 +8,7 @@ import json
 import math
 import mmap
 import os
+import stat
 from _lfs_path_io import Path, native_path
 import threading
 import time
@@ -250,6 +251,10 @@ def resolve_result(record, should_cancel=lambda: False):
     from . import geometry
     presentation = geometry.validate(result.get("presentation"))
     digest = hashlib.sha256()
+    if should_cancel():
+        raise InterruptedError("Saved model import cancelled")
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("Saved model must be a regular file")
     with path.open("rb") as stream:
         if os.fstat(stream.fileno()).st_size != result["bytes"]:
             raise ValueError("Saved model size changed")
