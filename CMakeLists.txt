@@ -653,10 +653,9 @@ if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
         foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_core lfs_visualizer lfs_mcp lfs_py)
             target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
         endforeach()
-        # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
-        # SPZ globals must stay local too: the Python module links another copy of its archive.
+        # SPZ globals must stay local: the Python module links another copy of its archive.
         target_link_options(lfs_visualizer PRIVATE
-            "LINKER:--exclude-libs,libavcodec.a:libavutil.a:libspz_lib.a")
+            "LINKER:--exclude-libs,libspz_lib.a")
     endif()
 endif()
 

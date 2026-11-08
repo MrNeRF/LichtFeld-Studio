@@ -5,6 +5,7 @@
 #pragma once
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/extracted_frame.hpp"
 #include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -113,7 +114,9 @@ namespace lfs::core {
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
             EVENT(OpenCameraPreview, int cam_id;);
-            EVENT(OpenImagePreview, std::vector<std::filesystem::path> paths; std::filesystem::path weights;);
+            EVENT(OpenImagePreview, std::vector<std::filesystem::path> paths; std::filesystem::path weights;
+                  std::vector<ExtractedFrame> frames{}; std::filesystem::path video{};
+                  std::filesystem::path output{}; Uuid run{};);
             EVENT(PrepareTrainingFromScene, );
             EVENT(AddPLY, std::filesystem::path path; std::string name;);
             EVENT(RemovePLY, std::string name; bool keep_children = false;);

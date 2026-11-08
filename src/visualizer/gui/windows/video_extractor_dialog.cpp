@@ -539,6 +539,9 @@ namespace lfs::gui {
             std::lock_guard lock(review_mutex_);
             review_frames_.clear();
             review_weights_ = params.masking.masking.weights;
+            review_video_ = params.video_path;
+            review_output_ = params.output_dir;
+            review_run_ = core::generate_uuid_v4();
         }
 
         extraction_thread_.emplace([this, params]() {
@@ -2412,18 +2415,24 @@ namespace lfs::gui {
             std::vector<std::filesystem::path> paths;
             std::vector<io::VideoFrameExtractor::WrittenFrame> frames;
             std::filesystem::path weights;
+            std::filesystem::path video, output;
+            core::Uuid run{};
             {
                 std::lock_guard lock(review_mutex_);
                 frames = review_frames_;
                 weights = review_weights_;
+                video = review_video_;
+                output = review_output_;
+                run = review_run_;
             }
             std::ranges::stable_sort(frames, [](const auto& a, const auto& b) {
                 return a.timestamp != b.timestamp ? a.timestamp < b.timestamp : a.source_frame < b.source_frame;
             });
             for (const auto& frame : frames)
                 paths.push_back(frame.path);
-            if (!extracting_.load() && !paths.empty())
-                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights)}.emit();
+            if (!extracting_.load() && !paths.empty()) {
+                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights), .frames = std::move(frames), .video = std::move(video), .output = std::move(output), .run = run}.emit();
+            }
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);

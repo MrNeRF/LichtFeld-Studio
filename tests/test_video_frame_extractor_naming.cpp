@@ -198,13 +198,6 @@ namespace {
         return count;
     }
 
-    uint64_t hashPixels(const unsigned char* pixels, const std::size_t size) {
-        uint64_t hash = 14695981039346656037ull;
-        for (std::size_t index = 0; index < size; ++index)
-            hash = (hash ^ pixels[index]) * 1099511628211ull;
-        return hash;
-    }
-
     nlohmann::json readMetadata(const std::filesystem::path& output_dir) {
         std::ifstream file(output_dir / "extraction_metadata.json");
         return nlohmann::json::parse(file);
@@ -1117,6 +1110,8 @@ TEST(VideoFrameExtractorSegments, ExtractsOnlyTheKeptStretches) {
     auto params = extractionParams(source, temp.path / "frames");
     params.end_time = -1.0;
     params.segments = {{1.0, 2.0}, {6.0, 7.5}};
+    std::vector<VideoFrameExtractor::WrittenFrame> written;
+    params.frame_written = [&](const auto& frame) { written.push_back(frame); };
     std::filesystem::create_directories(params.output_dir);
     VideoFrameExtractor extractor;
     std::string error;
@@ -1135,6 +1130,17 @@ TEST(VideoFrameExtractorSegments, ExtractsOnlyTheKeptStretches) {
     EXPECT_NEAR(static_cast<double>(first), 10.0, 1.0);
     EXPECT_NEAR(static_cast<double>(second), 15.0, 1.0);
     EXPECT_EQ(countPngFiles(params.output_dir), metadata["frames"].size());
+    ASSERT_EQ(written.size(), metadata["frames"].size());
+    for (std::size_t i = 0; i < written.size(); ++i) {
+        const auto& frame = metadata["frames"][i];
+        EXPECT_EQ(written[i].path.filename(), frame["file"].get<std::string>());
+        EXPECT_DOUBLE_EQ(written[i].timestamp, frame["timestamp"].get<double>());
+        EXPECT_EQ(written[i].source_frame, frame["source_frame"].get<int>());
+        EXPECT_EQ(written[i].width, 64);
+        EXPECT_EQ(written[i].height, 48);
+        if (i > 0)
+            EXPECT_GT(written[i].source_frame, written[i - 1].source_frame);
+    }
     EXPECT_EQ(metadata["performance"]["written_frames"].get<std::size_t>(), metadata["frames"].size());
 }
 
@@ -2192,7 +2198,7 @@ namespace {
         ASSERT_NE(first, nullptr);
         const auto tooltip = first->GetAttribute<Rml::String>("title", "");
         EXPECT_NE(tooltip.find("capture_a/clip.mp4"), std::string::npos);
-        EXPECT_NE(tooltip.find("batch_output/clip"), std::string::npos);
+        EXPECT_NE(tooltip.find(lfs::core::path_to_utf8(std::filesystem::path("batch_output") / "clip")), std::string::npos);
     }
 
     TEST_F(VideoExtractorNamingUiTest, BatchProgressIsGlobalAcrossVideos) {
@@ -2721,9 +2727,6 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheVideoWhenAudioOutlastsIt) {
 }
 
 TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy) {
-    if (!cudaAvailable())
-        GTEST_SKIP() << "Requires NVDEC for sparse FPS extraction";
-
     TempDir temp("stream_copy_tail");
     const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
                         "tests/data/video/h264_stream_copy.mp4";
@@ -2740,7 +2743,12 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy
         EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
         EXPECT_EQ(countPngFiles(params.output_dir), 1u);
         const auto metadata = readMetadata(params.output_dir);
-        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], "keyframe_seek");
+        // This 64x48 fixture is below some NVDEC devices' minimum height.
+        // The final-frame boundary must hold for both the hardware and CPU path.
+        const bool hardware = metadata["processing"]["decoder"]["backend"] == "nvdec";
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], hardware ? "keyframe_seek" : "sequential");
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["reason"],
+                  hardware ? "sparse_fps_keyframe_seek" : "software_decoder_requires_sequential_decode");
         EXPECT_EQ(metadata["processing"]["frame_selection"]["estimated_targets"], 1);
         ASSERT_EQ(metadata["frames"].size(), 1u);
         EXPECT_DOUBLE_EQ(metadata["frames"][0]["timestamp"].get<double>(), 0.0);
@@ -2773,14 +2781,18 @@ TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
 
 namespace {
     // Independent software decode: compare image contents, not just the output count.
-    std::vector<std::vector<uint8_t>> decodeVp9Reference(const std::filesystem::path& source) {
+    std::vector<std::vector<uint8_t>> decodeVideoReference(const std::filesystem::path& source) {
         std::vector<std::vector<uint8_t>> result;
         AVFormatContext* format = nullptr;
         if (avformat_open_input(&format, source.string().c_str(), nullptr, nullptr) < 0)
             return result;
         avformat_find_stream_info(format, nullptr);
         const int stream = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_VP9);
+        if (stream < 0) {
+            avformat_close_input(&format);
+            return result;
+        }
+        const AVCodec* codec = avcodec_find_decoder(format->streams[stream]->codecpar->codec_id);
         AVCodecContext* context = avcodec_alloc_context3(codec);
         avcodec_parameters_to_context(context, format->streams[stream]->codecpar);
         context->pkt_timebase = format->streams[stream]->time_base;
@@ -2826,7 +2838,7 @@ TEST(VideoFrameExtractorOutputNaming, Vp9KeepsEverySourceTimestamp) {
     TempDir temp("vp9_timestamps");
     const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
                         "tests/data/video/vp9_timestamps.webm";
-    const auto reference = decodeVp9Reference(source);
+    const auto reference = decodeVideoReference(source);
     ASSERT_EQ(reference.size(), 185u);
     auto params = extractionParams(source, temp.path);
     params.end_time = -1.0;
@@ -3016,7 +3028,7 @@ TEST(VideoDecoderFallback, LongRawH264PreviewOpenReadsOnlyTheProbeWindow) {
     player.close();
 }
 
-TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) {
+TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipPreservesFrameContents) {
     TempDir temp("timestamped_frame_hashes");
     const auto source = temp.path / "timestamped.mp4";
     constexpr int frame_count = 6;
@@ -3030,12 +3042,10 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
 
-    // Keep the original NVDEC pixel reference independent of PNG compression.
-    const std::vector<uint64_t> expected_hashes{
-        4447340953764640790ull, 6700247232541181701ull,
-        18018889043452171844ull, 15686283614649312191ull,
-        3742041256909694354ull, 8649771673398531241ull};
-    std::vector<uint64_t> hashes;
+    // The encoder is supplied by the local FFmpeg build. Compare the actual
+    // bitstream with independent software decoding, not another encoder's output.
+    const auto reference = decodeVideoReference(source);
+    ASSERT_EQ(reference.size(), frame_count);
     for (int index = 1; index <= frame_count; ++index) {
         SCOPED_TRACE(index);
         const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
@@ -3046,9 +3056,28 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
         ASSERT_EQ(width, 64);
         ASSERT_EQ(height, 48);
         ASSERT_EQ(channels, 3);
-        hashes.push_back(hashPixels(pixels, static_cast<std::size_t>(width) * height * channels));
+        const auto& expected = reference[index - 1];
+        ASSERT_EQ(expected.size(), static_cast<std::size_t>(width) * height * channels);
+        uint64_t difference = 0;
+        int maximum_difference = 0;
+        for (std::size_t pixel = 0; pixel < expected.size(); ++pixel) {
+            const int delta = std::abs(static_cast<int>(pixels[pixel]) - expected[pixel]);
+            difference += delta;
+            maximum_difference = std::max(maximum_difference, delta);
+        }
+        // Allow CPU/NVDEC IDCT and RGB rounding, but reject corrupt pixels and
+        // duplicated or reordered frames even when the output count is correct.
+        EXPECT_LE(maximum_difference, 3);
+        EXPECT_LT(static_cast<double>(difference) / expected.size(), 2.0);
+        for (int candidate = 0; candidate < frame_count; ++candidate) {
+            if (candidate == index - 1)
+                continue;
+            uint64_t other_difference = 0;
+            for (std::size_t pixel = 0; pixel < expected.size(); ++pixel)
+                other_difference += std::abs(static_cast<int>(pixels[pixel]) - reference[candidate][pixel]);
+            EXPECT_LT(difference, other_difference) << "better matching source frame " << candidate + 1;
+        }
     }
-    EXPECT_EQ(hashes, expected_hashes);
 }
 
 #if defined(__linux__)

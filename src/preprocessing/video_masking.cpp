@@ -904,6 +904,128 @@ namespace lfs::preprocessing {
             return best;
         }
 
+        std::expected<Tensor, Error> infer_seed_mask(
+            Sam2& model, const FrameCellSource& input, const std::span<const VideoMaskFrame> frames,
+            const int image, const CellTally& tally, const VideoMaskDetectionReport& detection,
+            const ImageCircle& circle, const VideoMaskOptions& options,
+            const std::span<const uint8_t> circle_keep, cudaStream_t stream) {
+            Tensor seed_mask;
+            io::PipelinedImageLoader loader(single_frame_loader(4));
+            const io::LoadParams once{.skip_blob_cache = true};
+
+            input.notify(VideoMaskStage::Seed, 0, 1);
+            loader.prefetch(size_t(image), frames[size_t(image)].image_path, once);
+            auto ready = loader.get();
+            if (!ready.error.empty())
+                throw std::runtime_error(ready.error);
+            core::waitForCUDAStream(stream, ready.stream);
+            ready.tensor.set_stream(stream);
+            const int width = input.width(image), height = input.height(image);
+            const auto& manual = options.prompt;
+            auto anchors = !manual
+                               ? prompts_for_image(detection, width, height)
+                               : std::vector<Sam2PointPrompt>{};
+            if (manual.has_value())
+                for (const auto& point : manual->points)
+                    anchors.push_back({std::min(point[0] * width, float(width - 1)),
+                                       std::min(point[1] * height, float(height - 1)), int(point[2])});
+            const auto encoded = model.set_image(ready.tensor.unsqueeze(0));
+            if (!encoded)
+                return std::unexpected(encoded.error());
+            Mask selected;
+            const auto propose = [&](const std::vector<Sam2PointPrompt>& points,
+                                     const std::optional<std::array<float, 4>>& box,
+                                     const bool primary) -> std::expected<void, Error> {
+                auto prediction = model.predict(points, box, true);
+                if (!prediction)
+                    return std::unexpected(prediction.error());
+                auto candidate = choose_seed_candidate(*prediction, points, circle, width, height, tally,
+                                                       primary, stream);
+                if (!candidate.empty() && !selected.empty()) {
+                    const auto interior = morphology(selected, 4, true);
+                    if (fixed_share(tally, candidate, &interior).second < kCameraFixedShare)
+                        return {};
+                }
+                if (selected.empty())
+                    selected = std::move(candidate);
+                else if (!candidate.empty())
+                    for (size_t pixel = 0; pixel < selected.size(); ++pixel)
+                        selected[pixel] |= candidate[pixel];
+                return {};
+            };
+            if (manual.has_value()) {
+                auto box = manual->box;
+                if (box) {
+                    (*box)[0] *= width;
+                    (*box)[1] *= height;
+                    (*box)[2] *= width;
+                    (*box)[3] *= height;
+                }
+                auto prediction = model.predict(anchors, box, false);
+                if (!prediction)
+                    return std::unexpected(prediction.error());
+                const auto low = core::nn::resize2d(prediction->low_res_logits.reshape({1, 1, 256, 256}),
+                                                    kMaskSide, kMaskSide, core::nn::ResizeMode::Bilinear,
+                                                    core::nn::CoordTransform::HalfPixel)
+                                     .to(Device::CPU, stream)
+                                     .contiguous();
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                selected.resize(size_t(kMaskSide) * kMaskSide);
+                for (size_t pixel = 0; pixel < selected.size(); ++pixel)
+                    selected[pixel] = low.ptr<float>()[pixel] > 0;
+            } else {
+                std::vector<Sam2PointPrompt> background;
+                for (const auto& point : anchors)
+                    if (point.label == 0)
+                        background.push_back(point);
+                auto strongest = background;
+                const auto positive = std::ranges::find_if(anchors, [](const auto& point) { return point.label == 1; });
+                if (positive == anchors.end())
+                    return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video masking inputs", "Accepted operator seed has no foreground anchor"));
+                strongest.push_back(*positive);
+                if (const auto proposed = propose(strongest, std::nullopt, true); !proposed)
+                    return std::unexpected(proposed.error());
+                auto supported = strongest;
+                if (!selected.empty()) {
+                    const auto vicinity = morphology(selected, 12, true);
+                    for (const auto& point : anchors)
+                        if (point.label == 1 && vicinity[size_t(mask_pixel(point.x, point.y, width, height))])
+                            supported.push_back(point);
+                }
+                if (const auto proposed = propose(supported, std::nullopt, true); !proposed)
+                    return std::unexpected(proposed.error());
+                if (const auto proposed = propose(supported, seed_box(supported, width, height), true); !proposed)
+                    return std::unexpected(proposed.error());
+                for (const auto& point : refinement_points(selected, tally, width, height, circle)) {
+                    auto part = background;
+                    part.push_back(point);
+                    if (const auto proposed = propose(part, std::nullopt, false); !proposed)
+                        return std::unexpected(proposed.error());
+                }
+            }
+            if (std::ranges::any_of(selected, [](uint8_t value) { return value != 0; })) {
+                selected = morphology(morphology(selected, 3, true), 3, false);
+                fill_holes(selected);
+                const int radius = std::max(1, int(std::ceil(12.0 * kMaskSide / std::max(width, height))));
+                const auto low = byte_tensor(morphology(selected, radius, true), kMaskSide, kMaskSide)
+                                     .to(Device::CUDA, stream)
+                                     .to(DataType::Float32)
+                                     .reshape({1, 1, kMaskSide, kMaskSide});
+                const auto circle_tensor = byte_tensor(circle_keep, height, width)
+                                               .to(Device::CUDA, stream)
+                                               .gt(0)
+                                               .reshape({1, 1, height, width});
+                auto seed = core::nn::resize2d(low, height, width, core::nn::ResizeMode::Bilinear,
+                                               core::nn::CoordTransform::HalfPixel)
+                                .gt(0.5f)
+                                .logical_and(circle_tensor);
+                seed_mask = seed.to(DataType::Float32).to(Device::CPU, stream);
+            }
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+            return seed_mask;
+        }
+
         void write_mask(const std::filesystem::path& path, const std::span<const std::uint8_t> keep,
                         const int width, const int height) {
             core::native_fs::create_directories(path.parent_path());
@@ -945,22 +1067,26 @@ namespace lfs::preprocessing {
     std::expected<VideoMaskReport, Error> mask_video_sequence(
         const std::span<const VideoMaskFrame> frames,
         const ImageCircle& circle,
-        const VideoMaskOptions& options, cudaStream_t stream) {
+        const VideoMaskOptions& options, cudaStream_t stream, Sam2* borrowed_model) {
+        const bool subject = options.profile == VideoMaskProfile::Subject;
+        const float max_area = subject ? 1.0f : kSam2MaxArea;
         if (frames.empty() || options.dilation_radius < 0 || options.dilation_radius > 128 ||
             (options.require_operator && !options.enabled) ||
             (options.recenter_fisheye && (!(options.fisheye_fov_degrees > 0 && options.fisheye_fov_degrees < 360) ||
                                           !(options.view_fov_degrees > 0 && options.view_fov_degrees < 360))))
             return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video masking inputs"));
+        if (subject && (!options.enabled || !options.prompt || !options.prompt->mask.is_valid() || options.recenter_fisheye))
+            return std::unexpected(failure(ErrorCode::InvalidArgument, "Subject tracking requires a reviewed seed mask"));
         for (const auto& frame : frames)
             if (frame.width <= 0 || frame.height <= 0 ||
-                frame.mask_path.empty() || frame.image_path.empty() || !std::isfinite(frame.time_seconds))
+                (!options.mask_ready && frame.mask_path.empty()) || frame.image_path.empty() || !std::isfinite(frame.time_seconds))
                 return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video masking frame"));
         std::set<std::filesystem::path> destinations;
         for (const auto& frame : frames) {
             const std::array dimensions{frame.width, frame.height};
             if (dimensions != std::array{frames.front().width, frames.front().height} ||
-                frame.image_path.lexically_normal() == frame.mask_path.lexically_normal() ||
-                !destinations.insert(frame.mask_path.lexically_normal()).second)
+                (!options.mask_ready && (frame.image_path.lexically_normal() == frame.mask_path.lexically_normal() ||
+                                         !destinations.insert(frame.mask_path.lexically_normal()).second)))
                 return std::unexpected(failure(ErrorCode::InvalidArgument, "Video masks need distinct destinations and consistent dimensions"));
         }
         if (!std::isfinite(circle.center_x) || !std::isfinite(circle.center_y) ||
@@ -969,9 +1095,13 @@ namespace lfs::preprocessing {
             return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video image circle"));
         if (options.prompt) {
             const auto& prompt = *options.prompt;
-            if (prompt.frame < 0 || prompt.frame >= int(frames.size()) || prompt.points.empty() ||
-                !std::ranges::any_of(prompt.points, [](const auto& point) { return point[2] == 1; }))
+            if (prompt.frame < 0 || prompt.frame >= int(frames.size()) ||
+                (!prompt.mask.is_valid() && (prompt.points.empty() ||
+                                             !std::ranges::any_of(prompt.points, [](const auto& point) { return point[2] == 1; }))))
                 return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid operator seed prompt"));
+            if (prompt.mask.is_valid() && (prompt.mask.ndim() != 4 || prompt.mask.size(0) != 1 ||
+                                           prompt.mask.size(1) != 1 || prompt.mask.size(2) == 0 || prompt.mask.size(3) == 0))
+                return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid reviewed seed mask dimensions"));
             for (const auto& point : prompt.points)
                 if (!std::isfinite(point[0]) || !std::isfinite(point[1]) ||
                     point[0] < 0 || point[0] > 1 || point[1] < 0 || point[1] > 1 ||
@@ -1012,13 +1142,19 @@ namespace lfs::preprocessing {
                     return std::unexpected(failure(ErrorCode::FailedPrecondition, result.warning));
             }
             const auto circle_keep = circle_keep_mask(frames.front().width, frames.front().height, circle);
+            const auto deliver_mask = [&](size_t image, const Tensor& keep, float score, bool reliable) {
+                if (options.mask_ready)
+                    options.mask_ready(image, keep, score, reliable);
+                else
+                    write_mask(frames[image].mask_path, {keep.ptr<uint8_t>(), keep.numel()}, input.width(int(image)), input.height(int(image)));
+            };
             std::vector<int> sequence;
             for (int image = 0; image < input.image_count(); ++image) {
                 if (options.enabled && detection.status == "accepted") {
                     sequence.push_back(image);
                 } else {
                     input.notify(VideoMaskStage::Writing, size_t(image), frames.size());
-                    write_mask(frames[size_t(image)].mask_path, circle_keep, input.width(image), input.height(image));
+                    deliver_mask(size_t(image), byte_tensor(circle_keep, input.height(image), input.width(image)), 0, false);
                 }
             }
             std::sort(sequence.begin(), sequence.end(), [&](const int a, const int b) {
@@ -1039,9 +1175,10 @@ namespace lfs::preprocessing {
                 });
                 seed_index = int(seed - sequence.begin());
             }
-            std::optional<Sam2> model;
+            std::optional<Sam2> owned_model;
+            auto* model = borrowed_model;
             std::filesystem::path model_path = options.weights;
-            if (!sequence.empty() && model_path.empty()) {
+            if (!sequence.empty() && !model && model_path.empty()) {
                 auto ensured = ensure_sam2_weights(options.allow_download, options.cancel_requested);
                 if (!ensured)
                     return std::unexpected(ensured.error());
@@ -1052,142 +1189,53 @@ namespace lfs::preprocessing {
             if (!sequence.empty()) {
                 size_t free_bytes = 0, total_bytes = 0;
                 LFS_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
-                const auto plan = plan_video_mask_resources(frames, options, reusable_mask_memory(free_bytes, total_bytes));
+                const auto resident = model ? model->weights_bytes() + model->arena_bytes() : 0;
+                const auto plan = plan_video_mask_resources(frames, options,
+                                                            std::min(total_bytes, reusable_mask_memory(free_bytes, total_bytes) + resident));
                 if (!plan)
                     return std::unexpected(plan.error());
                 decode = decode_settings(plan->budget_bytes);
-                auto loaded = Sam2::load(model_path, Device::CUDA, DataType::Float32);
-                if (!loaded)
-                    return std::unexpected(loaded.error());
-                model.emplace(std::move(*loaded));
+                if (!model) {
+                    auto loaded = Sam2::load(model_path, Device::CUDA, DataType::Float32);
+                    if (!loaded)
+                        return std::unexpected(loaded.error());
+                    owned_model.emplace(std::move(*loaded));
+                    model = &*owned_model;
+                }
                 model->set_encoder_dtype(DataType::Float16);
-                io::PipelinedImageLoader loader(single_frame_loader(4));
-                const io::LoadParams once{.skip_blob_cache = true};
-
-                const int image = sequence[size_t(seed_index)];
-                input.notify(VideoMaskStage::Seed, 0, 1);
-                loader.prefetch(size_t(image), frames[size_t(image)].image_path, once);
-                auto ready = loader.get();
-                if (!ready.error.empty())
-                    throw std::runtime_error(ready.error);
-                core::waitForCUDAStream(stream, ready.stream);
-                ready.tensor.set_stream(stream);
-                const int width = input.width(image), height = input.height(image);
-                const auto& tally = tallies[size_t(image)];
-                const auto& manual = options.prompt;
-                auto anchors = !manual
-                                   ? prompts_for_image(detection, width, height)
-                                   : std::vector<Sam2PointPrompt>{};
-                if (manual.has_value())
-                    for (const auto& point : manual->points)
-                        anchors.push_back({std::min(point[0] * width, float(width - 1)),
-                                           std::min(point[1] * height, float(height - 1)), int(point[2])});
-                const auto encoded = model->set_image(ready.tensor.unsqueeze(0));
-                if (!encoded)
-                    return std::unexpected(encoded.error());
-                Mask selected;
-                const auto propose = [&](const std::vector<Sam2PointPrompt>& points,
-                                         const std::optional<std::array<float, 4>>& box,
-                                         const bool primary) -> std::expected<void, Error> {
-                    auto prediction = model->predict(points, box, true);
-                    if (!prediction)
-                        return std::unexpected(prediction.error());
-                    auto candidate = choose_seed_candidate(*prediction, points, circle, width, height, tally,
-                                                           primary, stream);
-                    if (!candidate.empty() && !selected.empty()) {
-                        const auto interior = morphology(selected, 4, true);
-                        if (fixed_share(tally, candidate, &interior).second < kCameraFixedShare)
-                            return {};
-                    }
-                    if (selected.empty())
-                        selected = std::move(candidate);
-                    else if (!candidate.empty())
-                        for (size_t pixel = 0; pixel < selected.size(); ++pixel)
-                            selected[pixel] |= candidate[pixel];
-                    return {};
-                };
-                if (manual.has_value()) {
-                    auto box = manual->box;
-                    if (box) {
-                        (*box)[0] *= width;
-                        (*box)[1] *= height;
-                        (*box)[2] *= width;
-                        (*box)[3] *= height;
-                    }
-                    auto prediction = model->predict(anchors, box, false);
-                    if (!prediction)
-                        return std::unexpected(prediction.error());
-                    const auto low = core::nn::resize2d(prediction->low_res_logits.reshape({1, 1, 256, 256}),
-                                                        kMaskSide, kMaskSide, core::nn::ResizeMode::Bilinear,
-                                                        core::nn::CoordTransform::HalfPixel)
-                                         .to(Device::CPU, stream)
-                                         .contiguous();
+                if (options.prompt && options.prompt->mask.is_valid()) {
+                    seed_mask = options.prompt->mask.to(Device::CPU).contiguous();
                     LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                    selected.resize(size_t(kMaskSide) * kMaskSide);
-                    for (size_t pixel = 0; pixel < selected.size(); ++pixel)
-                        selected[pixel] = low.ptr<float>()[pixel] > 0;
+                    seed_mask = seed_mask.gt(0).to(DataType::Float32).contiguous();
+                    if (seed_mask.sum().item<float>() == 0)
+                        return std::unexpected(failure(ErrorCode::InvalidArgument, "The reviewed seed mask is empty"));
                 } else {
-                    std::vector<Sam2PointPrompt> background;
-                    for (const auto& point : anchors)
-                        if (point.label == 0)
-                            background.push_back(point);
-                    auto strongest = background;
-                    strongest.push_back(*std::ranges::find_if(anchors, [](const auto& point) { return point.label == 1; }));
-                    if (const auto proposed = propose(strongest, std::nullopt, true); !proposed)
-                        return std::unexpected(proposed.error());
-                    auto supported = strongest;
-                    if (!selected.empty()) {
-                        const auto vicinity = morphology(selected, 12, true);
-                        for (const auto& point : anchors)
-                            if (point.label == 1 && vicinity[size_t(mask_pixel(point.x, point.y, width, height))])
-                                supported.push_back(point);
-                    }
-                    if (const auto proposed = propose(supported, std::nullopt, true); !proposed)
-                        return std::unexpected(proposed.error());
-                    if (const auto proposed = propose(supported, seed_box(supported, width, height), true); !proposed)
-                        return std::unexpected(proposed.error());
-                    for (const auto& point : refinement_points(selected, tally, width, height, circle)) {
-                        auto part = background;
-                        part.push_back(point);
-                        if (const auto proposed = propose(part, std::nullopt, false); !proposed)
-                            return std::unexpected(proposed.error());
-                    }
-                }
-                if (std::ranges::any_of(selected, [](uint8_t value) { return value != 0; })) {
-                    selected = morphology(morphology(selected, 3, true), 3, false);
-                    fill_holes(selected);
-                    const int radius = std::max(1, int(std::ceil(12.0 * kMaskSide / std::max(width, height))));
-                    const auto low = byte_tensor(morphology(selected, radius, true), kMaskSide, kMaskSide)
-                                         .to(Device::CUDA, stream)
-                                         .to(DataType::Float32)
-                                         .reshape({1, 1, kMaskSide, kMaskSide});
-                    const auto circle_tensor = byte_tensor(circle_keep, height, width)
-                                                   .to(Device::CUDA, stream)
-                                                   .gt(0)
-                                                   .reshape({1, 1, height, width});
-                    auto seed = core::nn::resize2d(low, height, width, core::nn::ResizeMode::Bilinear,
-                                                   core::nn::CoordTransform::HalfPixel)
-                                    .gt(0.5f)
-                                    .logical_and(circle_tensor);
-                    seed_mask = seed.to(DataType::Float32).to(Device::CPU, stream);
-                }
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                    const int image = sequence[size_t(seed_index)];
+                    auto inferred = infer_seed_mask(*model, input, frames, image,
+                                                    tallies[size_t(image)], detection,
+                                                    circle, options, circle_keep, stream);
+                    if (!inferred)
+                        return std::unexpected(inferred.error());
+                    seed_mask = std::move(*inferred);
 
-                if (!seed_mask.is_valid()) {
-                    detection.status = "unconfirmed_operator";
-                    warn();
-                    if (options.require_operator)
-                        return std::unexpected(failure(ErrorCode::FailedPrecondition, result.warning));
-                    for (const int image : sequence)
-                        write_mask(frames[size_t(image)].mask_path, circle_keep, input.width(image), input.height(image));
+                    if (!seed_mask.is_valid()) {
+                        detection.status = "unconfirmed_operator";
+                        warn();
+                        if (options.require_operator)
+                            return std::unexpected(failure(ErrorCode::FailedPrecondition, result.warning));
+                        for (const int image : sequence)
+                            deliver_mask(size_t(image), byte_tensor(circle_keep, input.height(image), input.width(image)), 0, false);
+                    }
                 }
             }
             std::vector<int> decode_order;
             if (seed_mask.is_valid()) {
-                for (int index = seed_index; index < int(sequence.size()); ++index)
-                    decode_order.push_back(sequence[size_t(index)]);
-                for (int index = seed_index; index >= 0; --index)
-                    decode_order.push_back(sequence[size_t(index)]);
+                if (options.direction != VideoMaskDirection::Reverse)
+                    for (int index = seed_index; index < int(sequence.size()); ++index)
+                        decode_order.push_back(sequence[size_t(index)]);
+                if (options.direction != VideoMaskDirection::Forward)
+                    for (int index = seed_index; index >= 0; --index)
+                        decode_order.push_back(sequence[size_t(index)]);
             }
             std::optional<MaskFrameLoader> frame_loader;
             if (!decode_order.empty())
@@ -1206,198 +1254,242 @@ namespace lfs::preprocessing {
             };
             std::deque<std::future<void>> pending_masks;
             const auto finish_mask = [&] {
-                pending_masks.front().get();
+                auto next = std::move(pending_masks.front());
                 pending_masks.pop_front();
+                next.get();
             };
-            int cuda_device = 0;
-            LFS_CUDA_CHECK(cudaGetDevice(&cuda_device));
-            if (seed_mask.is_valid()) {
-                const int seed_image = sequence[size_t(seed_index)];
-                const int width = input.width(seed_image), height = input.height(seed_image);
-                const auto circle_tensor = byte_tensor(circle_keep, height, width).to(Device::CUDA, stream).gt(0);
-                const auto seed = seed_mask.to(Device::CUDA, stream);
-                std::optional<OperatorView> view;
-                Tensor tracking_seed = seed;
-                if (options.recenter_fisheye && circle.radius_x > 0 && circle.radius_y > 0) {
-                    const auto values = seed_mask.contiguous().to_vector();
-                    double sum_x = 0, sum_y = 0, count = 0;
-                    for (size_t pixel = 0; pixel < values.size(); ++pixel) {
-                        if (values[pixel] <= 0)
+            // Keep captured model/input state alive until every writer has finished,
+            // including when propagation returns an error before the normal drain.
+            const auto propagate = [&]() -> std::expected<VideoMaskReport, Error> {
+                int cuda_device = 0;
+                LFS_CUDA_CHECK(cudaGetDevice(&cuda_device));
+                if (seed_mask.is_valid()) {
+                    const int seed_image = sequence[size_t(seed_index)];
+                    const int width = input.width(seed_image), height = input.height(seed_image);
+                    const auto circle_tensor = byte_tensor(circle_keep, height, width).to(Device::CUDA, stream).gt(0);
+                    const auto seed = seed_mask.to(Device::CUDA, stream);
+                    std::optional<OperatorView> view;
+                    Tensor tracking_seed = seed;
+                    if (options.recenter_fisheye && circle.radius_x > 0 && circle.radius_y > 0) {
+                        const auto values = seed_mask.contiguous().to_vector();
+                        double sum_x = 0, sum_y = 0, count = 0;
+                        for (size_t pixel = 0; pixel < values.size(); ++pixel) {
+                            if (values[pixel] <= 0)
+                                continue;
+                            sum_x += pixel % width;
+                            sum_y += pixel / width;
+                            ++count;
+                        }
+                        if (count > 0) {
+                            view = make_operator_view(width, height, float(sum_x / count), float(sum_y / count),
+                                                      {float(circle.center_x), float(circle.center_y),
+                                                       float(circle.radius_x), float(circle.radius_y)},
+                                                      options.fisheye_fov_degrees, options.view_fov_degrees, 1024);
+                            tracking_seed = render_operator_view(seed, *view).gt(0.5f).to(DataType::Float32);
+                        }
+                    }
+                    for (const bool reverse : {false, true}) {
+                        if ((reverse && options.direction == VideoMaskDirection::Forward) ||
+                            (!reverse && options.direction == VideoMaskDirection::Reverse))
                             continue;
-                        sum_x += pixel % width;
-                        sum_y += pixel / width;
-                        ++count;
-                    }
-                    if (count > 0) {
-                        view = make_operator_view(width, height, float(sum_x / count), float(sum_y / count),
-                                                  {float(circle.center_x), float(circle.center_y),
-                                                   float(circle.radius_x), float(circle.radius_y)},
-                                                  options.fisheye_fov_degrees, options.view_fov_degrees, 1024);
-                        tracking_seed = render_operator_view(seed, *view).gt(0.5f).to(DataType::Float32);
-                    }
-                }
-                for (const bool reverse : {false, true}) {
-                    model->reset_video();
-                    detail::MaskRecovery recovery;
-                    Tensor last_good_mask;
-                    const int step = reverse ? -1 : 1;
-                    for (int index = seed_index; index >= 0 && index < int(sequence.size()); index += step) {
-                        const int image = sequence[size_t(index)];
-                        input.notify(reverse ? VideoMaskStage::Reverse : VideoMaskStage::Forward,
-                                     sam_frames, frames.size());
-                        auto source = std::make_shared<MaskSource>(stream);
-                        source->image = read_frame(image);
-                        auto rgb = source->image.tensor.unsqueeze(0);
-                        if (view) {
-                            rgb = render_operator_view(rgb, *view);
-                        }
-                        if (view && index == seed_index && !reverse) {
-                            // Host decisions require a completed download; explicit-stream transfers are asynchronous.
-                            const auto support = tracking_seed.to(Device::CPU).contiguous().to_vector();
-                            size_t closest = 0, area = 0;
-                            double distance = std::numeric_limits<double>::infinity();
-                            for (size_t pixel = 0; pixel < support.size(); ++pixel) {
-                                if (support[pixel] <= 0)
-                                    continue;
-                                ++area;
-                                const double dx = double(pixel % view->size) - view->size * 0.5;
-                                const double dy = double(pixel / view->size) - view->size * 0.5;
-                                if (dx * dx + dy * dy < distance) {
-                                    distance = dx * dx + dy * dy;
-                                    closest = pixel;
+                        model->reset_video();
+                        detail::MaskRecovery recovery;
+                        Tensor last_good_mask;
+                        const int step = reverse ? -1 : 1;
+                        for (int index = seed_index; index >= 0 && index < int(sequence.size()); index += step) {
+                            const int image = sequence[size_t(index)];
+                            input.notify(reverse ? VideoMaskStage::Reverse : VideoMaskStage::Forward,
+                                         sam_frames, frames.size());
+                            auto source = std::make_shared<MaskSource>(stream);
+                            source->image = read_frame(image);
+                            auto rgb = source->image.tensor.unsqueeze(0);
+                            if (view) {
+                                rgb = render_operator_view(rgb, *view);
+                            }
+                            if (view && index == seed_index && !reverse) {
+                                // Host decisions require a completed download; explicit-stream transfers are asynchronous.
+                                const auto support = tracking_seed.to(Device::CPU).contiguous().to_vector();
+                                size_t closest = 0, area = 0;
+                                double distance = std::numeric_limits<double>::infinity();
+                                for (size_t pixel = 0; pixel < support.size(); ++pixel) {
+                                    if (support[pixel] <= 0)
+                                        continue;
+                                    ++area;
+                                    const double dx = double(pixel % view->size) - view->size * 0.5;
+                                    const double dy = double(pixel / view->size) - view->size * 0.5;
+                                    if (dx * dx + dy * dy < distance) {
+                                        distance = dx * dx + dy * dy;
+                                        closest = pixel;
+                                    }
+                                }
+                                if (area) {
+                                    if (const auto encoded = model->set_image(rgb); !encoded)
+                                        return std::unexpected(encoded.error());
+                                    const auto refined = model->predict(
+                                        {{float(closest % view->size), float(closest / view->size), 1}}, std::nullopt, false);
+                                    if (!refined)
+                                        return std::unexpected(refined.error());
+                                    const auto candidate = refined->masks.gt(0).to(DataType::Float32).unsqueeze(0);
+                                    const auto pixels = candidate.to(Device::CPU).contiguous().to_vector();
+                                    size_t covered = 0, proposed_area = 0;
+                                    for (size_t pixel = 0; pixel < pixels.size(); ++pixel) {
+                                        proposed_area += pixels[pixel] > 0;
+                                        covered += pixels[pixel] > 0 && support[pixel] > 0;
+                                    }
+                                    if (covered >= 0.8 * area && proposed_area <= 3 * area)
+                                        tracking_seed = candidate;
                                 }
                             }
-                            if (area) {
-                                if (const auto encoded = model->set_image(rgb); !encoded)
+                            {
+                                if (const auto encoded = model->set_video_image(rgb); !encoded)
                                     return std::unexpected(encoded.error());
-                                const auto refined = model->predict(
-                                    {{float(closest % view->size), float(closest / view->size), 1}}, std::nullopt, false);
-                                if (!refined)
-                                    return std::unexpected(refined.error());
-                                const auto candidate = refined->masks.gt(0).to(DataType::Float32).unsqueeze(0);
-                                const auto pixels = candidate.to(Device::CPU).contiguous().to_vector();
-                                size_t covered = 0, proposed_area = 0;
-                                for (size_t pixel = 0; pixel < pixels.size(); ++pixel) {
-                                    proposed_area += pixels[pixel] > 0;
-                                    covered += pixels[pixel] > 0 && support[pixel] > 0;
-                                }
-                                if (covered >= 0.8 * area && proposed_area <= 3 * area)
-                                    tracking_seed = candidate;
                             }
-                        }
-                        {
-                            if (const auto encoded = model->set_video_image(rgb); !encoded)
-                                return std::unexpected(encoded.error());
-                        }
-                        auto prediction = [&] {
-                            return index == seed_index ? model->seed_video(tracking_seed, index, int(sequence.size()), reverse)
-                                                       : model->track_video(index);
-                        }();
-                        if (!prediction)
-                            return std::unexpected(prediction.error());
-                        const auto project_mask = [&](const Tensor& masks) {
-                            const auto logits = view ? restore_operator_mask(masks.unsqueeze(0), *view).squeeze(0) : masks;
-                            return logits.gt(0).logical_and(circle_tensor).to(DataType::Float32).unsqueeze(0);
-                        };
-                        auto raw_mask = project_mask(prediction->masks);
-                        {
-                            const auto quality_of = [&](const core::nn::models::Sam2Prediction& value, const Tensor& raw) {
-                                if (!value.object_score_logits.is_valid())
-                                    throw std::runtime_error("SAM2 image predictions must expose object scores for automatic re-seeding");
-                                const auto host_pixels = raw.sum().to(Device::CPU, stream);
-                                const auto host_area = value.low_res_logits.gt(0).to(DataType::Float32).sum().div(256.0f * 256.0f).to(Device::CPU, stream);
-                                const auto host_iou = value.iou.to(Device::CPU, stream).contiguous();
-                                const auto host_score = value.object_score_logits.to(Device::CPU, stream).contiguous();
-                                // Only scalar diagnostics cross to the host. The previous mask stays on CUDA
-                                // and is downloaded at 256 square only when a recovery box is needed.
-                                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                                return detail::RecoveryQuality{host_iou.ptr<float>()[0], host_score.ptr<float>()[0],
-                                                               host_area.ptr<float>()[0], host_pixels.ptr<float>()[0] == 0};
+                            auto prediction = [&] {
+                                return index == seed_index ? model->seed_video(tracking_seed, index, int(sequence.size()), reverse, max_area)
+                                                           : model->track_video(index);
+                            }();
+                            if (!prediction)
+                                return std::unexpected(prediction.error());
+                            const auto project_mask = [&](const Tensor& masks) {
+                                const auto logits = view ? restore_operator_mask(masks.unsqueeze(0), *view).squeeze(0) : masks;
+                                return logits.gt(0).logical_and(circle_tensor).to(DataType::Float32).unsqueeze(0);
                             };
-                            const auto quality = quality_of(*prediction, raw_mask);
-                            const auto reason = recovery.observe(quality, kSam2MinIou, kSam2MaxArea, 3);
-                            if (quality.rejection(kSam2MinIou, kSam2MaxArea).empty())
-                                last_good_mask = prediction->low_res_logits.gt(0).to(DataType::Float32).reshape({1, 1, 256, 256});
-                            if (!reason.empty()) {
-                                detail::RecoveryQuality candidate_quality;
-                                std::string_view recovery_result = "no_reliable_mask";
-                                if (last_good_mask.is_valid()) {
-                                    const auto support = last_good_mask.to(Device::CPU).contiguous().to_vector();
-                                    const auto box = detail::recovery_box(support, 256, int(rgb.size(3)), int(rgb.size(2)));
-                                    if (box) {
-                                        // Image prediction must see the current image, without temporal memory.
-                                        if (const auto encoded = model->set_image(rgb); !encoded)
-                                            return std::unexpected(encoded.error());
-                                        const auto prompt = last_good_mask.mul(20).sub(10);
-                                        auto candidate = model->predict({}, box, false, &prompt);
-                                        if (!candidate)
-                                            return std::unexpected(candidate.error());
-                                        const auto candidate_raw = project_mask(candidate->masks);
-                                        candidate_quality = quality_of(*candidate, candidate_raw);
-                                        recovery_result = candidate_quality.rejection(kSam2MinIou, kSam2MaxArea);
-                                        if (recovery_result.empty()) {
-                                            const auto new_seed = candidate->masks.gt(0).to(DataType::Float32).unsqueeze(0);
-                                            if (const auto encoded = model->set_video_image(rgb); !encoded)
+                            auto raw_mask = project_mask(prediction->masks);
+                            {
+                                const auto quality_of = [&](const core::nn::models::Sam2Prediction& value, const Tensor& raw) {
+                                    if (!value.object_score_logits.is_valid())
+                                        throw std::runtime_error("SAM2 image predictions must expose object scores for automatic re-seeding");
+                                    const auto host_pixels = raw.sum().to(Device::CPU, stream);
+                                    const auto host_area = value.low_res_logits.gt(0).to(DataType::Float32).sum().div(256.0f * 256.0f).to(Device::CPU, stream);
+                                    const auto host_iou = value.iou.to(Device::CPU, stream).contiguous();
+                                    const auto host_score = value.object_score_logits.to(Device::CPU, stream).contiguous();
+                                    // Only scalar diagnostics cross to the host. The previous mask stays on CUDA
+                                    // and is downloaded at 256 square only when a recovery box is needed.
+                                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                                    return detail::RecoveryQuality{host_iou.ptr<float>()[0], host_score.ptr<float>()[0],
+                                                                   host_area.ptr<float>()[0], host_pixels.ptr<float>()[0] == 0};
+                                };
+                                const auto quality = quality_of(*prediction, raw_mask);
+                                const auto reason = recovery.observe(quality, kSam2MinIou, max_area, 3);
+                                if (quality.rejection(kSam2MinIou, max_area).empty())
+                                    last_good_mask = prediction->low_res_logits.gt(0).to(DataType::Float32).reshape({1, 1, 256, 256});
+                                if (!reason.empty()) {
+                                    detail::RecoveryQuality candidate_quality;
+                                    std::string_view recovery_result = "no_reliable_mask";
+                                    if (last_good_mask.is_valid()) {
+                                        const auto support = last_good_mask.to(Device::CPU).contiguous().to_vector();
+                                        const auto box = detail::recovery_box(support, 256, int(rgb.size(3)), int(rgb.size(2)));
+                                        if (box) {
+                                            // Image prediction must see the current image, without temporal memory.
+                                            if (const auto encoded = model->set_image(rgb); !encoded)
                                                 return std::unexpected(encoded.error());
-                                            prediction = model->seed_video(new_seed, index, int(sequence.size()), reverse);
-                                            if (!prediction)
-                                                return std::unexpected(prediction.error());
-                                            raw_mask = project_mask(prediction->masks);
-                                            const auto restarted = quality_of(*prediction, raw_mask);
-                                            const bool accepted = restarted.rejection(kSam2MinIou, kSam2MaxArea).empty();
-                                            recovery_result = accepted ? "accepted" : "empty_after_seed_filter";
-                                            if (accepted) {
-                                                recovery.accept();
-                                                last_good_mask = prediction->low_res_logits.gt(0).to(DataType::Float32).reshape({1, 1, 256, 256});
+                                            const auto prompt = last_good_mask.mul(20).sub(10);
+                                            auto candidate = model->predict({}, box, false, &prompt);
+                                            if (!candidate)
+                                                return std::unexpected(candidate.error());
+                                            const auto candidate_raw = project_mask(candidate->masks);
+                                            candidate_quality = quality_of(*candidate, candidate_raw);
+                                            recovery_result = candidate_quality.rejection(kSam2MinIou, max_area);
+                                            if (recovery_result.empty()) {
+                                                const auto new_seed = candidate->masks.gt(0).to(DataType::Float32).unsqueeze(0);
+                                                if (const auto encoded = model->set_video_image(rgb); !encoded)
+                                                    return std::unexpected(encoded.error());
+                                                prediction = model->seed_video(new_seed, index, int(sequence.size()), reverse, max_area);
+                                                if (!prediction)
+                                                    return std::unexpected(prediction.error());
+                                                raw_mask = project_mask(prediction->masks);
+                                                const auto restarted = quality_of(*prediction, raw_mask);
+                                                const bool accepted = restarted.rejection(kSam2MinIou, max_area).empty();
+                                                recovery_result = accepted ? "accepted" : "empty_after_seed_filter";
+                                                if (accepted) {
+                                                    recovery.accept();
+                                                    last_good_mask = prediction->low_res_logits.gt(0).to(DataType::Float32).reshape({1, 1, 256, 256});
+                                                }
                                             }
                                         }
                                     }
+                                    LOG_INFO("SAM2 re-seed {} reverse {}: {} -> {} (IoU {}, object {}, area {})",
+                                             core::path_to_utf8(frames[size_t(image)].image_path.filename()), reverse,
+                                             reason, recovery_result, candidate_quality.iou, candidate_quality.object_score, candidate_quality.area);
                                 }
-                                LOG_INFO("SAM2 re-seed {} reverse {}: {} -> {} (IoU {}, object {}, area {})",
-                                         core::path_to_utf8(frames[size_t(image)].image_path.filename()), reverse,
-                                         reason, recovery_result, candidate_quality.iou, candidate_quality.object_score, candidate_quality.area);
                             }
-                        }
-                        source->completion.emplace(stream);
-                        if (reverse && index == seed_index) {
+                            source->completion.emplace(stream);
+                            if (reverse && index == seed_index && options.direction != VideoMaskDirection::Reverse) {
+                                auto completion = std::make_shared<MaskCompletion>(stream);
+                                pending_masks.push_back(std::async(std::launch::async,
+                                                                   [source, completion, cuda_device]() mutable {
+                                                                       LFS_CUDA_CHECK(cudaSetDevice(cuda_device));
+                                                                       LFS_CUDA_CHECK(cudaEventSynchronize(completion->ready));
+                                                                       source.reset();
+                                                                   }));
+                                if (pending_masks.size() >= kPendingMaskWrites)
+                                    finish_mask();
+                                continue;
+                            }
+                            const auto object = core::nn::dilate_binary_disk(raw_mask, options.dilation_radius).squeeze(0).squeeze(0).gt(0).logical_and(circle_tensor);
+                            const auto keep = (options.keep_subject ? object : !object).logical_and(circle_tensor).to(DataType::Float32).mul(255).to(DataType::UInt8).to(Device::CPU, stream).contiguous();
+                            const float score = options.mask_ready ? prediction->iou.to(DataType::Float32).item<float>() : 0;
+                            const bool reliable = options.mask_ready && score >= kSam2MinIou && prediction->object_score_logits.item<float>() > 0;
                             auto completion = std::make_shared<MaskCompletion>(stream);
+                            ++sam_frames;
                             pending_masks.push_back(std::async(std::launch::async,
-                                                               [source, completion, cuda_device]() mutable {
+                                                               [keep, completion, source, cuda_device, deliver_mask, image, score, reliable]() mutable {
                                                                    LFS_CUDA_CHECK(cudaSetDevice(cuda_device));
                                                                    LFS_CUDA_CHECK(cudaEventSynchronize(completion->ready));
+                                                                   // Decoder leases are no longer needed by CUDA. Release
+                                                                   // them before PNG work, even if the future is collected later.
                                                                    source.reset();
+                                                                   deliver_mask(size_t(image), keep, score, reliable);
                                                                }));
                             if (pending_masks.size() >= kPendingMaskWrites)
                                 finish_mask();
-                            continue;
                         }
-                        const auto object = core::nn::dilate_binary_disk(raw_mask, options.dilation_radius).squeeze(0).squeeze(0).gt(0).logical_and(circle_tensor);
-                        const auto keep = (!object).logical_and(circle_tensor).to(DataType::Float32).mul(255).to(DataType::UInt8).to(Device::CPU, stream).contiguous();
-                        auto completion = std::make_shared<MaskCompletion>(stream);
-                        ++sam_frames;
-                        pending_masks.push_back(std::async(std::launch::async,
-                                                           [keep, completion, source, cuda_device, path = frames[size_t(image)].mask_path,
-                                                            width = input.width(image), height = input.height(image)]() mutable {
-                                                               LFS_CUDA_CHECK(cudaSetDevice(cuda_device));
-                                                               LFS_CUDA_CHECK(cudaEventSynchronize(completion->ready));
-                                                               // Decoder leases are no longer needed by CUDA. Release
-                                                               // them before PNG work, even if the future is collected later.
-                                                               source.reset();
-                                                               write_mask(path, {keep.ptr<uint8_t>(), keep.numel()}, width, height);
-                                                           }));
-                        if (pending_masks.size() >= kPendingMaskWrites)
-                            finish_mask();
                     }
                 }
-            }
 
-            while (!pending_masks.empty())
-                finish_mask();
-            input.notify(VideoMaskStage::Writing, frames.size(), frames.size());
-            result.mask_wall_seconds = seconds(wall_start);
-            return result;
+                while (!pending_masks.empty())
+                    finish_mask();
+                input.notify(VideoMaskStage::Writing, frames.size(), frames.size());
+                result.mask_wall_seconds = seconds(wall_start);
+                return result;
+            };
+            std::expected<VideoMaskReport, Error> outcome;
+            try {
+                outcome = propagate();
+            } catch (const MaskingCancelled&) {
+                outcome = std::unexpected(failure(ErrorCode::Cancelled, "Video masking cancelled"));
+            } catch (const lfs::Exception& error) {
+                outcome = std::unexpected(error.error());
+            } catch (const std::exception& error) {
+                outcome = std::unexpected(failure(ErrorCode::Internal, "SAM2 video masking failed", error.what()));
+            } catch (...) {
+                LOG_ERROR("SAM2 video propagation failed with an unknown exception");
+                outcome = std::unexpected(failure(ErrorCode::Internal, "SAM2 video masking failed", "Unknown exception during propagation"));
+            }
+            const auto record_writer_error = [&](Error error) {
+                if (outcome)
+                    outcome = std::unexpected(std::move(error));
+                else
+                    outcome = std::unexpected(std::move(outcome.error()).with_suppressed(std::move(error)));
+            };
+            while (!pending_masks.empty()) {
+                try {
+                    finish_mask();
+                } catch (const lfs::Exception& error) {
+                    record_writer_error(error.error());
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Video mask writer failed during drain: {}", error.what());
+                    record_writer_error(failure(ErrorCode::Internal, "SAM2 video masking failed", error.what()));
+                } catch (...) {
+                    LOG_ERROR("Video mask writer failed during drain with an unknown exception");
+                    record_writer_error(failure(ErrorCode::Internal, "SAM2 video masking failed", "Unknown exception in video mask writer"));
+                }
+            }
+            return outcome;
         } catch (const MaskingCancelled&) {
             return std::unexpected(failure(ErrorCode::Cancelled, "Video masking cancelled"));
+        } catch (const lfs::Exception& error) {
+            return std::unexpected(error.error());
         } catch (const std::exception& error) {
             return std::unexpected(failure(ErrorCode::Internal, "SAM2 video masking failed", error.what()));
         }

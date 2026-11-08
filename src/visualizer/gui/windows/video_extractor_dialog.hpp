@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/uuid.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 #include "preprocessing/video_mask_extraction.hpp"
@@ -323,6 +324,8 @@ namespace lfs::gui {
         std::mutex review_mutex_;
         std::vector<io::VideoFrameExtractor::WrittenFrame> review_frames_;
         std::filesystem::path review_weights_;
+        std::filesystem::path review_video_, review_output_;
+        core::Uuid review_run_{};
 
         std::unique_ptr<lfs::vis::gui::RmlPanelHost> host_;
         EventListener listener_;

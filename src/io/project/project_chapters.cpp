@@ -8,6 +8,7 @@
 #include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 
 #include <xxhash.h>
 
@@ -611,12 +612,7 @@ namespace lfs::io::project {
         }
 
         std::int64_t file_time_ns(const std::filesystem::file_time_type value) {
-#if defined(_MSC_VER)
-            const auto system_time =
-                std::chrono::clock_cast<std::chrono::system_clock>(value);
-#else
-            const auto system_time = std::filesystem::file_time_type::clock::to_sys(value);
-#endif
+            const auto system_time = core::file_time_to_system_clock(value);
             constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
             constexpr auto MIN_NS = std::numeric_limits<std::int64_t>::min();
             constexpr auto MAX_NS = std::numeric_limits<std::int64_t>::max();

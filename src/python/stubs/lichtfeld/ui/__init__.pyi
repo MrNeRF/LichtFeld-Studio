@@ -2474,12 +2474,34 @@ def release_texture(texture_id: int) -> None:
 def release_rml_texture(source: str) -> bool:
     """Release a cached RmlUi texture by source URL"""
 
-def on_open_image_preview(callback: object) -> None:
-    """Register the preview callback for extracted images."""
-
-def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False) -> int:
+def on_open_image_preview(callback: object, include_sequence: bool = False) -> None:
     """
-    UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.
+    Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.
+    """
+
+def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None) -> int:
+    """
+    UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.
+    """
+
+def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> list:
+    """
+    UI thread: read at most 256 current frame summaries from an extraction run.
+    """
+
+def sam_preview_approve_frames(run: str, updates: Sequence[tuple[int, int, bool]]) -> bool:
+    """
+    UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.
+    """
+
+def sam_preview_end_sequence(run: str) -> None:
+    """
+    UI thread: release an extraction review document; old run IDs cannot close a new document.
+    """
+
+def sam_preview_invalidate_frame(run: str, index: int) -> None:
+    """
+    UI thread: revoke a changed frame's proposal/approval while idle. Reject active work and preserve saved masks.
     """
 
 def sam_preview_poll() -> dict:
