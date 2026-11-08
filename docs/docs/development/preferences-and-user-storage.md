@@ -32,7 +32,8 @@ leaving the top commands and status bar accessible. Minimized windows remain
 open as title bars along the bottom of that area; scroll over the bars when
 more rows are available. Click a minimized title, or open the panel again from
 its menu, to restore it. Restore returns to the previous presentation and keeps
-the normal window geometry. These presentation states are session-local;
+the normal window geometry. Minimized windows suppress hover hints and hidden
+content animation. These presentation states are session-local;
 project layouts retain the normal geometry. Popups, viewport overlays, and
 self-managed windows do not acquire these controls.
 

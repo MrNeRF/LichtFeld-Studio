@@ -28,9 +28,9 @@ body.window-maximized {
 }
 
 button.window-control {
-    color: @{text};
+    color: @{text_dim};
     background-color: transparent;
 }
 button.window-control:hover {
-    background-color: @{menu.hover};
+    background-color: rgba(255, 255, 255, 18);
 }

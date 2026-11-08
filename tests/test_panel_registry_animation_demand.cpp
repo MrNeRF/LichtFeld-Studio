@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "python/python_runtime.hpp"
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
@@ -105,7 +106,9 @@ namespace {
         }
 
         bool needsAnimationFrame() const override { return animation; }
+        std::optional<double> nextScheduledAnimationDelay() const override { return scheduled_delay; }
         bool animation = false;
+        std::optional<double> scheduled_delay;
         int draw_count = 0;
         int preload_count = 0;
         int cached_count = 0;
@@ -1002,6 +1005,22 @@ TEST_F(PanelRegistryAnimationDemandTest, MinimizedWindowsKeepTheirInstanceAndRes
     EXPECT_EQ(registry.floating_window_state("test.window"), FloatingWindowState::Normal);
 }
 
+TEST_F(PanelRegistryAnimationDemandTest, EnablingAnAlreadyNormalPanelDoesNotRaiseItOrRequestFrames) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.idempotent_window");
+    const auto before = registry.capture_project_state();
+    const auto original = std::ranges::find(before, std::string("test.idempotent_window"), &PanelProjectState::id);
+    ASSERT_NE(original, before.end());
+    lfs::python::consume_redraw_request();
+    registry.set_panel_enabled("test.idempotent_window", true);
+    const auto after = registry.capture_project_state();
+    const auto unchanged = std::ranges::find(after, std::string("test.idempotent_window"), &PanelProjectState::id);
+    ASSERT_NE(unchanged, after.end());
+    EXPECT_EQ(unchanged->float_stack_order, original->float_stack_order);
+    EXPECT_FALSE(lfs::python::has_redraw_request());
+}
+
 TEST_F(PanelRegistryAnimationDemandTest, WindowControlsRejectOverlaysDockedAndSelfManagedPanels) {
     using namespace lfs::vis::gui;
     auto& registry = PanelRegistry::instance();
@@ -1149,4 +1168,45 @@ TEST_F(PanelRegistryAnimationDemandTest, HiddenMinimizedPageDoesNotPinAnimationF
     ASSERT_TRUE(registry.bring_panel_to_front("test.hidden_animation.0"));
     EXPECT_TRUE(registry.needsAnimationFrame());
     EXPECT_TRUE(registry.animationDemandForVisiblePanels({}).floating);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, VisibleMinimizedBarDoesNotAnimateHiddenContentOrScheduleItsTimer) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.minimized_animation");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.minimized_animation"));
+    panel->animation = true;
+    panel->scheduled_delay = 0.25;
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 40, 1200, 760};
+    const auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx); };
+    draw();
+    EXPECT_TRUE(registry.needsAnimationFrameForVisiblePanels({}));
+    EXPECT_EQ(registry.nextScheduledAnimationDelayForVisiblePanels({}), 0.25);
+    ASSERT_TRUE(registry.set_floating_window_state("test.minimized_animation", FloatingWindowState::Minimized));
+    draw();
+    ASSERT_TRUE(registry.live_floating_bounds("test.minimized_animation"));
+    EXPECT_FALSE(registry.needsAnimationFrame());
+    EXPECT_FALSE(registry.needsAnimationFrameForVisiblePanels({}));
+    EXPECT_FALSE(registry.needsImmediateAnimationFrameForVisiblePanels({}));
+    EXPECT_FALSE(registry.nextScheduledAnimationDelayForVisiblePanels({}));
+    EXPECT_TRUE(panel->animation); // The content state is retained, not cancelled.
+    ASSERT_TRUE(registry.restore_floating_window("test.minimized_animation"));
+    draw();
+    EXPECT_TRUE(registry.needsAnimationFrameForVisiblePanels({}));
+    EXPECT_EQ(registry.nextScheduledAnimationDelayForVisiblePanels({}), 0.25);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, ParentingAMinimizedWindowRestoresItsContentPresentation) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerPanel("test.parent", PanelSpace::MainPanelTab, false);
+    registerRecordingPanel("test.child_window");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.child_window"));
+    panel->animation = true;
+    ASSERT_TRUE(registry.set_floating_window_state("test.child_window", FloatingWindowState::Minimized));
+    ASSERT_TRUE(registry.set_panel_parent("test.child_window", "test.parent"));
+    EXPECT_TRUE(registry.needsAnimationFrameForVisiblePanels({.active_main_tab = "test.parent"}));
+    ASSERT_TRUE(registry.set_panel_parent("test.child_window", ""));
+    EXPECT_EQ(registry.floating_window_state("test.child_window"), FloatingWindowState::Normal);
 }

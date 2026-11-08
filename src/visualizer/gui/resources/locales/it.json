@@ -2919,7 +2919,6 @@
     "show_ui": "Mostra interfaccia",
     "hide_ui": "Nascondi interfaccia",
     "minimize": "Riduci a icona",
-    "minimized_window_hint": "Fai clic sul titolo per ripristinare. Scorri per vedere le altre finestre ridotte a icona.",
     "restore_window": "Ripristina finestra",
     "maximize_window": "Massimizza finestra",
     "rad_lod": "RAD LOD",

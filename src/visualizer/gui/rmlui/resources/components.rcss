@@ -149,6 +149,33 @@ button.window-control.maximized .window-icon-maximize {
 button.window-control.maximized .window-icon-restore {
     display: block;
 }
+button.window-control .window-icon {
+    width: 14dp;
+    height: 14dp;
+}
+button.window-control .window-minimize-line {
+    left: 3dp;
+    top: 7dp;
+    width: 9dp;
+}
+button.window-control .window-maximize-box {
+    width: 9dp;
+    height: 9dp;
+}
+button.window-control .window-restore-box {
+    width: 8dp;
+    height: 8dp;
+}
+button.window-control .window-restore-back {
+    width: 9dp;
+    height: 9dp;
+    left: 4dp;
+    top: 2dp;
+}
+button.window-control .window-restore-front {
+    left: 2dp;
+    top: 4dp;
+}
 body.window-minimized #minimize-btn {
     display: none;
 }

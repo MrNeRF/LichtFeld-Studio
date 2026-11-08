@@ -630,11 +630,15 @@ apply_registered_chrome:
             0,
             panel.panel,
         };
+        if (supportsWindowControls(panel))
+            snapshot.float_window_state = FloatingWindowState::Normal;
         if (const auto it = floating_interactions_.find(panel.id);
             it != floating_interactions_.end()) {
             snapshot.float_x = it->second.x;
             snapshot.float_y = it->second.y;
             snapshot.float_stack_order = it->second.stack_order;
+            if (snapshot.float_window_state)
+                snapshot.float_window_state = it->second.window_state;
         }
         return snapshot;
     }
@@ -682,9 +686,9 @@ apply_registered_chrome:
 
         if (space == PanelSpace::Floating) {
             std::stable_sort(snapshots.begin(), snapshots.end(),
-                             [this](const PanelSnapshot& a, const PanelSnapshot& b) {
-                                 const bool am = floating_window_state(std::string(a.id)) == FloatingWindowState::Minimized;
-                                 const bool bm = floating_window_state(std::string(b.id)) == FloatingWindowState::Minimized;
+                             [](const PanelSnapshot& a, const PanelSnapshot& b) {
+                                 const bool am = a.float_window_state == FloatingWindowState::Minimized;
+                                 const bool bm = b.float_window_state == FloatingWindowState::Minimized;
                                  if (am != bm)
                                      return !am;
                                  if (a.float_stack_order != b.float_stack_order)
@@ -755,7 +759,7 @@ apply_registered_chrome:
         std::vector<std::string_view> minimized_ids;
         for (size_t i = 0; i < snapshots.size(); ++i) {
             if (space == PanelSpace::Floating && should_draw[i] &&
-                floating_window_state(std::string(snapshots[i].id)) == FloatingWindowState::Minimized)
+                snapshots[i].float_window_state == FloatingWindowState::Minimized)
                 minimized_ids.push_back(snapshots[i].id);
         }
         const int shelf_columns = std::max(1, static_cast<int>(shelf_anchor.width / (240.0f * dpi)));
@@ -804,7 +808,7 @@ apply_registered_chrome:
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            layout.window_state = floating_window_state(std::string(snap.id)).value_or(FloatingWindowState::Normal);
+            layout.window_state = snap.float_window_state.value_or(FloatingWindowState::Normal);
             if (layout.window_state != FloatingWindowState::Normal) {
                 layout.valid = true;
                 layout.has_user_height = true;
@@ -943,7 +947,7 @@ apply_registered_chrome:
             layout.mouse_in_panel =
                 mouse_x >= px && mouse_x < px + w && mouse_y >= py && mouse_y < py + h;
             layout.mouse_in_titlebar =
-                mouse_x >= px && mouse_x < px + w - (floating_window_state(std::string(snap.id)) ? 96.0f : 36.0f) * dpi && mouse_y >= py && mouse_y < py + kTitleH;
+                mouse_x >= px && mouse_x < px + w - (snap.float_window_state ? 96.0f : 36.0f) * dpi && mouse_y >= py && mouse_y < py + kTitleH;
 
             const float resize_scale = floatingUiScale();
             const bool on_left = resizeHitZone(px, resize_scale, 6.0f).contains(mouse_x);
@@ -1937,10 +1941,13 @@ apply_registered_chrome:
     void PanelRegistry::set_panel_enabled(const std::string& id, bool enabled) {
         bool changed = false;
         std::shared_ptr<IPanel> panel_to_notify;
+        std::shared_ptr<IPanel> panel_to_restore;
         {
             std::lock_guard lock(mutex_);
             for (auto& p : panels_) {
                 if (p.id == id) {
+                    if (enabled)
+                        panel_to_restore = p.panel;
                     if (enabled)
                         disabled_overrides_.erase(id);
                     else
@@ -1952,6 +1959,7 @@ apply_registered_chrome:
                             if (interaction.window_state == FloatingWindowState::Minimized) {
                                 interaction.window_state = interaction.before_minimize;
                                 bring_floating_panel_to_front_locked(p);
+                                ++visibility_revision_;
                                 changed = true;
                             }
                         }
@@ -2007,8 +2015,10 @@ apply_registered_chrome:
             }
         }
 
-        if (enabled)
-            bring_panel_to_front(id);
+        if (panel_to_restore) {
+            if (auto* window = panel_to_restore->nativeWindow(); window && (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED))
+                bring_panel_to_front(id);
+        }
         if (changed) {
             lfs::vis::publish_viewport_toolbar_generation();
             lfs::python::request_redraw();
@@ -2216,7 +2226,7 @@ apply_registered_chrome:
     bool PanelRegistry::floating_presentation_visible_locked(const PanelInfo& panel) const {
         const auto it = floating_interactions_.find(panel.id);
         return it == floating_interactions_.end() ||
-               it->second.window_state != FloatingWindowState::Minimized || it->second.last_bounds_valid;
+               it->second.window_state != FloatingWindowState::Minimized;
     }
 
     bool PanelRegistry::needsAnimationFrame() const {
@@ -2244,8 +2254,11 @@ apply_registered_chrome:
             }
 
             switch (p.space) {
-            case PanelSpace::Floating:
-                return visibility.ui_visible || p.panel->nativeWindow() != nullptr;
+            case PanelSpace::Floating: {
+                auto* native = p.panel->nativeWindow();
+                return (!native || !(SDL_GetWindowFlags(native) & SDL_WINDOW_MINIMIZED)) &&
+                       (visibility.ui_visible || native != nullptr);
+            }
             case PanelSpace::SidePanel:
                 return visibility.ui_visible;
             case PanelSpace::StatusBar:
@@ -2477,6 +2490,14 @@ apply_registered_chrome:
                 candidate.parent_id = parent_id;
                 if (!validatePanelContract(candidate, candidate.space))
                     return false;
+                if (p.parent_id != parent_id) {
+                    if (const auto interaction = floating_interactions_.find(p.id); interaction != floating_interactions_.end()) {
+                        interaction->second.window_state = FloatingWindowState::Normal;
+                        interaction->second.before_minimize = FloatingWindowState::Normal;
+                        interaction->second.normal_bounds.reset();
+                        interaction->second.last_bounds_valid = false;
+                    }
+                }
                 p.parent_id = parent_id;
                 ++visibility_revision_;
                 return true;

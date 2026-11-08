@@ -51,7 +51,7 @@ class NativeWindowsClient:
         self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.original_cursor = wintypes.POINT()
-        assert self.user32.GetCursorPos(ctypes.byref(self.original_cursor))
+        self.have_original_cursor = bool(self.user32.GetCursorPos(ctypes.byref(self.original_cursor)))
         self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                 "clientInfo": {"name": "native-window-tests", "version": "1"}})
         for uri in ("lichtfeld://runtime/catalog", "lichtfeld://runtime/state", "lichtfeld://ui/state",
@@ -80,7 +80,7 @@ class NativeWindowsClient:
 
     def call(self, name, **arguments):
         if name == "ui_pointer" and name not in self.tools:
-            self._used_native_pointer = True
+            assert self.have_original_cursor, "Physical pointer tests need an accessible desktop; no mouse input was sent"
             assert arguments.get("button", "left") == "left"
             # Master has no synthetic-pointer MCP tool. Use real mouse input:
             # posted messages do not update the physical held-button state used
@@ -120,6 +120,7 @@ class NativeWindowsClient:
                                 "Master pointer tests require an unlocked Windows session; no mouse input was sent"
                     finally:
                         kernel.CloseHandle(process)
+                self._used_native_pointer = True
                 self.user32.SetForegroundWindow(main["hwnd"])
                 time.sleep(.1)
                 if self.user32.GetForegroundWindow() != main["hwnd"]:
@@ -493,13 +494,20 @@ def test_native_window_actions_minimize_maximize_and_restore(native_client, pane
     native_client.user32.IsZoomed.argtypes = [wintypes.HWND]
 
     def rendered_size():
-        capture = native_client.call("render_capture_window", panel_id=panel_id)
+        try:
+            capture = native_client.call("render_capture_window", panel_id=panel_id)
+        except AssertionError as error:
+            # Resize may temporarily invalidate the native render target.
+            # Keep polling readiness; a persistent failure still times out.
+            if "FailedPrecondition" not in str(error):
+                raise
+            return (0, 0)
         assert capture["success"]
         png = base64.b64decode(capture["data"])
         return struct.unpack_from(">II", png, 16)
 
     def click(identifier):
-        client_width, _ = rendered_size()  # Wait for the Rml layout at the current native size.
+        client_width, _ = native_client.until(lambda: (size := rendered_size()) and size[0] > 0 and size)
         if panel_id == "native.video_extractor":
             # C++ panels do not register a Python Rml document. Probe their shared
             # title controls in client coordinates, then verify the native hit test.
@@ -536,6 +544,12 @@ def test_native_window_actions_minimize_maximize_and_restore(native_client, pane
     click("minimize-btn")
     native_client.until(lambda: native_client.user32.IsIconic(hwnd))
     assert native_client.call("ui_panel_describe", panel_id=panel_id)["panel"]["enabled"]
+    time.sleep(.35)
+    native_client.call("runtime_frame_ledger", reset=True)
+    time.sleep(.8)
+    ledger = native_client.call("runtime_frame_ledger")["frames"]
+    assert ledger["presents_by_reason"]["GuiAnimation"] == 0, ledger
+    assert ledger["views_rendered"] == 0, ledger
 
     def normal_geometry_saved():
         try:
@@ -586,8 +600,26 @@ def test_embedded_window_actions_preserve_content_and_restore_geometry(native_cl
     click("minimize-btn")
     minimized = native_client.until(lambda: (b := bounds()) and b["height"] < 60 and b)
     assert minimized["y"] > maximized["y"] + 100
+    # Minimized bars leave their title and controls unobstructed by hover help.
+    elements = native_client.panel_elements("lfs.preferences", ["title-text", "window-frame"])
+    title_x, title_y, title_w, title_h = elements["title-text"]
+    frame_x, frame_y = elements["window-frame"][:2]
+    hover = (int(minimized["y"] + title_y - frame_y + title_h / 2) << 16) | int(minimized["x"] + title_x - frame_x + title_w / 2)
+    assert native_client.user32.PostMessageW(main["hwnd"], 0x0200, 0, hover)
+
+    time.sleep(.7)  # Exceed the normal tooltip reveal delay.
+    assert not native_client.python("import lichtfeld as lf,json\ntip=lf.ui.rml.get_document('lfs.preferences').get_element_by_id('frame-tooltip')\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(bool(tip and tip.is_class_set('visible'))))")
     assert_rendered_capture(native_client, None)
     (native_client.profile.parent / "capture-main.png").replace(native_client.profile.parent / "embedded-minimized.png")
+    assert native_client.user32.PostMessageW(main["hwnd"], 0x0200, 0, (100 << 16) | 100)
+    native_client.until(lambda: not native_client.python("import lichtfeld as lf,json\ntip=lf.ui.rml.get_document('lfs.preferences').get_element_by_id('frame-tooltip')\nprint('NATIVE_WINDOWS_TEST:'+json.dumps(bool(tip and tip.is_class_set('visible'))))"))
+    for key in ("x", "y", "width", "height"):
+        assert abs(bounds()[key] - minimized[key]) < 2
+    native_client.call("runtime_frame_ledger", reset=True)
+    time.sleep(.8)
+    ledger = native_client.call("runtime_frame_ledger")["frames"]
+    assert ledger["presents_by_reason"]["GuiAnimation"] == 0, ledger
+    assert ledger["views_rendered"] == 0, ledger
     assert native_client.call("ui_panel_describe", panel_id="lfs.preferences")["panel"]["enabled"]
     click("title-text")
     native_client.until(lambda: (b := bounds()) and abs(b["width"] - maximized["width"]) < 2)

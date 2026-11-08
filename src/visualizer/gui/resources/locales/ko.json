@@ -2906,7 +2906,6 @@
     "show_ui": "UI 표시",
     "hide_ui": "UI 숨기기",
     "minimize": "최소화",
-    "minimized_window_hint": "제목을 클릭하면 복원됩니다. 스크롤하면 최소화된 다른 창을 볼 수 있습니다.",
     "restore_window": "창 복원",
     "maximize_window": "창 최대화",
     "rad_lod": "RAD LOD",

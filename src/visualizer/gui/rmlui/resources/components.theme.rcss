@@ -568,3 +568,11 @@ scrollbarhorizontal sliderbar:hover {
 .window-restore-box {
     border-color: @{text};
 }
+
+button.window-control .window-minimize-line {
+    background-color: @{text_dim};
+}
+button.window-control .window-maximize-box,
+button.window-control .window-restore-box {
+    border-color: @{text_dim};
+}

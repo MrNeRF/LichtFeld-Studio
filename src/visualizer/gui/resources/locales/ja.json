@@ -2906,7 +2906,6 @@
     "show_ui": "UIを表示",
     "hide_ui": "UIを非表示",
     "minimize": "最小化",
-    "minimized_window_hint": "タイトルをクリックすると元に戻ります。スクロールすると、最小化された他のウィンドウを表示できます。",
     "restore_window": "ウィンドウを復元",
     "maximize_window": "ウィンドウを最大化",
     "rad_lod": "RAD LOD",

@@ -378,6 +378,7 @@ namespace lfs::vis::gui {
         int order = 100;
         uint64_t float_stack_order = 0;
         std::shared_ptr<IPanel> panel_holder;
+        std::optional<FloatingWindowState> float_window_state;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;

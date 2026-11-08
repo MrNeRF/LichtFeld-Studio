@@ -2906,7 +2906,6 @@
     "show_ui": "Oberfläche anzeigen",
     "hide_ui": "Oberfläche ausblenden",
     "minimize": "Minimieren",
-    "minimized_window_hint": "Zum Wiederherstellen auf den Titel klicken. Scrollen, um weitere minimierte Fenster anzuzeigen.",
     "restore_window": "Fenster wiederherstellen",
     "maximize_window": "Fenster maximieren",
     "rad_lod": "RAD LOD",

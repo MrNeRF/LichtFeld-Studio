@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/rml_panel_host.hpp"
-#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
@@ -1255,7 +1254,7 @@ namespace lfs::vis::gui {
     void RmlPanelHost::syncWindowControls() {
         if (!document_ || (!floating_ && !controls_allowed_ && window_state_ == FloatingWindowState::Normal))
             return;
-        const auto state = PanelRegistry::instance().floating_window_state(std::string(panelId()));
+        const auto state = PanelRegistry::instance().floating_window_state(panel_id_.empty() ? context_name_ : panel_id_);
         const bool allowed = floating_ && state.has_value();
         auto* title = document_->GetElementById("title-bar");
         auto* close = document_->GetElementById("close-btn");
@@ -1265,6 +1264,7 @@ namespace lfs::vis::gui {
                 button->SetId(id);
                 button->SetClass("window-control", true);
                 button->SetAttribute("type", "button");
+                button->SetAttribute("data-tooltip", std::string_view(id) == "minimize-btn" ? "ui.minimize" : "ui.maximize_window");
                 button->SetInnerRML(std::string_view(id) == "minimize-btn"
                                         ? "<div class='window-icon'><div class='window-minimize-line'/></div>"
                                         : "<div class='window-icon window-icon-maximize'><div class='window-maximize-box'/></div>"
@@ -1286,15 +1286,13 @@ namespace lfs::vis::gui {
             desired = (SDL_GetWindowFlags(native) & SDL_WINDOW_MAXIMIZED) ? FloatingWindowState::Maximized : FloatingWindowState::Normal;
         if (desired != window_state_) {
             const bool was_minimized = window_state_ == FloatingWindowState::Minimized;
-            if (was_minimized)
-                if (auto* title_text = document_->GetElementById("title-text"))
-                    title_text->RemoveAttribute("title");
             if (desired == FloatingWindowState::Minimized && scroll_el_)
                 window_scroll_top_ = scroll_el_->GetScrollTop();
             window_state_ = desired;
             document_->SetClass("window-minimized", desired == FloatingWindowState::Minimized);
             document_->SetClass("window-maximized", desired == FloatingWindowState::Maximized);
             if (desired == FloatingWindowState::Minimized) {
+                tooltip_.setHover({}, nullptr);
                 if (auto* focused = rml_context_->GetFocusElement())
                     focused->Blur();
                 manager_->deactivateInput(rml_context_, true);
@@ -1309,24 +1307,12 @@ namespace lfs::vis::gui {
             document_->SetClass("window-controls", allowed);
             render_needed_ = direct_cache_dirty_ = true;
         }
-        const auto& localization = lfs::event::LocalizationManager::getInstance();
-        const auto set_title = [&](Rml::Element* element, const char* key) {
-            const std::string text(localization.get(key));
-            if (element->GetAttribute<Rml::String>("title", "") != text)
-                element->SetAttribute("title", text);
-        };
-        if (auto* title_text = document_->GetElementById("title-text")) {
-            if (desired == FloatingWindowState::Minimized)
-                set_title(title_text, "ui.minimized_window_hint");
-        }
-        if (minimize_button_) {
-            set_title(minimize_button_, "ui.minimize");
-        }
         if (maximize_button_) {
             const bool maximized = desired == FloatingWindowState::Maximized;
-            if (maximize_button_->IsClassSet("maximized") != maximized)
+            if (maximize_button_->IsClassSet("maximized") != maximized) {
                 maximize_button_->SetClass("maximized", maximized);
-            set_title(maximize_button_, desired == FloatingWindowState::Maximized ? "ui.restore_window" : "ui.maximize_window");
+                maximize_button_->SetAttribute("data-tooltip", maximized ? "ui.restore_window" : "ui.maximize_window");
+            }
         }
     }
 
@@ -1653,7 +1639,7 @@ namespace lfs::vis::gui {
 
         updateResizeCursorOverride(hovered);
 
-        if (hovered) {
+        if (hovered && window_state_ != FloatingWindowState::Minimized) {
             if (auto* const hover = rml_context_->GetHoverElement())
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
             else
