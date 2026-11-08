@@ -388,6 +388,9 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         test_panel_registry_default_closed.cpp
     )
     target_compile_features(panel_layout_tests PRIVATE cxx_std_23)
+    target_compile_definitions(panel_layout_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
     target_include_directories(panel_layout_tests PRIVATE
         $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>
     )

@@ -133,16 +133,6 @@ body {
     background-color: @{menu.hover};
 }
 
-.window-minimize-line,
-.window-close-line {
-    background-color: @{text};
-}
-
-.window-maximize-box,
-.window-restore-box {
-    border-color: @{text};
-}
-
 .menu-window-close:hover {
     background-color: #c42b1c;
 }

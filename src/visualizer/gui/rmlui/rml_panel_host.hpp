@@ -78,6 +78,9 @@ namespace lfs::vis::gui {
         }
         void setForeground(bool fg) { foreground_ = fg; }
         void setFloating(bool floating);
+        void setPanelId(std::string id) { panel_id_ = std::move(id); }
+        void setWindowPresentation(std::optional<FloatingWindowState> state);
+        std::optional<PanelDrawBounds> titleControlsBounds() const;
         void setInputClipY(float y_min, float y_max) {
             clip_y_min_ = y_min;
             clip_y_max_ = y_max;
@@ -114,6 +117,24 @@ namespace lfs::vis::gui {
         };
 
         void bindCloseButton();
+        void syncWindowControls();
+        FloatingWindowState windowState() const { return presentation_.value_or(FloatingWindowState::Normal); }
+        std::string_view panelId() const { return panel_id_.empty() ? std::string_view(context_name_) : std::string_view(panel_id_); }
+        class WindowControlListener final : public Rml::EventListener {
+        public:
+            explicit WindowControlListener(RmlPanelHost* host) : host_(host) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            RmlPanelHost* host_;
+        };
+        WindowControlListener window_control_listener_{this};
+        Rml::Element* minimize_button_ = nullptr;
+        Rml::Element* maximize_button_ = nullptr;
+        // Last render request, not an independent window-state owner.
+        std::optional<FloatingWindowState> presentation_;
+        std::string panel_id_;
+        std::optional<float> window_scroll_top_;
         bool scheduledUpdateDue() const {
             return next_update_at_ && std::chrono::steady_clock::now() >= *next_update_at_;
         }

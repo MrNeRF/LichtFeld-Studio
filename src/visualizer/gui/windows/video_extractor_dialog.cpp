@@ -430,6 +430,23 @@ namespace lfs::gui {
             host_->setFloating(floating_);
     }
 
+    void VideoExtractorDialog::prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                                         const lfs::vis::gui::PanelDrawContext& ctx) {
+        if (ensureInitialized(ctx.ui ? ctx.ui->rml_manager : nullptr))
+            host_->setWindowPresentation(request.floating_window_state);
+    }
+
+    bool VideoExtractorDialog::titleControlsBounds(float* bounds) const {
+        const auto box = host_ ? host_->titleControlsBounds() : std::nullopt;
+        if (!box)
+            return false;
+        bounds[0] = box->x;
+        bounds[1] = box->y;
+        bounds[2] = box->width;
+        bounds[3] = box->height;
+        return true;
+    }
+
     bool VideoExtractorDialog::wantsKeyboard() const {
         return host_ && host_->wantsKeyboard();
     }
@@ -448,6 +465,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setPanelId("native.video_extractor");
         host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
         host_->setForeground(true);
         host_->setFloating(floating_);
@@ -1301,6 +1319,7 @@ namespace lfs::gui {
         if (!host_) {
             host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(
                 manager, "video_extractor", "rmlui/video_extractor.rml");
+            host_->setPanelId("native.video_extractor");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
             host_->setForeground(true);
             host_->setFloating(floating_);

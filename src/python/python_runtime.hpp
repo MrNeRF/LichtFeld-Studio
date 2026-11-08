@@ -720,6 +720,8 @@ namespace lfs::python {
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*set_floating)(void* host, bool floating);
+        void (*set_window_presentation)(void* host, int state);
+        bool (*title_controls_bounds)(void* host, float* bounds);
         void* (*native_window)(void* host);
         void* (*native_graphics)(void* host);
         bool (*external_allowed)(void* host);
