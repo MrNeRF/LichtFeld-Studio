@@ -289,6 +289,14 @@ def stop_training() -> None:
 def reset_training() -> None:
     """Reset training state to initial"""
 
+def restart_training() -> None:
+    """
+    Return a terminal training run to Ready at iteration zero without reloading the dataset
+    """
+
+def can_restart_training() -> bool:
+    """Whether Restart Training is available for the terminal run"""
+
 def is_training_active() -> bool:
     """Whether training is starting, running, or paused"""
 

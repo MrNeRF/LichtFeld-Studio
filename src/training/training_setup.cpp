@@ -206,7 +206,7 @@ namespace lfs::training {
             const lfs::core::SplatData& splat) {
             const auto n = static_cast<size_t>(splat.size());
             auto means = splat.means_raw().is_valid()
-                             ? splat.means_raw().cpu().contiguous()
+                             ? splat.means_raw().slice(0, 0, static_cast<int64_t>(n)).cpu().contiguous()
                              : lfs::core::Tensor::zeros({n, 3}, lfs::core::Device::CPU);
             auto colors = lfs::core::Tensor::zeros({n, 3}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             if (n > 0 && colors.data_ptr() != nullptr) {
@@ -216,7 +216,7 @@ namespace lfs::training {
             const auto& sh0 = splat.sh0_raw();
             if (n > 0 && sh0.is_valid() && sh0.numel() > 0) {
                 try {
-                    auto rgb = (sh0.cpu().slice(1, 0, 1).squeeze(1) * kShC0 + 0.5f)
+                    auto rgb = (sh0.slice(0, 0, static_cast<int64_t>(n)).cpu().slice(1, 0, 1).squeeze(1) * kShC0 + 0.5f)
                                    .clamp(0.0f, 1.0f)
                                    .contiguous();
                     if (rgb.is_valid() && rgb.ndim() == 2 &&
@@ -463,8 +463,13 @@ namespace lfs::training {
             install.has_preserved_cropbox = context.has_preserved_cropbox;
             install.preserved_cropbox_data = context.preserved_cropbox_data;
             install.preserved_cropbox_transform = context.preserved_cropbox_transform;
+            install.preserved_cropbox_node = context.preserved_cropbox_node;
             install.preserved_crop_polygon = context.preserved_crop_polygon;
             install.preserved_crop_polygon_transform = context.preserved_crop_polygon_transform;
+            install.preserved_crop_polygon_node = context.preserved_crop_polygon_node;
+            install.preserved_ellipsoid = context.preserved_ellipsoid;
+            install.preserved_ellipsoid_transform = context.preserved_ellipsoid_transform;
+            install.preserved_ellipsoid_node = context.preserved_ellipsoid_node;
             return install;
         }
 
@@ -1172,10 +1177,26 @@ namespace lfs::training {
                        : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
                              scene.getWorldTransform(volume.id);
         };
+        const auto preserve_node = [&](const lfs::core::SceneNode& node) {
+            return TrainingModelPreservedNode{
+                .name = node.name,
+                .transform = local_to_point_cloud(node),
+                .visible = node.visible.get(),
+                .locked = node.locked.get(),
+            };
+        };
         if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(context.point_cloud_node_id));
             polygon_node && polygon_node->crop_polygon) {
             context.preserved_crop_polygon = *polygon_node->crop_polygon;
             context.preserved_crop_polygon_transform = local_to_point_cloud(*polygon_node);
+            context.preserved_crop_polygon_node = preserve_node(*polygon_node);
+        }
+
+        if (const auto* ellipsoid_node = scene.getNodeById(scene.getEllipsoidForSplat(context.point_cloud_node_id));
+            ellipsoid_node && ellipsoid_node->ellipsoid) {
+            context.preserved_ellipsoid = *ellipsoid_node->ellipsoid;
+            context.preserved_ellipsoid_transform = local_to_point_cloud(*ellipsoid_node);
+            context.preserved_ellipsoid_node = preserve_node(*ellipsoid_node);
         }
 
         const lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(context.point_cloud_node_id);
@@ -1188,8 +1209,115 @@ namespace lfs::training {
         }
         context.preserved_cropbox_data = *cropbox_node->cropbox;
         context.preserved_cropbox_transform = local_to_point_cloud(*cropbox_node);
+        context.preserved_cropbox_node = preserve_node(*cropbox_node);
         context.has_preserved_cropbox = true;
         return context;
+    }
+
+    TrainingModelGraphInstall makeTrainingModelGraphInstall(
+        const TrainingModelGraphCapture& context,
+        std::unique_ptr<lfs::core::SplatData> model) {
+        return makeGraphInstall(context, std::move(model));
+    }
+
+    std::expected<void, std::string> restoreTrainingPointCloudPreview(
+        lfs::core::Scene& scene,
+        const lfs::core::SplatData& seed) {
+        const auto model_id = scene.getTrainingModelNodeId();
+        const auto* model_node = scene.getNodeById(model_id);
+        if (!model_node || !model_node->model) {
+            return std::unexpected("The completed training model is unavailable");
+        }
+
+        const auto preview = pointCloudPreviewFromSplat(seed);
+        if (!preview || preview->size() <= 0) {
+            return std::unexpected("The restart seed has no visible points");
+        }
+
+        const auto preserve_node = [](const lfs::core::SceneNode& node) {
+            return TrainingModelPreservedNode{
+                .name = node.name,
+                .transform = node.transform(),
+                .visible = node.visible.get(),
+                .locked = node.locked.get(),
+            };
+        };
+        const auto model_name = model_node->name;
+        const auto parent_id = model_node->parent_id;
+        const auto model_transform = model_node->transform();
+        const auto model_visible = model_node->visible.get();
+        const auto model_locked = model_node->locked.get();
+
+        std::optional<lfs::core::CropBoxData> cropbox;
+        TrainingModelPreservedNode cropbox_node;
+        if (const auto cropbox_id = scene.getCropBoxForSplat(model_id);
+            const auto* node = scene.getNodeById(cropbox_id)) {
+            if (node && node->cropbox) {
+                cropbox = *node->cropbox;
+                cropbox_node = preserve_node(*node);
+            }
+        }
+        std::optional<lfs::core::CropPolygonData> polygon;
+        TrainingModelPreservedNode polygon_node;
+        if (const auto polygon_id = scene.getCropPolygonForSplat(model_id);
+            const auto* node = scene.getNodeById(polygon_id)) {
+            if (node && node->crop_polygon) {
+                polygon = *node->crop_polygon;
+                polygon_node = preserve_node(*node);
+            }
+        }
+        std::optional<lfs::core::EllipsoidData> ellipsoid;
+        TrainingModelPreservedNode ellipsoid_node;
+        if (const auto ellipsoid_id = scene.getEllipsoidForSplat(model_id);
+            const auto* node = scene.getNodeById(ellipsoid_id)) {
+            if (node && node->ellipsoid) {
+                ellipsoid = *node->ellipsoid;
+                ellipsoid_node = preserve_node(*node);
+            }
+        }
+
+        scene.removeNode(model_name, false);
+        const auto point_cloud_id = scene.addPointCloud(model_name, preview, parent_id);
+        if (point_cloud_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to install the restart point-cloud preview");
+        }
+        scene.setInitialPointCloud(preview);
+        scene.setNodeTransform(point_cloud_id, model_transform);
+        scene.setNodeVisibility(point_cloud_id, model_visible);
+        if (const auto* node = scene.getNodeById(point_cloud_id)) {
+            scene.setNodeLocked(node->name, model_locked);
+        }
+        if (cropbox) {
+            const auto id = scene.addCropBox(cropbox_node.name, point_cloud_id);
+            if (id != lfs::core::NULL_NODE) {
+                scene.setCropBoxData(id, *cropbox);
+                scene.setNodeTransform(id, cropbox_node.transform);
+                scene.setNodeVisibility(id, cropbox_node.visible);
+                if (const auto* node = scene.getNodeById(id))
+                    scene.setNodeLocked(node->name, cropbox_node.locked);
+            }
+        }
+        if (polygon) {
+            const auto id = scene.addCropPolygon(
+                polygon_node.name, point_cloud_id, *polygon, polygon_node.transform);
+            if (id != lfs::core::NULL_NODE) {
+                scene.setNodeVisibility(id, polygon_node.visible);
+                if (const auto* node = scene.getNodeById(id))
+                    scene.setNodeLocked(node->name, polygon_node.locked);
+            }
+        }
+        if (ellipsoid) {
+            const auto id = scene.addEllipsoid(ellipsoid_node.name, point_cloud_id);
+            if (id != lfs::core::NULL_NODE) {
+                if (auto* data = scene.getEllipsoidData(id))
+                    *data = *ellipsoid;
+                scene.setNodeTransform(id, ellipsoid_node.transform);
+                scene.setNodeVisibility(id, ellipsoid_node.visible);
+                if (const auto* node = scene.getNodeById(id))
+                    scene.setNodeLocked(node->name, ellipsoid_node.locked);
+            }
+        }
+        return {};
     }
 
     std::expected<std::optional<TrainingModelGraphInstall>, std::string> prepareTrainingModel(
@@ -1380,15 +1508,35 @@ namespace lfs::training {
         }
         scene.setTrainingModelNode(model_id);
         if (install.has_preserved_cropbox) {
-            const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
+            const lfs::core::NodeId model_cropbox_id = scene.addCropBox(install.preserved_cropbox_node.name, model_id);
             if (model_cropbox_id != lfs::core::NULL_NODE) {
                 scene.setCropBoxData(model_cropbox_id, install.preserved_cropbox_data);
                 scene.setNodeTransform(model_cropbox_id, install.preserved_cropbox_transform);
+                scene.setNodeVisibility(model_cropbox_id, install.preserved_cropbox_node.visible);
+                if (const auto* node = scene.getNodeById(model_cropbox_id))
+                    scene.setNodeLocked(node->name, install.preserved_cropbox_node.locked);
             }
         }
         if (install.preserved_crop_polygon) {
-            static_cast<void>(scene.addCropPolygon("Model_crop_polygon", model_id, *install.preserved_crop_polygon,
-                                                   install.preserved_crop_polygon_transform));
+            const auto polygon_id = scene.addCropPolygon(install.preserved_crop_polygon_node.name, model_id,
+                                                          *install.preserved_crop_polygon,
+                                                          install.preserved_crop_polygon_transform);
+            if (polygon_id != lfs::core::NULL_NODE) {
+                scene.setNodeVisibility(polygon_id, install.preserved_crop_polygon_node.visible);
+                if (const auto* node = scene.getNodeById(polygon_id))
+                    scene.setNodeLocked(node->name, install.preserved_crop_polygon_node.locked);
+            }
+        }
+        if (install.preserved_ellipsoid) {
+            const auto ellipsoid_id = scene.addEllipsoid(install.preserved_ellipsoid_node.name, model_id);
+            if (ellipsoid_id != lfs::core::NULL_NODE) {
+                if (auto* data = scene.getEllipsoidData(ellipsoid_id))
+                    *data = *install.preserved_ellipsoid;
+                scene.setNodeTransform(ellipsoid_id, install.preserved_ellipsoid_transform);
+                scene.setNodeVisibility(ellipsoid_id, install.preserved_ellipsoid_node.visible);
+                if (const auto* node = scene.getNodeById(ellipsoid_id))
+                    scene.setNodeLocked(node->name, install.preserved_ellipsoid_node.locked);
+            }
         }
         return {};
     }

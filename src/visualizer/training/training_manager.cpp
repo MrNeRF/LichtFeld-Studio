@@ -63,6 +63,23 @@
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatDataToCpu(
+            const lfs::core::SplatData& source) {
+            auto shN = source.clone_shN_storage();
+            if (shN.is_valid()) {
+                shN = shN.cpu();
+                shN.reserve(source.shN_raw().capacity());
+            }
+            auto copy = std::make_unique<lfs::core::SplatData>(
+                source.get_max_sh_degree(), source.means_raw().cpu(), source.sh0_raw().cpu(), std::move(shN),
+                source.scaling_raw().cpu(), source.rotation_raw().cpu(), source.opacity_raw().cpu(),
+                source.get_scene_scale(), lfs::core::SplatData::ShNLayout::Swizzled);
+            copy->set_active_sh_degree(
+                source.get_active_sh_degree(),
+                source.shN_value_quantized() ? source.shN_value_bounds().cpu() : lfs::core::Tensor{});
+            copy->set_frozen_ranges(source.frozen_ranges());
+            return copy;
+        }
 #ifdef __GLIBC__
         std::atomic<training_memory_detail::ClearTrainerTrimHook> clear_trainer_trim_hook{nullptr};
 
@@ -892,6 +909,11 @@ namespace lfs::vis {
     void TrainerManager::setTrainer(std::unique_ptr<lfs::training::Trainer> trainer) {
         LOG_TIMER_TRACE("TrainerManager::setTrainer");
 
+        if (!std::exchange(preserve_restart_seed_on_next_trainer_install_, false)) {
+            restart_seed_.reset();
+            restart_seed_pending_ = false;
+        }
+
         if (!clearTrainer()) {
             LOG_ERROR("Cannot install trainer while the previous training worker is still stopping");
             return;
@@ -929,8 +951,41 @@ namespace lfs::vis {
         }
     }
 
+    std::expected<void, std::string> TrainerManager::restartTraining() {
+        if (!isFinished())
+            return std::unexpected("Training must finish before it can restart");
+        if (!scene_ || !trainer_ || !restart_seed_)
+            return std::unexpected("This training session has no restart seed; use Reset Training instead");
+        const auto params = trainer_->getParams();
+        if (restart_seed_->size() == 0)
+            return std::unexpected("The restart seed is empty");
+        if (auto restored = lfs::training::restoreTrainingPointCloudPreview(
+                *scene_, *restart_seed_);
+            !restored) {
+            return std::unexpected(restored.error());
+        }
+
+        auto replacement_trainer = std::make_unique<lfs::training::Trainer>(*scene_);
+        replacement_trainer->setParams(params);
+        if (!clearTrainer())
+            return std::unexpected("The completed training worker is still stopping");
+
+        restart_seed_pending_ = true;
+        preserve_restart_seed_on_next_trainer_install_ = true;
+        setTrainer(std::move(replacement_trainer));
+        return {};
+    }
+
+    bool TrainerManager::canRestart() const {
+        return isFinished() && scene_ && trainer_ && restart_seed_ &&
+               restart_seed_->size() > 0;
+    }
+
     void TrainerManager::setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration) {
         LOG_TIMER_TRACE("TrainerManager::setTrainerFromCheckpoint");
+
+        restart_seed_.reset();
+        restart_seed_pending_ = false;
 
         if (!clearTrainer()) {
             LOG_ERROR("Cannot install checkpoint trainer while the previous training worker is still stopping");
@@ -1517,16 +1572,30 @@ namespace lfs::vis {
                 // The shared tensor storage is sized from the assembled model: splats appended with
                 // --add-splat are only known once prepareTrainingModel has loaded them.
                 std::unique_lock scene_lock(trainer_->getRenderMutex());
-                auto prepared = lfs::training::prepareTrainingModel(
-                    params, *scene_, {}, graph_capture ? &*graph_capture : nullptr);
-                if (!prepared) {
-                    return lfs::Result<void>::failure(
-                        training_initialization_error(prepared.error()));
-                }
-                if (*prepared) {
-                    pending_install = std::move(**prepared);
+                if (restart_seed_pending_) {
+                    if (!restart_seed_ || !graph_capture) {
+                        return lfs::Result<void>::failure(training_initialization_error(
+                            "The restart seed is unavailable"));
+                    }
+                    pending_install = lfs::training::makeTrainingModelGraphInstall(
+                        *graph_capture, cloneSplatDataToCpu(*restart_seed_));
+                } else {
+                    auto prepared = lfs::training::prepareTrainingModel(
+                        params, *scene_, {}, graph_capture ? &*graph_capture : nullptr);
+                    if (!prepared) {
+                        return lfs::Result<void>::failure(
+                            training_initialization_error(prepared.error()));
+                    }
+                    if (*prepared) {
+                        pending_install = std::move(**prepared);
+                    }
                 }
                 auto* const model = pending_install ? pending_install->model.get() : graph_capture->training_model;
+                if (model) {
+                    if (!restart_seed_pending_) {
+                        restart_seed_ = cloneSplatDataToCpu(*model);
+                    }
+                }
                 scene_lock.unlock();
 
                 auto tensor_allocator_result = createTrainingSplatTensorAllocator(

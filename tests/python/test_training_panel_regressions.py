@@ -35,6 +35,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
+    lf_stub.restart_training = lambda: None
+    lf_stub.can_restart_training = lambda: True
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.trainer_densification_vram = lambda: None
@@ -1536,10 +1538,10 @@ def test_overwrite_and_start_still_starts_without_save_as(
     assert starts == [True]
 
 
-def test_finished_run_overwrite_resets_before_the_new_run_starts(
+def test_finished_run_overwrite_does_not_reset_before_the_new_run_starts(
     training_panel_module, monkeypatch
 ):
-    """A completed run is a new training, so Overwrite must leave the finished trainer first."""
+    """Finished runs expose Restart; the old Start path must not reload the dataset."""
     panel, dialogs, _starts, _save_as_calls, _fresh_save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
         training_panel_module, monkeypatch
     )
@@ -1576,7 +1578,7 @@ def test_finished_run_overwrite_resets_before_the_new_run_starts(
         assert order == []
 
         callback(OVERWRITE_BTN)
-        assert order == [("reset", "completed"), ("start", "ready")]
+        assert order == [("start", "completed")]
     finally:
         runtime.iteration._fallback = 0
         runtime.training_state._fallback = "idle"
@@ -1638,7 +1640,7 @@ def test_reset_prompts_when_dirty_then_resets_on_continue(
     assert resets == []
     assert len(dialogs) == 1
     title, message, buttons, callback = dialogs[0]
-    assert title == "training_panel.reset"
+    assert title == "training_panel.reload_dataset"
     assert message == "exit_popup.unsaved_warning"
     assert buttons == [
         "menu.file.save_project_as",
@@ -1688,7 +1690,7 @@ def test_reset_when_dirty_and_training_does_not_ask_stop(
     assert resets == []
     assert len(dialogs) == 1
     title, message, buttons, callback = dialogs[0]
-    assert title == "training_panel.reset"
+    assert title == "training_panel.reload_dataset"
     assert message == "exit_popup.unsaved_warning"
     assert buttons == [
         "menu.file.save_project_as",
@@ -1813,6 +1815,52 @@ def test_completed_stored_session_shows_complete_mode_and_buttons(
         runtime.training_state._fallback = "idle"
         runtime.iteration._fallback = 0
         runtime.total_iterations._fallback = 0
+
+
+def test_restart_control_requires_a_retained_seed(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    monkeypatch.setattr(training_panel_module.lf, "can_restart_training", lambda: False)
+    panel._bind_visibility(model, lambda: _ParamsStub(), lambda: _DatasetStub())
+
+    assert model.bindings["show_restart"][0]() is False
+    monkeypatch.setattr(training_panel_module.lf, "can_restart_training", lambda: True)
+    assert model.bindings["show_restart"][0]() is True
+
+
+def test_reload_dataset_control_is_ready_only(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: _ParamsStub(), lambda: _DatasetStub())
+    try:
+        runtime.has_trainer.value = True
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+        assert model.bindings["show_reload_dataset"][0]() is True
+        assert model.bindings["show_training_telemetry"][0]() is False
+
+        runtime.trainer_state.value = "paused"
+        assert model.bindings["show_reload_dataset"][0]() is False
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+
+
+def test_reload_dataset_controls_exclude_paused_state():
+    rml = (
+        Path(__file__).resolve().parents[2]
+        / "src/visualizer/gui/rmlui/resources/training.rml"
+    ).read_text(encoding="utf-8")
+    paused = rml.split('<div data-if="show_ctrl_paused">', 1)[1].split("</div>", 1)[0]
+    stopped = rml.split('<div data-if="show_ctrl_stopped">', 1)[1].split("</div>", 1)[0]
+
+    assert "action('reset')" not in paused
+    assert "action('reset')" in stopped
+    assert "label_reload_dataset" in stopped
+    assert "training.tooltip.btn_reload_dataset" in stopped
 
 
 def test_paused_stored_session_shows_paused_mode_and_resume(

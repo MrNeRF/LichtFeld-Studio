@@ -233,6 +233,9 @@ namespace lfs::vis {
             static_cast<void>(preparer);
         }
         virtual std::expected<void, std::string> startTraining() = 0;
+        virtual std::expected<void, std::string> restartTraining() {
+            return std::unexpected("Restart Training is not supported by this visualizer");
+        }
         [[nodiscard]] virtual std::optional<int>
         trainingStartOverwriteConflict() {
             return std::nullopt;

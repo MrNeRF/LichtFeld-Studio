@@ -3014,6 +3014,26 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "training.restart",
+                .description = "Return a terminal training run to Ready at iteration zero without reloading the dataset",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "training",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl] {
+                    return viewer_impl->restartTraining();
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+                return json{{"success", true}, {"operation", "training.restart"}, {"iteration", 0}};
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "render.capture_window",
                 .description = "Capture the current composited app window, including panels, toolbars, and GUI overlays. Pass panel_id to capture an open native floating panel window instead.",
                 .input_schema = {

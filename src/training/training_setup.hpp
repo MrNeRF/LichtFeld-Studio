@@ -26,6 +26,13 @@ namespace lfs::io::project {
 namespace lfs::training {
     class Trainer;
 
+    struct TrainingModelPreservedNode {
+        std::string name;
+        glm::mat4 transform{1.0f};
+        bool visible = true;
+        bool locked = false;
+    };
+
     /// Scene-graph payload produced by prepareTrainingModel(). Heavy tensor work
     /// is finished; the owner thread still has to replace the POINTCLOUD node.
     struct TrainingModelGraphInstall {
@@ -38,9 +45,14 @@ namespace lfs::training {
         bool has_preserved_cropbox = false;
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};
+        TrainingModelPreservedNode preserved_cropbox_node;
         // The point cloud's crop polygon, carried to the model like its crop box.
         std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
         glm::mat4 preserved_crop_polygon_transform{1.0f};
+        TrainingModelPreservedNode preserved_crop_polygon_node;
+        std::optional<lfs::core::EllipsoidData> preserved_ellipsoid;
+        glm::mat4 preserved_ellipsoid_transform{1.0f};
+        TrainingModelPreservedNode preserved_ellipsoid_node;
     };
 
     /// Owner-thread snapshot of the graph inputs initializeTrainingModel needs.
@@ -53,14 +65,31 @@ namespace lfs::training {
         lfs::core::CropBoxData preserved_cropbox_data{};
         glm::mat4 preserved_cropbox_transform{1.0f};
         bool has_preserved_cropbox = false;
+        TrainingModelPreservedNode preserved_cropbox_node;
         std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
         glm::mat4 preserved_crop_polygon_transform{1.0f};
+        TrainingModelPreservedNode preserved_crop_polygon_node;
+        std::optional<lfs::core::EllipsoidData> preserved_ellipsoid;
+        glm::mat4 preserved_ellipsoid_transform{1.0f};
+        TrainingModelPreservedNode preserved_ellipsoid_node;
         lfs::core::SplatData* training_model = nullptr;
         lfs::core::Tensor scene_center;
         glm::vec3 training_data_origin{0.0f};
     };
 
     [[nodiscard]] TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene);
+
+    /// Recreate a point-cloud preview from the completed training model while
+    /// preserving the attached crop helpers and scene-node presentation state.
+    [[nodiscard]] std::expected<void, std::string> restoreTrainingPointCloudPreview(
+        lfs::core::Scene& scene,
+        const lfs::core::SplatData& seed);
+
+    /// Build the owner-thread install payload for an already resolved training
+    /// seed. Used by Restart Training so the next Start does not reread input.
+    [[nodiscard]] TrainingModelGraphInstall makeTrainingModelGraphInstall(
+        const TrainingModelGraphCapture& context,
+        std::unique_ptr<lfs::core::SplatData> model);
 
     /// Result of streaming an embedded project CKPT into a Trainer on an
     /// already-hydrated scene (no scene clear). Caller owns TrainerManager

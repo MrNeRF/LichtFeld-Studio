@@ -80,6 +80,8 @@ namespace lfs::vis {
         void setTrainer(std::unique_ptr<lfs::training::Trainer> trainer);
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
+        [[nodiscard]] std::expected<void, std::string> restartTraining();
+        [[nodiscard]] bool canRestart() const;
         bool hasTrainer() const;
         [[nodiscard]] std::uint64_t trainerGeneration() const {
             return trainer_generation_.load(std::memory_order_acquire);
@@ -305,6 +307,11 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        // The fully resolved pre-optimizer model, stored in CPU memory so a terminal
+        // run can be restarted without rereading the dataset or init file.
+        std::unique_ptr<lfs::core::SplatData> restart_seed_;
+        bool restart_seed_pending_ = false;
+        bool preserve_restart_seed_on_next_trainer_install_ = false;
         EvaluationWeightsPreparer evaluation_weights_preparer_;
         std::unique_ptr<std::jthread> initialization_thread_;
         std::unique_ptr<std::jthread> training_thread_;

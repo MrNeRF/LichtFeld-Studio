@@ -1271,6 +1271,20 @@ NB_MODULE(lichtfeld, m) {
         },
         "Reset training state to initial");
     m.def(
+        "restart_training", []() {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled(
+                "python.restart_training",
+                [] { lfs::core::events::cmd::RestartTraining{}.emit(); });
+        },
+        "Return a terminal training run to Ready at iteration zero without reloading the dataset");
+    m.def(
+        "can_restart_training", []() {
+            const auto* const trainer_manager = lfs::python::get_trainer_manager();
+            return trainer_manager && trainer_manager->canRestart();
+        },
+        "Whether Restart Training is available for the terminal run");
+    m.def(
         "is_training_active",
         []() {
             const auto* trainer_manager =

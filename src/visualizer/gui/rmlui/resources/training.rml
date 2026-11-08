@@ -15,7 +15,7 @@
   <div id="controls">
     <div data-if="show_ctrl_ready">
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{btn_start}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reload_dataset" data-if="show_reload_dataset" data-event-click="action('reset')">{{label_reload_dataset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
     <div data-if="show_ctrl_preparing">
@@ -38,26 +38,27 @@
     </div>
     <div data-if="show_ctrl_paused">
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_resume" data-event-click="action('resume')">{{label_resume}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
     </div>
     <div data-if="show_ctrl_completed">
       <span class="status-text status-success">{{label_status_completed}}</span>
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{label_start_training}}</button>
+      <button class="btn btn--success btn--full" data-if="show_restart" data-tooltip="training.tooltip.btn_restart" data-event-click="action('restart')">{{label_restart}}</button>
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reload_dataset" data-event-click="action('reset')">{{label_reload_dataset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
     <div data-if="show_ctrl_stopped">
       <span class="status-text status-muted">{{label_status_stopped}}</span>
+      <button class="btn btn--success btn--full" data-if="show_restart" data-tooltip="training.tooltip.btn_restart" data-event-click="action('restart')">{{label_restart}}</button>
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reload_dataset" data-event-click="action('reset')">{{label_reload_dataset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
     <div data-if="show_ctrl_error">
       <span class="status-text status-error">{{label_status_error}}</span>
       <span class="status-text">{{error_message}}</span>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--success btn--full" data-if="show_restart" data-tooltip="training.tooltip.btn_restart" data-event-click="action('restart')">{{label_restart}}</button>
+      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reload_dataset" data-event-click="action('reset')">{{label_reload_dataset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
     <div data-if="show_ctrl_stopping">

@@ -389,7 +389,8 @@ class TrainingPanel(Panel):
         model.bind_func(
             "label_no_params", lambda: tr("training_panel.parameters_unavailable")
         )
-        model.bind_func("label_reset", lambda: tr("training_panel.reset"))
+        model.bind_func("label_reload_dataset", lambda: tr("training_panel.reload_dataset"))
+        model.bind_func("label_restart", lambda: tr("training_panel.restart"))
         model.bind_func(
             "label_start_training", lambda: tr("training_panel.start_training")
         )
@@ -663,6 +664,10 @@ class TrainingPanel(Panel):
                 return False
             return _state() == "ready"
 
+        def _show_restart():
+            can_restart = getattr(lf, "can_restart_training", None)
+            return callable(can_restart) and can_restart()
+
         for state_name in [
             "ready",
             "preparing",
@@ -681,9 +686,8 @@ class TrainingPanel(Panel):
                     f"show_ctrl_{state_name}", lambda s=state_name: _state() == s
                 )
 
-        model.bind_func(
-            "show_reset_ready", lambda: _state() == "ready" and _iteration() > 0
-        )
+        model.bind_func("show_reload_dataset", lambda: _state() == "ready")
+        model.bind_func("show_restart", _show_restart)
         model.bind_func("show_project_save", lambda: _state() in ("running", "paused"))
         model.bind_func(
             "show_project_saved",
@@ -2746,6 +2750,8 @@ class TrainingPanel(Panel):
             lf.stop_training()
         elif action == "reset":
             self._action_reset()
+        elif action == "restart":
+            lf.restart_training()
         elif action == "clear":
             lf.new_project()
         elif action == "switch_edit":
@@ -2875,7 +2881,7 @@ class TrainingPanel(Panel):
             lf.reset_training()
 
         confirm_discard_work_then(
-            tr("training_panel.reset"),
+            tr("training_panel.reload_dataset"),
             _reset,
             ask_stop_training=False,
         )
@@ -2898,10 +2904,6 @@ class TrainingPanel(Panel):
         self._start_after_consent()
 
     def _start_after_consent(self):
-        # Consent starts a new run. A finished trainer cannot accept Start
-        # until Reset returns it to a fresh dataset.
-        if _trainer_run_is_finished():
-            lf.reset_training()
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
