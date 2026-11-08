@@ -1276,6 +1276,7 @@ namespace lfs::vis::gui {
         }
 
         for (auto& [id, snapshot] : snapshots) {
+            const bool read_only = scene.getNodeById(id)->isExternalPreview();
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
@@ -1286,18 +1287,17 @@ namespace lfs::vis::gui {
                                       !snapshot.locked &&
                                       !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
-            snapshot.rename_enabled = snapshot.can_rename;
+            snapshot.rename_enabled = snapshot.can_rename && !read_only;
             snapshot.can_toggle_training =
-                snapshot.type == core::NodeType::CAMERA ||
-                snapshot.type == core::NodeType::CAMERA_GROUP;
-            snapshot.camera_frustum_container =
-                (snapshot.type == core::NodeType::GROUP &&
-                 std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
-                     const auto child_it = snapshots.find(child_id);
-                     return child_it != snapshots.end() &&
-                            child_it->second.type == core::NodeType::CAMERA_GROUP;
-                 })) ||
-                (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP));
+                !read_only && (snapshot.type == core::NodeType::CAMERA ||
+                               snapshot.type == core::NodeType::CAMERA_GROUP);
+            snapshot.camera_frustum_container = !read_only && ((snapshot.type == core::NodeType::GROUP &&
+                                                                std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
+                                                                    const auto child_it = snapshots.find(child_id);
+                                                                    return child_it != snapshots.end() &&
+                                                                           child_it->second.type == core::NodeType::CAMERA_GROUP;
+                                                                })) ||
+                                                               (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP)));
             if (snapshot.camera_frustum_container) {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;

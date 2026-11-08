@@ -21,6 +21,7 @@
 #include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "scene/external_preview.hpp"
 #include "training/training_cropbox_mask.hpp"
 #include "visualizer/apriltag_calibration.hpp"
 #include <array>
@@ -64,6 +65,9 @@ namespace lfs::vis {
 
             void shutdown();
             AssistedMasking& assistedMasking() { return *assisted_masking_; }
+            bool uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update);
+            void cancelExternalPreviewUpload();
+            void removeExternalPreview(const core::Uuid& uuid);
 
             void setupEvents();
             void startCollision(core::CollisionSettings settings);
@@ -286,6 +290,12 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<JobSnapshot> cameraSelectionStatus() const { return jobs_.peek(camera_selection_state_.job); }
 
         private:
+            bool startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update);
+            std::optional<std::jthread> external_preview_thread_;
+            std::atomic_bool external_preview_uploading_{false};
+            std::shared_ptr<ExternalPreviewUpdate> external_preview_update_;
+            std::mutex external_preview_retirement_mutex_;
+            std::vector<std::shared_ptr<ExternalPreviewUpdate>> external_preview_retired_;
             friend class CollisionJobsTest;
             bool import_cancel_pending_ = false;
             bool importWorkersFinished() const;

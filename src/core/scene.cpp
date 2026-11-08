@@ -210,20 +210,24 @@ namespace lfs::core {
         locked.setPropertyPath(owner_id, "locked");
 
         local_transform.setCallback([this] {
+            if (external_preview_)
+                local_transform.setQuiet(external_transform_);
             if (scene_) {
                 scene_->markTransformDirty(id);
-                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
+                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED, external_preview_);
             }
         });
         visible.setCallback([this] {
             if (scene_) {
-                scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED);
+                scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED, external_preview_);
             }
         });
         // Locking is scene-graph state; MODEL_CHANGED would mark the splat payload dirty.
         locked.setCallback([this] {
+            if (external_preview_)
+                locked.setQuiet(true);
             if (scene_) {
-                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
+                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED, external_preview_);
             }
         });
     }
@@ -258,13 +262,14 @@ namespace lfs::core {
           restore_target_(&target),
           restore_staging_(true) {}
 
-    void Scene::notifyMutation(MutationType type) {
+    void Scene::notifyMutation(MutationType type, const bool transient) {
         if (restore_staging_) {
             return;
         }
-        if (type == MutationType::MODEL_CHANGED)
+        if (type == MutationType::MODEL_CHANGED && !transient && transient_transaction_depth_ == 0)
             collision_content_generation_.fetch_add(1, std::memory_order_release);
         pending_mutations_ |= static_cast<uint32_t>(type);
+        pending_document_change_ |= !transient && transient_transaction_depth_ == 0;
 
         if (type == MutationType::NODE_ADDED ||
             type == MutationType::NODE_REMOVED ||
@@ -304,6 +309,10 @@ namespace lfs::core {
         case MutationType::NODE_ADDED:
         case MutationType::NODE_REMOVED:
         case MutationType::MODEL_CHANGED:
+            if (transient_transaction_depth_ > 0) {
+                pending_selection_resize_ = true;
+                break;
+            }
             resizeSelectionIfSizeMismatch(
                 SelectionDomain::Splat,
                 currentSelectionCapacity(SelectionDomain::Splat));
@@ -321,19 +330,30 @@ namespace lfs::core {
     }
 
     void Scene::flushMutations() {
+        if (pending_selection_resize_) {
+            pending_selection_resize_ = false;
+            resizeSelectionIfSizeMismatch(SelectionDomain::Splat, currentSelectionCapacity(SelectionDomain::Splat));
+            resizeSelectionIfSizeMismatch(SelectionDomain::PointCloud, currentSelectionCapacity(SelectionDomain::PointCloud));
+        }
         if (pending_mutations_ == 0)
             return;
         const uint32_t mutations = pending_mutations_;
+        const bool document_changed = pending_document_change_;
         pending_mutations_ = 0;
-        events::state::SceneChanged{.mutation_flags = mutations}.emit();
+        pending_document_change_ = false;
+        events::state::SceneChanged{.mutation_flags = mutations, .document_changed = document_changed}.emit();
     }
 
-    Scene::Transaction::Transaction(Scene& scene) : scene_(scene) {
+    Scene::Transaction::Transaction(Scene& scene, const bool transient) : scene_(scene), transient_(transient) {
         ++scene_.transaction_depth_;
+        if (transient_)
+            ++scene_.transient_transaction_depth_;
     }
 
     Scene::Transaction::~Transaction() {
         assert(scene_.transaction_depth_ > 0);
+        if (transient_)
+            --scene_.transient_transaction_depth_;
         if (--scene_.transaction_depth_ == 0) {
             scene_.flushMutations();
         }
@@ -366,6 +386,9 @@ namespace lfs::core {
             LOG_WARN("Cannot add null scene node");
             return NULL_NODE;
         }
+        if (const auto* parent = getNodeById(node->parent_id);
+            parent && parent->isExternalPreview() && !node->isExternalPreview())
+            return NULL_NODE;
         if (node->name.empty()) {
             LOG_WARN("Cannot add node with empty name");
             return NULL_NODE;
@@ -442,6 +465,8 @@ namespace lfs::core {
     }
 
     void Scene::removeNodeById(const NodeId id, const bool keep_children) {
+        if (id != NULL_NODE && hasExternalPreview(id))
+            return;
         if (!getNodeById(id)) {
             return;
         }
@@ -509,6 +534,8 @@ namespace lfs::core {
     std::vector<std::pair<lfs::core::Uuid, std::unique_ptr<lfs::core::SplatData>>> Scene::detachSplatModelsForRemoval(
         const NodeId root_id,
         const bool keep_children) {
+        if (hasExternalPreview(root_id))
+            return {};
         std::vector<std::pair<lfs::core::Uuid, std::unique_ptr<lfs::core::SplatData>>> detached;
 
         if (root_id == NULL_NODE) {
@@ -649,6 +676,8 @@ namespace lfs::core {
     }
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        if (const auto* node = getNode(name); node && node->isExternalPreview())
+            return;
         if (!model) {
             LOG_WARN("replaceNodeModel: model for node '{}' is null", name);
             return;
@@ -693,13 +722,21 @@ namespace lfs::core {
     std::unique_ptr<lfs::core::SplatData> Scene::swapNodeModel(
         const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
         auto* node = getMutableNode(name);
+        if (node && node->isExternalPreview())
+            return model;
         if (!node) {
             LOG_WARN("swapNodeModel: node '{}' not found", name);
             return model;
         }
 
-        const size_t gaussian_count = model ? static_cast<size_t>(model->size()) : 0;
         const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
+        return swapNodeModelInternal(*node, std::move(model), centroid);
+    }
+
+    std::unique_ptr<SplatData> Scene::swapNodeModelInternal(
+        SceneNode& target, std::unique_ptr<SplatData> model, const glm::vec3& centroid) {
+        auto* node = &target;
+        const size_t gaussian_count = model ? model->size() : 0;
         auto previous = retireCombinedModelIfInFlight(std::move(node->model));
         node->model = std::move(model);
         single_node_model_ = nullptr;
@@ -710,6 +747,177 @@ namespace lfs::core {
                         : PayloadHydrationState::Unloaded;
         notifyMutation(MutationType::MODEL_CHANGED);
         return previous;
+    }
+
+    NodeId Scene::addExternalPreview(const std::string& name, const std::string& model_name) {
+        if (name.empty() || model_name.empty())
+            return NULL_NODE;
+        Transaction transaction(*this, true);
+        const auto id = addGroup(makeUniqueNodeName(name_to_id_, name));
+        if (id == NULL_NODE)
+            return id;
+        const auto child = addSplatPlaceholder(makeUniqueNodeName(name_to_id_, model_name), id);
+        for (const auto owned : {id, child}) {
+            auto* node = getNodeById(owned);
+            assert(node);
+            node->transient = node->external_preview_ = true;
+            node->locked.setQuiet(true);
+        }
+        return id;
+    }
+
+    bool Scene::hasExternalPreview(const NodeId root) const {
+        if (root == NULL_NODE)
+            return std::ranges::any_of(nodes_, [](const auto& node) { return node->isExternalPreview(); });
+        std::vector<NodeId> pending{root};
+        while (!pending.empty()) {
+            const auto* node = getNodeById(pending.back());
+            pending.pop_back();
+            if (!node)
+                continue;
+            if (node->isExternalPreview())
+                return true;
+            pending.insert(pending.end(), node->children.begin(), node->children.end());
+        }
+        return false;
+    }
+
+    std::unique_ptr<SplatData> Scene::updateExternalPreview(
+        const Uuid& uuid, std::unique_ptr<SplatData> model,
+        const glm::mat4& transform, const glm::vec3& centroid) {
+        Transaction transaction(*this, true);
+        const auto* root = getNodeByUuid(uuid);
+        if (!root || !root->isExternalPreview() || root->type != NodeType::GROUP)
+            return model;
+        const auto found = std::ranges::find_if(root->children, [this](const auto id) {
+            const auto* child = getNodeById(id);
+            return child && child->isExternalPreview() && child->type == NodeType::SPLAT;
+        });
+        if (found == root->children.end())
+            return model;
+        auto* node = getNodeById(*found);
+        node->external_transform_ = transform;
+        node->local_transform.setQuiet(transform);
+        markTransformDirty(node->id);
+        notifyMutation(MutationType::TRANSFORM_CHANGED);
+        if (!model)
+            return nullptr;
+        const auto selection = hasSelection() && node->gaussian_count.load(std::memory_order_acquire) != model->size()
+                                   ? capturePerNodeSelectionSlices()
+                                   : PerNodeSelectionSlices{};
+        auto previous = swapNodeModelInternal(*node, std::move(model), centroid);
+        if (!selection.empty())
+            applyPerNodeSelectionSlices(selection);
+        return previous;
+    }
+
+    bool Scene::updateExternalPreviewCameras(
+        const Uuid& uuid, const std::string& group_name, std::vector<ExternalPreviewCamera>& cameras) {
+        if (group_name.empty() || std::ranges::any_of(cameras, [](const auto& entry) { return !entry.camera; }))
+            return false;
+        const auto* root = getNodeByUuid(uuid);
+        if (!root || !root->isExternalPreview() || root->type != NodeType::GROUP)
+            return false;
+        const auto root_id = root->id;
+        NodeId group_id = NULL_NODE;
+        for (const auto id : root->children) {
+            if (const auto* child = getNodeById(id); child && child->type == NodeType::CAMERA_GROUP)
+                group_id = id;
+        }
+        Transaction transaction(*this, true);
+        if (group_id == NULL_NODE) {
+            auto group = std::make_unique<SceneNode>();
+            group->parent_id = root_id;
+            group->type = NodeType::CAMERA_GROUP;
+            group->name = makeUniqueNodeName(name_to_id_, group_name);
+            group->transient = group->external_preview_ = true;
+            group->locked.setQuiet(true);
+            group_id = insertNode(std::move(group));
+        }
+        auto* group = getNodeById(group_id);
+        if (!group)
+            return false;
+        const auto previous = group->children;
+        std::vector<ExternalPreviewCamera> retired;
+        retired.reserve(previous.size());
+        std::unordered_set<NodeId> removed;
+        for (size_t i = cameras.size(); i < previous.size(); ++i) {
+            const auto id = previous[i];
+            auto* node = getNodeById(id);
+            assert(node && node->type == NodeType::CAMERA && node->isExternalPreview());
+            retired.push_back({std::move(node->camera), node->local_transform.get()});
+            name_to_id_.erase(node->name);
+            uuid_to_id_.erase(node->uuid);
+            removed.insert(id);
+        }
+        if (!removed.empty()) {
+            std::erase_if(nodes_, [&](const auto& node) { return removed.contains(node->id); });
+            for (size_t i = 0; i < nodes_.size(); ++i)
+                id_to_index_[nodes_[i]->id] = i;
+            for (const auto id : removed)
+                id_to_index_.erase(id);
+            group->children.resize(cameras.size());
+            notifyMutation(MutationType::NODE_REMOVED);
+        }
+        for (size_t i = 0; i < cameras.size(); ++i) {
+            auto& entry = cameras[i];
+            if (i < previous.size()) {
+                auto* node = getNodeById(previous[i]);
+                assert(node && node->type == NodeType::CAMERA && node->isExternalPreview());
+                entry.camera->_uid = node->camera_uid;
+                retired.push_back({std::exchange(node->camera, std::move(entry.camera)), node->local_transform.get()});
+                node->external_transform_ = entry.transform;
+                node->local_transform.setQuiet(entry.transform);
+                markTransformDirty(node->id);
+            } else {
+                auto node = std::make_unique<SceneNode>();
+                node->parent_id = group_id;
+                node->type = NodeType::CAMERA;
+                node->name = makeUniqueNodeName(name_to_id_, entry.camera->image_name());
+                node->camera_uid = entry.camera->uid();
+                node->camera = std::move(entry.camera);
+                node->external_transform_ = entry.transform;
+                node->local_transform.setQuiet(entry.transform);
+                node->training_enabled = false;
+                node->transient = node->external_preview_ = true;
+                node->locked.setQuiet(true);
+                (void)insertNode(std::move(node));
+            }
+        }
+        group->gaussian_count.store(cameras.size(), std::memory_order_release);
+        {
+            // Drop cache references while the returned retirement batch still
+            // owns the old cameras, so a later UI lookup cannot destroy them.
+            std::lock_guard lock(camera_cache_mutex_);
+            cached_all_cameras_.reset();
+            cached_visible_cameras_.reset();
+        }
+        cameras = std::move(retired); // The upload owner reclaims GPU resources on its worker.
+        ++camera_list_generation_;
+        notifyMutation(MutationType::TRANSFORM_CHANGED);
+        return true;
+    }
+
+    std::pair<std::unique_ptr<SplatData>, std::vector<Scene::ExternalPreviewCamera>>
+    Scene::removeExternalPreview(const Uuid& uuid) {
+        std::unique_ptr<SplatData> model;
+        std::vector<ExternalPreviewCamera> cameras;
+        Transaction transaction(*this, true);
+        if (const auto* node = getNodeByUuid(uuid); node && node->isExternalPreview() && node->type == NodeType::GROUP) {
+            auto selection = hasSelection() ? capturePerNodeSelectionSlices() : PerNodeSelectionSlices{};
+            for (const auto id : node->children) {
+                auto* child = getNodeById(id);
+                if (child->type == NodeType::SPLAT)
+                    model = retireCombinedModelIfInFlight(std::move(child->model));
+                else if (child->type == NodeType::CAMERA_GROUP)
+                    updateExternalPreviewCameras(uuid, child->name, cameras);
+            }
+            removeNodeInternal(node->id, false);
+            std::erase_if(selection, [this](const auto& item) { return getNodeIdByUuid(item.first) == NULL_NODE; });
+            if (!selection.empty())
+                applyPerNodeSelectionSlices(selection);
+        }
+        return {std::move(model), std::move(cameras)};
     }
 
     bool Scene::setPayloadHydrationState(
@@ -746,6 +954,8 @@ namespace lfs::core {
     }
 
     void Scene::setNodeLocked(const std::string& name, const bool locked) {
+        if (const auto* node = getNode(name); node && node->isExternalPreview())
+            return;
         auto* node = getMutableNode(name);
         if (node) {
             node->locked.set(locked, false);
@@ -1524,6 +1734,8 @@ namespace lfs::core {
     }
 
     size_t Scene::consolidateNodeModels() {
+        if (hasExternalPreview())
+            return 0;
         pollCombinedModelBuild();
         if (preserve_source_models_)
             return 0;
@@ -3643,6 +3855,8 @@ namespace lfs::core {
     }
 
     bool Scene::renameNode(const NodeId id, const std::string& new_name) {
+        if (const auto* node = getNodeById(id); node && node->isExternalPreview())
+            return false;
         if (id == NULL_NODE) {
             return false;
         }
@@ -4779,6 +4993,9 @@ namespace lfs::core {
 
         pending_mutations_ = 0;
         transaction_depth_ = 0;
+        pending_document_change_ = false;
+        pending_selection_resize_ = false;
+        transient_transaction_depth_ = 0;
         ++camera_list_generation_;
         return staged;
     }
@@ -5659,6 +5876,10 @@ namespace lfs::core {
     }
 
     bool Scene::reparent(const NodeId node_id, const NodeId new_parent) {
+        if (hasExternalPreview(node_id))
+            return false;
+        if (const auto* parent = getNodeById(new_parent); parent && parent->isExternalPreview())
+            return false;
         auto* node = getNodeById(node_id);
         if (!node)
             return false;
@@ -5922,7 +6143,7 @@ namespace lfs::core {
 
     bool Scene::isNodeEffectivelyLocked(NodeId id) const {
         while (const auto* node = getNodeById(id)) {
-            if (static_cast<bool>(node->locked))
+            if (node->isExternalPreview() || static_cast<bool>(node->locked))
                 return true;
             id = node->parent_id;
         }
@@ -6470,6 +6691,8 @@ namespace lfs::core {
     }
 
     void Scene::setTrainingModelNode(const Uuid& uuid) {
+        if (const auto* node = getNodeByUuid(uuid); node && node->isExternalPreview())
+            return;
         if (uuid.is_nil()) {
             training_model_uuid_ = {};
             training_model_node_.clear();
@@ -6783,6 +7006,8 @@ namespace lfs::core {
 
     void Scene::setCameraTrainingEnabled(const NodeId id, const bool enabled) {
         auto* node = getNodeById(id);
+        if (node && node->isExternalPreview())
+            return;
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
             if (!restore_staging_)
@@ -6795,7 +7020,7 @@ namespace lfs::core {
         bool changed = false;
         for (const auto& candidate : nodes_) {
             auto* node = candidate.get();
-            if (!node || node->type != NodeType::CAMERA)
+            if (!node || node->type != NodeType::CAMERA || node->isExternalPreview())
                 continue;
             const bool enabled = enabled_camera_ids.contains(node->id);
             if (node->training_enabled == enabled)
@@ -6814,7 +7039,7 @@ namespace lfs::core {
     bool Scene::setCameraGroupTrainingSelection(const NodeId camera_group_id,
                                                 const std::unordered_set<NodeId>& enabled_camera_ids) {
         const auto* group = getNodeById(camera_group_id);
-        if (!group || group->type != NodeType::CAMERA_GROUP)
+        if (!group || group->type != NodeType::CAMERA_GROUP || group->isExternalPreview())
             return false;
         bool changed = false;
         for (const NodeId child_id : group->children) {

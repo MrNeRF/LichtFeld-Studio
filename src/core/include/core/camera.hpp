@@ -285,6 +285,7 @@ namespace lfs::core {
         // IDs
         float _FoVx = 0.f;
         float _FoVy = 0.f;
+        friend class Scene;
         int _uid = -1;
         int _camera_id = 0;
         float _focal_x = 0.f;

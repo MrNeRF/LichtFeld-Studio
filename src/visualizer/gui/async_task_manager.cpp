@@ -47,6 +47,7 @@
 #include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
@@ -873,11 +874,136 @@ namespace lfs::vis::gui {
           assisted_masking_(std::make_unique<AssistedMasking>(jobs_, [this] {
               const auto* trainer = viewer_->getTrainerManager();
               return !viewer_->isTrainingStartPending() && !viewer_->projectTrainingSessionState().restoring && (!trainer || trainer->isDatasetEditable()) &&
-                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport);
-          })) {}
+                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport); }, [this]() -> std::optional<std::array<uint64_t, 2>> {
+              if (const auto& project = viewer_->project_lifecycle_)
+                  return project->documentSceneRevision();
+              return std::nullopt; })) {}
 
     AsyncTaskManager::~AsyncTaskManager() {
         shutdown();
+    }
+
+    bool AsyncTaskManager::uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update) {
+        return update && startExternalPreviewWorker(std::move(update));
+    }
+
+    bool AsyncTaskManager::startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update) {
+        if ((update && update->submitted) || external_preview_uploading_.load(std::memory_order_acquire))
+            return false;
+        // Upload and retirement work is done; join also waits for the worker's
+        // native capture destructors, which must not acquire the GIL.
+        external_preview_thread_.reset();
+        auto allocator = makeViewerSplatTensorAllocator(true);
+        int first_uid = 0;
+        if (update && update->replace_cameras) {
+            for (const auto& camera : *viewer_->getSceneManager()->getScene().getAllCamerasCached()) {
+                if (camera->uid() >= std::numeric_limits<int>::max() - 10000)
+                    return false;
+                first_uid = std::max(first_uid, camera->uid() + 1);
+            }
+        }
+        if (update)
+            update->submitted = true;
+        external_preview_uploading_.store(true, std::memory_order_release);
+        // A retirement-only pass must not invalidate another connection's upload.
+        auto retired = update ? std::exchange(external_preview_update_, update) : nullptr;
+        const bool was_invalidated = retired && retired->invalidated.exchange(true, std::memory_order_acq_rel);
+        try {
+            external_preview_thread_.emplace([this, update, retired,
+                                              allocator = std::move(allocator), first_uid](const std::stop_token stop) {
+                // Large retired buffers are reclaimed here, never in the panel tick.
+                if (retired) {
+                    retired->model.reset();
+                    retired->cameras.clear();
+                }
+                try {
+                    if (update && update->model && !stop.stop_requested()) {
+                        if (auto migrated = io::migrateSplatTensorsToAllocator(*update->model, allocator); !migrated)
+                            throw std::runtime_error(migrated.error().format());
+                    }
+                    if (update && update->replace_cameras && !stop.stop_requested()) {
+                        auto rows = update->camera_rows.accessor<float, 2>();
+                        for (size_t i = 0; i < update->camera_rows.size(0) && !stop.stop_requested(); ++i) {
+                            glm::mat4 pose(1.0f);
+                            for (int row = 0; row < 4; ++row)
+                                for (int col = 0; col < 4; ++col)
+                                    pose[col][row] = rows(i, row * 4 + col);
+                            const auto name = std::to_string(i + 1);
+                            auto camera = std::make_shared<core::Camera>(
+                                core::Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, core::Device::CUDA),
+                                core::Tensor::zeros({3}, core::Device::CUDA),
+                                rows(i, 16), rows(i, 17), rows(i, 18), rows(i, 19),
+                                core::Tensor{}, core::Tensor{}, core::CameraModelType::PINHOLE,
+                                name, std::filesystem::path{}, std::filesystem::path{},
+                                static_cast<int>(rows(i, 20)), static_cast<int>(rows(i, 21)), first_uid + static_cast<int>(i));
+                            update->cameras.push_back({std::move(camera), pose});
+                        }
+                    }
+                    if (update && stop.stop_requested()) {
+                        update->model.reset();
+                        update->cameras.clear();
+                        update->error = "Preview upload cancelled";
+                    }
+                } catch (const std::exception& error) {
+                    LOG_WARN("External preview upload failed: {}", error.what());
+                    if (update)
+                        update->error = error.what();
+                }
+                if (update)
+                    update->ready.store(true, std::memory_order_release);
+                for (;;) {
+                    std::vector<std::shared_ptr<ExternalPreviewUpdate>> releases;
+                    {
+                        std::lock_guard lock(external_preview_retirement_mutex_);
+                        releases.swap(external_preview_retired_);
+                        if (releases.empty()) {
+                            external_preview_uploading_.store(false, std::memory_order_release);
+                            break;
+                        }
+                    }
+                    // Deletion and upload share the same worker and resource owner.
+                    for (const auto& resources : releases) {
+                        resources->model.reset();
+                        resources->cameras.clear();
+                    }
+                }
+            });
+        } catch (const std::exception& error) {
+            LOG_WARN("Could not start external preview upload: {}", error.what());
+            if (update)
+                external_preview_update_ = std::move(retired);
+            if (update && external_preview_update_)
+                external_preview_update_->invalidated.store(was_invalidated, std::memory_order_release);
+            if (update)
+                update->submitted = false;
+            external_preview_uploading_.store(false, std::memory_order_release);
+            throw;
+        }
+        return true;
+    }
+
+    void AsyncTaskManager::removeExternalPreview(const core::Uuid& uuid) {
+        auto resources = std::make_shared<ExternalPreviewUpdate>();
+        auto [model, cameras] = viewer_->getSceneManager()->getScene().removeExternalPreview(uuid);
+        resources->model = std::move(model);
+        resources->cameras = std::move(cameras);
+        if (!resources->model && resources->cameras.empty())
+            return;
+        {
+            std::lock_guard lock(external_preview_retirement_mutex_);
+            external_preview_retired_.push_back(std::move(resources));
+        }
+        if (!external_preview_uploading_.load(std::memory_order_acquire))
+            (void)startExternalPreviewWorker(nullptr);
+    }
+
+    void AsyncTaskManager::cancelExternalPreviewUpload() {
+        if (external_preview_update_)
+            external_preview_update_->invalidated.store(true, std::memory_order_release);
+        if (external_preview_thread_)
+            external_preview_thread_->request_stop();
+        if (!external_preview_uploading_.load(std::memory_order_acquire))
+            (void)uploadExternalPreview(std::make_shared<ExternalPreviewUpdate>());
     }
 
     float AsyncTaskManager::jobProgress(
@@ -984,7 +1110,17 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        if (external_preview_update_)
+            external_preview_update_->invalidated.store(true, std::memory_order_release);
+        if (external_preview_thread_)
+            external_preview_thread_->request_stop();
         assisted_masking_->shutdown();
+        external_preview_thread_.reset();
+        if (external_preview_update_) {
+            external_preview_update_->model.reset();
+            external_preview_update_->cameras.clear();
+            external_preview_update_.reset();
+        }
         shutdownAprilTagScan();
 
         cancelCollision();
@@ -2056,6 +2192,10 @@ namespace lfs::vis::gui {
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
+            if (node && node->isExternalPreview()) {
+                publishExportFailureState(format, path, LOC("external_training.export_unavailable"));
+                return;
+            }
             if (node && node->type == core::NodeType::SPLAT && node->model) {
                 if (const auto& tree = node->model->lod_tree;
                     tree && tree->has_tree() && node->model->size() < tree->total_nodes()) {

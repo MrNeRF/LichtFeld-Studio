@@ -1681,7 +1681,7 @@ class ImagePreviewPanel(Panel):
     def _sam_apply(self, exclude):
         editor = self._mask_editor
         node = self._current_camera_node(resolve_unbound=True)
-        if not node or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
+        if not node or node.read_only or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0]:
@@ -1690,7 +1690,7 @@ class ImagePreviewPanel(Panel):
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
                                                editor.draft.points, editor.draft.box, editor.request, -1,
                                                editor.weights, editor.candidate, bool(exclude))
-            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key, RuntimeState.scene_generation.value)
+            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key)
                                       if request else None)
             editor.phase = "rendering" if request else "closing"
             editor.error = ""
@@ -1720,12 +1720,11 @@ class ImagePreviewPanel(Panel):
             editor.phase = "ready" if editor.key == target.key and editor.request == target.proposal_request and editor.overlay is not None else "error"
             editor.error = state.get("error", "")
             self._mark_dirty()
-        if state.get("phase") == "mask_ready":
+        if state.get("phase") in ("mask_ready", "expired"):
             if not target or state.get("request") != target.request:
                 return
             self._sam_apply_target = None
-            if (editor.key == target.key and editor.request == target.proposal_request
-                    and RuntimeState.scene_generation.value == target.scene_generation):
+            if state["phase"] == "mask_ready" and editor.key == target.key and editor.request == target.proposal_request:
                 try:
                     lf.ui.sam_preview_apply(target.camera_uuid, target.request)
                     self._sam_cancel()
@@ -1792,7 +1791,8 @@ class ImagePreviewPanel(Panel):
             if binding:
                 bindings.append(f"{binding}: {lf.keymap.get_action_name(action)}")
         _set_text(doc, "sam-shortcuts", " · ".join(bindings))
-        has_target = self._current_camera_node(resolve_unbound=True) is not None
+        node = self._current_camera_node(resolve_unbound=True)
+        has_target = bool(node and not node.read_only)
         _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint" if has_target else "image_preview.sam_apply_dataset"))
         _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))
         _set_text(doc, "sam-exclude", lf.ui.tr("image_preview.sam_exclude"))

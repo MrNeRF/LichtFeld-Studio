@@ -131,9 +131,21 @@ from pathlib import Path
 dll = os.add_dll_directory({str(build)!r})
 sys.path.insert(0, {str(build / 'src' / 'python')!r})
 import lichtfeld as lf
+try:
+    lf.packages.init(cancel=lambda: True)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('Cancelled environment initialization continued')
 directory = Path(lf.packages.init())
 assert directory.is_relative_to(Path(os.environ['LFS_HOME']))
 assert (directory / 'Scripts' / 'python.exe').is_file()
+try:
+    lf.packages.install('observer-cancel-test', cancel=lambda: True)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('Cancelled installation continued')
 print('FRESH_UNICODE_VENV_PASS')
 """
         environment = {**os.environ, "LFS_HOME": str(runtime), "PYTHONHOME": sys.base_prefix}

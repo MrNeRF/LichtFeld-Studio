@@ -21,6 +21,13 @@ def arrays(count=3):
             "opacity": np.zeros((count, 1), np.float32), "sh": np.zeros((count, 1, 3), np.float32)}
 
 
+@pytest.mark.parametrize("field,value", [("iteration", -1), ("iterations", True), ("count", "12"),
+                                         ("iteration", 2**63), ("label", []), ("label", "x" * 1025)])
+def test_session_rejects_invalid_progress_and_labels(field, value):
+    with pytest.raises(ValueError):
+        transport.validate_session({"protocol": 1, "id": "session", "pid": os.getpid(), field: value})
+
+
 def test_session_round_trip_in_long_unicode_and_verbatim_directory(tmp_path, monkeypatch):
     from _lfs_path_io import Path as IOPath, TemporaryDirectory
 
@@ -43,6 +50,10 @@ def test_session_round_trip_in_long_unicode_and_verbatim_directory(tmp_path, mon
             assert record["label"] == "Unicode path"
             geometry.publish(session, {"schema": 1, "cameras": []})
             assert geometry.load(session.root, client.status()["geometry"])["cameras"] == []
+            missing_revision = dict(client.status()["geometry"])
+            missing_revision.pop("revision")
+            with pytest.raises(ValueError, match="revision"):
+                geometry.load(session.root, missing_revision)
             snapshot = session.publish(arrays(), 17)
             np.testing.assert_array_equal(transport.read_snapshot(snapshot)["means"], arrays()["means"])
         finally:
