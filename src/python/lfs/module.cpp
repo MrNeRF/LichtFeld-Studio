@@ -2526,6 +2526,37 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
 
     m.def(
+        "remove_disabled_cameras", [](const int camera_group_id) -> size_t {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer)
+                throw std::runtime_error("Viewer not available");
+            const auto remove = [camera_group_id]() -> std::expected<size_t, std::string> {
+                auto* const scene_manager = lfs::python::get_scene_manager();
+                if (!scene_manager)
+                    return std::unexpected("Scene manager not available");
+                return scene_manager->removeDisabledCamerasWithResult(
+                    static_cast<lfs::core::NodeId>(camera_group_id));
+            };
+
+            std::expected<size_t, std::string> removal;
+            if (viewer->isOnViewerThread()) {
+                removal = remove();
+            } else {
+                nb::gil_scoped_release release;
+                const lfs::core::TaskContext context{.name = "python.remove_disabled_cameras", .domain = lfs::ErrorDomain::Python, .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
+                const auto posted = lfs::vis::post_guarded_and_wait<std::expected<size_t, std::string>>(
+                    *viewer, context, remove, python_viewer_shutdown_error());
+                if (!posted)
+                    throw std::runtime_error(lfs::format_for_developer(posted.error()));
+                removal = *posted;
+            }
+            if (!removal)
+                throw std::runtime_error(removal.error());
+            return *removal;
+        },
+        nb::arg("camera_group_id"), "Remove disabled direct camera children and return their count");
+
+    m.def(
         "camera_selection_start", [](const std::string& operation, const int camera_group_id, const double percentage, const int every_n, const double overlap, const double coverage, const int cropbox_id) -> nb::dict {
             using Task = lfs::vis::gui::AsyncTaskManager;
             const auto type = [&]() -> Task::CameraSelectionOperation {

@@ -148,6 +148,8 @@ namespace lfs::vis {
                                                                    bool keep_children = false);
         [[nodiscard]] BatchNodeRemovalResult removeNodesByIdsWithResult(const std::vector<core::NodeId>& ids,
                                                                         bool keep_children = false);
+        using DisabledCameraRemovalResult = std::expected<size_t, std::string>;
+        [[nodiscard]] DisabledCameraRemovalResult removeDisabledCamerasWithResult(core::NodeId camera_group_id);
         size_t publishLiveCameraCount();
         void removePLY(std::string name, bool keep_children = false);
         void setPLYVisibility(std::string name, bool visible);

@@ -3505,19 +3505,8 @@ namespace lfs::vis::gui {
             auto* removal_manager = services().sceneOrNull();
             if (!removal_manager || !parseNodeId(parts[1], group_id))
                 return;
-            const auto* group = removal_manager->getScene().getNodeById(group_id);
-            if (!group || group->type != core::NodeType::CAMERA_GROUP)
-                return;
-            std::vector<core::NodeId> disabled_camera_ids;
-            for (const core::NodeId child_id : group->children) {
-                const auto* child = removal_manager->getScene().getNodeById(child_id);
-                if (child && child->type == core::NodeType::CAMERA && !child->training_enabled)
-                    disabled_camera_ids.push_back(child_id);
-            }
-            if (!disabled_camera_ids.empty()) {
-                if (const auto result = removal_manager->removeNodesByIdsWithResult(disabled_camera_ids, false); !result)
-                    LOG_WARN("Failed to remove disabled cameras: {}", result.error());
-            }
+            if (const auto result = removal_manager->removeDisabledCamerasWithResult(group_id); !result)
+                LOG_WARN("Failed to remove disabled cameras: {}", result.error());
         } else if (kind == "camera_selection" && parts.size() >= 3) {
             core::NodeId group_id = core::NULL_NODE;
             if (!parseNodeId(parts[2], group_id))

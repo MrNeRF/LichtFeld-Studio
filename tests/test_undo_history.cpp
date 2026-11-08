@@ -3604,6 +3604,47 @@ TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
     EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
 }
 
+TEST_F(UndoHistoryTest, RemoveDisabledCamerasRemovesOnlyDirectDisabledCameras) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 3);
+    const auto enabled = scene.addCamera("enabled.png", group, make_test_camera("enabled.png", 1));
+    const auto disabled = scene.addCamera("disabled.png", group, make_test_camera("disabled.png", 2));
+    const auto nested_group = scene.addCameraGroup("Nested", group, 1);
+    const auto nested_disabled = scene.addCamera("nested.png", nested_group, make_test_camera("nested.png", 3));
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(enabled, lfs::core::NULL_NODE);
+    ASSERT_NE(disabled, lfs::core::NULL_NODE);
+    ASSERT_NE(nested_disabled, lfs::core::NULL_NODE);
+    scene.setCameraTrainingEnabled(disabled, false);
+    scene.setCameraTrainingEnabled(nested_disabled, false);
+
+    const auto removal = scene_manager->removeDisabledCamerasWithResult(group);
+    ASSERT_TRUE(removal) << (removal ? "" : removal.error());
+    EXPECT_EQ(*removal, 1u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_EQ(scene.getNodeById(disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    const auto* restored = scene.getNode("disabled.png");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_FALSE(restored->training_enabled);
+
+    scene.setCameraTrainingEnabled(restored->id, true);
+    const auto no_op = scene_manager->removeDisabledCamerasWithResult(group);
+    ASSERT_TRUE(no_op) << (no_op ? "" : no_op.error());
+    EXPECT_EQ(*no_op, 0u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_NE(scene.getNode("disabled.png"), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
+}
+
 TEST_F(UndoHistoryTest, CameraBatchDeleteUndoRestoresOrderAndId) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

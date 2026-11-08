@@ -2036,6 +2036,29 @@ namespace lfs::vis {
         return {};
     }
 
+    SceneManager::DisabledCameraRemovalResult SceneManager::removeDisabledCamerasWithResult(
+        const core::NodeId camera_group_id) {
+        const auto* const group = scene_.getNodeById(camera_group_id);
+        if (!group)
+            return std::unexpected("Camera group not found: " + std::to_string(camera_group_id));
+        if (group->type != core::NodeType::CAMERA_GROUP)
+            return std::unexpected("Node is not a camera group: " + std::to_string(camera_group_id));
+
+        std::vector<core::NodeId> disabled_camera_ids;
+        disabled_camera_ids.reserve(group->children.size());
+        for (const core::NodeId child_id : group->children) {
+            const auto* const child = scene_.getNodeById(child_id);
+            if (child && child->type == core::NodeType::CAMERA && !child->training_enabled)
+                disabled_camera_ids.push_back(child_id);
+        }
+        if (disabled_camera_ids.empty())
+            return 0;
+
+        if (const auto result = removeNodesByIdsWithResult(disabled_camera_ids, false); !result)
+            return std::unexpected(result.error());
+        return disabled_camera_ids.size();
+    }
+
     void SceneManager::removePLY(std::string name, const bool keep_children) {
         if (const auto result = removePLYWithResult(std::move(name), keep_children); !result) {
             LOG_WARN("{}", result.error());
