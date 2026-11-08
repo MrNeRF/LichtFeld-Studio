@@ -3829,6 +3829,111 @@ namespace lfs::vis {
         EXPECT_NE(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
     }
 
+    TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto enabled_camera = scene.addCamera(
+            "Enabled", group,
+            std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU),
+                                           core::Tensor::zeros({3}, core::Device::CPU),
+                                           100.f, 110.f, 32.f, 24.f, core::Tensor{}, core::Tensor{},
+                                           core::CameraModelType::PINHOLE, "Enabled", std::filesystem::path{},
+                                           std::filesystem::path{}, 64, 48, 51));
+        const auto disabled_camera = scene.addCamera(
+            "Disabled", group,
+            std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU),
+                                           core::Tensor::zeros({3}, core::Device::CPU),
+                                           100.f, 110.f, 32.f, 24.f, core::Tensor{}, core::Tensor{},
+                                           core::CameraModelType::PINHOLE, "Disabled", std::filesystem::path{},
+                                           std::filesystem::path{}, 64, 48, 52));
+        const auto disabled_uuid = scene.getNodeUuid(disabled_camera);
+        ASSERT_NE(group, core::NULL_NODE);
+        ASSERT_NE(enabled_camera, core::NULL_NODE);
+        ASSERT_NE(disabled_camera, core::NULL_NODE);
+
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        const auto open_menu = [&] {
+            menu().request({}, 0, 0);
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            panel.preload(ctx);
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload,
+                                .width = 400,
+                                .height = 600},
+                               ctx);
+            auto* context = manager().getContext("scene_panel_native");
+            if (!context) {
+                ADD_FAILURE() << "Missing Scene panel";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            auto* document = context->GetDocument(0);
+            if (!document) {
+                ADD_FAILURE() << "Missing Scene panel document";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            document->Show();
+            auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+            if (!tree) {
+                ADD_FAILURE() << "Missing Scene tree";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            tree->SetProperty("height", "500px");
+            context->SetDimensions({400, 600});
+            context->Update();
+            static_cast<void>(tree->syncFromScene(ctx));
+            context->Update();
+            auto* row = document->QuerySelector("[data-node-id='" + std::to_string(group) + "']");
+            if (!row) {
+                ADD_FAILURE() << "Missing Camera Group row";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            row->DispatchEvent("mousedown", {{"button", Rml::Variant(1)},
+                                              {"mouse_x", Rml::Variant(10.f)},
+                                              {"mouse_y", Rml::Variant(10.f)}});
+            auto* menu_context = manager().getContext("global_context_menu");
+            if (!menu_context) {
+                ADD_FAILURE() << "Missing context menu";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            auto* menu_document = menu_context->GetDocument(0);
+            if (!menu_document) {
+                ADD_FAILURE() << "Missing context menu document";
+                return static_cast<Rml::ElementDocument*>(nullptr);
+            }
+            return menu_document;
+        };
+        const auto action = "scene_panel:remove_disabled_cameras:" + std::to_string(group);
+
+        auto* menu_document = open_menu();
+        auto* remove_disabled = menu_document->QuerySelector("[data-ctx-action='" + action + "']");
+        ASSERT_NE(remove_disabled, nullptr);
+        EXPECT_TRUE(remove_disabled->HasAttribute("disabled"));
+        EXPECT_TRUE(remove_disabled->IsClassSet("is-disabled"));
+        remove_disabled->DispatchEvent("click", {});
+        panel.preload(ctx);
+        EXPECT_NE(scene.getNodeById(enabled_camera), nullptr);
+        EXPECT_NE(scene.getNodeById(disabled_camera), nullptr);
+
+        scene.setCameraTrainingEnabled(disabled_camera, false);
+        menu_document = open_menu();
+        remove_disabled = menu_document->QuerySelector("[data-ctx-action='" + action + "']");
+        ASSERT_NE(remove_disabled, nullptr);
+        EXPECT_FALSE(remove_disabled->HasAttribute("disabled"));
+        remove_disabled->DispatchEvent("click", {});
+        panel.preload(ctx);
+        EXPECT_NE(scene.getNodeById(enabled_camera), nullptr);
+        EXPECT_EQ(scene.getNodeById(disabled_camera), nullptr);
+
+        const auto undo = op::undoHistory().undo();
+        ASSERT_TRUE(undo.success) << undo.error;
+        const auto* restored = scene.getNodeByUuid(disabled_uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_FALSE(restored->training_enabled);
+    }
+
     TEST_F(ScenePanelRefreshTest, ContextMenuDuplicateRefreshesLiveTree) {
         checkMutation(false, false, true);
     }

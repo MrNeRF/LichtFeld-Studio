@@ -900,6 +900,7 @@
     "disable_for_training": "禁用训练",
     "enable_all_training": "启用所选相机",
     "disable_all_training": "禁用所选相机",
+    "remove_disabled_cameras": "删除已禁用相机",
     "camera_selection": "相机选择",
     "invert_camera_selection": "反转选择",
     "enable_all_cameras": "全部启用",

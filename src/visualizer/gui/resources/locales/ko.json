@@ -900,6 +900,7 @@
     "disable_for_training": "훈련에서 제외",
     "enable_all_training": "선택한 카메라 활성화",
     "disable_all_training": "선택한 카메라 비활성화",
+    "remove_disabled_cameras": "비활성화된 카메라 제거",
     "camera_selection": "카메라 선택",
     "invert_camera_selection": "선택 반전",
     "enable_all_cameras": "모두 활성화",

@@ -900,6 +900,7 @@
     "disable_for_training": "Für Training deaktivieren",
     "enable_all_training": "Ausgewählte Kameras aktivieren",
     "disable_all_training": "Ausgewählte Kameras deaktivieren",
+    "remove_disabled_cameras": "Deaktivierte Kameras entfernen",
     "camera_selection": "Kameraauswahl",
     "invert_camera_selection": "Auswahl umkehren",
     "enable_all_cameras": "Alle aktivieren",
