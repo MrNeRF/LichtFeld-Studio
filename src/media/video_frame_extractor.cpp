@@ -1037,9 +1037,8 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (params.srt_metadata && ((!params.embed_source_metadata && !params.write_source_metadata_sidecars) ||
-                                        (params.srt_metadata->point_tolerance_milliseconds && *params.srt_metadata->point_tolerance_milliseconds < 0))) {
-                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "SRT frame metadata requires image metadata output and nonnegative tolerance", .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (const auto valid = media::detail::validateSrtFrameMetadata(params.srt_metadata, params.embed_source_metadata || params.write_source_metadata_sidecars); !valid) {
+                failure_ = valid.error();
                 error = std::string(failure_->detail());
                 return false;
             }
@@ -2703,12 +2702,7 @@ namespace lfs::io {
                         root["schema_version"] = 2;
                         if (params.srt_metadata) {
                             const auto& binding = *params.srt_metadata;
-                            root["srt_metadata"] = {{"policy", media::detail::srt_frame_metadata_policy},
-                                                    {"source_locator", binding.catalog.source().display},
-                                                    {"source_locator_bytes", media::json_detail::hexBytes(binding.catalog.source().native_bytes)},
-                                                    {"source_locator_encoding", binding.catalog.source().encoding == media::MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"},
-                                                    {"offset_ms", binding.offset_milliseconds},
-                                                    {"point_tolerance_ms", media::json_detail::optional(binding.point_tolerance_milliseconds)}};
+                            root["srt_metadata"] = media::json_detail::srtFrameBinding(binding, media::detail::srt_frame_metadata_policy);
                         }
                         if (params.embed_source_metadata)
                             root["embedded_metadata_policy"] = embeddedMetadataPolicy(params.format);

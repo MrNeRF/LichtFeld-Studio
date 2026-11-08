@@ -293,6 +293,13 @@ namespace lfs::media::detail {
             return metadataError(ErrorCode::ResourceExhausted, "Image frame metadata allocation failed");
         }
     }
+    SinkResult validateSrtFrameMetadata(const std::optional<SrtFrameMetadata>& binding, bool image_metadata_output) {
+        if (binding && !image_metadata_output)
+            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars"));
+        if (binding && binding->point_tolerance_milliseconds && *binding->point_tolerance_milliseconds < 0)
+            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative"));
+        return {};
+    }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar, const std::optional<SrtFrameMetadata>& srt) {
         if (embeddedMetadataPolicy(format).empty())
             return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
@@ -308,8 +315,8 @@ namespace lfs::media::detail {
             result.applied_rotation = applied_rotation;
             result.source_properties = std::move(*properties);
             result.srt_metadata = srt;
-            if (srt && srt->point_tolerance_milliseconds && *srt->point_tolerance_milliseconds < 0)
-                return metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative");
+            if (const auto valid = validateSrtFrameMetadata(srt, true); !valid)
+                return valid.error();
             if (format != FrameFileFormat::JPEG || sidecar || srt)
                 return result;
             return packJpegMetadata(std::move(result));

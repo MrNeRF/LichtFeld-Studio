@@ -206,7 +206,8 @@ namespace lfs::media::detail {
             Sha256 digest;
             digest.update(f.srt_metadata->catalog.originalBytes());
             const auto& binding = *f.srt_metadata;
-            identity_["srt_metadata"] = {{"policy", srt_frame_metadata_policy}, {"source_sha256", digest.finish()}, {"source_locator", binding.catalog.source().display}, {"source_locator_bytes", json_detail::hexBytes(binding.catalog.source().native_bytes)}, {"offset_ms", binding.offset_milliseconds}, {"point_tolerance_ms", json_detail::optional(binding.point_tolerance_milliseconds)}};
+            identity_["srt_metadata"] = json_detail::srtFrameBinding(binding, srt_frame_metadata_policy);
+            identity_["srt_metadata"]["source_sha256"] = digest.finish();
         }
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
         identity_["selection"] = {static_cast<int>(r.selection.mode), r.selection.fps, r.selection.interval, r.start_seconds, r.end_seconds};

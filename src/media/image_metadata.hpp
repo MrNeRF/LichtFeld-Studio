@@ -53,6 +53,7 @@ namespace lfs::media::detail {
         bool rendered = false;
         std::optional<SrtFrameMetadata> srt_metadata;
     };
+    [[nodiscard]] SinkResult validateSrtFrameMetadata(const std::optional<SrtFrameMetadata>&, bool image_metadata_output);
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat, std::string_view provenance);
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false, const std::optional<SrtFrameMetadata>& srt = {});
     [[nodiscard]] std::string_view imageXmpSuffix();

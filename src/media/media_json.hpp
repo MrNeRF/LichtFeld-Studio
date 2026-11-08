@@ -400,6 +400,11 @@ namespace lfs::media::json_detail {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON string allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         return std::move(stream).str();
     }
+    inline json srtFrameBinding(const SrtFrameMetadata& binding, std::string_view policy) {
+        json result{{"policy", policy}, {"offset_ms", binding.offset_milliseconds}, {"point_tolerance_ms", optional(binding.point_tolerance_milliseconds)}};
+        sourceLocator(result, &binding.catalog.source());
+        return result;
+    }
     inline Result<json> srtLookup(const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance = std::nullopt) {
         const auto match = catalog.lookup(timestamp, offset, tolerance);
         if (!match)

@@ -569,6 +569,40 @@ int runSourceMetadataContracts() {
         frame.origin = FrameOrigin::Decoded;
         frame.source_timestamp = Timestamp{std::numeric_limits<int64_t>::max(), {std::numeric_limits<int>::max(), 1}};
         require(!write_timed(frame), "unrepresentable frame mapping is refused");
+        {
+            const auto directory = root / "timed-stale-companion";
+            std::filesystem::create_directories(directory);
+            const auto stale_image = directory / "frame_7.png";
+            auto companion = stale_image;
+            companion += ".xmp";
+            SinkSession session;
+            session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*timed_container);
+            FileFrameSinkOptions seed_options;
+            seed_options.output_directory = directory;
+            seed_options.write_source_metadata_sidecars = true;
+            FileFrameSink seed(seed_options);
+            const std::array<std::uint8_t, 12> pixels{};
+            FrameInfo info;
+            info.legacy_source_frame = 7;
+            require(seed.begin(session) && seed.write({{2, 2, 6, FramePixelFormat::RGB8}, info, pixels}) && seed.complete({SinkOutcome::Completed, 1, {}}), "seed a generated companion through the public sink");
+            std::ifstream packet_input(companion, std::ios::binary);
+            const std::string generated_packet(std::istreambuf_iterator<char>(packet_input), {});
+            packet_input.close();
+            const auto source_bytes = generated_packet + "\n00:00:00,000 --> 00:00:01,000\nFrameCnt: 1 [latitude: 1]\n";
+            std::ofstream(companion, std::ios::binary) << source_bytes;
+            const auto source = MediaIngest::sourceSrtMetadata(companion);
+            require(source.has_value(), "SRT may have a generated-XMP prelude");
+            FileFrameSinkOptions options;
+            options.output_directory = directory;
+            options.remove_stale_frames = true;
+            options.embed_source_metadata = true;
+            options.srt_metadata = SrtFrameMetadata{*source, 0};
+            FileFrameSink sink(options);
+            const auto started = sink.begin(session);
+            require(!started && started.error().code() == lfs::ErrorCode::InvalidArgument, "stale companion cleanup refuses an alias of the SRT source");
+            std::ifstream retained(companion, std::ios::binary);
+            require(std::string(std::istreambuf_iterator<char>(retained), {}) == source_bytes && std::filesystem::exists(stale_image), "refused stale cleanup preserves source and image");
+        }
         std::ostringstream timed_stream;
         require(json_detail::writeSrtMetadataJson(timed_stream, *timed) && timed_stream.str() == *timed_json,
                 "SRT CLI and string output share exactly one JSON representation");

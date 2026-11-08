@@ -51,10 +51,8 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::AVIF)
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
-        if (options_.srt_metadata && (!options_.embed_source_metadata && !options_.write_source_metadata_sidecars))
-            return sinkError(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars");
-        if (options_.srt_metadata && options_.srt_metadata->point_tolerance_milliseconds && *options_.srt_metadata->point_tolerance_milliseconds < 0)
-            return sinkError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative");
+        if (auto valid = detail::validateSrtFrameMetadata(options_.srt_metadata, options_.embed_source_metadata || options_.write_source_metadata_sidecars); !valid)
+            return valid;
         source_metadata_.reset();
         sidecar_metadata_ = std::move(sidecar);
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
@@ -90,6 +88,9 @@ namespace lfs::media {
                 if (path.filename() != "extraction_metadata.json" && detail::PreviousSourceSidecar::inspect(path)) {
                     auto sidecar = path;
                     sidecar += detail::sidecar_metadata_suffix;
+                    if (options_.srt_metadata)
+                        if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, sidecar); !protected_source)
+                            return protected_source;
                     if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(sidecar)))
                         existing_frames_.push_back({sidecar, lfs::core::native_fs::last_write_time(sidecar), lfs::core::native_fs::file_size(sidecar), true});
                 }
