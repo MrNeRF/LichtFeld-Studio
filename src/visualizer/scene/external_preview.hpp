@@ -16,7 +16,9 @@ namespace lfs::vis {
 
     // CPU input is prepared by the protocol reader. AsyncTaskManager owns the
     // upload worker and joins it before the renderer/context is destroyed.
-    struct ExternalPreviewUpdate {
+    // Preserve native ownership across Python round-trips: worker capture
+    // destruction must not need the GIL to release a Python-owned shared_ptr.
+    struct ExternalPreviewUpdate : std::enable_shared_from_this<ExternalPreviewUpdate> {
         std::unique_ptr<core::SplatData> model;
         core::Tensor camera_rows;
         std::vector<core::Scene::ExternalPreviewCamera> cameras;

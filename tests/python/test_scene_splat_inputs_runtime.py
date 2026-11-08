@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Scene.add_splat input checks and scene values that exist before any dataset is loaded."""
 
+import inspect
 import time
 
 import pytest
@@ -10,6 +11,20 @@ from test_api_camera_project_runtime import camera_runtime, camera_runtime_with_
 from test_render_on_demand_idle import _ledger, _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+
+
+def wait_until(predicate, timeout=5):
+    deadline = time.monotonic() + timeout
+    while True:
+        result = predicate()
+        if result or time.monotonic() >= deadline:
+            return result
+        time.sleep(.05)
+
+
+@pytest.fixture(autouse=True)
+def editor_wait(camera_runtime):
+    _editor(camera_runtime, "import time\n" + inspect.getsource(wait_until))
 
 
 def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime_with_numpy, numpy, tmp_path, monkeypatch, request):
@@ -34,16 +49,9 @@ lf.ui.set_main_panel_active_tab(panel.ExternalTrainingPanel.id)
 print("attached")
 '''.replace("RECORD", repr(record)).replace("TEST_REGISTRY", repr(str(producer.root.parent))))
         assert "attached" in output
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            output = _editor(camera_runtime, '''
-import lfs_plugins.external_training_panel as panel
-print("ready" if panel._current.shown else "pending", panel._current.error)
+        _editor(camera_runtime, '''
+assert wait_until(lambda: panel._current.shown, 20), panel._current.error
 ''')
-            if output.startswith("ready"):
-                break
-            time.sleep(0.1)
-        assert output.startswith("ready"), output
 
         # A recovered status read must clear only the connection error, even
         # when no new snapshot arrives to trigger another installation.
@@ -59,10 +67,7 @@ def status_with_one_failure(client):
 observer.SessionClient.status = status_with_one_failure
 panel._current.error = "Unrelated import error"
 try:
-    deadline = time.monotonic() + 5
-    while status_reads < 3 and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert status_reads >= 3
+    assert wait_until(lambda: status_reads >= 3)
     assert not panel._current.connection_error
     assert panel._current.error == "Unrelated import error"
     assert panel._current.generation == SNAPSHOT_ID
@@ -82,18 +87,11 @@ finally:
                      "cx": 310, "cy": 235, "width": 640, "height": 480}]}
         geometry.publish(producer, value)
         revision = transport.read_json(producer.root / "session.json")["geometry"]["revision"]
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            output = _editor(camera_runtime, '''
-import lfs_plugins.external_training_panel as panel
-print("geometry-ready" if panel._current.geometry_revision == EXPECTED_REVISION else
-      (panel._current.geometry_revision, panel._current.error, panel._current.stop.is_set(),
-       panel._current.geometry_error))
+        _editor(camera_runtime, '''
+assert wait_until(lambda: panel._current.geometry_revision == EXPECTED_REVISION, 20), (
+    panel._current.geometry_revision, panel._current.error, panel._current.stop.is_set(),
+    panel._current.geometry_error)
 '''.replace("EXPECTED_REVISION", repr(revision)))
-            if output.startswith("geometry-ready"):
-                break
-            time.sleep(0.1)
-        assert output.startswith("geometry-ready"), output
         output = _ui_editor(camera_runtime, '''
 import lichtfeld as lf, numpy as np
 import lfs_plugins.external_training_panel as panel
@@ -145,10 +143,7 @@ camera.set("visible", False)
             revision = transport.read_json(producer.root / "session.json")["geometry"]["revision"]
             _editor(camera_runtime, '''
 import time
-deadline = time.monotonic() + 5
-while panel._current.geometry_revision != REVISION and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert panel._current.geometry_revision == REVISION, panel._current.geometry_error
+assert wait_until(lambda: panel._current.geometry_revision == REVISION), panel._current.geometry_error
 '''.replace("REVISION", repr(revision)))
             _ui_editor(camera_runtime, '''
 scene = lf.get_scene()
@@ -178,10 +173,7 @@ assert scene.selection_mask.cpu().tolist() == [0] * 32 + [1, 0]
         next_snapshot = producer.publish(arrays(33), 8)
         output = _editor(camera_runtime, '''
 import time
-deadline = time.monotonic() + 5
-while panel._current.generation != NEXT_ID and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert panel._current.generation == NEXT_ID, panel._current.error
+assert wait_until(lambda: panel._current.generation == NEXT_ID), panel._current.error
 assert not panel._current.error
 '''.replace("NEXT_ID", repr(next_snapshot["id"])))
         _ui_editor(camera_runtime, '''
@@ -197,10 +189,7 @@ lf.ui.set_main_panel_active_tab(next(tab.id for tab in lf.ui.get_main_panel_tabs
         opened = _tool(camera_runtime, "project_open", {"path": str(project), "discard_changes": True})
         assert opened.get("success", True), opened
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 5
-while lf.get_scene().get_node("Local model").gaussian_count != 2 and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert lf.get_scene().get_node("Local model").gaussian_count == 2
+assert wait_until(lambda: lf.get_scene().get_node("Local model").gaussian_count == 2)
 ''')
         output = _ui_editor(camera_runtime, '''
 import lfs_plugins.external_training_panel as panel
@@ -216,10 +205,7 @@ print("restored")
 ''')
         assert "restored" in output
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 5
-while not cancelled.ready and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert cancelled.ready
+assert wait_until(lambda: cancelled.ready)
 ''')
         _ui_editor(camera_runtime, '''
 scene = lf.get_scene()
@@ -228,10 +214,7 @@ assert not scene.apply_external_preview(target, cancelled, "Cameras")
 scene.remove_external_preview(target)
 ''')
         assert transport.read_json(producer.root / "session.json")["state"] == "training"
-        deadline = time.monotonic() + 5
-        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not list((producer.root / "clients").glob("*.json"))
+        assert wait_until(lambda: not list((producer.root / "clients").glob("*.json")))
         # Normal application exit must drain an active reader, not require the
         # fixture's forced cleanup or stop the trainer that owns the session.
         _ui_editor(camera_runtime, '''
@@ -239,10 +222,7 @@ panel._current = ExternalTraining(RECORD)
 '''.replace("RECORD", repr(record)))
         assert request.node.camera_process.poll() is None
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 5
-while panel._current.shown is None and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert panel._current.shown is not None, panel._current.error
+assert wait_until(lambda: panel._current.shown is not None), panel._current.error
 threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()
 ''')
         assert request.node.camera_process.wait(timeout=10) == 0
@@ -279,21 +259,15 @@ panel._current = panel.ExternalTraining({record!r})
 target = panel._current.uuid
 """)
         _editor(endpoint, """
-deadline = time.monotonic() + 15
-while not panel._current.shown and time.monotonic() < deadline: time.sleep(.05)
-assert panel._current.shown, panel._current.error
+assert wait_until(lambda: panel._current.shown, 15), panel._current.error
 """)
         _ui_editor(endpoint, f"lf.load_file({str(source)!r})")
         _editor(endpoint, """
-deadline = time.monotonic() + 15
-while not lf.get_scene().get_node("local") and time.monotonic() < deadline: time.sleep(.05)
-assert lf.get_scene().get_node("local")
+assert wait_until(lambda: lf.get_scene().get_node("local"), 15)
 """)
         _ui_editor(endpoint, 'lf.select_node("local")\nlf.generate_collision(.03, .1, False, False, 0.)')
         _editor(endpoint, """
-deadline = time.monotonic() + 15
-while not lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION) and time.monotonic() < deadline: time.sleep(.05)
-assert lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION)
+assert wait_until(lambda: lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION), 15)
 assert lf.capture_viewport() is not None
 """)
         assert _tool(endpoint, "gaussians_write", {
@@ -309,16 +283,12 @@ assert lf.get_scene().get_node("local") and lf.get_scene().get_nodes(lf.scene.No
         # Undo restores opacity in ordinary CUDA storage. The next frame must
         # still present, even though VkSplat cannot produce a new depth image.
         start = _ledger(endpoint)["frames_presented"]
-        deadline = time.monotonic() + 15
         app_log = tmp_path / "app.log"
-        while time.monotonic() < deadline:
+        def presented_degraded_frame():
             _ui_editor(endpoint, "lf.ui.request_redraw()")
             degraded = "missing_opacity" in app_log.read_text(encoding="utf-8", errors="replace")
-            if degraded and _ledger(endpoint)["frames_presented"] >= start + 4:
-                break
-            time.sleep(.1)
-        else:
-            pytest.fail("Viewport did not present frames after losing its splat depth image")
+            return degraded and _ledger(endpoint)["frames_presented"] >= start + 4
+        assert wait_until(presented_degraded_frame, 15), "Viewport did not present frames after losing its splat depth image"
         assert _tool(endpoint, "project_save_as", {"path": str(tmp_path / "local.licht")})["success"]
         _editor(endpoint, "threading.Timer(.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()")
         assert request.node.camera_process.wait(timeout=10) == 0
@@ -394,10 +364,7 @@ target = lf.get_scene().create_external_preview("Many cameras", "Preview")
 assert lf.get_scene().upload_external_preview(update)
 ''')
     _editor(camera_runtime, '''
-deadline = time.monotonic() + 20
-while not update.ready and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert update.ready
+assert wait_until(lambda: update.ready, 20)
 replacement = lf.scene.prepare_external_cameras(lf.Tensor.zeros([0, 22], device="cpu"), np.eye(4, dtype=np.float32))
 ''')
     _ui_editor(camera_runtime, '''
@@ -407,10 +374,7 @@ other = lf.get_scene().create_external_preview("Next trainer", "Preview")
 assert lf.get_scene().upload_external_preview(replacement)
 ''')
     _editor(camera_runtime, '''
-deadline = time.monotonic() + 5
-while not replacement.ready and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert replacement.ready
+assert wait_until(lambda: replacement.ready)
 ''')
     output = _ui_editor(camera_runtime, '''
 started = time.perf_counter()
@@ -420,9 +384,23 @@ assert lf.get_scene().get_node_by_uuid(target) is None
 assert not lf.get_scene().get_nodes(lf.scene.NodeType.CAMERA)
 assert lf.get_scene().apply_external_preview(other, replacement, "Cameras")
 lf.get_scene().remove_external_preview(other)
+del update, replacement
 ''')
     assert "camera_removal_ms" in output
     print(output.strip())
+    # Each retirement and following upload joins the previous worker from a
+    # Python UI callback with the GIL held.
+    for cycle in range(32):
+        _ui_editor(camera_runtime, '''
+target = lf.get_scene().create_external_preview("Repeated trainer", "Preview")
+update = lf.scene.prepare_external_cameras(lf.Tensor.from_numpy(rows[:1]), np.eye(4, dtype=np.float32))
+assert wait_until(lambda: lf.get_scene().upload_external_preview(update))
+assert wait_until(lambda: update.ready)
+assert lf.get_scene().apply_external_preview(target, update, "Cameras")
+del update
+lf.get_scene().remove_external_preview(target)
+assert lf.get_scene().get_node_by_uuid(target) is None
+''')
 
 
 @pytest.mark.parametrize("query", ["list()", "is_installed('numpy')"])
@@ -509,15 +487,10 @@ observer.ensure_numpy = unavailable_once
 ''')
         _ui_editor(endpoint, "connection = observer.ExternalTraining(RECORD)".replace("RECORD", repr(record)))
         _editor(endpoint, '''
-deadline = time.monotonic() + 5
-while not connection.error and time.monotonic() < deadline:
-    time.sleep(0.05)
+assert wait_until(lambda: connection.error)
 assert connection.preparing_dependencies
 assert "Dependency download unavailable" in connection.error
-deadline = time.monotonic() + 10
-while connection.generation != FIRST and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert connection.generation == FIRST, connection.error
+assert wait_until(lambda: connection.generation == FIRST, 10), connection.error
 assert dependency_attempts == 2
 assert not connection.preparing_dependencies
 assert not connection.error
@@ -539,19 +512,14 @@ observer.ExternalTraining.scene = property(lambda self: RejectingScene(original_
 '''.replace("FIRST", repr(first["id"])))
         second = producer.publish(arrays(9), 2)
         _editor(endpoint, '''
-deadline = time.monotonic() + 8
-while len(failed_installs) < 2 and time.monotonic() < deadline:
-    time.sleep(0.05)
+assert wait_until(lambda: len(failed_installs) >= 2, 8), failed_installs
 assert len(failed_installs) == 2, failed_installs
 assert failed_installs[1] - failed_installs[0] >= 1.9, failed_installs
 assert connection.generation == FIRST
 assert connection.shown["count"] == 8
 assert not connection.stop.is_set()
 reject_upload = False
-deadline = time.monotonic() + 8
-while connection.generation != SECOND and time.monotonic() < deadline:
-    time.sleep(0.05)
-assert connection.generation == SECOND, connection.error
+assert wait_until(lambda: connection.generation == SECOND, 8), connection.error
 assert not connection.error
 reject_upload = True
 '''.replace("FIRST", repr(first["id"])).replace("SECOND", repr(second["id"])))
@@ -559,10 +527,7 @@ reject_upload = True
         producer.finish("completed")
         _editor(endpoint, '''
 try:
-    deadline = time.monotonic() + 8
-    while not connection.stop.is_set() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert connection.stop.is_set(), connection.error
+    assert wait_until(connection.stop.is_set, 8), connection.error
     assert connection.generation == SECOND
     assert connection.shown["count"] == 9
     assert "Injected renderer allocation failure" in connection.error
@@ -570,10 +535,7 @@ finally:
     observer.ExternalTraining.scene = original_scene
     observer.ensure_numpy = original_numpy
 '''.replace("SECOND", repr(second["id"])))
-        deadline = time.monotonic() + 5
-        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not list((producer.root / "clients").glob("*.json"))
+        assert wait_until(lambda: not list((producer.root / "clients").glob("*.json")))
         _ui_editor(endpoint, "connection.close(remove=True)")
     finally:
         producer.finish("completed")

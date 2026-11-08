@@ -890,7 +890,9 @@ namespace lfs::vis::gui {
     bool AsyncTaskManager::startExternalPreviewWorker(std::shared_ptr<ExternalPreviewUpdate> update) {
         if ((update && update->submitted) || external_preview_uploading_.load(std::memory_order_acquire))
             return false;
-        external_preview_thread_.reset(); // Previous worker is already finished.
+        // Upload and retirement work is done; join also waits for the worker's
+        // native capture destructors, which must not acquire the GIL.
+        external_preview_thread_.reset();
         auto allocator = makeViewerSplatTensorAllocator(true);
         int first_uid = 0;
         if (update && update->replace_cameras) {
