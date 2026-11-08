@@ -2254,6 +2254,34 @@ namespace {
         sync();
         EXPECT_TRUE(NamingAccess::videoPath(*dialog).empty());
         EXPECT_TRUE(clear->HasAttribute("disabled"));
+
+        // Completion warnings can contain long paths without any breakable spaces.
+        NamingAccess::completeWithWarning(*dialog, std::string(256, 'W'));
+        NamingAccess::syncExtractionStatus(*dialog);
+        auto* const section = document->GetElementById("complete-section");
+        auto* const text = document->GetElementById("complete-text");
+        auto* const button = document->GetElementById("btn-complete-ok");
+        ASSERT_NE(section, nullptr);
+        ASSERT_NE(text, nullptr);
+        ASSERT_NE(button, nullptr);
+        for (const int width : {640, 420}) {
+            SCOPED_TRACE(width);
+            context->SetDimensions({width, 900});
+            context->Update();
+            context->Update();
+            ASSERT_TRUE(section->IsVisible());
+            EXPECT_GT(text->GetBox().GetSize(Rml::BoxArea::Border).y, 2 * text->GetLineHeight());
+            const auto origin = section->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = section->GetBox().GetSize(Rml::BoxArea::Border);
+            for (auto* const child : {text, button}) {
+                const auto position = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto extent = child->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(position.x, origin.x - 1);
+                EXPECT_GE(position.y, origin.y - 1);
+                EXPECT_LE(position.x + extent.x, origin.x + size.x + 1);
+                EXPECT_LE(position.y + extent.y, origin.y + size.y + 1);
+            }
+        }
     }
 } // namespace
 

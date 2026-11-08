@@ -637,7 +637,7 @@ body {
 .status-text {
     color: #cdd6f4;
     min-width: 0;
-    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 button[disabled],
