@@ -430,6 +430,23 @@ namespace lfs::gui {
             host_->setFloating(floating_);
     }
 
+    void VideoExtractorDialog::prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                                         const lfs::vis::gui::PanelDrawContext& ctx) {
+        if (ensureInitialized(ctx.ui ? ctx.ui->rml_manager : nullptr))
+            host_->setWindowPresentation(request.floating_window_state);
+    }
+
+    bool VideoExtractorDialog::titleControlsBounds(float* bounds) const {
+        const auto box = host_ ? host_->titleControlsBounds() : std::nullopt;
+        if (!box)
+            return false;
+        bounds[0] = box->x;
+        bounds[1] = box->y;
+        bounds[2] = box->width;
+        bounds[3] = box->height;
+        return true;
+    }
+
     bool VideoExtractorDialog::wantsKeyboard() const {
         return host_ && host_->wantsKeyboard();
     }

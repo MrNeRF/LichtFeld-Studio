@@ -16,6 +16,7 @@ struct SDL_Window;
 namespace lfs::vis::gui {
     struct PanelDrawContext;
     struct PanelInputState;
+    struct PanelDirectRenderRequest;
 } // namespace lfs::vis::gui
 
 namespace lfs::gui {
@@ -72,6 +73,9 @@ namespace lfs::gui {
         virtual void setInput(const lfs::vis::gui::PanelInputState* input) { (void)input; }
         virtual void setForcedHeight(float h) { (void)h; }
         virtual void setFloating(bool floating) { (void)floating; }
+        virtual void prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest&,
+                                               const lfs::vis::gui::PanelDrawContext&) {}
+        virtual bool titleControlsBounds(float*) const { return false; }
         [[nodiscard]] virtual bool wantsKeyboard() const { return false; }
         [[nodiscard]] virtual bool needsAnimationFrame() const { return isVideoPlaying(); }
         virtual void reloadRmlResources() {}

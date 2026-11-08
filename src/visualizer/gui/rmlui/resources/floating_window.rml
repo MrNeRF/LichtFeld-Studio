@@ -8,6 +8,13 @@
 <div id="window-frame">
   <div id="title-bar">
     <span id="title-text">{{panel_label}}</span>
+    <button id="minimize-btn" class="window-control" type="button" data-tooltip="ui.minimize">
+      <div class="window-icon"><div class="window-minimize-line"/></div>
+    </button>
+    <button id="maximize-btn" class="window-control" type="button" data-tooltip="ui.maximize_window">
+      <div class="window-icon window-icon-maximize"><div class="window-maximize-box"/></div>
+      <div class="window-icon window-icon-restore"><div class="window-restore-box window-restore-back"/><div class="window-restore-box window-restore-front"/></div>
+    </button>
     <span id="close-btn">&#xD7;</span>
   </div>
   <div id="content-wrap">

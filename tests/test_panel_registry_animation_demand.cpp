@@ -72,9 +72,10 @@ namespace {
             const lfs::vis::gui::PanelDrawContext&) override {
             using lfs::vis::gui::PanelDirectRenderMode;
             requests.emplace_back(request.mode, request.space);
+            presentation = request.floating_window_state;
             switch (request.mode) {
             case PanelDirectRenderMode::Measure:
-                return {.handled = true, .height = height};
+                return {.handled = true, .height = height, .title_controls_bounds = controls_bounds};
             case PanelDirectRenderMode::Draw:
                 ++draw_count;
                 if (draw_action)
@@ -123,6 +124,8 @@ namespace {
         bool poll_result = true;
         std::function<void()> poll_action;
         std::function<void()> draw_action;
+        std::optional<lfs::vis::gui::FloatingWindowState> presentation;
+        std::optional<lfs::vis::gui::PanelDrawBounds> controls_bounds;
         std::vector<std::pair<lfs::vis::gui::PanelDirectRenderMode,
                               lfs::vis::gui::PanelSpace>>
             requests;
@@ -969,6 +972,9 @@ TEST_F(PanelRegistryAnimationDemandTest, WindowMaximizePreservesNormalGeometryAn
     ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Maximized));
     draw();
     const auto maximized = registry.live_floating_bounds("test.window");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.window"));
+    ASSERT_TRUE(panel);
+    EXPECT_EQ(panel->presentation, FloatingWindowState::Maximized);
     ASSERT_TRUE(maximized);
     EXPECT_FLOAT_EQ(maximized->x, 0);
     EXPECT_FLOAT_EQ(maximized->y, 70);
@@ -982,11 +988,44 @@ TEST_F(PanelRegistryAnimationDemandTest, WindowMaximizePreservesNormalGeometryAn
     ASSERT_TRUE(registry.restore_floating_window("test.window"));
     draw();
     const auto restored = registry.live_floating_bounds("test.window");
+    EXPECT_EQ(panel->presentation, FloatingWindowState::Normal);
     ASSERT_TRUE(restored);
     EXPECT_FLOAT_EQ(restored->x, original->x);
     EXPECT_FLOAT_EQ(restored->y, original->y);
     EXPECT_FLOAT_EQ(restored->width, original->width);
     EXPECT_FLOAT_EQ(restored->height, original->height);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, TitleControlsUseMeasuredBoundsInsteadOfAFixedButtonStrip) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.window");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.window"));
+    ASSERT_TRUE(panel);
+    panel->height = 200;
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1200, 800};
+    PanelInputState input;
+    input.screen_w = 1200;
+    input.screen_h = 800;
+    const auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating), .input = &input}, ctx); };
+    draw();
+    const auto original = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(original);
+    // A theme can widen the controls far beyond the old fixed 96 dp strip.
+    panel->controls_bounds = PanelDrawBounds{original->width - 180, 0, 180, 30};
+    input.mouse_x = original->x + original->width - 160;
+    input.mouse_y = original->y + 15;
+    input.mouse_clicked[0] = input.mouse_down[0] = true;
+    draw();
+    input.mouse_clicked[0] = false;
+    input.mouse_x += 70;
+    input.mouse_y += 50;
+    draw();
+    const auto unchanged = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(unchanged);
+    EXPECT_FLOAT_EQ(unchanged->x, original->x);
+    EXPECT_FLOAT_EQ(unchanged->y, original->y);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, PresentationTransitionsPreserveProjectGeometryBeforeRedraw) {
@@ -1031,6 +1070,38 @@ TEST_F(PanelRegistryAnimationDemandTest, PresentationTransitionsPreserveProjectG
         EXPECT_FLOAT_EQ(restored->width, original->width);
         EXPECT_FLOAT_EQ(restored->height, original->height);
     }
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, SaveDuringPollKeepsTheLatestNormalGeometry) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.window");
+    const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.window"));
+    ASSERT_TRUE(panel);
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1200, 800};
+    const auto draw = [&] {
+        registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx);
+    };
+    draw();
+    ASSERT_TRUE(registry.set_floating_window_state("test.window", FloatingWindowState::Maximized));
+    ASSERT_TRUE(registry.restore_floating_window("test.window"));
+    ctx.screen_bounds->width = 200;
+    draw();
+    const auto latest = registry.live_floating_bounds("test.window");
+    ASSERT_TRUE(latest);
+    std::vector<PanelProjectState> saved;
+    panel->poll_action = [&] { saved = registry.capture_project_state(); };
+    ++ctx.scene_generation;
+    draw();
+    panel->poll_action = {};
+    const auto found = std::ranges::find(saved, std::string("test.window"), &PanelProjectState::id);
+    ASSERT_NE(found, saved.end());
+    EXPECT_TRUE(found->float_last_bounds_valid);
+    EXPECT_FLOAT_EQ(found->float_last_x, latest->x);
+    EXPECT_FLOAT_EQ(found->float_last_y, latest->y);
+    EXPECT_FLOAT_EQ(found->float_last_w, latest->width);
+    EXPECT_FLOAT_EQ(found->float_last_h, latest->height);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, ControlTransitionsDuringDrawPreserveProjectGeometry) {

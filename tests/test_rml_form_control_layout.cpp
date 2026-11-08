@@ -150,11 +150,15 @@ namespace {
     }
 
     TEST_P(RmlFormControlLayoutTest, MinimizedWindowKeepsOnlyChromeAndRestoresItsContent) {
-        auto* doc = load("<div id='window-frame'><div id='title-bar'><span id='title-text'>Preferences</span>"
-                         "<button id='minimize-btn' class='window-control'>-</button>"
-                         "<button id='maximize-btn' class='window-control'>[]</button>"
-                         "<span id='close-btn'>x</span></div><div id='content-wrap'><div id='content'>"
-                         "<input id='retained' value='unchanged'/></div></div></div>");
+        std::ifstream markup(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/floating_window.rml");
+        ASSERT_TRUE(markup);
+        const std::string window((std::istreambuf_iterator<char>(markup)), {});
+        const auto title_start = window.find("<div id=\"title-bar\">");
+        const auto title_end = window.find("<div id=\"content-wrap\">");
+        ASSERT_NE(title_start, std::string::npos);
+        ASSERT_NE(title_end, std::string::npos);
+        auto* doc = load("<div id='window-frame'>" + window.substr(title_start, title_end - title_start) +
+                         "<div id='content-wrap'><div id='content'><input id='retained' value='unchanged'/></div></div></div>");
         ASSERT_NE(doc, nullptr);
         std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/components.rcss");
         ASSERT_TRUE(file);

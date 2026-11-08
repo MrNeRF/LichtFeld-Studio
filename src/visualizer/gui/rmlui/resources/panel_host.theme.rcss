@@ -32,5 +32,5 @@ button.window-control {
     background-color: transparent;
 }
 button.window-control:hover {
-    background-color: rgba(255, 255, 255, 18);
+    background-color: @{menu.hover};
 }

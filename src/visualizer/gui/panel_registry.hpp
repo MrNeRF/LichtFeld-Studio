@@ -139,9 +139,16 @@ namespace lfs::vis::gui {
         Preload,
     };
 
+    enum class FloatingWindowState : uint8_t {
+        Normal,
+        Minimized,
+        Maximized
+    };
+
     struct PanelDirectRenderRequest {
         PanelDirectRenderMode mode = PanelDirectRenderMode::Draw;
         PanelSpace space = PanelSpace::Floating;
+        std::optional<FloatingWindowState> floating_window_state;
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;
@@ -155,6 +162,7 @@ namespace lfs::vis::gui {
     struct PanelDirectRenderResult {
         bool handled = false;
         float height = 0.0f;
+        std::optional<PanelDrawBounds> title_controls_bounds;
     };
 
     struct PanelRenderCapabilities {
@@ -254,12 +262,6 @@ namespace lfs::vis::gui {
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;
         }
-    };
-
-    enum class FloatingWindowState : uint8_t {
-        Normal,
-        Minimized,
-        Maximized
     };
 
     struct FloatingPanelInteraction {
@@ -507,7 +509,8 @@ namespace lfs::vis::gui {
         uint64_t registration_revision_ = 0;
         uint64_t visibility_revision_ = 0;
         uint64_t localized_label_generation_ = 0;
-        int minimized_first_row_ = 0;
+        int minimized_first_slot_ = 0;
+        bool minimized_scroll_to_end_ = false;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };
