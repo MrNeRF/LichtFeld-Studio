@@ -18,6 +18,18 @@ def editor(module):
     return value
 
 
+@pytest.fixture
+def tracked_sequence(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._sam_sequence = {"run": "clip-a"}
+    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
+    panel._path_revision_cache["frame.png"] = "revision-a"
+    panel._path_stat_cache["frame.png"] = (True, 11, 22)
+    yield module, panel
+    panel._metadata.close()
+
+
 @pytest.mark.parametrize("has_dataset", [False, True])
 @pytest.mark.parametrize("invert,ignore,expected", [(False, False, False), (True, False, True), (True, True, False)])
 def test_update_reads_optimization_once_and_preserves_mask_polarity(panel_modules, monkeypatch, has_dataset, invert, ignore, expected):
@@ -608,15 +620,12 @@ def test_mouse_removal_respects_rebound_double_click_and_modifiers(panel_modules
     assert not value.draft.points
 
 
-def test_tracking_submits_the_selected_seed_and_rejects_a_range_without_it(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_tracking_submits_the_selected_seed_and_rejects_a_range_without_it(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
     value.point(.4, .6, 1)
     value.phase, value.request, value.candidate = "ready", 7, 2
-    panel._sam_sequence = {"run": "clip-a"}
     panel._current_index, panel._sam_track_first, panel._sam_track_last = 4, 2, 8
-    panel._path_stat_cache["frame.png"] = (True, 11, 22)
     submitted = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append((a, kw)) or 8, raising=False)
     panel._sam_track_first = 5
@@ -695,14 +704,9 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     assert last.get_attribute("value", "") == "6"
 
 
-def test_retaining_another_candidate_preserves_its_native_refinement_identity(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_retaining_another_candidate_preserves_its_native_refinement_identity(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
-    panel._path_revision_cache["frame.png"] = "revision-a"
-    panel._path_stat_cache["frame.png"] = (True, 11, 22)
-    panel._sam_sequence = {"run": "clip-a"}
     value.request, value.phase, value.overlays = 7, "ready", [object(), object()]
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: 8, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_sequence_frames", lambda *a: [{"revision": 8}], raising=False)
@@ -714,14 +718,9 @@ def test_retaining_another_candidate_preserves_its_native_refinement_identity(pa
     assert panel._sam_apply_target is None
 
 
-def test_failed_sequence_retain_keeps_prediction_and_blocks_export_edits(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_failed_sequence_retain_keeps_prediction_and_blocks_export_edits(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
-    panel._path_revision_cache["frame.png"] = "revision-a"
-    panel._path_stat_cache["frame.png"] = (True, 11, 22)
-    panel._sam_sequence = {"run": "clip-a"}
     panel._preview_state = "ready"
     value.request, value.phase, value.overlays = 7, "ready", [object(), object()]
     submitted = []
@@ -775,12 +774,10 @@ def test_saving_requires_confirmation_of_the_same_review_revision(panel_modules,
     assert value.phase == "saving"
 
 
-def test_range_approval_pages_summaries_and_uses_one_reversible_group(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_range_approval_pages_summaries_and_uses_one_reversible_group(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = editor(module)
     panel._mask_editor.phase = "ready"
-    panel._sam_sequence = {"run": "clip-a"}
     panel._image_paths = [module.Path(f"frame-{i}.png") for i in range(257)]
     panel._sam_track_last = 256
     frames = [{"revision": i + 1, "approved": i == 0, "reliable": i != 1} for i in range(257)]
@@ -819,12 +816,10 @@ def test_range_approval_pages_summaries_and_uses_one_reversible_group(panel_modu
 
 
 @pytest.mark.parametrize("changed", ["revision", "run", "busy", "missing", "cancel"])
-def test_range_approval_rejects_missing_or_superseded_review(panel_modules, monkeypatch, changed):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_range_approval_rejects_missing_or_superseded_review(tracked_sequence, monkeypatch, changed):
+    module, panel = tracked_sequence
     panel._mask_editor = editor(module)
     panel._mask_editor.phase = "ready"
-    panel._sam_sequence = {"run": "clip-a"}
     panel._image_paths = [module.Path("frame.png")]
     state = {"sequence_revision": 3}
     dialogs, writes = [], []
@@ -848,10 +843,8 @@ def test_range_approval_rejects_missing_or_superseded_review(panel_modules, monk
     assert not writes
 
 
-def test_rejected_history_rolls_back_group_approval(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_rejected_history_rolls_back_group_approval(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     writes = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_approve_frames", lambda *a: writes.append(a) or True, raising=False)
     def reject(*a, **kw):
@@ -864,10 +857,8 @@ def test_rejected_history_rolls_back_group_approval(panel_modules, monkeypatch):
 
 
 @pytest.mark.parametrize("refusal", ["busy", "native_busy"])
-def test_approval_history_refusal_raises_and_can_be_retried(panel_modules, monkeypatch, refusal):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_approval_history_refusal_raises_and_can_be_retried(tracked_sequence, monkeypatch, refusal):
+    module, panel = tracked_sequence
     accepted, history, writes, phase = [True], [], [], ["ready"]
     def approve(run, values):
         writes.append(values)
@@ -900,10 +891,8 @@ def test_approval_history_refusal_raises_and_can_be_retried(panel_modules, monke
     assert len(writes) == count  # Closed/replaced documents remain harmless.
 
 
-def test_undo_of_another_frame_preserves_current_proposal(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_undo_of_another_frame_preserves_current_proposal(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._image_paths = [module.Path("a.png"), module.Path("b.png")]
     invalidated, history = [], []
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": "ready"}, raising=False)
@@ -925,10 +914,8 @@ def test_undo_of_another_frame_preserves_current_proposal(panel_modules, monkeyp
         assert not panel._sam_inspect_pending
 
 
-def test_source_revision_waits_for_native_work_then_revokes_old_proposal(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_source_revision_waits_for_native_work_then_revokes_old_proposal(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._image_paths, panel._mask_paths = [module.Path("a.png")], [None]
     value = panel._mask_editor
     value.enabled = True
@@ -1021,11 +1008,9 @@ def test_scrolling_or_hiding_filmstrip_retires_unseen_mask_textures(panel_module
     panel._metadata.close()
 
 
-def test_prompt_edits_invalidate_only_their_sequence_frame_after_history_accepts(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_prompt_edits_invalidate_only_their_sequence_frame_after_history_accepts(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._image_paths = [module.Path("one.png"), module.Path("two.png")]
-    panel._sam_sequence = {"run": "clip-a"}
     panel._mask_editor.bind("two.png", "r1")
     invalidated = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_invalidate_frame", lambda *a: invalidated.append(a), raising=False)
@@ -1040,11 +1025,9 @@ def test_prompt_edits_invalidate_only_their_sequence_frame_after_history_accepts
     assert panel._mask_editor.draft.points == [(.4, .6, 1)]
 
 
-def test_prompt_edit_during_native_work_restores_draft_without_history(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_prompt_edit_during_native_work_restores_draft_without_history(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._image_paths = [module.Path("frame.png")]
-    panel._sam_sequence = {"run": "clip-a"}
     panel._mask_editor.bind("frame.png", "r1")
     panel._sam_tracking_request = 42
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": "saving"}, raising=False)
@@ -1057,10 +1040,8 @@ def test_prompt_edit_during_native_work_restores_draft_without_history(panel_mod
     assert panel._sam_tracking_request == 42
 
 
-def test_sequence_summary_pages_preserve_saved_masks_after_proposal_revocation(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_sequence_summary_pages_preserve_saved_masks_after_proposal_revocation(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._image_paths = [module.Path(f"{i}.png") for i in range(300)]
     panel._mask_paths = [None] * 300
     panel._filmstrip_range = (0, 300)
@@ -1075,12 +1056,9 @@ def test_sequence_summary_pages_preserve_saved_masks_after_proposal_revocation(p
     assert panel._mask_paths[-1] == module.Path("masks/299.png")
 
 
-def test_failed_inspection_submit_preserves_tracking_handle(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_failed_inspection_submit_preserves_tracking_handle(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._sam_sequence = {"run": "clip-a"}
-    panel._path_stat_cache["frame.png"] = (True, 11, 22)
     panel._sam_tracking_request = 42
     def reject(*a, **kw):
         raise RuntimeError("admission failed")
@@ -1088,8 +1066,6 @@ def test_failed_inspection_submit_preserves_tracking_handle(panel_modules, monke
     panel._sam_inspect_current()
     assert panel._sam_tracking_request == 42
     assert value.error == "admission failed"
-    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
-    panel._path_revision_cache["frame.png"] = "revision-a"
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "tracking"}, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_sequence_frames", lambda *a: [], raising=False)
     updates = []
@@ -1108,10 +1084,8 @@ def test_failed_inspection_submit_preserves_tracking_handle(panel_modules, monke
     assert not panel._sam_worker_busy
 
 
-def test_approval_binding_failure_is_reported_without_creating_history(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
-    panel._sam_sequence = {"run": "clip-a"}
+def test_approval_binding_failure_is_reported_without_creating_history(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     def reject(*a):
         raise RuntimeError("native unavailable")
     monkeypatch.setattr(module.lf.ui, "sam_preview_approve_frames", reject, raising=False)
@@ -1147,15 +1121,10 @@ def test_reopening_the_same_extraction_keeps_the_active_draft_and_approval_conte
     assert panel._sam_sequence is None
 
 
-def test_sequence_failure_survives_navigation_to_another_frame(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_sequence_failure_survives_navigation_to_another_frame(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
-    panel._path_revision_cache["frame.png"] = "revision-a"
-    panel._path_stat_cache["frame.png"] = (True, 11, 22)
     panel._preview_state = "ready"
-    panel._sam_sequence = {"run": "clip-a"}
     panel._sam_inspect_pending = True
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {
         "request": 20, "phase": "error", "error": "disk full", "completed": 1, "total": 2}, raising=False)
@@ -1181,13 +1150,9 @@ def test_frame_navigation_continues_after_approving_but_text_fields_keep_the_arr
     assert steps == [1, -1]
 
 
-def test_saving_after_releasing_sam_does_not_reopen_gpu_inspection(panel_modules, monkeypatch):
-    module, _ = panel_modules
-    panel = module.ImagePreviewPanel()
+def test_saving_after_releasing_sam_does_not_reopen_gpu_inspection(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._image_paths, panel._mask_paths = [module.Path("frame.png")], [None]
-    panel._path_revision_cache["frame.png"] = "revision-a"
-    panel._sam_sequence = {"run": "clip-a"}
     value.request, value.phase = 20, "saving"
     closed, submitted = [], []
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {
