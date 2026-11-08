@@ -4,14 +4,12 @@
 #include "metadata_file_io.hpp"
 #include "source_metadata_internal.hpp"
 extern "C" {
-#include <libavformat/avformat.h>
 #include <libavutil/mathematics.h>
 }
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
-#include <cstring>
 #include <limits>
 
 namespace lfs::media {
@@ -26,36 +24,9 @@ namespace lfs::media {
         std::vector<std::size_t> points;
     };
     namespace {
-        Error srtError(ErrorCode code, std::string detail, int native = 0, core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
-            return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = site, .native = native ? std::optional{NativeError{ErrorDomain::IO, native, "ffmpeg"}} : std::nullopt});
+        Error srtError(ErrorCode code, std::string detail, core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+            return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = site});
         }
-        struct MemoryInput {
-            std::span<const std::uint8_t> bytes;
-            std::size_t offset = 0;
-            static int read(void* opaque, std::uint8_t* target, int capacity) noexcept {
-                auto& input = *static_cast<MemoryInput*>(opaque);
-                if (capacity <= 0)
-                    return AVERROR(EINVAL);
-                const auto count = std::min(input.bytes.size() - input.offset, static_cast<std::size_t>(capacity));
-                if (!count)
-                    return AVERROR_EOF;
-                std::memcpy(target, input.bytes.data() + input.offset, count);
-                input.offset += count;
-                return static_cast<int>(count);
-            }
-        };
-        struct Demux {
-            AVFormatContext* format = nullptr;
-            AVIOContext* io = nullptr;
-            AVPacket* packet = nullptr;
-            ~Demux() {
-                av_packet_free(&packet);
-                avformat_close_input(&format);
-                if (io)
-                    av_freep(&io->buffer);
-                avio_context_free(&io);
-            }
-        };
         std::string_view trim(std::string_view value) {
             const auto space = [](unsigned char c) { return c == ' ' || (c >= '\t' && c <= '\r'); };
             while (!value.empty() && space(value.front()))
@@ -81,7 +52,7 @@ namespace lfs::media {
                 text.remove_prefix(1);
                 return true;
             };
-            if (!takeInteger(text, hours) || hours > std::numeric_limits<int>::max() || !separator(':') ||
+            if (!takeInteger(text, hours) || !separator(':') ||
                 !takeInteger(text, minutes) || minutes > 59 || !separator(':') ||
                 !takeInteger(text, seconds) || seconds > 60 || text.empty() || (text.front() != ',' && text.front() != '.'))
                 return false;
@@ -90,7 +61,10 @@ namespace lfs::media {
                 return false;
             // Matrice camera sidecars use :60 at a minute boundary. Preserve
             // that arithmetic carry, rather than clamping or dropping the cue.
-            value = ((hours * 60 + minutes) * 60 + seconds) * 1000 + milliseconds;
+            const auto remainder = (minutes * 60 + seconds) * 1000 + milliseconds;
+            if (hours > (std::numeric_limits<std::int64_t>::max() - remainder) / 3600000)
+                return false;
+            value = hours * 3600000 + remainder;
             return true;
         }
         bool validTimingSuffix(std::string_view text) {
@@ -123,22 +97,32 @@ namespace lfs::media {
             }
             return text.empty();
         }
-        // This is a guard for the provider's representable input, not a second
-        // subtitle parser. FFmpeg still identifies and produces every cue. Bound
-        // its queue before opening and reject timing that it would repair/wrap.
-        Result<std::size_t> preflightSrt(std::span<const std::uint8_t> bytes, const SrtMetadataLimits& limits) {
-            const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-            std::size_t offset = 0, lines = 0, cues = 0;
+        Result<void> parseSrt(SrtMetadataStorage& storage, const SrtMetadataLimits& limits) {
+            const std::string_view text(reinterpret_cast<const char*>(storage.original.data()), storage.original.size());
+            std::size_t offset = 0, lines = 0, text_begin = 0, text_end = 0;
+            std::optional<std::size_t> possible_index;
+            const auto finish = [&]() -> Result<void> {
+                if (storage.cues.empty())
+                    return {};
+                auto& cue = storage.cues.back();
+                const auto end = possible_index.value_or(text_end);
+                if (end - text_begin > limits.cue_bytes)
+                    return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT cue text exceeds its byte budget (bytes=" + std::to_string(end - text_begin) + ", limit=" + std::to_string(limits.cue_bytes) + ")"));
+                cue.source_offset = static_cast<std::int64_t>(text_begin);
+                cue.text = text.substr(text_begin, end - text_begin);
+                return {};
+            };
             while (offset < text.size()) {
                 if (++lines > limits.lines)
-                    return srtError(ErrorCode::ResourceExhausted, "SRT line budget exceeded before demux (lines=" + std::to_string(lines) + ", limit=" + std::to_string(limits.lines) + ")");
+                    return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT line budget exceeded (lines=" + std::to_string(lines) + ", limit=" + std::to_string(limits.lines) + ")"));
                 const auto delimiter = text.find_first_of("\r\n", offset);
                 const auto end = delimiter == std::string_view::npos ? text.size() : delimiter;
+                auto next = end;
+                if (next < text.size() && text[next++] == '\r' && next < text.size() && text[next] == '\n')
+                    ++next;
                 auto line = text.substr(offset, end - offset);
                 if (const auto nul = line.find('\0'); nul != std::string_view::npos)
-                    return srtError(ErrorCode::Unsupported, "SRT input contains a NUL byte; UTF-16/32 and binary inputs are unsupported (offset=" + std::to_string(offset + nul) + ", size=" + std::to_string(bytes.size()) + ")");
-                if (line.size() > limits.line_bytes)
-                    return srtError(ErrorCode::ResourceExhausted, "SRT text budget exceeded before demux (lines=" + std::to_string(lines) + ", line_bytes=" + std::to_string(line.size()) + ", max_lines=" + std::to_string(limits.lines) + ", max_line_bytes=" + std::to_string(limits.line_bytes) + ")");
+                    return Result<void>::failure(srtError(ErrorCode::Unsupported, "SRT input contains a NUL byte; UTF-16/32 and binary inputs are unsupported (offset=" + std::to_string(offset + nul) + ", size=" + std::to_string(text.size()) + ")"));
                 if (!offset && line.starts_with("\xef\xbb\xbf"))
                     line.remove_prefix(3);
                 line = trim(line);
@@ -146,24 +130,36 @@ namespace lfs::media {
                 if (!line.empty() && ((line.front() >= '0' && line.front() <= '9') || line.front() == '+' || line.front() == '-') &&
                     arrow != std::string_view::npos && line.substr(0, arrow).find(':') != std::string_view::npos) {
                     auto begin = trim(line.substr(0, arrow));
-                    auto finish = trim(line.substr(arrow + 3));
+                    auto ending = trim(line.substr(arrow + 3));
                     std::int64_t start = 0, stop = 0;
-                    if (!takeTime(begin, start) || !trim(begin).empty() || !takeTime(finish, stop) || !validTimingSuffix(finish) ||
-                        stop < start || stop - start > std::numeric_limits<std::int32_t>::max())
-                        return srtError(ErrorCode::DataLoss, "SRT timing is malformed or outside the provider range before demux (line=" + std::to_string(lines) + ", offset=" + std::to_string(offset) + ", max_duration_ms=2147483647)");
-                    if (++cues > limits.cues)
-                        return srtError(ErrorCode::ResourceExhausted, "SRT cue budget exceeded before demux (count=" + std::to_string(cues) + ", limit=" + std::to_string(limits.cues) + ")");
+                    if (!takeTime(begin, start) || !trim(begin).empty() || !takeTime(ending, stop) || !validTimingSuffix(ending) || stop < start)
+                        return Result<void>::failure(srtError(ErrorCode::DataLoss, "SRT timing is malformed or outside the supported range (line=" + std::to_string(lines) + ", offset=" + std::to_string(offset) + ")"));
+                    if (storage.cues.size() >= limits.cues)
+                        return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT cue budget exceeded (count=" + std::to_string(storage.cues.size() + 1) + ", limit=" + std::to_string(limits.cues) + ")"));
+                    if (!storage.cues.empty() && start < storage.cues.back().start_milliseconds)
+                        return Result<void>::failure(srtError(ErrorCode::Unsupported, "SRT timeline reorders source cues; explicit segmentation is required (line=" + std::to_string(lines) + ", start_ms=" + std::to_string(start) + ")"));
+                    if (const auto completed = finish(); !completed)
+                        return Result<void>::failure(completed.error());
+                    storage.cues.push_back(SrtCue{.start_milliseconds = start, .end_milliseconds = stop});
+                    text_begin = text_end = next;
+                    possible_index.reset();
+                } else if (!storage.cues.empty() && !line.empty()) {
+                    // Only an all-digit line immediately preceding the next timing
+                    // can be an index. Preserve every other digit-leading payload.
+                    possible_index = std::all_of(line.begin(), line.end(), [](char c) { return c >= '0' && c <= '9'; })
+                                         ? std::optional(text_end)
+                                         : std::nullopt;
+                    text_end = end;
+                    if (text_end - text_begin > limits.cue_bytes && !possible_index)
+                        return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT cue text exceeds its byte budget (bytes=" + std::to_string(text_end - text_begin) + ", limit=" + std::to_string(limits.cue_bytes) + ")"));
                 }
-                offset = end;
-                if (offset < text.size()) {
-                    const auto first = text[offset++];
-                    if (first == '\r' && offset < text.size() && text[offset] == '\n')
-                        ++offset;
-                }
+                offset = next;
             }
-            return cues;
+            // Without a following timing line, a final all-digit line is text.
+            possible_index.reset();
+            return finish();
         }
-        Result<void> interpret(SrtCue& cue, std::size_t remaining_facts) {
+        Result<void> interpret(SrtCue& cue, std::size_t remaining_facts, const SrtMetadataLimits& limits) {
             const auto marker = [&](std::string_view name) {
                 std::size_t cursor = 0;
                 while ((cursor = cue.text.find(name, cursor)) != std::string::npos) {
@@ -187,6 +183,7 @@ namespace lfs::media {
                 {"latitude", "dji.srt.latitude", "degrees", -90, 90},
                 {"longitude", "dji.srt.longitude", "degrees", -180, 180},
                 {"longtitude", "dji.srt.longitude", "degrees", -180, 180},
+                {"altitude", "dji.srt.altitude", "unspecified", -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
                 {"rel_alt", "dji.srt.relative_altitude", "unspecified", -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
                 {"abs_alt", "dji.srt.absolute_altitude", "unspecified", -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
             };
@@ -216,15 +213,15 @@ namespace lfs::media {
                         if (leading_plus)
                             number.remove_prefix(1);
                         const auto parsed = std::from_chars(number.data(), number.data() + number.size(), value);
-                        DjiSrtFact fact{field.semantic, field.unit, static_cast<std::size_t>(raw.data() - text.data()), raw.size()};
+                        DjiSrtFact fact{field.semantic, field.unit, static_cast<std::size_t>(cue.source_offset) + static_cast<std::size_t>(raw.data() - text.data()), raw.size()};
                         if (!number.empty() && !(leading_plus && number.starts_with('-')) && parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size() &&
                             std::isfinite(value) && value >= field.low && value <= field.high)
                             fact.value = value;
                         for (auto& previous : cue.facts)
                             if (previous.semantic == fact.semantic)
                                 previous.ambiguous = fact.ambiguous = true;
-                        if (cue.facts.size() >= 64 || cue.facts.size() >= remaining_facts)
-                            return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT fact budget exceeded (cue_facts=" + std::to_string(cue.facts.size() + 1) + ", max_cue_facts=64, remaining=" + std::to_string(remaining_facts) + ")"));
+                        if (cue.facts.size() >= limits.cue_facts || cue.facts.size() >= remaining_facts)
+                            return Result<void>::failure(srtError(ErrorCode::ResourceExhausted, "SRT fact budget exceeded (cue_facts=" + std::to_string(cue.facts.size() + 1) + ", max_cue_facts=" + std::to_string(limits.cue_facts) + ", remaining=" + std::to_string(remaining_facts) + ")"));
                         cue.facts.push_back(fact);
                         break;
                     }
@@ -244,9 +241,13 @@ namespace lfs::media {
     Result<SrtMetadataCatalog> MediaIngest::sourceSrtMetadata(const std::filesystem::path& path, const SrtMetadataLimits& limits) {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
             return srtError(ErrorCode::InvalidArgument, "SRT path must be nonempty and contain no NUL bytes (native_units=" + std::to_string(path.native().size()) + ", contains_nul=" + std::to_string(path.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos) + ")");
-        if (!limits.bytes || limits.bytes > 32u * 1024 * 1024 || !limits.cues || limits.cues > 100000 ||
-            !limits.line_bytes || limits.line_bytes > 4095 || !limits.lines || limits.lines > 1000000 || !limits.facts || limits.facts > 500000 || !limits.cue_bytes || limits.cue_bytes > 1024u * 1024)
-            return srtError(ErrorCode::InvalidArgument, "SRT limits must be positive and within maxima (bytes=" + std::to_string(limits.bytes) + "/33554432, cues=" + std::to_string(limits.cues) + "/100000, line_bytes=" + std::to_string(limits.line_bytes) + "/4095, lines=" + std::to_string(limits.lines) + "/1000000, facts=" + std::to_string(limits.facts) + "/500000, cue_bytes=" + std::to_string(limits.cue_bytes) + "/1048576)");
+        if (!limits.bytes || limits.bytes > srt_metadata_maxima.bytes ||
+            !limits.cues || limits.cues > srt_metadata_maxima.cues ||
+            !limits.lines || limits.lines > srt_metadata_maxima.lines ||
+            !limits.facts || limits.facts > srt_metadata_maxima.facts ||
+            !limits.cue_bytes || limits.cue_bytes > srt_metadata_maxima.cue_bytes ||
+            !limits.cue_facts || limits.cue_facts > srt_metadata_maxima.cue_facts)
+            return srtError(ErrorCode::InvalidArgument, "SRT limits must be positive and within maxima (bytes=" + std::to_string(limits.bytes) + "/" + std::to_string(srt_metadata_maxima.bytes) + ", cues=" + std::to_string(limits.cues) + "/" + std::to_string(srt_metadata_maxima.cues) + ", lines=" + std::to_string(limits.lines) + "/" + std::to_string(srt_metadata_maxima.lines) + ", facts=" + std::to_string(limits.facts) + "/" + std::to_string(srt_metadata_maxima.facts) + ", cue_bytes=" + std::to_string(limits.cue_bytes) + "/" + std::to_string(srt_metadata_maxima.cue_bytes) + ", cue_facts=" + std::to_string(limits.cue_facts) + "/" + std::to_string(srt_metadata_maxima.cue_facts) + ")");
         try {
             detail::SidecarFile file;
             const auto size = file.open(path, limits.bytes);
@@ -255,73 +256,17 @@ namespace lfs::media {
             auto bytes = detail::readSidecarBytes(file, *size);
             if (!bytes)
                 return Error(bytes.error()).with_context("Read SRT metadata (path=" + core::path_to_utf8(path) + ")", LFS_SOURCE_SITE_CURRENT());
-            const auto expected_cues = preflightSrt(*bytes, limits);
-            if (!expected_cues)
-                return Error(expected_cues.error()).with_context("Validate SRT metadata (path=" + core::path_to_utf8(path) + ")", LFS_SOURCE_SITE_CURRENT());
-            const auto* input_format = av_find_input_format("srt");
-            if (!input_format)
-                return srtError(ErrorCode::Unavailable, "FFmpeg SRT demuxer is unavailable");
             auto storage = std::make_shared<SrtMetadataStorage>();
             storage->source = detail::sourceMetadataLocator(path);
             storage->original = std::move(*bytes);
-            MemoryInput input{storage->original};
-            Demux demux;
-            auto* buffer = static_cast<std::uint8_t*>(av_malloc(4096));
-            if (!buffer)
-                throw std::bad_alloc();
-            demux.io = avio_alloc_context(buffer, 4096, 0, &input, MemoryInput::read, nullptr, nullptr);
-            if (!demux.io) {
-                av_free(buffer);
-                throw std::bad_alloc();
-            }
-            demux.format = avformat_alloc_context();
-            if (!demux.format)
-                throw std::bad_alloc();
-            demux.format->pb = demux.io;
-            demux.format->flags |= AVFMT_FLAG_CUSTOM_IO;
-            const auto opened = avformat_open_input(&demux.format, nullptr, input_format, nullptr);
-            if (opened < 0)
-                return srtError(opened == AVERROR(ENOMEM) ? ErrorCode::ResourceExhausted : ErrorCode::DataLoss, "FFmpeg could not read SRT input (path=" + core::path_to_utf8(path) + ", native=" + std::to_string(opened) + ")", opened);
-            demux.packet = av_packet_alloc();
-            if (!demux.packet)
-                throw std::bad_alloc();
-            std::int64_t previous_position = -1, previous_pts = -1, group_floor = -1;
-            std::size_t text_bytes = 0, facts = 0;
-            int status = 0;
-            while ((status = av_read_frame(demux.format, demux.packet)) >= 0) {
-                const auto& packet = *demux.packet;
-                if (storage->cues.size() >= limits.cues)
-                    return srtError(ErrorCode::ResourceExhausted, "SRT cue budget exceeded (count=" + std::to_string(storage->cues.size() + 1) + ", limit=" + std::to_string(limits.cues) + ")");
-                if (packet.stream_index < 0 || static_cast<unsigned>(packet.stream_index) >= demux.format->nb_streams ||
-                    packet.pts == AV_NOPTS_VALUE || packet.pts < 0 || packet.duration < 0 || packet.size < 0 ||
-                    packet.pos < 0 || static_cast<std::uint64_t>(packet.pos) >= storage->original.size() || (packet.size && !packet.data))
-                    return srtError(ErrorCode::DataLoss, "SRT cue has missing/invalid timing or packet position (cue=" + std::to_string(storage->cues.size()) + ", pts=" + std::to_string(packet.pts) + ", duration=" + std::to_string(packet.duration) + ", position=" + std::to_string(packet.pos) + ", previous_position=" + std::to_string(previous_position) + ")");
-                if (packet.pts != previous_pts) {
-                    group_floor = previous_position;
-                    previous_pts = packet.pts;
-                }
-                if (packet.pos < group_floor)
-                    return srtError(ErrorCode::Unsupported, "SRT timeline reorders source cues; explicit segmentation is required (cue=" + std::to_string(storage->cues.size()) + ", pts=" + std::to_string(packet.pts) + ", position=" + std::to_string(packet.pos) + ", previous_group_position=" + std::to_string(group_floor) + ")");
-                const auto time_base = demux.format->streams[packet.stream_index]->time_base;
-                if (time_base.num != 1 || time_base.den != 1000 || packet.duration > std::numeric_limits<std::int64_t>::max() - packet.pts)
-                    return srtError(ErrorCode::DataLoss, "SRT cue requires finite millisecond timing (time_base=" + std::to_string(time_base.num) + "/" + std::to_string(time_base.den) + ")");
-                if (static_cast<std::size_t>(packet.size) > limits.cue_bytes)
-                    return srtError(ErrorCode::ResourceExhausted, "SRT cue text exceeds its byte budget (cue=" + std::to_string(storage->cues.size()) + ", bytes=" + std::to_string(packet.size) + ", limit=" + std::to_string(limits.cue_bytes) + ")");
-                if (static_cast<std::size_t>(packet.size) > limits.bytes - text_bytes)
-                    return srtError(ErrorCode::ResourceExhausted, "SRT demuxed text exceeds the input byte budget (retained=" + std::to_string(text_bytes) + ", next=" + std::to_string(packet.size) + ", limit=" + std::to_string(limits.bytes) + ")");
-                SrtCue cue;
-                cue.start_milliseconds = packet.pts;
-                cue.end_milliseconds = packet.pts + packet.duration;
-                cue.source_offset = packet.pos;
-                if (packet.size)
-                    cue.text.assign(reinterpret_cast<const char*>(packet.data), packet.size);
-                if (const auto interpreted = interpret(cue, limits.facts - facts); !interpreted)
+            if (const auto parsed = parseSrt(*storage, limits); !parsed)
+                return Error(parsed.error()).with_context("Read SRT metadata (path=" + core::path_to_utf8(path) + ")", LFS_SOURCE_SITE_CURRENT());
+            std::size_t facts = 0;
+            for (std::size_t index = 0; index < storage->cues.size(); ++index) {
+                auto& cue = storage->cues[index];
+                if (const auto interpreted = interpret(cue, limits.facts - facts, limits); !interpreted)
                     return interpreted.error();
                 facts += cue.facts.size();
-                text_bytes += packet.size;
-                previous_position = std::max(previous_position, packet.pos);
-                storage->cues.push_back(std::move(cue));
-                const auto index = storage->cues.size() - 1;
                 if (storage->cues[index].start_milliseconds == storage->cues[index].end_milliseconds)
                     storage->points.push_back(index);
                 constexpr auto missing = std::numeric_limits<std::size_t>::max();
@@ -333,14 +278,9 @@ namespace lfs::media {
                     best[1] = index;
                 }
                 storage->candidates.push_back(best);
-                av_packet_unref(demux.packet);
             }
-            if (status != AVERROR_EOF)
-                return srtError(status == AVERROR(ENOMEM) ? ErrorCode::ResourceExhausted : ErrorCode::DataLoss, "Read SRT packet failed (path=" + core::path_to_utf8(path) + ", native=" + std::to_string(status) + ")", status);
             if (storage->cues.empty())
                 return srtError(ErrorCode::DataLoss, "SRT input contains no timed cues (path=" + core::path_to_utf8(path) + ", bytes=" + std::to_string(storage->original.size()) + ")");
-            if (storage->cues.size() != *expected_cues)
-                return srtError(ErrorCode::Unsupported, "FFmpeg normalized or removed SRT occurrences; ambiguous/dropped input is unsupported (path=" + core::path_to_utf8(path) + ", expected=" + std::to_string(*expected_cues) + ", observed=" + std::to_string(storage->cues.size()) + ")");
             return SrtMetadataCatalog(std::move(storage));
         } catch (const std::bad_alloc&) {
             return srtError(ErrorCode::ResourceExhausted, "SRT metadata allocation failed (path=" + core::path_to_utf8(path) + ")");

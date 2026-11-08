@@ -8,13 +8,13 @@ namespace lfs::media {
     struct SrtMetadataLimits {
         std::size_t bytes = 32u * 1024 * 1024;
         std::size_t cues = 100000;
-        // The provider splits longer physical lines, potentially inside a value.
-        std::size_t line_bytes = 4095;
         std::size_t lines = 1000000;
         std::size_t facts = 500000;
         std::size_t cue_bytes = 256u * 1024;
+        std::size_t cue_facts = 64;
     };
-    // Offsets refer to the owned cue text, not to the input file. Unknown text
+    inline constexpr SrtMetadataLimits srt_metadata_maxima{.cue_bytes = 1024u * 1024};
+    // Offsets refer to the original input bytes. Unknown text
     // remains available even when no numeric interpretation is supported.
     struct DjiSrtFact {
         std::string_view semantic;
@@ -27,9 +27,9 @@ namespace lfs::media {
     struct SrtCue {
         std::int64_t start_milliseconds = 0;
         std::int64_t end_milliseconds = 0;
-        // FFmpeg packet position, not a range for the normalized text below.
+        // Text is a slice of the catalog's immutable original bytes.
         std::int64_t source_offset = -1;
-        std::string text;
+        std::string_view text;
         std::vector<DjiSrtFact> facts;
         bool dji_bracket_profile = false;
     };

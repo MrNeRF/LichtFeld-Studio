@@ -48,15 +48,11 @@ class SourceMetadataBindings(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def test_srt_corrupt_timing_and_duplicate_occurrences_are_refused(self):
+    def test_srt_corrupt_timing_is_refused(self):
         path = self.root / "corrupt telemetry.srt"
         cases = (
             b"1\n00:00:01,000 --> 00:00:00,000\nx\n\n2\n00:00:02,000 --> 00:00:03,000\ny\n",
-            b"1\n00:00:00,000 --> 1300:00:00,000\nx\n",
             b"1\n999999999999999999999:00:00,000 --> 00:00:01,000\nx\n",
-            srt_metadata_fixture.cues([(0, 0, "same"), (0, 0, "same")]),
-            srt_metadata_fixture.cues([(0, 1000, "same"), (0, 1000, "same")]),
-            srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 " + "x" * 4071 + "[latitude: 12]")]),
             b"\xff\xfe1\0",
         )
         for packet in cases:
@@ -94,12 +90,13 @@ class SourceMetadataBindings(unittest.TestCase):
                 for cue in observation["cues"]:
                     self.assertGreaterEqual(cue["start_ms"], 0)
                     self.assertGreaterEqual(cue["end_ms"], cue["start_ms"])
-                    self.assertLess(cue["source_offset"], len(packet))
+                    self.assertLessEqual(cue["source_offset"], len(packet))
                     self.assertGreaterEqual(cue["source_offset"], 0)
                     text = bytes.fromhex(cue["text_bytes"])
+                    self.assertEqual(packet[cue["source_offset"]:cue["source_offset"]+len(text)], text)
                     for fact in cue["facts"]:
-                        self.assertGreaterEqual(fact["text_offset"], 0)
-                        self.assertLessEqual(fact["text_offset"] + fact["text_bytes"], len(text))
+                        self.assertGreaterEqual(fact["source_offset"], cue["source_offset"])
+                        self.assertLessEqual(fact["source_offset"] + fact["text_bytes"], cue["source_offset"] + len(text))
                 self.assertEqual(path.read_bytes(), packet)
 
     def test_srt_lookup_matches_independent_rational_reference(self):
@@ -156,7 +153,7 @@ class SourceMetadataBindings(unittest.TestCase):
         cue_bytes = bytes.fromhex(cue["text_bytes"])
         self.assertEqual(cue["text"].encode("utf-8"), cue_bytes)
         latitude = next(fact for fact in cue["facts"] if fact["semantic"] == "dji.srt.latitude")
-        self.assertEqual(cue_bytes[latitude["text_offset"]:latitude["text_offset"]+latitude["text_bytes"]], b"0")
+        self.assertEqual(packet[latitude["source_offset"]:latitude["source_offset"]+latitude["text_bytes"]], b"0")
         self.assertEqual(path.stat().st_mtime_ns, before)
         path.unlink()
         self.assertEqual(bytes.fromhex(json.loads(catalog.metadata_json())["original_bytes"]), packet)

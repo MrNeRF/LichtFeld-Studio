@@ -863,7 +863,7 @@ class MediaIngest:
     @staticmethod
     def source_srt_metadata(path: str | os.PathLike) -> SrtMetadataCatalog:
         """
-        Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Uses FFmpeg SRT demux and bounded DJI bracket-field interpretation.
+        Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Preserves original cue byte ranges and applies bounded DJI bracket-field interpretation.
         """
 
     @staticmethod

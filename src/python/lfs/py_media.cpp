@@ -161,7 +161,7 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 const auto result = MediaIngest::sourceSrtMetadata(path);
                 if (!result) throw Exception(result.error());
-                return *result; }, nb::arg("path"), "Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Uses FFmpeg SRT demux and bounded DJI bracket-field interpretation.")
+                return *result; }, nb::arg("path"), "Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Preserves original cue byte ranges and applies bounded DJI bracket-field interpretation.")
             .def_static("capabilities", &MediaIngest::capabilities)
             .def_static("source_metadata_json", [](const std::filesystem::path& path) {
                 nb::gil_scoped_release release;

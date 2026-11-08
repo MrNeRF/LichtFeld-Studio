@@ -975,46 +975,34 @@ additional memory, as with the existing source-metadata command.
 SRT here denotes SubRip subtitle files.
 
 `MediaIngest::sourceSrtMetadata(path, limits)` reads an explicitly supplied
-subtitle file into an immutable `SrtMetadataCatalog`. It reuses the existing
-FFmpeg SRT demuxer through a private memory input after a bounded native-file
-read. It opens no network input, discovers no companion and decodes no pixels.
+subtitle file into an immutable `SrtMetadataCatalog`. The bounded native-file
+reader and a single SRT parser collect timing and text from those same bytes.
+It opens no network input, discovers no companion and decodes no pixels.
 Windows can refuse a directory at native open with PermissionDenied before the
-opened-object regular-file check; POSIX normally reaches that check and reports
-FailedPrecondition. Native error codes and the actual path are preserved.
-The catalog owns the complete original file bytes, the FFmpeg cue texts and
-intervals, and the source locator. Copies share this storage. Views require a
-live catalog. Reading does not modify the file.
+opened-object regular-file check; POSIX normally reports FailedPrecondition.
+Native error codes and the actual path are preserved.
 
-FFmpeg performs the subtitle parsing and can normalize line endings or ignore
-text that is not a subtitle cue. The demuxed cues are therefore not a claim of
-strict validation or lossless structural parsing of every source line; the
-complete original file remains available separately. The reported packet
-position is FFmpeg's source position, not a byte range for the normalized cue
-text. Fact offsets/lengths index the decoded `text_bytes` bytes, rather than
-Unicode code-point positions in the JSON display text. Lookup indices refer to
-the same catalog, and lookup JSON retains its own source locator.
-Binary/NUL-containing input, including UTF-16/32 SRT, is refused. Invalid
-UTF-8 bytes remain available in the raw fields; JSON display text uses the shared
-replacement policy.
+The catalog owns the complete original file and source locator. Cue texts are
+views into these immutable bytes; copies share the storage, and views require a
+live catalog. Reading does not modify the file. Cue `source_offset` and each
+fact's `source_offset`/`text_bytes` identify byte ranges in `original_bytes`, not
+Unicode code points. Lookup indices refer to the same catalog.
 
-Before FFmpeg opens the memory input, a bounded guard counts timing lines and
-checks their numeric ranges. It refuses reversed intervals, components outside
-their clock ranges, durations above 2,147,483,647 milliseconds, and malformed or
-out-of-range optional `X1/X2/Y1/Y2` subtitle coordinates. These checks prevent the
-provider from repairing a negative duration or narrowing an oversized one. Cue-count
-and physical-line budgets apply before the provider materializes its subtitle
-queue. CRLF, LF and CR line endings and an initial UTF-8 BOM are supported.
-The `:60` second carry used at minute boundaries by Matrice sidecars retains
-its exact arithmetic value; it is not clamped or treated as a civil leap second.
-Physical lines are limited to 4,095 bytes because the provider would otherwise
-split them and could change a numeric token. A mismatch between counted source
-timing lines and demuxed cues is refused, including identical occurrences that
-FFmpeg deduplicates. Distinct retained cues remain subject to the lookup's
-overlap/duplicate-point ambiguity checks.
+The parser supports CRLF, LF and CR line endings and an initial UTF-8 BOM.
+It retains internal line endings, paragraphs, empty cues and digit-leading text.
+An all-digit line before a timing line is treated as a cue index; an all-digit
+line followed by other text or EOF remains text. Blank lines at cue boundaries
+are separators. Reversed intervals, invalid clock components and malformed or
+out-of-range optional `X1/X2/Y1/Y2` coordinates are refused. The `:60` carry used
+by Matrice sidecars retains its arithmetic value without clamping. Identical
+occurrences remain separate; lookup applies its overlap/point ambiguity rules.
+There is no provider-specific physical-line or signed 32-bit duration limit.
+Binary/NUL-containing input, including UTF-16/32 SRT, is refused. Invalid UTF-8
+bytes remain in raw fields; JSON display text uses the shared replacement policy.
 
 The first interpreter recognizes the DJI bracket profile with `FrameCnt:` or
-`SrtCnt:` as complete tokens and lowercase `latitude`, `longitude`/`longtitude`, `rel_alt` and
-`abs_alt` fields. Latitude and longitude are finite decimal degree declarations
+`SrtCnt:` as complete tokens and lowercase `latitude`, `longitude`/`longtitude`,
+`altitude`, `rel_alt` and `abs_alt` fields. Latitude and longitude are finite decimal degree declarations
 with range checks. Altitudes are retained as distinct vendor declarations with
 unspecified units/datum; no geoid or sea-level conversion is inferred. Duplicate
 semantic fields remain ambiguous, invalid values remain invalid, and zero is a
@@ -1033,7 +1021,7 @@ as point samples and match only at their exact timestamp by default. It returns
 no match in gaps or outside coverage and refuses overlapping matches as ambiguous. The index
 uses binary search and two interval-end candidates per start-time prefix,
 including when an early long cue overlaps many expired short cues. Source
-positions reordered by FFmpeg's time sorting are refused rather than silently
+start times that decrease in file order are refused rather than silently
 adopting a reset/reordered timeline. The caller must provide a timestamp origin
 and offset appropriate to the source; the filename and civil date do not define
 synchronization. An optional `point_tolerance_milliseconds` enables nearest-point fallback when
@@ -1077,15 +1065,12 @@ media-ingest source-srt-metadata flight.srt --timestamp 4500 1 90000 --offset-ms
 ```
 
 Default budgets are 32 MiB original bytes, 100,000 cues, 500,000 interpreted
-facts, 256 KiB text per cue, 4,095-byte physical lines and 1,000,000 lines. Native
-callers can lower budgets; cue text can be raised to 1 MiB. Each cue retains at
-most 64 interpreted facts. Budget exhaustion returns an error rather than a
-truncated complete observation. The input and record limits are not a process
-memory ceiling: FFmpeg's subtitle queue, owned cue strings, the interval index
-and JSON have separate allocations. Cue-text and interpreted-fact limits are
-checked during collection after demux; they do not cap the provider's allocations.
-Original byte and cue-text budgets are checked independently; no whole-file JSON
-is copied for a lookup.
+facts, 256 KiB text per cue, 64 facts per cue and 1,000,000 physical lines. Native
+callers can lower budgets; cue text can be raised to 1 MiB. The shared constexpr
+`srt_metadata_maxima` defines the permitted upper bounds. Exhaustion returns an
+error rather than a truncated complete observation. These limits are not a
+process memory ceiling: cue records, facts, lookup index and JSON allocate
+separately. Text views share the original bytes; lookup copies no whole-file JSON.
 
 Timed subtitle/data streams inside video files remain a separate demux consumer.
 Enumeration of static stream metadata does not imply timed packet collection.

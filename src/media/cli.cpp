@@ -133,23 +133,38 @@ namespace {
                 }
             }
             if (args.size() >= 2 && args[1] == "source-srt-metadata") {
-                if (args.size() != 3 && ((args.size() != 9 && args.size() != 11) || args[3] != "--timestamp" || args[7] != "--offset-ms" || (args.size() == 11 && args[9] != "--point-tolerance-ms")))
+                if (args.size() < 3)
                     throw std::invalid_argument("Expected source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]");
                 std::optional<Timestamp> query;
-                std::int64_t offset = 0;
-                std::optional<std::int64_t> tolerance;
-                if (args.size() >= 9) {
-                    query = Timestamp{number<std::int64_t>(args[4]), {number<int>(args[5]), number<int>(args[6])}};
-                    offset = number<std::int64_t>(args[8]);
-                    if (args.size() == 11)
-                        tolerance = number<std::int64_t>(args[10]);
+                std::optional<std::int64_t> offset, tolerance;
+                for (std::size_t i = 3; i < args.size(); ++i) {
+                    const auto& flag = args[i];
+                    auto value = [&]() -> const std::string& {
+                        if (i + 1 >= args.size())
+                            throw std::invalid_argument("Missing value for " + flag);
+                        return args[++i];
+                    };
+                    if (flag == "--timestamp" && !query) {
+                        const auto ticks = number<std::int64_t>(value());
+                        const auto numerator = number<int>(value());
+                        const auto denominator = number<int>(value());
+                        query = Timestamp{ticks, {numerator, denominator}};
+                    } else if (flag == "--offset-ms" && !offset) {
+                        offset = number<std::int64_t>(value());
+                    } else if (flag == "--point-tolerance-ms" && !tolerance) {
+                        tolerance = number<std::int64_t>(value());
+                    } else {
+                        throw std::invalid_argument("Unknown or repeated SRT option: " + flag);
+                    }
                 }
+                if (query.has_value() != offset.has_value() || (tolerance && !query))
+                    throw std::invalid_argument("SRT lookup requires --timestamp and --offset-ms together; --point-tolerance-ms requires lookup");
                 try {
                     const auto catalog = MediaIngest::sourceSrtMetadata(lfs::core::utf8_to_path(args[2]));
                     if (!catalog)
                         return failed(catalog.error());
                     if (query) {
-                        const auto result = json_detail::srtLookup(*catalog, *query, offset, tolerance);
+                        const auto result = json_detail::srtLookup(*catalog, *query, *offset, tolerance);
                         if (!result)
                             return failed(result.error());
                         std::cout << json_detail::dump(*result) << '\n';

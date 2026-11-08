@@ -48,7 +48,7 @@ int runSrtMetadataContracts() {
     if (!result)
         throw std::runtime_error(std::string(result.error().detail()));
     auto catalog = *result;
-    require(catalog.cues().size() == 2, "FFmpeg SRT cue count");
+    require(catalog.cues().size() == 2, "SRT cue count");
     const auto raw = catalog.originalBytes();
     require(std::string_view(reinterpret_cast<const char*>(raw.data()), raw.size()) == packet && std::filesystem::last_write_time(path) == before,
             "SRT collection preserves every original CRLF byte and input mtime");
@@ -59,8 +59,8 @@ int runSrtMetadataContracts() {
                 first.facts[2].value == 12.5 && first.facts[3].value == -2.0 && first.facts[2].unit == "unspecified",
             "DJI bracket facts retain zero, signs, alias and distinct altitude declarations");
     for (const auto& fact : first.facts) {
-        require(fact.offset <= first.text.size() && fact.bytes <= first.text.size() - fact.offset,
-                "fact byte provenance stays inside the owned cue text");
+        require(fact.offset >= static_cast<std::size_t>(first.source_offset) && fact.offset <= raw.size() && fact.bytes <= raw.size() - fact.offset,
+                "fact byte provenance stays inside the original input");
     }
     const auto expect = [&](Timestamp timestamp, std::int64_t offset, std::optional<std::size_t> index) {
         const auto match = catalog.lookup(timestamp, offset);
@@ -78,7 +78,7 @@ int runSrtMetadataContracts() {
     require(!catalog.lookup({std::numeric_limits<std::int64_t>::max(), {1, 1000}}, 1), "offset overflow rejected");
     require(!catalog.lookup({std::numeric_limits<std::int64_t>::max(), {std::numeric_limits<int>::max(), 1}}, 0), "rescale overflow rejected");
     for (const auto limits : {SrtMetadataLimits{.bytes = std::string_view(packet).size() - 1}, SrtMetadataLimits{.cues = 1},
-                              SrtMetadataLimits{.line_bytes = 10}, SrtMetadataLimits{.lines = 2}, SrtMetadataLimits{.facts = 1}, SrtMetadataLimits{.cue_bytes = 10}}) {
+                              SrtMetadataLimits{.cue_facts = 1}, SrtMetadataLimits{.lines = 2}, SrtMetadataLimits{.facts = 1}, SrtMetadataLimits{.cue_bytes = 10}}) {
         const auto limited = MediaIngest::sourceSrtMetadata(path, limits);
         require(!limited && limited.error().code() == lfs::ErrorCode::ResourceExhausted, "each SRT collection budget is enforced");
     }
@@ -121,7 +121,7 @@ int runSrtMetadataContracts() {
     require(surviving && *surviving && tied->cues()[**surviving].end_milliseconds == 2000, "long tied cue survives short cue expiry");
     write("1\n00:00:01,000 --> 00:00:02,000\na\n\n2\n00:00:00,000 --> 00:00:00,500\nb\n");
     const auto reset = MediaIngest::sourceSrtMetadata(path);
-    require(!reset && reset.error().code() == lfs::ErrorCode::Unsupported, "FFmpeg sorting cannot hide a source clock reset");
+    require(!reset && reset.error().code() == lfs::ErrorCode::Unsupported, "source clock reset requires explicit segmentation");
     write("1\n00:00:00,000 --> 00:00:00,000\na\n\n2\n00:00:00,002 --> 00:00:00,002\nb\n");
     const auto points = MediaIngest::sourceSrtMetadata(path);
     require(points && points->cues().size() == 2, "zero-duration camera cues are retained as point samples");
@@ -155,18 +155,21 @@ int runSrtMetadataContracts() {
             "UTF16/binary SRT is refused with its observed NUL position");
     for (const auto text : {
              "1\n00:00:01,000 --> 00:00:00,000\nx\n\n2\n00:00:02,000 --> 00:00:03,000\ny\n",
-             "1\n00:00:00,000 --> 1300:00:00,000\nx\n",
              "1\n999999999999999999999:00:00,000 --> 00:00:01,000\nx\n",
              "1\n00:60:00,000 --> 01:01:00,000\nx\n",
              "1\n00:00:00,000 --> 00:00:01,000 X1:99999999999999999999 X2:2 Y1:3 Y2:4\nx\n"}) {
         write(text);
-        require(!MediaIngest::sourceSrtMetadata(path), "original malformed or unrepresentable timing is refused before FFmpeg repairs it");
+        require(!MediaIngest::sourceSrtMetadata(path), "malformed or unrepresentable timing is refused");
     }
     write("1\n00:00:00,000 --> 596:31:23,647\nx\n");
     const auto longest = MediaIngest::sourceSrtMetadata(path);
-    require(longest && longest->cues()[0].end_milliseconds == 2147483647, "exact provider duration maximum is retained");
+    require(longest && longest->cues()[0].end_milliseconds == 2147483647, "long durations retain their exact millisecond value");
     write("1\n00:00:00,000 --> 596:31:23,648\nx\n");
-    require(!MediaIngest::sourceSrtMetadata(path), "provider duration maximum plus one is refused");
+    require(MediaIngest::sourceSrtMetadata(path)->cues()[0].end_milliseconds == 2147483648LL, "duration is not narrowed to a signed 32-bit value");
+    write("1\n00:00:00,000 --> 2562047788015:12:55,807\nx\n");
+    require(MediaIngest::sourceSrtMetadata(path)->cues()[0].end_milliseconds == std::numeric_limits<std::int64_t>::max(), "maximum signed 64-bit millisecond timestamp is retained");
+    write("1\n00:00:00,000 --> 2562047788015:12:55,808\nx\n");
+    require(!MediaIngest::sourceSrtMetadata(path), "timestamp overflow beyond the exact 64-bit boundary is refused");
     write("1\n00:00:00.000 --> 00:00:01.000 X1:-1 X2:+2 Y1:3 Y2:4\nx\n");
     require(MediaIngest::sourceSrtMetadata(path).has_value(), "supported decimal separator and bounded subtitle coordinates remain accepted");
     write("1\n00:00:59,000 --> 00:00:60,000\nx\n\n2\n00:01:00,000 --> 00:01:01,000\ny\n");
@@ -177,7 +180,8 @@ int runSrtMetadataContracts() {
     for (const auto end : {"00:00:00,000", "00:00:01,000"}) {
         const auto entry = std::string("00:00:00,000 --> ") + end + "\nx\n\n";
         write("1\n" + entry + "2\n" + entry);
-        require(!MediaIngest::sourceSrtMetadata(path), "identical provider-deduplicated occurrences cannot become one unambiguous sample");
+        const auto duplicate = MediaIngest::sourceSrtMetadata(path);
+        require(duplicate && duplicate->cues().size() == 2 && !duplicate->lookup({0, {1, 1000}}, 0), "identical occurrences are retained and lookup refuses ambiguity");
     }
     for (const auto marker : {"NotFrameCnt:", "_SrtCnt:", "FrameCntExtra:", "FrameCnt"}) {
         write(std::string("1\n00:00:00,000 --> 00:00:01,000\n") + marker + " [latitude: 12]\n");
@@ -199,11 +203,12 @@ int runSrtMetadataContracts() {
     for (const auto length : {4094u, 4095u, 4096u}) {
         write(heading + std::string(length, 'x') + "\n");
         const auto line = MediaIngest::sourceSrtMetadata(path);
-        require(length <= 4095 ? line && line->cues()[0].text == std::string(length, 'x') : !line,
-                "provider line boundary is exact and never introduces a synthetic newline");
+        require(line && line->cues()[0].text == std::string(length, 'x'),
+                "long physical lines retain their exact original bytes");
     }
     write(heading + "FrameCnt: 1 " + std::string(4071, 'x') + "[latitude: 12]\n");
-    require(!MediaIngest::sourceSrtMetadata(path), "numeric token crossing the provider line boundary is refused rather than changed");
+    const auto long_line = MediaIngest::sourceSrtMetadata(path);
+    require(long_line && long_line->cues()[0].facts[0].value == 12, "numeric token after a long physical line prefix remains intact");
     write("1\r00:00:00,000 --> 00:00:01,000\rFrameCnt: 1 [latitude: 12]\r");
     const auto cr = MediaIngest::sourceSrtMetadata(path);
     require(cr && cr->cues()[0].facts[0].value == 12, "CR-only line endings are supported without inventing text");
@@ -217,15 +222,15 @@ int runSrtMetadataContracts() {
     }
     write(packet);
     const auto early_cues = MediaIngest::sourceSrtMetadata(path, {.cues = 1});
-    require(!early_cues && std::string(early_cues.error().detail()).find("before demux") != std::string::npos,
-            "cue quota is enforced before the provider queues the complete input");
+    require(!early_cues && std::string(early_cues.error().detail()).find("SRT cue budget exceeded") != std::string::npos,
+            "cue quota stops collection at the first excessive cue");
     write("1\n\v00:00:00,000 --> 00:00:01,000\nx\n\n2\n\f00:00:01,000 --> 00:00:02,000\ny\n");
     const auto spaced_cues = MediaIngest::sourceSrtMetadata(path, {.cues = 1});
-    require(!spaced_cues && std::string(spaced_cues.error().detail()).find("before demux") != std::string::npos,
-            "ASCII scanf whitespace cannot bypass the early cue quota");
+    require(!spaced_cues && std::string(spaced_cues.error().detail()).find("SRT cue budget exceeded") != std::string::npos,
+            "ASCII whitespace cannot bypass the cue quota");
     write("\xef\xbb\xbf"
           "00:00:00,000 --> 00:00:01,000\nx\n");
-    require(MediaIngest::sourceSrtMetadata(path).has_value(), "UTF8 BOM before a timestamp is recognized by both guard and provider");
+    require(MediaIngest::sourceSrtMetadata(path).has_value(), "UTF8 BOM before a timestamp is recognized by the parser");
     {
         constexpr std::size_t maximum = 32u * 1024 * 1024;
         const std::string cue = heading + "x\n";
@@ -250,6 +255,17 @@ int runSrtMetadataContracts() {
         const auto too_large = MediaIngest::sourceSrtMetadata(path);
         require(!too_large && too_large.error().code() == lfs::ErrorCode::ResourceExhausted, "maximum original size plus one is refused before parsing");
     }
+    write("00:00:00,000 --> 00:00:01,000\r\n12.5 m\r\n\r\nFrameCnt: 1 [longtitude: -73] [altitude: 12]\r\n123\r\nkept\r\n\r\n2\r\n00:00:01,000 --> 00:00:02,000\r\n\r\n3\r\n00:00:02,000 --> 00:00:03,000\r\n456");
+    const auto native = MediaIngest::sourceSrtMetadata(path);
+    require(native && native->cues().size() == 3, "empty cue between valid cues is retained");
+    require(native->cues()[0].text == "12.5 m\r\n\r\nFrameCnt: 1 [longtitude: -73] [altitude: 12]\r\n123\r\nkept" && native->cues()[1].text.empty() && native->cues()[2].text == "456",
+            "indexless digit-leading text, paragraphs, numeric payload and original CRLF survive");
+    require(native->cues()[0].facts.size() == 2 && native->cues()[0].facts[1].semantic == "dji.srt.altitude" && native->cues()[0].facts[1].unit == "unspecified" && native->cues()[0].facts[1].value == 12,
+            "altitude is a distinct declaration without an inferred datum");
+    write(heading + "12345");
+    require(MediaIngest::sourceSrtMetadata(path, {.cue_bytes = 5}).has_value() && !MediaIngest::sourceSrtMetadata(path, {.cue_bytes = 4}), "numeric final text obeys the exact cue byte budget");
+    for (const auto limit : {SrtMetadataLimits{.cue_facts = 0}, SrtMetadataLimits{.cue_facts = 65}})
+        require(!MediaIngest::sourceSrtMetadata(path, limit), "per-cue fact limits must be positive and bounded");
     std::mt19937 random(73561);
     for (unsigned i = 0; i < 128; ++i) {
         std::string mutated(packet);
@@ -269,10 +285,12 @@ int runSrtMetadataContracts() {
         require(std::string_view(reinterpret_cast<const char*>(original.data()), original.size()) == mutated, "accepted corrupted input retains its exact original bytes");
         for (const auto& cue : observed->cues()) {
             require(cue.start_milliseconds >= 0 && cue.end_milliseconds >= cue.start_milliseconds && cue.source_offset >= 0 &&
-                        static_cast<std::uint64_t>(cue.source_offset) < original.size(),
+                        static_cast<std::uint64_t>(cue.source_offset) <= original.size() &&
+                        cue.text.size() <= original.size() - static_cast<std::size_t>(cue.source_offset) &&
+                        cue.text.data() == reinterpret_cast<const char*>(original.data()) + cue.source_offset,
                     "accepted corrupted input retains valid intervals and source offsets");
             for (const auto& fact : cue.facts)
-                require(fact.offset <= cue.text.size() && fact.bytes <= cue.text.size() - fact.offset, "corrupted fact ranges remain inside owned text");
+                require(fact.offset >= static_cast<std::size_t>(cue.source_offset) && fact.offset <= static_cast<std::size_t>(cue.source_offset) + cue.text.size() && fact.bytes <= static_cast<std::size_t>(cue.source_offset) + cue.text.size() - fact.offset, "corrupted fact ranges remain inside the original cue slice");
         }
         const auto serialized = json_detail::srtMetadataJson(*observed);
         require(serialized && !serialized->empty(), "corrupted non-UTF8 input remains serializable with retained raw bytes");

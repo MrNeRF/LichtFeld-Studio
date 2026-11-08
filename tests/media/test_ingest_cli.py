@@ -1983,13 +1983,10 @@ class IngestCLI(unittest.TestCase):
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
 
-    def test_source_srt_metadata_rejects_provider_normalization_and_bad_timing(self):
+    def test_source_srt_metadata_rejects_bad_timing_and_binary_input(self):
         path = self.root / "corrupt telemetry.srt"
         for packet, code, error in (
             (b"1\n00:00:01,000 --> 00:00:00,000\nx\n\n2\n00:00:02,000 --> 00:00:03,000\ny\n", 3, "DataLoss"),
-            (b"1\n00:00:00,000 --> 1300:00:00,000\nx\n", 3, "DataLoss"),
-            (srt_metadata_fixture.cues([(0, 0, "same"), (0, 0, "same")]), 3, "Unsupported"),
-            (srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 " + "x" * 4071 + "[latitude: 12]")]), 4, "ResourceExhausted"),
             (b"\xff\xfe1\0", 3, "Unsupported"),
         ):
             with self.subTest(error=error, packet=packet[:60]):
@@ -2015,6 +2012,15 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual([(cue["start_ms"], cue["end_ms"]) for cue in result["cues"]], [(1000, 1150), (1400, 2000)])
         match, _ = self.invoke("source-srt-metadata", path, "--timestamp", "100", "1", "1000", "--offset-ms", "1000")
         self.assertEqual(match["match"]["cue"], 0)
+        reordered, _ = self.invoke("source-srt-metadata", path, "--point-tolerance-ms", "1", "--offset-ms", "1000", "--timestamp", "100", "1", "1000")
+        self.assertEqual(reordered["match"], match["match"])
+        for flags in (("--offset-ms", "0"), ("--point-tolerance-ms", "1"), ("--timestamp", "0", "1"),
+                      ("--offset-ms",), ("--unknown", "0"),
+                      ("--timestamp", "0", "1", "1000", "--offset-ms", "0", "--offset-ms", "0"),
+                      ("--timestamp", "0", "1", "1000", "--timestamp", "0", "1", "1000", "--offset-ms", "0"),
+                      ("--timestamp", "0", "1", "1000", "--offset-ms", "0", "--point-tolerance-ms", "0", "--point-tolerance-ms", "0")):
+            with self.subTest(flags=flags):
+                self.invoke("source-srt-metadata", path, *flags, code=2)
         gap, _ = self.invoke("source-srt-metadata", path, "--timestamp", "200", "1", "1000", "--offset-ms", "1000")
         self.assertIsNone(gap["match"])
         self.invoke("source-srt-metadata", path, "--timestamp", "0", "1", "1000", code=2)
