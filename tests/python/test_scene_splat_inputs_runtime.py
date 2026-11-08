@@ -388,7 +388,8 @@ threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start
         producer.thread.join(3)
 
 
-def test_remove_preview_with_collision_and_degraded_splats(camera_runtime_with_numpy, tmp_path, monkeypatch, numpy, request):
+@pytest.mark.parametrize("ordinary_storage", [False, True], ids=["viewer", "ordinary-cuda"])
+def test_remove_preview_with_collision_after_undo(camera_runtime_with_numpy, tmp_path, monkeypatch, numpy, request, ordinary_storage):
     from lichtfeld_sessions import transport
     from test_selection_outline_runtime import _write_splat
     from test_training_sessions import arrays
@@ -420,6 +421,17 @@ assert wait_until(lambda: panel._current.shown, 15), panel._current.error
         _editor(endpoint, """
 assert wait_until(lambda: lf.get_scene().get_node("local"), 15)
 """)
+        if ordinary_storage:
+            _ui_editor(endpoint, """
+scene = lf.get_scene()
+model = scene.get_node("local").splat_data()
+count = model.num_points
+fields = (model.means_raw.clone(), model.sh0_raw.reshape([count, 1, 3]).clone(),
+          lf.Tensor.zeros([count, 0, 3], device="cuda"), model.scaling_raw.clone(),
+          model.rotation_raw.clone(), model.opacity_raw.reshape([count, 1]).clone())
+scene.remove_node("local")
+scene.add_splat("local", *fields, sh_degree=0)
+""")
         _ui_editor(endpoint, 'lf.select_node("local")\nlf.generate_collision(.03, .1, False, False, 0.)')
         _editor(endpoint, """
 assert wait_until(lambda: lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION), 15)
@@ -435,15 +447,14 @@ panel.ExternalTrainingPanel()._remove()
 assert lf.get_scene().get_node_by_uuid(target) is None
 assert lf.get_scene().get_node("local") and lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION)
 """)
-        # Undo restores opacity in ordinary CUDA storage. The next frame must
-        # still present, even though VkSplat cannot produce a new depth image.
+        # Removing the preview after undo must preserve the local model,
+        # collision rendering and frame presentation with either storage type.
         start = _ledger(endpoint)["frames_presented"]
         app_log = tmp_path / "app.log"
-        def presented_degraded_frame():
+        def presented_frame():
             _ui_editor(endpoint, "lf.ui.request_redraw()")
-            degraded = "missing_opacity" in app_log.read_text(encoding="utf-8", errors="replace")
-            return degraded and _ledger(endpoint)["frames_presented"] >= start + 4
-        assert wait_until(presented_degraded_frame, 15), "Viewport did not present frames after losing its splat depth image"
+            return _ledger(endpoint)["frames_presented"] >= start + 4
+        assert wait_until(presented_frame, 15), "Viewport did not present frames after removing the preview"
         assert _tool(endpoint, "project_save_as", {"path": str(tmp_path / "local.licht")})["success"]
         _editor(endpoint, "threading.Timer(.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()")
         assert request.node.camera_process.wait(timeout=10) == 0
