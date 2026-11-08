@@ -904,6 +904,128 @@ namespace lfs::preprocessing {
             return best;
         }
 
+        std::expected<Tensor, Error> infer_seed_mask(
+            Sam2& model, const FrameCellSource& input, const std::span<const VideoMaskFrame> frames,
+            const int image, const CellTally& tally, const VideoMaskDetectionReport& detection,
+            const ImageCircle& circle, const VideoMaskOptions& options,
+            const std::span<const uint8_t> circle_keep, cudaStream_t stream) {
+            Tensor seed_mask;
+            io::PipelinedImageLoader loader(single_frame_loader(4));
+            const io::LoadParams once{.skip_blob_cache = true};
+
+            input.notify(VideoMaskStage::Seed, 0, 1);
+            loader.prefetch(size_t(image), frames[size_t(image)].image_path, once);
+            auto ready = loader.get();
+            if (!ready.error.empty())
+                throw std::runtime_error(ready.error);
+            core::waitForCUDAStream(stream, ready.stream);
+            ready.tensor.set_stream(stream);
+            const int width = input.width(image), height = input.height(image);
+            const auto& manual = options.prompt;
+            auto anchors = !manual
+                               ? prompts_for_image(detection, width, height)
+                               : std::vector<Sam2PointPrompt>{};
+            if (manual.has_value())
+                for (const auto& point : manual->points)
+                    anchors.push_back({std::min(point[0] * width, float(width - 1)),
+                                       std::min(point[1] * height, float(height - 1)), int(point[2])});
+            const auto encoded = model.set_image(ready.tensor.unsqueeze(0));
+            if (!encoded)
+                return std::unexpected(encoded.error());
+            Mask selected;
+            const auto propose = [&](const std::vector<Sam2PointPrompt>& points,
+                                     const std::optional<std::array<float, 4>>& box,
+                                     const bool primary) -> std::expected<void, Error> {
+                auto prediction = model.predict(points, box, true);
+                if (!prediction)
+                    return std::unexpected(prediction.error());
+                auto candidate = choose_seed_candidate(*prediction, points, circle, width, height, tally,
+                                                       primary, stream);
+                if (!candidate.empty() && !selected.empty()) {
+                    const auto interior = morphology(selected, 4, true);
+                    if (fixed_share(tally, candidate, &interior).second < kCameraFixedShare)
+                        return {};
+                }
+                if (selected.empty())
+                    selected = std::move(candidate);
+                else if (!candidate.empty())
+                    for (size_t pixel = 0; pixel < selected.size(); ++pixel)
+                        selected[pixel] |= candidate[pixel];
+                return {};
+            };
+            if (manual.has_value()) {
+                auto box = manual->box;
+                if (box) {
+                    (*box)[0] *= width;
+                    (*box)[1] *= height;
+                    (*box)[2] *= width;
+                    (*box)[3] *= height;
+                }
+                auto prediction = model.predict(anchors, box, false);
+                if (!prediction)
+                    return std::unexpected(prediction.error());
+                const auto low = core::nn::resize2d(prediction->low_res_logits.reshape({1, 1, 256, 256}),
+                                                    kMaskSide, kMaskSide, core::nn::ResizeMode::Bilinear,
+                                                    core::nn::CoordTransform::HalfPixel)
+                                     .to(Device::CPU, stream)
+                                     .contiguous();
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                selected.resize(size_t(kMaskSide) * kMaskSide);
+                for (size_t pixel = 0; pixel < selected.size(); ++pixel)
+                    selected[pixel] = low.ptr<float>()[pixel] > 0;
+            } else {
+                std::vector<Sam2PointPrompt> background;
+                for (const auto& point : anchors)
+                    if (point.label == 0)
+                        background.push_back(point);
+                auto strongest = background;
+                const auto positive = std::ranges::find_if(anchors, [](const auto& point) { return point.label == 1; });
+                if (positive == anchors.end())
+                    return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video masking inputs", "Accepted operator seed has no foreground anchor"));
+                strongest.push_back(*positive);
+                if (const auto proposed = propose(strongest, std::nullopt, true); !proposed)
+                    return std::unexpected(proposed.error());
+                auto supported = strongest;
+                if (!selected.empty()) {
+                    const auto vicinity = morphology(selected, 12, true);
+                    for (const auto& point : anchors)
+                        if (point.label == 1 && vicinity[size_t(mask_pixel(point.x, point.y, width, height))])
+                            supported.push_back(point);
+                }
+                if (const auto proposed = propose(supported, std::nullopt, true); !proposed)
+                    return std::unexpected(proposed.error());
+                if (const auto proposed = propose(supported, seed_box(supported, width, height), true); !proposed)
+                    return std::unexpected(proposed.error());
+                for (const auto& point : refinement_points(selected, tally, width, height, circle)) {
+                    auto part = background;
+                    part.push_back(point);
+                    if (const auto proposed = propose(part, std::nullopt, false); !proposed)
+                        return std::unexpected(proposed.error());
+                }
+            }
+            if (std::ranges::any_of(selected, [](uint8_t value) { return value != 0; })) {
+                selected = morphology(morphology(selected, 3, true), 3, false);
+                fill_holes(selected);
+                const int radius = std::max(1, int(std::ceil(12.0 * kMaskSide / std::max(width, height))));
+                const auto low = byte_tensor(morphology(selected, radius, true), kMaskSide, kMaskSide)
+                                     .to(Device::CUDA, stream)
+                                     .to(DataType::Float32)
+                                     .reshape({1, 1, kMaskSide, kMaskSide});
+                const auto circle_tensor = byte_tensor(circle_keep, height, width)
+                                               .to(Device::CUDA, stream)
+                                               .gt(0)
+                                               .reshape({1, 1, height, width});
+                auto seed = core::nn::resize2d(low, height, width, core::nn::ResizeMode::Bilinear,
+                                               core::nn::CoordTransform::HalfPixel)
+                                .gt(0.5f)
+                                .logical_and(circle_tensor);
+                seed_mask = seed.to(DataType::Float32).to(Device::CPU, stream);
+            }
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+            return seed_mask;
+        }
+
         void write_mask(const std::filesystem::path& path, const std::span<const std::uint8_t> keep,
                         const int width, const int height) {
             core::native_fs::create_directories(path.parent_path());
@@ -1085,123 +1207,16 @@ namespace lfs::preprocessing {
                     seed_mask = options.prompt->mask.to(Device::CPU).contiguous();
                     LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                     seed_mask = seed_mask.gt(0).to(DataType::Float32).contiguous();
-                    if (seed_mask.gt(0).to(DataType::Float32).sum().item<float>() == 0)
+                    if (seed_mask.sum().item<float>() == 0)
                         return std::unexpected(failure(ErrorCode::InvalidArgument, "The reviewed seed mask is empty"));
                 } else {
-                    io::PipelinedImageLoader loader(single_frame_loader(4));
-                    const io::LoadParams once{.skip_blob_cache = true};
-
                     const int image = sequence[size_t(seed_index)];
-                    input.notify(VideoMaskStage::Seed, 0, 1);
-                    loader.prefetch(size_t(image), frames[size_t(image)].image_path, once);
-                    auto ready = loader.get();
-                    if (!ready.error.empty())
-                        throw std::runtime_error(ready.error);
-                    core::waitForCUDAStream(stream, ready.stream);
-                    ready.tensor.set_stream(stream);
-                    const int width = input.width(image), height = input.height(image);
-                    const auto& tally = tallies[size_t(image)];
-                    const auto& manual = options.prompt;
-                    auto anchors = !manual
-                                       ? prompts_for_image(detection, width, height)
-                                       : std::vector<Sam2PointPrompt>{};
-                    if (manual.has_value())
-                        for (const auto& point : manual->points)
-                            anchors.push_back({std::min(point[0] * width, float(width - 1)),
-                                               std::min(point[1] * height, float(height - 1)), int(point[2])});
-                    const auto encoded = model->set_image(ready.tensor.unsqueeze(0));
-                    if (!encoded)
-                        return std::unexpected(encoded.error());
-                    Mask selected;
-                    const auto propose = [&](const std::vector<Sam2PointPrompt>& points,
-                                             const std::optional<std::array<float, 4>>& box,
-                                             const bool primary) -> std::expected<void, Error> {
-                        auto prediction = model->predict(points, box, true);
-                        if (!prediction)
-                            return std::unexpected(prediction.error());
-                        auto candidate = choose_seed_candidate(*prediction, points, circle, width, height, tally,
-                                                               primary, stream);
-                        if (!candidate.empty() && !selected.empty()) {
-                            const auto interior = morphology(selected, 4, true);
-                            if (fixed_share(tally, candidate, &interior).second < kCameraFixedShare)
-                                return {};
-                        }
-                        if (selected.empty())
-                            selected = std::move(candidate);
-                        else if (!candidate.empty())
-                            for (size_t pixel = 0; pixel < selected.size(); ++pixel)
-                                selected[pixel] |= candidate[pixel];
-                        return {};
-                    };
-                    if (manual.has_value()) {
-                        auto box = manual->box;
-                        if (box) {
-                            (*box)[0] *= width;
-                            (*box)[1] *= height;
-                            (*box)[2] *= width;
-                            (*box)[3] *= height;
-                        }
-                        auto prediction = model->predict(anchors, box, false);
-                        if (!prediction)
-                            return std::unexpected(prediction.error());
-                        const auto low = core::nn::resize2d(prediction->low_res_logits.reshape({1, 1, 256, 256}),
-                                                            kMaskSide, kMaskSide, core::nn::ResizeMode::Bilinear,
-                                                            core::nn::CoordTransform::HalfPixel)
-                                             .to(Device::CPU, stream)
-                                             .contiguous();
-                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                        selected.resize(size_t(kMaskSide) * kMaskSide);
-                        for (size_t pixel = 0; pixel < selected.size(); ++pixel)
-                            selected[pixel] = low.ptr<float>()[pixel] > 0;
-                    } else {
-                        std::vector<Sam2PointPrompt> background;
-                        for (const auto& point : anchors)
-                            if (point.label == 0)
-                                background.push_back(point);
-                        auto strongest = background;
-                        const auto positive = std::ranges::find_if(anchors, [](const auto& point) { return point.label == 1; });
-                        if (positive == anchors.end())
-                            return std::unexpected(failure(ErrorCode::InvalidArgument, "Invalid video masking inputs", "Accepted operator seed has no foreground anchor"));
-                        strongest.push_back(*positive);
-                        if (const auto proposed = propose(strongest, std::nullopt, true); !proposed)
-                            return std::unexpected(proposed.error());
-                        auto supported = strongest;
-                        if (!selected.empty()) {
-                            const auto vicinity = morphology(selected, 12, true);
-                            for (const auto& point : anchors)
-                                if (point.label == 1 && vicinity[size_t(mask_pixel(point.x, point.y, width, height))])
-                                    supported.push_back(point);
-                        }
-                        if (const auto proposed = propose(supported, std::nullopt, true); !proposed)
-                            return std::unexpected(proposed.error());
-                        if (const auto proposed = propose(supported, seed_box(supported, width, height), true); !proposed)
-                            return std::unexpected(proposed.error());
-                        for (const auto& point : refinement_points(selected, tally, width, height, circle)) {
-                            auto part = background;
-                            part.push_back(point);
-                            if (const auto proposed = propose(part, std::nullopt, false); !proposed)
-                                return std::unexpected(proposed.error());
-                        }
-                    }
-                    if (std::ranges::any_of(selected, [](uint8_t value) { return value != 0; })) {
-                        selected = morphology(morphology(selected, 3, true), 3, false);
-                        fill_holes(selected);
-                        const int radius = std::max(1, int(std::ceil(12.0 * kMaskSide / std::max(width, height))));
-                        const auto low = byte_tensor(morphology(selected, radius, true), kMaskSide, kMaskSide)
-                                             .to(Device::CUDA, stream)
-                                             .to(DataType::Float32)
-                                             .reshape({1, 1, kMaskSide, kMaskSide});
-                        const auto circle_tensor = byte_tensor(circle_keep, height, width)
-                                                       .to(Device::CUDA, stream)
-                                                       .gt(0)
-                                                       .reshape({1, 1, height, width});
-                        auto seed = core::nn::resize2d(low, height, width, core::nn::ResizeMode::Bilinear,
-                                                       core::nn::CoordTransform::HalfPixel)
-                                        .gt(0.5f)
-                                        .logical_and(circle_tensor);
-                        seed_mask = seed.to(DataType::Float32).to(Device::CPU, stream);
-                    }
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                    auto inferred = infer_seed_mask(*model, input, frames, image,
+                                                    tallies[size_t(image)], detection,
+                                                    circle, options, circle_keep, stream);
+                    if (!inferred)
+                        return std::unexpected(inferred.error());
+                    seed_mask = std::move(*inferred);
 
                     if (!seed_mask.is_valid()) {
                         detection.status = "unconfirmed_operator";
