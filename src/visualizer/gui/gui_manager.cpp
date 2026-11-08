@@ -4791,6 +4791,19 @@ namespace lfs::vis::gui {
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
         };
+        ops.set_window_presentation = [](void* host, int state) {
+            static_cast<RmlPanelHost*>(host)->setWindowPresentation(state < 0 ? std::nullopt : std::optional(static_cast<FloatingWindowState>(state)));
+        };
+        ops.title_controls_bounds = [](void* host, float* bounds) {
+            const auto box = static_cast<RmlPanelHost*>(host)->titleControlsBounds();
+            if (!box)
+                return false;
+            bounds[0] = box->x;
+            bounds[1] = box->y;
+            bounds[2] = box->width;
+            bounds[3] = box->height;
+            return true;
+        };
         ops.native_window = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->nativeWindow();
         };

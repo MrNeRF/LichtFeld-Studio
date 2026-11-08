@@ -18,7 +18,6 @@ class MaskApply:
     proposal_request: int
     camera_uuid: str | None
     key: tuple
-    scene_generation: int
     kind: str = "apply"
 
 

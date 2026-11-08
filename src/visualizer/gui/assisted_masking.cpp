@@ -62,6 +62,9 @@ namespace lfs::vis::gui {
     struct AssistedMasking::Impl {
         JobRegistry& jobs;
         std::function<bool()> admission;
+        RevisionReader document_revision;
+        std::optional<std::array<uint64_t, 2>> apply_revision;
+        bool document_apply = false;
         JobHandle job;
         struct Sequence {
             struct Frame {
@@ -94,14 +97,14 @@ namespace lfs::vis::gui {
         bool release = false, stopping = false;
         std::thread worker;
 
-        Impl(JobRegistry& registry, std::function<bool()> check)
-            : jobs(registry), admission(std::move(check)) {}
+        Impl(JobRegistry& registry, std::function<bool()> check, RevisionReader revision)
+            : jobs(registry), admission(std::move(check)), document_revision(std::move(revision)) {}
 
         bool editable() const {
             const auto& phase = result.phase;
             return !release && !stopping && !pending &&
                    (phase == "idle" || phase == "editing" || phase == "ready" || phase == "tracked" ||
-                    phase == "mask_ready" || phase == "saved" || phase == "error");
+                    phase == "mask_ready" || phase == "saved" || phase == "error" || phase == "expired");
         }
 
         void retain(const Work& work, size_t index, std::shared_ptr<const std::vector<std::byte>> png,
@@ -689,8 +692,8 @@ namespace lfs::vis::gui {
         }
     };
 
-    AssistedMasking::AssistedMasking(JobRegistry& jobs, std::function<bool()> admission)
-        : impl_(std::make_unique<Impl>(jobs, std::move(admission))) {}
+    AssistedMasking::AssistedMasking(JobRegistry& jobs, std::function<bool()> admission, RevisionReader revision)
+        : impl_(std::make_unique<Impl>(jobs, std::move(admission), std::move(revision))) {}
     AssistedMasking::~AssistedMasking() {
         try {
             shutdown();
@@ -757,6 +760,10 @@ namespace lfs::vis::gui {
         }
         std::lock_guard lock(impl_->mutex);
         const auto id = ++impl_->next;
+        impl_->apply_revision.reset();
+        impl_->document_apply = input.export_candidate >= 0 && !input.retain_frame;
+        if (impl_->document_apply && impl_->document_revision)
+            impl_->apply_revision = impl_->document_revision();
         impl_->result = {};
         impl_->result.request = id;
         impl_->result.image = input.image;
@@ -778,6 +785,11 @@ namespace lfs::vis::gui {
             }
         }
         std::lock_guard lock(impl_->mutex);
+        if (impl_->result.phase == "mask_ready" && impl_->document_apply && impl_->document_revision &&
+            (!impl_->apply_revision || impl_->apply_revision != impl_->document_revision())) {
+            impl_->result.phase = "expired";
+            impl_->result.mask.reset();
+        }
         auto result = impl_->result;
         result.sequence_revision = impl_->sequence ? impl_->sequence->revision : 0;
         result.approved = impl_->sequence ? impl_->sequence->approved : 0;

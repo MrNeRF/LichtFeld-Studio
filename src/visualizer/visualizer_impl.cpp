@@ -2046,7 +2046,7 @@ namespace lfs::vis {
         state::SceneChanged::when([this](const auto& event) {
             python::set_scene_mutation_flags(event.mutation_flags);
             python::bump_scene_generation();
-            if (project_lifecycle_) {
+            if (project_lifecycle_ && event.document_changed) {
                 project_lifecycle_->markSceneMutation(
                     event.mutation_flags);
             }

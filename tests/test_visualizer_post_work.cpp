@@ -55,6 +55,7 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/viewport_appearance_correction.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -1661,6 +1662,19 @@ namespace lfs::vis {
         installSessionTestInputController(viewer);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         auto& scene = viewer.getScene();
+        // Even a matching source image does not make a trainer-owned camera editable.
+        const auto preview = scene.getNodeUuid(scene.addExternalPreview("Trainer", "Preview"));
+        auto preview_camera = make_project_request_test_camera(image);
+        std::vector<core::Scene::ExternalPreviewCamera> cameras{{preview_camera, glm::mat4{1.0f}}};
+        ASSERT_TRUE(scene.updateExternalPreviewCameras(preview, "Capture cameras", cameras));
+        const auto* preview_node = scene.getNode(preview_camera->image_name());
+        ASSERT_TRUE(preview_node && preview_node->isExternalPreview());
+        const auto undo_count = op::undoHistory().undoCount();
+        EXPECT_FALSE(viewer.applyCameraMask(preview_node->uuid, image, png, 64, 64));
+        EXPECT_FALSE(preview_camera->has_mask());
+        EXPECT_EQ(op::undoHistory().undoCount(), undo_count);
+        (void)scene.removeExternalPreview(preview);
+
         auto camera = make_project_request_test_camera(image);
         camera->set_image_dimensions(64, 64);
         const auto id = scene.addCamera("image.png", scene.addGroup("Cameras"), camera);
@@ -7403,6 +7417,32 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 2u);
             EXPECT_EQ(viewer.getSceneManager()->getSelectedNodeName(), "direct-replacement");
         }
+    }
+
+    TEST_F(VisualizerImplResetTest, ExternalPreviewAcceptsOrdinaryStorageAndCannotEnterExport) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_FALSE(makeViewerSplatTensorAllocator()); // No Vulkan window in this fixture.
+        auto update = std::make_shared<ExternalPreviewUpdate>();
+        update->model = lfs::test::licht::make_splat(3);
+        const auto device = update->model->means_raw().device();
+        ASSERT_TRUE(tasks.uploadExternalPreview(update));
+        ASSERT_TRUE(waitUntil([&] { return update->ready.load(std::memory_order_acquire); }));
+        EXPECT_TRUE(update->error.empty()) << update->error;
+        ASSERT_TRUE(update->model);
+        EXPECT_EQ(update->model->means_raw().device(), device);
+        auto& scene = viewer.getScene();
+        const auto root = scene.addExternalPreview("Trainer", "Preview");
+        (void)scene.updateExternalPreview(scene.getNodeUuid(root), std::move(update->model), glm::mat4(1), {});
+        scene.addSplat("Local", lfs::test::licht::make_splat(2));
+        for (const auto& names : {std::vector<std::string>{"Preview"}, std::vector<std::string>{"Local", "Preview"}}) {
+            const auto output = temporary_.path / "external.ply";
+            tasks.performExport(core::ExportFormat::PLY, output, names, 0);
+            EXPECT_FALSE(tasks.isExporting());
+            EXPECT_FALSE(tasks.getExportError().empty());
+            EXPECT_FALSE(std::filesystem::exists(output));
+        }
+        EXPECT_EQ(scene.getNode("Local")->model->size(), 2u);
     }
 
     TEST_F(VisualizerImplResetTest, AsyncSplatLoadAttachesAndSelectsNode) {
@@ -22284,6 +22324,7 @@ namespace lfs::vis::gui {
                 });
                 const auto token = tasks().collision_stop_.get_token();
                 ASSERT_TRUE(dispatched_.try_acquire_for(std::chrono::seconds(10))) << tasks().collisionJob()->error;
+                ASSERT_TRUE(tasks().collisionWorkerActive());
                 if (replacement == "Open" || replacement == "InvalidSecond") {
                     if (replacement == "InvalidSecond")
                         ASSERT_NO_FATAL_FAILURE(queueOpen(path));
@@ -22295,7 +22336,6 @@ namespace lfs::vis::gui {
                         EXPECT_EQ(token.stop_requested(), replacement == "InvalidSecond");
                     }
                 }
-                const auto started = std::chrono::steady_clock::now();
                 if (replacement != "Clear" && replacement != "New" && replacement != "InvalidSecond")
                     ASSERT_NO_FATAL_FAILURE(queueOpen(path));
                 else if (replacement == "Clear")
@@ -22304,7 +22344,9 @@ namespace lfs::vis::gui {
                     events::cmd::NewProject{.discard_changes = true}.emit();
                 if (replacement == "Supersede")
                     ASSERT_NO_FATAL_FAILURE(queueOpen(second_path));
-                EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
+                // The worker is parked on release_: returning while it is still
+                // active proves that scene replacement did not join it.
+                EXPECT_TRUE(tasks().collisionWorkerActive());
                 if (replacement == "Prepared")
                     std::filesystem::rename(path, temporary_.path / "prepared.licht");
                 if (replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy")
@@ -22351,6 +22393,7 @@ namespace lfs::vis::gui {
                 }
                 EXPECT_EQ(callbacks, 3);
                 finish();
+                EXPECT_FALSE(tasks().collisionWorkerActive());
                 EXPECT_FALSE(tasks().sceneReplacementPending());
                 if (!retain_source) {
                     EXPECT_EQ(scene().getNodeByUuid(source_uuid), nullptr);

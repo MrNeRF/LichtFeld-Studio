@@ -2371,6 +2371,8 @@ namespace lfs::vis {
                 model_change.changed) {
                 invalidateGTComparisonImageCache();
                 clearVulkanViewportImageState();
+                // The mesh frame borrows a depth view from the same renderer output ring.
+                clearVulkanMeshFrame();
                 last_logged_vksplat_render_error_.clear();
                 if (vksplat_viewport_renderer_) {
                     if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
@@ -4953,9 +4955,11 @@ namespace lfs::vis {
             clearVulkanMeshFrame();
         }
 
-        if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
+        const bool publish_gpu_pass =
+            (rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
-             pending_split_view.enabled)) {
+             pending_split_view.enabled);
+        if (publish_gpu_pass) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_split_mesh_panels(gpu_mesh_frame);
 
@@ -4996,15 +5000,8 @@ namespace lfs::vis {
         }
         render_lock.reset();
 
-        const bool has_gpu_only_pass =
-            !frame_ctx.scene_state.meshes.empty() ||
-            environmentBackgroundEnabled(frame_settings) ||
-            pending_split_view.enabled;
-
-        if (!rendered_image && has_gpu_only_pass) {
-            if (pending_split_view.enabled || render_error.empty()) {
-                vksplat_stale_frame_guard_.onSuccess();
-            }
+        if (!rendered_image && publish_gpu_pass) {
+            vksplat_stale_frame_guard_.onSuccess();
             clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};

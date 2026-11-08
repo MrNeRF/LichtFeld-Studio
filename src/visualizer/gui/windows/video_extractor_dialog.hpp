@@ -93,6 +93,9 @@ namespace lfs::gui {
         void setInput(const lfs::vis::gui::PanelInputState* input) override;
         void setForcedHeight(float h) override;
         void setFloating(bool floating) override;
+        void prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                       const lfs::vis::gui::PanelDrawContext& ctx) override;
+        bool titleControlsBounds(float* bounds) const override;
         SDL_Window* nativeWindow() const override;
         bool detachToDesktop(float x, float y, float w, float h) override;
         bool restoreDesktopWindow() override;

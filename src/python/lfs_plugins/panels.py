@@ -254,8 +254,10 @@ def _build_builtin_panel_steps(lf):
 
     def training_panel():
         from .training_panel import TrainingPanel
+        from .external_training_panel import ExternalTrainingPanel
 
         lf.register_class(TrainingPanel)
+        lf.register_class(ExternalTrainingPanel)
 
     def import_panels():
         _register_lazy_panel(lf, "new_project")

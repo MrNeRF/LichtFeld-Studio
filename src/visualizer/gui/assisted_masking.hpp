@@ -73,7 +73,9 @@ namespace lfs::vis::gui {
     // Inference produces disposable proposals; only explicit publication writes approved masks.
     class LFS_VIS_API AssistedMasking {
     public:
-        AssistedMasking(JobRegistry& jobs, std::function<bool()> admission);
+        using RevisionReader = std::function<std::optional<std::array<uint64_t, 2>>()>;
+        AssistedMasking(JobRegistry& jobs, std::function<bool()> admission,
+                        RevisionReader document_revision = {});
         ~AssistedMasking();
         uint64_t submit(AssistedMaskRequest request);
         AssistedMaskSnapshot poll();

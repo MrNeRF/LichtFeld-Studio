@@ -1793,7 +1793,7 @@ class ImagePreviewPanel(Panel):
     def _sam_apply(self, exclude):
         editor = self._mask_editor
         node = self._current_camera_node(resolve_unbound=True)
-        if not node or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
+        if not node or node.read_only or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0]:
@@ -1803,7 +1803,7 @@ class ImagePreviewPanel(Panel):
                                                editor.draft.points, editor.draft.box, editor.request, -1,
                                                editor.weights, editor.candidate, bool(exclude),
                                                **self._sam_sequence_arguments())
-            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key, RuntimeState.scene_generation.value)
+            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key)
                                       if request else None)
             editor.phase = "rendering" if request else "closing"
             editor.error = ""
@@ -1874,7 +1874,7 @@ class ImagePreviewPanel(Panel):
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
                 editor.draft.points, editor.draft.box, proposal, -1, editor.weights, editor.candidate, False,
                 **self._sam_sequence_arguments(retain=True))
-            self._sam_apply_target = MaskApply(request, proposal, None, editor.key, RuntimeState.scene_generation.value, kind="retain")
+            self._sam_apply_target = MaskApply(request, proposal, None, editor.key, kind="retain")
             editor.phase = "storing"
         except Exception as error:
             editor.phase, editor.error = "error", str(error)
@@ -2118,11 +2118,9 @@ class ImagePreviewPanel(Panel):
             editor.phase = "ready" if editor.key == target.key and editor.request == target.proposal_request and editor.overlay is not None else "error"
             editor.error = state.get("error", "")
             self._mark_dirty()
-        if state.get("phase") == "mask_ready" and target and state.get("request") == target.request:
+        if state.get("phase") in ("mask_ready", "expired") and target and state.get("request") == target.request:
             self._sam_apply_target = None
-            expected = target.proposal_request
-            if (editor.key == target.key and editor.request == expected
-                    and RuntimeState.scene_generation.value == target.scene_generation):
+            if state["phase"] == "mask_ready" and editor.key == target.key and editor.request == target.proposal_request:
                 try:
                     if target.kind == "retain":
                         editor.phase = "ready"
@@ -2247,7 +2245,8 @@ class ImagePreviewPanel(Panel):
             if binding:
                 bindings.append(f"{binding}: {lf.keymap.get_action_name(action)}")
         _set_text(doc, "sam-shortcuts", " · ".join(bindings))
-        has_target = self._current_camera_node(resolve_unbound=True) is not None
+        node = self._current_camera_node(resolve_unbound=True)
+        has_target = bool(node and not node.read_only)
         hint = "tracking_hint" if self._sam_sequence else "hint" if has_target else "apply_dataset"
         _set_text(doc, "sam-hint", lf.ui.tr(_sam_key(hint)))
         _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))

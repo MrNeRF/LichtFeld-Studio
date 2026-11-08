@@ -224,7 +224,8 @@ namespace {
         }
         const auto run = lfs::core::generate_uuid_v4();
         JobRegistry jobs;
-        AssistedMasking service(jobs, [] { return true; });
+        uint64_t document_revision = 1;
+        AssistedMasking service(jobs, [] { return true; }, [&] { return std::optional{std::array<uint64_t, 2>{1, document_revision}}; });
         service.beginSequence(run, frames, directory.path, *weights);
         AssistedMaskRequest input{};
         input.run = run;
@@ -310,6 +311,21 @@ namespace {
         ASSERT_EQ(state.phase, "tracked") << state.error;
         input.tracking.reset();
         input.refine_candidate = -1;
+        // Retaining an extracted-frame proposal is independent of the document.
+        input.review_frame = 2;
+        state = wait(service.submit(input), "ready");
+        ASSERT_EQ(state.phase, "ready") << state.error;
+        input.review_frame = -1;
+        input.export_candidate = 0;
+        input.retain_frame = true;
+        input.refine_request = state.request;
+        const auto retained = service.submit(input);
+        ++document_revision;
+        state = wait(retained, "mask_ready");
+        ASSERT_EQ(state.phase, "mask_ready") << state.error;
+        EXPECT_TRUE(service.sequenceFrames(run)[2].keyframe);
+        input.retain_frame = false;
+        input.export_candidate = -1;
         input.review_frame = 1;
         state = wait(service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
@@ -320,6 +336,10 @@ namespace {
         ASSERT_EQ(state.phase, "mask_ready") << state.error;
         const auto expected = state.mask;
         ASSERT_TRUE(expected);
+        // A camera Apply expires after a document edit; sequence review stays editable.
+        ++document_revision;
+        EXPECT_EQ(service.poll().phase, "expired");
+        ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{2, service.sequenceFrames(run)[2].revision, false}}));
         input.export_candidate = -1;
         input.publish_approved = true;
         const auto blocked_directory = directory.path / "masks";
@@ -450,7 +470,8 @@ namespace {
         input.size_bytes = lfs::core::native_fs::file_size(input.image);
         input.points = {{0.5f, 0.5f, 1}};
         JobRegistry jobs;
-        AssistedMasking service(jobs, [] { return true; });
+        std::array<uint64_t, 2> document_revision{1, 1};
+        AssistedMasking service(jobs, [] { return true; }, [&] { return document_revision; });
         const auto wait = [&](const uint64_t id, const std::string& phase) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             AssistedMaskSnapshot state;
@@ -524,6 +545,8 @@ namespace {
                 for (size_t i = 0; i < count; ++i)
                     ASSERT_EQ(raw[i], 255 - kept[i]) << i;
             }
+            ++document_revision[exclude ? 0 : 1]; // Replaced document or persistent scene edit.
+            EXPECT_EQ(service.poll().phase, "expired");
         }
     }
 } // namespace
