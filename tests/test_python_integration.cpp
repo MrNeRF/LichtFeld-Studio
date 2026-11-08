@@ -346,6 +346,15 @@ namespace {
         std::deque<WorkItem> queued_work;
     };
 
+    std::shared_ptr<lfs::core::Camera> make_test_camera(const std::string& image_name, const int uid) {
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+            image_name, std::filesystem::path{}, std::filesystem::path{}, 64, 64, uid);
+    }
+
     std::unique_ptr<lfs::core::SplatData> makeSingleWhiteSplat(const float x, const float y, const float z) {
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -683,22 +692,8 @@ TEST_F(PythonIntegrationTest, PythonRemoveDisabledCamerasReturnsDeletedCount) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
     const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 2);
-    const auto enabled = scene.addCamera(
-        "enabled.png", group,
-        std::make_shared<lfs::core::Camera>(
-            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
-            100.0f, 100.0f, 32.0f, 32.0f,
-            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
-            "enabled.png", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 1));
-    const auto disabled = scene.addCamera(
-        "disabled.png", group,
-        std::make_shared<lfs::core::Camera>(
-            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
-            100.0f, 100.0f, 32.0f, 32.0f,
-            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
-            "disabled.png", std::filesystem::path{}, std::filesystem::path{}, 64, 64, 2));
+    const auto enabled = scene.addCamera("enabled.png", group, make_test_camera("enabled.png", 1));
+    const auto disabled = scene.addCamera("disabled.png", group, make_test_camera("disabled.png", 2));
     ASSERT_NE(group, lfs::core::NULL_NODE);
     ASSERT_NE(enabled, lfs::core::NULL_NODE);
     ASSERT_NE(disabled, lfs::core::NULL_NODE);
