@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Immutable local snapshots. No application imports; shared by both clients."""
 import ctypes
+from contextlib import contextmanager
 import hashlib
 from functools import lru_cache
 import json
@@ -235,6 +236,42 @@ def validate_result(result):
     return result
 
 
+def artifact_path(root, relative):
+    root = Path(root).resolve()
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError("Artifact path escapes its output directory")
+    return path
+
+
+def digest_stream(stream, should_cancel=lambda: False):
+    digest = hashlib.sha256()
+    while True:
+        if should_cancel():
+            raise InterruptedError("Artifact verification cancelled")
+        block = stream.read(4 * 1024 * 1024)
+        if not block:
+            return digest.hexdigest()
+        digest.update(block)
+
+
+@contextmanager
+def verified_artifact(path, record, should_cancel=lambda: False):
+    """Yield the verified stream at its start; decoding reuses this same handle."""
+    path = Path(path)
+    if should_cancel():
+        raise InterruptedError("Artifact verification cancelled")
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("Artifact must be a regular file")
+    with path.open("rb") as stream:
+        if os.fstat(stream.fileno()).st_size != record["bytes"]:
+            raise ValueError("Artifact size changed")
+        if digest_stream(stream, should_cancel) != record["sha256"]:
+            raise ValueError("Artifact integrity check failed")
+        stream.seek(0)
+        yield stream
+
+
 def resolve_result(record, should_cancel=lambda: False):
     """Verify a completed full-model artifact on a worker, before native import."""
     if not isinstance(record, dict) or record.get("state") not in TERMINAL:
@@ -243,31 +280,13 @@ def resolve_result(record, should_cancel=lambda: False):
     root, relative = Path(result["root"]), Path(result["path"])
     if not root.is_absolute() or relative.is_absolute():
         raise ValueError("Saved model paths require an absolute root and relative artifact")
-    root = root.resolve()
-    path = (root / relative).resolve()
-    if not path.is_relative_to(root) or path == root or path.suffix.lower() != ".ply":
-        raise ValueError("Saved model path escapes its output directory or has an unsupported format")
-    checksum = result["sha256"]
+    path = artifact_path(root, relative)
+    if path.suffix.lower() != ".ply":
+        raise ValueError("Unsupported saved model format")
     from . import geometry
     presentation = geometry.validate(result.get("presentation"))
-    digest = hashlib.sha256()
-    if should_cancel():
-        raise InterruptedError("Saved model import cancelled")
-    if not stat.S_ISREG(path.stat().st_mode):
-        raise ValueError("Saved model must be a regular file")
-    with path.open("rb") as stream:
-        if os.fstat(stream.fileno()).st_size != result["bytes"]:
-            raise ValueError("Saved model size changed")
-        while True:
-            if should_cancel():
-                raise InterruptedError("Saved model import cancelled")
-            block = stream.read(4 * 1024 * 1024)
-            if not block:
-                break
-            digest.update(block)
-    if digest.hexdigest() != checksum:
-        raise ValueError("Saved model integrity check failed")
-    return path, presentation
+    with verified_artifact(path, result, should_cancel):
+        return path, presentation
 
 
 def prune_session(directory, record, max_age=86400):
