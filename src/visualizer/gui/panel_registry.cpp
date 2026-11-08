@@ -1735,7 +1735,8 @@ apply_registered_chrome:
                 .float_stack_order =
                     interaction ? interaction->stack_order : 0,
             };
-            if (interaction && interaction->window_state != FloatingWindowState::Normal) {
+            if (interaction && (interaction->window_state != FloatingWindowState::Normal ||
+                                (!interaction->last_bounds_valid && interaction->normal_bounds))) {
                 state.float_last_bounds_valid = interaction->normal_bounds.has_value();
                 const auto normal = interaction->normal_bounds.value_or(PanelDrawBounds{});
                 state.float_last_x = normal.x;
@@ -2073,8 +2074,9 @@ apply_registered_chrome:
                 // Newly minimized panels appear on the last shelf page.
                 minimized_first_row_ = static_cast<int>(panels_.size());
             }
-            if (interaction.window_state == FloatingWindowState::Normal && state != FloatingWindowState::Normal) {
-                interaction.normal_bounds = interaction.last_bounds_valid ? std::optional(PanelDrawBounds{interaction.last_x, interaction.last_y, interaction.last_width, interaction.last_height}) : std::nullopt;
+            if (interaction.window_state == FloatingWindowState::Normal && state != FloatingWindowState::Normal &&
+                interaction.last_bounds_valid) {
+                interaction.normal_bounds = PanelDrawBounds{interaction.last_x, interaction.last_y, interaction.last_width, interaction.last_height};
             }
             interaction.window_state = state;
             interaction.dragging = interaction.resizing = false;

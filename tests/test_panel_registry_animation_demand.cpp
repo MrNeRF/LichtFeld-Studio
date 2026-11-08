@@ -77,6 +77,8 @@ namespace {
                 return {.handled = true, .height = height};
             case PanelDirectRenderMode::Draw:
                 ++draw_count;
+                if (draw_action)
+                    draw_action();
                 return {.handled = true, .height = height};
             case PanelDirectRenderMode::Preload:
                 ++preload_count;
@@ -120,6 +122,7 @@ namespace {
         bool cache_hit = true;
         bool poll_result = true;
         std::function<void()> poll_action;
+        std::function<void()> draw_action;
         std::vector<std::pair<lfs::vis::gui::PanelDirectRenderMode,
                               lfs::vis::gui::PanelSpace>>
             requests;
@@ -984,6 +987,86 @@ TEST_F(PanelRegistryAnimationDemandTest, WindowMaximizePreservesNormalGeometryAn
     EXPECT_FLOAT_EQ(restored->y, original->y);
     EXPECT_FLOAT_EQ(restored->width, original->width);
     EXPECT_FLOAT_EQ(restored->height, original->height);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, PresentationTransitionsPreserveProjectGeometryBeforeRedraw) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1200, 800};
+    const auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx); };
+    for (const auto state : {FloatingWindowState::Minimized, FloatingWindowState::Maximized}) {
+        SCOPED_TRACE(static_cast<int>(state));
+        registry.unregister_all_non_native();
+        registerRecordingPanel("test.window");
+        draw();
+        const auto original = registry.live_floating_bounds("test.window");
+        ASSERT_TRUE(original);
+        const auto expect_saved_normal = [&] {
+            const auto saved = registry.capture_project_state();
+            const auto found = std::ranges::find(saved, std::string("test.window"), &PanelProjectState::id);
+            ASSERT_NE(found, saved.end());
+            EXPECT_TRUE(found->float_last_bounds_valid);
+            EXPECT_FLOAT_EQ(found->float_last_x, original->x);
+            EXPECT_FLOAT_EQ(found->float_last_y, original->y);
+            EXPECT_FLOAT_EQ(found->float_last_w, original->width);
+            EXPECT_FLOAT_EQ(found->float_last_h, original->height);
+        };
+        ASSERT_TRUE(registry.set_floating_window_state("test.window", state));
+        draw();
+        expect_saved_normal();
+        ASSERT_TRUE(registry.restore_floating_window("test.window"));
+        expect_saved_normal();
+        // A second presentation change can arrive before the requested redraw.
+        const auto next = state == FloatingWindowState::Minimized ? FloatingWindowState::Maximized : FloatingWindowState::Minimized;
+        ASSERT_TRUE(registry.set_floating_window_state("test.window", next));
+        expect_saved_normal();
+        ASSERT_TRUE(registry.restore_floating_window("test.window"));
+        expect_saved_normal();
+        draw();
+        const auto restored = registry.live_floating_bounds("test.window");
+        ASSERT_TRUE(restored);
+        EXPECT_FLOAT_EQ(restored->x, original->x);
+        EXPECT_FLOAT_EQ(restored->y, original->y);
+        EXPECT_FLOAT_EQ(restored->width, original->width);
+        EXPECT_FLOAT_EQ(restored->height, original->height);
+    }
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, ControlTransitionsDuringDrawPreserveProjectGeometry) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    PanelDrawContext ctx;
+    ctx.screen_bounds = PanelDrawBounds{0, 0, 1200, 800};
+    const auto draw = [&] { registry.render_panels({.target = PanelRenderTarget::for_space(PanelSpace::Floating)}, ctx); };
+    for (const auto state : {FloatingWindowState::Minimized, FloatingWindowState::Maximized}) {
+        SCOPED_TRACE(static_cast<int>(state));
+        registry.unregister_all_non_native();
+        registerRecordingPanel("test.window");
+        const auto panel = std::dynamic_pointer_cast<RecordingPanel>(registry.get_panel_instance("test.window"));
+        ASSERT_TRUE(panel);
+        draw();
+        const auto original = registry.live_floating_bounds("test.window");
+        ASSERT_TRUE(original);
+        int controls = 0;
+        panel->draw_action = [&] {
+            ++controls;
+            // This is the boundary at which the shared host dispatches clicks.
+            ASSERT_TRUE(registry.live_floating_bounds("test.window"));
+            ASSERT_TRUE(registry.set_floating_window_state("test.window", state));
+        };
+        draw();
+        EXPECT_EQ(controls, 1);
+        panel->draw_action = {};
+        const auto saved = registry.capture_project_state();
+        const auto found = std::ranges::find(saved, std::string("test.window"), &PanelProjectState::id);
+        ASSERT_NE(found, saved.end());
+        EXPECT_TRUE(found->float_last_bounds_valid);
+        EXPECT_FLOAT_EQ(found->float_last_x, original->x);
+        EXPECT_FLOAT_EQ(found->float_last_y, original->y);
+        EXPECT_FLOAT_EQ(found->float_last_w, original->width);
+        EXPECT_FLOAT_EQ(found->float_last_h, original->height);
+    }
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, MinimizedWindowsKeepTheirInstanceAndRestoreFromMenu) {
