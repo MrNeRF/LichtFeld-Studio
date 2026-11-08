@@ -5,6 +5,7 @@
 #include "core/native_fs.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 #include "gui/assisted_masking.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 #include "long_path_test_support.hpp"
@@ -312,6 +313,10 @@ namespace {
         input.tracking.reset();
         input.refine_candidate = -1;
         // Retaining an extracted-frame proposal is independent of the document.
+        const auto camera_input = input;
+        input.image = frames[2].path;
+        input.mtime_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(lfs::core::file_time_to_system_clock(lfs::core::native_fs::last_write_time(input.image)).time_since_epoch()).count();
+        input.size_bytes = lfs::core::native_fs::file_size(input.image);
         input.review_frame = 2;
         state = wait(service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
@@ -324,8 +329,7 @@ namespace {
         state = wait(retained, "mask_ready");
         ASSERT_EQ(state.phase, "mask_ready") << state.error;
         EXPECT_TRUE(service.sequenceFrames(run)[2].keyframe);
-        input.retain_frame = false;
-        input.export_candidate = -1;
+        input = camera_input;
         input.review_frame = 1;
         state = wait(service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
