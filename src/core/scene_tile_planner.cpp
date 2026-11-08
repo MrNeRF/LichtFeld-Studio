@@ -742,9 +742,11 @@ std::vector<TileSpec> generate_adaptive_tiles(
 
 std::vector<int> select_tile_camera_uids(
     const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras,
-    TileCameraSelectionDiagnostics* diagnostics) {
+    TileCameraSelectionDiagnostics* diagnostics, const int max_cameras) {
     if (diagnostics) *diagnostics = {};
     if (cameras.empty()) return {};
+    if (max_cameras < 0)
+        throw std::invalid_argument("Tile camera limit must be non-negative");
     const glm::mat3 inverse = glm::transpose(tile_rotation(tile.rotation_degrees));
     const auto [context_min, context_max] = tile_context_bounds(tile);
     const glm::vec3 center = (context_min + context_max) * 0.5f;
@@ -896,7 +898,57 @@ std::vector<int> select_tile_camera_uids(
     std::vector<size_t> order(support.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::sort(order.begin(), order.end(), ranked);
-    const size_t minimum_evidence_views = std::min<size_t>(4, static_cast<size_t>(evidence_views));
+
+    // Large captures can have thousands of views whose tracks touch the same
+    // tile.  Retaining every one turns coarse-mask generation into an
+    // unbounded tile-times-camera pass.  Keep a bounded, coverage-first
+    // subset instead: greedily retain cameras that add one or two-view
+    // support in the 4x4x2 local grid, then fill remaining slots by the same
+    // deterministic evidence ranking used below.
+    if (max_cameras > 0 && selected_count > static_cast<size_t>(max_cameras)) {
+        std::vector<bool> limited(cameras.size(), false);
+        std::array<int, spatial_cells> limited_coverage{};
+        size_t limited_count = 0;
+        const auto add_limited = [&](const size_t index) {
+            if (limited[index]) return;
+            limited[index] = true;
+            ++limited_count;
+            for (int cell = 0; cell < spatial_cells; ++cell)
+                limited_coverage[cell] += support[index].cells.test(cell);
+        };
+        while (limited_count < static_cast<size_t>(max_cameras)) {
+            size_t best = support.size();
+            int best_gain = 0;
+            for (size_t index = 0; index < support.size(); ++index) {
+                if (!chosen[index] || limited[index]) continue;
+                int gain = 0;
+                for (int cell = 0; cell < spatial_cells; ++cell) {
+                    const int target = std::min(2, available[cell]);
+                    if (support[index].cells.test(cell) && limited_coverage[cell] < target)
+                        gain += limited_coverage[cell] == 0 ? 2 : 1;
+                }
+                if (gain > best_gain ||
+                    (gain == best_gain && gain > 0 && best < support.size() && ranked(index, best))) {
+                    best = index;
+                    best_gain = gain;
+                }
+            }
+            if (best_gain == 0) break;
+            add_limited(best);
+        }
+        for (const size_t index : order) {
+            if (limited_count >= static_cast<size_t>(max_cameras)) break;
+            if (chosen[index]) add_limited(index);
+        }
+        chosen = std::move(limited);
+        covered = limited_coverage;
+        selected_count = limited_count;
+    }
+    const size_t selection_limit = max_cameras > 0
+        ? static_cast<size_t>(max_cameras)
+        : std::numeric_limits<size_t>::max();
+    const size_t minimum_evidence_views = std::min({
+        size_t{4}, static_cast<size_t>(evidence_views), selection_limit});
     for (const size_t index : order) {
         if (selected_count >= minimum_evidence_views)
             break;
@@ -905,7 +957,7 @@ std::vector<int> select_tile_camera_uids(
 
     const bool sparse = evidence_views < 4 || observed_cells < 2 || best_image_cells < 2;
     if (sparse) {
-        const size_t floor = std::min<size_t>(8, support.size());
+        const size_t floor = std::min({size_t{8}, support.size(), selection_limit});
         for (const size_t index : order) {
             if (selected_count >= floor) break;
             if (support[index].inside_tracks >= 2 ||

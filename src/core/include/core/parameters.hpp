@@ -629,6 +629,10 @@ namespace lfs::core {
             // Reject or coalesce cells that do not have enough independent
             // multi-view evidence before the expensive coarse pass starts.
             int tile_min_cameras = 2;
+            // Bound the per-tile camera/mask set for large captures while
+            // retaining a coverage-first subset.  This protects the dense
+            // coarse-mask pass from a tile that is visible in every image.
+            int tile_max_cameras = 512;
             int tile_min_multi_view_cells = 2;
             bool tile_merge_infeasible = true;
             // Extra final ownership extent on the scene-facing local OBB X/Y
@@ -652,12 +656,20 @@ namespace lfs::core {
             // from dense Gaussian rasterization. Disable only for recovery of
             // old/manual jobs where the sparse estimator is acceptable.
             bool tile_require_dense_masks = true;
-            // Global SfM gain calibration is always applied to the targets.
-            // This optional lock additionally disables per-tile learned
-            // appearance correction so individual tiles cannot drift away
-            // from that shared reference.
+            // Relative exposure fitting samples every participating image and
+            // can be expensive on thousands of views, so it is opt-in.  The
+            // lock below enables it implicitly because a shared reference is
+            // otherwise unavailable.
+            bool tile_calibrate_exposure = false;
+            // This optional lock disables per-tile learned appearance
+            // correction so individual tiles cannot drift away from the
+            // calibrated shared reference.
             bool tile_lock_exposure_correction = false;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
+            // Internal: parent-job snapshot of the cameras enabled in the GUI
+            // scene.  The parent uses it before planning so disabled views
+            // cannot affect bounds, feasibility, coarse training, or tiles.
+            std::optional<std::filesystem::path> tile_source_camera_uids_path = std::nullopt;
             std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
             std::optional<std::filesystem::path> tile_exposure_gains_path = std::nullopt;
             std::optional<std::array<float, 6>> tile_contextbox = std::nullopt;

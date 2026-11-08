@@ -39,6 +39,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <new>
 #include <optional>
 #include <print>
 #include <ranges>
@@ -344,8 +345,18 @@ namespace lfs::app {
                 }
                 if (!positive_overlap) continue;
 
-                auto failing_fragments = split_tile_on_neighbour_boundaries(
-                    failing, neighbour, join_axis);
+                // A feasibility repair must be monotonic: preserve the whole
+                // failing tile and add a matching piece of its neighbour.
+                // Splitting the failing tile itself can repeatedly create an
+                // even less-supported fragment; that was the source of the
+                // unbounded fragment chain seen on sparse real scenes.
+                //
+                // We therefore split only a neighbour which spans the
+                // failing tile in both transverse directions.  The merged
+                // result strictly grows the failing tile across its shared
+                // face.  If no such neighbour exists, report the tile as
+                // infeasible instead of manufacturing a recursive closure.
+                std::vector<lfs::core::TileSpec> failing_fragments{failing};
                 auto neighbour_fragments = split_tile_on_neighbour_boundaries(
                     neighbour, failing, join_axis);
                 size_t best_failing = failing_fragments.size();
@@ -374,6 +385,53 @@ namespace lfs::app {
                 }
             }
             return std::nullopt;
+        }
+
+        bool read_source_camera_snapshot(const path& snapshot_path,
+                                         const path& dataset,
+                                         std::unordered_set<int>& camera_uids,
+                                         std::string& error) {
+            std::ifstream input(lfs::core::native_fs::native_path(snapshot_path), std::ios::binary);
+            if (!input) {
+                error = "Cannot open auto-tile source camera snapshot";
+                return false;
+            }
+            try {
+                const auto snapshot = json::parse(input);
+                if (!snapshot.contains("dataset") || !snapshot["dataset"].is_string() ||
+                    snapshot["dataset"].get<std::string>() != lfs::core::path_to_utf8(dataset)) {
+                    error = "Auto-tile source camera snapshot belongs to another dataset";
+                    return false;
+                }
+                if (!snapshot.contains("camera_uids") || !snapshot["camera_uids"].is_array()) {
+                    error = "Auto-tile source camera snapshot needs a camera_uids array";
+                    return false;
+                }
+                for (const auto& uid_value : snapshot["camera_uids"]) {
+                    const int uid = uid_value.get<int>();
+                    if (uid < 0 || !camera_uids.insert(uid).second) {
+                        error = "Auto-tile source camera snapshot has an invalid or duplicate camera UID";
+                        return false;
+                    }
+                }
+            } catch (const std::exception& exception) {
+                error = std::format("Invalid auto-tile source camera snapshot: {}", exception.what());
+                return false;
+            }
+            if (camera_uids.empty()) {
+                error = "Auto-tile source camera snapshot has no enabled cameras";
+                return false;
+            }
+            return true;
+        }
+
+        void filter_camera_evidence_to_source_snapshot(
+            std::vector<lfs::core::TileCameraEvidence>& evidence,
+            const std::unordered_set<int>& camera_uids) {
+            if (camera_uids.empty()) return;
+            std::erase_if(evidence, [&](const auto& camera) {
+                return !camera_uids.contains(camera.uid);
+            });
         }
 
         // Extend only outer ownership faces.  This happens strictly after
@@ -1810,9 +1868,11 @@ namespace lfs::app {
                                      name == "--tile-align" || name == "--tile-source" ||
                                      name == "--tile-quantile" || name == "--tile-coarse-iterations" ||
                                      name == "--tile-coarse-resize" || name == "--tile-depth-masks" ||
+                                     name == "--tile-source-camera-uids" ||
                                      name == "--tile-camera-uids" || name == "--tile-exposure-gains" ||
                                      name == "--tile-contextbox" || name == "--tile-child" ||
                                      name == "--tile-min-cameras" ||
+                                     name == "--tile-max-cameras" ||
                                      name == "--tile-min-multiview-cells" ||
                                      name == "--no-tile-merge-infeasible" ||
                                      name == "--tile-boundary-padding" ||
@@ -1820,6 +1880,7 @@ namespace lfs::app {
                                      name == "--tile-visibility-min-alpha" ||
                                      name == "--tile-visibility-foreign-weight" ||
                                      name == "--no-tile-require-dense-masks" ||
+                                     name == "--tile-calibrate-exposure" ||
                                      name == "--tile-lock-exposure-correction" ||
                                      name == "--train";
             if (!parent_only)
@@ -1831,6 +1892,17 @@ namespace lfs::app {
         std::vector<lfs::core::TileCameraEvidence> camera_evidence;
         std::vector<lfs::core::TilePlanDiagnostics> planning_diagnostics;
         bool plan_has_boundary_padding = false;
+        std::unordered_set<int> source_camera_uids;
+        if (params.tile_source_camera_uids_path) {
+            std::string source_snapshot_error;
+            if (!read_source_camera_snapshot(*params.tile_source_camera_uids_path, dataset,
+                                             source_camera_uids, source_snapshot_error)) {
+                LOG_ERROR("{}", source_snapshot_error);
+                return 1;
+            }
+            LOG_INFO("Auto-tiling uses {} cameras enabled in the GUI scene snapshot",
+                     source_camera_uids.size());
+        }
         try {
             if (params.tile_plan_path) {
                 std::ifstream input(lfs::core::native_fs::native_path(*params.tile_plan_path));
@@ -1902,6 +1974,7 @@ namespace lfs::app {
             centers.reserve(scene->cameras.size());
             for (const auto& camera : scene->cameras) {
                 if (!camera || !camera->has_image()) continue;
+                if (!source_camera_uids.empty() && !source_camera_uids.contains(camera->uid())) continue;
                 const auto position = camera->cam_position().cpu().contiguous();
                 if (position.numel() >= 3) {
                     const auto* p = position.ptr<float>();
@@ -1911,6 +1984,7 @@ namespace lfs::app {
             const lfs::core::PointCloud empty_points;
             const auto& points = scene->point_cloud ? *scene->point_cloud : empty_points;
             camera_evidence = lfs::core::collect_tile_camera_evidence(scene->cameras);
+            filter_camera_evidence_to_source_snapshot(camera_evidence, source_camera_uids);
             lfs::core::OrientationMode mode = lfs::core::OrientationMode::Obb3D;
             if (params.auto_tile_align_mode == "planar_yaw" || params.auto_tile_align_mode == "yaw") {
                 mode = lfs::core::OrientationMode::PlanarYaw;
@@ -1966,7 +2040,10 @@ namespace lfs::app {
                 auto* scene = std::get_if<lfs::io::LoadedScene>(&loaded->data);
                 if (!scene) throw std::runtime_error("Tile plan needs a dataset with cameras");
                 camera_evidence = lfs::core::collect_tile_camera_evidence(scene->cameras);
+                filter_camera_evidence_to_source_snapshot(camera_evidence, source_camera_uids);
             }
+            if (!source_camera_uids.empty() && camera_evidence.size() != source_camera_uids.size())
+                throw std::runtime_error("Enabled-camera snapshot does not match the dataset being trained");
             if (camera_evidence.size() < 2)
                 throw std::runtime_error("Auto-tiling needs at least two usable cameras");
         } catch (const std::exception& error) {
@@ -1998,7 +2075,7 @@ namespace lfs::app {
             for (const auto& tile : tiles) {
                 lfs::core::TileCameraSelectionDiagnostics diagnostics;
                 auto selected = lfs::core::select_tile_camera_uids(
-                    tile, camera_evidence, &diagnostics);
+                    tile, camera_evidence, &diagnostics, params.tile_max_cameras);
                 tile_feasibility.push_back(assess_tile_feasibility(selected, diagnostics, params));
                 tile_cameras.push_back(std::move(selected));
                 camera_selection_diagnostics.push_back(std::move(diagnostics));
@@ -2006,16 +2083,26 @@ namespace lfs::app {
         };
         assign_tile_cameras();
 
-        // Make a rectangular closure around an infeasible cell.  When a
-        // partial neighbour prevents a direct union, split both rectangles on
-        // their shared local-frame boundaries, merge the aligned pair, and
-        // leave the remaining fragments explicit.  This preserves ownership;
-        // unlike an L-shaped bounding box it never steals a third tile's core.
+        // Make a rectangular closure around an infeasible cell.  A partial
+        // neighbour is split on the failing tile's transverse boundaries and
+        // its aligned piece is merged into the whole failing tile.  This
+        // preserves ownership without creating an L-shaped bounding box or
+        // recursively splitting an already unsupported tile.
         json topology_operations = json::array();
         std::string topology_blocker;
         size_t fragment_serial = 0;
         size_t topology_operation_count = 0;
-        const size_t max_topology_operations = std::max<size_t>(64, requested_tile_count * 8);
+        // A feasibility repair is a small local correction, not a secondary
+        // adaptive partitioner.  Bound both its iterations and the temporary
+        // number of leaves by the requested plan.  In particular, a four-tile
+        // plan must never manufacture tens of fragments while repeatedly
+        // rescanning every SfM observation; it should stop and report the
+        // infeasible layout for the user to adjust.
+        const size_t max_topology_operations = std::min<size_t>(64,
+            std::max<size_t>(8, requested_tile_count * 2));
+        const size_t max_resolved_tile_count = std::min<size_t>(256,
+            std::max<size_t>(8, requested_tile_count * 2));
+        try {
         while (true) {
             if (g_interrupt_count.load() > 0) {
                 LOG_WARN("Auto-tile feasibility processing cancelled");
@@ -2026,6 +2113,11 @@ namespace lfs::app {
             if (unfeasible == tile_feasibility.end()) break;
             const size_t failing_index = static_cast<size_t>(unfeasible - tile_feasibility.begin());
             if (!params.tile_merge_infeasible || tiles.size() <= 1) break;
+            if (topology_operation_count >= max_topology_operations) {
+                topology_blocker = std::format(
+                    "stopped after {} rectangular-closure operations", max_topology_operations);
+                break;
+            }
 
             size_t best_index = tiles.size();
             std::optional<RectangularClosure> best_closure;
@@ -2055,17 +2147,15 @@ namespace lfs::app {
                 }
             }
             if (best_index == tiles.size()) break;
-            if (++topology_operation_count > max_topology_operations) {
-                topology_blocker = std::format(
-                    "stopped after {} rectangular-closure operations", max_topology_operations);
-                break;
-            }
+            ++topology_operation_count;
 
             auto closure = std::move(*best_closure);
             const size_t prospective_count = tiles.size() +
                 closure.failing_fragments.size() + closure.neighbour_fragments.size() - 3;
-            if (prospective_count > 1000) {
-                topology_blocker = "rectangular closure would exceed the 1000 tile safety limit";
+            if (prospective_count > max_resolved_tile_count) {
+                topology_blocker = std::format(
+                    "rectangular closure would exceed the {}-tile repair safety limit",
+                    max_resolved_tile_count);
                 break;
             }
 
@@ -2124,11 +2214,20 @@ namespace lfs::app {
                      requested_tile_count, tiles.size());
             assign_tile_cameras();
         }
+        } catch (const std::bad_alloc&) {
+            // This path used to escape through the application exception
+            // firewall after a pathological closure generated more work than
+            // the host could hold.  Keep the process alive long enough to
+            // surface an actionable failure instead.
+            LOG_ERROR("Auto-tile feasibility repair exhausted host memory; reduce the requested tile count or disable automatic merging");
+            return 1;
+        }
 
         json feasibility_report;
         feasibility_report["requested_tile_count"] = requested_tile_count;
         feasibility_report["resolved_tile_count"] = tiles.size();
         feasibility_report["minimum_cameras"] = params.tile_min_cameras;
+        feasibility_report["maximum_cameras"] = params.tile_max_cameras;
         feasibility_report["minimum_multi_view_cells"] = params.tile_min_multi_view_cells;
         feasibility_report["coalesce_infeasible"] = params.tile_merge_infeasible;
         feasibility_report["topology_operations"] = topology_operations;
@@ -2177,56 +2276,61 @@ namespace lfs::app {
             LOG_INFO("Auto-tile plan already contains boundary padding; not applying it a second time");
         }
 
-        // Solve this once from SfM before the coarse pass.  The same normalized
-        // images are then seen by the global prior and every local optimizer;
-        // learned exposure correction, when enabled, only needs to model the
-        // residual instead of letting tiles choose incompatible baselines.
+        // Solve this once from SfM before the coarse pass when requested.  It
+        // decodes one thumbnail per participating camera, which is valuable
+        // for exposure consistency but can take minutes for very large sets.
+        // Keep it explicit rather than silently adding a long preflight phase.
         lfs::core::TileExposureCalibration exposure;
         size_t exposure_samples = 0;
-        try {
-            LOG_INFO("Estimating global tile exposure from shared SfM tracks");
-            const auto samples = lfs::core::sample_tile_exposure(
-                camera_evidence, 2048, [] { return g_interrupt_count.load() > 0; });
-            if (g_interrupt_count.load() > 0) return 1;
-            exposure_samples = samples.size();
-            std::vector<int> camera_uids;
-            camera_uids.reserve(camera_evidence.size());
-            for (const auto& view : camera_evidence) camera_uids.push_back(view.uid);
-            exposure = lfs::core::estimate_tile_exposure(samples, camera_uids);
-        } catch (const std::exception& error) {
-            LOG_ERROR("Cannot estimate global tile exposure: {}", error.what());
-            return 1;
-        }
-        if (exposure.connected_cameras < 2)
-            LOG_WARN("Insufficient shared SfM image evidence for exposure calibration; using unchanged images");
-        else
-            LOG_INFO("Global exposure calibrated {} of {} images from {} shared points and {} reliable view pairs",
-                     exposure.connected_cameras, exposure.cameras.size(),
-                     exposure.shared_points, exposure.reliable_edges);
-        json exposure_file = {
-            {"version", 1},
-            {"dataset", path_to_utf8(dataset)},
-            {"method", "sfm_shared_track_log_luminance"},
-            {"domain", "encoded_rgb"},
-            {"sampled_observations", exposure_samples},
-            {"shared_points", exposure.shared_points},
-            {"reliable_view_pairs", exposure.reliable_edges},
-            {"connected_cameras", exposure.connected_cameras},
-            {"cameras", json::array()}};
-        for (const auto& gain : exposure.cameras) {
-            const auto found = views_by_uid.find(gain.camera_uid);
-            if (found == views_by_uid.end()) {
-                LOG_ERROR("Exposure calibration returned unknown camera UID {}", gain.camera_uid);
+        std::optional<path> exposure_path;
+        if (params.tile_calibrate_exposure) {
+            try {
+                LOG_INFO("Estimating global tile exposure from shared SfM tracks");
+                const auto samples = lfs::core::sample_tile_exposure(
+                    camera_evidence, 2048, [] { return g_interrupt_count.load() > 0; });
+                if (g_interrupt_count.load() > 0) return 1;
+                exposure_samples = samples.size();
+                std::vector<int> camera_uids;
+                camera_uids.reserve(camera_evidence.size());
+                for (const auto& view : camera_evidence) camera_uids.push_back(view.uid);
+                exposure = lfs::core::estimate_tile_exposure(samples, camera_uids);
+            } catch (const std::exception& error) {
+                LOG_ERROR("Cannot estimate global tile exposure: {}", error.what());
                 return 1;
             }
-            exposure_file["cameras"].push_back({
-                {"uid", gain.camera_uid},
-                {"image", found->second->image_name},
-                {"gain", gain.gain},
-                {"shared_points", gain.shared_points}});
+            if (exposure.connected_cameras < 2)
+                LOG_WARN("Insufficient shared SfM image evidence for exposure calibration; using unchanged images");
+            else
+                LOG_INFO("Global exposure calibrated {} of {} images from {} shared points and {} reliable view pairs",
+                         exposure.connected_cameras, exposure.cameras.size(),
+                         exposure.shared_points, exposure.reliable_edges);
+            json exposure_file = {
+                {"version", 1},
+                {"dataset", path_to_utf8(dataset)},
+                {"method", "sfm_shared_track_log_luminance"},
+                {"domain", "encoded_rgb"},
+                {"sampled_observations", exposure_samples},
+                {"shared_points", exposure.shared_points},
+                {"reliable_view_pairs", exposure.reliable_edges},
+                {"connected_cameras", exposure.connected_cameras},
+                {"cameras", json::array()}};
+            for (const auto& gain : exposure.cameras) {
+                const auto found = views_by_uid.find(gain.camera_uid);
+                if (found == views_by_uid.end()) {
+                    LOG_ERROR("Exposure calibration returned unknown camera UID {}", gain.camera_uid);
+                    return 1;
+                }
+                exposure_file["cameras"].push_back({
+                    {"uid", gain.camera_uid},
+                    {"image", found->second->image_name},
+                    {"gain", gain.gain},
+                    {"shared_points", gain.shared_points}});
+            }
+            exposure_path = output / "tile_exposure.json";
+            if (!write_batch_report(*exposure_path, exposure_file.dump(2) + "\n")) return 1;
+        } else {
+            LOG_INFO("Skipping global tile exposure calibration; enable --tile-calibrate-exposure to run it");
         }
-        const path exposure_path = output / "tile_exposure.json";
-        if (!write_batch_report(exposure_path, exposure_file.dump(2) + "\n")) return 1;
 
         lfs::core::param::BatchTrainingParameters batch;
         batch.output_dir = output;
@@ -2254,8 +2358,10 @@ namespace lfs::app {
             "--iter", std::format("{}", params.tile_coarse_iterations),
             "--resize_factor", std::format("{}", params.tile_coarse_resize_factor),
             "--tile-camera-uids", path_to_utf8(coarse_camera_path),
-            "--tile-exposure-gains", path_to_utf8(exposure_path),
             "--tile-child", "--output-name", "coarse", "--export", "ply"};
+        if (exposure_path)
+            coarse_job.extra_args.insert(coarse_job.extra_args.end(),
+                                         {"--tile-exposure-gains", path_to_utf8(*exposure_path)});
         if (params.tile_lock_exposure_correction) {
             // A PLY transfers Gaussian appearance but not optimizer-owned
             // appearance modules. Keep the coarse model in the same globally
@@ -2483,6 +2589,7 @@ namespace lfs::app {
         manifest["feasibility"] = {
             {"path", "tile_feasibility.json"},
             {"minimum_cameras", params.tile_min_cameras},
+            {"maximum_cameras", params.tile_max_cameras},
             {"minimum_multi_view_cells", params.tile_min_multi_view_cells},
             {"topology_operations", topology_operations},
             {"coalesced", tiles.size() != requested_tile_count}};
@@ -2511,7 +2618,8 @@ namespace lfs::app {
         manifest["camera_selection"] = "sfm_image_support_tile_coverage_and_projected_airspace";
         manifest["airspace_view_threshold"] = lfs::core::TILE_AIRSPACE_VIEW_THRESHOLD;
         manifest["exposure_calibration"] = {
-            {"path", "tile_exposure.json"},
+            {"enabled", params.tile_calibrate_exposure},
+            {"path", exposure_path ? "tile_exposure.json" : ""},
             {"connected_cameras", exposure.connected_cameras},
             {"shared_points", exposure.shared_points},
             {"reliable_view_pairs", exposure.reliable_edges}};
@@ -2608,11 +2716,13 @@ namespace lfs::app {
                               std::format("{}", params.tile_outside_loss_weight),
                               "--tile-camera-uids", path_to_utf8(camera_path),
                               "--tile-contextbox=" + context_box,
-                              "--tile-exposure-gains", path_to_utf8(exposure_path),
                               "--tile-depth-masks", path_to_utf8(tile_depth_mask_paths[tile_index]),
                               "--init", path_to_utf8(coarse_export),
                               "--tile-child",
                               "--output-name", tile.name, "--export", "ply"};
+            if (exposure_path)
+                job.extra_args.insert(job.extra_args.end(),
+                                      {"--tile-exposure-gains", path_to_utf8(*exposure_path)});
             if (params.auto_tile_crop)
                 job.extra_args.push_back("--crop");
             if (!params.tile_require_dense_masks)
@@ -2625,10 +2735,10 @@ namespace lfs::app {
                                                      tile.rotation_degrees.z));
             }
             if (params.tile_lock_exposure_correction) {
-                // The global SfM gains are still applied to every target image
-                // through --tile-exposure-gains.  This only removes the
-                // independent learned residual that could otherwise diverge
-                // between separately optimized tiles.
+                // A requested lock implies global calibration, so every
+                // target already shares the same SfM gain.  This only removes
+                // the independent learned residual that could otherwise
+                // diverge between separately optimized tiles.
                 job.extra_args.push_back("--no-exposure-correction");
             }
             std::string error;

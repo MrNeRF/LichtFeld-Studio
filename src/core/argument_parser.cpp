@@ -823,6 +823,7 @@ namespace {
             ::args::ValueFlag<int> tile_coarse_iterations(training_group, "iterations", "Global coarse-pass iterations used to initialize every tile (default 5000)", {"tile-coarse-iterations"});
             ::args::ValueFlag<int> tile_coarse_resize(training_group, "factor", "Global coarse-pass image resize factor: 1, 2, 4, or 8 (default 4)", {"tile-coarse-resize"});
             ::args::ValueFlag<int> tile_min_cameras(training_group, "count", "Minimum selected cameras required for a feasible tile (default 2)", {"tile-min-cameras"});
+            ::args::ValueFlag<int> tile_max_cameras(training_group, "count", "Maximum coverage-ranked cameras retained per tile and dense-mask pass (default 512)", {"tile-max-cameras"});
             ::args::ValueFlag<int> tile_min_multi_view_cells(training_group, "count", "Minimum coarse cells with selected multi-view support per tile (default 2)", {"tile-min-multiview-cells"});
             ::args::Flag no_tile_merge_infeasible(training_group, "no_tile_merge_infeasible", "Fail instead of coalescing an infeasible tile with a rectangular neighbour", {"no-tile-merge-infeasible"});
             ::args::ValueFlag<float> tile_boundary_padding(training_group, "distance", "Extend scene-facing local-OBB boundary tile crop faces by this distance after camera assignment (default 0)", {"tile-boundary-padding"});
@@ -830,11 +831,13 @@ namespace {
             ::args::ValueFlag<float> tile_visibility_min_alpha(training_group, "alpha", "Minimum coarse rendered opacity used to mark foreign tile coverage (default 0.15)", {"tile-visibility-min-alpha"});
             ::args::ValueFlag<float> tile_visibility_foreign_weight(training_group, "weight", "Loss weight in confidently foreign coarse-rendered pixels from 0 to 1 (default 0.15)", {"tile-visibility-foreign-weight"});
             ::args::Flag no_tile_require_dense_masks(training_group, "no_tile_require_dense_masks", "Allow sparse fallback when a selected camera cannot receive a dense coarse Gaussian mask", {"no-tile-require-dense-masks"});
+            ::args::Flag tile_calibrate_exposure(training_group, "tile_calibrate_exposure", "Fit shared global exposure gains from SfM tracks before coarse and tile training (can be slow for very large image sets)", {"tile-calibrate-exposure"});
             ::args::Flag tile_lock_exposure_correction(training_group, "tile_lock_exposure_correction", "Keep per-tile learned exposure correction disabled after global SfM calibration", {"tile-lock-exposure-correction"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
             ::args::Flag no_tile_crop(training_group, "no_tile_crop", "Keep splats outside each tile after training", {"no-tile-crop"});
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
             ::args::ValueFlag<std::string> tile_plan(training_group, "path", "Use edited tile boxes from a JSON plan instead of recomputing the grid", {"tile-plan"});
+            ::args::ValueFlag<std::string> tile_source_camera_uids(training_group, "path", "Internal: enabled-camera UID snapshot for the auto-tile parent job", {"tile-source-camera-uids"});
             ::args::ValueFlag<std::string> tile_camera_uids(training_group, "path", "Internal: camera UID allowlist for one tile job", {"tile-camera-uids"});
             ::args::ValueFlag<std::string> tile_exposure_gains(training_group, "path", "Internal: global per-image exposure gains shared by tile jobs", {"tile-exposure-gains"});
             ::args::ValueFlag<std::string> tile_contextbox(training_group, "x0,y0,z0,x1,y1,z1", "Internal: overlapping context bounds used only for tile camera/initialization selection", {"tile-contextbox"});
@@ -1464,6 +1467,13 @@ namespace {
                 if (params.tile_min_cameras < 2 || params.tile_min_cameras > 10000)
                     return std::unexpected("--tile-min-cameras must be between 2 and 10000");
             }
+            if (tile_max_cameras) {
+                params.tile_max_cameras = ::args::get(tile_max_cameras);
+                if (params.tile_max_cameras < 2 || params.tile_max_cameras > 10000)
+                    return std::unexpected("--tile-max-cameras must be between 2 and 10000");
+            }
+            if (params.tile_max_cameras < params.tile_min_cameras)
+                return std::unexpected("--tile-max-cameras must be at least --tile-min-cameras");
             if (tile_min_multi_view_cells) {
                 params.tile_min_multi_view_cells = ::args::get(tile_min_multi_view_cells);
                 if (params.tile_min_multi_view_cells < 0 || params.tile_min_multi_view_cells > 32)
@@ -1495,6 +1505,7 @@ namespace {
             params.tile_merge_infeasible = !no_tile_merge_infeasible;
             params.tile_require_dense_masks = !no_tile_require_dense_masks;
             params.tile_lock_exposure_correction = tile_lock_exposure_correction;
+            params.tile_calibrate_exposure = tile_calibrate_exposure || tile_lock_exposure_correction;
             params.auto_tile_crop = !no_tile_crop;
             params.auto_tile_merge = !no_tile_merge;
             params.tile_child_job = tile_child;
@@ -1512,6 +1523,14 @@ namespace {
                     return std::unexpected("--tile-plan file does not exist");
                 if (!params.auto_tile_grid && params.auto_tile_count <= 0 && params.auto_tile_size <= 0.0f)
                     return std::unexpected("--tile-plan needs --auto-tile or --tile-size");
+            }
+            if (tile_source_camera_uids) {
+                params.tile_source_camera_uids_path = absolute_input_path(::args::get(tile_source_camera_uids));
+                if (!lfs::core::native_fs::exists(*params.tile_source_camera_uids_path))
+                    return std::unexpected("--tile-source-camera-uids file does not exist");
+                if (params.tile_child_job ||
+                    (!params.auto_tile_grid && params.auto_tile_count <= 0 && params.auto_tile_size <= 0.0f))
+                    return std::unexpected("--tile-source-camera-uids is for an auto-tile parent job only");
             }
             if (tile_camera_uids) {
                 params.tile_camera_uids_path = absolute_input_path(::args::get(tile_camera_uids));

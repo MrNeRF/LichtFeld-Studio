@@ -70,10 +70,12 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
             "coarse_iterations", "coarse_resize", "coarse_help", "inspect_tile",
             "inspect_selected", "restore_scene", "associated_cameras", "cameras_short",
             "preview_before_inspect", "previewing", "inspecting", "inspection_restored",
-            "boundary_padding", "boundary_help", "min_cameras", "min_multiview_cells",
+            "boundary_padding", "boundary_help", "min_cameras", "max_cameras", "max_cameras_help",
+            "min_multiview_cells",
             "merge_infeasible", "feasibility_help", "visibility_resolution",
             "visibility_min_alpha", "visibility_foreign_weight", "visibility_help",
             "require_dense_masks", "require_dense_masks_help",
+            "calibrate_exposure", "calibrate_exposure_help",
             "lock_exposure_correction", "lock_exposure_help",
             "completed_coalesced",
         ):
@@ -157,6 +159,7 @@ class _HandleStub:
         self.dirty_fields = []
         self.dirty_all_count = 0
         self.request_update_count = 0
+        self.record_lists = {}
 
     def dirty(self, name):
         self.dirty_fields.append(name)
@@ -166,6 +169,9 @@ class _HandleStub:
 
     def request_update(self):
         self.request_update_count += 1
+
+    def update_record_list(self, name, records):
+        self.record_lists[name] = list(records)
 
 
 def _make_signal(value):
@@ -269,6 +275,7 @@ def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_loc
 
     panel = module.TrainingPanel()
     panel._auto_tile_min_cameras = "4"
+    panel._auto_tile_max_cameras = "256"
     panel._auto_tile_min_multiview_cells = "6"
     panel._auto_tile_merge_infeasible = False
     panel._auto_tile_boundary_padding = "2.5"
@@ -282,6 +289,7 @@ def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_loc
 
     command = started[0]
     assert command[command.index("--tile-min-cameras") + 1] == "4"
+    assert command[command.index("--tile-max-cameras") + 1] == "256"
     assert command[command.index("--tile-min-multiview-cells") + 1] == "6"
     assert "--no-tile-merge-infeasible" in command
     assert command[command.index("--tile-boundary-padding") + 1] == "2.5"
@@ -290,6 +298,50 @@ def test_auto_tile_gui_forwards_feasibility_boundary_visibility_and_exposure_loc
     assert command[command.index("--tile-visibility-foreign-weight") + 1] == "0.35"
     assert "--no-tile-require-dense-masks" in command
     assert "--tile-lock-exposure-correction" in command
+    # Locking the residual makes the parent enable its calibration even when
+    # the separate opt-in checkbox was left off.
+    assert "--tile-calibrate-exposure" not in command
+
+
+def test_auto_tile_gui_snapshots_active_cameras_and_forwards_import_and_distortion(
+    training_panel_module, monkeypatch, tmp_path
+):
+    module = training_panel_module
+    dataset = SimpleNamespace(
+        has_params=lambda: True, data_path=str(tmp_path),
+        output_path=str(tmp_path / "output"), centralize_dataset="off", images="images",
+        resize_factor=1, max_width=3840, min_track_length=3,
+    )
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", iterations=100,
+        sh_degree=3, max_cap=10_000_000, use_exposure_correction=False,
+        undistort=True, gut=False,
+    )
+    active = [SimpleNamespace(camera_uid=4), SimpleNamespace(camera_uid=9)]
+    scene = SimpleNamespace(
+        get_active_cameras=lambda: active,
+        has_active_distorted_cameras=lambda: False,
+    )
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(module.lf, "studio_executable_path", lambda: "LichtFeld-Studio", raising=False)
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(trainer_state=_make_signal("ready")))
+    started = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: started.append(command) or object())
+
+    panel = module.TrainingPanel()
+    panel._auto_tile_calibrate_exposure = True
+    panel._schedule_deferred_update = lambda _delay: None
+    panel._auto_tile_train()
+
+    command = started[0]
+    assert command[command.index("--min-track-length") + 1] == "3"
+    assert "--undistort" in command
+    assert "--gut" not in command
+    assert "--tile-calibrate-exposure" in command
+    snapshot = Path(command[command.index("--tile-source-camera-uids") + 1])
+    assert json.loads(snapshot.read_text(encoding="utf-8"))["camera_uids"] == [4, 9]
 
 
 def test_auto_tile_gui_starts_preview_without_blocking_on_native_plan(
@@ -332,6 +384,10 @@ def test_auto_tile_inspector_selection_accepts_any_preview_index(training_panel_
     assert panel._auto_tile_selected_index == 2
     assert panel._auto_tile_selected_cameras() == []
     assert "auto_tile_selected_index" in panel._handle.dirty_fields
+    assert [record["name"] for record in panel._handle.record_lists["auto_tile_preview_tiles"]] == [
+        "Tile 0", "Tile 1", "Tile 2"
+    ]
+    assert panel._handle.record_lists["auto_tile_selected_cameras"] == []
 
 
 def test_auto_tile_quantile_slider_exposes_the_full_cli_range(training_panel_module):
@@ -472,6 +528,9 @@ class _ModelStub:
         self.bindings[name] = (getter, None)
 
     def bind_string_list(self, name):
+        self.bindings[name] = (None, None)
+
+    def bind_record_list(self, name):
         self.bindings[name] = (None, None)
 
 

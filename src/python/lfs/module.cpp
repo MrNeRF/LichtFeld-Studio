@@ -939,6 +939,7 @@ namespace {
         lfs::core::NodeId group_id = lfs::core::NULL_NODE;
         std::vector<lfs::core::NodeId> child_ids;
         std::vector<lfs::core::TileSpec> generated_tiles;
+        int max_cameras = 0;
         std::unordered_map<lfs::core::NodeId, bool> visibility_before_inspection;
         lfs::core::NodeId inspection_points_id = lfs::core::NULL_NODE;
     };
@@ -970,9 +971,11 @@ namespace {
 
     void cache_auto_tile_preview(lfs::core::Scene& scene,
                                  const lfs::core::NodeId group_id,
-                                 const std::vector<lfs::core::TileSpec>& tiles) {
+                                 const std::vector<lfs::core::TileSpec>& tiles,
+                                 const int max_cameras = 0) {
         restore_auto_tile_preview_visibility();
-        auto_tile_preview_cache = {.scene = &scene, .group_id = group_id, .generated_tiles = tiles};
+        auto_tile_preview_cache = {.scene = &scene, .group_id = group_id,
+                                   .generated_tiles = tiles, .max_cameras = max_cameras};
         const auto* const group = scene.getNodeById(group_id);
         if (!group || group->children.size() != tiles.size()) {
             auto_tile_preview_cache = {};
@@ -992,6 +995,7 @@ namespace {
         float boundary_padding = 0.0f;
         int resize_factor = -1;
         int max_width = 3840;
+        int max_cameras = 512;
         int replace_group_id = lfs::core::NULL_NODE;
         lfs::core::OrientationMode orientation = lfs::core::OrientationMode::Obb3D;
         lfs::core::BoundsSource source = lfs::core::BoundsSource::Points;
@@ -1009,6 +1013,7 @@ namespace {
         lfs::core::Scene* scene = nullptr;
         uint64_t scene_generation = 0;
         int replace_group_id = lfs::core::NULL_NODE;
+        int max_cameras = 0;
         std::future<std::vector<lfs::core::TileSpec>> future;
     };
 
@@ -1051,7 +1056,8 @@ namespace {
             }
         }
         for (const auto* const node : scene.getNodes()) {
-            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                node->training_enabled)
                 request.cameras.push_back(node->camera);
         }
         return request;
@@ -1168,7 +1174,8 @@ namespace {
 
     [[nodiscard]] int apply_auto_tile_preview(lfs::core::Scene& scene,
                                                const int replace_group_id,
-                                               const std::vector<lfs::core::TileSpec>& tiles) {
+                                               const std::vector<lfs::core::TileSpec>& tiles,
+                                               const int max_cameras = 0) {
         restore_auto_tile_preview_visibility();
         if (const auto* const old = scene.getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
@@ -1177,7 +1184,7 @@ namespace {
         const auto group_id = scene.createTileCropBoxes(tiles);
         if (group_id == lfs::core::NULL_NODE)
             throw std::runtime_error("Could not create tile preview boxes");
-        cache_auto_tile_preview(scene, group_id, tiles);
+        cache_auto_tile_preview(scene, group_id, tiles, max_cameras);
         return group_id;
     }
 
@@ -1260,7 +1267,8 @@ namespace {
             throw std::runtime_error("Preview tile boxes before inspecting them");
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
         for (const auto* const node : scene.getNodes())
-            if (node->type == lfs::core::NodeType::CAMERA && node->camera)
+            if (node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                node->training_enabled)
                 cameras.push_back(node->camera);
         const auto evidence = lfs::core::collect_tile_camera_evidence(cameras);
         std::vector<ResolvedAutoTilePreview> result;
@@ -1270,7 +1278,8 @@ namespace {
             const auto* generated = cached_index && *cached_index < auto_tile_preview_cache.generated_tiles.size()
                 ? &auto_tile_preview_cache.generated_tiles[*cached_index] : nullptr;
             auto tile = tile_spec_from_preview_box(scene, child_id, generated);
-            auto camera_uids = lfs::core::select_tile_camera_uids(tile, evidence);
+            auto camera_uids = lfs::core::select_tile_camera_uids(
+                tile, evidence, nullptr, auto_tile_preview_cache.max_cameras);
             result.push_back({child_id, std::move(tile), std::move(camera_uids)});
         }
         return result;
@@ -4101,17 +4110,17 @@ NB_MODULE(lichtfeld, m) {
                                     float target_size,
                                     float outside_loss_weight,
                                     float boundary_padding,
-                                    int resize_factor,
-                                    int max_width) {
+                                    int resize_factor, int max_width,
+                                    int max_cameras) {
         auto* scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
         AutoTilePreviewOptions options{
             columns, rows, count, target_size, overlap, quantile, outside_loss_weight, boundary_padding,
-            resize_factor, max_width, replace_group_id,
+            resize_factor, max_width, max_cameras, replace_group_id,
             auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
         const auto request = make_auto_tile_preview_request(*scene, options);
         return apply_auto_tile_preview(*scene, replace_group_id,
-                                       compute_auto_tile_preview(request));
+                                       compute_auto_tile_preview(request), max_cameras);
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
        nb::arg("align_mode") = "obb_3d", nb::arg("source") = "points",
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
@@ -4119,6 +4128,7 @@ NB_MODULE(lichtfeld, m) {
        nb::arg("outside_loss_weight") = 0.0f,
        nb::arg("boundary_padding") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
+       nb::arg("max_cameras") = 512,
        "Preview auto-tile boxes in the current scene");
 
     m.def("start_auto_tile_preview", [](int columns, int rows, float overlap,
@@ -4128,12 +4138,13 @@ NB_MODULE(lichtfeld, m) {
                                          int count, float target_size,
                                          float outside_loss_weight,
                                          float boundary_padding,
-                                         int resize_factor, int max_width) {
+                                         int resize_factor, int max_width,
+                                         int max_cameras) {
         auto* const scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
         AutoTilePreviewOptions options{
             columns, rows, count, target_size, overlap, quantile, outside_loss_weight, boundary_padding,
-            resize_factor, max_width, replace_group_id,
+            resize_factor, max_width, max_cameras, replace_group_id,
             auto_tile_orientation_mode(align_mode), auto_tile_bounds_source(source_str)};
         const auto request = make_auto_tile_preview_request(*scene, options);
         std::lock_guard lock(auto_tile_preview_job.mutex);
@@ -4148,6 +4159,7 @@ NB_MODULE(lichtfeld, m) {
         auto_tile_preview_job.scene = scene;
         auto_tile_preview_job.scene_generation = lfs::python::get_scene_generation();
         auto_tile_preview_job.replace_group_id = replace_group_id;
+        auto_tile_preview_job.max_cameras = max_cameras;
         auto_tile_preview_job.future = std::async(std::launch::async, [request] {
             return compute_auto_tile_preview(request);
         });
@@ -4160,6 +4172,7 @@ NB_MODULE(lichtfeld, m) {
        nb::arg("outside_loss_weight") = 0.0f,
        nb::arg("boundary_padding") = 0.0f,
        nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
+       nb::arg("max_cameras") = 512,
        "Start automatic tile planning on a worker; call finish_auto_tile_preview on the UI thread");
 
     m.def("finish_auto_tile_preview", []() -> nb::object {
@@ -4167,6 +4180,7 @@ NB_MODULE(lichtfeld, m) {
         lfs::core::Scene* planned_scene = nullptr;
         uint64_t planned_scene_generation = 0;
         int replace_group_id = lfs::core::NULL_NODE;
+        int max_cameras = 0;
         {
             std::lock_guard lock(auto_tile_preview_job.mutex);
             if (!auto_tile_preview_job.active ||
@@ -4177,6 +4191,7 @@ NB_MODULE(lichtfeld, m) {
             planned_scene = auto_tile_preview_job.scene;
             planned_scene_generation = auto_tile_preview_job.scene_generation;
             replace_group_id = auto_tile_preview_job.replace_group_id;
+            max_cameras = auto_tile_preview_job.max_cameras;
             auto_tile_preview_job.active = false;
             auto_tile_preview_job.scene = nullptr;
         }
@@ -4185,7 +4200,7 @@ NB_MODULE(lichtfeld, m) {
         if (scene != planned_scene ||
             lfs::python::get_scene_generation() != planned_scene_generation)
             throw std::runtime_error("Scene changed while automatic tiles were being planned");
-        return nb::cast(apply_auto_tile_preview(*scene, replace_group_id, tiles));
+        return nb::cast(apply_auto_tile_preview(*scene, replace_group_id, tiles, max_cameras));
     }, "Apply a completed automatic tile plan on the UI thread, or return None while it is running");
 
     m.def("preview_auto_tiles", [](int columns, int rows, float overlap, bool align_pca,

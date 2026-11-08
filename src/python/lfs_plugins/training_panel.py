@@ -5,6 +5,7 @@
 import json
 import math
 import os
+import re
 import subprocess
 import threading
 import time
@@ -279,6 +280,7 @@ class TrainingPanel(Panel):
         self._auto_tile_coarse_iterations = "5000"
         self._auto_tile_coarse_resize = "4"
         self._auto_tile_min_cameras = "2"
+        self._auto_tile_max_cameras = "512"
         self._auto_tile_min_multiview_cells = "2"
         self._auto_tile_merge_infeasible = True
         self._auto_tile_boundary_padding = "0"
@@ -286,6 +288,7 @@ class TrainingPanel(Panel):
         self._auto_tile_visibility_min_alpha = "0.15"
         self._auto_tile_visibility_foreign_weight = "0.15"
         self._auto_tile_require_dense_masks = True
+        self._auto_tile_calibrate_exposure = False
         self._auto_tile_lock_exposure_correction = False
         self._auto_tile_crop = True
         self._auto_tile_merge = True
@@ -293,6 +296,8 @@ class TrainingPanel(Panel):
         self._auto_tile_process = None
         self._auto_tile_status = ""
         self._auto_tile_output = ""
+        self._auto_tile_log_offset = 0
+        self._auto_tile_last_log_line = ""
         self._auto_tile_preview_group = -1
         self._auto_tile_preview_settings = None
         self._auto_tile_preview_dataset = ""
@@ -421,6 +426,8 @@ class TrainingPanel(Panel):
                    lambda value: setattr(self, "_auto_tile_coarse_resize", str(value)))
         model.bind("auto_tile_min_cameras", lambda: self._auto_tile_min_cameras,
                    lambda value: setattr(self, "_auto_tile_min_cameras", str(value)))
+        model.bind("auto_tile_max_cameras", lambda: self._auto_tile_max_cameras,
+                   lambda value: setattr(self, "_auto_tile_max_cameras", str(value)))
         model.bind("auto_tile_min_multiview_cells", lambda: self._auto_tile_min_multiview_cells,
                    lambda value: setattr(self, "_auto_tile_min_multiview_cells", str(value)))
         model.bind("auto_tile_merge_infeasible", lambda: self._auto_tile_merge_infeasible,
@@ -435,14 +442,20 @@ class TrainingPanel(Panel):
                    lambda value: setattr(self, "_auto_tile_visibility_foreign_weight", str(value)))
         model.bind("auto_tile_require_dense_masks", lambda: self._auto_tile_require_dense_masks,
                    lambda value: setattr(self, "_auto_tile_require_dense_masks", bool(value)))
+        model.bind("auto_tile_calibrate_exposure", lambda: self._auto_tile_calibrate_exposure,
+                   lambda value: setattr(self, "_auto_tile_calibrate_exposure", bool(value)))
         model.bind("auto_tile_lock_exposure_correction", lambda: self._auto_tile_lock_exposure_correction,
                    lambda value: setattr(self, "_auto_tile_lock_exposure_correction", bool(value)))
         model.bind("auto_tile_selected_index", lambda: str(self._auto_tile_selected_index),
                    self._set_auto_tile_selected_index)
         model.bind_func("auto_tile_has_preview", lambda: bool(self._auto_tile_preview_tiles))
-        model.bind_func("auto_tile_preview_tiles", lambda: self._auto_tile_preview_tiles)
+        # RmlUI cannot turn an arbitrary Python list returned by bind_func into
+        # a data-for collection.  Keep the authoritative nested Python data
+        # below, but expose the two rendered lists through the native record
+        # list bridge.  This is also what the other dynamic selects use.
+        model.bind_record_list("auto_tile_preview_tiles")
         model.bind_func("auto_tile_cameras_short", lambda: tr("auto_tiles.cameras_short"))
-        model.bind_func("auto_tile_selected_cameras", self._auto_tile_selected_cameras)
+        model.bind_record_list("auto_tile_selected_cameras")
         model.bind_func("auto_tile_selected_camera_count",
                         lambda: len(self._auto_tile_selected_cameras()))
         model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
@@ -475,6 +488,7 @@ class TrainingPanel(Panel):
         }
         self._bind_events(model)
         self._handle = model.get_handle()
+        self._sync_auto_tile_preview_records()
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
 
@@ -1812,6 +1826,8 @@ class TrainingPanel(Panel):
                 self._handle.dirty("auto_tile_running")
                 auto_tile_finished = True
             else:
+                if self._update_auto_tile_log_status():
+                    self._handle.dirty("auto_tile_status")
                 self._schedule_deferred_update(0.25)
         self._sync_auto_scale_markers()
 
@@ -3029,6 +3045,7 @@ class TrainingPanel(Panel):
             coarse_iterations = int(self._auto_tile_coarse_iterations)
             coarse_resize = int(self._auto_tile_coarse_resize)
             min_cameras = int(self._auto_tile_min_cameras)
+            max_cameras = int(self._auto_tile_max_cameras)
             min_multiview_cells = int(self._auto_tile_min_multiview_cells)
             boundary_padding = float(self._auto_tile_boundary_padding)
             visibility_mask_resolution = int(self._auto_tile_visibility_mask_resolution)
@@ -3044,7 +3061,8 @@ class TrainingPanel(Panel):
             raise ValueError(tr("auto_tiles.invalid_grid"))
         if not (0.0 <= overlap <= 0.3 and 0.0 <= quantile < 0.5 and
                 coarse_iterations >= 100 and coarse_resize in (1, 2, 4, 8) and
-                2 <= min_cameras <= 10000 and 0 <= min_multiview_cells <= 32 and
+                2 <= min_cameras <= max_cameras <= 10000 and
+                0 <= min_multiview_cells <= 32 and
                 math.isfinite(boundary_padding) and boundary_padding >= 0.0 and
                 16 <= visibility_mask_resolution <= 256 and
                 math.isfinite(visibility_min_alpha) and 0.0 < visibility_min_alpha <= 1.0 and
@@ -3070,7 +3088,7 @@ class TrainingPanel(Panel):
         except (TypeError, ValueError):
             raise ValueError(tr("auto_tiles.invalid_grid"))
         return (mode, columns, rows, count, target_size, overlap, quantile,
-                coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+                coarse_iterations, coarse_resize, min_cameras, max_cameras, min_multiview_cells,
                 bool(self._auto_tile_merge_infeasible), boundary_padding,
                 visibility_mask_resolution, visibility_min_alpha,
                 visibility_foreign_weight,
@@ -3106,15 +3124,68 @@ class TrainingPanel(Panel):
         if self._handle:
             self._handle.dirty("auto_tile_status")
 
+    def _update_auto_tile_log_status(self):
+        """Show the latest parent-process phase without retaining its full log in the GUI."""
+        if not self._auto_tile_output:
+            return False
+        log_path = os.path.join(self._auto_tile_output, "auto_tiles.log")
+        try:
+            size = os.path.getsize(log_path)
+            if size < self._auto_tile_log_offset:
+                self._auto_tile_log_offset = 0
+            start = max(self._auto_tile_log_offset, max(0, size - 65_536))
+            with open(log_path, "r", encoding="utf-8", errors="replace") as log:
+                log.seek(start)
+                text = log.read()
+            self._auto_tile_log_offset = size
+        except OSError:
+            return False
+        if not text:
+            return False
+        lines = text.splitlines()
+        for line in reversed(lines):
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
+            if line:
+                if line == self._auto_tile_last_log_line:
+                    return False
+                self._auto_tile_last_log_line = line
+                self._auto_tile_status = line
+                return True
+        return False
+
     def _dirty_auto_tile_preview(self):
         if not self._handle:
             return
         self._handle.dirty("auto_tile_has_preview")
-        self._handle.dirty("auto_tile_preview_tiles")
         self._handle.dirty("auto_tile_selected_index")
-        self._handle.dirty("auto_tile_selected_cameras")
         self._handle.dirty("auto_tile_selected_camera_count")
         self._handle.dirty("auto_tile_preview_running")
+
+    def _sync_auto_tile_preview_records(self):
+        """Publish inspect data through RmlUI's native dynamic-record bridge.
+
+        The preview API deliberately keeps ``cameras`` nested with each tile
+        for inspection and focus.  RmlUI's data-for support, however, needs a
+        registered record collection rather than a Python list from a regular
+        getter.  Flattening just the rendered fields here keeps the model
+        stable while a preview is built asynchronously and makes the select
+        options and camera rows update atomically.
+        """
+        if not self._handle:
+            return
+        tiles = []
+        for index, tile in enumerate(self._auto_tile_preview_tiles):
+            tiles.append({
+                "index": str(index),
+                "name": str(tile.get("name", f"tile_{index}")),
+                "camera_count": str(int(tile.get("camera_count", 0))),
+            })
+        cameras = [
+            {"uid": str(camera.get("uid", "")), "name": str(camera.get("name", ""))}
+            for camera in self._auto_tile_selected_cameras()
+        ]
+        self._handle.update_record_list("auto_tile_preview_tiles", tiles)
+        self._handle.update_record_list("auto_tile_selected_cameras", cameras)
 
     def _set_auto_tile_selected_index(self, value):
         try:
@@ -3123,6 +3194,7 @@ class TrainingPanel(Panel):
             index = 0
         self._auto_tile_selected_index = max(0, min(index, len(self._auto_tile_preview_tiles) - 1)) \
             if self._auto_tile_preview_tiles else 0
+        self._sync_auto_tile_preview_records()
         self._dirty_auto_tile_preview()
 
     def _auto_tile_selected_cameras(self):
@@ -3135,6 +3207,7 @@ class TrainingPanel(Panel):
         details = lf.auto_tile_preview_details(self._auto_tile_preview_group)
         self._auto_tile_preview_tiles = list(details)
         self._auto_tile_selected_index = 0
+        self._sync_auto_tile_preview_records()
         self._dirty_auto_tile_preview()
 
     def _auto_tile_focus(self):
@@ -3202,7 +3275,7 @@ class TrainingPanel(Panel):
             return
         try:
             (mode, columns, rows, count, target_size, overlap, quantile,
-             coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+             coarse_iterations, coarse_resize, min_cameras, max_cameras, min_multiview_cells,
              merge_infeasible, boundary_padding, visibility_mask_resolution,
              visibility_min_alpha, visibility_foreign_weight,
              require_dense_masks,
@@ -3224,11 +3297,13 @@ class TrainingPanel(Panel):
                 target_size=target_size if mode == "size" else 0.0,
                 outside_loss_weight=self._auto_tile_outside_loss,
                 boundary_padding=boundary_padding,
-                resize_factor=resize_factor, max_width=max_width)
+                resize_factor=resize_factor, max_width=max_width,
+                max_cameras=max_cameras)
             preview_settings = (
                 mode, columns, rows, count, target_size, overlap, quantile,
                 self._auto_tile_align_mode, self._auto_tile_source,
-                self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width
+                self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width,
+                max_cameras
             )
             start = getattr(lf, "start_auto_tile_preview", None)
             finish = getattr(lf, "finish_auto_tile_preview", None)
@@ -3256,9 +3331,11 @@ class TrainingPanel(Panel):
         if RuntimeState.trainer_state.value != "ready":
             self._set_auto_tile_status(tr("auto_tiles.training_active"))
             return
+        if not self._auto_tile_distortion_ready():
+            return
         try:
             (mode, columns, rows, count, target_size, overlap, quantile,
-             coarse_iterations, coarse_resize, min_cameras, min_multiview_cells,
+             coarse_iterations, coarse_resize, min_cameras, max_cameras, min_multiview_cells,
              merge_infeasible, boundary_padding, visibility_mask_resolution,
              visibility_min_alpha, visibility_foreign_weight,
              require_dense_masks,
@@ -3273,6 +3350,7 @@ class TrainingPanel(Panel):
                                      os.path.join(dataset_path, "output"))
             resize_factor = getattr(dataset, "resize_factor", -1)
             max_width = getattr(dataset, "max_width", 3840)
+            min_track_length = max(0, int(getattr(dataset, "min_track_length", 0) or 0))
             command = [lf.studio_executable_path(), "-d", dataset_path, "-o", output]
             if mode == "size":
                 command.extend(["--tile-size", f"{target_size:.6g}"])
@@ -3287,17 +3365,21 @@ class TrainingPanel(Panel):
                        "--tile-coarse-iterations", str(coarse_iterations),
                        "--tile-coarse-resize", str(coarse_resize),
                        "--tile-min-cameras", str(min_cameras),
+                       "--tile-max-cameras", str(max_cameras),
                        "--tile-min-multiview-cells", str(min_multiview_cells),
                        "--tile-boundary-padding", f"{boundary_padding:.6g}",
                        "--tile-visibility-mask-resolution", str(visibility_mask_resolution),
                        "--tile-visibility-min-alpha", f"{visibility_min_alpha:.4g}",
                        "--tile-visibility-foreign-weight", f"{visibility_foreign_weight:.4g}",
                        "-r", "auto" if resize_factor <= 1 else str(resize_factor),
-                       "--max-width", str(max_width)])
+                       "--max-width", str(max_width),
+                       "--min-track-length", str(min_track_length)])
             if not merge_infeasible:
                 command.append("--no-tile-merge-infeasible")
             if not require_dense_masks:
                 command.append("--no-tile-require-dense-masks")
+            if self._auto_tile_calibrate_exposure:
+                command.append("--tile-calibrate-exposure")
             if lock_exposure_correction:
                 command.append("--tile-lock-exposure-correction")
             if not self._auto_tile_crop:
@@ -3309,7 +3391,8 @@ class TrainingPanel(Panel):
                     self._auto_tile_preview_settings ==
                     (mode, columns, rows, count, target_size, overlap, quantile,
                      self._auto_tile_align_mode, self._auto_tile_source,
-                     self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width)):
+                     self._auto_tile_outside_loss, boundary_padding, resize_factor, max_width,
+                     max_cameras)):
                 tile_plan = os.path.join(output, "auto_tile_plan.json")
                 saved_count = lf.save_auto_tile_plan(self._auto_tile_preview_group,
                                                      columns if mode == "grid" else max(1, count), tile_plan,
@@ -3330,8 +3413,32 @@ class TrainingPanel(Panel):
                                 "--max-cap", str(params.max_cap)])
                 if getattr(params, "use_exposure_correction", False):
                     command.append("--exposure-correction")
+                if getattr(params, "undistort", False):
+                    command.append("--undistort")
+                if getattr(params, "gut", False):
+                    command.append("--gut")
             os.makedirs(output, exist_ok=True)
+            scene = lf.get_scene()
+            if scene is not None:
+                camera_uids = sorted({
+                    int(camera.camera_uid)
+                    for camera in scene.get_active_cameras()
+                    if int(camera.camera_uid) >= 0
+                })
+                if len(camera_uids) < 2:
+                    raise ValueError("Automatic tiling needs at least two enabled cameras")
+                source_cameras_path = os.path.join(output, "auto_tile_source_cameras.json")
+                with open(source_cameras_path, "w", encoding="utf-8") as source_file:
+                    json.dump({
+                        "version": 1,
+                        "dataset": dataset_path,
+                        "camera_uids": camera_uids,
+                    }, source_file, indent=2)
+                    source_file.write("\n")
+                command.extend(["--tile-source-camera-uids", source_cameras_path])
             self._auto_tile_output = output
+            self._auto_tile_log_offset = 0
+            self._auto_tile_last_log_line = ""
             with open(os.path.join(output, "auto_tiles.log"), "w", encoding="utf-8") as log:
                 self._auto_tile_process = subprocess.Popen(
                     command, stdout=log, stderr=subprocess.STDOUT)
@@ -3426,6 +3533,55 @@ class TrainingPanel(Panel):
         if scene is None:
             return False
         return scene.can_undistort_active_cameras()
+
+    def _auto_tile_distortion_ready(self):
+        """Handle distorted cameras before spawning the independent parent process."""
+        params = lf.optimization_params()
+        if (
+            params is None
+            or not params.has_params()
+            or getattr(params, "undistort", False)
+            or getattr(params, "gut", False)
+            or not self._scene_has_active_distorted_cameras()
+        ):
+            return True
+
+        can_undistort = self._scene_can_undistort_active_cameras()
+        can_gut = getattr(params, "strategy", "") != "igs+"
+        btn_undistort = tr("training.distorted_warning.btn_undistort")
+        btn_gut = tr("training.distorted_warning.btn_gut")
+        btn_cancel = tr("training.conflict.btn_cancel")
+        buttons = []
+        if can_undistort:
+            buttons.append(btn_undistort)
+        if can_gut:
+            buttons.append(btn_gut)
+        buttons.append(btn_cancel)
+
+        def _on_result(button, _u=btn_undistort, _g=btn_gut):
+            active = lf.optimization_params()
+            if button == _u and active and active.has_params():
+                active.undistort = True
+            elif button == _g and active and active.has_params():
+                active.gut = True
+                error = active.validate()
+                if error:
+                    self._show_strategy_gut_conflict_dialog()
+                    return
+            else:
+                return
+            if self._handle:
+                self._handle.dirty_all()
+            self._auto_tile_train()
+
+        lf.ui.confirm_dialog(
+            tr("training.distorted_warning.title"),
+            tr("training.distorted_warning.message"),
+            buttons,
+            _on_result,
+            style="warning",
+        )
+        return False
 
     def _check_distortion_and_start(self):
         params = lf.optimization_params()

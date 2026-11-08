@@ -1068,6 +1068,11 @@
           <input type="text" class="number-input" data-value="auto_tile_min_cameras" />
         </div>
         <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.max_cameras</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_max_cameras" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.max_cameras_help</span>
+        <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.min_multiview_cells</span></span>
           <input type="text" class="number-input" data-value="auto_tile_min_multiview_cells" />
         </div>
@@ -1132,6 +1137,11 @@
           <span class="prop-label"><span>@tr:auto_tiles.merge_after_training</span></span>
           <input type="checkbox" data-value="auto_tile_merge" />
         </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.calibrate_exposure</span></span>
+          <input type="checkbox" data-value="auto_tile_calibrate_exposure" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.calibrate_exposure_help</span>
         <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.lock_exposure_correction</span></span>
           <input type="checkbox" data-value="auto_tile_lock_exposure_correction" />

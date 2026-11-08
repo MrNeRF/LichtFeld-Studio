@@ -158,7 +158,8 @@ namespace lfs::core {
 
     [[nodiscard]] LFS_CORE_API std::vector<int> select_tile_camera_uids(
         const TileSpec& tile, const std::vector<TileCameraEvidence>& cameras,
-        TileCameraSelectionDiagnostics* diagnostics = nullptr);
+        TileCameraSelectionDiagnostics* diagnostics = nullptr,
+        int max_cameras = 0);
     [[nodiscard]] LFS_CORE_API std::vector<int> select_tile_initial_point_indices(
         const PointCloud& points, const TileSpec& tile,
         const std::vector<TileCameraEvidence>& selected_cameras,

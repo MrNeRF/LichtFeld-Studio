@@ -364,6 +364,15 @@ namespace {
         EXPECT_EQ(selection.airspace_supported_views, 1);
         EXPECT_FALSE(selection.sparse_fallback);
 
+        lfs::core::TileCameraSelectionDiagnostics limited_selection;
+        const auto limited = lfs::core::select_tile_camera_uids(
+            tile, cameras, &limited_selection, 3);
+        EXPECT_EQ(limited.size(), 3u);
+        EXPECT_TRUE(std::ranges::all_of(limited, [&](const int uid) {
+            return std::ranges::find(selected, uid) != selected.end();
+        }));
+        EXPECT_GT(limited_selection.covered_cells, 0);
+
         std::vector<lfs::core::TilePlanDiagnostics> planning;
         const auto tiles = lfs::core::generate_adaptive_tiles(
             bounds, 1, 0.0f, bounds, cloud(coordinates), cameras, &planning);

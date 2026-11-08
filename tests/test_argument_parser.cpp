@@ -1559,7 +1559,9 @@ TEST(ArgumentParserTest, AutoTileKeepsExportsAndOutsideLossWhenRequested) {
     EXPECT_FLOAT_EQ((*defaults)->tile_outside_loss_weight, 0.0f);
     EXPECT_EQ((*defaults)->tile_coarse_iterations, 5000);
     EXPECT_EQ((*defaults)->tile_coarse_resize_factor, 4);
+    EXPECT_EQ((*defaults)->tile_max_cameras, 512);
     EXPECT_TRUE((*defaults)->tile_require_dense_masks);
+    EXPECT_FALSE((*defaults)->tile_calibrate_exposure);
 
     const char* argv[] = {
         "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
@@ -1589,7 +1591,8 @@ TEST(ArgumentParserTest, AutoTileParsesFeasibilityBoundaryAndDenseMaskSettings) 
     const auto output_path = make_test_path("lfs_arg_parser_tile_feasibility_output");
     const char* argv[] = {
         "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
-        "--auto-tile", "4", "--tile-min-cameras", "4", "--tile-min-multiview-cells", "5",
+        "--auto-tile", "4", "--tile-min-cameras", "4", "--tile-max-cameras", "256",
+        "--tile-min-multiview-cells", "5",
         "--no-tile-merge-infeasible", "--tile-boundary-padding", "3.5",
         "--tile-visibility-mask-resolution", "128", "--tile-visibility-min-alpha", "0.2",
         "--tile-visibility-foreign-weight", "0.3", "--no-tile-require-dense-masks",
@@ -1597,6 +1600,7 @@ TEST(ArgumentParserTest, AutoTileParsesFeasibilityBoundaryAndDenseMaskSettings) 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_EQ((*parsed)->tile_min_cameras, 4);
+    EXPECT_EQ((*parsed)->tile_max_cameras, 256);
     EXPECT_EQ((*parsed)->tile_min_multi_view_cells, 5);
     EXPECT_FALSE((*parsed)->tile_merge_infeasible);
     EXPECT_FLOAT_EQ((*parsed)->tile_boundary_padding, 3.5f);
@@ -1604,7 +1608,20 @@ TEST(ArgumentParserTest, AutoTileParsesFeasibilityBoundaryAndDenseMaskSettings) 
     EXPECT_FLOAT_EQ((*parsed)->tile_visibility_min_alpha, 0.2f);
     EXPECT_FLOAT_EQ((*parsed)->tile_visibility_foreign_weight, 0.3f);
     EXPECT_FALSE((*parsed)->tile_require_dense_masks);
+    EXPECT_TRUE((*parsed)->tile_calibrate_exposure);
     EXPECT_TRUE((*parsed)->tile_lock_exposure_correction);
+}
+
+TEST(ArgumentParserTest, AutoTileParsesExplicitExposureCalibration) {
+    const auto data_path = make_test_path("lfs_arg_parser_tile_exposure_data");
+    const auto output_path = make_test_path("lfs_arg_parser_tile_exposure_output");
+    const char* argv[] = {
+        "LichtFeld-Studio", "--headless", "-d", data_path.c_str(), "-o", output_path.c_str(),
+        "--auto-tile", "2", "--tile-calibrate-exposure"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->tile_calibrate_exposure);
+    EXPECT_FALSE((*parsed)->tile_lock_exposure_correction);
 }
 
 TEST(ArgumentParserTest, AutoTileRejectsInvalidDenseMaskSettings) {
