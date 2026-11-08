@@ -1112,7 +1112,7 @@ The image XMP contains `lfs:SrtObservation` in the existing
 `https://lichtfeld.io/ns/media/1.0/` namespace. Its value is XML-escaped ASCII
 JSON with policy `srt-frame-observation-v1`. It retains the query ticks and
 rational time base, explicit offset/tolerance, source locator and the selected
-cue's timing, normalized text bytes and interpreted DJI fields. Gaps are
+cue's timing, original text bytes and interpreted DJI fields. Gaps are
 represented by `match: null`. The selected cue can include unknown producer
 fields and identifiers. Original whole-file SRT bytes remain owned by the input
 catalog rather than being repeated in every exported image.
