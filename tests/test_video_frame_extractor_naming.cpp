@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 #include "io/video/frame_color_range.hpp"
 #include "io/video/probed_stream_rewind.hpp"
@@ -2205,6 +2206,54 @@ namespace {
         ASSERT_NE(progress, nullptr);
         EXPECT_NEAR(std::stof(progress->GetAttribute<Rml::String>("value", "")), 1.25f / 3.0f, 1.0e-4f);
         EXPECT_NE(document->GetElementById("progress-text")->GetInnerRML().find("2/3"), std::string::npos);
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, BatchFailurePolicyIsContextualAndRetainsItsValue) {
+        auto* const row = document->GetElementById("batch-failure-options");
+        auto* const toggle = document->GetElementById("continue-batch-on-failure");
+        ASSERT_NE(row, nullptr);
+        ASSERT_NE(toggle, nullptr);
+        EXPECT_FALSE(row->IsVisible());
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4", "capture/b.mp4"}, "batch_output");
+        sync();
+        EXPECT_TRUE(row->IsVisible());
+        toggle->RemoveAttribute("checked");
+        toggle->DispatchEvent(Rml::EventId::Change, {});
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4"}, "batch_output");
+        sync();
+        EXPECT_FALSE(row->IsVisible());
+        NamingAccess::configureBatch(*dialog, {"capture/a.mp4", "capture/b.mp4"}, "batch_output");
+        sync();
+        EXPECT_TRUE(row->IsVisible());
+        EXPECT_FALSE(toggle->HasAttribute("checked"));
+        EXPECT_EQ(document->GetElementById("output-value")->GetAttribute<Rml::String>("title", ""), "batch_output");
+    }
+
+    TEST_F(VideoExtractorNamingUiTest, SingleVideoCanBeClearedAndFooterReservesProgressSpace) {
+        TempDir temp("single_video_clear");
+        const auto source = temp.path / "source.mp4";
+        ASSERT_TRUE(writeProbedVideo(source, "mp4", AV_CODEC_ID_MPEG4, 5, 0));
+        ASSERT_TRUE(dialog->openVideoPath(source));
+        sync();
+        auto* const clear = document->GetElementById("btn-clear-videos");
+        ASSERT_NE(clear, nullptr);
+        EXPECT_FALSE(clear->HasAttribute("disabled"));
+        EXPECT_EQ(document->GetElementById("video-value")->GetAttribute<Rml::String>("title", ""),
+                  lfs::core::path_to_utf8(source));
+        NamingAccess::syncExtractionStatus(*dialog);
+        context->Update();
+        auto* const footer = document->GetElementById("action-footer");
+        ASSERT_NE(footer, nullptr);
+        const float idle_height = footer->GetBox().GetSize(Rml::BoxArea::Border).y;
+        NamingAccess::batchProgress(*dialog, -1, 1, 10);
+        NamingAccess::syncExtractionStatus(*dialog);
+        context->Update();
+        EXPECT_FLOAT_EQ(footer->GetBox().GetSize(Rml::BoxArea::Border).y, idle_height);
+        NamingAccess::extracting(*dialog, false);
+        NamingAccess::click(*dialog, "btn-clear-videos");
+        sync();
+        EXPECT_TRUE(NamingAccess::videoPath(*dialog).empty());
+        EXPECT_TRUE(clear->HasAttribute("disabled"));
     }
 } // namespace
 
