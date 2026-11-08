@@ -44,17 +44,11 @@ controls = panel.ExternalTrainingPanel()
 '''.replace("RECORD", repr(record)))
         _editor(endpoint, '''
 import time
-deadline = time.monotonic() + 10
-while panel._current.generation != FIRST and time.monotonic() < deadline:
-    time.sleep(.05)
-assert panel._current.generation == FIRST, panel._current.error
+assert wait_until(lambda: panel._current.generation == FIRST, 10), panel._current.error
 '''.replace("FIRST", repr(first["id"])))
         producer.finish("completed", result={"root": str(tmp_path), "iteration": "broken"})
         _editor(endpoint, '''
-deadline = time.monotonic() + 10
-while not panel._current.stop.is_set() and time.monotonic() < deadline:
-    time.sleep(.05)
-assert panel._current.stop.is_set(), panel._current.connection_error
+assert wait_until(panel._current.stop.is_set, 10), panel._current.connection_error
 assert panel._current.status["state"] == "completed"
 assert not panel._current.connection_error
 ''')
@@ -66,10 +60,7 @@ assert panel._current.shown["count"] == 8
 assert lf.get_scene().get_node_by_uuid(panel._current.uuid)
 controls._remove()
 ''')
-        deadline = time.monotonic() + 5
-        while list((producer.root / "clients").glob("*.json")) and time.monotonic() < deadline:
-            time.sleep(.05)
-        assert not list((producer.root / "clients").glob("*.json"))
+        assert wait_until(lambda: not list((producer.root / "clients").glob("*.json")))
     finally:
         producer.finish()
         producer.pool.close()
@@ -115,17 +106,11 @@ lf.io.save_ply(source, {str(artifact)!r})
         record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
         _ui_editor(camera_runtime, f'panel._current = ExternalTraining({record!r})\ncontrols = panel.ExternalTrainingPanel()')
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while not panel._current.shown and time.monotonic() < deadline:
-    time.sleep(.05)
-assert panel._current.shown
+assert wait_until(lambda: panel._current.shown, 10)
 ''')
         producer.finish("completed", result=result)
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while not panel._current.stop.is_set() and time.monotonic() < deadline:
-    time.sleep(.05)
-assert panel._current.stop.is_set()
+assert wait_until(panel._current.stop.is_set, 10)
 assert panel._current.status["result"]["count"] == 8
 ''')
         # Integrity failure must not modify the preview or any existing model.
@@ -133,10 +118,7 @@ assert panel._current.status["result"]["count"] == 8
         artifact.write_bytes(content[:-1] + bytes([content[-1] ^ 1]))
         _ui_editor(camera_runtime, 'controls._import_result()')
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while not controls._result_future.done() and time.monotonic() < deadline:
-    time.sleep(.05)
-assert controls._result_future.done()
+assert wait_until(controls._result_future.done, 10)
 ''')
         _ui_editor(camera_runtime, '''
 controls.on_update(None)
@@ -147,16 +129,11 @@ assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
         artifact.write_bytes(content)
         _ui_editor(camera_runtime, 'controls._import_result()')
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while not controls._result_future.done() and time.monotonic() < deadline:
-    time.sleep(.05)
-assert controls._result_future.done()
+assert wait_until(controls._result_future.done, 10)
 ''')
         _ui_editor(camera_runtime, 'controls.on_update(None)\nassert not controls._message(), controls._message()')
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 20
-while not lf.ui.get_import_state().get("success") and not lf.ui.get_import_state().get("error") and time.monotonic() < deadline:
-    time.sleep(.05)
+assert wait_until(lambda: lf.ui.get_import_state().get("success") or lf.ui.get_import_state().get("error"), 20)
 assert lf.ui.get_import_state()["success"], lf.ui.get_import_state()
 assert lf.ui.get_import_state()["path"] == "saved-full.ply"
 assert lf.ui.get_import_state()["source_path"].endswith("saved-full.ply")
@@ -182,10 +159,7 @@ imported_name = local.name
         artifact.unlink()
         _ui_editor(camera_runtime, 'controls._import_result()')
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while not controls._result_future.done() and time.monotonic() < deadline:
-    time.sleep(.05)
-assert controls._result_future.done()
+assert wait_until(controls._result_future.done, 10)
 ''')
         _ui_editor(camera_runtime, '''
 controls.on_update(None)
@@ -200,10 +174,7 @@ assert lf.get_scene().get_node(imported_name).gaussian_count == 8
         _tool(camera_runtime, "project_save_as", {"path": str(project)})
         _tool(camera_runtime, "project_open", {"path": str(project), "discard_changes": True})
         _editor(camera_runtime, '''
-deadline = time.monotonic() + 10
-while (not lf.get_scene().get_node(imported_name) or lf.get_scene().get_node(imported_name).gaussian_count != 8) and time.monotonic() < deadline:
-    time.sleep(.05)
-assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+assert wait_until(lambda: lf.get_scene().get_node(imported_name) and lf.get_scene().get_node(imported_name).gaussian_count == 8, 10)
 np.testing.assert_allclose(lf.get_scene().get_node(imported_name).local_transform, edited_transform)
 ''')
     finally:
