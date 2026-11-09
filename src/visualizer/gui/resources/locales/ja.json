@@ -319,7 +319,18 @@
     "video_intro": "360°正距円筒図法画像でのトレーニング",
     "video_reality_scan": "Reality Scanデータセット",
     "video_colmap": "COLMAPチュートリアル",
-    "video_masks": "マスクチュートリアル"
+    "video_masks": "マスクチュートリアル",
+    "tab_editing": "編集",
+    "video_editing_navigation": "1. ナビゲーション",
+    "video_editing_align": "2. 3点位置合わせ",
+    "video_editing_crop": "3. クロップボックス",
+    "video_editing_transform": "4. ミラー、変形、グループ",
+    "video_editing_selection": "5. 選択ツール",
+    "video_editing_depth_selection": "6. ヒストグラムと深度による選択",
+    "video_editing_publish": "7. 保存、エクスポート、公開",
+    "video_blender": "Blenderでガウシアンスプラットを使う",
+    "video_normals": "ガウシアンスプラッティングで法線を使う",
+    "more_videos": "その他の動画"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

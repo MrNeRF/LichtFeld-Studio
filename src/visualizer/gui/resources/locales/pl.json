@@ -319,7 +319,18 @@
     "video_intro": "Trening na Obrazach Equirectangular 360",
     "video_reality_scan": "Zbiór Danych Reality Scan",
     "video_colmap": "Samouczek COLMAP",
-    "video_masks": "Samouczek Masek"
+    "video_masks": "Samouczek Masek",
+    "tab_editing": "Edycja",
+    "video_editing_navigation": "1. Nawigacja",
+    "video_editing_align": "2. Wyrównanie trzema punktami",
+    "video_editing_crop": "3. Prostopadłościany przycinania",
+    "video_editing_transform": "4. Odbicie, przekształcenia i grupy",
+    "video_editing_selection": "5. Narzędzia zaznaczania",
+    "video_editing_depth_selection": "6. Histogram i zaznaczanie według głębi",
+    "video_editing_publish": "7. Zapisywanie, eksportowanie i publikowanie",
+    "video_blender": "Splaty Gaussa w Blenderze",
+    "video_normals": "Używanie normalnych w Gaussian Splatting",
+    "more_videos": "Więcej filmów"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

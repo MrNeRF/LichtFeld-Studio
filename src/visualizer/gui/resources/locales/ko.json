@@ -319,7 +319,18 @@
     "video_intro": "360 정방형 이미지 트레이닝",
     "video_reality_scan": "Reality Scan 데이터셋",
     "video_colmap": "COLMAP 튜토리얼",
-    "video_masks": "마스크 튜토리얼"
+    "video_masks": "마스크 튜토리얼",
+    "tab_editing": "편집",
+    "video_editing_navigation": "1. 탐색",
+    "video_editing_align": "2. 3점 정렬",
+    "video_editing_crop": "3. 자르기 상자",
+    "video_editing_transform": "4. 대칭, 변환 및 그룹",
+    "video_editing_selection": "5. 선택 도구",
+    "video_editing_depth_selection": "6. 히스토그램 및 깊이 선택",
+    "video_editing_publish": "7. 저장, 내보내기 및 게시",
+    "video_blender": "Blender에서 가우시안 스플랫 사용",
+    "video_normals": "가우시안 스플래팅에서 법선 사용",
+    "more_videos": "더 많은 동영상"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

@@ -319,7 +319,18 @@
     "video_intro": "Entrenamiento con Imágenes Equirectangulares 360",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutorial COLMAP",
-    "video_masks": "Tutorial de Máscaras"
+    "video_masks": "Tutorial de Máscaras",
+    "tab_editing": "Edición",
+    "video_editing_navigation": "1. Navegación",
+    "video_editing_align": "2. Alineación con tres puntos",
+    "video_editing_crop": "3. Cajas de recorte",
+    "video_editing_transform": "4. Simetría, transformaciones y grupos",
+    "video_editing_selection": "5. Herramientas de selección",
+    "video_editing_depth_selection": "6. Histograma y selección por profundidad",
+    "video_editing_publish": "7. Guardar, exportar y publicar",
+    "video_blender": "Splats gaussianos en Blender",
+    "video_normals": "Usar normales en Gaussian Splatting",
+    "more_videos": "Más vídeos"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
