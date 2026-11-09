@@ -797,7 +797,6 @@ body {
     margin-top: 2dp;
     display: flex;
     justify-content: space-between;
-    color: #a6adc8;
     font-size: 10dp;
     line-height: 12dp;
 }
