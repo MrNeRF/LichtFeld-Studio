@@ -69,6 +69,11 @@ namespace lfs::vis::gui {
             status_bar.tooltip_.setHover(text, status_bar.document_);
         }
 
+        static void startAnimations(RmlStatusBar& status_bar) {
+            status_bar.model_animation_active_ = status_bar.rml_animation_active_ = status_bar.animation_active_ = true;
+            status_bar.next_refresh_at_ = {};
+        }
+
         static void revealTooltip(RmlStatusBar& status_bar, const bool layout = true) {
             if (const auto deadline = status_bar.tooltip_.revealDeadline())
                 std::this_thread::sleep_until(*deadline + std::chrono::milliseconds(2));
@@ -662,6 +667,20 @@ namespace {
             EXPECT_NEAR(value->GetAbsoluteOffset().x - unit->GetAbsoluteOffset().x - unit->GetOffsetWidth(),
                         11 * scale, 0.5f);
         }
+    }
+
+    TEST_F(StatusBarFitTest, HiddenBarStopsAnimationsAndCancelsPendingTooltips) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        RmlStatusBarTestAccess::startAnimations(status_bar_);
+        RmlStatusBarTestAccess::prepareTooltip(status_bar_, "Status bar tooltip");
+        const auto now = std::chrono::steady_clock::now();
+        EXPECT_TRUE(status_bar_.animationFrameDue(now));
+        EXPECT_TRUE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        status_bar_.suspend();
+        EXPECT_FALSE(status_bar_.animationFrameDue(now + std::chrono::seconds(10)));
+        EXPECT_FALSE(status_bar_.secondsUntilAnimationFrame(now));
+        EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
     }
 
     TEST_F(StatusBarFitTest, PreferencesHideItemsIndependentlyAndKeepWarnings) {

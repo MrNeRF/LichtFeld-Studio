@@ -7233,6 +7233,8 @@ namespace lfs::vis::gui {
                                   },
                                   status_draw_ctx);
             }
+        } else {
+            rml_status_bar_.suspend();
         }
 
         if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {

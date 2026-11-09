@@ -82,6 +82,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API void processInput(const PanelInputState& input, float bar_x, float bar_y,
                                       float bar_w, float bar_h);
         void clearTooltip() { tooltip_.setHover({}, nullptr); }
+        LFS_VIS_API void suspend();
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
         [[nodiscard]] LFS_VIS_API bool isOverlayPoint(float local_x, float local_y,
                                                       float bar_w) const;

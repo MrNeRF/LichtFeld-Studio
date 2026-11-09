@@ -559,6 +559,20 @@ namespace lfs::vis::gui {
         next_refresh_at_ = {};
     }
 
+    void RmlStatusBar::suspend() {
+        clearTooltip();
+        resetSaveStepInteraction();
+        setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
+        model_animation_active_ = rml_animation_active_ = animation_active_ = false;
+        markModelDirty();
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        if (rml_manager_ && rml_context_) {
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, false);
+            rml_manager_->setContextTooltipRevealDeadline(rml_context_, std::nullopt);
+        }
+    }
+
     bool RmlStatusBar::animationFrameDue(
         const std::chrono::steady_clock::time_point now) const {
         return animation_active_ &&
