@@ -5,6 +5,7 @@
 from enum import IntEnum
 from importlib import import_module
 import json
+import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -1965,18 +1966,14 @@ def test_status_bar_choices_use_partial_updates_and_dedicated_reset(preferences_
     assert saved == defaults
 
 
-def test_status_bar_defaults_match_native_defaults_and_have_no_untranslated_labels():
-    import ast
+def test_status_bar_defaults_match_native_defaults_and_have_no_untranslated_labels(preferences_panel_module):
+    module, _state = preferences_panel_module
+    defaults = module.PreferencesPanel.STATUS_BAR_DEFAULTS
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/python/lfs_plugins/preferences_panel.py").read_text()
-    tree = ast.parse(source)
-    panel = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PreferencesPanel")
-    defaults = next(ast.literal_eval(node.value) for node in panel.body if isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == "STATUS_BAR_DEFAULTS" for target in node.targets))
     native = (root / "src/visualizer/preferences.hpp").read_text()
     rml = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text()
     for key, value in defaults.items():
-        assert f"bool {key} = {str(value).lower()};" in native
+        assert re.search(rf"\bbool\s+{re.escape(key)}\s*=\s*{str(value).lower()}\s*;", native)
         assert f'data-checked="status_bar_{key}"' in rml
         assert f"@tr:preferences.status_bar_{key}" in rml
     assert 'data-event-click="reset_status_bar"' in rml
