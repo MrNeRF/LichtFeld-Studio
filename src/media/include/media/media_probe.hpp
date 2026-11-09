@@ -103,6 +103,33 @@ namespace lfs::media {
         // Aggregate copied key/value bytes and coded side-data payload bytes.
         std::size_t bytes = 8 * 1024 * 1024;
     };
+    // Owned demuxer packet observations, not original container byte ranges or
+    // interpreted GPS/IMU samples. Packet positions are provider-reported only.
+    struct TimedMetadataPacket {
+        std::optional<Timestamp> pts;
+        std::optional<Timestamp> dts;
+        std::optional<Timestamp> duration;
+        std::optional<std::int64_t> source_offset;
+        int flags = 0;
+        std::vector<std::uint8_t> bytes;
+        std::vector<MetadataSideData> side_data;
+    };
+    struct TimedMetadataLimits {
+        std::size_t bytes = 32u * 1024 * 1024;
+        // Selected packets plus packet side-data blocks.
+        std::size_t records = 100000;
+        // All packets examined, including unselected streams.
+        std::size_t scan_packets = 1000000;
+    };
+    inline constexpr TimedMetadataLimits timed_metadata_maxima{};
+    struct TimedMetadataObservation {
+        std::optional<MetadataProviderInfo> provider;
+        int stream_index = -1;
+        std::uint32_t codec_tag = 0;
+        std::vector<std::uint8_t> extradata;
+        std::vector<TimedMetadataPacket> packets;
+        std::size_t packets_examined = 0;
+    };
     struct MediaDescription {
         std::string container;
         // FFmpeg may derive properties during packet probing; this is not a CFR guarantee.
@@ -114,6 +141,8 @@ namespace lfs::media {
         std::optional<int> selected_video_stream;
         // Absent unless explicitly requested; no packet telemetry scan.
         std::optional<ContainerSourceMetadata> source_metadata;
+        // Present only after an explicit complete packet scan of one data/subtitle track.
+        std::optional<TimedMetadataObservation> timed_metadata;
     };
     enum class ProbeDepth { Headers,
                             StreamInfo };
@@ -123,6 +152,9 @@ namespace lfs::media {
         std::chrono::milliseconds timeout{10000};
         bool collect_source_metadata = false;
         ContainerMetadataLimits metadata_limits;
+        // Requires Headers depth; does not probe codecs or decode video frames.
+        std::optional<int> timed_metadata_stream;
+        TimedMetadataLimits timed_metadata_limits;
     };
     // Metadata only: no image output, hardware context or application runtime.
     // StreamInfo may read packets and use FFmpeg's software codec probing.

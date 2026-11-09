@@ -956,6 +956,22 @@ class MediaBindings(unittest.TestCase):
                     shutil.rmtree(normalized)
             cls.temp.cleanup()
 
+    def test_timed_metadata_probe_cli_parity_and_owned_result(self):
+        path = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
+        self.assertNotIn("timed_metadata", json.loads(media.MediaIngest.probe(path, headers_only=True).to_json()))
+        observed = media.MediaIngest.probe(path, timed_metadata_stream=1)
+        actual = json.loads(observed.to_json())
+        reference = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "1"], check=True, capture_output=True, timeout=30)
+        self.assertEqual(actual, json.loads(reference.stdout)["media"])
+        self.assertTrue(actual["timed_metadata"]["packets"])
+        limits = media.TimedMetadataLimits()
+        limits.records = 1
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.probe(path, timed_metadata_stream=1, timed_metadata_limits=limits)
+        path.unlink()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            self.assertTrue(all(value == observed.to_json() for value in executor.map(lambda _: observed.to_json(), range(6))))
+
     def request(self):
         request = media.IngestRequest()
         request.input = self.corpus / "cfr-asymmetric.nut"

@@ -2019,6 +2019,46 @@ class IngestCLI(unittest.TestCase):
         node = ET.fromstring((output / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
         self.assertEqual(json.loads(node.text)["match"]["cue"], 0)
 
+    def test_timed_metadata_probe_matches_demuxed_packets_and_explicit_track(self):
+        path = srt_metadata_fixture.embedded(self.root, FFMPEG)
+        original, modified = path.read_bytes(), path.stat().st_mtime_ns
+        ordinary, _ = self.invoke("probe", path, "--headers-only")
+        self.assertNotIn("timed_metadata", ordinary["media"])
+        observations = []
+        for stream in (1, 2):
+            result, _ = self.invoke("probe", path, "--timed-stream", stream)
+            self.assertFalse(result["media"]["stream_info_probed"])
+            timed = result["media"]["timed_metadata"]
+            self.assertEqual(timed["scope"], "demuxed_timed_packets")
+            self.assertEqual(timed["interpretation"], "not_performed")
+            reference = json.loads(subprocess.check_output([str(FFPROBE), "-v", "error", "-select_streams", str(stream),
+                "-show_packets", "-show_streams", "-show_data_hash", "sha256", "-of", "json", str(path)]))
+            self.assertEqual(len(timed["packets"]), len(reference["packets"]))
+            self.assertEqual(timed["stream_index"], stream)
+            self.assertEqual(hashlib.sha256(bytes.fromhex(timed["extradata"])).hexdigest(), reference["streams"][0]["extradata_hash"].split(":")[1])
+            for packet, expected in zip(timed["packets"], reference["packets"]):
+                self.assertEqual(hashlib.sha256(bytes.fromhex(packet["bytes"])).hexdigest(), expected["data_hash"].split(":")[1])
+                self.assertEqual(len(bytes.fromhex(packet["bytes"])), int(expected["size"]))
+                for name in ("pts", "dts", "duration"):
+                    if name in expected:
+                        self.assertEqual(packet[name]["ticks"], int(expected[name]))
+                        self.assertEqual(packet[name]["time_base"], list(map(int, reference["streams"][0]["time_base"].split("/"))))
+                    else:
+                        self.assertIsNone(packet[name])
+                if "pos" in expected and int(expected["pos"]) >= 0:
+                    self.assertEqual(packet["source_offset"], int(expected["pos"]))
+            observations.append(timed)
+        self.assertNotEqual([p["bytes"] for p in observations[0]["packets"]], [p["bytes"] for p in observations[1]["packets"]])
+        for flags in (("--timed-stream", "0"), ("--timed-stream", "99"), ("--timed-stream", "-1"),
+                      ("--timed-stream", "1", "--timed-stream", "2"), ("--timed-stream",),
+                      ("--timed-max-bytes", "100"), ("--timed-stream", "1", "--timed-max-bytes", "0")):
+            with self.subTest(flags=flags):
+                self.invoke("probe", path, *flags, code=2)
+        for flag in ("--timed-max-bytes", "--timed-max-records", "--timed-max-scan-packets"):
+            limited, _ = self.invoke("probe", path, flag, "1", "--timed-stream", "1", code=4)
+            self.assertEqual(limited["error"]["code"], "ResourceExhausted")
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
+
     def test_source_srt_metadata_raw_and_explicit_clock_lookup(self):
         path = self.root / "DJI telemetry é 日本語.srt"
         packet = srt_metadata_fixture.packet(offset_ms=1000)

@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/image_codecs.hpp"
+#include "core/path_utils.hpp"
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
+#include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/video_player.hpp"
@@ -427,10 +429,113 @@ namespace {
         require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.empty(),
                 "ancillary recovery never searches past invalid next-chunk framing");
     }
+    void timedPacketContracts() {
+        using namespace lfs::media;
+        const auto path = std::filesystem::temp_directory_path() / ("lfs-timed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
+        struct Fixture {
+            std::filesystem::path path;
+            AVFormatContext* context = nullptr;
+            ~Fixture() {
+                if (context) {
+                    if (context->pb)
+                        avio_closep(&context->pb);
+                    avformat_free_context(context);
+                }
+                try {
+                    std::error_code ignored;
+                    std::filesystem::remove(path, ignored);
+                } catch (const std::exception&) {}
+            }
+        } fixture{path};
+        const auto native = lfs::core::path_to_native_utf8(path);
+        require(avformat_alloc_output_context2(&fixture.context, nullptr, "mp4", native.c_str()) >= 0 && fixture.context, "allocate timed metadata fixture muxer");
+        for (int i = 0; i < 3; ++i) {
+            auto* stream = avformat_new_stream(fixture.context, nullptr);
+            require(stream != nullptr, "allocate explicit subtitle stream");
+            stream->codecpar->codec_type = i == 2 ? AVMEDIA_TYPE_DATA : AVMEDIA_TYPE_SUBTITLE;
+            stream->codecpar->codec_id = i == 2 ? AV_CODEC_ID_BIN_DATA : AV_CODEC_ID_MOV_TEXT;
+            if (i == 2)
+                stream->codecpar->codec_tag = MKTAG('g', 'p', 'm', 'd');
+            stream->time_base = {1, 1000};
+        }
+        require(avio_open(&fixture.context->pb, native.c_str(), AVIO_FLAG_WRITE) >= 0 && avformat_write_header(fixture.context, nullptr) >= 0, "write metadata-only fixture header");
+        const std::array<std::uint8_t, 7> payload{0, 5, 'h', 'e', 0, 255, 'o'};
+        const auto append = [&](int stream, std::int64_t pts) {
+            AVPacket packet{};
+            packet.data = const_cast<std::uint8_t*>(payload.data());
+            packet.size = static_cast<int>(payload.size());
+            packet.stream_index = stream;
+            packet.pts = packet.dts = pts;
+            packet.duration = 500;
+            av_packet_rescale_ts(&packet, {1, 1000}, fixture.context->streams[stream]->time_base);
+            require(av_write_frame(fixture.context, &packet) >= 0, "mux raw subtitle packet without an encoder");
+        };
+        append(0, 0);
+        append(1, 0);
+        append(0, 500);
+        append(2, 0);
+        require(av_write_trailer(fixture.context) >= 0 && avio_closep(&fixture.context->pb) >= 0, "finish timed metadata fixture");
+        ProbeOptions options;
+        options.depth = ProbeDepth::Headers;
+        const auto ordinary = MediaProbe::inspect(path, options);
+        require(ordinary && !ordinary->timed_metadata && !json_detail::description(*ordinary).contains("timed_metadata"), "ordinary probe remains free of timed packet collection");
+        options.timed_metadata_stream = 0;
+        options.collect_source_metadata = true;
+        const auto observed = MediaProbe::inspect(path, options);
+        require(observed && observed->timed_metadata && observed->timed_metadata->packets.size() == 2, "explicit stream selection retains only its packets");
+        const auto& timed = *observed->timed_metadata;
+        require(timed.packets_examined == 4 && timed.provider && timed.provider->name == "ffmpeg", "packet scan counts all streams and identifies its provider");
+        for (const auto& packet : timed.packets)
+            require(packet.bytes == std::vector<std::uint8_t>(payload.begin(), payload.end()) && packet.pts && packet.dts, "raw subtitle bytes retain NUL/nonUTF8 and original clocks");
+        require(timed.packets[0].pts->ticks == 0 && timed.packets[1].pts->ticks * timed.packets[1].pts->time_base.numerator * 1000 / timed.packets[1].pts->time_base.denominator == 500, "packet clocks are not replaced by a frame-rate estimate");
+        options.timed_metadata_stream = 1;
+        const auto alternate = MediaProbe::inspect(path, options);
+        require(alternate && alternate->timed_metadata && alternate->timed_metadata->packets.size() == 1, "second track is independently selectable");
+        options.timed_metadata_stream = 2;
+        const auto binary = MediaProbe::inspect(path, options);
+        require(binary && binary->timed_metadata && binary->timed_metadata->codec_tag == MKTAG('g', 'p', 'm', 'd') && binary->timed_metadata->packets.size() == 1 && binary->timed_metadata->packets[0].bytes == std::vector<std::uint8_t>(payload.begin(), payload.end()), "binary data tracks are observed without interpreting a vendor schema");
+        options.timed_metadata_stream = 3;
+        require(!MediaProbe::inspect(path, options), "missing track is refused without guessing another stream");
+        options.timed_metadata_stream = 0;
+        options.depth = ProbeDepth::StreamInfo;
+        require(!MediaProbe::inspect(path, options), "packet scan refuses codec-probing mode");
+        options.depth = ProbeDepth::Headers;
+        options.timed_metadata_limits.records = 1;
+        const auto limited = MediaProbe::inspect(path, options);
+        require(!limited && limited.error().code() == lfs::ErrorCode::ResourceExhausted, "packet record exhaustion does not return a truncated successful scan");
+        options.timed_metadata_limits.records = 2;
+        options.timed_metadata_limits.scan_packets = 4;
+        options.timed_metadata_limits.bytes = timed.extradata.size() + 2 * payload.size();
+        require(MediaProbe::inspect(path, options).has_value(), "exact byte, record and scan limits accept the complete observation");
+        --options.timed_metadata_limits.bytes;
+        require(!MediaProbe::inspect(path, options), "one byte below aggregate metadata retention is refused");
+        options.timed_metadata_limits = {};
+        options.timed_metadata_limits.scan_packets = 2;
+        require(!MediaProbe::inspect(path, options), "unselected packets count toward the scan work limit");
+        for (auto limits : {TimedMetadataLimits{.bytes = 0}, TimedMetadataLimits{.records = timed_metadata_maxima.records + 1}, TimedMetadataLimits{.scan_packets = 0}}) {
+            options.timed_metadata_limits = limits;
+            require(!MediaProbe::inspect(path, options), "invalid timed packet limits are refused");
+        }
+        const auto refused = catalogContainerMetadata(*observed);
+        require(!refused && refused.error().detail().find("timed packet") != std::string_view::npos, "static catalogs refuse timed observations even alongside valid static metadata");
+        require(!MediaIngest::sourceContainerMetadata(path, options), "static collection refuses timed options before reading packets");
+        options.timed_metadata_limits = {};
+        auto sidecar = path;
+        sidecar.replace_extension(".srt");
+        Fixture sidecar_fixture{sidecar};
+        std::ofstream(sidecar, std::ios::binary) << "00:00:00,000 --> 00:00:01,000\nFrameCnt: 1 [latitude: 1]\n";
+        require(!MediaProbe::inspect(sidecar, options), "embedded collection never invokes a standalone subtitle demuxer");
+        require(MediaIngest::sourceSrtMetadata(sidecar).has_value(), "standalone subtitles remain supported by their single existing parser");
+        const auto serialized = json_detail::dump(json_detail::description(*observed));
+        require(nlohmann::json::parse(serialized)["timed_metadata"]["packets"][0]["bytes"] == "0005686500ff6f", "shared JSON retains opaque binary payload exactly");
+        std::filesystem::remove(path);
+        require(observed->timed_metadata->packets[0].bytes.size() == payload.size(), "packet observation owns bytes after input removal");
+    }
 } // namespace
 
 int runProbeUnitContracts() {
     sourceExifContracts();
+    timedPacketContracts();
     using namespace lfs::media;
     const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
     require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==

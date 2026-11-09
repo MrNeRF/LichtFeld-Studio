@@ -63,13 +63,16 @@ namespace lfs::media::detail {
         };
     } // namespace
 
+    MetadataProviderInfo metadataProviderInfo() {
+        return {"ffmpeg", av_version_info(), avcodec_version()};
+    }
     void collectContextMetadata(const AVFormatContext* context, MediaDescription& description, const ContainerMetadataLimits& limits) {
         description.source_metadata.reset();
         if (!context)
             return;
         description.source_metadata.emplace();
         auto& output = *description.source_metadata;
-        output.provider = MetadataProviderInfo{"ffmpeg", av_version_info(), avcodec_version()};
+        output.provider = metadataProviderInfo();
         Collector collector{limits};
         if (!collector.dictionary(context->metadata, output.tags)) {
             output.limited = true;

@@ -5,6 +5,7 @@
 #include "media/media_ingest.hpp"
 #include "media/media_options.hpp"
 #include "media_json.hpp"
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <csignal>
@@ -70,7 +71,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--timed-max-bytes N] [--timed-max-records N] [--timed-max-scan-packets N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -197,6 +198,7 @@ namespace {
             std::filesystem::path srt_path;
             std::optional<std::int64_t> srt_offset, srt_tolerance;
             ProbeOptions probe;
+            std::array<bool, 4> timed_options{};
             bool avif_options = false;
             bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false, exr_codec_options = false, tiff_options = false, jxl_options = false;
             for (size_t i = 3; i < args.size(); ++i) {
@@ -207,7 +209,24 @@ namespace {
                         probe.depth = ProbeDepth::Headers;
                     else if (flag == "--timeout-ms")
                         probe.timeout = std::chrono::milliseconds(number<int64_t>(value()));
-                    else
+                    else if (flag == "--timed-stream" || flag == "--timed-max-bytes" || flag == "--timed-max-records" || flag == "--timed-max-scan-packets") {
+                        const auto slot = flag == "--timed-stream" ? 0u : flag == "--timed-max-bytes" ? 1u
+                                                                      : flag == "--timed-max-records" ? 2u
+                                                                                                      : 3u;
+                        if (timed_options[slot])
+                            throw std::invalid_argument("Repeated probe option: " + flag);
+                        timed_options[slot] = true;
+                        if (slot == 0) {
+                            probe.timed_metadata_stream = number<int>(value());
+                            probe.depth = ProbeDepth::Headers;
+                        } else if (slot == 1) {
+                            probe.timed_metadata_limits.bytes = number<std::size_t>(value());
+                        } else if (slot == 2) {
+                            probe.timed_metadata_limits.records = number<std::size_t>(value());
+                        } else {
+                            probe.timed_metadata_limits.scan_packets = number<std::size_t>(value());
+                        }
+                    } else
                         throw std::invalid_argument("Unknown probe option: " + flag);
                     continue;
                 }
@@ -345,6 +364,8 @@ namespace {
                     throw std::invalid_argument("Unknown extract option: " + flag);
             }
             if (args[1] == "probe") {
+                if ((timed_options[1] || timed_options[2] || timed_options[3]) && !probe.timed_metadata_stream)
+                    throw std::invalid_argument("Timed metadata limits require --timed-stream");
                 const auto result = MediaIngest::probe(request.input, probe);
                 if (!result)
                     return failed(result.error());

@@ -677,6 +677,27 @@ class StreamDescription:
     @property
     def orientation(self) -> Orientation: ...
 
+class TimedMetadataLimits:
+    def __init__(self) -> None: ...
+
+    @property
+    def bytes(self) -> int: ...
+
+    @bytes.setter
+    def bytes(self, arg: int, /) -> None: ...
+
+    @property
+    def records(self) -> int: ...
+
+    @records.setter
+    def records(self, arg: int, /) -> None: ...
+
+    @property
+    def scan_packets(self) -> int: ...
+
+    @scan_packets.setter
+    def scan_packets(self, arg: int, /) -> None: ...
+
 class MediaDescription:
     @property
     def container(self) -> str: ...
@@ -695,6 +716,11 @@ class MediaDescription:
 
     @property
     def selected_video_stream(self) -> int | None: ...
+
+    def to_json(self) -> str:
+        """
+        Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.
+        """
 
 class FrameLayout:
     @property
@@ -909,7 +935,10 @@ class MediaIngest:
     def codec_build_info() -> CodecBuildInfo: ...
 
     @staticmethod
-    def probe(path: str | os.PathLike, headers_only: bool = False, timeout_ms: int = 10000) -> MediaDescription: ...
+    def probe(path: str | os.PathLike, headers_only: bool = False, timeout_ms: int = 10000, timed_metadata_stream: int | None = None, timed_metadata_limits: TimedMetadataLimits = ...) -> MediaDescription:
+        """
+        Inspect headers or stream information. Selecting a timed metadata stream performs a bounded raw packet scan in Headers mode without interpreting telemetry or decoding pixels.
+        """
 
     @staticmethod
     def extract_files(request: IngestRequest, files: FileExtraction, progress: object | None = None, cancelled: object | None = None) -> IngestReport: ...

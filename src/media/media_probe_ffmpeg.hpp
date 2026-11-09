@@ -8,6 +8,7 @@ struct AVStream;
 namespace lfs::media::detail {
     // Non-owning descriptions: no reads, seeks or changes to the supplied context.
     [[nodiscard]] LFS_MEDIA_API MediaDescription describeContext(const AVFormatContext* context);
+    [[nodiscard]] MetadataProviderInfo metadataProviderInfo();
     // Copies only demuxer-exposed static metadata, without reads or mutations.
     LFS_MEDIA_API void collectContextMetadata(const AVFormatContext*, MediaDescription&, const ContainerMetadataLimits& = {});
     [[nodiscard]] LFS_MEDIA_API StreamDescription describeStream(const AVStream* stream);
