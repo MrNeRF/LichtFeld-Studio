@@ -578,14 +578,12 @@ body.floating-panel {
 }
 .preferences-field-actions .btn { flex: 0 0 auto; }
 
-.preferences-model-operation {
-    height: 54dp;
-    display: flex;
-    align-items: flex-start;
-    gap: 12dp;
-}
-.preferences-model-operation > span { margin: 0; flex: 1; min-width: 0; max-height: 54dp; overflow: hidden; }
 .preferences-model-card { margin: 0 0 18dp; padding: 12dp; border-width: 1dp; }
 .preferences-model-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8dp; margin-bottom: 6dp; }
 .preferences-model-actions { display: flex; flex-wrap: wrap; gap: 6dp; margin: 8dp 0; }
 .preferences-model-path { font-size: 11dp; }
+.preferences-model-status { display: flex; align-items: center; gap: 8dp; }
+.preferences-model-status > span { margin: 0; }
+.preferences-model-actions > .btn:first-child,
+.preferences-model-actions > .btn:nth-child(2) { min-width: 130dp; }
+.preferences-model-dot { width: 8dp; height: 8dp; border-radius: 4dp; }

@@ -1969,6 +1969,33 @@ def test_model_preferences_removal_respects_native_ownership(preferences_panel_m
     section.sync(force=True)
     assert not records["managed_models"][0]["can_remove"]
     assert not records["managed_models"][0]["can_verify"]
+    snapshot["job"] = {}
+    snapshot["models"][0].update(present=False, path="/cache/sam.lfw")
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert row["path"] == ""
+    assert row["can_download"]
+    assert not row["can_verify"]
+    assert not row["can_remove"]
+    assert not row["can_open"]
+    assert not row["available"]
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "verify"])
+    section._action(None, None, ["0", "remove"])
+    assert starts == []
+    snapshot["models"][0]["busy"] = True
+    section.sync(force=True)
+    assert records["managed_models"][0]["working"]
+    assert not records["managed_models"][0]["can_download"]
+    snapshot["models"][0]["busy"] = False
+    snapshot["job"] = {"model": 0, "action": 1, "completed": True}
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.missing")
+    snapshot["models"][0]["present"] = True
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
+    assert records["managed_models"][0]["available"]
 
 
 @pytest.mark.parametrize("retained", [False, True])
@@ -1977,6 +2004,7 @@ def test_model_preferences_closed_confirmation_does_not_remove(preferences_panel
     section = module.ModelPreferencesSection()
     section.handle = object()
     section.rows = [{"id": 0, "name": "SAM 2.1"}]
+    section._records = [{"id": "0", "can_remove": True}]
     dialogs = []
     starts = []
     monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
