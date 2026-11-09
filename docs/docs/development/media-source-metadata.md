@@ -991,9 +991,10 @@ Unicode code points. Lookup indices refer to the same catalog.
 The parser supports CRLF, LF and CR line endings and an initial UTF-8 BOM.
 It retains internal line endings, paragraphs, empty cues and digit-leading text.
 An all-digit line before a timing line is treated as a cue index; an all-digit
-line followed by other text or EOF remains text. Blank lines at cue boundaries
-are separators. Reversed intervals, invalid clock components and malformed or
-out-of-range optional `X1/X2/Y1/Y2` coordinates are refused. The `:60` carry used
+line followed by other text or EOF remains text. Leading and trailing blank
+lines are separators; nonempty cue text starts at its first nonblank physical
+line. Internal blank lines remain part of the original text slice. Reversed
+intervals, invalid clock components and malformed or out-of-range optional `X1/X2/Y1/Y2` coordinates are refused. The `:60` carry used
 by Matrice sidecars retains its arithmetic value without clamping. Identical
 occurrences remain separate; lookup applies its overlap/point ambiguity rules.
 There is no provider-specific physical-line or signed 32-bit duration limit.
