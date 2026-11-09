@@ -528,6 +528,10 @@ namespace {
         require(MediaIngest::sourceSrtMetadata(sidecar).has_value(), "standalone subtitles remain supported by their single existing parser");
         const auto serialized = json_detail::dump(json_detail::description(*observed));
         require(nlohmann::json::parse(serialized)["timed_metadata"]["packets"][0]["bytes"] == "0005686500ff6f", "shared JSON retains opaque binary payload exactly");
+        // A truncated container must not be reported as an empty successful scan.
+        std::filesystem::resize_file(path, 16);
+        const auto truncated = MediaProbe::inspect(path, options);
+        require(!truncated && truncated.error().code() == lfs::ErrorCode::DataLoss, "truncated MOV headers produce a typed failure without a partial observation");
         std::filesystem::remove(path);
         require(observed->timed_metadata->packets[0].bytes.size() == payload.size(), "packet observation owns bytes after input removal");
     }
