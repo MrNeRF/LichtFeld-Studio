@@ -145,6 +145,7 @@ jobs:
             -DLFS_HIDDEN_SYMBOLS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
+            -DBUILD_VISUALIZER_TESTS=ON \
             -DBUILD_SELECTION_OUTLINE_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
@@ -188,6 +189,12 @@ jobs:
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld_format_tests$'
+
+      - name: Build and run GT comparison tests
+        run: |
+          cmake --build build --target lichtfeld_visualizer_tests -j $(nproc)
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.gt_compare$'
 
       - name: Build and run EXR image codec tests
         run: |
