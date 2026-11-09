@@ -5,6 +5,11 @@
     overflow-x: hidden;
 }
 
+#minimize-btn,
+#maximize-btn {
+    display: none;
+}
+
 /* The format rail sets a stable height even when the scene has no splats. */
 .ep-layout {
     display: flex;
@@ -57,7 +62,7 @@
     width: 8dp;
     height: 8dp;
     border-width: 1dp;
-    border-radius: 4dp;
+    border-radius: 5dp;
     margin-right: 8dp;
     flex-shrink: 0;
 }
@@ -180,7 +185,10 @@
 }
 
 .ep-action-btn {
+    box-sizing: border-box;
+    width: 78dp;
     min-width: 78dp;
+    min-height: 24dp;
     text-align: center;
 }
 
