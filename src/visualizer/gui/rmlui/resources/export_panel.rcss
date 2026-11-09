@@ -5,8 +5,8 @@
     overflow-x: hidden;
 }
 
-#minimize-btn,
-#maximize-btn {
+.export-panel #minimize-btn,
+.export-panel #maximize-btn {
     display: none;
 }
 
@@ -177,20 +177,28 @@
 
 .ep-buttons {
     display: flex;
-    flex-wrap: wrap;
     gap: 6dp;
+    margin-top: 4dp;
+}
+
+.ep-action-btn {
+    flex: 1;
+    text-align: center;
+}
+
+.export-panel .ep-buttons {
+    flex-wrap: wrap;
     justify-content: flex-end;
     border-top-width: 1dp;
     padding-top: 12dp;
     margin-top: 8dp;
 }
 
-.ep-action-btn {
+.export-panel .ep-action-btn {
     box-sizing: border-box;
-    flex-shrink: 0;
+    flex: 0 0 auto;
     min-width: 78dp;
     min-height: 24dp;
-    text-align: center;
 }
 
 /* ── Progress section ──────────────────────────────── */

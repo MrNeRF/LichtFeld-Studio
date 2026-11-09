@@ -3,7 +3,7 @@
   <link type="text/template" href="floating_window.rml"/>
   <link type="text/rcss" href="export_panel.rcss"/>
 </head>
-<body template="floating-window" data-model="export">
+<body template="floating-window" data-model="export" class="export-panel">
 
   <div data-if="show_form">
     <form id="export-form">

@@ -49,7 +49,7 @@
 }
 
 .ep-model-list,
-.ep-buttons {
+.export-panel .ep-buttons {
     border-color: @{border};
 }
 
