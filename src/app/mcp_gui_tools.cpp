@@ -15,6 +15,7 @@
 #include "app/view_info_json.hpp"
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -2535,7 +2536,7 @@ namespace lfs::app {
                         return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
                     const auto removal = scene_manager->removeDisabledCamerasWithResult(group_id);
                     if (!removal)
-                        return json{{"error", removal.error()}};
+                        return json{{"error", lfs::format_for_developer(removal.error())}};
                     return json{{"removed", *removal}};
                 });
             });

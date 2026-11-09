@@ -2040,9 +2040,17 @@ namespace lfs::vis {
         const core::NodeId camera_group_id) {
         const auto* const group = scene_.getNodeById(camera_group_id);
         if (!group)
-            return std::unexpected("Camera group not found: " + std::to_string(camera_group_id));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::NotFound,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = "Camera group not found",
+                .detection = LFS_SOURCE_SITE_CURRENT()});
         if (group->type != core::NodeType::CAMERA_GROUP)
-            return std::unexpected("Node is not a camera group: " + std::to_string(camera_group_id));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = "Node is not a camera group",
+                .detection = LFS_SOURCE_SITE_CURRENT()});
 
         std::vector<core::NodeId> disabled_camera_ids;
         disabled_camera_ids.reserve(group->children.size());
@@ -2054,8 +2062,16 @@ namespace lfs::vis {
         if (disabled_camera_ids.empty())
             return 0;
 
-        if (const auto result = removeNodesByIdsWithResult(disabled_camera_ids, false); !result)
-            return std::unexpected(result.error());
+        auto result = removeNodesByIdsWithResult(disabled_camera_ids, false);
+        if (!result) {
+            const auto removal = lfs::from_legacy_expected<void>(
+                std::move(result), lfs::LegacyErrorContext{
+                                       .code = lfs::ErrorCode::FailedPrecondition,
+                                       .domain = lfs::ErrorDomain::App,
+                                       .operation = "Remove disabled cameras",
+                                       .source = LFS_SOURCE_SITE_CURRENT()});
+            return removal.error();
+        }
         return disabled_camera_ids.size();
     }
 

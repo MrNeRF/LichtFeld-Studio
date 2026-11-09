@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "core/error.hpp"
 #include "core/native_fs.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
@@ -3506,7 +3507,7 @@ namespace lfs::vis::gui {
             if (!removal_manager || !parseNodeId(parts[1], group_id))
                 return;
             if (const auto result = removal_manager->removeDisabledCamerasWithResult(group_id); !result)
-                LOG_WARN("Failed to remove disabled cameras: {}", result.error());
+                LOG_WARN("Failed to remove disabled cameras: {}", lfs::format_for_developer(result.error()));
         } else if (kind == "camera_selection" && parts.size() >= 3) {
             core::NodeId group_id = core::NULL_NODE;
             if (!parseNodeId(parts[2], group_id))

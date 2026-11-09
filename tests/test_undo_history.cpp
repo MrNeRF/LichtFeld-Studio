@@ -3628,8 +3628,17 @@ TEST_F(UndoHistoryTest, RemoveDisabledCamerasRemovesOnlyDirectDisabledCameras) {
     scene.setCameraTrainingEnabled(nested_disabled, false);
     EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
 
+    const auto invalid_group = scene_manager->removeDisabledCamerasWithResult(enabled);
+    ASSERT_FALSE(invalid_group);
+    EXPECT_EQ(invalid_group.error().code(), lfs::ErrorCode::InvalidArgument);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_NE(scene.getNodeById(first_disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(second_disabled), nullptr);
+    EXPECT_NE(scene.getNodeById(nested_disabled), nullptr);
+
     const auto removal = scene_manager->removeDisabledCamerasWithResult(group);
-    ASSERT_TRUE(removal) << (removal ? "" : removal.error());
+    ASSERT_TRUE(removal) << (removal ? "" : lfs::format_for_developer(removal.error()));
     EXPECT_EQ(*removal, 2u);
     EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
     EXPECT_NE(scene.getNodeById(enabled), nullptr);
@@ -3661,7 +3670,7 @@ TEST_F(UndoHistoryTest, RemoveDisabledCamerasRemovesOnlyDirectDisabledCameras) {
     scene.setCameraTrainingEnabled(restored_first->id, true);
     scene.setCameraTrainingEnabled(restored_second->id, true);
     const auto no_op = scene_manager->removeDisabledCamerasWithResult(group);
-    ASSERT_TRUE(no_op) << (no_op ? "" : no_op.error());
+    ASSERT_TRUE(no_op) << (no_op ? "" : lfs::format_for_developer(no_op.error()));
     EXPECT_EQ(*no_op, 0u);
     EXPECT_NE(scene.getNodeById(enabled), nullptr);
     EXPECT_NE(scene.getNode("first-disabled.png"), nullptr);
