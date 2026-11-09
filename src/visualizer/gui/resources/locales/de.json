@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "Wird heruntergeladen…",
   "preferences.models.prepare": "Laden / reparieren",
   "preferences.models.verifying": "Integrität wird geprüft…",
   "preferences.models.removing": "Heruntergeladene Dateien werden entfernt…",

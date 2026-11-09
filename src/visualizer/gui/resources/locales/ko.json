@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "다운로드 중…",
   "preferences.models.prepare": "다운로드 / 복구",
   "preferences.models.verifying": "무결성 확인 중…",
   "preferences.models.removing": "다운로드한 파일 삭제 중…",

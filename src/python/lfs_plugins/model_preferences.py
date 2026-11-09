@@ -58,10 +58,19 @@ class ModelPreferencesSection:
         elif self.error and self.job.get("error_code") == "Unsupported":
             self.error = tr("preferences.models.not_file")
         if running:
+            stage = str(self.job.get("stage", ""))
             key = "preferences.models.canceling" if self.job.get("cancel_requested") else {
                 1: "preferences.models.verifying", 2: "preferences.models.removing",
             }.get(self.job.get("action"), "preferences.models.working")
+            if not self.job.get("cancel_requested"):
+                if stage.startswith("downloading"):
+                    key = "preferences.models.downloading"
+                elif stage.startswith("verifying"):
+                    key = "preferences.models.verifying"
             self.message = tr(key)
+            if stage.endswith("_progress") and not self.job.get("cancel_requested"):
+                percent = round(max(0.0, min(1.0, float(self.job.get("progress", 0)))) * 100)
+                self.message = tr("gallery.status.progress").format(stage=self.message, percent=percent)
         elif self.error:
             self.message = tr("preferences.models.failed")
             if self.job.get("error_code") in ("FailedPrecondition", "Unsupported"):
@@ -77,13 +86,18 @@ class ModelPreferencesSection:
         for row in self.rows:
             present = bool(row.get("present"))
             busy = bool(row.get("busy"))
+            previous = next((record for record in self._records or () if record["id"] == str(row["id"])), {})
+            # Busy snapshots intentionally omit file metadata. Preserve only the
+            # last rendered path/size so an operation does not collapse its card.
+            if busy:
+                present = bool(previous.get("has_path"))
             in_use = bool(row.get("in_use"))
             status = "in_use" if in_use else "working" if busy else "installed" if present else "missing"
             row_error = str(row.get("error", ""))
             if row_error and row.get("error_code") == "Unsupported":
                 row_error = tr("preferences.models.not_file")
             owns_job = row["id"] == self.job.get("model")
-            relevant = owns_job and (running or bool(self.error) or bool(self.job.get("canceled")) or
+            relevant = owns_job and (running or bool(self.error) and (present or self.job.get("action") != 1) or bool(self.job.get("canceled")) or
                                     (bool(self.job.get("completed")) and
                                      (present if self.job.get("action") in (0, 1) else not present)))
             records.append({
@@ -94,7 +108,7 @@ class ModelPreferencesSection:
                 "failed": bool(self.error) if relevant else bool(row_error),
                 "running": owns_job and running,
                 "canceling": owns_job and bool(self.job.get("cancel_requested")),
-                "size": format_size(row.get("bytes", 0)) if present else "",
+                "size": previous.get("size", "") if busy else format_size(row.get("bytes", 0)) if present else "",
                 "path": str(row.get("path", "")) if present else "",
                 "has_path": present,
                 "available": present and not busy and not row_error and not (owns_job and bool(self.error)),

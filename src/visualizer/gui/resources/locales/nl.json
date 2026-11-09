@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "Bezig met downloaden…",
   "preferences.models.prepare": "Downloaden / herstellen",
   "preferences.models.verifying": "Integriteit controleren…",
   "preferences.models.removing": "Gedownloade bestanden verwijderen…",

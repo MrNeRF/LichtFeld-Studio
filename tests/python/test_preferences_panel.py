@@ -1965,6 +1965,12 @@ def test_model_preferences_removal_respects_native_ownership(preferences_panel_m
     snapshot["models"][0]["in_use"] = False
     section.sync(force=True)
     assert records["managed_models"][0]["can_remove"]
+    snapshot["models"][0].update(busy=True, present=False, bytes=0)
+    section.sync(force=True)
+    assert records["managed_models"][0]["path"] == "/cache/sam.lfw"
+    assert records["managed_models"][0]["size"]
+    assert not records["managed_models"][0]["can_verify"]
+    snapshot["models"][0].update(busy=False, present=True, bytes=4096)
     snapshot["job"] = {"id": 42, "running": True}
     section.sync(force=True)
     assert not records["managed_models"][0]["can_remove"]
@@ -1996,6 +2002,21 @@ def test_model_preferences_removal_respects_native_ownership(preferences_panel_m
     section.sync(force=True)
     assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
     assert records["managed_models"][0]["available"]
+    snapshot["job"] = {"id": 43, "model": 0, "action": 1, "error": "bad checksum"}
+    section.sync(force=True)
+    assert records["managed_models"][0]["failed"]
+    snapshot["models"][0]["present"] = False
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.missing")
+    assert not records["managed_models"][0]["failed"]
+    snapshot["job"] = {"id": 44, "model": 0, "action": 0, "running": True,
+                       "stage": "downloading_progress", "progress": 0.42}
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{stage} {percent}%" if key == "gallery.status.progress" else key)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.downloading 42%"
+    snapshot["job"].update(stage="verifying_progress", progress=0.8)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
 
 
 @pytest.mark.parametrize("retained", [False, True])

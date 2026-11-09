@@ -42,8 +42,15 @@ namespace lfs::preprocessing {
 
     [[nodiscard]] std::span<const ModelDescriptor> model_catalog();
     [[nodiscard]] lfs::Result<ModelCacheState> inspect_cached_model(CachedModel model);
+    enum class ModelPreparationPhase { Waiting,
+                                       Downloading,
+                                       Verifying };
+    // Invoked synchronously on the acquisition worker. A zero total is unknown;
+    // bytes describe the current phase, not overall operation completion.
+    using ModelPreparationCallback = std::function<void(ModelPreparationPhase, std::uintmax_t, std::uintmax_t)>;
     [[nodiscard]] lfs::Result<core::nn::WeightSource> prepare_cached_model(
-        CachedModel model, bool allow_download, const std::function<bool()>& cancel_requested = {});
+        CachedModel model, bool allow_download, const std::function<bool()>& cancel_requested = {},
+        const ModelPreparationCallback& progress = {});
     [[nodiscard]] lfs::Result<bool> remove_cached_model(CachedModel model);
 
     [[nodiscard]] lfs::Result<core::nn::WeightSource> ensure_lpips_weights(bool allow_download);

@@ -47,8 +47,16 @@ namespace {
         ASSERT_TRUE(state);
         EXPECT_TRUE(state->present);
         EXPECT_GT(state->bytes, 0);
-        const auto verified = prepare_cached_model(CachedModel::Sam2, false);
+        std::vector<std::pair<std::uintmax_t, std::uintmax_t>> progress;
+        const auto verified = prepare_cached_model(CachedModel::Sam2, false, {}, [&](ModelPreparationPhase phase, auto done, auto total) {
+            if (phase == ModelPreparationPhase::Verifying)
+                progress.emplace_back(done, total);
+        });
         EXPECT_FALSE(verified);
+        ASSERT_GE(progress.size(), 2u);
+        EXPECT_EQ(progress.front().first, 0u);
+        EXPECT_EQ(progress.back().first, state->bytes);
+        EXPECT_EQ(progress.back().second, state->bytes);
         EXPECT_EQ(fs::file_size(path), state->bytes);
         EXPECT_FALSE(lfs::core::nn::WeightFile::source_in_use(path));
     }

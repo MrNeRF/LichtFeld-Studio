@@ -86,6 +86,8 @@ namespace {
 
     using lfs::preprocessing::CachedModel;
     using lfs::preprocessing::ModelDescriptor;
+    using lfs::preprocessing::ModelPreparationCallback;
+    using lfs::preprocessing::ModelPreparationPhase;
     constexpr std::array kModelCatalog = {
         ModelDescriptor{CachedModel::Sam2, "SAM 2.1 Hiera Base+", "preferences.models.masking", kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256},
         ModelDescriptor{CachedModel::Moge2, "MoGe-2 ViT-B", "preferences.models.depth", kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256},
@@ -304,7 +306,7 @@ namespace {
             throw DownloadCancelled();
     }
 
-    std::string sha256_file(const fs::path& path, const std::function<bool()>& cancel_requested) {
+    std::string sha256_file(const fs::path& path, const std::function<bool()>& cancel_requested, const ModelPreparationCallback& progress) {
         std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!input)
             throw std::runtime_error("Could not open " + path_to_string(path) + " for hashing");
@@ -315,6 +317,10 @@ namespace {
         if (EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) != 1)
             throw std::runtime_error("EVP_DigestInit_ex failed");
 
+        const auto total = progress ? fs::file_size(path) : 0;
+        std::uintmax_t done = 0;
+        if (progress)
+            progress(ModelPreparationPhase::Verifying, done, total);
         std::vector<char> buffer(1 << 20);
         while (input) {
             check_download_cancelled(cancel_requested);
@@ -322,6 +328,9 @@ namespace {
             const auto count = input.gcount();
             if (count > 0 && EVP_DigestUpdate(ctx.get(), buffer.data(), static_cast<std::size_t>(count)) != 1)
                 throw std::runtime_error("EVP_DigestUpdate failed");
+            done += static_cast<std::uintmax_t>(count);
+            if (progress && count > 0)
+                progress(ModelPreparationPhase::Verifying, done, total);
         }
 
         std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
@@ -346,8 +355,9 @@ namespace {
     void require_sha256(const fs::path& path,
                         std::string_view expected_hash,
                         std::string_view label,
-                        const std::function<bool()>& cancel_requested = {}) {
-        const auto hash = sha256_file(path, cancel_requested);
+                        const std::function<bool()>& cancel_requested = {},
+                        const ModelPreparationCallback& progress = {}) {
+        const auto hash = sha256_file(path, cancel_requested, progress);
         if (hash == expected_hash)
             return;
 
@@ -394,6 +404,7 @@ namespace {
         std::unique_ptr<indicators::ProgressBar> bar;
         std::function<bool()> cancel_requested;
         std::exception_ptr failure;
+        ModelPreparationCallback report;
         int last_percent = -1;
         int next_plain_print = 10;
     };
@@ -408,6 +419,8 @@ namespace {
             if (percent == progress->last_percent)
                 return 0;
             progress->last_percent = percent;
+            if (progress->report)
+                progress->report(ModelPreparationPhase::Downloading, static_cast<std::uintmax_t>(dlnow), static_cast<std::uintmax_t>(dltotal));
             if (progress->bar) {
                 progress->bar->set_option(indicators::option::PostfixText(
                     std::format("{}/{} MiB", dlnow >> 20, dltotal >> 20)));
@@ -428,8 +441,11 @@ namespace {
                                 const fs::path& destination,
                                 std::string_view expected_hash,
                                 std::string_view label,
-                                const std::function<bool()>& cancel_requested = {}) {
+                                const std::function<bool()>& cancel_requested = {},
+                                const ModelPreparationCallback& report = {}) {
         check_download_cancelled(cancel_requested);
+        if (report)
+            report(ModelPreparationPhase::Downloading, 0, 0);
         fs::create_directories(destination.parent_path());
         lfs::io::ScopedAtomicOutputFile download(destination);
         const auto& tmp_path = download.temp_path();
@@ -468,6 +484,7 @@ namespace {
 
         DownloadProgress progress;
         progress.cancel_requested = cancel_requested;
+        progress.report = report;
         if (stdout_is_tty()) {
             progress.bar = std::make_unique<indicators::ProgressBar>();
             style_progress_bar(*progress.bar, "Downloading ");
@@ -491,7 +508,7 @@ namespace {
             throw std::runtime_error("Download failed: " + std::string(curl_easy_strerror(result)));
         if (response_code >= 400)
             throw std::runtime_error("Download failed with HTTP " + std::to_string(response_code));
-        require_sha256(tmp_path, expected_hash, label, cancel_requested);
+        require_sha256(tmp_path, expected_hash, label, cancel_requested, report);
         check_download_cancelled(cancel_requested);
         if (const auto committed = download.commit(); !committed)
             throw std::runtime_error(committed.error().message);
@@ -525,13 +542,14 @@ namespace {
                                               const std::string_view expected_hash,
                                               const bool allow_download,
                                               const std::string_view label,
-                                              const std::function<bool()>& cancel_requested = {}) {
+                                              const std::function<bool()>& cancel_requested = {},
+                                              const ModelPreparationCallback& progress = {}) {
         try {
             check_download_cancelled(cancel_requested);
             const fs::path path = cached_model_path(filename);
             if (cached_weight_file_present(path)) {
                 try {
-                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label), cancel_requested);
+                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label), cancel_requested, progress);
                     check_download_cancelled(cancel_requested);
                     return path;
                 } catch (const DownloadIntegrityError& e) {
@@ -550,7 +568,7 @@ namespace {
 
             std::cout << "Downloading " << label << " weights to " << path_to_string(path) << "\n";
             download_verified_file(url, path, expected_hash,
-                                   std::string("Downloaded ") + std::string(label), cancel_requested);
+                                   std::string("Downloaded ") + std::string(label), cancel_requested, progress);
             std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
             return path;
         } catch (const lfs::Exception& e) {
@@ -568,7 +586,7 @@ namespace {
         }
     }
 
-    fs::path ensure_moge_cached_model(bool no_download, const std::function<bool()>& cancel_requested) {
+    fs::path ensure_moge_cached_model(bool no_download, const std::function<bool()>& cancel_requested, const ModelPreparationCallback& progress) {
         const fs::path path = cached_model_path(kDefaultModelFile);
         if (!fs::exists(path)) {
             const fs::path legacy = legacy_model_path();
@@ -578,7 +596,7 @@ namespace {
                     fs::create_directories(path.parent_path());
                     lfs::io::ScopedAtomicOutputFile migration(path);
                     fs::copy_file(legacy, migration.temp_path(), fs::copy_options::overwrite_existing);
-                    require_sha256(migration.temp_path(), kDefaultModelSha256, "Migrated model", cancel_requested);
+                    require_sha256(migration.temp_path(), kDefaultModelSha256, "Migrated model", cancel_requested, progress);
                     check_download_cancelled(cancel_requested);
                     if (const auto committed = migration.commit(); !committed)
                         throw std::runtime_error(committed.error().message);
@@ -590,7 +608,7 @@ namespace {
             }
         }
         auto ensured = ensure_cached_model(kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256,
-                                           !no_download, "MoGe-2 ViT-B normal model", cancel_requested);
+                                           !no_download, "MoGe-2 ViT-B normal model", cancel_requested, progress);
         if (!ensured)
             throw lfs::Exception(ensured.error());
         return std::move(*ensured);
@@ -1453,19 +1471,22 @@ namespace lfs::preprocessing {
     }
 
     lfs::Result<core::nn::WeightSource> prepare_cached_model(
-        const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested) {
+        const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested,
+        const ModelPreparationCallback& progress) {
         try {
             check_download_cancelled(cancel_requested);
             const auto& descriptor = model_descriptor(model);
             auto operation = core::nn::WeightFile::source_operation(cached_model_path(descriptor.filename));
+            if (progress)
+                progress(ModelPreparationPhase::Waiting, 0, 0);
             std::unique_lock lock(*operation, std::defer_lock);
             while (!lock.try_lock_for(std::chrono::milliseconds(50)))
                 check_download_cancelled(cancel_requested);
             check_download_cancelled(cancel_requested);
             auto result = model == CachedModel::Moge2
-                              ? lfs::Result<fs::path>(ensure_moge_cached_model(!allow_download, cancel_requested))
+                              ? lfs::Result<fs::path>(ensure_moge_cached_model(!allow_download, cancel_requested, progress))
                               : ensure_cached_model(descriptor.filename, descriptor.url, descriptor.sha256,
-                                                    allow_download, descriptor.name, cancel_requested);
+                                                    allow_download, descriptor.name, cancel_requested, progress);
             if (!result)
                 return result.error();
             auto source = core::nn::WeightFile::retain_source(*result);

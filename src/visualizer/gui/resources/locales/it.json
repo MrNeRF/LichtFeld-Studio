@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "Download in corso…",
   "preferences.models.prepare": "Scarica / ripara",
   "preferences.models.verifying": "Verifica dell’integrità…",
   "preferences.models.removing": "Rimozione dei file scaricati…",

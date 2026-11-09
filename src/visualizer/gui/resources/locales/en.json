@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "Downloading…",
   "preferences.models.prepare": "Download / repair",
   "preferences.models.verifying": "Verifying integrity…",
   "preferences.models.removing": "Removing downloaded files…",

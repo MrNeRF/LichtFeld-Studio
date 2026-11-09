@@ -1,4 +1,5 @@
 {
+  "preferences.models.downloading": "正在下载…",
   "preferences.models.prepare": "下载／修复",
   "preferences.models.verifying": "正在验证完整性…",
   "preferences.models.removing": "正在删除下载的文件…",

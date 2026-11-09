@@ -2843,6 +2843,8 @@ namespace lfs::python {
                     job["id"] = state->handle.id;
                     job["model"] = static_cast<int>(tasks.modelCacheModel());
                     job["action"] = static_cast<int>(tasks.modelCacheAction());
+                    job["stage"] = state->stage;
+                    job["progress"] = state->progress;
                     job["running"] = state->running();
                     job["cancel_requested"] = state->cancel_requested;
                     job["canceled"] = state->status == vis::JobStatus::Canceled;
@@ -3732,7 +3734,8 @@ namespace lfs::python {
             "open_url",
             [](const std::string& url) {
 #ifdef _WIN32
-                ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                const auto wide_url = core::utf8_to_wstring(url);
+                ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
                 std::thread([url] {
                     pid_t child = -1;

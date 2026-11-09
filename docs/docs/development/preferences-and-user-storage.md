@@ -215,6 +215,9 @@ of the same archive serialize through the process-wide weight-source owner in
 to the Preferences operation; other callers retain their own cancellation and
 can continue acquiring the model. Closing Preferences leaves its operation
 running; application shutdown cancels and joins it.
+Download and SHA-256 verification report progress through the job registry. Cards
+show a percentage for the current phase when its byte total is known; waiting or
+unknown-size transfers do not show an estimated percentage.
 
 Remove requires confirmation and affects only the selected managed cache file.
 It is refused during preparation or while a consumer holds its weights, including
