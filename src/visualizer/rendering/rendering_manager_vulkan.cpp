@@ -729,8 +729,8 @@ namespace lfs::vis {
                 output[2 * pixel_count + i] = params.background.b;
             }
 
-            const auto sample = [](const lfs::core::Tensor& tensor, const int w, const int h,
-                                   const float u, const float v, const int channel) {
+            const auto sample = [&params](const lfs::core::Tensor& tensor, const int w, const int h,
+                                          const float u, const float v, const int channel) {
                 // Match texture(...): normalized coordinates address texel centers and use the
                 // Vulkan sampler's linear filtering, with edge samples clamped to the texture.
                 const float sample_x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(w) - 0.5f;
@@ -744,8 +744,12 @@ namespace lfs::vis {
                 const float tx = sample_x - static_cast<float>(x0_unclamped);
                 const float ty = sample_y - static_cast<float>(y0_unclamped);
                 const float* data = tensor.ptr<float>();
-                const auto at = [data, w, h, channel](const int x, const int y) {
-                    return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                const auto at = [data, w, h, channel, &params](const int x, const int y) {
+                    const float value = data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                    // Uploads round each texel to RGBA8 before the sampler interpolates it.
+                    return params.loss_visualization
+                               ? std::floor(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f) / 255.0f
+                               : value;
                 };
                 return std::lerp(std::lerp(at(x0, y0), at(x1, y0), tx),
                                  std::lerp(at(x0, y1), at(x1, y1), tx), ty);

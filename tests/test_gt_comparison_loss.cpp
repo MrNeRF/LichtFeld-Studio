@@ -70,7 +70,7 @@ namespace lfs::vis {
         params.right.image = image(0.5f);
         // Pool-aligned UV values must be replaced with tight CPU sampling.
         params.left.uv_scale = params.right.uv_scale = {0.6f, 0.6f};
-        const auto expected = gtLossHeatmapColor(glm::vec3(0.4f), glm::vec3(0.5f));
+        const auto expected = gtLossHeatmapColor(glm::vec3(0.4f), glm::vec3(128.0f / 255.0f));
         for (const float split : {0.0f, 0.5f, 1.0f}) {
             params.split_position = split;
             const auto capture = RenderingManager::composeSplitViewCpu(params, {width, height});
@@ -90,6 +90,30 @@ namespace lfs::vis {
         const auto matching = RenderingManager::composeSplitViewCpu(params, {width, height});
         ASSERT_TRUE(matching);
         EXPECT_FLOAT_EQ(matching->ptr<float>()[(height / 2 * width + width / 2) * 3], 0.0f);
+    }
+
+    TEST(GTComparisonLoss, CaptureRoundsAndClampsTexelsBeforeBilinearSampling) {
+        constexpr int width = 9, height = 7;
+        auto reference = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+            {3, height, width}, lfs::core::Device::CPU));
+        auto rendered = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty(
+            {3, height, width}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+        constexpr float values[] = {0.5f, -0.5f, 1.5f, 0.1f};
+        constexpr std::uint8_t bytes[] = {128, 0, 255, 26};
+        for (int i = 0; i < width * height * 3; ++i) {
+            reference->ptr<float>()[i] = values[i % 4];
+            rendered->ptr<std::uint8_t>()[i] = bytes[i % 4];
+        }
+        VulkanSplitViewParams params;
+        params.loss_visualization = true;
+        params.content_rect = {0, 0, 21, 13};
+        params.left.image = reference;
+        params.right.image = rendered;
+        const auto capture = RenderingManager::composeSplitViewCpu(params, {21, 13});
+        ASSERT_TRUE(capture);
+        for (int i = 0; i < 21 * 13 * 3; ++i)
+            EXPECT_FLOAT_EQ(capture->ptr<float>()[i], 0.0f);
+        EXPECT_FLOAT_EQ(reference->ptr<float>()[0], 0.5f);
     }
 
     TEST(GTComparisonLoss, CaptureIgnoresEnvironmentAndAlphaWhenComparingRgb) {
