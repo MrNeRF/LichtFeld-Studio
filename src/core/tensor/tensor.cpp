@@ -19,6 +19,7 @@
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
+#include <cmath>
 #include <cstring>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -2203,7 +2204,8 @@ namespace lfs::core {
         char* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
         if (device_ == Device::CUDA) {
-            LFS_CUDA_CHECK(cudaMemset(dest, 0, bytes()));
+            const auto home = stream();
+            LFS_CUDA_CHECK(cudaMemsetAsync(dest, 0, bytes(), is_stream_retired(home) ? nullptr : home));
         } else {
             std::memset(dest, 0, bytes());
         }
@@ -2222,6 +2224,10 @@ namespace lfs::core {
         if (numel() == 0) {
             return *this;
         }
+        if (device_ == Device::CUDA) {
+            const auto home = stream();
+            return fill_(value, is_stream_retired(home) ? nullptr : home);
+        }
         preserve_lazy_snapshots_before_write();
 
         // CRITICAL FIX: For non-contiguous tensors (from slice/view operations),
@@ -2229,26 +2235,6 @@ namespace lfs::core {
         if (!is_contiguous()) {
             // For non-contiguous tensors, iterate and use operator[] which respects strides
             const size_t n = numel();
-
-            // For CUDA non-contiguous tensors: use CUDA kernel that respects strides
-            if (device_ == Device::CUDA) {
-                // Use CUDA kernel for strided fill (much faster than element-by-element cudaMemcpy)
-                if (dtype_ == DataType::Float32) {
-                    tensor_ops::launch_fill_strided<float>(
-                        static_cast<float*>(data_), value, shape_.dims(), strides_, storage_offset_, n, stream());
-                } else if (dtype_ == DataType::Int32) {
-                    int int_val = static_cast<int>(value);
-                    tensor_ops::launch_fill_strided<int>(
-                        static_cast<int*>(data_), int_val, shape_.dims(), strides_, storage_offset_, n, stream());
-                } else if (dtype_ == DataType::Bool) {
-                    unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-                    tensor_ops::launch_fill_strided<unsigned char>(
-                        static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, stream());
-                }
-                // Sync for the no-stream overload (maintains original behavior)
-                LFS_CUDA_CHECK(cudaDeviceSynchronize());
-                return *this;
-            }
 
             // CPU non-contiguous: manually compute offsets using strides
             std::vector<size_t> indices(ndim(), 0);
@@ -2284,37 +2270,22 @@ namespace lfs::core {
         // Handle Bool dtype
         if (dtype_ == DataType::Bool) {
             unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-            if (device_ == Device::CUDA) {
-                std::vector<unsigned char> temp(numel(), bool_val);
-                LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
-            } else {
-                unsigned char* data = static_cast<unsigned char*>(dest);
-                std::fill(data, data + numel(), bool_val);
-            }
+            unsigned char* data = static_cast<unsigned char*>(dest);
+            std::fill(data, data + numel(), bool_val);
             return *this;
         }
 
         // Handle Int32 dtype
         if (dtype_ == DataType::Int32) {
             int int_val = static_cast<int>(value);
-            if (device_ == Device::CUDA) {
-                std::vector<int> temp(numel(), int_val);
-                LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
-            } else {
-                int* data = static_cast<int*>(dest);
-                std::fill(data, data + numel(), int_val);
-            }
+            int* data = static_cast<int*>(dest);
+            std::fill(data, data + numel(), int_val);
             return *this;
         }
 
         // Handle Float32 dtype (original code)
-        if (device_ == Device::CUDA) {
-            std::vector<float> temp(numel(), value);
-            LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
-        } else {
-            float* data = static_cast<float*>(dest);
-            std::fill(data, data + numel(), value);
-        }
+        float* data = static_cast<float*>(dest);
+        std::fill(data, data + numel(), value);
 
         return *this;
     }
@@ -2358,7 +2329,7 @@ namespace lfs::core {
         // Contiguous tensors: use cudaMemsetAsync for zeros, or strided kernel for non-zero
         void* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
-        if (value == 0.0f) {
+        if (value == 0.0f && (dtype_ != DataType::Float32 || !std::signbit(value))) {
             // Fast path: use cudaMemsetAsync for zeros
             LFS_CUDA_CHECK(cudaMemsetAsync(dest, 0, bytes(), stream));
         } else {
@@ -2438,8 +2409,10 @@ namespace lfs::core {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(data_ptr(), src.data_ptr(), bytes(),
                                                cudaMemcpyDeviceToDevice, execution_stream));
             } else if (device_ == Device::CUDA && src.device_ == Device::CPU) {
-                prepare_inputs_for_stream({this, &src}, stream());
-                LFS_CUDA_CHECK(memcpy_ordered(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyHostToDevice, stream()));
+                const auto home = stream();
+                const auto execution_stream = is_stream_retired(home) ? nullptr : home;
+                prepare_inputs_for_stream({this, &src}, execution_stream);
+                LFS_CUDA_CHECK(memcpy_ordered(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyHostToDevice, execution_stream));
             } else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
                 prepare_inputs_for_stream({this, &src}, src.stream());
                 LFS_CUDA_CHECK(memcpy_ordered(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyDeviceToHost, src.stream()));

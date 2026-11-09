@@ -96,6 +96,7 @@ namespace lfs::vis::gui {
         bool drawDirectCached(float x, float y, float w, float h,
                               const PanelDrawContext& ctx);
         float getDirectDrawHeight() const;
+        std::optional<PanelDrawBounds> titleControlsBounds() const;
         void setInput(const PanelInputState* input);
         void setInputClipY(float y_min, float y_max);
         void setForcedHeight(float h);

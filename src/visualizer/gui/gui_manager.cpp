@@ -16,6 +16,7 @@
 #include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/assisted_masking.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/guide_segment_clipping.hpp"
@@ -4622,6 +4623,9 @@ namespace lfs::vis::gui {
             }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
+        rmlui_manager_.setPreviewMemoryProvider([this](std::string_view key) {
+            return async_tasks_.assistedMasking().sequencePreview(key);
+        });
         initDevResourceHotReload();
 
         startup_overlay_.init(&rmlui_manager_);
@@ -4786,6 +4790,19 @@ namespace lfs::vis::gui {
         };
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
+        };
+        ops.set_window_presentation = [](void* host, int state) {
+            static_cast<RmlPanelHost*>(host)->setWindowPresentation(state < 0 ? std::nullopt : std::optional(static_cast<FloatingWindowState>(state)));
+        };
+        ops.title_controls_bounds = [](void* host, float* bounds) {
+            const auto box = static_cast<RmlPanelHost*>(host)->titleControlsBounds();
+            if (!box)
+                return false;
+            bounds[0] = box->x;
+            bounds[1] = box->y;
+            bounds[2] = box->width;
+            bounds[3] = box->height;
+            return true;
         };
         ops.native_window = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->nativeWindow();
@@ -5147,6 +5164,7 @@ namespace lfs::vis::gui {
         if (video_widget_)
             video_widget_->shutdown();
 
+        rmlui_manager_.setPreviewMemoryProvider({});
         async_tasks_.shutdown();
 
         const bool need_gil = lfs::python::get_main_thread_state() != nullptr;

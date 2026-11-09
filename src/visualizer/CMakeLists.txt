@@ -245,12 +245,13 @@ target_include_directories(lfs_visualizer
 find_package(OpenXR CONFIG REQUIRED)
 
 target_link_libraries(lfs_visualizer
+        PUBLIC
+        lfs_preprocessing
         PRIVATE
         lfs_core
         lfs_diagnostics
         lfs_video
         lfs_geometry
-        lfs_preprocessing
         lfs_io
         lfs_rendering_tensor
         lfs_training

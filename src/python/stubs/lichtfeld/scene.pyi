@@ -117,6 +117,21 @@ class SplatData:
         Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.
         """
 
+class ExternalPreviewUpdate:
+    @property
+    def ready(self) -> bool:
+        """Whether the native upload has finished (including failure)"""
+
+def prepare_external_splat(means: lichtfeld.Tensor, sh0: lichtfeld.Tensor, shN: lichtfeld.Tensor, scaling: lichtfeld.Tensor, rotation: lichtfeld.Tensor, opacity: lichtfeld.Tensor, sh_degree: int, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> ExternalPreviewUpdate:
+    """
+    Prepare owned CPU snapshot data on a reader worker; does not access the live scene
+    """
+
+def prepare_external_cameras(rows: lichtfeld.Tensor, transform: Annotated[NDArray[numpy.float32], dict(shape=(4, 4), device='cpu')]) -> ExternalPreviewUpdate:
+    """
+    Prepare camera-to-data matrices and fx, fy, cx, cy, width, height on a reader worker
+    """
+
 def generate_collision(voxel_size: float = 0.05000000074505806, opacity: float = 0.10000000149011612, auto_resolution: bool = False, cleanup: bool = True, max_gaussian_area: float = 0.0) -> None: ...
 
 def export_collision(uuid: str, path: str) -> None: ...
@@ -396,6 +411,10 @@ class SceneNode:
         """Node type (SPLAT, GROUP, CAMERA, etc.)"""
 
     @property
+    def read_only(self) -> bool:
+        """Whether an external observer owns this transient node"""
+
+    @property
     def local_transform(self) -> tuple:
         """Local transform as 4x4 row-major tuple"""
 
@@ -535,6 +554,27 @@ class NodeCollection:
         """Return an iterator over all nodes"""
 
 class Scene:
+    def create_external_preview(self, name: str, model_name: str) -> str:
+        """
+        Create a protected transient group and model on the UI thread; returns its UUID
+        """
+
+    def upload_external_preview(self, update: ExternalPreviewUpdate) -> bool:
+        """
+        Submit a prepared update to the GUI-owned upload worker; False while another upload is running
+        """
+
+    def cancel_external_preview_upload(self) -> None:
+        """Cancel and retire the observer upload asynchronously"""
+
+    def apply_external_preview(self, uuid: str, update: ExternalPreviewUpdate, cameras_label: str) -> bool:
+        """
+        Install a completed upload on the UI thread; False if its scene or target has disappeared
+        """
+
+    def remove_external_preview(self, uuid: str) -> None:
+        """Remove the observer-owned group, without changing the external trainer"""
+
     def is_valid(self) -> bool:
         """Check if scene reference is still valid (thread-safe)"""
 
@@ -660,7 +700,9 @@ class Scene:
         """Set node local transform from a [4, 4] ndarray"""
 
     def combined_model(self) -> SplatData | None:
-        """Get the merged SplatData for all visible splats (None if empty)"""
+        """
+        Get the merged SplatData for visible splats (None if unavailable or aliasing a protected external source)
+        """
 
     def apply_crop_filter(self, mask: lichtfeld.Tensor) -> None:
         """

@@ -16,12 +16,14 @@ class MaskDraft:
 class MaskApply:
     request: int
     proposal_request: int
-    camera_uuid: str
+    camera_uuid: str | None
     key: tuple
-    scene_generation: int
+    kind: str = "apply"
 
 
 class FrameMaskEditor:
+    BUSY_PHASES = frozenset(("queued", "loading", "encoding", "predicting", "rendering", "closing", "tracking", "storing", "saving"))
+
     def __init__(self, on_edit=None):
         self.on_edit = on_edit
         self.enabled = False
@@ -51,7 +53,7 @@ class FrameMaskEditor:
 
     @property
     def busy(self):
-        return self.phase in ("queued", "loading", "encoding", "predicting", "rendering", "closing")
+        return self.phase in self.BUSY_PHASES
 
     def invalidate(self, keep_refinement=False):
         if not keep_refinement:
@@ -184,7 +186,10 @@ class FrameMaskEditor:
         phase = snapshot.get("phase", "idle")
         changed = phase != self.phase
         self.phase = phase
-        self.error = snapshot.get("error", "")
+        # A repeated completed result must not erase feedback from a local
+        # validation/approval action performed after accepting that result.
+        if changed or phase != "ready" or not self.overlays:
+            self.error = snapshot.get("error", "")
         if phase == "ready" and not self.overlays:
             self.overlays = list(snapshot["overlays"])
             self.scores = list(snapshot.get("scores", ()))

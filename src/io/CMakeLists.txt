@@ -169,6 +169,13 @@ target_link_libraries(lfs_video
         CUDA::cuda_driver
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # FFmpeg assembly references archive-local data directly. Keep those symbols
+    # local in every ELF consumer, including Python modules reached transitively.
+    target_link_options(lfs_video INTERFACE
+            "LINKER:--exclude-libs,libavcodec.a:libavutil.a")
+endif()
+
 # libplacebo's static pkg-config dependency chain includes shaderc and
 # SPIR-V Tools. GNU ld resolves static archives left-to-right, so rescan the
 # complete chain on ELF platforms.

@@ -30,7 +30,7 @@ __lfs_panel_ids__ = ["lfs.image_preview"]
 
 def __lfs_after_reload__(runtime):
     runtime.ui.on_open_camera_preview(open_camera_preview_by_uid)
-    runtime.ui.on_open_image_preview(open_extracted_frame_preview)
+    runtime.ui.on_open_image_preview(open_extracted_frame_preview, include_sequence=True)
 
 
 ZOOM_MIN = 0.01
@@ -41,6 +41,12 @@ THUMB_MAX_PX = 256
 
 def _sam_key(name):
     return "image_preview.sam_" + name
+
+
+def _sam_confirmation_rml(message):
+    paragraphs = [escape(part).replace("\n", "<br/>") for part in message.split("\n\n")]
+    return "".join(f'<div class="modal-note">{"<strong>" + part + "</strong>" if i == 0 else part}</div>'
+                   for i, part in enumerate(paragraphs))
 
 
 _instance = None
@@ -78,9 +84,22 @@ class ImagePreviewPanel(Panel):
         self._sam_texture = None
         self._sam_texture_key = None
         self._sam_texture_source = ""
+        self._sam_thumbnail_sources = set()
         self._sam_controls_state = None
         self._sam_session_active = False
         self._sam_apply_target = None
+        self._sam_sequence = None
+        self._sam_page = "frame"
+        self._sam_sequence_revision = -1
+        self._sam_frame_summaries = {}
+        self._sam_inspect_pending = False
+        self._sam_track_first = self._sam_track_last = 0
+        self._sam_track_direction = "both"
+        self._sam_syncing_sequence = False
+        self._sam_progress = (0, 0, 0)
+        self._sam_sequence_error = ""
+        self._sam_tracking_request = 0
+        self._sam_worker_busy = False
         self._sam_markers_rml = None
         self._sam_selection_options = None
         self._sam_syncing_selection = False
@@ -124,7 +143,7 @@ class ImagePreviewPanel(Panel):
         self._path_revision_cache: dict[str, str] = {}
         self._filmstrip_top_spacer = 0.0
         self._filmstrip_bottom_spacer = 0.0
-        self._last_training_params: tuple[int, int, bool] = (1, 0, False)
+        self._last_training_params: tuple[int, int, bool, bool] = (1, 0, False, False)
         self._decorator_cache: dict[str, str] = {}
         self._reactive_unsubscribers = []
         self._pending_view_chrome = None
@@ -236,6 +255,8 @@ class ImagePreviewPanel(Panel):
             ("btn-thumbnails", lambda _ev: self._toggle_chrome("_show_filmstrip")),
             ("btn-help", lambda _ev: self._toggle_chrome("_show_help")),
             ("btn-sam", lambda _ev: self._toggle_sam()),
+            ("sam-page-frame", lambda _ev: self._set_sam_page("frame")),
+            ("sam-page-sequence", lambda _ev: self._set_sam_page("sequence")),
             ("sam-positive", lambda _ev: self._sam_tool("positive")),
             ("sam-negative", lambda _ev: self._sam_tool("negative")),
             ("sam-box", lambda _ev: self._sam_tool("box")),
@@ -250,6 +271,10 @@ class ImagePreviewPanel(Panel):
             ("sam-cancel", lambda _ev: self._sam_cancel()),
             ("sam-apply", lambda _ev: self._sam_apply(False)),
             ("sam-exclude", lambda _ev: self._sam_apply(True)),
+            ("sam-track", lambda _ev: self._sam_track()),
+            ("sam-approve-range", lambda _ev: self._sam_approve_range()),
+            ("sam-save", lambda _ev: self._sam_save(False)),
+            ("sam-save-exclude", lambda _ev: self._sam_save(True)),
             ("sam-candidate-0", lambda _ev: self._sam_candidate(0)),
             ("sam-candidate-1", lambda _ev: self._sam_candidate(1)),
             ("sam-candidate-2", lambda _ev: self._sam_candidate(2)),
@@ -265,6 +290,13 @@ class ImagePreviewPanel(Panel):
         cb_mask = doc.get_element_by_id("cb-mask")
         if cb_mask:
             cb_mask.add_event_listener("change", self._on_mask_checkbox_change)
+        for eid in ("sam-track-first", "sam-track-last", "sam-track-direction"):
+            element = doc.get_element_by_id(eid)
+            if element:
+                element.add_event_listener("change", self._sam_track_options_changed)
+        approved = doc.get_element_by_id("sam-approve")
+        if approved:
+            approved.add_event_listener("change", lambda _ev: self._sam_approve())
         selection = doc.get_element_by_id("sam-selection")
         if selection:
             selection.add_event_listener("change", self._sam_select_control)
@@ -325,9 +357,7 @@ class ImagePreviewPanel(Panel):
         if current_params != self._last_training_params:
             self._last_training_params = current_params
             self._dirty = True
-        params = lf.optimization_params()
-        inverted = bool(params and params.has_params() and params.invert_masks
-                        and params.mask_mode != lf.MaskMode.SEGMENT_AND_IGNORE)
+        inverted = current_params[3]
         if inverted != self._mask_inverted:
             self._mask_inverted = inverted
             self._dirty = True
@@ -355,10 +385,14 @@ class ImagePreviewPanel(Panel):
 
     def on_unmount(self, doc):
         self._sam_cancel()
+        if self._sam_sequence:
+            lf.ui.sam_preview_end_sequence(self._sam_sequence["run"])
+            self._sam_sequence = None
         self._sample_request = None
         self._metadata.close()
         self._unsubscribe_reactive_state()
         doc.remove_data_model("image_preview")
+        self._sam_release_thumbnails()
         self._handle = None
         self._doc = None
         self._filmstrip_range = None
@@ -419,9 +453,25 @@ class ImagePreviewPanel(Panel):
 
     def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
              start_index: int, camera_uids: list[int] | None = None,
-             camera_nodes: dict[int, tuple[int, str]] | None = None, assisted: bool = False, weights: str = ""):
+             camera_nodes: dict[int, tuple[int, str]] | None = None, assisted: bool = False, weights: str = "", sequence=None):
+        if sequence and self._sam_sequence and sequence["run"] == self._sam_sequence["run"]:
+            self._mask_editor.enabled = assisted
+            self._mark_dirty()
+            if assisted:
+                lf.ui.set_panel_enabled("native.video_extractor", False)
+            return
         self._reset_preview()
         self._sam_cancel()
+        if self._sam_sequence and (not sequence or self._sam_sequence["run"] != sequence["run"]):
+            lf.ui.sam_preview_end_sequence(self._sam_sequence["run"])
+        self._sam_sequence = sequence
+        self._sam_page = "frame"
+        self._sam_sequence_revision = -1
+        self._sam_frame_summaries = {}
+        self._sam_progress = (0, 0, 0)
+        self._sam_tracking_request = 0
+        self._sam_track_first, self._sam_track_last = 0, max(0, len(image_paths) - 1)
+        self._sam_inspect_pending = bool(sequence)
         self._mask_editor = FrameMaskEditor(self._sam_record_edit)
         self._mask_editor.enabled = assisted
         self._mask_editor.weights = weights
@@ -465,6 +515,10 @@ class ImagePreviewPanel(Panel):
         self._decorator_cache = {}
         self._update_picker_cursor()
         self._mark_dirty()
+        # Hide the source only after the review has accepted its frames, including
+        # a deferred open during construction. Failures leave extraction available.
+        if assisted:
+            lf.ui.set_panel_enabled("native.video_extractor", False)
 
     def _reset_pan(self):
         self._pan_x = 0.0
@@ -678,19 +732,23 @@ class ImagePreviewPanel(Panel):
             return f"{w / h:.2f}:1"
         return f"{rw}:{rh}"
 
-    def _get_training_params(self) -> tuple[int, int, bool]:
+    def _get_training_params(self) -> tuple[int, int, bool, bool]:
+        inverted = False
         try:
+            op = lf.optimization_params()
+            inverted = bool(op and op.has_params() and op.invert_masks
+                            and op.mask_mode != lf.MaskMode.SEGMENT_AND_IGNORE)
             dp = lf.dataset_params()
             if dp.has_params():
-                op = lf.optimization_params()
-                return (dp.resize_factor, dp.max_width, op.undistort)
+                return (dp.resize_factor, dp.max_width, op.undistort, inverted)
+            return (1, 0, False, inverted)
         except Exception:
             pass
-        return (1, 0, False)
+        return (1, 0, False, inverted)
 
     def _make_preview_url(self, path: Path, cam_uid: int,
                           thumb: int = 0, preview_mw: int = 0, dimensions=None, mask_overlay=False) -> str:
-        rf, mw, ud = self._last_training_params
+        rf, mw, ud = self._last_training_params[:3]
         revision = self._path_revision_cache.get(str(path), "missing")
         width, height, _ = dimensions or self._image_info_cache.get(str(path), (0, 0, 0))
         return (f"preview://cam={cam_uid}&thumb={thumb}&w={width}&h={height}"
@@ -1107,6 +1165,8 @@ class ImagePreviewPanel(Panel):
             return
         filmstrip.set_attribute("class", "" if self._show_filmstrip else "hidden")
         if not self._show_filmstrip:
+            self._sam_release_thumbnails()
+            self._filmstrip_range = None
             return
         count = len(self._image_paths) if has_images else 0
         ratio = max(1.0, lf.ui.get_ui_scale())
@@ -1132,7 +1192,8 @@ class ImagePreviewPanel(Panel):
         key = (lo, hi, self._current_index,
                tuple((self._path_revision_cache.get(str(self._image_paths[i]), "missing"),
                       self._image_info_cache.get(str(self._image_paths[i]))) for i in range(lo, hi)),
-               self._refresh_revision)
+               self._refresh_revision, self._sam_sequence_revision if self._sam_sequence else None,
+               self._mask_editor.enabled, self._mask_editor.show_proposal)
         if key == self._filmstrip_range:
             if self._ensure_selection_visible and count:
                 # The unchanged model has had a chance to lay out its spacers.
@@ -1151,13 +1212,26 @@ class ImagePreviewPanel(Panel):
         self._filmstrip_top_spacer = lo * THUMB_ROW_DP
         self._filmstrip_bottom_spacer = max(0, count - hi) * THUMB_ROW_DP
         records = []
+        mask_sources = set()
         for i in range(lo, hi):
             path = self._image_paths[i]
             uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
-            records.append({"index": i, "label": f"{i + 1:,}", "name": path.name,
+            name = path.name + (" · " + self._sam_frame_status(i) if self._sam_sequence else "")
+            frame = self._sam_frame_summaries.get(i, {})
+            mask_decorator = "none"
+            if self._sam_sequence and self._mask_editor.enabled and self._mask_editor.show_proposal and frame.get("revision"):
+                width, height, _ = self._image_info_cache.get(str(path), (0, 0, 0))
+                source = (f"preview://memory=sam:{self._sam_sequence['run']}:{i}:{frame['revision']}"
+                          f"&thumb={THUMB_MAX_PX}&w={width}&h={height}&mode=mask")
+                mask_sources.add(source)
+                mask_decorator = f"image({source} contain)"
+            badge = " ✓" if frame.get("approved") else " !" if frame.get("revision") and not frame.get("reliable") else " ●" if frame.get("revision") else ""
+            records.append({"index": i, "label": f"{i + 1:,}" + badge, "name": name,
                             "selected": i == self._current_index,
+                            "mask_decorator": mask_decorator,
                             "decorator": f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)} contain)"})
         self._handle.update_record_list("thumbs", records)
+        self._sam_release_thumbnails(mask_sources)
         self._handle.dirty("filmstrip_top_spacer_height")
         self._handle.dirty("filmstrip_bottom_spacer_height")
         if self._ensure_selection_visible and count:
@@ -1165,6 +1239,12 @@ class ImagePreviewPanel(Panel):
                 actual_top <= item_top + 1.0 and item_bottom <= actual_top + height + 1.0)
             if self._ensure_selection_visible:
                 self._request_model_update()
+
+    def _sam_release_thumbnails(self, keep=()):
+        keep = set(keep)
+        for source in self._sam_thumbnail_sources - keep:
+            lf.ui.release_rml_texture(source)
+        self._sam_thumbnail_sources = keep
 
     def _update_nav_arrows(self, doc, has_images: bool):
         prev_el = doc.get_element_by_id("nav-prev")
@@ -1506,15 +1586,23 @@ class ImagePreviewPanel(Panel):
         editor = self._mask_editor
         editor_ref = weakref.ref(editor)
 
+        def require_idle(panel):
+            if panel._sam_sequence and lf.ui.sam_preview_poll().get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                raise RuntimeError(lf.ui.tr("projects.gallery.error.busy"))
+
         def restore(state):
             panel = panel_ref()
             owner = editor_ref()
             # Project replacement clears shared history; ordinary scene mutations
             # (including Apply and its undo) must not invalidate these edits.
-            if panel is not None and owner is panel._mask_editor and owner.restore(key, state):
-                panel._mark_dirty()
+            if panel is not None and owner is panel._mask_editor:
+                require_idle(panel)
+                if owner.restore(key, state):
+                    panel._sam_invalidate_sequence_frame(key)
+                    panel._mark_dirty()
 
         try:
+            require_idle(self)
             lf.undo.push(lf.ui.tr("image_preview.sam_title") + ": " + lf.ui.tr("image_preview.sam_edit"),
                          lambda: restore(before), lambda: restore(after),
                          scope="image_preview", dirty_flags=16,
@@ -1522,6 +1610,20 @@ class ImagePreviewPanel(Panel):
         except Exception:
             editor.restore(key, before)
             raise
+        self._sam_invalidate_sequence_frame(key)
+
+    def _sam_invalidate_sequence_frame(self, key):
+        if not self._sam_sequence:
+            return
+        index = next((i for i, path in enumerate(self._image_paths) if str(path) == key[0]), None)
+        if index is not None:
+            lf.ui.sam_preview_invalidate_frame(self._sam_sequence["run"], index)
+            self._sam_sequence_revision = -1
+            if key == self._mask_editor.key:
+                self._sam_apply_target = None
+                self._sam_inspect_pending = False
+                self._sam_tracking_request = 0
+                self._mask_editor.invalidate(keep_refinement=True)
 
     def _sam_release_texture(self, destroy=True):
         if self._sam_texture is None:
@@ -1546,7 +1648,7 @@ class ImagePreviewPanel(Panel):
                          or event.get_bool_parameter("command_key", False)) else 0))
 
     def _sam_edit(self, action):
-        if self._sam_apply_target is not None:
+        if self._sam_apply_target is not None or self._sam_worker_busy or self._mask_editor.busy:
             return
         getattr(self._mask_editor, action)()
         self._mark_dirty()
@@ -1568,6 +1670,9 @@ class ImagePreviewPanel(Panel):
 
     def _sam_cancel(self):
         self._sam_apply_target = None
+        self._sam_inspect_pending = False
+        self._sam_tracking_request = 0
+        self._sam_sequence_error = ""
         self._sam_release_texture()
         lf.ui.sam_preview_close()
         self._mask_editor.invalidate()
@@ -1578,9 +1683,11 @@ class ImagePreviewPanel(Panel):
     def _sam_candidate(self, index):
         if self._sam_apply_target is not None or self._mask_editor.phase != "ready":
             return
-        if 0 <= index < len(self._mask_editor.overlays):
+        if 0 <= index < len(self._mask_editor.overlays) and index != self._mask_editor.candidate:
             self._mask_editor.candidate = index
             self._mask_editor.refinement = (self._mask_editor.request, index)
+            if self._sam_sequence:
+                self._sam_retain_candidate()
             self._mark_dirty()
 
     def _sam_source_point(self, event, clamp=False):
@@ -1601,7 +1708,7 @@ class ImagePreviewPanel(Panel):
                 min(1.0, max(0.0, sy / max(1, layout["height"] - 1))))
 
     def _sam_pointer(self, event):
-        if self._sam_apply_target is not None:
+        if self._sam_apply_target is not None or self._sam_worker_busy or self._mask_editor.busy:
             return
         point = self._sam_source_point(event)
         if point is None:
@@ -1659,15 +1766,20 @@ class ImagePreviewPanel(Panel):
     def _sam_generate(self, refine=False):
         editor = self._mask_editor
         draft = editor.draft
-        if not editor.enabled or not draft or not editor.key or self._preview_state != "ready" or editor.busy or self._sam_apply_target is not None:
+        if not editor.enabled or not draft or not editor.key or self._preview_state != "ready" or editor.busy or self._sam_worker_busy or self._sam_apply_target is not None:
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0] or (not draft.points and not draft.box):
             return
         base, candidate = editor.refinement if refine and editor.refinement else (0, -1)
         try:
+            self._sam_apply_target = None
+            self._sam_inspect_pending = False
+            self._sam_sequence_error = ""
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
-                                               draft.points, draft.box, base, candidate, editor.weights)
+                                               draft.points, draft.box, base, candidate, editor.weights,
+                                               **self._sam_sequence_arguments())
+            self._sam_tracking_request = 0
             editor.invalidate()
             editor.request = request
             self._sam_session_active = bool(request)
@@ -1681,7 +1793,7 @@ class ImagePreviewPanel(Panel):
     def _sam_apply(self, exclude):
         editor = self._mask_editor
         node = self._current_camera_node(resolve_unbound=True)
-        if not node or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
+        if not node or node.read_only or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0]:
@@ -1689,8 +1801,9 @@ class ImagePreviewPanel(Panel):
         try:
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
                                                editor.draft.points, editor.draft.box, editor.request, -1,
-                                               editor.weights, editor.candidate, bool(exclude))
-            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key, RuntimeState.scene_generation.value)
+                                               editor.weights, editor.candidate, bool(exclude),
+                                               **self._sam_sequence_arguments())
+            self._sam_apply_target = (MaskApply(request, editor.request, node.uuid, editor.key)
                                       if request else None)
             editor.phase = "rendering" if request else "closing"
             editor.error = ""
@@ -1698,15 +1811,300 @@ class ImagePreviewPanel(Panel):
             editor.phase, editor.error = "ready", str(error)
         self._mark_dirty()
 
+    def _sam_save_message(self, approved=None):
+        return lf.ui.tr("image_preview.sam_save_hint").format(
+            output=str(Path(self._sam_sequence["output"]) / "masks"),
+            approved=self._sam_progress[2] if approved is None else approved)
+
+    def _sam_save(self, exclude, confirmed=False):
+        editor = self._mask_editor
+        stat = self._path_stat_cache.get(editor.key[0]) if editor.key else None
+        if not self._sam_sequence or not stat or not stat[0] or not self._sam_progress[2]:
+            return
+        if not confirmed:
+            run = self._sam_sequence["run"]
+            snapshot = lf.ui.sam_preview_poll()
+            revision, approved = snapshot.get("sequence_revision"), snapshot.get("approved", 0)
+            if not approved or snapshot.get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                return
+            label = lf.ui.tr("image_preview.sam_save_excluded" if exclude else "image_preview.sam_save_approved")
+            answered = False
+            panel_ref = weakref.ref(self)
+            editor_ref = weakref.ref(editor)
+            def selected(button, _values):
+                nonlocal answered
+                if answered:
+                    return
+                answered = True
+                panel = panel_ref()
+                if button != label or panel is None:
+                    return
+                if (panel._sam_sequence and panel._sam_sequence["run"] == run and editor_ref() is panel._mask_editor
+                        and revision == lf.ui.sam_preview_poll().get("sequence_revision")):
+                    panel._sam_save(exclude, confirmed=True)
+                else:
+                    panel._sam_sequence_error = lf.ui.tr("image_preview.sam_proposal_expired")
+                    panel._mark_dirty()
+            message = self._sam_save_message(approved)
+            lf.ui.form_dialog(f"sam-save:{run}", label, _sam_confirmation_rml(message),
+                              [{"label": lf.ui.tr("common.cancel")}, {"label": label, "style": "primary"}], selected)
+            return
+        try:
+            self._sam_sequence_error = ""
+            editor.request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2], [],
+                exclude=exclude, **self._sam_sequence_arguments(publish=True))
+            self._sam_tracking_request = 0
+            editor.phase = "saving" if editor.request else "closing"
+            editor.error = ""
+            self._sam_apply_target = None
+        except Exception as error:
+            editor.phase, editor.error = "error", str(error)
+        self._mark_dirty()
+
+    def _sam_sequence_arguments(self, **values):
+        return {"sequence": {"run": self._sam_sequence["run"], **values}} if self._sam_sequence else {}
+
+    def _sam_retain_candidate(self):
+        editor = self._mask_editor
+        stat = self._path_stat_cache.get(editor.key[0]) if editor.key else None
+        if not stat or not stat[0] or not self._sam_sequence or editor.phase != "ready":
+            return
+        try:
+            proposal = editor.request
+            request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
+                editor.draft.points, editor.draft.box, proposal, -1, editor.weights, editor.candidate, False,
+                **self._sam_sequence_arguments(retain=True))
+            self._sam_apply_target = MaskApply(request, proposal, None, editor.key, kind="retain")
+            editor.phase = "storing"
+        except Exception as error:
+            editor.phase, editor.error = "error", str(error)
+
+    def _sam_inspect_current(self):
+        editor = self._mask_editor
+        stat = self._path_stat_cache.get(editor.key[0]) if editor.key else None
+        self._sam_inspect_pending = False
+        if not stat or not stat[0] or not self._sam_sequence:
+            return
+        try:
+            request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2], [],
+                                                **self._sam_sequence_arguments(inspect=self._current_index))
+            self._sam_tracking_request = 0
+            editor.invalidate()
+            editor.request, editor.phase = request, "queued" if request else "closing"
+            editor.submitted_signature = editor.signature
+            self._sam_apply_target = None
+        except Exception as error:
+            editor.phase, editor.error = "error", str(error)
+        self._mark_dirty()
+
+    def _sam_track(self):
+        if self._sam_tracking_request:
+            if self._sam_frame_summaries.get(self._current_index, {}).get("revision"):
+                self._sam_inspect_current()
+            else:
+                self._sam_cancel()
+            return
+        editor = self._mask_editor
+        stat = self._path_stat_cache.get(editor.key[0]) if editor.key else None
+        if not self._sam_sequence or not stat or not stat[0] or editor.phase != "ready":
+            return
+        if self._doc and not self._sam_track_options_changed(None):
+            return
+        if not self._sam_track_first <= self._current_index <= self._sam_track_last:
+            editor.error = lf.ui.tr("image_preview.sam_range_seed_required")
+            self._mark_dirty()
+            return
+        try:
+            self._sam_sequence_error = ""
+            request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
+                editor.draft.points, editor.draft.box, editor.request, editor.candidate, editor.weights,
+                **self._sam_sequence_arguments(first=self._sam_track_first, last=self._sam_track_last,
+                                               seed=self._current_index, direction=self._sam_track_direction))
+            editor.invalidate()
+            self._sam_tracking_request = editor.request = request
+            editor.phase = "queued" if request else "closing"
+            self._sam_inspect_pending = False
+        except Exception as error:
+            editor.phase, editor.error = "error", str(error)
+        self._mark_dirty()
+
+    def _sam_track_options_changed(self, _event):
+        if self._sam_syncing_sequence or not self._doc:
+            return False
+        valid = True
+        try:
+            first = int(self._doc.get_element_by_id("sam-track-first").get_attribute("value", "1")) - 1
+            last = int(self._doc.get_element_by_id("sam-track-last").get_attribute("value", "1")) - 1
+            direction = self._doc.get_element_by_id("sam-track-direction").get_attribute("value", "both")
+            if not 0 <= first <= last < len(self._image_paths) or direction not in ("both", "forward", "reverse"):
+                raise ValueError()
+            self._sam_track_first, self._sam_track_last, self._sam_track_direction = first, last, direction
+            self._mask_editor.error = ""
+        except ValueError:
+            self._mask_editor.error = lf.ui.tr("image_preview.sam_range_invalid")
+            valid = False
+        self._mark_dirty()
+        return valid
+
+    def _sam_approve(self):
+        if self._sam_syncing_sequence or not self._sam_sequence or self._mask_editor.phase != "ready":
+            return
+        run, index = self._sam_sequence["run"], self._current_index
+        frames = lf.ui.sam_preview_sequence_frames(run, index, 1)
+        if not frames or not frames[0]["revision"]:
+            return
+        previous, revision = frames[0]["approved"], frames[0]["revision"]
+        label = lf.ui.tr("image_preview.sam_revoke" if previous else "image_preview.sam_approve")
+        self._sam_commit_approvals(run, [(index, revision, previous)], not previous, label)
+
+    def _sam_commit_approvals(self, run, previous, approved, label):
+        panel_ref = weakref.ref(self)
+        updates = [(index, revision, approved) for index, revision, _ in previous]
+        def write(values):
+            panel = panel_ref()
+            if panel is not None and panel._sam_sequence and panel._sam_sequence["run"] == run:
+                if panel._mask_editor.busy or panel._sam_worker_busy:
+                    # Shared history retains the entry when playback is refused.
+                    raise RuntimeError(lf.ui.tr("projects.gallery.error.busy"))
+                try:
+                    accepted = lf.ui.sam_preview_approve_frames(run, values)
+                except Exception as error:
+                    panel._sam_sequence_error = str(error)
+                    panel._mark_dirty()
+                    raise
+                if accepted:
+                    panel._sam_sequence_revision = -1
+                    panel._mark_dirty()
+                    return True
+                panel._sam_sequence_error = lf.ui.tr("image_preview.sam_proposal_expired")
+                panel._mark_dirty()
+            return False
+        try:
+            if not write(updates):
+                return
+        except Exception:
+            return
+        def restore(values):
+            panel = panel_ref()
+            if panel is None or not panel._sam_sequence or panel._sam_sequence["run"] != run:
+                return
+            # PyUndoEntry ignores callback return values. Refuse busy playback
+            # explicitly, including work started since the last panel update.
+            if lf.ui.sam_preview_poll().get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                raise RuntimeError(lf.ui.tr("projects.gallery.error.busy"))
+            # On the UI thread no new work can start between this poll and write.
+            # A stale proposal is reported by write(), then skipped like an
+            # expired draft; it must not trap unrelated history behind it.
+            write(values)
+        try:
+            lf.undo.push(label, lambda: restore(previous), lambda: restore(updates),
+                         scope="image_preview", estimated_bytes=256 * len(previous) + 1024)
+        except Exception as error:
+            self._sam_sequence_error = str(error)
+            try:
+                write(previous)
+            except Exception:
+                pass  # write() retains the rollback error for the panel.
+            self._mark_dirty()
+            raise
+
+    def _sam_approve_range(self):
+        editor = self._mask_editor
+        if not self._sam_sequence or editor.busy or editor.phase != "ready":
+            return
+        if self._doc and not self._sam_track_options_changed(None):
+            return
+        run = self._sam_sequence["run"]
+        first, last = self._sam_track_first, self._sam_track_last
+        revision = lf.ui.sam_preview_poll().get("sequence_revision")
+        frames = []
+        for start in range(first, last + 1, 256):
+            frames.extend(lf.ui.sam_preview_sequence_frames(run, start, min(256, last - start + 1)))
+        if len(frames) != last - first + 1:
+            editor.error = lf.ui.tr("image_preview.sam_proposal_expired")
+            self._mark_dirty()
+            return
+        if not any(frame.get("revision") for frame in frames):
+            editor.error = lf.ui.tr("image_preview.sam_range_missing")
+            self._mark_dirty()
+            return
+        previous = [(first + i, frame["revision"], False) for i, frame in enumerate(frames)
+                    if frame.get("revision") and not frame["approved"]]
+        if not previous:
+            return
+        label = lf.ui.tr("image_preview.sam_approve_range").removesuffix("…")
+        message = lf.ui.tr("image_preview.sam_approve_range_hint").format(
+            first=first + 1, last=last + 1, count=len(previous),
+            uncertain=sum(bool(frame.get("revision")) and not frame["reliable"] and not frame["approved"] for frame in frames),
+            missing=sum(not frame.get("revision") for frame in frames))
+        panel_ref = weakref.ref(self)
+        editor_ref = weakref.ref(editor)
+        answered = False
+        def selected(button, _values):
+            nonlocal answered
+            if answered:
+                return
+            answered = True
+            panel = panel_ref()
+            if button != label or panel is None:
+                return
+            owner = editor_ref()
+            if (not panel._sam_sequence or panel._sam_sequence["run"] != run
+                    or owner is None or panel._mask_editor is not owner or owner.busy
+                    or revision != lf.ui.sam_preview_poll().get("sequence_revision")):
+                panel._sam_sequence_error = lf.ui.tr("image_preview.sam_proposal_expired")
+                panel._mark_dirty()
+                return
+            panel._sam_commit_approvals(run, previous, True, label)
+        lf.ui.form_dialog(f"sam-approve:{run}", label, _sam_confirmation_rml(message),
+                          [{"label": lf.ui.tr("common.cancel")}, {"label": label, "style": "primary"}], selected)
+
     def _service_sam(self):
         editor = self._mask_editor
         if not editor.enabled:
             return
         path = self._image_paths[self._current_index] if self._image_paths else None
         revision = self._path_revision_cache.get(str(path)) if path else None
-        if editor.bind(path, revision):
-            self._mark_dirty()
+        old_key = editor.key
         state = lf.ui.sam_preview_poll()
+        worker_busy = state.get("phase", "idle") in FrameMaskEditor.BUSY_PHASES
+        if worker_busy != self._sam_worker_busy:
+            self._sam_worker_busy = worker_busy
+            self._mark_dirty()
+        if old_key and path and old_key[0] == str(path) and revision is None:
+            # Metadata refresh has not established a new source revision yet.
+            self._request_async_update()
+            return
+        if old_key and path and old_key[0] == str(path) and old_key[1] != revision:
+            if worker_busy:
+                # Keep the old binding until invalidation is admitted. The next
+                # poll retries the same revision change without losing its edge.
+                if editor.request or editor.overlays:
+                    editor.invalidate()
+                    self._sam_release_texture()
+                    self._mark_dirty()
+                message = lf.ui.tr("image_preview.sam_source_changed")
+                if self._sam_sequence_error != message:
+                    self._sam_sequence_error = message
+                    self._mark_dirty()
+                self._request_async_update()
+                return
+            self._sam_invalidate_sequence_frame(old_key)
+            if self._sam_sequence_error == lf.ui.tr("image_preview.sam_source_changed"):
+                self._sam_sequence_error = ""
+            state = lf.ui.sam_preview_poll()
+        bound = editor.bind(path, revision)
+        if bound:
+            self._sam_inspect_pending = bool(self._sam_sequence and editor.key)
+            self._mark_dirty()
+        self._sam_sync_sequence(state)
+        if self._sam_sequence and state.get("phase") == "error" and state.get("error"):
+            message = state["error"]
+            if state.get("total"):
+                message += f" · {state.get('completed', 0)} / {state['total']}"
+            if self._sam_sequence_error != message:
+                self._sam_sequence_error = message
+                self._mark_dirty()
         active = state.get("phase", "idle") != "idle"
         if active != self._sam_session_active:
             self._sam_session_active = active
@@ -1720,33 +2118,86 @@ class ImagePreviewPanel(Panel):
             editor.phase = "ready" if editor.key == target.key and editor.request == target.proposal_request and editor.overlay is not None else "error"
             editor.error = state.get("error", "")
             self._mark_dirty()
-        if state.get("phase") == "mask_ready":
-            if not target or state.get("request") != target.request:
-                return
+        if state.get("phase") in ("mask_ready", "expired") and target and state.get("request") == target.request:
             self._sam_apply_target = None
-            if (editor.key == target.key and editor.request == target.proposal_request
-                    and RuntimeState.scene_generation.value == target.scene_generation):
+            if state["phase"] == "mask_ready" and editor.key == target.key and editor.request == target.proposal_request:
                 try:
-                    lf.ui.sam_preview_apply(target.camera_uuid, target.request)
-                    self._sam_cancel()
-                    editor.enabled = False
-                    self._show_overlay = True
-                    self._refresh_sources()
+                    if target.kind == "retain":
+                        editor.phase = "ready"
+                    else:
+                        lf.ui.sam_preview_apply(target.camera_uuid, target.request)
+                        self._sam_cancel()
+                        editor.enabled = False
+                        self._show_overlay = True
+                        self._refresh_sources()
                 except Exception as error:
                     editor.phase, editor.error = "ready", str(error)
                 self._mark_dirty()
-            else:
+            elif target.kind != "retain" or editor.key == target.key:
                 editor.invalidate()
                 editor.phase, editor.error = "error", lf.ui.tr("image_preview.sam_proposal_expired")
                 self._mark_dirty()
-            return
         if editor.accept(state):
             self._mark_dirty()
+        if self._sam_tracking_request and state.get("request") == self._sam_tracking_request:
+            if state.get("phase") in ("tracked", "error"):
+                self._sam_tracking_request = 0
+                self._sam_inspect_pending = state.get("phase") == "tracked"
+        elif self._sam_tracking_request and state.get("phase") == "idle":
+            # Native retirement may clear the request before the next panel poll.
+            self._sam_tracking_request = 0
+            self._mark_dirty()
+        if editor.request == state.get("request") and state.get("phase") == "saved":
+            if editor.overlay is not None:
+                self._sam_inspect_pending = True
+            elif not self._sam_inspect_pending:
+                self._sam_cancel()
+        if (self._sam_inspect_pending and editor.key and self._preview_state == "ready"
+                and state.get("phase") not in FrameMaskEditor.BUSY_PHASES):
+            frame = self._sam_frame_summaries.get(self._current_index, {})
+            if frame.get("revision"):
+                self._sam_inspect_current()
+            else:
+                self._sam_inspect_pending = False
         if editor.phase == "closing" and state.get("phase") == "idle":
             editor.phase = "idle"
             self._mark_dirty()
-        if editor.busy:
+        if editor.busy or self._sam_tracking_request:
             self._request_async_update()
+
+    def _sam_sync_sequence(self, state):
+        if not self._sam_sequence:
+            return
+        progress = (state.get("completed", 0), state.get("total", 0), state.get("approved", 0))
+        if progress != self._sam_progress:
+            self._sam_progress = progress
+            self._mark_dirty()
+        lo, hi = self._filmstrip_range[:2] if self._filmstrip_range else (self._current_index, self._current_index + 1)
+        key = (state.get("sequence_revision", 0), self._current_index, lo, hi)
+        if key != self._sam_sequence_revision:
+            run = self._sam_sequence["run"]
+            frames = []
+            for start in range(lo, hi, 256):
+                frames.extend(lf.ui.sam_preview_sequence_frames(run, start, min(256, hi - start)))
+            self._sam_frame_summaries = {lo + i: frame for i, frame in enumerate(frames)}
+            if self._current_index not in self._sam_frame_summaries:
+                current = lf.ui.sam_preview_sequence_frames(run, self._current_index, 1)
+                if current:
+                    self._sam_frame_summaries[self._current_index] = current[0]
+            for index, frame in self._sam_frame_summaries.items():
+                if frame.get("mask_path"):
+                    self._mask_paths[index] = Path(frame["mask_path"])
+            self._sam_sequence_revision = key
+            self._mark_dirty()
+
+    def _sam_frame_status(self, index):
+        frame = self._sam_frame_summaries.get(index, {})
+        key = ("approved" if frame.get("approved") else "keyframe" if frame.get("keyframe") else
+               "proposal" if frame.get("revision") else "pending")
+        status = lf.ui.tr(_sam_key("frame_" + key))
+        if frame.get("revision") and not frame.get("reliable") and not frame.get("approved"):
+            status += " · " + lf.ui.tr("image_preview.sam_frame_low_confidence")
+        return status
 
     def _update_sam(self, doc):
         editor = self._mask_editor
@@ -1766,6 +2217,8 @@ class ImagePreviewPanel(Panel):
         _set_text(doc, "btn-sam", lf.ui.tr("image_preview.sam_title"))
         for key in ("heading", "proposals-heading", "apply-heading", "edit-hint"):
             _set_text(doc, "sam-" + key, lf.ui.tr(_sam_key(key.replace("-", "_"))))
+        if self._sam_sequence:
+            _set_text(doc, "sam-apply-heading", lf.ui.tr("image_preview.sam_save_heading"))
         refine = doc.get_element_by_id("sam-refine")
         if refine:
             refine.set_text(lf.ui.tr("image_preview.sam_refine"))
@@ -1792,8 +2245,10 @@ class ImagePreviewPanel(Panel):
             if binding:
                 bindings.append(f"{binding}: {lf.keymap.get_action_name(action)}")
         _set_text(doc, "sam-shortcuts", " · ".join(bindings))
-        has_target = self._current_camera_node(resolve_unbound=True) is not None
-        _set_text(doc, "sam-hint", lf.ui.tr("image_preview.sam_hint" if has_target else "image_preview.sam_apply_dataset"))
+        node = self._current_camera_node(resolve_unbound=True)
+        has_target = bool(node and not node.read_only)
+        hint = "tracking_hint" if self._sam_sequence else "hint" if has_target else "apply_dataset"
+        _set_text(doc, "sam-hint", lf.ui.tr(_sam_key(hint)))
         _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))
         _set_text(doc, "sam-exclude", lf.ui.tr("image_preview.sam_exclude"))
         applicable = editor.phase == "ready" and (editor.overlay is not None) and has_target
@@ -1803,17 +2258,21 @@ class ImagePreviewPanel(Panel):
         has_controls = bool(editor.draft and (editor.draft.points or editor.draft.box))
         status = ("" if phase == "idle" and not has_controls else
                   lf.ui.tr(_sam_key("generate_hint" if phase == "idle" else phase)))
+        if phase in ("tracking", "saving", "saved") or (phase == "error" and self._sam_progress[1]):
+            status += f" · {self._sam_progress[0]} / {self._sam_progress[1]}"
         status += ": " + editor.error if editor.error else ""
+        if self._sam_sequence_error:
+            status = lf.ui.tr("image_preview.sam_error") + ": " + self._sam_sequence_error
         _set_text(doc, "sam-status", status)
         status_element = doc.get_element_by_id("sam-status")
         if status_element:
             status_element.set_attribute("title", status)
         ready = bool(editor.draft and (editor.draft.points or editor.draft.box) and self._preview_state == "ready")
-        busy = editor.busy
+        busy = editor.busy or self._sam_worker_busy
         self._set_disabled(doc.get_element_by_id("sam-generate"), not ready or busy)
         self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy or not editor.can_refine)
         self._set_disabled(doc.get_element_by_id("sam-cancel"), not self._sam_session_active or editor.phase == "closing")
-        applying = self._sam_apply_target is not None
+        applying = self._sam_apply_target is not None or busy
         self._set_disabled(doc.get_element_by_id("sam-clear"), applying or not bool(editor.draft and (editor.draft.points or editor.draft.box)))
         self._set_disabled(doc.get_element_by_id("sam-remove"), applying or editor.selected is None)
         self._set_disabled(doc.get_element_by_id("sam-flip"), applying or not isinstance(editor.selected, int))
@@ -1848,7 +2307,104 @@ class ImagePreviewPanel(Panel):
             description = lf.ui.tr(key)
             legend.set_text(description)
             legend.set_attribute("title", description)
+        self._update_sam_sequence(doc, busy)
+        self._update_sam_page(doc)
         self._update_sam_geometry(doc)
+
+    def _set_sam_page(self, page):
+        self._sam_page = page
+        if self._doc:
+            self._doc.get_element_by_id("sam-controls").scroll_top = 0
+        self._mark_dirty()
+
+    def _update_sam_page(self, doc):
+        sequence = bool(self._sam_sequence)
+        pages = doc.get_element_by_id("sam-pages")
+        if pages:
+            pages.set_class("hidden", not (sequence and self._mask_editor.enabled))
+        heading = doc.get_element_by_id("sam-heading")
+        if heading:
+            heading.set_class("hidden", sequence)
+        for page, content in (("frame", "sam-frame-controls"), ("sequence", "sam-tracking")):
+            active = page == (self._sam_page if sequence else "frame")
+            button = doc.get_element_by_id("sam-page-" + page)
+            if button:
+                button.set_text(lf.ui.tr(_sam_key("page_" + page)))
+                button.set_class("btn--primary", active)
+                button.set_attribute("aria-pressed", "true" if active else "false")
+            element = doc.get_element_by_id(content)
+            if element:
+                element.set_class("hidden", not active)
+
+    def _update_sam_sequence(self, doc, busy):
+        for eid in ("sam-apply", "sam-exclude"):
+            button = doc.get_element_by_id(eid)
+            if button:
+                button.set_class("hidden", bool(self._sam_sequence))
+        save = doc.get_element_by_id("sam-save-controls")
+        if save:
+            save.set_class("hidden", not bool(self._sam_sequence))
+        controls = doc.get_element_by_id("sam-tracking")
+        if not controls:
+            return
+        if not self._sam_sequence:
+            return
+        _set_text(doc, "sam-apply-heading", lf.ui.tr("image_preview.sam_save_heading")
+                  + f" · {self._sam_progress[2]} / {len(self._image_paths)}")
+        for eid, key in (("sam-tracking-heading", "tracking_heading"), ("sam-track-first-label", "range_first"),
+                         ("sam-track-last-label", "range_last"), ("sam-track-direction-label", "direction"),
+                         ("sam-approve-label", "approve")):
+            _set_text(doc, eid, lf.ui.tr(_sam_key(key)))
+        self._sam_syncing_sequence = True
+        try:
+            for eid, value in (("sam-track-first", self._sam_track_first + 1), ("sam-track-last", self._sam_track_last + 1)):
+                element = doc.get_element_by_id(eid)
+                # Initialize each run once. A temporarily empty or invalid edit
+                # must stay editable and be rejected by Track, not overwritten.
+                if element.get_attribute("data-sequence-run", "") != self._sam_sequence["run"]:
+                    element.set_attribute("value", str(value))
+                    element.set_attribute("data-sequence-run", self._sam_sequence["run"])
+                self._set_disabled(element, busy)
+            direction = doc.get_element_by_id("sam-track-direction")
+            options = "".join(f'<option value="{value}">{escape(lf.ui.tr(_sam_key(value)))}</option>'
+                              for value in ("both", "forward", "reverse"))
+            if direction.get_inner_rml() != options:
+                direction.set_inner_rml(options)
+            if direction.get_attribute("value", "") != self._sam_track_direction:
+                direction.set_attribute("value", self._sam_track_direction)
+            self._set_disabled(direction, busy)
+            frame = self._sam_frame_summaries.get(self._current_index, {})
+            approved = doc.get_element_by_id("sam-approve")
+            checked = bool(frame.get("approved"))
+            if approved.has_attribute("checked") != checked:
+                if checked:
+                    approved.set_attribute("checked", "checked")
+                else:
+                    approved.remove_attribute("checked")
+            self._set_disabled(approved, busy or self._mask_editor.phase != "ready" or not frame.get("revision"))
+        finally:
+            self._sam_syncing_sequence = False
+        track = doc.get_element_by_id("sam-track")
+        track.set_text(lf.ui.tr(_sam_key("stop_tracking" if self._sam_tracking_request else "track")))
+        track.set_attribute("title", lf.ui.tr("image_preview.sam_tracking_hint"))
+        self._set_disabled(track, not self._sam_tracking_request and (busy or self._mask_editor.phase != "ready"))
+        approve_range = doc.get_element_by_id("sam-approve-range")
+        if approve_range:
+            approve_range.set_text(lf.ui.tr("image_preview.sam_approve_range"))
+            self._set_disabled(approve_range, busy or self._mask_editor.phase != "ready")
+        sources = self._sam_sequence.get("frames", ())
+        source = sources[self._current_index] if self._current_index < len(sources) else {}
+        time_text = f"≈{source['time']:.3f}" if "time" in source else "—"
+        status = lf.ui.tr("image_preview.sam_frame_status").format(frame=self._current_index + 1,
+            total=len(self._image_paths), time=time_text, state=self._sam_frame_status(self._current_index), approved=self._sam_progress[2])
+        if self._sam_frame_summaries.get(self._current_index, {}).get("mask_path"):
+            status += " · " + lf.ui.tr("image_preview.sam_saved")
+        _set_text(doc, "sam-sequence-status", status)
+        for eid, key in (("sam-save", "save_approved"), ("sam-save-exclude", "save_excluded")):
+            button = doc.get_element_by_id(eid)
+            button.set_text(lf.ui.tr(_sam_key(key)))
+            button.set_attribute("title", self._sam_save_message())
+            self._set_disabled(button, busy or not self._sam_progress[2])
 
     def _update_sam_selection(self, doc):
         editor = self._mask_editor
@@ -1995,14 +2551,15 @@ class ImagePreviewPanel(Panel):
     # -- Keyboard --
 
     def _on_keydown(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
         target = event.target()
         while target is not None:
             if target.tag_name.lower() in ("input", "textarea", "select"):
-                return
+                if target.id != "sam-approve" or key not in (KI_LEFT, KI_RIGHT):
+                    return
             if target.has_attribute("contenteditable"):
                 return
             target = target.parent()
-        key = int(event.get_parameter("key_identifier", "0"))
         if self._mask_editor.enabled:
             keymap = lf.keymap
             if keymap.is_capturing():
@@ -2145,10 +2702,12 @@ def _set_text(doc, element_id: str, text: str):
 
 def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
                        start_index: int, camera_uids: list[int] | None = None,
-                       camera_nodes: dict[int, tuple[int, str]] | None = None, assisted: bool = False, weights: str = ""):
+                       camera_nodes: dict[int, tuple[int, str]] | None = None, assisted: bool = False, weights: str = "", sequence=None):
     global _pending_open
     _pending_open = (image_paths, mask_paths, start_index, camera_uids, camera_nodes)
-    if assisted:
+    if sequence is not None:
+        _pending_open += (assisted, weights, sequence)
+    elif assisted:
         _pending_open += (True, weights)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
     panel = _instance
@@ -2160,8 +2719,8 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
         panel.open(*pending)
 
 
-def open_extracted_frame_preview(paths, weights=""):
-    open_image_preview([Path(path) for path in paths], [None] * len(paths), 0, assisted=True, weights=weights)
+def open_extracted_frame_preview(paths, weights="", sequence=None):
+    open_image_preview([Path(path) for path in paths], [None] * len(paths), 0, assisted=True, weights=weights, sequence=sequence)
 
 
 def open_camera_preview_by_uid(cam_uid: int):

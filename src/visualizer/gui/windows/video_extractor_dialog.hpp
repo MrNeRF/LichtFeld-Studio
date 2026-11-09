@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/uuid.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 #include "preprocessing/video_mask_extraction.hpp"
@@ -92,6 +93,9 @@ namespace lfs::gui {
         void setInput(const lfs::vis::gui::PanelInputState* input) override;
         void setForcedHeight(float h) override;
         void setFloating(bool floating) override;
+        void prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                       const lfs::vis::gui::PanelDrawContext& ctx) override;
+        bool titleControlsBounds(float* bounds) const override;
         SDL_Window* nativeWindow() const override;
         bool detachToDesktop(float x, float y, float w, float h) override;
         bool restoreDesktopWindow() override;
@@ -320,6 +324,8 @@ namespace lfs::gui {
         std::mutex review_mutex_;
         std::vector<io::VideoFrameExtractor::WrittenFrame> review_frames_;
         std::filesystem::path review_weights_;
+        std::filesystem::path review_video_, review_output_;
+        core::Uuid review_run_{};
 
         std::unique_ptr<lfs::vis::gui::RmlPanelHost> host_;
         EventListener listener_;

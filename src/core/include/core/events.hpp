@@ -5,6 +5,7 @@
 #pragma once
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/extracted_frame.hpp"
 #include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -113,7 +114,9 @@ namespace lfs::core {
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
             EVENT(OpenCameraPreview, int cam_id;);
-            EVENT(OpenImagePreview, std::vector<std::filesystem::path> paths; std::filesystem::path weights;);
+            EVENT(OpenImagePreview, std::vector<std::filesystem::path> paths; std::filesystem::path weights;
+                  std::vector<ExtractedFrame> frames{}; std::filesystem::path video{};
+                  std::filesystem::path output{}; Uuid run{};);
             EVENT(PrepareTrainingFromScene, );
             EVENT(AddPLY, std::filesystem::path path; std::string name;);
             EVENT(RemovePLY, std::string name; bool keep_children = false;);
@@ -225,7 +228,7 @@ namespace lfs::core {
             EVENT(SceneReplacing, const Scene* scene;);
             EVENT(CombinedModelBuildReady, const Scene* scene;);
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
-            EVENT(SceneChanged, uint32_t mutation_flags = 0;);
+            EVENT(SceneChanged, uint32_t mutation_flags = 0; bool document_changed = true;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type stores core::NodeType as int.
             EVENT(PLYAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);

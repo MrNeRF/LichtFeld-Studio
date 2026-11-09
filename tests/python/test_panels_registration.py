@@ -186,6 +186,7 @@ def _install_recording_lf(monkeypatch):
         add_hook=lambda *args, **kwargs: step_side_effects.append(("hook", args)),
         remove_hook=lambda *args, **kwargs: None,
         on_open_camera_preview=lambda cb: step_side_effects.append(("camera_preview", cb)),
+        on_open_image_preview=lambda cb, **kwargs: step_side_effects.append(("image_preview", cb, kwargs)),
         on_show_new_project_dialog=lambda cb: None,
         on_show_resume_checkpoint_popup=lambda cb: None,
         on_request_exit=lambda cb: None,
@@ -353,7 +354,7 @@ def test_isolation_mid_step_failure_still_registers_later_panels(panels_module, 
     assert any("Traceback" in msg for msg in state.log_errors), state.log_errors
 
 
-def test_all_good_registers_in_order_with_rendering_first(panels_module):
+def test_all_good_registers_in_order_with_rendering_first(panels_module, monkeypatch):
     """Happy path: all real steps succeed, RenderingPanel is first register_class."""
     module, state = panels_module
 
@@ -390,6 +391,17 @@ def test_all_good_registers_in_order_with_rendering_first(panels_module):
 
     # Image preview callback hookup is part of image_preview_panel step.
     assert any(effect[0] == "camera_preview" for effect in state.side_effects)
+    callbacks = [effect for effect in state.side_effects if effect[0] == "image_preview"]
+    assert len(callbacks) == 1
+    _, callback, options = callbacks[0]
+    assert options == {"include_sequence": True}
+    opened = []
+    preview = ModuleType("lfs_plugins.image_preview_panel")
+    preview.open_extracted_frame_preview = lambda *args: opened.append(args)
+    monkeypatch.setitem(sys.modules, preview.__name__, preview)
+    paths, sequence = ["frames/frame_00001.png"], {"run": "extraction-a"}
+    callback(paths, "sam-video.lfw", sequence)
+    assert opened == [(paths, "sam-video.lfw", sequence)]
 
 
 def test_project_manager_auto_open_does_not_wait_for_startup_overlay(panels_module):

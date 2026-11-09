@@ -17,6 +17,10 @@
 #include <string>
 #include <vector>
 
+namespace lfs::core::nn::models {
+    class Sam2;
+}
+
 namespace lfs::preprocessing {
 
     struct ImageCircle {
@@ -71,7 +75,15 @@ namespace lfs::preprocessing {
         std::vector<std::array<float, 3>> points;
         // Optional normalized x0, y0, x1, y1 bounds for small or partially visible operators.
         std::optional<std::array<float, 4>> box;
+        // Optional reviewed binary seed [1, 1, H, W]; replaces prompt inference.
+        core::Tensor mask{};
     };
+
+    enum class VideoMaskProfile { Operator,
+                                  Subject };
+    enum class VideoMaskDirection { Both,
+                                    Forward,
+                                    Reverse };
 
     struct VideoMaskOptions {
         // Circle masks are still written when SAM2 inference is disabled.
@@ -89,6 +101,13 @@ namespace lfs::preprocessing {
         std::optional<VideoMaskSeedPrompt> prompt;
         std::function<bool()> cancel_requested;
         std::function<void(const VideoMaskProgress&)> progress;
+        VideoMaskProfile profile = VideoMaskProfile::Operator;
+        VideoMaskDirection direction = VideoMaskDirection::Both;
+        bool keep_subject = false;
+        // CPU uint8 output, original dimensions, 0/255; invoked on a bounded writer
+        // thread after its CUDA event completes. With a consumer, no files are written.
+        // Consumers must be thread-safe; exceptions propagate through the writer drain.
+        std::function<void(size_t, const core::Tensor&, float, bool)> mask_ready;
     };
 
     struct VideoMaskResourcePlan {
@@ -103,8 +122,11 @@ namespace lfs::preprocessing {
 
     // One video sequence, ordered by timestamp, with a single temporal memory.
     // Masks use 0 for ignored pixels and 255 for retained pixels. Missing operators produce circle masks only.
+    // A borrowed model must be exclusively owned by the calling worker on this stream;
+    // the caller remains responsible for resetting its video/image state afterwards.
     std::expected<VideoMaskReport, Error> mask_video_sequence(
         std::span<const VideoMaskFrame> frames, const ImageCircle& circle,
-        const VideoMaskOptions& options, cudaStream_t stream);
+        const VideoMaskOptions& options, cudaStream_t stream,
+        core::nn::models::Sam2* borrowed_model = nullptr);
 
 } // namespace lfs::preprocessing

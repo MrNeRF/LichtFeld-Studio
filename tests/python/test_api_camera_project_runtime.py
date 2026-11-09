@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -15,7 +16,7 @@ pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
 
 @pytest.fixture
-def camera_runtime(tmp_path, monkeypatch):
+def camera_runtime(tmp_path, monkeypatch, request):
     executable = os.environ.get("LFS_EXECUTABLE")
     if not executable:
         pytest.skip("requires LFS_EXECUTABLE and a display")
@@ -54,6 +55,7 @@ def camera_runtime(tmp_path, monkeypatch):
     ])
     try:
         bridge.ensure_server_ready()
+        request.node.camera_process = bridge._spawned_processes[-1][0]
         _initialize(endpoint)
         tools = _call(endpoint, "tools/list")["tools"]
         (tmp_path / "tools.json").write_text(json.dumps(tools, indent=2))
@@ -75,6 +77,38 @@ def _editor(endpoint, code):
     assert result.get("completed") and result.get("success"), result
     assert "Traceback" not in result.get("output", {}).get("text", ""), result
     return result.get("output", {}).get("text", "")
+
+
+@pytest.fixture
+def camera_runtime_with_numpy(camera_runtime, numpy):
+    # The test requirements provide NumPy. Share that explicit dependency with
+    # the matching embedded interpreter, without depending on a user's uv cache.
+    site = str(Path(numpy.__file__).resolve().parent.parent)
+    _editor(camera_runtime, f'''
+import sys
+assert sys.version_info[:2] == {sys.version_info[:2]!r}, "Run runtime tests with the build's Python interpreter"
+sys.path.insert(0, {site!r})
+import numpy
+assert numpy.__version__ == {numpy.__version__!r}
+''')
+    return camera_runtime
+
+
+def _ui_editor(endpoint, code):
+    return _editor(endpoint, '''
+import threading, traceback, lichtfeld as lf
+_test_ui_done, _test_ui_errors = threading.Event(), []
+def _test_ui_run():
+    try:
+        exec(UI_SOURCE, globals())
+    except Exception:
+        _test_ui_errors.append(traceback.format_exc())
+    finally:
+        _test_ui_done.set()
+lf.ui.schedule_on_ui_thread(_test_ui_run)
+assert _test_ui_done.wait(5), "UI did not process the test action"
+assert not _test_ui_errors, _test_ui_errors
+'''.replace("UI_SOURCE", repr(code)))
 
 
 def test_api_camera_save_reopen_exact(camera_runtime, tmp_path):

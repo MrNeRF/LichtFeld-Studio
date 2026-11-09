@@ -6,6 +6,13 @@
   <div id="window-frame" class="video-extractor-window">
     <div id="title-bar">
       <span id="title-text">@tr:video_extractor.title</span>
+      <button id="minimize-btn" class="window-control" type="button" data-tooltip="ui.minimize">
+        <div class="window-icon"><div class="window-minimize-line"/></div>
+      </button>
+      <button id="maximize-btn" class="window-control" type="button" data-tooltip="ui.maximize_window">
+        <div class="window-icon window-icon-maximize"><div class="window-maximize-box"/></div>
+        <div class="window-icon window-icon-restore"><div class="window-restore-box window-restore-back"/><div class="window-restore-box window-restore-front"/></div>
+      </button>
       <span id="close-btn">&#xD7;</span>
     </div>
 
@@ -105,7 +112,7 @@
               <span id="interval-value" class="interval-unit">@tr:video_extractor.frames_unit</span>
             </div>
           </div>
-          <div class="settings-row">
+          <div id="batch-failure-options" class="settings-row">
             <span class="field-label"></span>
             <label class="toggle-label">
               <input id="continue-batch-on-failure" type="checkbox" checked="checked" />
@@ -309,7 +316,7 @@
 
     <div id="action-footer">
       <div class="action-row">
-        <button id="btn-start" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.start</button>
+        <button id="btn-start" class="btn btn--primary action-btn" type="button">@tr:video_extractor.start</button>
         <button id="btn-stop" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.stop</button>
         <button id="btn-cancel" class="btn btn--secondary action-btn" type="button">@tr:video_extractor.cancel</button>
         <button id="btn-review-frames" class="btn btn--secondary action-btn" type="button">@tr:image_preview.sam_review_frames</button>

@@ -73,6 +73,135 @@ body.docked-panel {
     background-color: rgba(255, 255, 255, 18);
 }
 
+.window-icon {
+    position: relative;
+    width: 18dp;
+    height: 18dp;
+    flex-shrink: 0;
+}
+
+.window-minimize-line {
+    position: absolute;
+    left: 3dp;
+    top: 9dp;
+    width: 12dp;
+    height: 1dp;
+}
+
+.window-maximize-box {
+    position: absolute;
+    left: 3dp;
+    top: 3dp;
+    width: 12dp;
+    height: 12dp;
+    border-width: 1dp;
+}
+
+.window-icon-restore {
+    display: none;
+}
+
+.window-restore-box {
+    position: absolute;
+    width: 10dp;
+    height: 10dp;
+    border-width: 1dp;
+}
+
+.window-restore-back {
+    width: 11dp;
+    height: 11dp;
+    border-width: 1dp 1dp 0 0;
+    left: 5dp;
+    top: 3dp;
+}
+
+.window-restore-front {
+    left: 3dp;
+    top: 5dp;
+}
+
+/* Window actions are installed by the floating panel host. */
+button.window-control {
+    display: none;
+    width: 22dp;
+    min-width: 22dp;
+    height: 22dp;
+    min-height: 22dp;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 5dp;
+    font-size: 15dp;
+    line-height: 20dp;
+    text-align: center;
+    cursor: pointer;
+}
+body.window-controls button.window-control {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+button.window-control.maximized .window-icon-maximize {
+    display: none;
+}
+button.window-control.maximized .window-icon-restore {
+    display: block;
+}
+button.window-control .window-icon {
+    width: 14dp;
+    height: 14dp;
+}
+button.window-control .window-minimize-line {
+    left: 3dp;
+    top: 7dp;
+    width: 9dp;
+}
+button.window-control .window-maximize-box {
+    width: 9dp;
+    height: 9dp;
+}
+button.window-control .window-restore-box {
+    width: 8dp;
+    height: 8dp;
+}
+button.window-control .window-restore-back {
+    width: 9dp;
+    height: 9dp;
+    left: 4dp;
+    top: 2dp;
+}
+button.window-control .window-restore-front {
+    left: 2dp;
+    top: 4dp;
+}
+body.window-minimized #minimize-btn {
+    display: none;
+}
+body.window-minimized #window-frame > * {
+    display: none;
+}
+body.window-minimized #window-frame > #title-bar {
+    display: flex;
+}
+body.window-minimized #title-text {
+    cursor: pointer;
+}
+body.window-controls #title-text {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+body.window-minimized,
+body.window-maximized,
+body.window-minimized #window-frame,
+body.window-maximized #window-frame {
+    min-height: 0;
+    height: 100%;
+    max-height: none;
+}
+
 #content-wrap {
     display: flex;
     flex-direction: column;

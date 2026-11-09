@@ -4,14 +4,17 @@
 
 #include "py_scene.hpp"
 #include "core/camera.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "core/transform_utils.hpp"
 #include "io/loader.hpp"
 #include "py_error.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/selection_ops.hpp"
+#include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/input/input_controller.hpp"
@@ -28,8 +31,10 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace lfs::python {
@@ -167,6 +172,17 @@ namespace lfs::python {
         return m;
     }
 
+    static void validate_preview_transform(const glm::mat4& transform) {
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                if (!std::isfinite(transform[col][row]) || std::abs(transform[col][row]) > 1e10f)
+                    throw nb::value_error("Invalid external preview transform");
+        if (glm::abs(transform[0][3]) > 1e-7f || glm::abs(transform[1][3]) > 1e-7f ||
+            glm::abs(transform[2][3]) > 1e-7f || glm::abs(transform[3][3] - 1.0f) > 1e-7f ||
+            !core::finiteLocalTransform(transform, glm::mat4(1.0f)))
+            throw nb::value_error("External preview transform must be invertible and affine");
+    }
+
     void apply_node_transform_with_undo(const std::string& name,
                                         const glm::mat4& transform,
                                         core::Scene* scene) {
@@ -251,7 +267,7 @@ namespace lfs::python {
 
     std::optional<PySplatData> PySceneNode::splat_data() {
         auto& live = node();
-        if (live.type != core::NodeType::SPLAT || !live.model) {
+        if (live.type != core::NodeType::SPLAT || !live.model || live.isExternalPreview()) {
             return std::nullopt;
         }
         return PySplatData(live.model.get(), scene_);
@@ -588,17 +604,10 @@ namespace lfs::python {
         return scene_->addGroup(name, parent);
     }
 
-    int32_t PyScene::add_splat(const std::string& name,
-                               const PyTensor& means,
-                               const PyTensor& sh0,
-                               const PyTensor& shN,
-                               const PyTensor& scaling,
-                               const PyTensor& rotation,
-                               const PyTensor& opacity,
-                               const int sh_degree,
-                               const float scene_scale,
-                               const int32_t parent,
-                               const bool transient) {
+    static std::unique_ptr<core::SplatData> prepare_scene_splat(
+        const PyTensor& means, const PyTensor& sh0, const PyTensor& shN,
+        const PyTensor& scaling, const PyTensor& rotation, const PyTensor& opacity,
+        const int sh_degree, const float scene_scale) {
         const auto require_float32 = [](const char* field, const PyTensor& tensor) {
             const auto dtype = tensor.tensor().dtype();
             if (dtype != core::DataType::Float32) {
@@ -636,14 +645,7 @@ namespace lfs::python {
         require_shape("rotation", rotation, rows, {4}, "[N, 4]");
         require_shape("opacity", opacity, rows, {1}, "[N, 1]");
 
-        // A transient node is not part of the document: it is never saved, and
-        // adding it leaves nothing to undo.
-        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
-        if (auto* const scene_manager = get_scene_manager(); scene_manager && !transient) {
-            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
-        }
-
-        auto splat = std::make_unique<core::SplatData>(
+        return std::make_unique<core::SplatData>(
             sh_degree,
             means.tensor().clone(),
             sh0.tensor().clone(),
@@ -652,6 +654,26 @@ namespace lfs::python {
             rotation.tensor().clone(),
             opacity.tensor().clone(),
             scene_scale);
+    }
+
+    int32_t PyScene::add_splat(const std::string& name,
+                               const PyTensor& means,
+                               const PyTensor& sh0,
+                               const PyTensor& shN,
+                               const PyTensor& scaling,
+                               const PyTensor& rotation,
+                               const PyTensor& opacity,
+                               const int sh_degree,
+                               const float scene_scale,
+                               const int32_t parent,
+                               const bool transient) {
+        auto splat = prepare_scene_splat(means, sh0, shN, scaling, rotation, opacity, sh_degree, scene_scale);
+        // A transient node is not part of the document: it is never saved, and
+        // adding it leaves nothing to undo.
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager(); scene_manager && !transient) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
 
         if (auto allocator = vis::makeViewerSplatTensorAllocator()) {
             if (auto migrated = io::migrateSplatTensorsToAllocator(*splat, allocator); !migrated) {
@@ -1100,6 +1122,19 @@ namespace lfs::python {
         auto* model = const_cast<core::SplatData*>(scene_->getCombinedModel());
         if (!model)
             return std::nullopt;
+        // A merged cache owns its tensors; a single-model alias may still refer
+        // to the protected foreign source. Empty/hidden previews do not prevent
+        // access to local models, or analysis of an independently merged cache.
+        if (scene_->hasExternalPreview()) {
+            if (scene_->combinedModelBuildPending())
+                return std::nullopt;
+            for (const auto* node : scene_->getNodes()) {
+                if (node->isExternalPreview() && node->model.get() == model)
+                    return std::nullopt;
+            }
+        }
+        if (auto owner = scene_->sharePreparedCombinedModel(); owner && owner.get() == model)
+            return PySplatData(std::const_pointer_cast<core::SplatData>(std::move(owner)));
         return PySplatData(model);
     }
 
@@ -1199,6 +1234,8 @@ namespace lfs::python {
     }
 
     void PyScene::set_training_model_node(const std::string& name) {
+        if (const auto* target = scene_->getNode(name); target && target->isExternalPreview())
+            throw std::runtime_error("An external preview cannot become a local training model");
         // Binding a transient preview leaves nothing to undo, like adding it.
         // A preview is for display only: it must not take the place of a
         // saved training model, which training continues from and saves.
@@ -1230,6 +1267,8 @@ namespace lfs::python {
         if (!node) {
             return false;
         }
+        if (!transient && scene_->hasExternalPreview(node->id))
+            throw std::runtime_error("External preview is transient; create a local copy to save it");
         if (node->transient == transient) {
             return true;
         }
@@ -1497,7 +1536,121 @@ namespace lfs::python {
         return scene_->mergeGroup(group_name);
     }
 
+    std::string PyScene::create_external_preview(const std::string& name, const std::string& model_name) {
+        if (!is_valid() || !on_graphics_thread())
+            throw std::runtime_error("External previews require the current scene on the UI thread");
+        if (const auto* manager = get_scene_manager(); manager && manager->hasDataset())
+            throw std::runtime_error(LOC("external_training.dataset_open"));
+        const auto id = scene_->addExternalPreview(name, model_name);
+        if (id == core::NULL_NODE)
+            throw std::runtime_error("Could not create external preview");
+        if (auto* manager = get_scene_manager())
+            ensure_scene_manager_content_type(*manager, vis::SceneManager::ContentType::SplatFiles);
+        return scene_->getNodeUuid(id).to_string();
+    }
+
+    bool PyScene::upload_external_preview(std::shared_ptr<vis::ExternalPreviewUpdate> update) {
+        auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+        if (!is_valid() || !on_graphics_thread() || !viewer || !viewer->getGuiManager())
+            throw std::runtime_error("External preview upload requires the current GUI scene");
+        return viewer->getGuiManager()->asyncTasks().uploadExternalPreview(std::move(update));
+    }
+
+    void PyScene::cancel_external_preview_upload() {
+        auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+        if (on_graphics_thread() && viewer && viewer->getGuiManager())
+            viewer->getGuiManager()->asyncTasks().cancelExternalPreviewUpload();
+    }
+
+    bool PyScene::apply_external_preview(const std::string& uuid,
+                                         std::shared_ptr<vis::ExternalPreviewUpdate> update,
+                                         const std::string& cameras_label) {
+        if (!is_valid() || !on_graphics_thread() || !update || update->invalidated.load(std::memory_order_acquire) ||
+            !update->ready.load(std::memory_order_acquire) || update->applied)
+            return false;
+        if (!update->error.empty())
+            throw std::runtime_error(update->error);
+        const auto parsed = core::Uuid::from_string(uuid);
+        const auto* root = parsed ? scene_->getNodeByUuid(*parsed) : nullptr;
+        if (!root || !root->isExternalPreview() || root->type != core::NodeType::GROUP)
+            return false;
+        if (update->replace_cameras) {
+            std::unordered_set<int> existing_uids;
+            for (const auto& camera : *scene_->getAllCamerasCached())
+                existing_uids.insert(camera->uid());
+            for (const auto& incoming : update->cameras) {
+                if (existing_uids.contains(incoming.camera->uid()))
+                    throw std::runtime_error("Camera identifiers changed during preview upload; retrying");
+            }
+        }
+        core::Scene::Transaction transaction(*scene_);
+        if (update->model || update->replace_cameras)
+            update->model = scene_->updateExternalPreview(*parsed, std::move(update->model), update->transform, update->centroid);
+        if (update->replace_cameras)
+            scene_->updateExternalPreviewCameras(*parsed, cameras_label, update->cameras);
+        update->applied = true;
+        return true;
+    }
+
+    void PyScene::remove_external_preview(const std::string& uuid) {
+        if (!is_valid() || !on_graphics_thread())
+            return;
+        if (const auto parsed = core::Uuid::from_string(uuid)) {
+            auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+            if (viewer && viewer->getGuiManager())
+                viewer->getGuiManager()->asyncTasks().removeExternalPreview(*parsed);
+        }
+    }
+
     void register_scene(nb::module_& m) {
+        nb::class_<vis::ExternalPreviewUpdate>(m, "ExternalPreviewUpdate")
+            .def_prop_ro("ready", [](const vis::ExternalPreviewUpdate& update) { return update.ready.load(std::memory_order_acquire); }, "Whether the native upload has finished (including failure)");
+        m.def("prepare_external_splat", [](const PyTensor& means, const PyTensor& sh0, const PyTensor& shN, const PyTensor& scaling, const PyTensor& rotation, const PyTensor& opacity, int degree, nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
+            auto update = std::make_shared<vis::ExternalPreviewUpdate>();
+            update->transform = ndarray_to_mat4(transform);
+            validate_preview_transform(update->transform);
+            for (const auto* tensor : {&means, &sh0, &shN, &scaling, &rotation, &opacity})
+                if (tensor->tensor().device() != core::Device::CPU)
+                    throw nb::value_error("External preview preparation requires CPU tensors");
+            if (degree < 0 || degree > 3 || shN.tensor().ndim() != 3 ||
+                shN.tensor().size(1) != static_cast<size_t>((degree + 1) * (degree + 1) - 1))
+                throw nb::value_error("External preview SH degree does not match its coefficients");
+            nb::gil_scoped_release release;
+            update->model = prepare_scene_splat(means, sh0, shN, scaling, rotation, opacity, degree, 1.0f);
+            if (means.tensor().size(0)) {
+                const auto center = means.tensor().mean({0}, false).cpu();
+                const auto* values = center.ptr<float>();
+                update->centroid = {values[0], values[1], values[2]};
+            }
+            return update; }, nb::arg("means"), nb::arg("sh0"), nb::arg("shN"), nb::arg("scaling"), nb::arg("rotation"), nb::arg("opacity"), nb::arg("sh_degree"), nb::arg("transform"), "Prepare owned CPU snapshot data on a reader worker; does not access the live scene");
+        m.def("prepare_external_cameras", [](const PyTensor& rows, nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
+            const auto& tensor = rows.tensor();
+            if (tensor.device() != core::Device::CPU || tensor.dtype() != core::DataType::Float32 ||
+                tensor.ndim() != 2 || tensor.size(1) != 22 || tensor.size(0) > 10000)
+                throw nb::value_error("Camera rows must be CPU float32 [N,22], with N <= 10000");
+            auto update = std::make_shared<vis::ExternalPreviewUpdate>();
+            update->transform = ndarray_to_mat4(transform);
+            validate_preview_transform(update->transform);
+            nb::gil_scoped_release release;
+            update->camera_rows = tensor.contiguous().clone();
+            auto values = update->camera_rows.accessor<float, 2>();
+            for (size_t i = 0; i < tensor.size(0); ++i) {
+                glm::mat4 pose(1.0f);
+                for (int row = 0; row < 4; ++row)
+                    for (int col = 0; col < 4; ++col)
+                        pose[col][row] = values(i, row * 4 + col);
+                validate_preview_transform(pose);
+                for (int col = 16; col < 22; ++col)
+                    if (!std::isfinite(values(i, col)) || std::abs(values(i, col)) > 1e9f)
+                        throw nb::value_error("Invalid external camera calibration");
+                if (values(i, 16) <= 0 || values(i, 17) <= 0)
+                    throw nb::value_error("External camera focal lengths must be positive");
+                for (int col = 20; col < 22; ++col)
+                    if (values(i, col) < 1 || values(i, col) > 65536 || std::floor(values(i, col)) != values(i, col))
+                        throw nb::value_error("Invalid external camera dimensions");
+            }
+            update->replace_cameras = true;
+            return update; }, nb::arg("rows"), nb::arg("transform"), "Prepare camera-to-data matrices and fx, fy, cx, cy, width, height on a reader worker");
         const auto collision_access = [](auto&& action) {
             auto* manager = get_scene_manager();
             return point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
@@ -1733,6 +1886,7 @@ namespace lfs::python {
             .def_prop_ro("parent_id", &PySceneNode::parent_id, "Parent node identifier (-1 for root)")
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
+            .def_prop_ro("read_only", &PySceneNode::read_only, "Whether an external observer owns this transient node")
             // Transform (special conversion to tuple/ndarray)
             .def_prop_ro("local_transform", &PySceneNode::local_transform, "Local transform as 4x4 row-major tuple")
             .def_prop_ro("world_transform", &PySceneNode::world_transform, "World-space transform as 4x4 row-major tuple")
@@ -1804,6 +1958,16 @@ namespace lfs::python {
 
         // Scene class
         nb::class_<PyScene>(m, "Scene")
+            .def("create_external_preview", &PyScene::create_external_preview, nb::arg("name"), nb::arg("model_name"),
+                 "Create a protected transient group and model on the UI thread; returns its UUID")
+            .def("upload_external_preview", &PyScene::upload_external_preview, nb::arg("update"),
+                 "Submit a prepared update to the GUI-owned upload worker; False while another upload is running")
+            .def("cancel_external_preview_upload", &PyScene::cancel_external_preview_upload,
+                 "Cancel and retire the observer upload asynchronously")
+            .def("apply_external_preview", &PyScene::apply_external_preview, nb::arg("uuid"), nb::arg("update"), nb::arg("cameras_label"),
+                 "Install a completed upload on the UI thread; False if its scene or target has disappeared")
+            .def("remove_external_preview", &PyScene::remove_external_preview, nb::arg("uuid"),
+                 "Remove the observer-owned group, without changing the external trainer")
             // Thread-safe validity checking
             .def("is_valid", &PyScene::is_valid,
                  "Check if scene reference is still valid (thread-safe)")
@@ -1940,7 +2104,7 @@ Returns:
             .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
             .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
             // Combined/training model
-            .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
+            .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for visible splats (None if unavailable or aliasing a protected external source)")
             .def("apply_crop_filter", &PyScene::apply_crop_filter, nb::arg("mask"), "Filter a combined-model CUDA bool mask in place by enabled render crop boxes, ellipsoids and polygons. Scene selection is unchanged.")
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model. A transient node may not replace a saved training model (RuntimeError)")

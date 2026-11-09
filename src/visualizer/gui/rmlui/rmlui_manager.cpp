@@ -259,11 +259,20 @@ namespace lfs::vis::gui {
             return {};
         }
         result->renderer = std::make_unique<RenderInterface_VK>();
+        result->renderer->setPreviewMemoryProvider(preview_memory_provider_);
         if (!result->renderer->InitializeExternal(nativeRenderContext(*result->graphics)))
             return {};
         LOG_INFO("External RmlUi host '{}' initialized in {:.2f} ms", name,
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
         return result;
+    }
+
+    void RmlUIManager::setPreviewMemoryProvider(PreviewMemoryProvider provider) {
+        preview_memory_provider_ = std::move(provider);
+        if (vulkan_render_interface_)
+            vulkan_render_interface_->setPreviewMemoryProvider(preview_memory_provider_);
+        for (const auto& [context, native] : native_windows_)
+            native->renderer->setPreviewMemoryProvider(preview_memory_provider_);
     }
 
     bool RmlUIManager::restoredExternalBounds(const std::string& name, float* bounds) {
@@ -307,6 +316,27 @@ namespace lfs::vis::gui {
     VulkanContext* RmlUIManager::nativeGraphics(const Rml::Context* context) const {
         const auto it = native_windows_.find(context);
         return it == native_windows_.end() ? nullptr : it->second->graphics.get();
+    }
+
+    void RmlUIManager::minimizeNativeWindow(Rml::Context* context) {
+        if (const auto it = native_windows_.find(context); it != native_windows_.end()) {
+            auto* window = it->second->window;
+            recordNativeGeometry(*it->second);
+            cancelPointerInput(context);
+            if (!SDL_MinimizeWindow(window))
+                LOG_WARN("Failed to minimize external panel: {}", SDL_GetError());
+        }
+    }
+
+    void RmlUIManager::toggleNativeWindowMaximized(Rml::Context* context) {
+        if (const auto it = native_windows_.find(context); it != native_windows_.end()) {
+            auto* window = it->second->window;
+            recordNativeGeometry(*it->second);
+            cancelPointerInput(context);
+            const bool maximized = SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED;
+            if (!(maximized ? SDL_RestoreWindow(window) : SDL_MaximizeWindow(window)))
+                LOG_WARN("Failed to change external panel maximize state: {}", SDL_GetError());
+        }
     }
 
     void RmlUIManager::showNativeWindow(Rml::Context* context) {

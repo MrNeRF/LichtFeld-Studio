@@ -1,10 +1,10 @@
 ---
-title: Mask people in video frames
+title: Mask video frames
 ---
 
-# Mask people in video frames
+# Mask video frames
 
-LichtFeld Studio uses native SAM2.1 image and video inference to exclude a camera operator or a prompted person from extracted video frames. It runs with the project's C++/CUDA tensor library and requires a CUDA GPU.
+LichtFeld Studio uses native SAM2.1 image and video inference to mask subjects in extracted video frames. Choose a subject interactively or use automatic detection for a camera operator. It runs with the project's C++/CUDA tensor library and requires a CUDA GPU.
 
 ## Video Extractor
 
@@ -34,7 +34,11 @@ Seed boxes, background points, multiple foreground points, and off-center or ell
 
 ## Assisted frame preview
 
-After extracting a single video, choose **Review frames · SAM** to open the frames written by that extraction in Image Preview. The action also remains available for successfully written frames after stopping extraction. Image Preview offers the same tools through its **Mask · SAM2.1** button when opened on dataset images.
+After extracting a single video, choose **Mask frames · SAM** to open the frames written by that extraction in Image Preview. The action also remains available for successfully written frames after stopping extraction. Image Preview offers the same tools through its **Mask · SAM2.1** button when opened on dataset images.
+
+In an extracted sequence, the side panel has two sections: **Frame** for points, boxes and proposal generation, and **Sequence** for tracking and approval. Switching sections preserves your edits and the selected frame range. The save actions and status remain visible below the controls.
+
+Tracking follows the extracted sequence and its sampling gaps. The frame status shows the approximate relative time reported by the extractor; it does not represent exact source PTS or analysis of every original video frame.
 
 The **Mask · SAM2.1** button opens an editor in the side panel. Use **Foreground +** for positive points on the object and **Background −** for negative points outside it, or drag a **Box** (bounding box) around the subject. These are visual prompts: they guide segmentation rather than painting or erasing mask pixels. Click or drag an existing point to select or move it. The control list also lets you select points and the box with the keyboard. **Swap +/−** changes the selected point’s label, and **Delete** removes the selected control; the default shortcuts are Delete for the selected control and right-click for the control under the cursor. Removing a point removes a constraint; it does not turn that point into background. Drag a box edge or corner to resize it. In **Box**, drag inside the box to move it; draw outside the existing box to replace it. There is one box per proposal. **Undo** uses the shared history for point, box, and applied-mask changes, including edits made while browsing other images. **Pan** returns to normal pan gestures without adding points. Generate, removal, and mouse shortcuts can be rebound in the keymap preferences; Help and tooltips show the current bindings.
 
@@ -46,7 +50,17 @@ Save the project normally to store the PNG mask inside the `.licht` file. Reopen
 
 Points and boxes are kept per image while browsing the current preview. **Clear points and box** clears these working controls through the shared history. **Release SAM** retains points and boxes and releases the model asynchronously. Close SAM before starting training. Escape first cancels a box gesture or exits SAM mode.
 
-The assisted preview reviews one image at a time. Frames opened directly from the extractor can be inspected and corrected as proposals; applying requires their association with a camera in the current dataset. Interactive propagation is not available. Automatic operator tracking remains available through the extraction options described above. The preview uses the extractor's selected model file, or the existing verified SAM2.1 model cache when no file was selected.
+For frames opened directly from a single extraction, **Track subject** propagates the selected proposal over a chosen frame range. Set the first and last frames, keep the current seed inside the range, and choose forward, backward, or both directions. This uses SAM2.1 temporal memory in the finalized extracted-frame order, advancing between these samples rather than decoding the source video again. It does not require camera motion or restrict the subject to the small area expected by automatic operator detection. Video-capable weights are required; the extractor's model file or the verified SAM2.1 cache is reused.
+
+Browse the proposals before saving. Thumbnail marks distinguish proposals (●), low confidence (!), and approved frames (✓); the frame status explains them. Correct any frame with points or a box, generate a new proposal, and track again from it. Manual keyframes and approved frames are protected when propagation crosses them. Editing a frame revokes its approval and preserves any previously saved mask until you explicitly save a replacement. Wait for tracking or saving to finish before editing controls. **Stop tracking** preserves proposals already produced; **Release SAM** also releases GPU resources while keeping the sequence's proposals available for inspection. Proposals have a bounded memory budget and are discarded when this sequence is closed or replaced; there is no persistent session recovery.
+
+Approve frames individually with **Approve this frame**. Under **Save approved masks**, **Save · keep** writes the selected subject as white and **Save · exclude** writes it as black. A confirmation shows the number of approved frames and the extraction output folder. Only approved masks are saved, as original-resolution single-channel binary PNGs in `masks/<image filename>.png` under that folder, using the same naming convention as automatic extraction. Existing masks for approved frames are replaced atomically; other frames remain unchanged. Saving files is an export and cannot be undone. If saving stops or fails, already saved masks remain available and the completion count is shown. A frame without a saved mask remains unmasked.
+
+The filmstrip overlays each visible frame's retained proposal using the same theme color as the main preview. **Overlay** shows or hides both. Approval badges remain visible. These small previews support a quick check; inspect uncertain boundaries in the main image before approving them.
+
+To review many frames, set **First frame** and **Last frame**, then choose **Approve range…**. The confirmation counts masks awaiting approval, those with low model confidence, and frames without a proposal. Missing proposals remain unapproved so you can return to them later. Approval remains an explicit review decision, and one shared **Undo** step restores the entire group. Stale proposals reject the group without partially changing its approvals.
+
+Frames extracted without camera association can therefore save masks directly. Dataset images opened outside an extraction sequence continue to use **Keep selection** or **Exclude selection** on the current camera, with project persistence and shared undo as described above. Automatic operator tracking remains available through the extraction options. Text selection, brush painting, multiple objects and equirectangular projection tools are separate capabilities, not provided by this workflow.
 
 ## Command line
 

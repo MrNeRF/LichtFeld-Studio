@@ -60,7 +60,7 @@ namespace lfs::core::nn::models {
         // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
         lfs::Result<void> set_video_image(const Tensor& image);
         lfs::Result<Sam2Prediction> seed_video(const Tensor& mask, int frame_index, int frame_count,
-                                               bool reverse);
+                                               bool reverse, float max_area = kSam2MaxArea);
         lfs::Result<Sam2Prediction> track_video(int frame_index);
         void reset_video();
         [[nodiscard]] bool supports_video() const;
@@ -118,6 +118,7 @@ namespace lfs::core::nn::models {
         bool video_reverse_ = false;
         bool video_image_ = false;
         bool video_oversized_ = false;
+        float video_max_area_ = kSam2MaxArea;
         Tensor raw_image_embed_;
         Tensor video_image_position_;
         Tensor video_memory_position_;

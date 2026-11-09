@@ -575,3 +575,20 @@ scrollbarhorizontal sliderbar:hover {
 #mcp-toggle.is-on .mcp-switch-knob,
 .preferences-mcp-toggle.is-on .preferences-mcp-switch-knob,
 .crop-effect-toggle.active .crop-effect-dot { background-color: @{success}; }
+.window-minimize-line,
+.window-close-line {
+    background-color: @{text};
+}
+
+.window-maximize-box,
+.window-restore-box {
+    border-color: @{text};
+}
+
+button.window-control .window-minimize-line {
+    background-color: @{text_dim};
+}
+button.window-control .window-maximize-box,
+button.window-control .window-restore-box {
+    border-color: @{text_dim};
+}

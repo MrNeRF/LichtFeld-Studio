@@ -29,6 +29,7 @@
 #include "training/control/command_api.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/scene/external_preview.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/camera_training_notice.hpp"
 #include "visualizer/visualizer.hpp"
@@ -50,6 +51,8 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -81,6 +84,36 @@ protected:
         return script_path;
     }
 };
+
+TEST_F(PythonIntegrationTest, ExternalPreviewUpdateReleasesWhileGilIsHeld) {
+    const lfs::python::GilAcquire gil;
+    (void)nanobind::module_::import_("lichtfeld");
+    // Attach the test executable's nanobind runtime to the imported module.
+    nanobind::detail::nb_module_exec(NB_DOMAIN_STR, nullptr);
+    auto original = std::make_shared<lfs::vis::ExternalPreviewUpdate>();
+    const std::weak_ptr<lfs::vis::ExternalPreviewUpdate> lifetime = original;
+    auto python_update = nanobind::cast(original);
+    auto worker_update = nanobind::cast<std::shared_ptr<lfs::vis::ExternalPreviewUpdate>>(python_update);
+    original.reset();
+    python_update.reset();
+
+    std::promise<void> released;
+    auto completion = released.get_future();
+    std::thread worker([update = std::move(worker_update), &released]() mutable {
+        update.reset();
+        released.set_value();
+    });
+    const auto status = completion.wait_for(std::chrono::seconds(5));
+    {
+        // Allow a broken Python deleter to finish so failure cannot hang the suite.
+        nanobind::gil_scoped_release release;
+        worker.join();
+    }
+    nanobind::detail::nb_module_free(nullptr);
+    EXPECT_EQ(status, std::future_status::ready)
+        << "Releasing a native preview update after its Python round-trip required the GIL";
+    EXPECT_TRUE(lifetime.expired());
+}
 
 namespace {
     template <typename ClearCallback, typename HasCallback>

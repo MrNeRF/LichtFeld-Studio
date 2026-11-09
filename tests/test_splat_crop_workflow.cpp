@@ -537,6 +537,41 @@ namespace {
         EXPECT_EQ(scene.getNodeById(box)->cropbox->enabled, enabled);
     }
 
+    TEST_F(SplatCropTreeTest, ExternalPreviewPreservesCropOwnerRevisionAndReadOnlyControls) {
+        auto& scene = sm->getScene();
+        const auto previous = scene.swapNodeModel("first", groupTestSplat());
+        EXPECT_FALSE(previous);
+        const auto owner_uuid = scene.getNodeById(owner)->uuid;
+        const auto source_before = scene.collisionSourceIdentity(owner);
+        ASSERT_TRUE(source_before);
+        const auto history_before = op::undoHistory().generation();
+        const auto preview = scene.addExternalPreview("Trainer", "Preview");
+        ASSERT_NE(preview, core::NULL_NODE);
+        ASSERT_TRUE(scene.isNodeEffectivelyLocked(preview));
+        const auto retired = scene.updateExternalPreview(scene.getNodeById(preview)->uuid, groupTestSplat(), glm::mat4(1), {});
+        EXPECT_FALSE(retired);
+        EXPECT_EQ(scene.collisionSourceIdentity(owner), source_before);
+        EXPECT_EQ(op::undoHistory().generation(), history_before);
+        sync();
+        auto* trash = tree->QuerySelector(".trash-icon[data-node-id='" + std::to_string(preview) + "']");
+        ASSERT_NE(trash, nullptr);
+        EXPECT_TRUE(trash->IsClassSet("trash-disabled"));
+        bool checked_splat = false;
+        for (const auto id : scene.getNodeById(preview)->children) {
+            const auto* child = scene.getNodeById(id);
+            if (child && child->type == core::NodeType::SPLAT) {
+                EXPECT_FALSE(cap::createSplatCrop(*sm, nullptr, child->uuid, core::NodeType::CROPBOX));
+                EXPECT_TRUE(child->children.empty());
+                checked_splat = true;
+            }
+        }
+        EXPECT_TRUE(checked_splat);
+        ASSERT_TRUE(sm->setSplatCropGroupEnabled(owner_uuid, false));
+        EXPECT_NE(op::undoHistory().generation(), history_before);
+        scene.setNodeTransform(owner, glm::translate(glm::mat4(1), glm::vec3(1, 0, 0)));
+        EXPECT_NE(scene.collisionSourceIdentity(owner), source_before);
+    }
+
     TEST_F(SplatCropTreeTest, LockedCropSwitchDoesNotMutateState) {
         auto& scene = sm->getScene();
         scene.setNodeLocked(scene.getNodeById(owner)->name, true);

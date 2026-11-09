@@ -38,6 +38,7 @@ namespace {
         int index = 0;
         bool selected = false;
         Rml::String name = "frame.png", label = "1", decorator = "image(preview://thumb=256&rev=1&path=frame.png contain)";
+        Rml::String mask_decorator = "image(preview://memory=sam:fixture:0:1&thumb=256&mode=mask contain)";
     };
 
     class ImagePreviewLayoutTest : public ::testing::TestWithParam<float> {
@@ -57,6 +58,7 @@ namespace {
             thumb.RegisterMember("name", &Thumb::name);
             thumb.RegisterMember("label", &Thumb::label);
             thumb.RegisterMember("decorator", &Thumb::decorator);
+            thumb.RegisterMember("mask_decorator", &Thumb::mask_decorator);
             model.RegisterArray<std::vector<Thumb>>();
             ASSERT_TRUE(model.Bind("thumbs", &thumbs));
             ASSERT_TRUE(model.Bind("panel_label", &title));
@@ -83,6 +85,8 @@ namespace {
             context->Update();
         }
         void checkWithin(Rml::Element* child, Rml::Element* parent) {
+            SCOPED_TRACE(::testing::Message() << child->GetId() << " in " << parent->GetId()
+                                              << " (width " << parent->GetClientWidth() << ")");
             const auto p = parent->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = parent->GetBox().GetSize(Rml::BoxArea::Border);
             const auto c = child->GetAbsoluteOffset(Rml::BoxArea::Border);
@@ -233,14 +237,18 @@ namespace {
             for (const bool help : {false, true}) {
                 SCOPED_TRACE(help);
                 doc->GetElementById("shortcut-help")->SetClass("hidden", !help);
-                for (int width : {600, 760, 1200}) {
+                for (int width : {600, 760, 900, 1200}) {
                     SCOPED_TRACE(width);
+                    doc->GetElementById("sam-pages")->SetClass("hidden", width != 900);
+                    doc->GetElementById("sam-heading")->SetClass("hidden", width == 900);
                     resize(width);
                     EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
                     Rml::ElementList buttons;
                     controls->QuerySelectorAll(buttons, "button");
                     Rml::ElementList apply_buttons;
                     apply->QuerySelectorAll(apply_buttons, "button");
+                    std::erase_if(buttons, [](auto* button) { return !button->IsVisible(true); });
+                    std::erase_if(apply_buttons, [](auto* button) { return !button->IsVisible(true); });
                     buttons.insert(buttons.end(), apply_buttons.begin(), apply_buttons.end());
                     ASSERT_EQ(buttons.size(), 17u);
                     checkWithin(apply, sidebar);
@@ -267,6 +275,10 @@ namespace {
                     // the canvas or the controls under the pointer between operations.
                     controls->SetScrollTop(0);
                     context->Update();
+                    if (width == 900 && !help) {
+                        for (const char* id : {"sam-generate", "sam-refine", "sam-cancel", "sam-show"})
+                            checkWithin(doc->GetElementById(id), controls);
+                    }
                     const auto geometry = [&](const char* id) {
                         auto* element = doc->GetElementById(id);
                         return Rml::Rectanglef::FromPositionSize(element->GetAbsoluteOffset(Rml::BoxArea::Border),
@@ -310,6 +322,75 @@ namespace {
             EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y + apply->GetBox().GetSize(Rml::BoxArea::Border).y,
                         sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).y + sidebar->GetBox().GetSize(Rml::BoxArea::Border).y, 1.5f * GetParam());
             doc->GetElementById("metadata-info")->SetClass("hidden", true);
+        }
+    }
+
+    TEST_P(ImagePreviewLayoutTest, TrackingStatusAndLocalizedSaveActionsKeepTheCanvasStable) {
+        const auto root = std::filesystem::path(PROJECT_ROOT_PATH);
+        for (const char* font : {"NotoSansJP-Regular.ttf", "NotoSansKR-Regular.ttf"})
+            ASSERT_TRUE(Rml::LoadFontFace((root / "src/visualizer/gui/assets/fonts" / font).string(), true));
+        auto& locales = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(locales.initialize((root / "src/visualizer/gui/resources/locales").string()));
+        auto* controls = doc->GetElementById("sam-controls");
+        auto* apply = doc->GetElementById("sam-apply-controls");
+        auto* sidebar = doc->GetElementById("sidebar");
+        sidebar->SetClass("sam-sidebar", true);
+        doc->GetElementById("metadata-info")->SetClass("hidden", true);
+        for (const auto* id : {"sam-pages", "sam-controls", "sam-apply-controls", "sam-tracking", "sam-save-controls"})
+            doc->GetElementById(id)->SetClass("hidden", false);
+        for (const auto* id : {"sam-frame-controls", "sam-apply", "sam-exclude"})
+            doc->GetElementById(id)->SetClass("hidden", true);
+        for (const auto& language : locales.getAvailableLanguages()) {
+            SCOPED_TRACE(language);
+            ASSERT_TRUE(locales.setLanguage(language));
+            doc->GetElementById("sam-page-frame")->SetInnerRML(locales.get("image_preview.sam_page_frame"));
+            doc->GetElementById("sam-page-sequence")->SetInnerRML(locales.get("image_preview.sam_page_sequence"));
+            for (const auto& [id, key] : std::map<std::string, std::string>{{"sam-track", "sam_track"},
+                                                                            {"sam-approve-range", "sam_approve_range"},
+                                                                            {"sam-save", "sam_save_approved"},
+                                                                            {"sam-save-exclude", "sam_save_excluded"},
+                                                                            {"sam-apply-heading", "sam_save_heading"},
+                                                                            {"sam-approve-label", "sam_approve"},
+                                                                            {"sam-tracking-heading", "sam_tracking_heading"},
+                                                                            {"sam-track-first-label", "sam_range_first"},
+                                                                            {"sam-track-last-label", "sam_range_last"},
+                                                                            {"sam-track-direction-label", "sam_direction"}})
+                doc->GetElementById(id)->SetInnerRML(locales.get("image_preview." + key));
+            doc->GetElementById("sam-apply-heading")->SetInnerRML(std::string(locales.get("image_preview.sam_save_heading")) + " · 999 / 1000");
+            doc->GetElementById("sam-track-direction")->SetInnerRML("<option>" + Rml::String(locales.get("image_preview.sam_both")) + "</option>");
+            for (int width : {900, 600, 760}) {
+                controls->SetScrollTop(0);
+                resize(width);
+                const auto viewport = doc->GetElementById("image-viewport")->GetBox().GetSize();
+                const auto apply_top = apply->GetAbsoluteOffset().y;
+                for (const auto* id : {"sam-track-first", "sam-track-last", "sam-track-direction"}) {
+                    auto* field = doc->GetElementById(id);
+                    if (width != 900)
+                        field->ScrollIntoView(false);
+                    context->Update();
+                    checkWithin(field, controls);
+                }
+                for (const auto* id : {"sam-track", "sam-approve-range", "sam-save", "sam-save-exclude"}) {
+                    auto* button = doc->GetElementById(id);
+                    if (width != 900)
+                        button->ScrollIntoView(false);
+                    context->Update();
+                    checkWithin(button, id == Rml::String("sam-track") || id == Rml::String("sam-approve-range") ? controls : apply);
+                    const auto key = id == Rml::String("sam-track") ? "sam_track" : id == Rml::String("sam-approve-range") ? "sam_approve_range"
+                                                                                : id == Rml::String("sam-save")            ? "sam_save_approved"
+                                                                                                                           : "sam_save_excluded";
+                    const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(button->GetFontFaceHandle(), Rml::String(locales.get("image_preview." + Rml::String(key))),
+                                                                                          Rml::TextShapingContext{button->GetComputedValues().language()});
+                    EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+                }
+                for (const auto* phase : {"sam_tracking", "sam_saved", "sam_error"}) {
+                    doc->GetElementById("sam-status")->SetInnerRML(locales.get("image_preview." + Rml::String(phase)));
+                    context->Update();
+                    EXPECT_EQ(doc->GetElementById("image-viewport")->GetBox().GetSize(), viewport);
+                    EXPECT_NEAR(apply->GetAbsoluteOffset().y, apply_top, .5f);
+                    checkWithin(apply, sidebar);
+                }
+            }
         }
     }
 

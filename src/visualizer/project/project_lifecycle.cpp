@@ -26,6 +26,7 @@
 #include "core/path_utils.hpp"
 #include "core/persisted_settings.hpp"
 #include "core/user_paths.hpp"
+#include "core/utc_time.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
@@ -2004,6 +2005,14 @@ namespace lfs::vis::project {
             return summary;
         }
 
+        [[nodiscard]] bool hasPersistentSceneNodes(const core::Scene& scene) {
+            // A transient root and its descendants are omitted from project saves.
+            return std::ranges::any_of(scene.getRootNodes(), [&scene](const auto id) {
+                const auto* node = scene.getNodeById(id);
+                return node && !node->transient;
+            });
+        }
+
         [[nodiscard]] bool hasHardDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
@@ -2037,10 +2046,7 @@ namespace lfs::vis::project {
                     lfs::core::native_fs::last_write_time(
                         path, error);
                 if (!error) {
-                    const auto system_time =
-                        std::chrono::clock_cast<
-                            std::chrono::system_clock>(
-                            file_time);
+                    const auto system_time = core::file_time_to_system_clock(file_time);
                     unix_seconds =
                         std::chrono::system_clock::to_time_t(
                             system_time);
@@ -6392,6 +6398,8 @@ namespace lfs::vis::project {
             return fail<void>(lfs::ErrorCode::FailedPrecondition, "The image mask cannot be changed now.", "Apply requires an editable dataset and an idle project", "camera.mask");
         auto& scene = manager->getScene();
         auto* node = scene.getNodeByUuid(uuid);
+        if (node && node->isExternalPreview())
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, LOC("external_training.read_only"), "External trainer cameras cannot own project masks", "camera.mask");
         std::error_code ec;
         if (!node || !node->camera || !core::native_fs::equivalent(node->camera->image_path(), image, ec) || ec)
             return fail<void>(lfs::ErrorCode::FailedPrecondition, "The source camera has changed.", "Mask target no longer matches the source image", "camera.mask");
@@ -11397,7 +11405,7 @@ namespace lfs::vis::project {
         const auto* manager =
             viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(
@@ -11419,7 +11427,7 @@ namespace lfs::vis::project {
         }
         const auto* manager = viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(

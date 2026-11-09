@@ -430,6 +430,23 @@ namespace lfs::gui {
             host_->setFloating(floating_);
     }
 
+    void VideoExtractorDialog::prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                                         const lfs::vis::gui::PanelDrawContext& ctx) {
+        if (ensureInitialized(ctx.ui ? ctx.ui->rml_manager : nullptr))
+            host_->setWindowPresentation(request.floating_window_state);
+    }
+
+    bool VideoExtractorDialog::titleControlsBounds(float* bounds) const {
+        const auto box = host_ ? host_->titleControlsBounds() : std::nullopt;
+        if (!box)
+            return false;
+        bounds[0] = box->x;
+        bounds[1] = box->y;
+        bounds[2] = box->width;
+        bounds[3] = box->height;
+        return true;
+    }
+
     bool VideoExtractorDialog::wantsKeyboard() const {
         return host_ && host_->wantsKeyboard();
     }
@@ -448,6 +465,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setPanelId("native.video_extractor");
         host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
         host_->setForeground(true);
         host_->setFloating(floating_);
@@ -521,6 +539,9 @@ namespace lfs::gui {
             std::lock_guard lock(review_mutex_);
             review_frames_.clear();
             review_weights_ = params.masking.masking.weights;
+            review_video_ = params.video_path;
+            review_output_ = params.output_dir;
+            review_run_ = core::generate_uuid_v4();
         }
 
         extraction_thread_.emplace([this, params]() {
@@ -1205,8 +1226,6 @@ namespace lfs::gui {
                                     Rml::StringUtilities::EncodeRml(status));
             }
         }
-        if (rows.empty())
-            rows = std::format("<span class=\"inline-note\">{}</span>", LOC(VideoExtractor::NO_FILE));
         const bool changed = setCachedInnerRml(batch_video_list_el_, rows);
         const int total = static_cast<int>(batch_items_.size());
         const std::string summary = probing_count > 0
@@ -1301,6 +1320,7 @@ namespace lfs::gui {
         if (!host_) {
             host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(
                 manager, "video_extractor", "rmlui/video_extractor.rml");
+            host_->setPanelId("native.video_extractor");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
             host_->setForeground(true);
             host_->setFloating(floating_);
@@ -1987,7 +2007,7 @@ namespace lfs::gui {
         changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
         changed |= setCachedDisabled(remove_video_el_, extracting || pending_params_set_ || !selected_batch_item_);
         changed |= setCachedDisabled(clear_videos_el_, extracting || pending_params_set_ || probing_batch ||
-                                                           batch_items_.empty());
+                                                           (batch_items_.empty() && !has_video));
         changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
@@ -2012,6 +2032,8 @@ namespace lfs::gui {
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
         changed |= setCachedChecked(continue_batch_on_failure_el_, continue_batch_on_failure_);
         changed |= setCachedDisabled(continue_batch_on_failure_el_, extracting);
+        if (auto* row = document_->GetElementById("batch-failure-options"))
+            changed |= setCachedProperty(row, "display", batch_items_.size() > 1 ? "flex" : "none");
 
         const bool masking_on = masking_toggle_el_ && masking_toggle_el_->HasAttribute("checked");
         const bool circle_on = mask_circle_el_ && mask_circle_el_->HasAttribute("checked");
@@ -2104,6 +2126,8 @@ namespace lfs::gui {
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
+        changed |= setCachedAttribute(video_value_el_, "title", lfs::core::path_to_utf8(video_path_));
+        changed |= setCachedAttribute(output_value_el_, "title", lfs::core::path_to_utf8(output_dir_));
         const bool inputs_missing = (batch_items_.empty() ? !player_->isOpen() : false) || output_dir_.empty();
         changed |= setCachedProperty(select_hint_el_, "display", inputs_missing ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, LOC(VideoExtractor::SELECT_BOTH));
@@ -2391,18 +2415,24 @@ namespace lfs::gui {
             std::vector<std::filesystem::path> paths;
             std::vector<io::VideoFrameExtractor::WrittenFrame> frames;
             std::filesystem::path weights;
+            std::filesystem::path video, output;
+            core::Uuid run{};
             {
                 std::lock_guard lock(review_mutex_);
                 frames = review_frames_;
                 weights = review_weights_;
+                video = review_video_;
+                output = review_output_;
+                run = review_run_;
             }
             std::ranges::stable_sort(frames, [](const auto& a, const auto& b) {
                 return a.timestamp != b.timestamp ? a.timestamp < b.timestamp : a.source_frame < b.source_frame;
             });
             for (const auto& frame : frames)
                 paths.push_back(frame.path);
-            if (!extracting_.load() && !paths.empty())
-                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights)}.emit();
+            if (!extracting_.load() && !paths.empty()) {
+                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights), .frames = std::move(frames), .video = std::move(video), .output = std::move(output), .run = run}.emit();
+            }
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);

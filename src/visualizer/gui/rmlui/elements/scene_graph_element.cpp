@@ -36,6 +36,7 @@
 #include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -1361,6 +1362,7 @@ namespace lfs::vis::gui {
                     collapsed_ids_.insert(id);
                 continue;
             }
+            const bool read_only = scene.getNodeById(id)->isExternalPreview();
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
@@ -1371,18 +1373,17 @@ namespace lfs::vis::gui {
                                       !scene.isNodeEffectivelyLocked(id) &&
                                       !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
-            snapshot.rename_enabled = snapshot.can_rename;
+            snapshot.rename_enabled = snapshot.can_rename && !read_only;
             snapshot.can_toggle_training =
-                snapshot.type == core::NodeType::CAMERA ||
-                snapshot.type == core::NodeType::CAMERA_GROUP;
-            snapshot.camera_frustum_container =
-                (snapshot.type == core::NodeType::GROUP &&
-                 std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
-                     const auto child_it = snapshots.find(child_id);
-                     return child_it != snapshots.end() &&
-                            child_it->second.type == core::NodeType::CAMERA_GROUP;
-                 })) ||
-                (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP));
+                !read_only && (snapshot.type == core::NodeType::CAMERA ||
+                               snapshot.type == core::NodeType::CAMERA_GROUP);
+            snapshot.camera_frustum_container = !read_only && ((snapshot.type == core::NodeType::GROUP &&
+                                                                std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
+                                                                    const auto child_it = snapshots.find(child_id);
+                                                                    return child_it != snapshots.end() &&
+                                                                           child_it->second.type == core::NodeType::CAMERA_GROUP;
+                                                                })) ||
+                                                               (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP)));
             if (snapshot.camera_frustum_container) {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;
@@ -3666,7 +3667,8 @@ namespace lfs::vis::gui {
             request.body_rml = encode(tr(bake ? "splat_inspector.group_bake_note" : "splat_inspector.group_delete_note"));
             request.buttons = {{tr("common.cancel"), "secondary"}, {label, "warning"}};
             request.on_result = [uuid = *uuid, members = std::move(members), bake, label = label,
-                                 expected_generation = scene->renderGeneration(), changed_message = tr("splat_inspector.group_changed")](const core::ModalResult& result) {
+                                 expected_history = op::undoHistory().generation(), expected_source = scene->collisionSourceIdentity(owner->id),
+                                 changed_message = tr("splat_inspector.group_changed")](const core::ModalResult& result) {
                 if (result.button_label != label)
                     return;
                 auto* manager = services().sceneOrNull();
@@ -3683,7 +3685,8 @@ namespace lfs::vis::gui {
                     if (desc && desc->category == core::SplatOperationCategory::CropVolume)
                         current_members.push_back(child->uuid);
                 }
-                if (current_members != members || current.renderGeneration() != expected_generation) {
+                if (current_members != members || op::undoHistory().generation() != expected_history ||
+                    current.collisionSourceIdentity(owner->id) != expected_source) {
                     lfs::ErrorBus::instance().publish({.error = lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition, .domain = lfs::ErrorDomain::Core, .user_message = changed_message, .detail = "Crop group confirmation scope changed", .detection = LFS_SOURCE_SITE_CURRENT()}), .surface = lfs::ErrorSurface::Toast});
                     return;
                 }
@@ -3716,7 +3719,8 @@ namespace lfs::vis::gui {
                 request.style = core::ModalStyle::Warning;
                 request.body_rml = encode(tr("splat_inspector.bake_note"));
                 request.buttons = {{tr("common.cancel"), "secondary"}, {apply_label, "warning"}};
-                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label, expected_generation = scene->renderGeneration()](const core::ModalResult& result) {
+                request.on_result = [element_uuid = node->uuid, owner_uuid = owner->uuid, apply_label = apply_label,
+                                     expected_history = op::undoHistory().generation(), expected_source = scene->collisionSourceIdentity(owner->id)](const core::ModalResult& result) {
                     if (result.button_label != apply_label)
                         return;
                     auto* sm = services().sceneOrNull();
@@ -3725,11 +3729,12 @@ namespace lfs::vis::gui {
                     if (!sm || !gm || (ed && ed->isToolsDisabled()) || op::operators().hasModalOperator())
                         return;
                     const auto& current_scene = sm->getScene();
-                    if (current_scene.renderGeneration() != expected_generation)
+                    if (op::undoHistory().generation() != expected_history)
                         return;
                     const auto* target = current_scene.getNodeByUuid(element_uuid);
                     const auto* parent = current_scene.getNodeByUuid(owner_uuid);
-                    if (!target || !parent || !core::validateSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id))
+                    if (!target || !parent || !core::validateSplatOperation(*parent, *target) || current_scene.isNodeEffectivelyLocked(target->id) ||
+                        current_scene.collisionSourceIdentity(parent->id) != expected_source)
                         return;
                     sm->selectNode(target->id);
                     gm->gizmo().editCropTool(target->uuid);

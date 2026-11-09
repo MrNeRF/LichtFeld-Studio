@@ -8,6 +8,7 @@
 #include "core/export.hpp"
 
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/window_state_utils.hpp"
 #include <RmlUi/Core/EventListener.h>
@@ -133,6 +134,8 @@ namespace lfs::vis::gui {
         SDL_Window* nativeWindow(const Rml::Context* context) const;
         VulkanContext* nativeGraphics(const Rml::Context* context) const;
         void showNativeWindow(Rml::Context* context);
+        void minimizeNativeWindow(Rml::Context* context);
+        void toggleNativeWindowMaximized(Rml::Context* context);
         void renderNativeWindows();
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
@@ -150,6 +153,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
 
         void activateTheme(const std::string& theme_id);
+        void setPreviewMemoryProvider(PreviewMemoryProvider provider);
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
         [[nodiscard]] LFS_VIS_API RenderInterface_VK* getVulkanRenderInterface(Rml::Context* context) const;
@@ -351,6 +355,7 @@ namespace lfs::vis::gui {
         std::unique_ptr<Rml::FileInterface> file_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         RenderInterface_VK* vulkan_render_interface_ = nullptr;
+        PreviewMemoryProvider preview_memory_provider_;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;

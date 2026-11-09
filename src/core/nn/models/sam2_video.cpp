@@ -100,7 +100,7 @@ namespace lfs::core::nn::models {
         const auto areas = candidate_areas(low_res.squeeze(0).to(DataType::Float32));
         int best = -1;
         for (int candidate = 1; candidate < int(iou.size()); ++candidate)
-            if (areas[size_t(candidate)] <= kSam2MaxArea && (best < 0 || iou[size_t(candidate)] > iou[size_t(best)]))
+            if (areas[size_t(candidate)] <= video_max_area_ && (best < 0 || iou[size_t(candidate)] > iou[size_t(best)]))
                 best = candidate;
         video_oversized_ = best < 0;
         if (video_oversized_)
@@ -235,16 +235,19 @@ namespace lfs::core::nn::models {
     }
 
     lfs::Result<Sam2Prediction> Sam2::seed_video(const Tensor& mask, int frame_index, int frame_count,
-                                                 bool reverse) {
+                                                 bool reverse, const float max_area) {
         if (!video_image_ || !image_set_ || !supports_video() || frame_count < 1 || frame_index < 0 || frame_index >= frame_count)
             return video_error("A video image and valid seed frame are required");
         if (mask.ndim() != 4 || mask.size(0) != 1 || mask.size(1) != 1)
             return video_error("The seed mask must have shape 1 by 1 by height by width");
+        if (!std::isfinite(max_area) || max_area <= 0 || max_area > 1)
+            return video_error("The video mask area limit must be greater than zero and at most one");
         reset_video();
         const CUDAStreamGuard guard(raw_image_embed_.stream());
         video_seed_ = video_last_ = frame_index;
         video_frame_count_ = frame_count;
         video_reverse_ = reverse;
+        video_max_area_ = max_area;
         auto seed = resize2d_bilinear_antialiased(mask.to(DataType::Float32), kImage, kImage).ge(0.5f).to(DataType::Float32);
         image_embed_hold_ = raw_image_embed_.clone();
         Conv2dParams downsample;
