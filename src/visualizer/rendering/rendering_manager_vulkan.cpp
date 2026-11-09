@@ -6,6 +6,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -3485,7 +3486,8 @@ namespace lfs::vis {
                         }
                     }
 
-                    if (!gt_image || !gt_image->is_valid()) {
+                    const bool gt_placeholder = !gt_image || !gt_image->is_valid();
+                    if (gt_placeholder) {
                         if (!gt_loading) {
                             LOG_DEBUG("{}",
                                       gt_error.empty() ? "GT comparison could not load ground-truth data" : gt_error);
@@ -3537,6 +3539,7 @@ namespace lfs::vis {
 
                             RenderedPanel compare_panel{};
                             std::string compare_error;
+                            bool compare_placeholder = false;
 
                             if (!gtComparisonUsesRGBReference(gt_mode)) {
                                 // Overlay-only follow-ups deliver the pending image without
@@ -3824,6 +3827,7 @@ namespace lfs::vis {
                                   isRetryableSharedScratchUnavailable(compare_error))) {
                                 LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
                                 compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
+                                compare_placeholder = true;
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
@@ -3890,7 +3894,8 @@ namespace lfs::vis {
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(gt_comparison_size, true, gt_size);
                                 pending_split_view.enabled = true;
-                                pending_split_view.loss_visualization = gtComparisonShowsLoss(gt_mode);
+                                pending_split_view.loss_visualization =
+                                    gtComparisonShowsLoss(gt_mode) && !gt_placeholder && !compare_placeholder;
                                 pending_split_view.split_position = frame_settings.split_position;
                                 pending_split_view.background = frame_settings.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
@@ -3900,7 +3905,7 @@ namespace lfs::vis {
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
-                                const char* mode_label = "GT Compare";
+                                std::string mode_label = "GT Compare";
                                 const char* left_name = "Ground Truth";
                                 const char* right_name = "Rendered";
                                 if (gt_mode == GTComparisonMode::Depth) {
@@ -3915,6 +3920,15 @@ namespace lfs::vis {
                                     mode_label = "GT Loss";
                                     left_name = "Loss";
                                     right_name = "";
+                                    if (!pending_split_view.loss_visualization) {
+                                        // Show a status panel, never an error heatmap of fabricated pixels.
+                                        const auto placeholder = gt_placeholder ? pending_split_view.left.image
+                                                                                : pending_split_view.right.image;
+                                        pending_split_view.left = {placeholder, 0.0f, frame_settings.split_position, false, true};
+                                        pending_split_view.right = {placeholder, frame_settings.split_position, 1.0f, false, true};
+                                        mode_label = std::format("GT Loss - {}", LOC(gt_loading ? "status.loading"
+                                                                                                : "dataset_relocate.unavailable"));
+                                    }
                                 }
                                 rendered_split_info = SplitViewInfo{
                                     .enabled = true,
