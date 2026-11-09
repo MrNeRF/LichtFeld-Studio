@@ -170,16 +170,16 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     panel._rebuild_model_records(state.nodes)
 
     assert panel._handle.records["formats"] == [
-        {"index": "0", "label": "export.format.ply_standard", "selected": False},
-        {"index": "1", "label": "export.format.sog_supersplat", "selected": False},
-        {"index": "8", "label": "export.format.ssog", "selected": False},
-        {"index": "2", "label": "export.format.spz_niantic", "selected": True},
-        {"index": "13", "label": "export.format.glb_gltf", "selected": False},
-        {"index": "6", "label": "export.format.rad_random_access", "selected": False},
-        {"index": "4", "label": "export.format.usd_openusd", "selected": False},
-        {"index": "5", "label": "export.format.usdz_nurec", "selected": False},
-        {"index": "3", "label": "export.format.html_viewer", "selected": False},
-        {"index": "7", "label": "export.format.colmap_sparse", "selected": False},
+        {"index": "0", "label": "export.format.ply_standard", "description": "export_dialog.format_description.ply", "selected": False},
+        {"index": "1", "label": "export.format.sog_supersplat", "description": "export_dialog.format_description.sog", "selected": False},
+        {"index": "8", "label": "export.format.ssog", "description": "export_dialog.format_description.ssog", "selected": False},
+        {"index": "2", "label": "export.format.spz_niantic", "description": "export_dialog.format_description.spz", "selected": True},
+        {"index": "13", "label": "export.format.glb_gltf", "description": "export_dialog.format_description.glb", "selected": False},
+        {"index": "6", "label": "export.format.rad_random_access", "description": "export_dialog.format_description.rad", "selected": False},
+        {"index": "4", "label": "export.format.usd_openusd", "description": "export_dialog.format_description.usd", "selected": False},
+        {"index": "5", "label": "export.format.usdz_nurec", "description": "export_dialog.format_description.nurec_usdz", "selected": False},
+        {"index": "3", "label": "export.format.html_viewer", "description": "export_dialog.format_description.html_viewer", "selected": False},
+        {"index": "7", "label": "export.format.colmap_sparse", "description": "export_dialog.format_description.colmap", "selected": False},
     ]
     assert panel._handle.records["models"] == [
         {"name": "Tree", "selected": True, "count_text": "(128)",
@@ -755,3 +755,68 @@ def test_label_reset_export_uses_available_sh_and_respects_export_lock(export_pa
     panel._exporting = True
     assert panel._reset_default("sh_degree") is None
     assert not panel._apply_reset("spz_version", 4)
+
+
+def _bound_export_model(panel):
+    getters = {}
+    model = SimpleNamespace(
+        bind_func=lambda name, getter: getters.update({name: getter}),
+        bind=lambda *args: None,
+        bind_event=lambda *args: None,
+        bind_record_list=lambda *args: None,
+        get_handle=_HandleStub,
+    )
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda name: model))
+    return getters
+
+
+def test_empty_scene_hides_settings_until_splats_arrive(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    getters = _bound_export_model(panel)
+    panel.on_update(None)
+    assert getters["show_no_models"]()
+    assert not getters["show_splat_settings"]()
+    assert getters["hide_export_error"]()
+    assert not getters["can_export"]()
+
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
+    panel._handle.dirty_fields.clear()
+    panel.on_update(None)
+    assert not getters["show_no_models"]()
+    assert getters["show_splat_settings"]()
+    assert getters["can_export"]()
+    assert "show_splat_settings" in panel._handle.dirty_fields
+
+    state.nodes = []
+    panel.on_update(None)
+    assert getters["show_no_models"]()
+    assert not getters["show_splat_settings"]()
+    assert not getters["can_export"]()
+
+
+def test_empty_scene_colmap_keeps_dataset_error_and_format_description(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    getters = _bound_export_model(panel)
+    panel._format = module.ExportFormat.COLMAP
+    assert not getters["show_model_selection"]()
+    assert not getters["show_splat_settings"]()
+    assert not getters["hide_export_error"]()
+    assert getters["selected_format_label"]() == "export.format.colmap_sparse"
+    assert getters["selected_format_description"]() == "export_dialog.format_description.colmap"
+    assert getters["export_error_text"]() == "export_dialog.colmap_requires_dataset"
+    assert not missing_locale_keys(module.FORMAT_DESCRIPTION_KEYS.values())
+
+
+@pytest.mark.parametrize("opened", [True, False])
+def test_empty_scene_new_project_handoff(export_panel_module, monkeypatch, opened):
+    module, state = export_panel_module
+    import_panel = ModuleType("lfs_plugins.import_panels")
+    calls = []
+    import_panel.open_new_project_panel = lambda: calls.append("open") or opened
+    monkeypatch.setitem(sys.modules, "lfs_plugins.import_panels", import_panel)
+    panel = module.ExportPanel()
+    panel._on_new_project(None, None, None)
+    assert calls == ["open"]
+    assert state.set_panel_enabled_calls == ([("lfs.export", False)] if opened else [])
