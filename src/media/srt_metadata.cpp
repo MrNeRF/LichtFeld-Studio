@@ -144,6 +144,8 @@ namespace lfs::media {
                     text_begin = text_end = next;
                     possible_index.reset();
                 } else if (!storage.cues.empty() && !line.empty()) {
+                    if (text_end == text_begin)
+                        text_begin = text_end = offset;
                     // Only an all-digit line immediately preceding the next timing
                     // can be an index. Preserve every other digit-leading payload.
                     possible_index = std::all_of(line.begin(), line.end(), [](char c) { return c >= '0' && c <= '9'; })
@@ -162,11 +164,11 @@ namespace lfs::media {
         Result<void> interpret(SrtCue& cue, std::size_t remaining_facts, const SrtMetadataLimits& limits) {
             const auto marker = [&](std::string_view name) {
                 std::size_t cursor = 0;
-                while ((cursor = cue.text.find(name, cursor)) != std::string::npos) {
+                while ((cursor = cue.text.find(name, cursor)) != std::string_view::npos) {
                     const auto previous = cursor ? static_cast<unsigned char>(cue.text[cursor - 1]) : 0;
                     const auto identifier = previous >= 128 || (previous >= 'a' && previous <= 'z') || (previous >= 'A' && previous <= 'Z') ||
                                             (previous >= '0' && previous <= '9') || previous == '_';
-                    if (!identifier && trim(std::string_view(cue.text).substr(cursor + name.size())).starts_with(':'))
+                    if (!identifier && trim(cue.text.substr(cursor + name.size())).starts_with(':'))
                         return true;
                     cursor += name.size();
                 }
@@ -187,7 +189,7 @@ namespace lfs::media {
                 {"rel_alt", "dji.srt.relative_altitude", "unspecified", -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
                 {"abs_alt", "dji.srt.absolute_altitude", "unspecified", -std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
             };
-            const std::string_view text(cue.text);
+            const auto text = cue.text;
             std::size_t cursor = 0;
             while ((cursor = text.find('[', cursor)) != std::string_view::npos) {
                 const auto end = text.find(']', cursor + 1);
@@ -267,14 +269,14 @@ namespace lfs::media {
                 if (const auto interpreted = interpret(cue, limits.facts - facts, limits); !interpreted)
                     return interpreted.error();
                 facts += cue.facts.size();
-                if (storage->cues[index].start_milliseconds == storage->cues[index].end_milliseconds)
+                if (cue.start_milliseconds == cue.end_milliseconds)
                     storage->points.push_back(index);
                 constexpr auto missing = std::numeric_limits<std::size_t>::max();
                 auto best = storage->candidates.empty() ? std::array{missing, missing} : storage->candidates.back();
-                if (best[0] == missing || storage->cues[index].end_milliseconds > storage->cues[best[0]].end_milliseconds) {
+                if (best[0] == missing || cue.end_milliseconds > storage->cues[best[0]].end_milliseconds) {
                     best[1] = best[0];
                     best[0] = index;
-                } else if (best[1] == missing || storage->cues[index].end_milliseconds > storage->cues[best[1]].end_milliseconds) {
+                } else if (best[1] == missing || cue.end_milliseconds > storage->cues[best[1]].end_milliseconds) {
                     best[1] = index;
                 }
                 storage->candidates.push_back(best);

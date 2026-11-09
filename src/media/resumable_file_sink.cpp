@@ -10,6 +10,7 @@
 #include "git_version.h"
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
+#include "media_json.hpp"
 #include "source_metadata_internal.hpp"
 #include <algorithm>
 #include <array>
@@ -184,7 +185,7 @@ namespace lfs::media::detail {
         if (output_.files.embed_source_metadata) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image metadata requires a source observation"));
-            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, output_.files.format);
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, output_.files.format, false, f.srt_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             embedded_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
@@ -194,13 +195,20 @@ namespace lfs::media::detail {
         } else if (output_.write_source_metadata_sidecars) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image sidecars require a source observation"));
-            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true);
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true, f.srt_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             sidecar_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
         }
         identity_ = {{"checkpoint_version", 2}, {"pipeline_version", 1}, {"application_build", GIT_TAGGED_VERSION}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
         identity_["image_encoder"] = imageEncoderBackend();
+        if (f.srt_metadata) {
+            Sha256 digest;
+            digest.update(f.srt_metadata->catalog.originalBytes());
+            const auto& binding = *f.srt_metadata;
+            identity_["srt_metadata"] = json_detail::srtFrameBinding(binding, srt_frame_metadata_policy);
+            identity_["srt_metadata"]["source_sha256"] = digest.finish();
+        }
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
         identity_["selection"] = {static_cast<int>(r.selection.mode), r.selection.fps, r.selection.interval, r.start_seconds, r.end_seconds};
         identity_["geometry"] = {static_cast<int>(r.geometry.mode), r.geometry.scale, r.geometry.width, r.geometry.height, r.geometry.clockwise_rotation};

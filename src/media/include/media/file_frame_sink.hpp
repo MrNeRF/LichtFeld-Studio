@@ -4,6 +4,7 @@
 #include "core/atomic_file.hpp"
 #include "core/export.hpp"
 #include "media/image_output.hpp"
+#include "media/srt_metadata.hpp"
 #include <filesystem>
 #include <memory>
 #include <unordered_set>
@@ -45,6 +46,9 @@ namespace lfs::media {
         bool embed_source_metadata = false;
         // Publish a separate XMP after each image, using the image overwrite policy.
         bool write_source_metadata_sidecars = false;
+        // Explicit timed observations, exported only when embedded or sidecar
+        // metadata is enabled. The timestamp offset has no implicit default.
+        std::optional<SrtFrameMetadata> srt_metadata;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

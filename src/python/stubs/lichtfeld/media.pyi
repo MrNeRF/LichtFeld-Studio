@@ -440,6 +440,30 @@ class JxlOutputOptions:
     @overwrite.setter
     def overwrite(self, arg: bool, /) -> None: ...
 
+class SrtMetadataCatalog:
+    @property
+    def cue_count(self) -> int: ...
+
+    def metadata_json(self) -> str:
+        """Return the owned SRT observation and retained raw bytes as JSON."""
+
+    def lookup_json(self, timestamp: Timestamp, offset_milliseconds: int, point_tolerance_milliseconds: int | None = None) -> str:
+        """
+        Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.
+        """
+
+class SrtFrameMetadata:
+    def __init__(self, catalog: SrtMetadataCatalog, offset_milliseconds: int, point_tolerance_milliseconds: int | None = None) -> None: ...
+
+    @property
+    def catalog(self) -> SrtMetadataCatalog: ...
+
+    @property
+    def offset_milliseconds(self) -> int: ...
+
+    @property
+    def point_tolerance_milliseconds(self) -> int | None: ...
+
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
 
@@ -496,6 +520,12 @@ class FileFrameSinkOptions:
 
     @embed_source_metadata.setter
     def embed_source_metadata(self, arg: bool, /) -> None: ...
+
+    @property
+    def srt_metadata(self) -> SrtFrameMetadata | None: ...
+
+    @srt_metadata.setter
+    def srt_metadata(self, arg: SrtFrameMetadata | None) -> None: ...
 
 class FileExtraction:
     def __init__(self) -> None: ...
@@ -846,18 +876,6 @@ class ImageOutput:
 
     @staticmethod
     def write_avif(path: str | os.PathLike, frame: FrameSurface, options: AvifOutputOptions = ..., cancelled: object | None = None) -> None: ...
-
-class SrtMetadataCatalog:
-    @property
-    def cue_count(self) -> int: ...
-
-    def metadata_json(self) -> str:
-        """Return the owned SRT observation and retained raw bytes as JSON."""
-
-    def lookup_json(self, timestamp: Timestamp, offset_milliseconds: int, point_tolerance_milliseconds: int | None = None) -> str:
-        """
-        Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.
-        """
 
 class MediaIngest:
     @staticmethod

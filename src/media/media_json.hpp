@@ -400,6 +400,11 @@ namespace lfs::media::json_detail {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON string allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         return std::move(stream).str();
     }
+    inline json srtFrameBinding(const SrtFrameMetadata& binding, std::string_view policy) {
+        json result{{"policy", policy}, {"offset_ms", binding.offset_milliseconds}, {"point_tolerance_ms", optional(binding.point_tolerance_milliseconds)}};
+        sourceLocator(result, &binding.catalog.source());
+        return result;
+    }
     inline Result<json> srtLookup(const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance = std::nullopt) {
         const auto match = catalog.lookup(timestamp, offset, tolerance);
         if (!match)
@@ -429,7 +434,7 @@ namespace lfs::media::json_detail {
     // Let the JSON library format every key/scalar (including replacement UTF-8).
     // Count the XML-escaped output first, then allocate exactly once. Neither
     // pass retains a second complete JSON serialization alongside the XML.
-    inline std::optional<std::string> sourceMetadataXmlProperty(const json& value, std::size_t max_value_bytes) {
+    inline std::optional<std::string> sourceMetadataXmlProperty(const json& value, std::size_t max_value_bytes, std::string_view name = "SourceMetadata") {
         const auto visit = [&](const auto& self, const json& node, auto&& emit) -> bool {
             if (node.is_object()) {
                 if (!emit("{"))
@@ -470,7 +475,7 @@ namespace lfs::media::json_detail {
         };
         if (!visit(visit, value, count))
             return std::nullopt;
-        constexpr std::string_view prefix = "<lfs:SourceMetadata>", suffix = "</lfs:SourceMetadata>";
+        const auto prefix = "<lfs:" + std::string(name) + ">", suffix = "</lfs:" + std::string(name) + ">";
         std::string result;
         if (bytes > result.max_size() - prefix.size() - suffix.size())
             return std::nullopt;

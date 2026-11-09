@@ -6,6 +6,7 @@
 
 #include "core/atomic_file.hpp"
 #include "core/export.hpp"
+#include "media/srt_metadata.hpp"
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -154,6 +155,7 @@ namespace lfs::io {
             core::AtomicFileOptions jpeg_metadata_output{.overwrite = true, .durable = false, .create_directories = false};
             // Appended: MediaIngest file sinks own publication and optional recovery.
             bool write_source_metadata_sidecars = false;
+            std::optional<media::SrtFrameMetadata> srt_metadata;
         };
 
         struct ValidatedLayout {

@@ -126,6 +126,9 @@ namespace lfs::media {
                     p.embed_source_metadata = files->files.embed_source_metadata;
                     p.write_source_metadata_sidecars = files->write_source_metadata_sidecars;
                     p.jpeg_metadata_output = files->files.image_output;
+                    p.srt_metadata = files->files.srt_metadata;
+                    if (const auto valid = detail::validateSrtFrameMetadata(p.srt_metadata, p.embed_source_metadata || p.write_source_metadata_sidecars); !valid)
+                        return failure(valid.error().code(), std::string(valid.error().detail()), 0);
                     if ((p.embed_source_metadata || p.write_source_metadata_sidecars) && detail::embeddedMetadataPolicy(files->files.format).empty())
                         return failure(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output", 0);
                     p.generate_metadata = files->write_metadata || p.preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;

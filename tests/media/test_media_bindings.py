@@ -986,6 +986,16 @@ class MediaBindings(unittest.TestCase):
                     reference_pixels = pixels
                 matches = [json.loads(catalog.lookup_json(frame.info.source_timestamp, 1000))["match"] for frame in frames]
                 self.assertEqual([match["cue"] if match else None for match in matches], expected)
+                import xml.etree.ElementTree as ET
+                output = media.FileExtraction()
+                output.files.output_directory = self.root / ("timed-export-" + source)
+                output.files.srt_metadata = media.SrtFrameMetadata(catalog, 1000)
+                output.write_source_metadata_sidecars = True
+                media.MediaIngest.extract_files(request, output)
+                records = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))["frames"]
+                exported = [json.loads(ET.fromstring((output.files.output_directory / record["sidecar"]).read_bytes()).find(
+                    ".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation").text)["match"] for record in records]
+                self.assertEqual([item["cue"] if item else None for item in exported], expected)
                 point_matches = [json.loads(points.lookup_json(frame.info.source_timestamp, 1000, point_tolerance_milliseconds=1))["match"] for frame in frames]
                 expected_points = [0, None, None, None, 1] if source == "cfr-asymmetric" else [0, None, 1, None, None]
                 self.assertEqual([match["cue"] if match else None for match in point_matches], expected_points)
@@ -1006,6 +1016,17 @@ class MediaBindings(unittest.TestCase):
         matches = [json.loads(catalog.lookup_json(frame.info.source_timestamp, -1500))["match"] for frame in frames]
         self.assertEqual([match["cue"] if match else None for match in matches], [0, 0, None, None, 1])
         self.assertEqual([frame.pixels for frame in frames], reference_pixels)
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "timed-export-shifted"
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, -1500)
+        output.write_source_metadata_sidecars = True
+        media.MediaIngest.extract_files(request, output)
+        records = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))["frames"]
+        exported = [json.loads(ET.fromstring((output.files.output_directory / record["sidecar"]).read_bytes()).find(
+            ".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation").text) for record in records]
+        self.assertEqual([item["match"]["cue"] if item["match"] else None for item in exported], [0, 0, None, None, 1])
+        self.assertEqual(exported[0]["query"]["ticks"], first.ticks)
+        self.assertTrue(all(item["query"]["offset_ms"] == -1500 for item in exported))
 
     def test_hdr_units_survive_owned_surfaces_and_verified_file_resume(self):
         for hlg,profile,transfer,units in [(False,media.FloatColorProfile.PqNits,"smpte2084",media.ColorUnits.Nits),
@@ -1100,6 +1121,131 @@ class MediaBindings(unittest.TestCase):
         subprocess.run(command, check=True, capture_output=True, timeout=30)
         request.input = path
         return request
+
+    def test_srt_frame_metadata_roundtrip_all_formats(self):
+        import xml.etree.ElementTree as ET
+        sidecar = self.root / "telemetry é 日本語.srt"
+        sidecar.write_bytes(srt_metadata_fixture.packet(offset_ms=1000).replace(b"[unknown: kept]", "[unknown: & < >] \ufffe\x01".encode("utf-8")))
+        catalog = media.MediaIngest.source_srt_metadata(sidecar)
+        binding = media.SrtFrameMetadata(catalog, 1000)
+        sidecar.unlink()  # The extraction consumes the owned observation.
+        for name, fmt in (("png", media.FrameFileFormat.PNG), ("jpeg", media.FrameFileFormat.JPEG),
+                          ("tiff", media.FrameFileFormat.TIFF16), ("exr", media.FrameFileFormat.EXR),
+                          ("jxl", media.FrameFileFormat.JXL), ("avif", media.FrameFileFormat.AVIF)):
+            with self.subTest(format=name):
+                request = self.request()
+                request.end_seconds = .5
+                if name not in ("png", "jpeg"):
+                    request.output_format = media.FramePixelFormat.RGBFloat32
+                    request.input_color.transfer = media.ColorTransfer.Linear
+                    request.input_color.primaries = media.ColorPrimaries.Bt709
+                output = media.FileExtraction()
+                output.files.output_directory = self.root / ("srt-" + name)
+                output.files.format = fmt
+                output.files.srt_metadata = binding
+                output.files.embed_source_metadata = True
+                output.write_source_metadata_sidecars = True
+                self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+                manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["srt_metadata"]["offset_ms"], 1000)
+                matches = []
+                for entry in manifest["frames"]:
+                    image = output.files.output_directory / entry["file"]
+                    packet = (output.files.output_directory / entry["sidecar"]).read_bytes()
+                    node = ET.fromstring(packet).find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
+                    observed = json.loads(node.text)
+                    query = observed["query"]
+                    self.assertEqual(query["ticks"], entry["source_pts"])
+                    self.assertEqual(query["time_base"], manifest["input"]["video"]["time_base"])
+                    timestamp = media.Timestamp()
+                    timestamp.ticks = query["ticks"]
+                    clock = media.Rational()
+                    clock.numerator, clock.denominator = query["time_base"]
+                    timestamp.time_base = clock
+                    expected = json.loads(catalog.lookup_json(timestamp, 1000))
+                    self.assertEqual(observed.pop("policy"), "srt-frame-observation-v1")
+                    self.assertEqual(observed, expected)
+                    matches.append(observed["match"]["cue"] if observed["match"] else None)
+                    embedded = json.loads(media.MediaIngest.source_metadata_json(image))["metadata"]["image_xmp"]["blocks"]
+                    embedded_observations = [json.loads(n.text) for block in embedded
+                        for n in ET.fromstring(bytes.fromhex(block["payload_bytes"])).iter()
+                        if n.tag == "{https://lichtfeld.io/ns/media/1.0/}SrtObservation"]
+                    self.assertEqual(len(embedded_observations), 1)
+                    self.assertEqual(embedded_observations[0]["match"], observed["match"])
+                self.assertIn(None, matches)
+                self.assertIn(0, matches)
+                self.assertIn(1, matches)
+
+    def test_srt_frame_metadata_large_jpeg_uses_existing_extended_xmp(self):
+        path = self.root / "large telemetry.srt"
+        path.write_bytes(srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 [latitude: 12]\n" + ("x" * 3000 + "\n") * 24)]))
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        request = self.request()
+        request.end_seconds = .01
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "srt-extended"
+        output.files.format = media.FrameFileFormat.JPEG
+        output.files.embed_source_metadata = True
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, 0)
+        media.MediaIngest.extract_files(request, output)
+        images = list(output.files.output_directory.glob("*.jpg"))
+        self.assertEqual(len(images), 1)
+        encoded, orientation, dimensions, facts, static, chunks = jpeg_metadata_fixture.read(images[0].read_bytes())
+        self.assertGreater(chunks, 0)
+        observation = json.loads(facts["SrtObservation"])
+        self.assertEqual(observation["match"]["metadata"]["facts"][0]["value"], 12)
+        self.assertGreater(len(observation["match"]["metadata"]["text"]), 65535)
+
+    def test_srt_frame_metadata_resume_identity_and_owned_catalog(self):
+        request = self.request()
+        path = self.root / "resume telemetry.srt"
+        original = srt_metadata_fixture.packet(offset_ms=1000)
+        path.write_bytes(original)
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "srt-resume"
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, 1000)
+        output.files.embed_source_metadata = True
+        output.write_source_metadata_sidecars = True
+        output.resume = True
+        self.interrupt_resume(request, output)
+        images = sorted(output.files.output_directory.glob("*.png"))
+        self.assertTrue(images)
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}
+        for binding in (media.SrtFrameMetadata(catalog, 1001), media.SrtFrameMetadata(catalog, 1000, 1), None):
+            output.files.srt_metadata = binding
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
+        path.write_bytes(original.replace(b"45.5", b"46.5"))
+        output.files.srt_metadata = media.SrtFrameMetadata(media.MediaIngest.source_srt_metadata(path), 1000)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, 1000)
+        path.unlink()
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual({p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in images}, before)
+        (output.files.output_directory / (images[0].name + ".xmp")).unlink()
+        media.MediaIngest.extract_files(request, output)
+        self.assertTrue((output.files.output_directory / (images[0].name + ".xmp")).is_file())
+
+    def test_srt_frame_metadata_refuses_ambiguity_and_unused_binding(self):
+        request = self.request()
+        path = self.root / "ambiguous.srt"
+        path.write_bytes(srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 [latitude: 1]"), (0, 800, "FrameCnt: 2 [latitude: 2]")]))
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "srt-invalid"
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, 0)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertFalse(output.files.output_directory.exists())
+        output.write_source_metadata_sidecars = True
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertFalse(list(output.files.output_directory.glob("*.png")))
+        output.files.srt_metadata = media.SrtFrameMetadata(catalog, 0, -1)
+        with self.assertRaisesRegex(MEDIA_ERROR, "tolerance_ms=-1"):
+            media.MediaIngest.extract_files(request, output)
 
     def test_source_metadata_manifest_survives_empty_selection_and_resume(self):
         request = self.metadata_request()

@@ -63,7 +63,14 @@ nlohmann::json runJpegBackendContracts(const nlohmann::json& request) {
     files.files.output_directory = core::utf8_to_path(request.at("output").get<std::string>());
     files.files.filename_pattern = "frame_%03d";
     files.files.format = media::FrameFileFormat::JPEG;
-    files.files.embed_source_metadata = mode == "metadata-bad-app0";
+    files.files.embed_source_metadata = request.value("embed_metadata", mode == "metadata-bad-app0");
+    files.resume = request.value("resume", false);
+    if (request.contains("srt_path")) {
+        auto catalog = media::MediaIngest::sourceSrtMetadata(core::utf8_to_path(request.at("srt_path").get<std::string>()));
+        if (!catalog)
+            throw std::runtime_error(std::string(catalog.error().detail()));
+        files.files.srt_metadata = media::SrtFrameMetadata{std::move(*catalog), request.at("srt_offset_ms").get<std::int64_t>()};
+    }
     files.files.image_output.overwrite = request.value("overwrite", true);
     files.write_source_metadata_sidecars = request.value("write_sidecars", false);
     if (request.value("cancel_after_cleanup", false))

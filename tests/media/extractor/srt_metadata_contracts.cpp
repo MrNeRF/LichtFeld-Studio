@@ -262,6 +262,20 @@ int runSrtMetadataContracts() {
             "indexless digit-leading text, paragraphs, numeric payload and original CRLF survive");
     require(native->cues()[0].facts.size() == 2 && native->cues()[0].facts[1].semantic == "dji.srt.altitude" && native->cues()[0].facts[1].unit == "unspecified" && native->cues()[0].facts[1].value == 12,
             "altitude is a distinct declaration without an inferred datum");
+    for (const auto separator : {"\n", "\r\n", "\r"}) {
+        const std::string newline(separator);
+        const auto payload = std::string("12.5 m") + newline + newline + "FrameCnt: 1 [latitude: 12]";
+        const auto original = std::string("1") + newline + "00:00:00,000 --> 00:00:01,000" + newline + newline + " \t" + newline + payload + newline + newline + "2" + newline + "00:00:01,000 --> 00:00:02,000" + newline + newline;
+        write(original);
+        const auto blank_prefix = MediaIngest::sourceSrtMetadata(path, {.cue_bytes = payload.size()});
+        require(blank_prefix && blank_prefix->cues().size() == 2, "leading separators do not consume the cue text budget or drop an empty cue");
+        const auto& cue = blank_prefix->cues()[0];
+        const auto expected_offset = original.find("12.5 m");
+        require(cue.text == payload && cue.source_offset == static_cast<std::int64_t>(expected_offset), "text starts at its first nonblank line and retains internal paragraphs");
+        const auto retained = blank_prefix->originalBytes();
+        require(std::string_view(reinterpret_cast<const char*>(retained.data()), retained.size()) == original && cue.text.data() == reinterpret_cast<const char*>(retained.data()) + expected_offset, "cue trimming preserves original bytes and shares their storage");
+        require(cue.facts.size() == 1 && cue.facts[0].offset == original.find("12]") && cue.facts[0].value == 12 && blank_prefix->cues()[1].text.empty(), "absolute fact provenance and genuinely empty cues survive leading separators");
+    }
     write(heading + "12345");
     require(MediaIngest::sourceSrtMetadata(path, {.cue_bytes = 5}).has_value() && !MediaIngest::sourceSrtMetadata(path, {.cue_bytes = 4}), "numeric final text obeys the exact cue byte budget");
     for (const auto limit : {SrtMetadataLimits{.cue_facts = 0}, SrtMetadataLimits{.cue_facts = 65}})

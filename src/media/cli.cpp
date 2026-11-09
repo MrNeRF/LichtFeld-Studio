@@ -81,6 +81,7 @@ namespace {
                              "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (Float32 SDR default; --jxl-precision float32|uint16; --jxl-transfer linear|srgb; effort 4..9 for lossless Float32, otherwise 1..9)\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
+                std::cout << "  [--srt-metadata SIDECAR --srt-offset-ms N [--srt-point-tolerance-ms N]] (requires image metadata output)\n";
                 return 0;
             }
             if (args.size() == 2 && args[1] == "version") {
@@ -193,6 +194,8 @@ namespace {
             IngestRequest request;
             request.input = lfs::core::utf8_to_path(args[2]);
             FileExtraction output;
+            std::filesystem::path srt_path;
+            std::optional<std::int64_t> srt_offset, srt_tolerance;
             ProbeOptions probe;
             bool avif_options = false;
             bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false, exr_codec_options = false, tiff_options = false, jxl_options = false;
@@ -300,7 +303,21 @@ namespace {
                     output.files.embed_source_metadata = true;
                 else if (flag == "--source-metadata-sidecars")
                     output.write_source_metadata_sidecars = true;
-                else if (flag == "--resume")
+                else if (flag == "--srt-metadata") {
+                    if (!srt_path.empty())
+                        throw std::invalid_argument("Specify SRT metadata once");
+                    srt_path = lfs::core::utf8_to_path(value());
+                    if (srt_path.empty())
+                        throw std::invalid_argument("SRT metadata path must not be empty");
+                } else if (flag == "--srt-offset-ms") {
+                    if (srt_offset)
+                        throw std::invalid_argument("Specify SRT offset once");
+                    srt_offset = number<std::int64_t>(value());
+                } else if (flag == "--srt-point-tolerance-ms") {
+                    if (srt_tolerance)
+                        throw std::invalid_argument("Specify SRT point tolerance once");
+                    srt_tolerance = number<std::int64_t>(value());
+                } else if (flag == "--resume")
                     output.resume = true;
                 else if (flag == "--quiet")
                     quiet = true;
@@ -358,6 +375,16 @@ namespace {
                 request.progress = [](const IngestProgress& p) {
                     std::cerr << json{{"event", "progress"}, {"processed", p.processed}, {"estimated", p.estimated}, {"discarded", p.discarded}}.dump() << '\n';
                 };
+            if (!srt_path.empty() || srt_offset || srt_tolerance) {
+                if (srt_path.empty() || !srt_offset || (!output.files.embed_source_metadata && !output.write_source_metadata_sidecars))
+                    throw std::invalid_argument("SRT metadata requires a sidecar path, explicit --srt-offset-ms and embedded metadata or XMP sidecars");
+                if (srt_tolerance && *srt_tolerance < 0)
+                    throw std::invalid_argument("SRT point tolerance must be nonnegative");
+                auto catalog = MediaIngest::sourceSrtMetadata(srt_path);
+                if (!catalog)
+                    return failed(catalog.error());
+                output.files.srt_metadata = SrtFrameMetadata{std::move(*catalog), *srt_offset, srt_tolerance};
+            }
             const auto result = MediaIngest::extractFiles(request, output);
             if (!result)
                 return failed(result.error());

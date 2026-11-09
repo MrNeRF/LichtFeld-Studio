@@ -51,6 +51,8 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::AVIF)
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
+        if (auto valid = detail::validateSrtFrameMetadata(options_.srt_metadata, options_.embed_source_metadata || options_.write_source_metadata_sidecars); !valid)
+            return valid;
         source_metadata_.reset();
         sidecar_metadata_ = std::move(sidecar);
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
@@ -123,7 +125,7 @@ namespace lfs::media {
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (source_metadata_) {
             auto prepared =
-                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, !options_.embed_source_metadata);
+                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, !options_.embed_source_metadata, options_.srt_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             auto metadata = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared));
@@ -133,7 +135,7 @@ namespace lfs::media {
                 if (metadata->extended_markers.empty()) {
                     sidecar_metadata_ = std::move(metadata);
                 } else {
-                    auto sidecar = detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, true);
+                    auto sidecar = detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, true, options_.srt_metadata);
                     if (!sidecar)
                         return SinkResult::failure(sidecar.error());
                     sidecar_metadata_ = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*sidecar));

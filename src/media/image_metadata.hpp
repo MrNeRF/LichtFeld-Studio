@@ -17,6 +17,7 @@ namespace lfs::media::detail {
     inline constexpr char jxl_metadata_policy[] = "jxl-static-source-xmp-v1";
     inline constexpr char avif_metadata_policy[] = "avif-static-source-xmp-v1";
     inline constexpr char sidecar_metadata_policy[] = "image-static-source-xmp-v1";
+    inline constexpr char srt_frame_metadata_policy[] = "srt-frame-observation-v1";
     inline constexpr char render_sidecar_metadata_policy[] = "image-render-xmp-v1";
     inline constexpr std::size_t max_render_provenance_bytes = 64 * 1024;
     inline constexpr char sidecar_metadata_naming[] = "image-filename-plus-xmp-v1";
@@ -41,8 +42,8 @@ namespace lfs::media::detail {
         std::shared_ptr<const SidecarObservation> observation_;
     };
     [[nodiscard]] std::string_view embeddedMetadataPolicy(FrameFileFormat);
-    // One prepared static observation per writer session. JPEG alone needs
-    // Extended XMP markers when its Standard APP1 packet cannot hold the source.
+    // Prepared static properties and an optional shared timed catalog. JPEG
+    // uses Extended XMP when the complete frame packet exceeds Standard APP1.
     struct EmbeddedImageMetadata {
         FrameFileFormat format = FrameFileFormat::JPEG;
         int applied_rotation = 0;
@@ -50,9 +51,11 @@ namespace lfs::media::detail {
         std::string extended_guid;
         std::vector<std::uint8_t> extended_markers;
         bool rendered = false;
+        std::optional<SrtFrameMetadata> srt_metadata;
     };
+    [[nodiscard]] SinkResult validateSrtFrameMetadata(const std::optional<SrtFrameMetadata>&, bool image_metadata_output);
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat, std::string_view provenance);
-    [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false);
+    [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false, const std::optional<SrtFrameMetadata>& srt = {});
     [[nodiscard]] std::string_view imageXmpSuffix();
     [[nodiscard]] Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&, bool sidecar = false);
     // Contiguous representation required by TIFF/OpenEXR setters, libjxl boxes and libheif metadata items.

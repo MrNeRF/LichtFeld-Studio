@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "media/image_sequence.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/metadata_file_io.hpp"
 #include "media/source_metadata.hpp"
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <sstream>
@@ -516,6 +518,57 @@ int runSourceMetadataContracts() {
                     decoded.at("cues").size() == 1 && decoded.at("cues")[0].at("facts")[0].at("state") == "invalid" &&
                     decoded.at("cues")[0].at("text").get<std::string>().find("quote\" slash\\ é 日") != std::string::npos,
                 "SRT JSON retains schema, bytes, invalid tokens, Unicode and escaping");
+        MediaDescription timed_source;
+        timed_source.source_metadata.emplace();
+        auto timed_container = catalogContainerMetadata(std::move(timed_source));
+        require(timed_container.has_value(), "explicit static container observation for the frame writer");
+        ImageSequenceOptions rendered;
+        rendered.files.output_directory = root / "timed-render";
+        rendered.files.srt_metadata = SrtFrameMetadata{*timed, 0};
+        rendered.layout = {2, 2, 6, FramePixelFormat::RGB8};
+        rendered.frame_count = 1;
+        const auto preflight = validateImageSequenceOptions(rendered);
+        require(!preflight && preflight.error().code() == lfs::ErrorCode::InvalidArgument &&
+                    preflight.error().detail().find("source-camera metadata") != std::string_view::npos,
+                "render preflight refuses a source telemetry binding");
+        ImageSequence render_sequence;
+        const auto opened = render_sequence.open(rendered);
+        require(!opened && opened.error().detail() == preflight.error().detail() && !std::filesystem::exists(rendered.files.output_directory),
+                "render open preserves the preflight refusal before output creation");
+        int frame_case = 0;
+        std::string timed_failure;
+        const auto write_timed = [&](FrameInfo info) {
+            FileFrameSinkOptions options;
+            options.output_directory = root / ("timed-frame-" + std::to_string(++frame_case));
+            options.embed_source_metadata = true;
+            options.srt_metadata = SrtFrameMetadata{*timed, 0, {}};
+            FileFrameSink sink(std::move(options));
+            SinkSession session;
+            session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*timed_container);
+            require(sink.begin(session).has_value(), "begin timed public file sink");
+            const std::array<std::uint8_t, 12> pixels{};
+            info.legacy_source_frame = 1;
+            const auto written = sink.write({{2, 2, 6, FramePixelFormat::RGB8}, info, pixels});
+            timed_failure = written ? "" : std::string(written.error().detail());
+            sink.abort({written ? SinkOutcome::Completed : SinkOutcome::Failed, written ? 1u : 0u, {}});
+            return written.has_value();
+        };
+        FrameInfo frame;
+        require(!write_timed(frame), "timed metadata refuses missing source timestamps");
+        frame.origin = FrameOrigin::Decoded;
+        frame.source_timestamp = Timestamp{0, {1, 1000}};
+        require(!write_timed(frame), "timed metadata refuses an unspecified timestamp origin");
+        frame.timestamp_origin = TimestampOrigin::Presentation;
+        const auto associated = write_timed(frame);
+        require(associated, ("decoded source clock produces a timed image: " + timed_failure).c_str());
+        frame.timestamp_origin = static_cast<TimestampOrigin>(99);
+        require(!write_timed(frame), "timed metadata refuses an unknown timestamp origin");
+        frame.timestamp_origin = TimestampOrigin::Presentation;
+        frame.origin = FrameOrigin::Rendered;
+        require(!write_timed(frame), "rendered frames cannot inherit camera telemetry");
+        frame.origin = FrameOrigin::Decoded;
+        frame.source_timestamp = Timestamp{std::numeric_limits<int64_t>::max(), {std::numeric_limits<int>::max(), 1}};
+        require(!write_timed(frame), "unrepresentable frame mapping is refused");
         std::ostringstream timed_stream;
         require(json_detail::writeSrtMetadataJson(timed_stream, *timed) && timed_stream.str() == *timed_json,
                 "SRT CLI and string output share exactly one JSON representation");
