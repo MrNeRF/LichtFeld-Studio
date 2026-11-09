@@ -15,8 +15,6 @@ extern "C" {
 namespace lfs::media {
     struct SrtMetadataStorage {
         MetadataSourceLocator source;
-        // Anchor protection to collection time even if a caller changes cwd.
-        std::filesystem::path source_path;
         std::vector<std::uint8_t> original;
         std::vector<SrtCue> cues;
         // For every start-time prefix, retain the two greatest interval ends.
@@ -25,33 +23,6 @@ namespace lfs::media {
         std::vector<std::array<std::size_t, 2>> candidates;
         std::vector<std::size_t> points;
     };
-    namespace detail {
-        Result<void> protectSrtMetadataSource(const SrtMetadataCatalog& catalog, const std::filesystem::path& output) {
-            try {
-                std::error_code error;
-                // equivalent() only has an identity to compare when both names
-                // exist; a missing candidate can report ENOTSUP on macOS.
-                if (!core::native_fs::exists(output, error)) {
-                    if (error)
-                        return SinkResult::failure(sidecarIoError(error, "Inspect SRT output candidate", output));
-                    return {};
-                }
-                if (!core::native_fs::exists(catalog.storage_->source_path, error)) {
-                    if (error)
-                        return SinkResult::failure(sidecarIoError(error, "Inspect SRT source identity", catalog.storage_->source_path));
-                    return {};
-                }
-                const auto same = core::native_fs::equivalent(catalog.storage_->source_path, output, error);
-                if (same)
-                    return SinkResult::failure(sidecarError(ErrorCode::InvalidArgument, "Image extraction output aliases its SRT source (source=" + catalog.source().display + ", output=" + core::path_to_utf8(output) + ")"));
-                if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
-                    return SinkResult::failure(sidecarIoError(error, "Check SRT source/output identity", output));
-                return {};
-            } catch (const std::bad_alloc&) {
-                return SinkResult::failure(sidecarError(ErrorCode::ResourceExhausted, "SRT source/output identity allocation failed"));
-            }
-        }
-    } // namespace detail
     namespace {
         Error srtError(ErrorCode code, std::string detail, core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
             return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = site});
@@ -280,12 +251,8 @@ namespace lfs::media {
             !limits.cue_facts || limits.cue_facts > srt_metadata_maxima.cue_facts)
             return srtError(ErrorCode::InvalidArgument, "SRT limits must be positive and within maxima (bytes=" + std::to_string(limits.bytes) + "/" + std::to_string(srt_metadata_maxima.bytes) + ", cues=" + std::to_string(limits.cues) + "/" + std::to_string(srt_metadata_maxima.cues) + ", lines=" + std::to_string(limits.lines) + "/" + std::to_string(srt_metadata_maxima.lines) + ", facts=" + std::to_string(limits.facts) + "/" + std::to_string(srt_metadata_maxima.facts) + ", cue_bytes=" + std::to_string(limits.cue_bytes) + "/" + std::to_string(srt_metadata_maxima.cue_bytes) + ", cue_facts=" + std::to_string(limits.cue_facts) + "/" + std::to_string(srt_metadata_maxima.cue_facts) + ")");
         try {
-            std::error_code path_error;
-            const auto source_path = core::native_fs::absolute(path, path_error);
-            if (path_error)
-                return detail::sidecarIoError(path_error, "Resolve SRT source path", path);
             detail::SidecarFile file;
-            const auto size = file.open(source_path, limits.bytes);
+            const auto size = file.open(path, limits.bytes);
             if (!size)
                 return size.error();
             auto bytes = detail::readSidecarBytes(file, *size);
@@ -293,7 +260,6 @@ namespace lfs::media {
                 return Error(bytes.error()).with_context("Read SRT metadata (path=" + core::path_to_utf8(path) + ")", LFS_SOURCE_SITE_CURRENT());
             auto storage = std::make_shared<SrtMetadataStorage>();
             storage->source = detail::sourceMetadataLocator(path);
-            storage->source_path = source_path;
             storage->original = std::move(*bytes);
             if (const auto parsed = parseSrt(*storage, limits); !parsed)
                 return Error(parsed.error()).with_context("Read SRT metadata (path=" + core::path_to_utf8(path) + ")", LFS_SOURCE_SITE_CURRENT());

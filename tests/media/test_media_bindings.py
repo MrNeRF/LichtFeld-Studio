@@ -1228,33 +1228,6 @@ class MediaBindings(unittest.TestCase):
         media.MediaIngest.extract_files(request, output)
         self.assertTrue((output.files.output_directory / (images[0].name + ".xmp")).is_file())
 
-    def test_srt_frame_metadata_preserves_input_on_output_name_collision(self):
-        for name, relative in (("frame_1.png", False), ("frame_1.png.xmp", False), ("extraction_metadata.json", False), ("frame_1.png.xmp", True)):
-            with self.subTest(source=name, relative=relative):
-                root = self.root / ("collision-" + name + ("-relative" if relative else ""))
-                root.mkdir()
-                path = root / name
-                original = srt_metadata_fixture.packet()
-                path.write_bytes(original)
-                before = path.stat().st_mtime_ns
-                previous_directory = Path.cwd()
-                try:
-                    if relative:
-                        os.chdir(root)
-                    catalog = media.MediaIngest.source_srt_metadata(path.name if relative else path)
-                finally:
-                    os.chdir(previous_directory)
-                request = self.request()
-                request.end_seconds = .01
-                output = media.FileExtraction()
-                output.files.output_directory = root
-                output.files.embed_source_metadata = True
-                output.write_source_metadata_sidecars = True
-                output.files.srt_metadata = media.SrtFrameMetadata(catalog, 0)
-                with self.assertRaises(MEDIA_ERROR):
-                    media.MediaIngest.extract_files(request, output)
-                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, before))
-
     def test_srt_frame_metadata_refuses_ambiguity_and_unused_binding(self):
         request = self.request()
         path = self.root / "ambiguous.srt"
@@ -1271,7 +1244,7 @@ class MediaBindings(unittest.TestCase):
             media.MediaIngest.extract_files(request, output)
         self.assertFalse(list(output.files.output_directory.glob("*.png")))
         output.files.srt_metadata = media.SrtFrameMetadata(catalog, 0, -1)
-        with self.assertRaises(MEDIA_ERROR):
+        with self.assertRaisesRegex(MEDIA_ERROR, "tolerance_ms=-1"):
             media.MediaIngest.extract_files(request, output)
 
     def test_source_metadata_manifest_survives_empty_selection_and_resume(self):

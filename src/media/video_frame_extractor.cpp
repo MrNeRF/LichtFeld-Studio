@@ -1042,14 +1042,6 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (params.srt_metadata) {
-                auto protected_source = media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, params.output_dir / "extraction_metadata.json");
-                if (!protected_source) {
-                    failure_ = protected_source.error();
-                    error = std::string(failure_->detail());
-                    return false;
-                }
-            }
             const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
@@ -1877,12 +1869,6 @@ namespace lfs::io {
                         throw_if_cancelled();
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
-                            if (params.srt_metadata) {
-                                check_sink(media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, batch_filenames[i]));
-                                auto companion = batch_filenames[i];
-                                companion += media::detail::sidecar_metadata_suffix;
-                                check_sink(media::detail::protectSrtMetadataSource(params.srt_metadata->catalog, companion));
-                            }
                             auto previous_sidecar = media::detail::PreviousSourceSidecar::inspect(batch_filenames[i]);
                             auto options = params.jpeg_metadata_output;
                             const auto cancelled = options.cancelled;

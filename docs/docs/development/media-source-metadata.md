@@ -1141,11 +1141,6 @@ and checks the locator, offset and tolerance. A changed input or mapping is
 refused before adopting existing output. The catalog remains usable after its
 source file is removed; a resumed call can pass that same owned observation.
 
-Output and cleanup paths identifying the still-existing SRT input are refused
-before replacing that source, including native filesystem aliases. The catalog
-remains usable when its original file has been removed. Existing filesystem
-publication and concurrent-writer contracts continue to apply.
-
 Images and their XMP companions remain separate atomic publications. The existing
 checkpoint verifies encoded bytes and companion bytes, preserves accepted frames
 and reconstructs missing generated output through the same writer and lookup.

@@ -353,14 +353,6 @@ namespace lfs::media::detail {
             sidecar_name += sidecar_metadata_suffix;
             sidecar_destination = output_.files.output_directory / sidecar_name;
         }
-        if (output_.files.srt_metadata) {
-            if (auto protected_source = protectSrtMetadataSource(output_.files.srt_metadata->catalog, destination); !protected_source)
-                return protected_source;
-            auto companion = destination;
-            companion += sidecar_metadata_suffix;
-            if (auto protected_source = protectSrtMetadataSource(output_.files.srt_metadata->catalog, companion); !protected_source)
-                return protected_source;
-        }
         const auto record_path = checkpoint_ / ("frame-" + std::to_string(accepted_) + ".json");
         Sha256 pixel_digest;
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * pixelBytes(frame.layout.format);

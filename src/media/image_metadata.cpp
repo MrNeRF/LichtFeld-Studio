@@ -254,10 +254,10 @@ namespace lfs::media::detail {
                 return SinkResult::failure(observation.error());
             (*observation)["policy"] = srt_frame_metadata_policy;
             if (properties.size() > max_packet_bytes - 1024)
-                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget"));
+                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", limit=" + std::to_string(max_packet_bytes - 1024) + ")"));
             auto encoded = json_detail::sourceMetadataXmlProperty(*observation, max_packet_bytes - properties.size() - 1024, "SrtObservation");
             if (!encoded)
-                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget"));
+                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", srt_value_limit=" + std::to_string(max_packet_bytes - properties.size() - 1024) + ")"));
             properties += *encoded;
             return {};
         }
@@ -297,7 +297,7 @@ namespace lfs::media::detail {
         if (binding && !image_metadata_output)
             return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars"));
         if (binding && binding->point_tolerance_milliseconds && *binding->point_tolerance_milliseconds < 0)
-            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative"));
+            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative (tolerance_ms=" + std::to_string(*binding->point_tolerance_milliseconds) + ")"));
         return {};
     }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar, const std::optional<SrtFrameMetadata>& srt) {

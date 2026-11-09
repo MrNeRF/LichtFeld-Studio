@@ -81,16 +81,10 @@ namespace lfs::media {
             for (const auto& path : io::generatedExtractionFiles(options_.output_directory, options_.filename_pattern)) {
                 if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
                     continue;
-                if (options_.srt_metadata)
-                    if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, path); !protected_source)
-                        return protected_source;
                 existing_frames_.push_back({path, lfs::core::native_fs::last_write_time(path), lfs::core::native_fs::file_size(path)});
                 if (path.filename() != "extraction_metadata.json" && detail::PreviousSourceSidecar::inspect(path)) {
                     auto sidecar = path;
                     sidecar += detail::sidecar_metadata_suffix;
-                    if (options_.srt_metadata)
-                        if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, sidecar); !protected_source)
-                            return protected_source;
                     if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(sidecar)))
                         existing_frames_.push_back({sidecar, lfs::core::native_fs::last_write_time(sidecar), lfs::core::native_fs::file_size(sidecar), true});
                 }
@@ -127,14 +121,6 @@ namespace lfs::media {
                                                                                                                              : ".jpg";
         const auto filename = options_.output_directory /
                               core::utf8_to_path(io::formatFrameFilenameStem(options_.filename_pattern, output_frame_number) + extension);
-        if (options_.srt_metadata) {
-            if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, filename); !protected_source)
-                return protected_source;
-            auto companion = filename;
-            companion += detail::sidecar_metadata_suffix;
-            if (auto protected_source = detail::protectSrtMetadataSource(options_.srt_metadata->catalog, companion); !protected_source)
-                return protected_source;
-        }
         if (!filenames_.insert(filename).second)
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (source_metadata_) {
