@@ -3,8 +3,8 @@
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
+#include "media/metadata_file_io.hpp"
 #include "media/source_metadata.hpp"
-#include "media/xmp_sidecar_io.hpp"
 #include <chrono>
 #include <fstream>
 #include <sstream>
@@ -19,6 +19,7 @@ extern "C" {
 #include <utility>
 
 int runMetadataObservationContracts();
+int runSrtMetadataContracts();
 
 namespace {
     using namespace lfs::media;
@@ -487,11 +488,45 @@ int runSourceMetadataContracts() {
         require(lfs::media::json_detail::writeSourceSidecarMetadataJson(stream, *bound, *summary) && stream.str() == encoded, "CLI and string serialization share identical output");
         require(lfs::media::json_detail::sourceMetadata(bound->catalog).at("scope") == "static_xmp_sidecar", "shared serializer preserves sidecar provenance without wrapper patch");
         struct RejectingBuffer : std::streambuf {
-            std::streamsize xsputn(const char*, std::streamsize) override { return 0; }
-            int_type overflow(int_type) override { return traits_type::eof(); }
+            std::size_t remaining = 0;
+            explicit RejectingBuffer(std::size_t bytes = 0) : remaining(bytes) {}
+            std::streamsize xsputn(const char*, std::streamsize count) override {
+                const auto written = std::min(remaining, static_cast<std::size_t>(count));
+                remaining -= written;
+                return static_cast<std::streamsize>(written);
+            }
+            int_type overflow(int_type value) override {
+                if (!remaining)
+                    return traits_type::eof();
+                --remaining;
+                return value;
+            }
         } rejecting;
         std::ostream failed_stream(&rejecting);
         require(!lfs::media::json_detail::writeSourceSidecarMetadataJson(failed_stream, *bound, *summary), "stream errors are reported instead of accepted");
+        const auto telemetry = root / "telemetry.srt";
+        const std::string telemetry_bytes = "1\n00:00:00,000 --> 00:00:01,000\nFrameCnt: 1 [latitude: +-12] quote\" slash\\ é 日 \xff\n";
+        std::ofstream(telemetry, std::ios::binary) << telemetry_bytes;
+        const auto timed = MediaIngest::sourceSrtMetadata(telemetry);
+        require(timed.has_value(), "SRT observation for shared JSON output contracts");
+        const auto timed_json = json_detail::srtMetadataJson(*timed);
+        require(timed_json.has_value(), "SRT JSON string serialization succeeds");
+        const auto decoded = nlohmann::json::parse(*timed_json);
+        require(decoded.at("scope") == "timed_srt" && decoded.at("original_bytes") == json_detail::hexBytes(telemetry_bytes) &&
+                    decoded.at("cues").size() == 1 && decoded.at("cues")[0].at("facts")[0].at("state") == "invalid" &&
+                    decoded.at("cues")[0].at("text").get<std::string>().find("quote\" slash\\ é 日") != std::string::npos,
+                "SRT JSON retains schema, bytes, invalid tokens, Unicode and escaping");
+        std::ostringstream timed_stream;
+        require(json_detail::writeSrtMetadataJson(timed_stream, *timed) && timed_stream.str() == *timed_json,
+                "SRT CLI and string output share exactly one JSON representation");
+        for (const auto capacity : {std::size_t{0}, std::size_t{1}, timed_json->find("original_bytes") + 20, timed_json->size() - 1}) {
+            RejectingBuffer partial(capacity);
+            std::ostream partial_stream(&partial);
+            require(!json_detail::writeSrtMetadataJson(partial_stream, *timed), "partial SRT JSON output never reports success");
+        }
+        RejectingBuffer exact(timed_json->size());
+        std::ostream exact_stream(&exact);
+        require(json_detail::writeSrtMetadataJson(exact_stream, *timed), "SRT JSON output accepts its exact byte capacity");
         {
             lfs::media::detail::SidecarFile pinned_image;
             lfs::media::detail::SidecarFile pinned_sidecar;
@@ -514,5 +549,7 @@ int runSourceMetadataContracts() {
         invalid.blocks[0].payload_offset = 1;
         require(!catalogSourceMetadata({}, {}, std::nullopt, std::move(invalid)), "sidecar carrier rejects invented payload offsets");
     }
-    return runMetadataObservationContracts();
+    if (const auto status = runMetadataObservationContracts())
+        return status;
+    return runSrtMetadataContracts();
 }

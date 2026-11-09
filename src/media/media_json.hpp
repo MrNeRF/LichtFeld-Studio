@@ -5,10 +5,12 @@
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
+#include "media/srt_metadata.hpp"
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <sstream>
 #include <type_traits>
 #include <vector>
 namespace lfs::media::json_detail {
@@ -36,6 +38,12 @@ namespace lfs::media::json_detail {
         }
         return result;
     }
+    inline void sourceLocator(json& result, const MetadataSourceLocator* locator) {
+        result["source_locator"] = locator ? json(locator->display) : json(nullptr);
+        result["source_locator_bytes"] = locator ? json(hexBytes(locator->native_bytes)) : json(nullptr);
+        result["source_locator_encoding"] = locator ? json(locator->encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes") : json(nullptr);
+    }
+
     inline const char* metadataStatus(core::image_codecs::MetadataStatus status) {
         using core::image_codecs::MetadataStatus;
         switch (status) {
@@ -212,17 +220,7 @@ namespace lfs::media::json_detail {
                 result["source_metadata"] = std::move(source);
             }
         }
-        const auto& locator = catalog.sourceLocator();
-        result["source_locator"] = locator ? json(locator->display) : json(nullptr);
-        result["source_locator_bytes"] = locator ? json(hexBytes(locator->native_bytes)) : json(nullptr);
-        const char* encoding = "unknown";
-        if (locator) {
-            switch (locator->encoding) {
-            case MetadataPathEncoding::PosixBytes: encoding = "posix_bytes"; break;
-            case MetadataPathEncoding::Utf16LE: encoding = "utf16le"; break;
-            }
-        }
-        result["source_locator_encoding"] = locator ? json(encoding) : json(nullptr);
+        sourceLocator(result, catalog.sourceLocator() ? &*catalog.sourceLocator() : nullptr);
         result["identity_scope"] = "in_memory_observation";
         for (const auto& reference : catalog.records())
             result["records"].push_back(metadataReference(reference));
@@ -374,6 +372,46 @@ namespace lfs::media::json_detail {
         const auto output = sourceSidecarMetadataJson(sidecar, summary);
         stream.write(output.data(), static_cast<std::streamsize>(output.size()));
         return static_cast<bool>(stream);
+    }
+    inline json srtCue(const SrtCue& cue) {
+        json facts = json::array();
+        for (const auto& fact : cue.facts)
+            facts.push_back({{"semantic", fact.semantic}, {"unit", fact.unit}, {"value", optional(fact.value)}, {"state", fact.value ? "present" : "invalid"}, {"ambiguous", fact.ambiguous}, {"source_offset", fact.offset}, {"text_bytes", fact.bytes}});
+        return {{"profile", cue.dji_bracket_profile ? "dji_bracket_fields_v1" : "raw_text"}, {"sample_kind", cue.start_milliseconds == cue.end_milliseconds ? "point" : "interval"}, {"start_ms", cue.start_milliseconds}, {"end_ms", cue.end_milliseconds}, {"source_offset", cue.source_offset}, {"text", cue.text}, {"text_bytes", hexBytes(cue.text)}, {"facts", std::move(facts)}};
+    }
+    inline bool writeSrtMetadataJson(std::ostream& stream, const SrtMetadataCatalog& catalog) {
+        // Retain one cue DOM at a time; shared dump owns escaping and formatting.
+        stream << "{\"cues\":[";
+        bool first = true;
+        for (const auto& cue : catalog.cues()) {
+            if (!first)
+                stream.put(',');
+            first = false;
+            stream << dump(srtCue(cue));
+        }
+        json rest{{"schema_version", 1}, {"success", true}, {"scope", "timed_srt"}, {"parser", "srt"}, {"interpreter", "dji_bracket_fields_v1"}, {"original_bytes", hexBytes(catalog.originalBytes())}};
+        sourceLocator(rest, &catalog.source());
+        stream << "]," << dump(rest).substr(1);
+        return static_cast<bool>(stream);
+    }
+    inline Result<std::string> srtMetadataJson(const SrtMetadataCatalog& catalog) {
+        std::ostringstream stream;
+        if (!writeSrtMetadataJson(stream, catalog))
+            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON string allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
+        return std::move(stream).str();
+    }
+    inline Result<json> srtLookup(const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance = std::nullopt) {
+        const auto match = catalog.lookup(timestamp, offset, tolerance);
+        if (!match)
+            return match.error();
+        auto query = json_detail::timestamp(timestamp);
+        query["offset_ms"] = offset;
+        query["point_tolerance_ms"] = optional(tolerance);
+        json result{{"schema_version", 1}, {"success", true}, {"query", std::move(query)}, {"match", nullptr}};
+        sourceLocator(result, &catalog.source());
+        if (*match)
+            result["match"] = {{"cue", **match}, {"metadata", srtCue(catalog.cues()[**match])}};
+        return result;
     }
     inline void appendXmlText(std::string& output, std::string_view text) {
         for (const auto c : text) {

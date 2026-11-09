@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -131,6 +131,55 @@ namespace {
                 } catch (const std::bad_alloc&) {
                     return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "Sidecar metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 }
+            }
+            if (args.size() >= 2 && args[1] == "source-srt-metadata") {
+                if (args.size() < 3)
+                    throw std::invalid_argument("Expected source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]");
+                std::optional<Timestamp> query;
+                std::optional<std::int64_t> offset, tolerance;
+                for (std::size_t i = 3; i < args.size(); ++i) {
+                    const auto& flag = args[i];
+                    auto value = [&]() -> const std::string& {
+                        if (i + 1 >= args.size())
+                            throw std::invalid_argument("Missing value for " + flag);
+                        return args[++i];
+                    };
+                    if (flag == "--timestamp" && !query) {
+                        const auto ticks = number<std::int64_t>(value());
+                        const auto numerator = number<int>(value());
+                        const auto denominator = number<int>(value());
+                        query = Timestamp{ticks, {numerator, denominator}};
+                    } else if (flag == "--offset-ms" && !offset) {
+                        offset = number<std::int64_t>(value());
+                    } else if (flag == "--point-tolerance-ms" && !tolerance) {
+                        tolerance = number<std::int64_t>(value());
+                    } else {
+                        throw std::invalid_argument("Unknown or repeated SRT option: " + flag);
+                    }
+                }
+                if (query.has_value() != offset.has_value() || (tolerance && !query))
+                    throw std::invalid_argument("SRT lookup requires --timestamp and --offset-ms together; --point-tolerance-ms requires lookup");
+                try {
+                    const auto catalog = MediaIngest::sourceSrtMetadata(lfs::core::utf8_to_path(args[2]));
+                    if (!catalog)
+                        return failed(catalog.error());
+                    if (query) {
+                        const auto result = json_detail::srtLookup(*catalog, *query, *offset, tolerance);
+                        if (!result)
+                            return failed(result.error());
+                        std::cout << json_detail::dump(*result) << '\n';
+                    } else {
+                        if (!json_detail::writeSrtMetadataJson(std::cout, *catalog))
+                            return failed(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::IO, .detail = "Write SRT metadata JSON failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                        std::cout << '\n';
+                    }
+                    std::cout.flush();
+                    if (!std::cout)
+                        return failed(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::IO, .detail = "Write SRT metadata JSON failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                } catch (const std::bad_alloc&) {
+                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "SRT metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                }
+                return 0;
             }
             if (args.size() == 3 && args[1] == "source-exif") {
                 const auto result = MediaIngest::sourceExif(lfs::core::utf8_to_path(args[2]));

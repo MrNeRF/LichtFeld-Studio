@@ -969,3 +969,108 @@ Sidecar JSON uses the shared metadata DOM serializer, including hexadecimal
 original packet and payload fields. The 32 MiB input ceiling is not a process
 memory ceiling: hex expansion, DOM values and the serialized result require
 additional memory, as with the existing source-metadata command.
+
+### Explicit temporal SRT observations
+
+SRT here denotes SubRip subtitle files.
+
+`MediaIngest::sourceSrtMetadata(path, limits)` reads an explicitly supplied
+subtitle file into an immutable `SrtMetadataCatalog`. The bounded native-file
+reader and a single SRT parser collect timing and text from those same bytes.
+It opens no network input, discovers no companion and decodes no pixels.
+Windows can refuse a directory at native open with PermissionDenied before the
+opened-object regular-file check; POSIX normally reports FailedPrecondition.
+Native error codes and the actual path are preserved.
+
+The catalog owns the complete original file and source locator. Cue texts are
+views into these immutable bytes; copies share the storage, and views require a
+live catalog. Reading does not modify the file. Cue `source_offset` and each
+fact's `source_offset`/`text_bytes` identify byte ranges in `original_bytes`, not
+Unicode code points. Lookup indices refer to the same catalog.
+
+The parser supports CRLF, LF and CR line endings and an initial UTF-8 BOM.
+It retains internal line endings, paragraphs, empty cues and digit-leading text.
+An all-digit line before a timing line is treated as a cue index; an all-digit
+line followed by other text or EOF remains text. Blank lines at cue boundaries
+are separators. Reversed intervals, invalid clock components and malformed or
+out-of-range optional `X1/X2/Y1/Y2` coordinates are refused. The `:60` carry used
+by Matrice sidecars retains its arithmetic value without clamping. Identical
+occurrences remain separate; lookup applies its overlap/point ambiguity rules.
+There is no provider-specific physical-line or signed 32-bit duration limit.
+Binary/NUL-containing input, including UTF-16/32 SRT, is refused. Invalid UTF-8
+bytes remain in raw fields; JSON display text uses the shared replacement policy.
+
+The first interpreter recognizes the DJI bracket profile with `FrameCnt:` or
+`SrtCnt:` as complete tokens and lowercase `latitude`, `longitude`/`longtitude`,
+`altitude`, `rel_alt` and `abs_alt` fields. Latitude and longitude are finite decimal degree declarations
+with range checks. Altitudes are retained as distinct vendor declarations with
+unspecified units/datum; no geoid or sea-level conversion is inferred. Duplicate
+semantic fields remain ambiguous, invalid values remain invalid, and zero is a
+valid numeric value. Unknown fields, dates, formatting and older `GPS:(...)`
+profiles remain in the retained cue text and original file. This is a syntax
+profile, not authentication of the manufacturer or a measurement-quality claim.
+The producer's [subtitle description](https://repair.dji.com/help/content?customId=01700006657&lang=en&paperDocType=ARTICLE&re=US&spaceId=17)
+distinguishes these source fields. Device-family support requires its own corpus.
+
+`catalog.lookup(timestamp, offset_milliseconds)` maps an explicitly supplied
+frame timestamp to the SRT clock using `SRT time = timestamp + offset`. The
+argument uses the existing integer `Timestamp`/rational time base, so VFR and
+fractional frame rates do not require a float frame-number approximation. The
+lookup respects half-open intervals `[start, end)`. Zero-duration cues are kept
+as point samples and match only at their exact timestamp by default. It returns
+no match in gaps or outside coverage and refuses overlapping matches as ambiguous. The index
+uses binary search and two interval-end candidates per start-time prefix,
+including when an early long cue overlaps many expired short cues. Source
+start times that decrease in file order are refused rather than silently
+adopting a reset/reordered timeline. The caller must provide a timestamp origin
+and offset appropriate to the source; the filename and civil date do not define
+synchronization. An optional `point_tolerance_milliseconds` enables nearest-point fallback when
+there is no interval/exact match. Equal-distance ties and duplicate point samples
+are ambiguous; distance and tolerance checks retain rational precision. It does
+not extend interval coverage or hold the final value outside the tolerance.
+Drift fitting, explicit segmentation and interpolation require separate policies
+and consumers.
+
+Python reads the file once and performs subsequent lookups in-process:
+
+```python
+import json
+import lichtfeld as lf
+
+telemetry = lf.media.MediaIngest.source_srt_metadata("flight.srt")
+report, frames = lf.media.MediaIngest.extract(request)
+for frame in frames:
+    if frame.info.source_timestamp is not None:
+        observation = json.loads(telemetry.lookup_json(
+            frame.info.source_timestamp, offset_milliseconds=1000))
+        # observation["match"] is null in gaps or outside coverage.
+```
+
+`telemetry.metadata_json()` returns the full observation and original bytes.
+`lookup_json` returns only the selected cue and query mapping. Both use the
+shared JSON formatting rules; collection and serialization release the GIL.
+Full-observation output serializes one cue at a time through the same formatter,
+without retaining a DOM for every cue. The Python method still returns a complete
+string, while the CLI writes to its output stream. Retained raw bytes, hexadecimal
+expansion and the returned string require memory beyond the input file size.
+This read-only observation does not alter pixels, poses, training or exported
+image metadata. Raw output can contain coordinates and identifiers, so callers
+must include it in their privacy decisions.
+
+CLI examples:
+
+```sh
+media-ingest source-srt-metadata flight.srt
+media-ingest source-srt-metadata flight.srt --timestamp 4500 1 90000 --offset-ms 1000
+```
+
+Default budgets are 32 MiB original bytes, 100,000 cues, 500,000 interpreted
+facts, 256 KiB text per cue, 64 facts per cue and 1,000,000 physical lines. Native
+callers can lower budgets; cue text can be raised to 1 MiB. The shared constexpr
+`srt_metadata_maxima` defines the permitted upper bounds. Exhaustion returns an
+error rather than a truncated complete observation. These limits are not a
+process memory ceiling: cue records, facts, lookup index and JSON allocate
+separately. Text views share the original bytes; lookup copies no whole-file JSON.
+
+Timed subtitle/data streams inside video files remain a separate demux consumer.
+Enumeration of static stream metadata does not imply timed packet collection.

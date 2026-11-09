@@ -847,7 +847,25 @@ class ImageOutput:
     @staticmethod
     def write_avif(path: str | os.PathLike, frame: FrameSurface, options: AvifOutputOptions = ..., cancelled: object | None = None) -> None: ...
 
+class SrtMetadataCatalog:
+    @property
+    def cue_count(self) -> int: ...
+
+    def metadata_json(self) -> str:
+        """Return the owned SRT observation and retained raw bytes as JSON."""
+
+    def lookup_json(self, timestamp: Timestamp, offset_milliseconds: int, point_tolerance_milliseconds: int | None = None) -> str:
+        """
+        Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.
+        """
+
 class MediaIngest:
+    @staticmethod
+    def source_srt_metadata(path: str | os.PathLike) -> SrtMetadataCatalog:
+        """
+        Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Preserves original cue byte ranges and applies bounded DJI bracket-field interpretation.
+        """
+
     @staticmethod
     def capabilities() -> IngestCapabilities: ...
 
