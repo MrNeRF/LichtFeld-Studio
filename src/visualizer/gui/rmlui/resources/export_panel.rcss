@@ -5,6 +5,23 @@
     overflow-x: hidden;
 }
 
+/* The format rail sets a stable height even when the scene has no splats. */
+.ep-layout {
+    display: flex;
+    gap: 16dp;
+    align-items: flex-start;
+}
+
+.ep-format-column {
+    width: 262dp;
+    flex-shrink: 0;
+}
+
+.ep-details-column {
+    flex: 1;
+    min-width: 0;
+}
+
 .ep-section {
     margin-bottom: 4dp;
 }
@@ -14,9 +31,11 @@
 }
 
 .ep-section-title {
+    display: block;
     font-size: 12dp;
     font-weight: bold;
-    margin-bottom: 4dp;
+    padding: 4dp 8dp;
+    margin-bottom: 0;
 }
 
 /* ── Format list ─────────────────────────────────────── */
@@ -28,7 +47,8 @@
 .ep-format-option {
     display: flex;
     align-items: center;
-    padding: 3dp 6dp;
+    min-height: 41dp;
+    padding: 2dp 8dp;
     cursor: pointer;
     transition: background-color 0.1s quadratic-out;
 }
@@ -43,15 +63,37 @@
 }
 
 .ep-format-name {
+    display: block;
     font-size: 12dp;
+    font-weight: bold;
+}
+
+.ep-format-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.ep-format-description {
+    display: block;
+    font-size: 12dp;
+    margin-top: 2dp;
+}
+
+.ep-details-description {
+    margin-bottom: 12dp;
 }
 
 /* ── Model list ──────────────────────────────────────── */
 
+.ep-model-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
 .ep-toggle-row {
     display: flex;
     gap: 4dp;
-    margin-bottom: 4dp;
 }
 
 .ep-small-btn {
@@ -60,7 +102,11 @@
 }
 
 .ep-model-list {
-    margin-top: 2dp;
+    border-width: 1dp;
+    border-radius: 2dp;
+    max-height: 210dp;
+    overflow-y: auto;
+    padding: 8dp;
 }
 
 .ep-model-row {
@@ -95,9 +141,21 @@
     flex-shrink: 0;
 }
 
-.ep-no-models {
+.ep-empty-state {
+    padding: 16dp 0 2dp;
+}
+
+.ep-empty-title {
+    display: block;
     font-size: 12dp;
-    padding: 4dp 0;
+    font-weight: bold;
+    margin-bottom: 8dp;
+}
+
+.ep-empty-hint {
+    display: block;
+    font-size: 12dp;
+    margin-bottom: 8dp;
 }
 
 /* ── Action area ─────────────────────────────────────── */
@@ -115,11 +173,14 @@
 .ep-buttons {
     display: flex;
     gap: 6dp;
-    margin-top: 4dp;
+    justify-content: flex-end;
+    border-top-width: 1dp;
+    padding-top: 12dp;
+    margin-top: 8dp;
 }
 
 .ep-action-btn {
-    flex: 1;
+    min-width: 78dp;
     text-align: center;
 }
 

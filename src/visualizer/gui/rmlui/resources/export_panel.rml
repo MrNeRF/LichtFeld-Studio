@@ -7,153 +7,166 @@
 
   <div data-if="show_form">
     <form id="export-form">
-      <!-- Format selection -->
-      <div class="ep-section">
-        <span class="ep-section-title">@tr:export_dialog.format</span>
-        <div id="format-list" class="ep-format-list">
-          <div class="ep-format-option"
-               data-for="format : formats"
-               data-class-selected="format.selected"
-               data-attr-data-format-idx="format.index">
-            <div class="ep-format-dot"></div>
-            <span class="ep-format-name">{{ format.label }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="separator"></div>
-
-      <!-- Model selection -->
-      <div class="ep-section" data-if="show_model_selection">
-        <span class="ep-section-title">@tr:export_dialog.models</span>
-        <div class="ep-toggle-row">
-          <button id="btn-select-all" type="button" class="btn btn--secondary ep-small-btn">@tr:export.all</button>
-          <button id="btn-select-none" type="button" class="btn btn--secondary ep-small-btn">@tr:export.none</button>
-        </div>
-        <div id="model-list" class="ep-model-list">
-          <span class="ep-no-models" data-if="show_no_models">@tr:export_dialog.no_models</span>
-          <div class="ep-model-row"
-               data-for="model : models"
-               data-attr-data-node-name="model.name"
-               data-class-is-group="model.is_group"
-               data-style-padding-left="model.indent">
-            <label class="setting-label">
-              <input type="checkbox"
-                     data-attr-data-node-name="model.name"
-                     data-attr-data-group-id="model.group_id"
-                     data-class-is-partial="model.partial"
-                     data-attrif-checked="model.selected" />
-              <span class="ep-model-name">{{ model.name }}</span>
-            </label>
-            <span class="ep-model-count">{{ model.count_text }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="separator"></div>
-
-      <!-- SH Degree -->
-      <div class="ep-section" data-if="show_sh_degree">
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="sh_degree">@tr:export_dialog.sh_degree</span>
-          <div class="setting-row__control-col setting-row__control-col--slider">
-            <input type="range" class="setting-slider" data-value="sh_degree" min="0" max="3" step="1" />
-            <span class="slider-value">{{sh_degree}}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Provenance - hidden for COLMAP and SPZ v3 -->
-      <div class="ep-section" data-if="show_include_provenance">
-        <div class="setting-row setting-row--aligned" data-tooltip="export_dialog.include_provenance_hint">
-          <span class="setting-row__label-col">@tr:export_dialog.include_provenance</span>
-          <div class="setting-row__control-col">
-            <input type="checkbox" data-attrif-checked="include_provenance" data-event-change="toggle_include_provenance" />
-          </div>
-        </div>
-      </div>
-
-      <!-- SPZ version - only shown for SPZ format -->
-      <div class="ep-section" data-if="show_spz_version">
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="spz_version">@tr:export_dialog.spz_version</span>
-          <div class="setting-row__control-col setting-row__control-col--fill">
-            <select data-value="spz_version">
-              <option value="4">@tr:export_dialog.spz_version_v4</option>
-              <option value="3">@tr:export_dialog.spz_version_v3</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <!-- SSOG settings -->
-      <div class="ep-section" data-if="show_ssog_settings">
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.ssog_bundle</span>
-          <div class="setting-row__control-col"><input type="checkbox" data-attrif-checked="ssog_bundle" data-event-change="toggle_ssog_bundle" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned" data-if="show_ssog_folder">
-          <span class="setting-row__label-col">@tr:export_dialog.folder_name</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="ssog_folder_name" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="lod_levels">@tr:export_dialog.lod_levels</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_levels" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="lod_ratio">@tr:export_dialog.lod_ratio</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_ratio" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="chunk_count_k">@tr:export_dialog.chunk_count_k</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_count_k" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="chunk_extent">@tr:export_dialog.chunk_extent</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_extent" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="chunk_min_k">@tr:export_dialog.chunk_min_k</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_min_k" /></div>
-        </div>
-        <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col" data-reset-prop="kmeans_iterations">@tr:export_dialog.kmeans_iterations</span>
-          <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="kmeans_iterations" /></div>
-        </div>
-      </div>
-
-      <div data-if="show_rad_settings">
-        <div class="separator"></div>
-        <div class="ep-section">
-          <div class="setting-row setting-row--aligned">
-            <span class="setting-row__label-col">@tr:export_dialog.rad_export_mode</span>
-            <div class="setting-row__control-col setting-row__control-col--fill">
-              <select data-value="rad_export_mode">
-                <option value="stream">@tr:export_dialog.rad_streamable</option>
-                <option value="non_stream">@tr:export_dialog.rad_native</option>
-              </select>
-            </div>
-          </div>
-          <!-- Y-flip checkbox -->
-          <div class="setting-row setting-row--aligned">
-            <span class="setting-row__label-col">@tr:export_dialog.rad_flip_y</span>
-            <div class="setting-row__control-col">
-              <input type="checkbox" data-attrif-checked="rad_flip_y" data-event-change="toggle_rad_flip_y" />
+      <div class="ep-layout">
+        <!-- Format selection -->
+        <div class="ep-format-column">
+          <span class="ep-section-title">@tr:export_dialog.format</span>
+          <div id="format-list" class="ep-format-list">
+            <div class="ep-format-option"
+                 data-for="format : formats"
+                 data-class-selected="format.selected"
+                 data-attr-data-format-idx="format.index">
+              <div class="ep-format-dot"></div>
+              <div class="ep-format-copy">
+                <span class="ep-format-name">{{ format.label }}</span>
+                <span class="ep-format-description">{{ format.description }}</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div class="separator"></div>
+        <div class="ep-details-column">
+          <span class="ep-section-title">{{ selected_format_label }}</span>
+          <span class="ep-format-description ep-details-description">{{ selected_format_description }}</span>
+
+          <!-- Model selection -->
+          <div class="ep-section" data-if="show_model_selection">
+            <div class="ep-model-header">
+              <span class="ep-section-title">@tr:export_dialog.models</span>
+              <div class="ep-toggle-row">
+                <button id="btn-select-all" type="button" class="btn btn--secondary ep-small-btn" data-attrif-disabled="show_no_models">@tr:export.all</button>
+                <button id="btn-select-none" type="button" class="btn btn--secondary ep-small-btn" data-attrif-disabled="show_no_models">@tr:export.none</button>
+              </div>
+            </div>
+            <div id="model-list" class="ep-model-list">
+              <div class="ep-empty-state" data-if="show_no_models">
+                <span class="ep-empty-title">@tr:export_dialog.no_splat_models</span>
+                <span class="ep-empty-hint">@tr:export_dialog.empty_hint</span>
+                <button type="button" class="btn btn--secondary" data-event-click="do_new_project">@tr:new_project.title</button>
+              </div>
+              <div class="ep-model-row"
+                   data-for="model : models"
+                   data-attr-data-node-name="model.name"
+                   data-class-is-group="model.is_group"
+                   data-style-padding-left="model.indent">
+                <label class="setting-label">
+                  <input type="checkbox"
+                         data-attr-data-node-name="model.name"
+                         data-attr-data-group-id="model.group_id"
+                         data-class-is-partial="model.partial"
+                         data-attrif-checked="model.selected" />
+                  <span class="ep-model-name">{{ model.name }}</span>
+                </label>
+                <span class="ep-model-count">{{ model.count_text }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div data-if="show_splat_settings">
+            <!-- SH Degree -->
+            <div class="ep-section" data-if="show_sh_degree">
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="sh_degree">@tr:export_dialog.sh_degree</span>
+                <div class="setting-row__control-col setting-row__control-col--slider">
+                  <input type="range" class="setting-slider" data-value="sh_degree" min="0" max="3" step="1" />
+                  <span class="slider-value">{{sh_degree}}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Provenance - hidden for COLMAP and SPZ v3 -->
+            <div class="ep-section" data-if="show_include_provenance">
+              <div class="setting-row setting-row--aligned" data-tooltip="export_dialog.include_provenance_hint">
+                <span class="setting-row__label-col">@tr:export_dialog.include_provenance</span>
+                <div class="setting-row__control-col">
+                  <input type="checkbox" data-attrif-checked="include_provenance" data-event-change="toggle_include_provenance" />
+                </div>
+              </div>
+            </div>
+
+            <!-- SPZ version - only shown for SPZ format -->
+            <div class="ep-section" data-if="show_spz_version">
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="spz_version">@tr:export_dialog.spz_version</span>
+                <div class="setting-row__control-col setting-row__control-col--fill">
+                  <select data-value="spz_version">
+                    <option value="4">@tr:export_dialog.spz_version_v4</option>
+                    <option value="3">@tr:export_dialog.spz_version_v3</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- SSOG settings -->
+            <div class="ep-section" data-if="show_ssog_settings">
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col">@tr:export_dialog.ssog_bundle</span>
+                <div class="setting-row__control-col"><input type="checkbox" data-attrif-checked="ssog_bundle" data-event-change="toggle_ssog_bundle" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned" data-if="show_ssog_folder">
+                <span class="setting-row__label-col">@tr:export_dialog.folder_name</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="ssog_folder_name" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="lod_levels">@tr:export_dialog.lod_levels</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_levels" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="lod_ratio">@tr:export_dialog.lod_ratio</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_ratio" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="chunk_count_k">@tr:export_dialog.chunk_count_k</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_count_k" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="chunk_extent">@tr:export_dialog.chunk_extent</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_extent" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="chunk_min_k">@tr:export_dialog.chunk_min_k</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_min_k" /></div>
+              </div>
+              <div class="setting-row setting-row--aligned">
+                <span class="setting-row__label-col" data-reset-prop="kmeans_iterations">@tr:export_dialog.kmeans_iterations</span>
+                <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="kmeans_iterations" /></div>
+              </div>
+            </div>
+
+            <div data-if="show_rad_settings">
+              <div class="separator"></div>
+              <div class="ep-section">
+                <div class="setting-row setting-row--aligned">
+                  <span class="setting-row__label-col">@tr:export_dialog.rad_export_mode</span>
+                  <div class="setting-row__control-col setting-row__control-col--fill">
+                    <select data-value="rad_export_mode">
+                      <option value="stream">@tr:export_dialog.rad_streamable</option>
+                      <option value="non_stream">@tr:export_dialog.rad_native</option>
+                    </select>
+                  </div>
+                </div>
+                <!-- Y-flip checkbox -->
+                <div class="setting-row setting-row--aligned">
+                  <span class="setting-row__label-col">@tr:export_dialog.rad_flip_y</span>
+                  <div class="setting-row__control-col">
+                    <input type="checkbox" data-attrif-checked="rad_flip_y" data-event-change="toggle_rad_flip_y" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
 
       <!-- Action buttons -->
-      <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">{{ export_error_text }}</span>
+      <span id="export-error" class="ep-error hidden" data-class-hidden="hide_export_error">{{ export_error_text }}</span>
       <div class="ep-buttons">
-        <input id="btn-export" class="btn btn--primary ep-action-btn"
+        <button type="button" class="btn btn--secondary ep-action-btn" data-event-click="do_cancel">@tr:export.cancel</button>
+        <input id="btn-export" class="btn btn--secondary ep-action-btn"
                type="submit"
                data-attr-value="export_label"
                data-attrif-disabled="!can_export" />
-        <button type="button" class="btn btn--secondary ep-action-btn" data-event-click="do_cancel">@tr:export.cancel</button>
       </div>
     </form>
   </div>

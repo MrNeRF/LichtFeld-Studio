@@ -47,7 +47,7 @@ PANEL_SPECS = {
     ),
     "export": _PanelSpec(
         "lfs_plugins.export_panel", "ExportPanel", "lfs.export", "Export",
-        "FLOATING", 10, "rmlui/export_panel.rml", "CONTENT", (320, 0),
+        "FLOATING", 10, "rmlui/export_panel.rml", "CONTENT", (704, 0),
         update_policy="dirty",
     ),
     "about": _PanelSpec(
