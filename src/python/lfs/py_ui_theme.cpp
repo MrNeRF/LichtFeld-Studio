@@ -191,17 +191,19 @@ namespace lfs::python {
             return values;
         });
         m.def("set_status_bar_preferences", [](const nb::dict& values) {
-            auto state = lfs::vis::UserPreferences::instance().statusBar();
+            std::vector<std::pair<bool lfs::vis::StatusBarPreferences::*, bool>> changes;
             for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS) {
                 if (values.contains(field.key))
-                    state.*field.member = nb::cast<bool>(values[field.key]);
+                    changes.emplace_back(field.member, nb::cast<bool>(values[field.key]));
             }
-            invoke_on_viewer_thread([state] {
+            invoke_on_viewer_thread([changes = std::move(changes)] {
+                auto state = lfs::vis::UserPreferences::instance().statusBar();
+                for (const auto& [member, value] : changes)
+                    state.*member = value;
                 lfs::vis::UserPreferences::instance().setStatusBar(state);
                 if (auto* rm = get_rendering_manager())
                     rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SettingsChange);
-            });
-        }, nb::arg("values"));
+            }); }, nb::arg("values"));
         m.def("reset_status_bar_preferences", [] {
             invoke_on_viewer_thread([] {
                 lfs::vis::UserPreferences::instance().setStatusBar({});
