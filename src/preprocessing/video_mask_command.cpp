@@ -60,7 +60,7 @@ namespace lfs::preprocessing {
                 const auto weights = ensure_sam2_weights(!params.no_download);
                 if (!weights)
                     throw std::runtime_error(std::string(weights.error().user_message()));
-                std::cout << core::path_to_utf8(*weights) << '\n';
+                std::cout << core::path_to_utf8(weights->path) << '\n';
                 return 0;
             }
             const auto started = std::chrono::steady_clock::now();

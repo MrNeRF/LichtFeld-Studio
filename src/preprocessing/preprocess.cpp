@@ -50,6 +50,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <semaphore>
 #include <sstream>
@@ -82,6 +83,21 @@ namespace {
         "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-sam2-video-v1/sam2.1-hiera-base-plus-video.lfw";
     constexpr std::string_view kSam2ModelSha256 =
         "b4a981065f3d64fe98cd882f28e5bd3a076b39f5f0c696c7885dbe404bc18fed";
+
+    using lfs::preprocessing::CachedModel;
+    using lfs::preprocessing::ModelDescriptor;
+    constexpr std::array kModelCatalog = {
+        ModelDescriptor{CachedModel::Sam2, "SAM 2.1 Hiera Base+", "preferences.models.masking", kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256},
+        ModelDescriptor{CachedModel::Moge2, "MoGe-2 ViT-B", "preferences.models.depth", kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256},
+        ModelDescriptor{CachedModel::Lpips, "LPIPS VGG16 v0.1", "preferences.models.quality", kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256},
+    };
+
+    const ModelDescriptor& model_descriptor(const CachedModel id) {
+        const auto index = static_cast<std::size_t>(id);
+        if (index >= kModelCatalog.size())
+            throw std::invalid_argument("Unknown cached model");
+        return kModelCatalog[index];
+    }
 
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
@@ -172,10 +188,6 @@ namespace {
             return lfs::core::utf8_to_path(*home);
 #endif
         return fs::temp_directory_path();
-    }
-
-    fs::path default_model_path() {
-        return home_directory() / ".lichtfeld" / "onnx" / std::string(kDefaultModelFile);
     }
 
     fs::path lfw_path_for_onnx(const fs::path& onnx_path) {
@@ -433,7 +445,8 @@ namespace {
                     throw std::runtime_error("curl_global_init failed");
             }
             ~CurlGlobal() { curl_global_cleanup(); }
-        } global;
+        };
+        static CurlGlobal global;
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
         CURL* curl = handle.get();
         if (!curl)
@@ -442,6 +455,9 @@ namespace {
         const std::string url_string(url);
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
@@ -485,6 +501,25 @@ namespace {
         return home_directory() / ".lichtfeld" / "onnx" / std::string(filename);
     }
 
+    bool cached_weight_file_present(const fs::path& path) {
+        std::error_code error;
+        const auto status = fs::status(path, error);
+        if (error == std::errc::no_such_file_or_directory || status.type() == fs::file_type::not_found)
+            return false;
+        if (error)
+            throw fs::filesystem_error("inspect model cache", path, error);
+        if (status.type() != fs::file_type::regular) {
+            throw lfs::Exception(lfs::make_error({
+                .code = lfs::ErrorCode::Unsupported,
+                .domain = lfs::ErrorDomain::Preprocess,
+                .user_message = "The cache entry is not a weight file",
+                .detail = path_to_string(path),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        return true;
+    }
+
     lfs::Result<fs::path> ensure_cached_model(const std::string_view filename,
                                               const std::string_view url,
                                               const std::string_view expected_hash,
@@ -494,7 +529,7 @@ namespace {
         try {
             check_download_cancelled(cancel_requested);
             const fs::path path = cached_model_path(filename);
-            if (fs::is_regular_file(path)) {
+            if (cached_weight_file_present(path)) {
                 try {
                     require_sha256(path, expected_hash, std::string("Cached ") + std::string(label), cancel_requested);
                     check_download_cancelled(cancel_requested);
@@ -503,7 +538,9 @@ namespace {
                     if (!allow_download)
                         throw;
                     std::cerr << e.what() << "\n";
-                    remove_file_if_exists(path);
+                    const auto removed = lfs::core::nn::WeightFile::remove_unused_source(path);
+                    if (!removed)
+                        throw lfs::Exception(removed.error());
                     std::cerr << "Removed untrusted cached " << label << "; re-downloading "
                               << path_to_string(path) << "\n";
                 }
@@ -516,6 +553,8 @@ namespace {
                                    std::string("Downloaded ") + std::string(label), cancel_requested);
             std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
             return path;
+        } catch (const lfs::Exception& e) {
+            return e.error();
         } catch (const std::exception& e) {
             // LFS-CENSUS-OK(empty-catch): converts the exception text to a returned Result error.
             return lfs::Result<fs::path>(lfs::make_legacy_error(
@@ -529,50 +568,39 @@ namespace {
         }
     }
 
-    fs::path ensure_default_model(bool no_download) {
-        const fs::path path = default_model_path();
-        if (fs::is_regular_file(path)) {
-            try {
-                require_sha256(path, kDefaultModelSha256, "Cached model");
-                return path;
-            } catch (const DownloadIntegrityError& e) {
-                if (no_download)
-                    throw;
-
-                std::cerr << e.what() << "\n";
-                remove_file_if_exists(path);
-                std::cerr << "Removed untrusted cached model; re-downloading "
-                          << path_to_string(path) << "\n";
-            }
-        } else {
+    fs::path ensure_moge_cached_model(bool no_download, const std::function<bool()>& cancel_requested) {
+        const fs::path path = cached_model_path(kDefaultModelFile);
+        if (!fs::exists(path)) {
             const fs::path legacy = legacy_model_path();
             if (fs::is_regular_file(legacy)) {
                 try {
-                    require_sha256(legacy, kDefaultModelSha256, "Legacy cached model");
+                    check_download_cancelled(cancel_requested);
                     fs::create_directories(path.parent_path());
-                    std::error_code ec;
-                    fs::rename(legacy, path, ec);
-                    if (ec)
-                        fs::copy_file(legacy, path, fs::copy_options::overwrite_existing);
-                    require_sha256(path, kDefaultModelSha256, "Cached model");
-                    std::cout << "Migrated cached model to " << path_to_string(path) << "\n";
+                    lfs::io::ScopedAtomicOutputFile migration(path);
+                    fs::copy_file(legacy, migration.temp_path(), fs::copy_options::overwrite_existing);
+                    require_sha256(migration.temp_path(), kDefaultModelSha256, "Migrated model", cancel_requested);
+                    check_download_cancelled(cancel_requested);
+                    if (const auto committed = migration.commit(); !committed)
+                        throw std::runtime_error(committed.error().message);
                     return path;
                 } catch (const DownloadIntegrityError& e) {
-                    std::cerr << e.what() << "\n";
-                    std::cerr << "Ignoring untrusted legacy cached model at "
+                    std::cerr << e.what() << "\nIgnoring untrusted legacy cached model at "
                               << path_to_string(legacy) << "\n";
                 }
             }
-            if (no_download) {
-                throw std::runtime_error("Default model is not cached: " + path_to_string(path));
-            }
         }
-
         auto ensured = ensure_cached_model(kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256,
-                                           !no_download, "MoGe-2 ViT-B normal model");
+                                           !no_download, "MoGe-2 ViT-B normal model", cancel_requested);
         if (!ensured)
-            throw std::runtime_error(std::string(ensured.error().detail()));
+            throw lfs::Exception(ensured.error());
         return std::move(*ensured);
+    }
+
+    lfs::core::nn::WeightSource ensure_default_model(const bool no_download) {
+        auto result = lfs::preprocessing::prepare_cached_model(CachedModel::Moge2, !no_download);
+        if (!result)
+            throw lfs::Exception(result.error());
+        return std::move(*result);
     }
 
     Image load_image_rgb(const fs::path& path) {
@@ -1351,7 +1379,7 @@ namespace {
             if (params.download_only) {
                 fs::path model_path = params.model_path;
                 if (model_path.empty())
-                    model_path = ensure_default_model(params.no_download);
+                    model_path = ensure_default_model(params.no_download).path;
                 if (!progress)
                     std::cout << "Cached model: " << path_to_string(model_path) << "\n";
                 return result;
@@ -1370,9 +1398,12 @@ namespace {
                 return result;
             }
 
+            std::optional<lfs::core::nn::WeightSource> prepared_weights;
             fs::path model_path = params.model_path;
-            if (model_path.empty())
-                model_path = ensure_default_model(params.no_download);
+            if (model_path.empty()) {
+                prepared_weights = ensure_default_model(params.no_download);
+                model_path = prepared_weights->path;
+            }
 
             if (!fs::is_regular_file(model_path))
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
@@ -1392,14 +1423,92 @@ namespace {
 
 namespace lfs::preprocessing {
 
-    lfs::Result<std::filesystem::path> ensure_lpips_weights(const bool allow_download) {
-        return ensure_cached_model(kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256,
-                                   allow_download, "LPIPS");
+    std::span<const ModelDescriptor> model_catalog() { return kModelCatalog; }
+
+    lfs::Result<ModelCacheState> inspect_cached_model(const CachedModel model) {
+        try {
+            const auto& descriptor = model_descriptor(model);
+            ModelCacheState state;
+            state.path = cached_model_path(descriptor.filename);
+            auto operation = core::nn::WeightFile::source_operation(cached_model_path(descriptor.filename));
+            std::unique_lock lock(*operation, std::try_to_lock);
+            state.busy = !lock.owns_lock();
+            if (state.busy)
+                return state;
+            state.present = cached_weight_file_present(state.path);
+            if (state.present) {
+                state.bytes = fs::file_size(state.path);
+                state.in_use = core::nn::WeightFile::source_in_use(state.path);
+            }
+            return state;
+        } catch (const lfs::Exception& error) {
+            return error.error();
+        } catch (const std::exception& error) {
+            return lfs::make_error({.code = lfs::ErrorCode::Unavailable,
+                                    .domain = lfs::ErrorDomain::Preprocess,
+                                    .user_message = "Cannot inspect model cache",
+                                    .detail = error.what(),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
     }
 
-    lfs::Result<std::filesystem::path> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
-        return ensure_cached_model(kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256,
-                                   allow_download, "SAM2.1", cancel_requested);
+    lfs::Result<core::nn::WeightSource> prepare_cached_model(
+        const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested) {
+        try {
+            check_download_cancelled(cancel_requested);
+            const auto& descriptor = model_descriptor(model);
+            auto operation = core::nn::WeightFile::source_operation(cached_model_path(descriptor.filename));
+            std::unique_lock lock(*operation, std::defer_lock);
+            while (!lock.try_lock_for(std::chrono::milliseconds(50)))
+                check_download_cancelled(cancel_requested);
+            check_download_cancelled(cancel_requested);
+            auto result = model == CachedModel::Moge2
+                              ? lfs::Result<fs::path>(ensure_moge_cached_model(!allow_download, cancel_requested))
+                              : ensure_cached_model(descriptor.filename, descriptor.url, descriptor.sha256,
+                                                    allow_download, descriptor.name, cancel_requested);
+            if (!result)
+                return result.error();
+            auto source = core::nn::WeightFile::retain_source(*result);
+            return core::nn::WeightSource{std::move(*result), std::move(source)};
+        } catch (const lfs::Exception& error) {
+            return error.error();
+        } catch (const std::exception& error) {
+            return lfs::make_error({.code = dynamic_cast<const DownloadCancelled*>(&error) ? lfs::ErrorCode::Cancelled : lfs::ErrorCode::Unavailable,
+                                    .domain = lfs::ErrorDomain::Preprocess,
+                                    .user_message = "Cannot prepare model weights",
+                                    .detail = error.what(),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+    }
+
+    lfs::Result<bool> remove_cached_model(const CachedModel model) {
+        try {
+            const auto& descriptor = model_descriptor(model);
+            auto operation = core::nn::WeightFile::source_operation(cached_model_path(descriptor.filename));
+            std::unique_lock lock(*operation, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
+                                        .domain = lfs::ErrorDomain::Preprocess,
+                                        .user_message = "Model preparation is active",
+                                        .detail = std::string(descriptor.name),
+                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+            }
+            return core::nn::WeightFile::remove_unused_source(cached_model_path(descriptor.filename));
+        } catch (const std::exception& error) {
+            return lfs::make_error({.code = lfs::ErrorCode::Unavailable,
+                                    .domain = lfs::ErrorDomain::Preprocess,
+                                    .user_message = "Cannot remove cached model",
+                                    .detail = error.what(),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+    }
+
+    lfs::Result<core::nn::WeightSource> ensure_lpips_weights(const bool allow_download) {
+        return prepare_cached_model(CachedModel::Lpips, allow_download);
+    }
+
+    lfs::Result<core::nn::WeightSource> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
+        return prepare_cached_model(CachedModel::Sam2, allow_download, cancel_requested);
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

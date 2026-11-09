@@ -1712,7 +1712,7 @@ namespace lfs::training {
 
         if (!_lpips_load_attempted && _lpips_weights_path) {
             _lpips_load_attempted = true;
-            const auto& weights_path = *_lpips_weights_path;
+            const auto& weights_path = _lpips_weights_path->path;
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,

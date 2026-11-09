@@ -1067,6 +1067,61 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    bool AsyncTaskManager::startModelCache(const preprocessing::CachedModel model, const ModelCacheAction action) {
+        if (!beginJob(model_cache_job_, JobType::ModelCache, "working"))
+            return false;
+        model_cache_thread_.reset();
+        model_cache_model_ = model;
+        model_cache_action_ = action;
+        const auto job = model_cache_job_;
+        try {
+            model_cache_thread_.emplace([this, job, model, action](const std::stop_token stop) {
+                jobs_.work(job);
+                try {
+                    const auto canceled = [this, job, stop] { return stop.stop_requested() || jobs_.cancelRequested(job); };
+                    if (canceled()) {
+                        jobs_.finishWork(job, true);
+                        return;
+                    }
+                    if (action == ModelCacheAction::Remove) {
+                        const auto result = preprocessing::remove_cached_model(model);
+                        if (!result) {
+                            jobs_.finishWork(job, false, std::string(result.error().detail()), result.error().code(), result.error());
+                            return;
+                        }
+                        jobs_.finishWork(job, false, {}, {}, {}, *result);
+                    } else {
+                        const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled);
+                        if (!result) {
+                            jobs_.finishWork(job, result.error().code() == lfs::ErrorCode::Cancelled,
+                                             std::string(result.error().detail()), result.error().code(), result.error());
+                            return;
+                        }
+                        jobs_.finishWork(job, false, {}, {}, {}, action == ModelCacheAction::Download);
+                    }
+                } catch (const std::exception& error) {
+                    // LFS-CENSUS-OK(empty-catch): publish the failure to the existing job lifecycle; never escape a worker thread.
+                    jobs_.finishWork(job, false, error.what(), lfs::ErrorCode::Internal);
+                }
+            });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): thread creation failed; release the active job slot through its Failed transition.
+            jobs_.failed(job, error.what());
+            return false;
+        }
+        return true;
+    }
+
+    void AsyncTaskManager::cancelModelCache(const uint64_t expected_job) {
+        if (expected_job && model_cache_job_.id != expected_job)
+            return;
+        if (const auto state = modelCacheJob(); state && state->running()) {
+            jobs_.requestCancel(model_cache_job_);
+            if (model_cache_thread_)
+                model_cache_thread_->request_stop();
+        }
+    }
+
     void AsyncTaskManager::settlePendingJobs() {
         const auto settle =
             [this](const JobHandle handle) {
@@ -1088,6 +1143,7 @@ namespace lfs::vis::gui {
                 }
                 return true;
             };
+        settle(model_cache_job_);
         if (settle(export_state_.job)) {
             publishExportState();
         }
@@ -1110,6 +1166,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        cancelModelCache();
+        model_cache_thread_.reset();
         if (external_preview_update_)
             external_preview_update_->invalidated.store(true, std::memory_order_release);
         if (external_preview_thread_)
@@ -2085,6 +2143,8 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = modelCacheJob(); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (const auto job = jobs_.active(JobType::AssistedMask); job && job->status == JobStatus::CompletionPending)
             return true;
         if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)

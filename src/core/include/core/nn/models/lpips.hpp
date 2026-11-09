@@ -84,6 +84,7 @@ namespace lfs::core::nn::models {
         Tensor normalize_feature(const Tensor& x);
         Tensor ensure_workspace(std::size_t bytes, const Tensor& like);
 
+        std::shared_ptr<const void> weights_source_;
         std::unordered_map<std::string, Tensor> weights_;
         Tensor workspace_;
         Tensor feature_x_hold_;

@@ -14,6 +14,7 @@ the user's application preferences or desktop window placement.
 The Preferences panel currently exposes:
 
 - language;
+- downloaded models for masking (SAM 2.1), depth (MoGe-2), and quality evaluation (LPIPS);
 - project location for new projects and the Asset Manager Default folder;
 - application theme and UI scale;
 - status bar progress bar style (`status_bar_progress_style`: `classic`, `miner`, or `tessle`);
@@ -198,6 +199,35 @@ state. They affect viewport presentation only and do not alter training or
 stored splat data. See [Scene reconstruction](scene-reconstruction) for the
 backend, preset, lazy-loading, and fallback contracts.
 
+## Downloaded models
+
+Preferences > Models shows the managed SAM 2.1, MoGe-2 and LPIPS weight files.
+Download / repair prepares a missing model or verifies an existing file
+and downloads a replacement if its pinned SHA-256 does not match. Verify integrity
+checks the local file without downloading. Downloaded means the file is present;
+verification runs explicitly or when the feature acquires its weights, not during
+UI refreshes.
+
+The on-demand download remains available from each feature. Preferences uses the
+same acquisition, hashing and atomic publication code. Concurrent acquisitions
+of the same archive serialize through the process-wide weight-source owner in
+`lfs_core`, including callers linked into different Windows DLLs. Cancel applies
+to the Preferences operation; other callers retain their own cancellation and
+can continue acquiring the model. Closing Preferences leaves its operation
+running; application shutdown cancels and joins it.
+
+Remove requires confirmation and affects only the selected managed cache file.
+It is refused during preparation or while a consumer holds its weights, including
+the handoff to a loader and deferred LPIPS evaluation. Models retain a small use
+token after releasing their file mapping. Removing cached weights does not edit
+projects, masks or arbitrary custom weight files; the next on-demand request can
+download the model again. Reset settings does not remove model files.
+
+These native `.lfw` weights retain the historical cache location
+`~/.lichtfeld/onnx` (`%USERPROFILE%/.lichtfeld/onnx` on Windows). Despite the directory
+name, inference does not use ONNX here. This model cache currently follows the OS
+home directory, independently of `LFS_HOME` and portable preference roots.
+
 ## User storage roots
 
 The default root is the unified `~/.lichtfeld` tree on Windows and Linux.
@@ -270,7 +300,8 @@ An explicit CLI `-o` / `--output-path` is different: training binds a titled
 `<output_path>/project.licht` instead of the untitled temp file. The temp
 directory is created lazily on first scratch write. The project location
 applies to newly created projects; a live project keeps its existing path.
-Cache, logs, plugins, the venv, and ONNX models stay on the unified root.
+Cache, logs, plugins, and the venv stay on the unified root. The native model
+cache described above retains its historical OS-home location.
 
 The legacy `<root>/recovery` directory is no longer created up front. Startup
 still scans it, if it exists and differs from `<root>/tmp`, so

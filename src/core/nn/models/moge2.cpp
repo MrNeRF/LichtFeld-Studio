@@ -179,6 +179,7 @@ namespace lfs::core::nn::models {
         Moge2 model;
         model.device_ = device;
         model.compute_ = dtype;
+        model.weights_source_ = file->retain_source();
         model.weights_ = std::move(*loaded);
         configure_nn_mempool();
         for (auto& [name, tensor] : model.weights_) {

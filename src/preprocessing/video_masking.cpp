@@ -1177,12 +1177,14 @@ namespace lfs::preprocessing {
             }
             std::optional<Sam2> owned_model;
             auto* model = borrowed_model;
+            std::optional<core::nn::WeightSource> prepared_weights;
             std::filesystem::path model_path = options.weights;
             if (!sequence.empty() && !model && model_path.empty()) {
                 auto ensured = ensure_sam2_weights(options.allow_download, options.cancel_requested);
                 if (!ensured)
                     return std::unexpected(ensured.error());
-                model_path = std::move(*ensured);
+                prepared_weights = std::move(*ensured);
+                model_path = prepared_weights->path;
             }
             MaskDecodeSettings decode;
             Tensor seed_mask;

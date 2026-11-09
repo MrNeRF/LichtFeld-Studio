@@ -81,6 +81,7 @@ namespace lfs::core::nn::models {
                       cudaStream_t stream) const;
         Tensor ensure_workspace(std::size_t bytes, const Tensor& like);
 
+        std::shared_ptr<const void> weights_source_;
         std::unordered_map<std::string, Tensor> weights_;
         std::unordered_map<std::string, Tensor> weight_taps_;
         Tensor workspace_;

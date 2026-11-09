@@ -183,6 +183,7 @@ namespace lfs::core::nn::models {
         model.device_ = device;
         model.compute_ = dtype;
         model.encoder_compute_ = dtype;
+        model.weights_source_ = file->retain_source();
         model.weights_ = std::move(*loaded);
         configure_nn_mempool();
         const std::array<const char*, 8> required = {

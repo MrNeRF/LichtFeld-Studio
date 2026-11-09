@@ -122,6 +122,7 @@ namespace lfs::core::nn::models {
         Tensor raw_image_embed_;
         Tensor video_image_position_;
         Tensor video_memory_position_;
+        std::shared_ptr<const void> weights_source_;
         std::unordered_map<std::string, Tensor> weights_;
         std::unordered_map<std::string, Tensor> encoder_weights_; // image_encoder.* in encoder_compute_, when it differs
         bool encoding_ = false;

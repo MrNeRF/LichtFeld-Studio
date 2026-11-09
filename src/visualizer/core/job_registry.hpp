@@ -30,6 +30,7 @@ namespace lfs::vis {
         Collision,
         AprilTagScan,
         AssistedMask,
+        ModelCache,
     };
 
     enum class JobStatus : std::uint8_t {

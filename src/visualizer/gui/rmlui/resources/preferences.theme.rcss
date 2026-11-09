@@ -1,5 +1,7 @@
 /* Theme-dependent styles for the Preferences panel. */
 
+.preferences-model-card { border-color: @{border}; }
+
 .preferences-nav {
     background-color: @{surface};
     border-right-color: @{border};

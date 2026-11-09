@@ -3872,7 +3872,7 @@ namespace lfs::training {
         apply_param_side_effects(accepted, bg_image_path_changed);
     }
 
-    void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
+    void Trainer::set_lpips_weights_path(std::optional<core::nn::WeightSource> path) {
         lpips_weights_path_ = std::move(path);
         if (evaluator_)
             evaluator_->set_lpips_weights_path(lpips_weights_path_);

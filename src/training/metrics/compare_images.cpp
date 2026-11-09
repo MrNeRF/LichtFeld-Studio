@@ -269,7 +269,7 @@ namespace lfs::training {
     }
 
     lfs::Result<CompareResult> compare_image_sets(const lfs::core::param::CompareParameters& params,
-                                                  std::optional<std::filesystem::path> lpips_weights) {
+                                                  std::optional<core::nn::WeightSource> lpips_weights) {
         namespace param = lfs::core::param;
         const auto reference_set = resolve_image_set(params.reference_path);
         const auto test_set = resolve_image_set(params.test_path);

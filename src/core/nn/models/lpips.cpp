@@ -110,6 +110,7 @@ namespace lfs::core::nn::models {
         model.compute_ = dtype;
         model.scaling_ = scaling;
         model.activation_budget_bytes_ = activation_budget_bytes;
+        model.weights_source_ = file->retain_source();
         model.weights_ = std::move(*loaded);
 
         for (const char* name : {"scaling.shift", "scaling.scale"}) {

@@ -1943,3 +1943,93 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+
+
+def test_model_preferences_removal_respects_native_ownership(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    records = {}
+    section.handle = SimpleNamespace(
+        update_record_list=lambda key, rows: records.update({key: rows}), dirty=lambda key: None,
+    )
+    snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
+                            "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
+                            "in_use": True, "busy": False, "error": ""}], "job": {}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert not row["can_remove"]
+    assert not row["can_download"]
+    assert row["can_verify"]
+    snapshot["models"][0]["in_use"] = False
+    section.sync(force=True)
+    assert records["managed_models"][0]["can_remove"]
+    snapshot["job"] = {"id": 42, "running": True}
+    section.sync(force=True)
+    assert not records["managed_models"][0]["can_remove"]
+    assert not records["managed_models"][0]["can_verify"]
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_model_preferences_closed_confirmation_does_not_remove(preferences_panel_module, monkeypatch, retained):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = object()
+    section.rows = [{"id": 0, "name": "SAM 2.1"}]
+    dialogs = []
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "remove"])
+    if retained:
+        section.cancel_pending_confirmation()
+    else:
+        section.handle = None
+    title, _message, _buttons, callback = dialogs[0]
+    callback(title)
+    assert starts == []
+
+
+def test_model_preferences_recovery_clears_failure_and_cancel_matches_job(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = SimpleNamespace(update_record_list=lambda *args: None, dirty=lambda key: None)
+    snapshot = {"models": [], "job": {"id": 7, "running": False, "error": "disk full"}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    assert section.error == "disk full"
+    assert "disk full" not in section.message
+    snapshot["job"]["error"] = "SHA-256 mismatch: " + "0123456789abcdef" * 20
+    section.sync(force=True)
+    assert section.error == snapshot["job"]["error"]
+    assert "0123456789abcdef" not in section.message
+    snapshot["job"].update(error="/cache/sam.lfw", error_code="FailedPrecondition")
+    section.sync(force=True)
+    assert section.error == module.lf.ui.tr("preferences.models.locked")
+    snapshot["job"] = {"id": 8, "running": True, "error": ""}
+    section.sync(force=True)
+    assert not section.error
+    canceled = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_cancel", lambda job: canceled.append(job), raising=False)
+    section._cancel()
+    assert canceled == [8]
+
+
+def test_model_preferences_unchanged_poll_preserves_rows_and_focus(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    updates = []
+    dirty = []
+    section.handle = SimpleNamespace(
+        update_record_list=lambda *args: updates.append(args), dirty=dirty.append,
+    )
+    snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
+                            "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
+                            "in_use": False, "busy": False, "error": ""}], "job": {}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    changes = list(dirty)
+    section.sync(force=True)
+    assert len(updates) == 1
+    assert dirty == changes

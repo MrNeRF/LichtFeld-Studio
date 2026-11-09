@@ -355,12 +355,14 @@ namespace lfs::vis::gui {
                             if (!plan)
                                 throw std::runtime_error(std::string(plan.error().user_message()));
                             if (!model) {
+                                std::optional<core::nn::WeightSource> prepared_weights;
                                 auto weights = w.input.weights;
                                 if (weights.empty()) {
                                     const auto cached = preprocessing::ensure_sam2_weights(true, obsolete);
                                     if (!cached)
                                         throw std::runtime_error(std::string(cached.error().user_message()));
-                                    weights = *cached;
+                                    prepared_weights = *cached;
+                                    weights = prepared_weights->path;
                                 }
                                 if (obsolete())
                                     continue;

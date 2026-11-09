@@ -104,7 +104,7 @@ TEST(VideoMaskingPipeline, ReviewedSubjectTracksRequestedDirectionsWithoutPublis
         GTEST_SKIP() << "SAM2.1 weights are not cached";
     Stream stream;
     const core::CUDAStreamGuard guard(stream.value);
-    auto model = core::nn::models::Sam2::load(*weights, core::Device::CUDA, core::DataType::Float32);
+    auto model = core::nn::models::Sam2::load(weights->path, core::Device::CUDA, core::DataType::Float32);
     ASSERT_TRUE(model);
     OutputDirectory output;
     const std::vector frames{frame(output.path, 0), frame(output.path, 1), frame(output.path, 2)};

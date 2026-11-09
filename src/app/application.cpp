@@ -77,7 +77,7 @@
 
 namespace lfs::app {
 
-    std::optional<std::filesystem::path> prepare_lpips_weights(const bool allow_download) {
+    std::optional<core::nn::WeightSource> prepare_lpips_weights(const bool allow_download) {
         if (const auto path = core::environment::value("LFS_LPIPS_WEIGHTS"))
             return core::utf8_to_path(*path);
         auto result = lfs::preprocessing::ensure_lpips_weights(allow_download);
