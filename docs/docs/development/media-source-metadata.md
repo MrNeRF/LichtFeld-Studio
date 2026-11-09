@@ -1199,7 +1199,13 @@ These bytes are demuxer-exposed payload/configuration, not an archive of origina
 MP4 boxes. Packet positions are provider-reported and are not guaranteed to be
 an original-file range for that payload. Packets remain in demux order. A corrupt
 selected packet or read error fails collection; successful EOF does not certify
-the entire container or interpret the vendor schema. The returned observation
+the entire container or interpret the vendor schema. Before accepting EOF, the
+probe checks FFmpeg's sample indices against the size of the same opened input,
+including indices discovered in fragments. A missing sample in another read
+track can also stop demuxing before the selected track is complete. Out-of-file sample
+ranges fail with DataLoss; a genuinely empty track remains valid. This requires
+an input with a known size. No separate MP4 box parser or declared-frame-count
+comparison is used. The returned observation
 owns its bytes and remains usable after the source file is removed.
 
 `TimedMetadataLimits` defaults to 32 MiB retained bytes, 100,000 records (selected

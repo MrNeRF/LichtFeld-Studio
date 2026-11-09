@@ -33,3 +33,18 @@ def embedded(directory, ffmpeg):
                     "-map", "0:v:0", "-map", "1:0", "-map", "2:0", "-c:v", "mpeg4",
                     "-c:s", "mov_text", str(output)], check=True, capture_output=True, timeout=30)
     return output
+
+
+def mp4_boxes(data):
+    """Independent atom offsets for mutating our small synthetic MP4 fixtures."""
+    import struct
+    def walk(start, end):
+        while start + 8 <= end:
+            size, kind = struct.unpack_from(">I4s", data, start)
+            if size < 8 or start + size > end:
+                raise ValueError("invalid synthetic MP4 box")
+            yield start, kind
+            if kind in (b"moov", b"trak", b"mdia", b"minf", b"stbl"):
+                yield from walk(start + 8, start + size)
+            start += size
+    return list(walk(0, len(data)))

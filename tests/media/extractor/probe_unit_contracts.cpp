@@ -468,7 +468,16 @@ namespace {
             packet.pts = packet.dts = pts;
             packet.duration = 500;
             av_packet_rescale_ts(&packet, {1, 1000}, fixture.context->streams[stream]->time_base);
-            require(av_write_frame(fixture.context, &packet) >= 0, "mux raw subtitle packet without an encoder");
+            std::array<std::uint8_t, 30> configuration{};
+            configuration.back() = 255;
+            if (stream == 0 && pts == 500) {
+                auto* side = av_packet_new_side_data(&packet, AV_PKT_DATA_NEW_EXTRADATA, configuration.size());
+                require(side != nullptr, "allocate changed subtitle configuration");
+                std::memcpy(side, configuration.data(), configuration.size());
+            }
+            const auto written = av_write_frame(fixture.context, &packet);
+            av_packet_free_side_data(&packet);
+            require(written >= 0, "mux raw subtitle packet without an encoder");
         };
         append(0, 0);
         append(1, 0);
@@ -503,12 +512,27 @@ namespace {
         options.timed_metadata_limits.records = 1;
         const auto limited = MediaProbe::inspect(path, options);
         require(!limited && limited.error().code() == lfs::ErrorCode::ResourceExhausted, "packet record exhaustion does not return a truncated successful scan");
-        options.timed_metadata_limits.records = 2;
+        std::size_t retained = timed.extradata.size(), records = 0, side_blocks = 0;
+        for (const auto& packet : timed.packets) {
+            retained += packet.bytes.size();
+            ++records;
+            for (const auto& side : packet.side_data) {
+                retained += side.bytes.size();
+                ++records;
+                ++side_blocks;
+                require(side.type == AV_PKT_DATA_NEW_EXTRADATA && !side.bytes.empty(), "changed subtitle configuration is preserved as owned packet side data");
+            }
+        }
+        require(side_blocks > 0, "fixture must actually exercise packet side data");
+        options.timed_metadata_limits.records = records;
         options.timed_metadata_limits.scan_packets = 4;
-        options.timed_metadata_limits.bytes = timed.extradata.size() + 2 * payload.size();
+        options.timed_metadata_limits.bytes = retained;
         require(MediaProbe::inspect(path, options).has_value(), "exact byte, record and scan limits accept the complete observation");
         --options.timed_metadata_limits.bytes;
         require(!MediaProbe::inspect(path, options), "one byte below aggregate metadata retention is refused");
+        options.timed_metadata_limits.bytes = retained;
+        --options.timed_metadata_limits.records;
+        require(!MediaProbe::inspect(path, options), "side data shares the selected packet record budget");
         options.timed_metadata_limits = {};
         options.timed_metadata_limits.scan_packets = 2;
         require(!MediaProbe::inspect(path, options), "unselected packets count toward the scan work limit");

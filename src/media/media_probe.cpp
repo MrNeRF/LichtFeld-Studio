@@ -332,6 +332,30 @@ namespace lfs::media {
                     if (read == AVERROR_EOF) {
                         if (context->pb && context->pb->error < 0 && context->pb->error != AVERROR_EOF)
                             return failure(context->pb->error, "Read timed metadata", deadline.expired);
+                        // MOV can report EOF for a missing sample without returning
+                        // a corrupt packet. Reuse its parsed index, including any
+                        // entries discovered in fragments, rather than reparsing boxes
+                        // or assuming declared frame counts equal returned packets.
+                        // A missing sample in any read track can stop the demuxer,
+                        // truncating even an otherwise valid selected track.
+                        const auto input_size = context->pb ? avio_size(context->pb) : AVERROR(EIO);
+                        if (input_size < 0)
+                            return failure(static_cast<int>(input_size), "Determine timed metadata input size", deadline.expired);
+                        for (unsigned track = 0; track < context->nb_streams; ++track) {
+                            auto* indexed_stream = context->streams[track];
+                            if (!indexed_stream)
+                                return failure(AVERROR_INVALIDDATA, "Validate timed metadata stream index", false);
+                            const auto entries = avformat_index_get_entries_count(indexed_stream);
+                            for (int entry_index = 0; entry_index < entries; ++entry_index) {
+                                if (Deadline::interrupt(&deadline))
+                                    return failure(AVERROR_EXIT, "Validate timed metadata index", true);
+                                const auto* entry = avformat_index_get_entry(indexed_stream, entry_index);
+                                if (!entry || entry->pos < 0 || entry->size < 0 || entry->pos > input_size || entry->size > input_size - entry->pos)
+                                    return make_error({.code = ErrorCode::DataLoss, .domain = ErrorDomain::IO, .detail = "Timed metadata sample exceeds input bounds (stream=" + std::to_string(track) + ", index=" + std::to_string(entry_index) + ", position=" + std::to_string(entry ? entry->pos : -1) + ", bytes=" + std::to_string(entry ? entry->size : -1) + ", input_bytes=" + std::to_string(input_size) + ")", .detection = LFS_SOURCE_SITE_CURRENT()});
+                            }
+                        }
+                        if (Deadline::interrupt(&deadline))
+                            return failure(AVERROR_EXIT, "Read timed metadata", true);
                         break;
                     }
                     if (read < 0)
