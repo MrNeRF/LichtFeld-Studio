@@ -82,6 +82,7 @@ namespace lfs::vis {
         p.orthographic = s.orthographic;
         p.ortho_scale = s.ortho_scale;
         p.depth_view = s.depth_view;
+        p.normal_view = s.normal_view;
         p.depth_view_min = s.depth_view_min;
         p.depth_view_max = s.depth_view_max;
         p.depth_visualization_mode = static_cast<int>(s.depth_visualization_mode);
@@ -193,6 +194,7 @@ namespace lfs::vis {
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
         s.depth_view = p.depth_view;
+        s.normal_view = p.normal_view;
         s.depth_view_min = p.depth_view_min;
         s.depth_view_max = p.depth_view_max;
         s.depth_visualization_mode =

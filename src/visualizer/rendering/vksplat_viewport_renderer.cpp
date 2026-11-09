@@ -1973,8 +1973,12 @@ namespace lfs::vis {
             float color_exposure = 1.0f;
             std::uint32_t color_tonemapping = 0;
             std::uint32_t splat_render_profile = 0;
-            std::uint32_t color_padding = 0;
+            std::uint32_t normal_view = 0;
+            glm::vec4 normal_intrinsics{};  // fx, fy, cx, cy in full camera pixels
+            glm::uvec4 normal_camera{};     // full extent, subregion origin
+            glm::uvec4 normal_projection{}; // packed model in x
         };
+        static_assert(sizeof(ComposePushConstants) == 112);
 
     } // namespace
 
@@ -2532,9 +2536,9 @@ namespace lfs::vis {
         const int mode = static_cast<int>(request.transparency_mode);
         const auto& guides = request.overlay.markers;
         const bool stochastic = (mode == 1 || mode == 2) && !request.gut && !lod && !depth_capture_mode_ && !capture &&
-                                !request.deterministic_export && !request.depth_view && !request.require_exact_depth && output_slot != OutputSlot::Preview &&
+                                !request.deterministic_export && !request.depth_view && !request.normal_view && !request.require_exact_depth && output_slot != OutputSlot::Preview &&
                                 !guides.show_rings && !guides.show_center_markers && !guides.show_object_outline;
-        const bool candidate = !stochastic && !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload && !depth_capture_mode_ && !capture;
+        const bool candidate = !stochastic && !request.normal_view && !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload && !depth_capture_mode_ && !capture;
         const bool warmup = candidate && macro_chain_warmup_pending_ && !request.deterministic_export;
         VulkanGSRenderer::HostInputs inputs{buffers_.quant_pool, buffers_.shN_q16, buffers_.shN_f16,
                                             request.gut, candidate && !warmup, ((candidate && !warmup) || request.gut) && output_slot == OutputSlot::Preview && request.frame_view.subregion_full_size.y > 0};
@@ -6221,6 +6225,7 @@ namespace lfs::vis {
         const float depth_min,
         const float depth_max,
         const lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+        const bool normal_view,
         const _VulkanBuffer* color_override) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
@@ -6336,7 +6341,7 @@ namespace lfs::vis {
             transitionToProducer(output.depth_image.image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  transfer_write);
-            const auto clear_background = !depth_view && uniforms.splat_render_profile == 0u
+            const auto clear_background = !depth_view && !normal_view && uniforms.splat_render_profile == 0u
                                               ? lfs::rendering::lfsDisplayTone(glm::max(background, glm::vec3(0)), uniforms.color_tonemapping, uniforms.color_exposure)
                                               : background;
             VkClearColorValue clear = transparent_background
@@ -6478,6 +6483,10 @@ namespace lfs::vis {
             .color_exposure = uniforms.color_exposure,
             .color_tonemapping = uniforms.color_tonemapping,
             .splat_render_profile = uniforms.splat_render_profile,
+            .normal_view = normal_view ? 1u : 0u,
+            .normal_intrinsics = {uniforms.fx, uniforms.fy, uniforms.cx, uniforms.cy},
+            .normal_camera = {uniforms.camera_width, uniforms.camera_height, uniforms.render_origin_x, uniforms.render_origin_y},
+            .normal_projection = {uniforms.camera_model, 0u, 0u, 0u},
         };
         vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
@@ -8574,7 +8583,7 @@ namespace lfs::vis {
             uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
-            if (request.depth_view || request.require_exact_depth)
+            if (request.depth_view || request.normal_view || request.require_exact_depth)
                 uniforms.mip_filter |= 2u;
         }
 
@@ -8662,7 +8671,7 @@ namespace lfs::vis {
                         request.depth_view,
                         request.depth_view_min,
                         request.depth_view_max,
-                        request.depth_visualization_mode);
+                        request.depth_visualization_mode, request.normal_view);
                 }
             }
         } catch (const std::exception& e) {
@@ -9326,7 +9335,7 @@ namespace lfs::vis {
         // batch that crosses transmittance 0.5, so the map is smooth instead of
         // quantized to the crossing batch's leading splat. Bit 0 stays the mip
         // anti-aliasing flag; the raster reads them independently.
-        if (request.depth_view || request.require_exact_depth) {
+        if (request.depth_view || request.normal_view || request.require_exact_depth) {
             uniforms.mip_filter |= 2u;
         }
         const bool higs_warmup_frame = prepared.warmup;
@@ -9351,11 +9360,13 @@ namespace lfs::vis {
             renderer_.setRevealEffect(request.reveal.has_value());
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
-        renderer_.setDepthCapture(depth_capture_mode_);
+        renderer_.setDepthCapture(depth_capture_mode_ || request.normal_view);
         // Median vs. expected (alpha-weighted, hole-free) depth is a per-render
         // uniform the selected rasterizer reads — no backend-specific pipeline. The
         // far plane doubles as the expected-mode flag and bounds out junk far splats.
-        uniforms.expected_far = depth_capture_expected_ ? request.frame_view.far_plane : 0.0f;
+        // Surface normals need smooth alpha-weighted depth, rather than median
+        // depth plateaus at individual splat centers.
+        uniforms.expected_far = (depth_capture_expected_ || request.normal_view) ? request.frame_view.far_plane : 0.0f;
         // Projection/compaction storage is exact for the active render domain;
         // tile-instance scratch is independently fixed at K and reused per wave.
         const std::size_t visible_capacity = active_splat_count;
@@ -9856,7 +9867,7 @@ namespace lfs::vis {
                     request.depth_view,
                     request.depth_view_min,
                     request.depth_view_max,
-                    request.depth_visualization_mode,
+                    request.depth_visualization_mode, request.normal_view,
                     stochastic_color);
             }
             // record/composePixelState timer scope ends here.

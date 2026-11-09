@@ -2313,3 +2313,7 @@ body {
 .gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
 
 .gamepad-navigation-indicator.hidden { display: none; }
+
+.viewport-render-mode-select { min-width: 86dp; }
+
+#depth-view-block .viewport-depth-header { flex-wrap: wrap; gap: 6dp; }

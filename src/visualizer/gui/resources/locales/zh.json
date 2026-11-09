@@ -1356,7 +1356,8 @@
     "scale_distance_measured": "测量值:",
     "scale_distance_set": "设置距离:",
     "scale_distance_apply": "确认缩放",
-    "scale_distance_reset": "重置点"
+    "scale_distance_reset": "重置点",
+    "render_modes": "渲染模式"
   },
   "transform": {
     "scale_apriltag": "使用 AprilTag 缩放场景",
@@ -1624,7 +1625,8 @@
     "seq_preview_options": "预览尺寸",
     "seq_path_menu": "相机路径文件",
     "seq_ply_menu": "PLY 序列文件",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "选择 RGB、深度或相机空间的表面法线。法线需要泼溅模型。"
   },
   "exit_popup": {
     "title": "退出应用程序？",

@@ -380,6 +380,8 @@ namespace lfs::vis {
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
         bool depth_view = false;
+        bool normal_view = false;
+        bool render_mode_controls_open = false;
         float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
         lfs::rendering::DepthVisualizationMode depth_visualization_mode =
@@ -488,6 +490,11 @@ namespace lfs::vis {
         settings.gut = true;
     }
 
+    [[nodiscard]] inline bool normalViewEnabled(const RenderSettings& settings) {
+        return settings.normal_view && !settings.depth_view &&
+               !splitViewUsesGTComparison(settings.split_view_mode);
+    }
+
     [[nodiscard]] inline bool environmentBackgroundEnabled(const RenderSettings& settings) {
         return settings.environment_mode == EnvironmentBackgroundMode::Equirectangular &&
                !settings.environment_map_path.empty();
@@ -495,7 +502,7 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool environmentBackgroundUsesTransparentViewerCompositing(
         const RenderSettings& settings) {
-        return environmentBackgroundEnabled(settings) &&
+        return environmentBackgroundEnabled(settings) && !normalViewEnabled(settings) &&
                !splitViewUsesGTComparison(settings.split_view_mode);
     }
 

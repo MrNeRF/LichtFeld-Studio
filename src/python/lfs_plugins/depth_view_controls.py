@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Depth-map controls controller for the viewport overlay."""
+"""Render-mode selector and depth controls for the viewport overlay."""
 
 import math
 import lichtfeld as lf
@@ -59,6 +59,9 @@ def _normalize_mode(value):
 
 class DepthViewControlsController:
     _DIRTY_FIELDS = (
+        "viewport_render_mode",
+        "viewport_show_depth",
+        "viewport_has_gaussians",
         "depth_view_tool_label",
         "ui_color_label",
         "ui_gray_label",
@@ -82,6 +85,8 @@ class DepthViewControlsController:
         self._depth_near = _DEFAULT_DEPTH_NEAR
         self._depth_far = _DEFAULT_DEPTH_FAR
         self._mode = _DEFAULT_MODE
+        self._render_mode = "rgb"
+        self._has_gaussians = False
         self._last_state_key = None
         self._last_state_items = None
         self._scrub_fields = ScrubFieldController(
@@ -97,7 +102,10 @@ class DepthViewControlsController:
         return self._visible
 
     def bind_model(self, model):
-        model.bind_func("depth_view_tool_label", lambda: _ui_label("toolbar.depth_map", "Depth Map"))
+        model.bind("viewport_render_mode", lambda: self._render_mode, self._set_render_mode)
+        model.bind_func("viewport_show_depth", lambda: self._render_mode == "depth")
+        model.bind_func("viewport_has_gaussians", lambda: self._has_gaussians)
+        model.bind_func("depth_view_tool_label", lambda: _ui_label("toolbar.render_modes", "Render Modes"))
         model.bind_func("ui_color_label", lambda: _ui_label("ui.color", "Color"))
         model.bind_func("ui_gray_label", lambda: _ui_label("ui.gray", "Gray"))
         model.bind_func("ui_near_label", lambda: _ui_label("ui.near", "Near"))
@@ -105,7 +113,7 @@ class DepthViewControlsController:
         model.bind_func("depth_view_has_scene", lambda: self._has_scene)
         model.bind_func(
             "depth_view_disable_label",
-            lambda: _ui_label("toolbar.depth_map_disable", "Disable Depth Map"),
+            lambda: _ui_label("common.close", "Close"),
         )
         model.bind(
             "depth_view_mode_value",
@@ -182,7 +190,9 @@ class DepthViewControlsController:
         self._scrub_fields.unmount()
 
     def _depth_view_active(self):
-        getter = getattr(lf, "get_depth_view", None)
+        getter = getattr(lf, "get_render_mode_controls_open", None)
+        if not callable(getter):
+            getter = getattr(lf, "get_depth_view", None)
         if not callable(getter):
             return False
         try:
@@ -192,6 +202,10 @@ class DepthViewControlsController:
 
     def _refresh_state(self):
         self._has_scene = self._scene_available()
+        getter = getattr(lf, "get_viewport_render_mode", None)
+        self._render_mode = getter() if callable(getter) else ("depth" if self._depth_view_active() else "rgb")
+        count = getattr(lf, "get_num_gaussians", None)
+        self._has_gaussians = bool(count() > 0) if callable(count) else self._has_scene
         try:
             near, far = lf.get_depth_view_range()
         except Exception:
@@ -214,6 +228,8 @@ class DepthViewControlsController:
         return (
             ("language_generation", RuntimeState.language_generation.value),
             ("has_scene", self._has_scene),
+            ("render_mode", self._render_mode),
+            ("has_gaussians", self._has_gaussians),
             ("depth_near", round(self._depth_near, 3)),
             ("depth_far", round(self._depth_far, 3)),
             ("mode", self._mode),
@@ -258,6 +274,14 @@ class DepthViewControlsController:
             lf.set_depth_view_mode(mode)
         except Exception as exc:
             self._report_error(str(exc).strip() or "Could not update depth-map mode.")
+        self._dirty_all()
+
+    def _set_render_mode(self, value):
+        mode = str(value).lower()
+        if mode not in ("rgb", "depth", "normal"):
+            return
+        lf.set_viewport_render_mode(mode)
+        self._render_mode = mode
         self._dirty_all()
 
     def _get_scrub_value(self, prop):
@@ -332,7 +356,11 @@ class DepthViewControlsController:
     def _on_action(self, handle, event, args):
         del handle, event, args
         try:
-            lf.set_depth_view(False)
+            close = getattr(lf, "set_render_mode_controls_open", None)
+            if callable(close):
+                close(False)
+            else:
+                lf.set_depth_view(False)
         except Exception as exc:
             self._report_error(str(exc).strip() or "Could not disable depth map.")
         self._dirty_all()
@@ -365,6 +393,8 @@ class DepthViewControlsController:
                 "depth_view_disable_label",
             ),
             "has_scene": ("depth_view_has_scene",),
+            "render_mode": ("viewport_render_mode", "viewport_show_depth"),
+            "has_gaussians": ("viewport_has_gaussians",),
             "depth_near": (
                 "depth_view_near_value",
                 "depth_view_near_slider_min",

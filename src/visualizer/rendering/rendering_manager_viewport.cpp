@@ -804,6 +804,7 @@ namespace lfs::vis {
         settings.depth_clip_enabled = false;
         settings.orthographic = false;
         settings.depth_view = false;
+        settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_rings = false;
         settings.show_center_markers = false;
@@ -1503,7 +1504,7 @@ namespace lfs::vis {
 
     RenderSettings RenderingManager::vrRenderSettings(RenderSettings settings) {
         settings.split_view_mode = SplitViewMode::Disabled;
-        settings.orthographic = settings.equirectangular = settings.depth_view = false;
+        settings.orthographic = settings.equirectangular = settings.depth_view = settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_grid = settings.show_coord_axes = settings.show_pivot = false;
         settings.show_camera_frustums = settings.show_rings = settings.show_center_markers = false;

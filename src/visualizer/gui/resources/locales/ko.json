@@ -1356,7 +1356,8 @@
     "scale_distance_measured": "측정치:",
     "scale_distance_set": "거리 설정:",
     "scale_distance_apply": "크기 조절 확정",
-    "scale_distance_reset": "점 재설정"
+    "scale_distance_reset": "점 재설정",
+    "render_modes": "렌더링 모드"
   },
   "transform": {
     "scale_apriltag": "AprilTag로 장면 크기 조정",
@@ -1624,7 +1625,8 @@
     "seq_preview_options": "미리보기 크기",
     "seq_path_menu": "카메라 경로 파일",
     "seq_ply_menu": "PLY 시퀀스 파일",
-    "seq_projection": "투영 방식"
+    "seq_projection": "투영 방식",
+    "render_modes": "RGB, 깊이 또는 카메라 공간의 표면 법선을 선택합니다. 법선에는 스플랫 모델이 필요합니다."
   },
   "exit_popup": {
     "title": "애플리케이션을 종료하시겠습니까?",

@@ -1356,7 +1356,8 @@
     "scale_distance_measured": "Gemeten:",
     "scale_distance_set": "Afstand instellen:",
     "scale_distance_apply": "Schaling bevestigen",
-    "scale_distance_reset": "Punten resetten"
+    "scale_distance_reset": "Punten resetten",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Scène schalen met AprilTags",
@@ -1624,7 +1625,8 @@
     "seq_preview_options": "Voorbeeldgrootte",
     "seq_path_menu": "Camerapadbestanden",
     "seq_ply_menu": "PLY-reeksbestanden",
-    "seq_projection": "Projectie"
+    "seq_projection": "Projectie",
+    "render_modes": "Kies RGB, diepte of oppervlaktenormalen in cameraruimte. Normalen vereisen een splatmodel."
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",

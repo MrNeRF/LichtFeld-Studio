@@ -343,3 +343,41 @@ def test_float_scrub_keeps_prior_value_for_non_finite_text():
         scrub._on_input_change("scale", Event(linebreak=True))
         assert values["scale"] == 0.5, text
 
+
+
+@pytest.mark.parametrize("mode", ["rgb", "depth", "normal"])
+def test_render_selector_visibility_is_independent_of_mode(depth, monkeypatch, mode):
+    panel, _, _ = depth
+    module = import_module("lfs_plugins.depth_view_controls")
+    state = {"open": True, "mode": mode}
+    monkeypatch.setattr(module.lf, "get_render_mode_controls_open", lambda: state["open"], raising=False)
+    monkeypatch.setattr(module.lf, "get_viewport_render_mode", lambda: state["mode"], raising=False)
+    monkeypatch.setattr(module.lf, "set_render_mode_controls_open", lambda value: state.update(open=value), raising=False)
+    panel._refresh_state()
+    assert panel._depth_view_active()
+    assert panel._render_mode == mode
+    panel._on_action(None, None, [])
+    assert not panel._depth_view_active()
+    assert state["mode"] == mode
+
+
+def test_render_selector_switches_modes_without_resetting_depth_range(depth, monkeypatch):
+    panel, values, _ = depth
+    module = import_module("lfs_plugins.depth_view_controls")
+    selected = []
+    monkeypatch.setattr(module.lf, "set_viewport_render_mode", selected.append, raising=False)
+    for mode in ("normal", "rgb", "depth"):
+        panel._set_render_mode(mode)
+        assert panel._render_mode == mode
+        assert values == [5.0, 200.0]
+    assert selected == ["normal", "rgb", "depth"]
+
+
+@pytest.mark.parametrize("count", [0, 20])
+def test_render_selector_normals_availability_uses_splats_not_scene(depth, monkeypatch, count):
+    panel, _, _ = depth
+    module = import_module("lfs_plugins.depth_view_controls")
+    monkeypatch.setattr(module.lf, "get_num_gaussians", lambda: count, raising=False)
+    panel._refresh_state()
+    assert panel._has_scene
+    assert panel._has_gaussians == (count > 0)

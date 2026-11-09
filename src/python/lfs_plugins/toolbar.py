@@ -1678,11 +1678,12 @@ class _ViewportToolbarController:
                 self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
-            elif self._gt_compare_controls.visible:
-                self._hide_tool_overlay(doc, "depth-view-block")
+            elif self._depth_view_controls.visible:
+                self._hide_tool_overlay(doc, "gt-compare-mode-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
-            elif self._depth_view_controls.visible:
+            elif self._gt_compare_controls.visible:
+                self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
             else:
@@ -1712,11 +1713,12 @@ class _ViewportToolbarController:
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
-        elif self._gt_compare_controls.visible:
-            self._hide_tool_overlay(doc, "depth-view-block")
+        elif self._depth_view_controls.visible:
+            self._hide_tool_overlay(doc, "gt-compare-mode-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
-        elif self._depth_view_controls.visible:
+        elif self._gt_compare_controls.visible:
+            self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
 

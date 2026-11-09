@@ -1367,7 +1367,8 @@
     "scale_distance_measured": "Measured:",
     "scale_distance_set": "Set Distance:",
     "scale_distance_apply": "Confirm scale",
-    "scale_distance_reset": "Reset points"
+    "scale_distance_reset": "Reset points",
+    "render_modes": "Render modes"
   },
   "transform": {
     "scale_apriltag": "Scale scene with AprilTags",
@@ -1635,7 +1636,8 @@
     "seq_preview_options": "Preview size",
     "seq_path_menu": "Camera path files",
     "seq_ply_menu": "PLY sequence files",
-    "seq_projection": "Projection"
+    "seq_projection": "Projection",
+    "render_modes": "Choose RGB, depth, or camera-space surface normals. Normals require a splat model."
   },
   "exit_popup": {
     "title": "Exit Application?",

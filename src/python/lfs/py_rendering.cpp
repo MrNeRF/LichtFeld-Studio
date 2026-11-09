@@ -849,6 +849,7 @@ namespace lfs::python {
                    "Scene Reconstruction Preset",
                    "Backend-specific scene reconstruction quality preset",
                    "native");
+        add_bool(&Proxy::normal_view, "normal_view", "Normals View", "Render camera-space surface normals", false);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",

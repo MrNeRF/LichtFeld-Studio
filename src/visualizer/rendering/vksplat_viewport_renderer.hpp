@@ -435,6 +435,7 @@ namespace lfs::vis {
             float depth_min,
             float depth_max,
             lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            bool normal_view = false,
             const _VulkanBuffer* color_override = nullptr);
 
         // The custom effect a stochastic frame projects with: the program set

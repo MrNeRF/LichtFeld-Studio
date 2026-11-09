@@ -1356,7 +1356,8 @@
     "scale_distance_measured": "測定値:",
     "scale_distance_set": "距離を設定:",
     "scale_distance_apply": "スケールを確定",
-    "scale_distance_reset": "点をリセット"
+    "scale_distance_reset": "点をリセット",
+    "render_modes": "レンダリングモード"
   },
   "transform": {
     "scale_apriltag": "AprilTagでシーンのスケールを調整",
@@ -1624,7 +1625,8 @@
     "seq_preview_options": "プレビューサイズ",
     "seq_path_menu": "カメラパスのファイル",
     "seq_ply_menu": "PLYシーケンスのファイル",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "RGB、深度、カメラ空間の表面法線を選択します。法線にはスプラットモデルが必要です。"
   },
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",

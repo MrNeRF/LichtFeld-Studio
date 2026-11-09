@@ -1356,7 +1356,8 @@
     "scale_distance_measured": "Gemessen:",
     "scale_distance_set": "Abstand festlegen:",
     "scale_distance_apply": "Skalierung bestätigen",
-    "scale_distance_reset": "Punkte zurücksetzen"
+    "scale_distance_reset": "Punkte zurücksetzen",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Szene mit AprilTags skalieren",
@@ -1624,7 +1625,8 @@
     "seq_preview_options": "Vorschaugröße",
     "seq_path_menu": "Kamerapfad-Dateien",
     "seq_ply_menu": "PLY-Sequenzdateien",
-    "seq_projection": "Projektion"
+    "seq_projection": "Projektion",
+    "render_modes": "RGB, Tiefe oder Oberflächennormalen im Kameraraum wählen. Normalen benötigen ein Splat-Modell."
   },
   "exit_popup": {
     "title": "Anwendung beenden?",

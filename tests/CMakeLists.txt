@@ -276,6 +276,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_preferences_tooltips.cpp
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
+        test_viewport_render_modes.cpp
         test_panel_layout_render_demand.cpp
         test_right_panel_tabs.cpp
         test_preferences_migration.cpp

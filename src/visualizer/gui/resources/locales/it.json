@@ -1369,7 +1369,8 @@
     "scale_distance_measured": "Misurato:",
     "scale_distance_set": "Imposta distanza:",
     "scale_distance_apply": "Conferma scala",
-    "scale_distance_reset": "Reimposta punti"
+    "scale_distance_reset": "Reimposta punti",
+    "render_modes": "Modalità di rendering"
   },
   "transform": {
     "scale_apriltag": "Ridimensiona la scena con AprilTags",
@@ -1637,7 +1638,8 @@
     "seq_preview_options": "Dimensione anteprima",
     "seq_path_menu": "File del percorso camera",
     "seq_ply_menu": "File della sequenza PLY",
-    "seq_projection": "Proiezione"
+    "seq_projection": "Proiezione",
+    "render_modes": "Scegli RGB, profondità o normali di superficie nello spazio della fotocamera. Le normali richiedono un modello di splat."
   },
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",

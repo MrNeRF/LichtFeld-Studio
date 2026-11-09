@@ -154,7 +154,7 @@ namespace lfs::vis {
         SceneManager* const scene_manager,
         const RenderSettings& settings,
         const int camera_uid) {
-        if (!image || !scene_manager || !settings.apply_appearance_correction) {
+        if (!image || !scene_manager || !settings.apply_appearance_correction || normalViewEnabled(settings)) {
             return image;
         }
 
