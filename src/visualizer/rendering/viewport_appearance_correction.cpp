@@ -317,6 +317,10 @@ namespace lfs::vis {
             return std::unexpected(std::format(
                 "export post-process expects a contiguous CPU u8 HWC image with {} channels", expected_channels));
         }
+        // Preview exports disable GT comparison before rendering the selected mode.
+        if (settings.normal_view && !settings.depth_view) {
+            return needs_env ? image_u8_hwc_cpu.slice(2, 0, 3).contiguous() : image_u8_hwc_cpu;
+        }
         const int height = static_cast<int>(image_u8_hwc_cpu.size(0));
         const int width = static_cast<int>(image_u8_hwc_cpu.size(1));
 

@@ -20158,6 +20158,36 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_EQ(after_save.second, before.second);
     }
 
+    TEST(ViewportAppearanceCorrectionTest, NormalExportsPreserveColorAndAlpha) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        SceneManager scene;
+        auto appearance = std::make_unique<lfs::training::PPISP>(100);
+        appearance->register_frame(0, 0);
+        appearance->finalize();
+        scene.setAppearanceModel(std::move(appearance));
+        RenderSettings settings;
+        settings.normal_view = true;
+        settings.apply_appearance_correction = true;
+        settings.ppisp_mode = RenderSettings::PPISPMode::MANUAL;
+        settings.ppisp_overrides.exposure_offset = 1.0f;
+        settings.environment_map_path = "missing-normal-export.hdr";
+        for (const auto split : {SplitViewMode::Disabled, SplitViewMode::GTComparison}) {
+            settings.split_view_mode = split;
+            for (const auto mode : {ExportPostProcessMode::Opaque, ExportPostProcessMode::Transparent,
+                                    ExportPostProcessMode::EnvironmentComposite}) {
+                const std::size_t channels = mode == ExportPostProcessMode::Opaque ? 3 : 4;
+                auto image = core::Tensor::zeros({16, 16, channels}, core::Device::CPU, core::DataType::UInt8);
+                std::memset(image.ptr<std::uint8_t>(), 127, image.numel());
+                auto result = applyExportPostProcess(image.clone(), &scene, settings, -1, mode, {});
+                ASSERT_TRUE(result) << result.error();
+                EXPECT_EQ(result->size(2), mode == ExportPostProcessMode::EnvironmentComposite ? 3 : channels);
+                const auto* pixels = result->ptr<std::uint8_t>();
+                EXPECT_TRUE(std::all_of(pixels, pixels + result->numel(), [](const auto value) { return value == 127; }));
+            }
+        }
+    }
+
     TEST(ViewportAppearanceCorrectionTest, StandaloneModesPreservePixelsAndUpdateCost) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
