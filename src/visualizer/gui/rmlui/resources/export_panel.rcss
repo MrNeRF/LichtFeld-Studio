@@ -13,6 +13,7 @@
 /* The format rail sets a stable height even when the scene has no splats. */
 .ep-layout {
     display: flex;
+    flex-wrap: wrap;
     gap: 16dp;
     align-items: flex-start;
 }
@@ -23,7 +24,7 @@
 }
 
 .ep-details-column {
-    flex: 1;
+    flex: 1 1 280dp;
     min-width: 0;
 }
 
