@@ -1472,7 +1472,7 @@ namespace lfs::preprocessing {
 
     lfs::Result<core::nn::WeightSource> prepare_cached_model(
         const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested,
-        const ModelPreparationCallback& progress) {
+        const ModelPreparationCallback& progress, const ModelPreparationMode mode) {
         try {
             check_download_cancelled(cancel_requested);
             const auto& descriptor = model_descriptor(model);
@@ -1483,10 +1483,10 @@ namespace lfs::preprocessing {
             while (!lock.try_lock_for(std::chrono::milliseconds(50)))
                 check_download_cancelled(cancel_requested);
             check_download_cancelled(cancel_requested);
-            auto result = model == CachedModel::Moge2
+            auto result = mode == ModelPreparationMode::Acquire && model == CachedModel::Moge2
                               ? lfs::Result<fs::path>(ensure_moge_cached_model(!allow_download, cancel_requested, progress))
                               : ensure_cached_model(descriptor.filename, descriptor.url, descriptor.sha256,
-                                                    allow_download, descriptor.name, cancel_requested, progress);
+                                                    mode == ModelPreparationMode::Acquire && allow_download, descriptor.name, cancel_requested, progress);
             if (!result)
                 return result.error();
             auto source = core::nn::WeightFile::retain_source(*result);

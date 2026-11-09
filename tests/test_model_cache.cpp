@@ -11,6 +11,7 @@
 #include <chrono>
 #include <future>
 #include <gtest/gtest.h>
+#include <vector>
 
 namespace {
     using namespace lfs::preprocessing;
@@ -76,6 +77,47 @@ namespace {
         ASSERT_TRUE(removed);
         EXPECT_TRUE(*removed);
         EXPECT_FALSE(fs::exists(path));
+    }
+
+    TEST_F(ModelCacheTest, VerificationDoesNotReadOrMigrateALegacyCache) {
+        const auto legacy_root = home.path / "legacy";
+        const lfs::test::licht::ScopedEnvironmentVariable legacy_environment{
+#ifdef _WIN32
+            "LOCALAPPDATA",
+#else
+            "XDG_CACHE_HOME",
+#endif
+            lfs::core::path_to_utf8(legacy_root)};
+        const auto legacy = legacy_root /
+#ifdef _WIN32
+                            "LichtFeld" /
+#else
+                            "lichtfeld" /
+#endif
+                            "models" / "Ruicheng" / "moge-2-vitb-normal-onnx" / "model.onnx";
+        ASSERT_TRUE(fs::create_directories(legacy.parent_path()));
+        std::ofstream output;
+        ASSERT_TRUE(lfs::core::open_file_for_write(legacy, std::ios::binary, output));
+        output << "legacy weights";
+        output.close();
+        int hash_reports = 0;
+        const auto result = prepare_cached_model(CachedModel::Moge2, false, {}, [&](ModelPreparationPhase phase, auto, auto) { hash_reports += phase == ModelPreparationPhase::Verifying; }, ModelPreparationMode::Verify);
+        EXPECT_FALSE(result);
+        EXPECT_EQ(hash_reports, 0);
+        EXPECT_TRUE(fs::exists(legacy));
+        const auto state = inspect_cached_model(CachedModel::Moge2);
+        ASSERT_TRUE(state);
+        EXPECT_FALSE(state->present);
+        EXPECT_FALSE(fs::exists(state->path));
+        // Offline acquisition keeps its legacy-cache behavior; only Verify is
+        // strictly read-only. This deliberately invalid source is never published.
+        const auto acquired = prepare_cached_model(CachedModel::Moge2, false, {}, [&](ModelPreparationPhase phase, auto, auto) {
+            hash_reports += phase == ModelPreparationPhase::Verifying;
+        });
+        EXPECT_FALSE(acquired);
+        EXPECT_GT(hash_reports, 0);
+        EXPECT_TRUE(fs::exists(legacy));
+        EXPECT_FALSE(fs::exists(state->path));
     }
 
     TEST_F(ModelCacheTest, DirectoryAtTheWeightPathIsReportedAndPreserved) {

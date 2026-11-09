@@ -1099,7 +1099,8 @@ namespace lfs::vis::gui {
                                 stage += "_progress";
                             jobs_.report(job, total ? static_cast<float>(static_cast<double>(done) / static_cast<double>(total)) : 0.0f, std::move(stage));
                         };
-                        const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress);
+                        const auto mode = action == ModelCacheAction::Verify ? preprocessing::ModelPreparationMode::Verify : preprocessing::ModelPreparationMode::Acquire;
+                        const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode);
                         if (!result) {
                             jobs_.finishWork(job, result.error().code() == lfs::ErrorCode::Cancelled,
                                              std::string(result.error().detail()), result.error().code(), result.error());
