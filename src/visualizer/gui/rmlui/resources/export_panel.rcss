@@ -177,6 +177,7 @@
 
 .ep-buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: 6dp;
     justify-content: flex-end;
     border-top-width: 1dp;
@@ -186,7 +187,7 @@
 
 .ep-action-btn {
     box-sizing: border-box;
-    width: 78dp;
+    flex-shrink: 0;
     min-width: 78dp;
     min-height: 24dp;
     text-align: center;
