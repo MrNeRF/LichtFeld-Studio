@@ -282,7 +282,9 @@ namespace lfs::vis {
             OutputSlot output_slot,
             lfs::core::Tensor& destination,
             int destination_x,
-            int destination_y) const;
+            int destination_y,
+            int source_y = 0,
+            int source_height = 0) const;
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
             VulkanContext& context,
             OutputSlot output_slot,

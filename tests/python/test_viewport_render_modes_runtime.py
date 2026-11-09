@@ -60,3 +60,20 @@ for u in (.025, .975):
     sample = image[h//2, int(w*u)].tolist()
     assert sample[1] > .4, (u, sample)
 """)
+
+
+def test_large_normal_export_has_no_band_seams(normal_endpoint, tmp_path):
+    from PIL import Image
+
+    _editor(normal_endpoint, """
+lf.get_render_settings().equirectangular = False
+lf.set_viewport_render_mode('normal')
+lf.set_camera((0,0,1), (0,0,0))
+""")
+    path = tmp_path / "normal-bands.png"
+    _editor(normal_endpoint, f"lf.export_viewport_image({str(path)!r}, width=4096, height=4352, include_provenance=False)")
+    image = Image.open(path)
+    # This sheet covers the image height. Any dark interior row is a band seam.
+    for y in range(8, image.height - 8):
+        pixel = image.getpixel((image.width // 2, y))
+        assert max(pixel) > 80, (y, pixel)

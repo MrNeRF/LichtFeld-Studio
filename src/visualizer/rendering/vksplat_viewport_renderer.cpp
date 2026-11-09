@@ -7526,7 +7526,9 @@ namespace lfs::vis {
         const OutputSlot output_slot,
         lfs::core::Tensor& destination,
         const int destination_x,
-        const int destination_y) const {
+        const int destination_y,
+        const int source_y,
+        const int source_height) const {
         if (!destination.is_valid() ||
             destination.device() != lfs::core::Device::CPU ||
             destination.ndim() != 3 ||
@@ -7564,12 +7566,17 @@ namespace lfs::vis {
             return std::unexpected(
                 "VkSplat output readback has no submitted image producer to wait on");
         }
+        if (source_y < 0 || source_y >= output.size.y || source_height < 0 ||
+            source_height > output.size.y - source_y) {
+            return std::unexpected("VkSplat output readback source rows are out of range");
+        }
+        const int readback_height = source_height > 0 ? source_height : output.size.y - source_y;
         const int destination_width = static_cast<int>(destination.size(1));
         const int destination_height = static_cast<int>(destination.size(0));
         if (destination_x > destination_width ||
             destination_y > destination_height ||
             output.size.x > destination_width - destination_x ||
-            output.size.y > destination_height - destination_y) {
+            readback_height > destination_height - destination_y) {
             return std::unexpected("VkSplat output readback destination region is too small");
         }
 
@@ -7579,7 +7586,7 @@ namespace lfs::vis {
 
         const VkDeviceSize byte_count =
             static_cast<VkDeviceSize>(output.size.x) *
-            static_cast<VkDeviceSize>(output.size.y) *
+            static_cast<VkDeviceSize>(readback_height) *
             static_cast<VkDeviceSize>(4);
         if (byte_count == 0) {
             return std::unexpected("VkSplat output readback has zero bytes");
@@ -7634,9 +7641,10 @@ namespace lfs::vis {
         VkBufferImageCopy copy_region{};
         copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         copy_region.imageSubresource.layerCount = 1;
+        copy_region.imageOffset.y = source_y;
         copy_region.imageExtent = {
             static_cast<std::uint32_t>(output.size.x),
-            static_cast<std::uint32_t>(output.size.y),
+            static_cast<std::uint32_t>(readback_height),
             1};
         vkCmdCopyImageToBuffer(command_buffer,
                                output.image.image,
@@ -7662,7 +7670,7 @@ namespace lfs::vis {
         meta.source_image = output.image.image;
         meta.byte_count = byte_count;
         meta.width = output.size.x;
-        meta.height = output.size.y;
+        meta.height = readback_height;
         meta.dest_x = destination_x;
         meta.dest_y = destination_y;
         meta.dest_width = destination_width;
