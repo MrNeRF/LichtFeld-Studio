@@ -92,6 +92,22 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(matching->ptr<float>()[(height / 2 * width + width / 2) * 3], 0.0f);
     }
 
+    TEST(GTComparisonLoss, CaptureIgnoresEnvironmentAndAlphaWhenComparingRgb) {
+        constexpr int width = 9, height = 7;
+        auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::full(
+            {4, height, width}, 0.5f, lfs::core::Device::CPU));
+        std::fill_n(image->ptr<float>() + 3 * width * height, width * height, 0.0f);
+        VulkanSplitViewParams params;
+        params.loss_visualization = true;
+        params.content_rect = {0, 0, width, height};
+        params.left.image = params.right.image = image;
+        params.right.environment.enabled = true;
+        const auto capture = RenderingManager::composeSplitViewCpu(params, {width, height});
+        ASSERT_TRUE(capture);
+        for (int i = 0; i < width * height * 3; ++i)
+            EXPECT_FLOAT_EQ(capture->ptr<float>()[i], 0.0f);
+    }
+
     TEST(GTComparisonLoss, LossModeDoesNotExposeDraggableDivider) {
         RenderingManager manager;
         auto settings = manager.getSettings();

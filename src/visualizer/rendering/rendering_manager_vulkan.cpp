@@ -703,9 +703,9 @@ namespace lfs::vis {
             apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
             apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
 
-            const auto load_environment = [](const VulkanEnvironmentParams& environment) {
+            const auto load_environment = [&params](const VulkanEnvironmentParams& environment) {
                 std::shared_ptr<const lfs::rendering::EnvironmentImage> image;
-                if (environment.enabled && environment.map_path) {
+                if (!params.loss_visualization && environment.enabled && environment.map_path) {
                     auto loaded = lfs::rendering::loadEnvironmentImageShared(*environment.map_path);
                     if (loaded) {
                         image = *loaded;
@@ -820,7 +820,7 @@ namespace lfs::vis {
                                        glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
                                        glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
                 }
-                if (panel.environment.enabled) {
+                if (panel.environment.enabled && !params.loss_visualization) {
                     const auto& environment = panel.environment;
                     const auto& image = environment_image;
                     glm::vec3 background{0.0f};
