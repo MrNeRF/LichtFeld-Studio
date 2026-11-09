@@ -318,6 +318,7 @@ namespace {
             real_context_->SetDensityIndependentPixelRatio(scale);
             for (int width : {360, 720}) {
                 real_context_->SetDimensions({int(width * scale), int(400 * scale)});
+                overlay_.setToolbarPanels(0.0f, width * scale, 18.0f * scale);
                 for (bool collapsed : {false, true}) {
                     overlay_.setSideDocks(true, collapsed, true, !collapsed);
                     real_context_->Update();
@@ -330,6 +331,15 @@ namespace {
                         EXPECT_GT(size.x, 0.0f);
                         EXPECT_GE(pos.x, 0.0f);
                         EXPECT_LE(pos.x + size.x, width * scale);
+                        if (std::string_view(id) == "left-side-dock-toggle") {
+                            auto* tools = doc->GetElementById("primary-utility-toolbar");
+                            ASSERT_NE(tools, nullptr);
+                            EXPECT_LE(pos.x + size.x, tools->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+                        }
+                        auto* grip = button->QuerySelector(".side-dock-grip");
+                        ASSERT_NE(grip, nullptr);
+                        const bool is_collapsed = button->IsClassSet("collapsed");
+                        EXPECT_EQ(grip->GetDisplay() == Rml::Style::Display::None, is_collapsed);
                         auto* hit = real_context_->GetElementAtPoint(pos + size * 0.5f);
                         while (hit && hit != button)
                             hit = hit->GetParentNode();

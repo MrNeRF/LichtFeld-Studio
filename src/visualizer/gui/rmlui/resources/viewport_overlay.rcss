@@ -2314,7 +2314,7 @@ body {
 
 .gamepad-navigation-indicator.hidden { display: none; }
 
-/* Edge handles use the existing overlay context and shared button states. */
+/* Compact edge targets keep the tool rail clear; shared button focus remains. */
 .side-dock-toggle {
     position: absolute;
     display: flex;
@@ -2322,17 +2322,25 @@ body {
     justify-content: center;
     box-sizing: border-box;
     top: 50%;
-    margin-top: -24dp;
-    width: 20dp;
-    height: 48dp;
+    margin-top: -16dp;
+    width: 14dp;
+    height: 32dp;
     min-width: 0;
     padding: 0;
-    font-size: 20dp;
+    font-size: 12dp;
+    border-radius: 3dp;
     z-index: 15;
 }
 .side-dock-toggle.hidden { display: none; }
 .side-dock-toggle.left { left: 0; }
 .side-dock-toggle.right { right: 0; }
-.side-dock-toggle .dock-expand-arrow,
-.side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }
+.side-dock-grip { width: 2dp; height: 16dp; border-radius: 1dp; }
+.side-dock-toggle .dock-collapse-arrow,
+.side-dock-toggle .dock-expand-arrow { display: none; }
+.side-dock-toggle:hover .side-dock-grip,
+.side-dock-toggle:focus .side-dock-grip,
+.side-dock-toggle.collapsed .side-dock-grip { display: none; }
+.side-dock-toggle:hover .dock-collapse-arrow,
+.side-dock-toggle:focus .dock-collapse-arrow,
 .side-dock-toggle.collapsed .dock-expand-arrow { display: inline; }
+.side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }

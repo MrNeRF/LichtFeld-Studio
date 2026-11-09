@@ -1163,7 +1163,11 @@ namespace lfs::vis::gui {
         const float dpi = lfs::python::get_shared_dpi_scale();
         const float panel_w = computeLeftDockReservedWidth(show_main_panel, ui_hidden, screen);
         const float edge_x = screen.work_pos.x + panel_w;
-        const float toolbar_inset = TOOLBAR_INSET * dpi;
+        // The 14 dp collapse target and the tools must never share a hit region.
+        constexpr float kSideDockToolbarInset = 18.0f;
+        const bool dock_controls = show_main_panel && !ui_hidden &&
+                                   PanelRegistry::instance().has_panels(PanelSpace::LeftDock);
+        const float toolbar_inset = (dock_controls ? kSideDockToolbarInset : TOOLBAR_INSET) * dpi;
         const auto edge_zone = resizeHitZone(edge_x, dpi);
         return {
             .panel_x = screen.work_pos.x,

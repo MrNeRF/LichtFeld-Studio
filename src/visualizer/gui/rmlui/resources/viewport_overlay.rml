@@ -7,10 +7,10 @@
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
     <button id="left-side-dock-toggle" class="btn side-dock-toggle left hidden">
-        <span class="dock-collapse-arrow">‹</span><span class="dock-expand-arrow">›</span>
+        <span class="side-dock-grip"></span><span class="dock-collapse-arrow">‹</span><span class="dock-expand-arrow">›</span>
     </button>
     <button id="right-side-dock-toggle" class="btn side-dock-toggle right hidden">
-        <span class="dock-collapse-arrow">›</span><span class="dock-expand-arrow">‹</span>
+        <span class="side-dock-grip"></span><span class="dock-collapse-arrow">›</span><span class="dock-expand-arrow">‹</span>
     </button>
     <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden">
         <div class="gamepad-indicator-heading">

@@ -885,7 +885,7 @@ TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
             const auto docked = layout.computeLeftDockLayout(true, false, s);
             EXPECT_FLOAT_EQ(docked.panel_x, s.work_pos.x);
             EXPECT_FLOAT_EQ(docked.panel_width, width * dpi);
-            EXPECT_FLOAT_EQ(docked.toolbar_x, s.work_pos.x + (width + 8.0f) * dpi);
+            EXPECT_FLOAT_EQ(docked.toolbar_x, s.work_pos.x + (width + 18.0f) * dpi);
             EXPECT_FLOAT_EQ(projects->last_draw_x, docked.panel_x);
             EXPECT_FLOAT_EQ(layout.computeViewportLayout(true, false, false, s).pos.x,
                             docked.panel_x + docked.panel_width);
@@ -893,6 +893,12 @@ TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
             EXPECT_FLOAT_EQ(projects->last_cached_x, docked.panel_x);
             EXPECT_FLOAT_EQ(projects->last_cached_width,
                             resizeContentWidth(docked.panel_width, dpi));
+
+            layout.setSideDockCollapsed(false, true);
+            const auto collapsed = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(collapsed.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(collapsed.toolbar_x, s.work_pos.x + 18.0f * dpi);
+            layout.setSideDockCollapsed(false, false);
 
             reg.set_panel_enabled("lfs.asset_manager", false);
             layout.renderLeftDock(ctx, true, false, input, s);
@@ -912,7 +918,7 @@ TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
         layout.renderLeftDock(ctx, true, false, input, s);
         const auto other = layout.computeLeftDockLayout(true, false, s);
         EXPECT_FLOAT_EQ(other.panel_x, s.work_pos.x);
-        EXPECT_FLOAT_EQ(other.toolbar_x, s.work_pos.x + other.panel_width + 8.0f * dpi);
+        EXPECT_FLOAT_EQ(other.toolbar_x, s.work_pos.x + other.panel_width + 18.0f * dpi);
         EXPECT_GT(other.panel_width, 0.0f);
         reg.unregister_panel("test.other.left");
 
@@ -1022,7 +1028,7 @@ TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand
     const auto after = layout.computeLeftDockLayout(true, false, s);
     EXPECT_FLOAT_EQ(after.panel_width, before.panel_width + 180.0f);
     EXPECT_FLOAT_EQ(after.toolbar_x, after.panel_x + after.panel_width +
-                                         8.0f * lfs::python::get_shared_dpi_scale());
+                                         18.0f * lfs::python::get_shared_dpi_scale());
     EXPECT_LE(after.edge_max_x, after.toolbar_x);
     input.mouse_down[0] = false;
     input.mouse_x = s.work_pos.x + s.work_size.x + 200.0f;
