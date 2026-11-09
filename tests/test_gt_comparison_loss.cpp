@@ -4,10 +4,24 @@
 #include "core/tensor.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 
 namespace lfs::vis {
+    TEST(GTComparisonLoss, LossRequestsUseRgbWithoutChangingTheDepthPreference) {
+        Viewport viewport{64, 64};
+        FrameContext frame{.viewport = viewport};
+        frame.settings.depth_view = true;
+        frame.settings.split_view_mode = SplitViewMode::GTComparison;
+        EXPECT_TRUE(buildViewportRenderRequest(frame, {64, 64}).depth_view);
+        frame.settings.gt_comparison_mode = GTComparisonMode::Loss;
+        EXPECT_FALSE(buildViewportRenderRequest(frame, {64, 64}).depth_view);
+        EXPECT_TRUE(frame.settings.depth_view);
+        frame.settings.split_view_mode = SplitViewMode::Disabled;
+        EXPECT_TRUE(buildViewportRenderRequest(frame, {64, 64}).depth_view);
+    }
+
     TEST(GTComparisonLoss, MatchingPixelsAreBlackAndLargerErrorsAreBrighter) {
         const glm::vec3 reference{0.4f, 0.5f, 0.6f};
         EXPECT_EQ(gtLossHeatmapColor(reference, reference), glm::vec3(0.0f));
