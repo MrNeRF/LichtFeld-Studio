@@ -77,3 +77,16 @@ lf.set_camera((0,0,1), (0,0,0))
     for y in range(8, image.height - 8):
         pixel = image.getpixel((image.width // 2, y))
         assert max(pixel) > 80, (y, pixel)
+
+
+def test_legacy_depth_api_opens_and_closes_controls(normal_endpoint):
+    _editor(normal_endpoint, """
+for mode in ('rgb', 'depth', 'normal'):
+    lf.set_viewport_render_mode(mode)
+    lf.set_render_mode_controls_open(True)
+    lf.set_depth_view(False)
+    assert not lf.get_render_mode_controls_open()
+    assert lf.get_viewport_render_mode() == ('normal' if mode == 'normal' else 'rgb')
+    lf.set_depth_view(True)
+    assert lf.get_render_mode_controls_open() and lf.get_depth_view()
+""")

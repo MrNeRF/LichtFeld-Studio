@@ -3418,9 +3418,9 @@ NB_MODULE(lichtfeld, m) {
             const bool before = rm->getSettings().depth_view;
             auto settings = rm->getSettings();
             settings.depth_view = enabled;
+            settings.render_mode_controls_open = enabled;
             if (enabled) {
                 settings.normal_view = false;
-                settings.render_mode_controls_open = true;
             }
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
             markViewSettingIfChanged(before, rm->getSettings().depth_view);
