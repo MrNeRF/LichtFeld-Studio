@@ -17,6 +17,29 @@ _current = None
 _log = logging.getLogger(__name__)
 
 
+def _discard_prepared_result(future):
+    try:
+        source, _, _ = future.result()
+    except Exception:
+        return  # Preparation already failed or was cancelled; it owns cleanup.
+    source.__exit__(None, None, None)
+
+
+def _retain_import_source(source, path):
+    """Follow the native import independently of the panel or selected trainer."""
+    def poll():
+        state = lf.ui.get_import_state()
+        if state.get("active") and os.path.normcase(os.path.normpath(state.get("source_path", ""))) == path:
+            timer = threading.Timer(0.1, lambda: lf.ui.schedule_on_ui_thread(poll))
+            timer.daemon = True
+            timer.start()
+        else:
+            # Removing a large temporary file must not perform I/O on the UI thread.
+            threading.Thread(target=source.__exit__, args=(None, None, None),
+                             name="saved-result-cleanup", daemon=True).start()
+    poll()
+
+
 class ExternalTrainingPanel(Panel):
     id = "lfs.external_training"
     label = "external_training.title"
@@ -76,7 +99,10 @@ class ExternalTrainingPanel(Panel):
         # Hiding the panel leaves the connected observer running.
         self._result_cancel.set()
         if self._executor:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            if self._result_future:
+                self._executor.submit(_discard_prepared_result, self._result_future)
+                self._result_future = self._result_target = None
+            self._executor.shutdown(wait=False)
         self._executor = self._scan = None
         doc.remove_data_model("external_training")
         self._handle = None
@@ -90,14 +116,17 @@ class ExternalTrainingPanel(Panel):
 
     def on_update(self, doc):
         if self._result_future and self._result_future.done():
+            source = None
             try:
-                path, transform = self._result_future.result()
+                source, path, transform = self._result_future.result()
                 if (not self._result_cancel.is_set() and _current is self._result_target
                         and _current.scene.get_node_by_uuid(_current.uuid)):
                     name = lf.ui.tr("external_training.result_name").format(name=_current.record.get("label") or _current.record["id"])
                     if not _current.scene.import_splat_file(str(path), name, transform):
                         raise RuntimeError(lf.ui.tr("external_training.import_busy"))
                     self._result_load = (_current, os.path.normcase(os.path.normpath(str(path))))
+                    _retain_import_source(source, self._result_load[1])
+                    source = None  # Native import lifetime now owns the private copy.
             except Exception as error:
                 if not self._result_cancel.is_set():
                     _log.warning("Saved model import failed: %s", error)
@@ -108,6 +137,8 @@ class ExternalTrainingPanel(Panel):
                     else:
                         self._result_error = str(error)
             finally:
+                if source is not None:
+                    self._executor.submit(source.__exit__, None, None, None)
                 self._result_future = self._result_target = None
         if self._result_load:
             state = lf.ui.get_import_state()
@@ -253,9 +284,16 @@ class ExternalTrainingPanel(Panel):
 
         def prepare():
             np = ensure_numpy(lf, cancel)
-            path, value = resolve_result(status, cancel)
-            transform = presentation_transform(value, np) @ geometry.matrix(value.get("model_to_data", geometry.IDENTITY))
-            return path, np.asarray(transform, dtype=np.float32)
+            source = resolve_result(status, cancel)
+            path, value = source.__enter__()
+            try:
+                transform = presentation_transform(value, np) @ geometry.matrix(value.get("model_to_data", geometry.IDENTITY))
+                if cancel():
+                    raise InterruptedError("Saved model import cancelled")
+                return source, path, np.asarray(transform, dtype=np.float32)
+            except BaseException:
+                source.__exit__(None, None, None)
+                raise
 
         if self._executor is None:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trainer-discovery")

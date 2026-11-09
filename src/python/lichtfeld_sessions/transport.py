@@ -10,7 +10,7 @@ import math
 import mmap
 import os
 import stat
-from _lfs_path_io import Path, native_path
+from _lfs_path_io import Path, TemporaryDirectory, native_path
 import threading
 import time
 import uuid
@@ -244,7 +244,7 @@ def artifact_path(root, relative):
     return path
 
 
-def digest_stream(stream, should_cancel=lambda: False):
+def digest_stream(stream, should_cancel=lambda: False, destination=None):
     digest = hashlib.sha256()
     while True:
         if should_cancel():
@@ -253,10 +253,12 @@ def digest_stream(stream, should_cancel=lambda: False):
         if not block:
             return digest.hexdigest()
         digest.update(block)
+        if destination is not None:
+            destination.write(block)
 
 
 @contextmanager
-def verified_artifact(path, record, should_cancel=lambda: False):
+def verified_artifact(path, record, should_cancel=lambda: False, *, destination=None):
     """Yield the verified stream at its start; decoding reuses this same handle."""
     path = Path(path)
     if should_cancel():
@@ -266,14 +268,22 @@ def verified_artifact(path, record, should_cancel=lambda: False):
     with path.open("rb") as stream:
         if os.fstat(stream.fileno()).st_size != record["bytes"]:
             raise ValueError("Artifact size changed")
-        if digest_stream(stream, should_cancel) != record["sha256"]:
+        if digest_stream(stream, should_cancel, destination) != record["sha256"]:
             raise ValueError("Artifact integrity check failed")
-        stream.seek(0)
-        yield stream
+        if destination is not None and destination.tell() != record["bytes"]:
+            raise ValueError("Artifact size changed")
+        verified = stream if destination is None else destination
+        verified.seek(0)
+        yield verified
 
 
+@contextmanager
 def resolve_result(record, should_cancel=lambda: False):
-    """Verify a completed full-model artifact on a worker, before native import."""
+    """Own a private verified copy until the asynchronous consumer finishes.
+
+    Hash the bytes being copied, not a pathname that the producer can replace
+    before the native loader opens it. Enter and exit on a worker thread.
+    """
     if not isinstance(record, dict) or record.get("state") not in TERMINAL:
         raise ValueError("The trainer has not finished saving its result")
     result = validate_result(record.get("result"))
@@ -285,8 +295,14 @@ def resolve_result(record, should_cancel=lambda: False):
         raise ValueError("Unsupported saved model format")
     from . import geometry
     presentation = geometry.validate(result.get("presentation"))
-    with verified_artifact(path, result, should_cancel):
-        return path, presentation
+    with TemporaryDirectory(prefix="lichtfeld-result-") as directory:
+        staged = Path(directory) / path.name
+        with staged.open("w+b") as output:
+            with verified_artifact(path, result, should_cancel, destination=output):
+                pass
+        if should_cancel():
+            raise InterruptedError("Artifact verification cancelled")
+        yield staged, presentation
 
 
 def prune_session(directory, record, max_age=86400):

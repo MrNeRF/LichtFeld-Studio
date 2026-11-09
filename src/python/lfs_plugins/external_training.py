@@ -26,7 +26,7 @@ def presentation_transform(value, np):
     value = value or {}
     if value.get("source_frame") == "blender-world":
         blender_to_view = np.array(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))
-        return geometry.matrix(geometry.FLIP) @ blender_to_view @ geometry.matrix(value["data_to_source"])
+        return geometry.matrix(geometry.FLIP) @ blender_to_view @ geometry.matrix(value.get("data_to_source", geometry.FLIP))
     return np.eye(4)
 
 

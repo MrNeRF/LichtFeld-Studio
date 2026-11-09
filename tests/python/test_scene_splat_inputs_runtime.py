@@ -78,6 +78,11 @@ def test_completed_training_imports_full_model_with_result_coordinates(camera_ru
 import numpy as np, time
 import lfs_plugins.external_training_panel as panel
 from lfs_plugins.external_training import ExternalTraining
+from lfs_plugins.external_training import presentation_transform
+from lichtfeld_sessions import geometry
+np.testing.assert_array_equal(
+    presentation_transform({"schema": 1, "source_frame": "blender-world"}, np),
+    presentation_transform({"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP}, np))
 scene = lf.get_scene()
 def tensor(value):
     return lf.Tensor.from_numpy(np.ascontiguousarray(value, dtype=np.float32))
@@ -131,12 +136,23 @@ assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
         _editor(camera_runtime, '''
 assert wait_until(controls._result_future.done, 10)
 ''')
-        _ui_editor(camera_runtime, 'controls.on_update(None)\nassert not controls._message(), controls._message()')
+        # Replace the producer's path after verification, before native loading.
+        # Only the private, checksum-covered copy may reach the native parser.
+        artifact.write_bytes(b"replacement is not a Gaussian PLY")
+        _ui_editor(camera_runtime, '''
+staged_result_path = str(controls._result_future.result()[1])
+controls.on_update(None)
+assert not controls._message(), controls._message()
+from types import SimpleNamespace
+controls.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
+''')
         _editor(camera_runtime, '''
 assert wait_until(lambda: lf.ui.get_import_state().get("success") or lf.ui.get_import_state().get("error"), 20)
 assert lf.ui.get_import_state()["success"], lf.ui.get_import_state()
 assert lf.ui.get_import_state()["path"] == "saved-full.ply"
 assert lf.ui.get_import_state()["source_path"].endswith("saved-full.ply")
+from pathlib import Path
+assert wait_until(lambda: not Path(staged_result_path).exists(), 10), "Verified copy was not released"
 ''')
         _ui_editor(camera_runtime, '''
 controls.on_update(None)
