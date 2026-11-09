@@ -358,6 +358,20 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
         lfs_io lfs_visualizer lfs_core lfs_python_runtime
         GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_executable(lichtfeld_gt_compare_tests test_gt_comparison_loss.cpp)
+    target_compile_features(lichtfeld_gt_compare_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_gt_compare_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(lichtfeld_gt_compare_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime
+        GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_gt_compare_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_gt_compare_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.gt_compare COMMAND lichtfeld_gt_compare_tests)
+    set_tests_properties(lichtfeld.gt_compare PROPERTIES LABELS "fast;cpu;rendering" TIMEOUT 60
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
         --gtest_filter=SidebarInputDispatchTest.Sidebar*)
     set_tests_properties(lichtfeld.sidebar_input PROPERTIES

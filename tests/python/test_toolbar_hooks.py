@@ -190,6 +190,7 @@ class _DocumentStub:
                 "overlay-body",
                 "dm-root",
                 "depth-view-block",
+                "gt-compare-mode-block",
                 "viewport-export-block",
                 "viewport-export-status",
                 "selection-block",
@@ -311,6 +312,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "selection_depth_far_slider_min" in model.bound_funcs
     assert "selection_depth_far_slider_max" in model.bound_funcs
     assert "selection_action" in model.bound_events
+    assert "gt_compare_mode_value" in model.bound_binds
+    assert "gt_compare_depth_mode_value" in model.bound_funcs
     assert "transform_show_translate" in model.bound_funcs
     assert "transform_show_rotate" in model.bound_funcs
     assert "transform_show_scale" in model.bound_funcs
@@ -384,6 +387,48 @@ def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
     module.attach_overlay_model_handle(handle)
 
     assert handle.dirty_all_calls == 1
+
+
+def test_gt_compare_controls_track_depth_visualization_mode(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gt_comparison_mode", lambda: "depth", raising=False)
+    monkeypatch.setattr(lf_stub, "get_depth_view_mode", lambda: "gray", raising=False)
+
+    model = _DataModelStub()
+    doc = _DocumentStub()
+    controller = module.GTCompareControlsController()
+    controller.bind_model(model)
+    controller.mount(doc)
+
+    assert controller.update(doc) == "visibility,mode"
+    assert model.bound_funcs["gt_compare_depth_mode_value"]() == "gray"
+    assert "gt_compare_depth_mode_value" in model.handle.dirty_calls
+    assert "hidden" not in doc.elements["gt-compare-mode-block"].classes
+
+
+def test_gt_compare_controls_select_loss_and_follow_external_mode_changes(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = {"mode": "rgb", "depth": "palette"}
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gt_comparison_mode", lambda: state["mode"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_gt_comparison_mode", lambda mode: state.update(mode=mode), raising=False)
+    monkeypatch.setattr(lf_stub, "get_depth_view_mode", lambda: state["depth"], raising=False)
+    model = _DataModelStub()
+    doc = _DocumentStub()
+    controller = module.GTCompareControlsController()
+    controller.bind_model(model)
+    controller.mount(doc)
+    controller.update(doc)
+    controller._set_mode(" LOSS ")
+    assert state["mode"] == "loss"
+    assert controller._mode == "loss"
+    state.update(mode="depth", depth="gray")
+    assert controller.update(doc) == "mode"
+    assert model.bound_funcs["gt_compare_depth_mode_value"]() == "gray"
+    assert controller.update(doc) is None
 
 
 def test_button_record_resolves_toolbar_tooltip(toolbar_module, monkeypatch):
@@ -2214,6 +2259,28 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-radius: 5dp;" in scene_body_rule
     assert "overflow: hidden;" in scene_body_rule
     assert "border-color: @{right_panel.border};" in scene_tree_theme
+
+
+def test_gt_compare_modes_show_matching_color_legends():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+
+    assert 'data-if="gt_compare_mode_value == \'depth\'"' in rml
+    assert 'data-if="gt_compare_depth_mode_value == \'palette\'"' in rml
+    assert 'data-if="gt_compare_depth_mode_value == \'gray\'"' in rml
+    assert "@tr:ui.far" in rml
+    assert "@tr:ui.near" in rml
+    assert "horizontal-gradient(#0d0a26 #0f3280)" in rcss
+    assert "horizontal-gradient(#f6d14d #fb6e20)" in rcss
+    assert "horizontal-gradient(#000000 #ffffff)" in rcss
+
+    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
+    assert "@tr:tooltip.gt_loss_lower_error" in rml
+    assert "@tr:tooltip.gt_loss_higher_error" in rml
+    assert "horizontal-gradient(#000000 #380578)" in rcss
+    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
 
 
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):

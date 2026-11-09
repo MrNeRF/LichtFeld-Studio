@@ -777,89 +777,103 @@ namespace lfs::vis {
                 output[2 * pixel_count + idx] = c.b;
             };
 
+            const auto sample_panel_color = [&](const VulkanSplitViewPanel& panel,
+                                                const auto& data,
+                                                const auto& environment_image,
+                                                const float u, const float v) {
+                float panel_u = u;
+                if (panel.normalize_x_to_panel) {
+                    const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
+                    panel_u = (u - panel.start_position) / span;
+                }
+                const float panel_v = panel.flip_y ? 1.0f - v : v;
+                const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
+                                                       glm::vec2(0.0f), glm::vec2(1.0f));
+                const glm::vec2 texture_uv = glm::min(
+                    (glm::vec2(panel_u, panel_v) * panel.texcoord_scale + panel.texcoord_offset) *
+                        panel.uv_scale,
+                    clamp_max);
+                const auto sample_color = [&](const glm::vec2 sample_uv) {
+                    return glm::vec3{
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 0),
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 1),
+                        sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                               sample_uv.x, sample_uv.y, 2)};
+                };
+                glm::vec3 color = sample_color(texture_uv);
+                if (panel.spatial_filter) {
+                    constexpr float kSpatialSharpenStrength = 0.18f;
+                    const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
+                    const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
+                    const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
+                        return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
+                    };
+                    const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
+                    const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
+                    const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
+                    const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
+                    const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
+                                                (left + right + up + down) * kSpatialSharpenStrength;
+                    color = glm::clamp(sharpened,
+                                       glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
+                                       glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                }
+                if (panel.environment.enabled) {
+                    const auto& environment = panel.environment;
+                    const auto& image = environment_image;
+                    glm::vec3 background{0.0f};
+                    if (image) {
+                        namespace math = lfs::rendering::envmath;
+                        auto direction = math::environmentWorldDirection(
+                            panel_u * environment.viewport_size.x - 0.5f,
+                            v * environment.viewport_size.y - 0.5f,
+                            environment.viewport_size.x, environment.viewport_size.y,
+                            environment.equirectangular_view,
+                            environment.intrinsics.x, environment.intrinsics.y,
+                            environment.intrinsics.z, environment.intrinsics.w,
+                            &environment.camera_to_world[0][0]);
+                        direction = math::rotateAroundY(direction, environment.rotation_radians);
+                        const auto uv = math::equirectUvForDirection(direction);
+                        const auto radiance = math::sampleEnvironmentBilinear(
+                            [&](const int sx, const int sy) {
+                                const auto offset = (static_cast<std::size_t>(sy) * image->width + sx) * 3;
+                                return math::Vec3{image->pixels[offset], image->pixels[offset + 1], image->pixels[offset + 2]};
+                            },
+                            uv.u, uv.v, image->width, image->height);
+                        const auto shaded = math::shadeEnvironmentRadiance(radiance, std::exp2(environment.exposure));
+                        background = {shaded.x, shaded.y, shaded.z};
+                    }
+                    const float alpha = std::get<3>(data) >= 4
+                                            ? std::clamp(sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                                                texture_uv.x, texture_uv.y, 3),
+                                                         0.0f, 1.0f)
+                                            : 1.0f;
+                    color = color * alpha + background * (1.0f - alpha);
+                }
+                return color;
+            };
+
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
                 const float v = splitViewPixelCenterUv(y, rect_y, rect_h);
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
                     const float u = splitViewPixelCenterUv(x, rect_x, rect_w);
-                    const bool use_left = x < divider;
-                    const auto& panel = use_left ? left_panel : right_panel;
-                    const auto& data = use_left ? *left_data : *right_data;
-                    float panel_u = u;
-                    if (panel.normalize_x_to_panel) {
-                        const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
-                        panel_u = (u - panel.start_position) / span;
-                    }
-                    const float panel_v = panel.flip_y ? 1.0f - v : v;
-                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
-                                                           glm::vec2(0.0f), glm::vec2(1.0f));
-                    const glm::vec2 texture_uv = glm::min(
-                        (glm::vec2(panel_u, panel_v) * panel.texcoord_scale + panel.texcoord_offset) *
-                            panel.uv_scale,
-                        clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    const auto sample_color = [&](const glm::vec2 sample_uv) {
-                        return glm::vec3{
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 0),
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 1),
-                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                   sample_uv.x, sample_uv.y, 2)};
-                    };
-                    glm::vec3 color = sample_color(texture_uv);
-                    if (panel.spatial_filter) {
-                        constexpr float kSpatialSharpenStrength = 0.18f;
-                        const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
-                        const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
-                        const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
-                            return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
-                        };
-                        const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
-                        const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
-                        const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
-                        const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
-                        const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
-                                                    (left + right + up + down) * kSpatialSharpenStrength;
-                        color = glm::clamp(sharpened,
-                                           glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
-                                           glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
-                    }
-                    if (panel.environment.enabled) {
-                        const auto& environment = panel.environment;
-                        const auto& image = use_left ? left_environment : right_environment;
-                        glm::vec3 background{0.0f};
-                        if (image) {
-                            namespace math = lfs::rendering::envmath;
-                            auto direction = math::environmentWorldDirection(
-                                panel_u * environment.viewport_size.x - 0.5f,
-                                v * environment.viewport_size.y - 0.5f,
-                                environment.viewport_size.x, environment.viewport_size.y,
-                                environment.equirectangular_view,
-                                environment.intrinsics.x, environment.intrinsics.y,
-                                environment.intrinsics.z, environment.intrinsics.w,
-                                &environment.camera_to_world[0][0]);
-                            direction = math::rotateAroundY(direction, environment.rotation_radians);
-                            const auto uv = math::equirectUvForDirection(direction);
-                            const auto radiance = math::sampleEnvironmentBilinear(
-                                [&](const int sx, const int sy) {
-                                    const auto offset = (static_cast<std::size_t>(sy) * image->width + sx) * 3;
-                                    return math::Vec3{image->pixels[offset], image->pixels[offset + 1], image->pixels[offset + 2]};
-                                },
-                                uv.u, uv.v, image->width, image->height);
-                            const auto shaded = math::shadeEnvironmentRadiance(radiance, std::exp2(environment.exposure));
-                            background = {shaded.x, shaded.y, shaded.z};
-                        }
-                        const float alpha = std::get<3>(data) >= 4
-                                                ? std::clamp(sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                                                    texture_uv.x, texture_uv.y, 3),
-                                                             0.0f, 1.0f)
-                                                : 1.0f;
-                        color = color * alpha + background * (1.0f - alpha);
+                    glm::vec3 color;
+                    if (params.loss_visualization) {
+                        color = gtLossHeatmapColor(
+                            sample_panel_color(left_panel, *left_data, left_environment, u, v),
+                            sample_panel_color(right_panel, *right_data, right_environment, u, v));
+                    } else if (x < divider) {
+                        color = sample_panel_color(left_panel, *left_data, left_environment, u, v);
+                    } else {
+                        color = sample_panel_color(right_panel, *right_data, right_environment, u, v);
                     }
                     write(idx, color);
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
-                    if (dist_from_split < kMinBarWidthPx * 0.5f) {
+                    if (!params.loss_visualization && dist_from_split < kMinBarWidthPx * 0.5f) {
                         glm::vec3 divider_color = kDividerColor;
                         const float dist_from_center =
                             std::abs(static_cast<float>(y) + 0.5f - center_y);
@@ -1467,7 +1481,7 @@ namespace lfs::vis {
             std::string error;
             try {
                 lfs::core::Tensor gt_tensor;
-                if (request.mode == GTComparisonMode::RGB) {
+                if (gtComparisonUsesRGBReference(request.mode)) {
                     if (request.image_loader) {
                         // The training loader's byte cache is bounded and keyed by plain
                         // path (original bytes training reuses), so writing it is fine;
@@ -1492,7 +1506,7 @@ namespace lfs::vis {
                                                                   .skip_blob_cache = true});
                     }
                 }
-                if (request.mode == GTComparisonMode::RGB) {
+                if (gtComparisonUsesRGBReference(request.mode)) {
                     if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
                         const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
                         if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
@@ -1585,7 +1599,7 @@ namespace lfs::vis {
                 image = gt_comparison_detail::convertDisplayTensorToUInt8(image);
                 if (!image || !image->is_valid()) {
                     image.reset();
-                    error = request.mode == GTComparisonMode::RGB
+                    error = gtComparisonUsesRGBReference(request.mode)
                                 ? "RGB GT comparison could not load the source image"
                             : request.mode == GTComparisonMode::Depth
                                 ? "Depth GT comparison could not load the camera depth map"
@@ -2576,7 +2590,7 @@ namespace lfs::vis {
         const bool gt_readback_pending =
             gt_async_depth_ticket_ != 0 &&
             splitViewUsesGTComparison(frame_settings.split_view_mode) &&
-            frame_settings.gt_comparison_mode != GTComparisonMode::RGB;
+            !gtComparisonUsesRGBReference(frame_settings.gt_comparison_mode);
         if (!vksplat_viewport_resize && !gt_readback_pending &&
             (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
             has_cached_viewport_output) {
@@ -2737,7 +2751,7 @@ namespace lfs::vis {
                         hosts.emplace_back(host);
                 };
                 add(inputs);
-                if (splitViewUsesGTComparison(frame_settings.split_view_mode) && frame_settings.gt_comparison_mode != GTComparisonMode::RGB)
+                if (splitViewUsesGTComparison(frame_settings.split_view_mode) && !gtComparisonUsesRGBReference(frame_settings.gt_comparison_mode))
                     add(vksplat_viewport_renderer_->prepareDecision(request, VksplatViewportRenderer::OutputSlot::Preview, synchronize_vksplat_input_upload, true).inputs);
                 // The first panel can finish warmup before the second panel submits.
                 if (planned->warmup) {
@@ -3311,7 +3325,7 @@ namespace lfs::vis {
                     std::string gt_error;
                     bool gt_loading = false;
 
-                    if (gt_mode == GTComparisonMode::RGB) {
+                    if (gtComparisonUsesRGBReference(gt_mode)) {
                         if (camera->image_path().empty() || !camera->has_image()) {
                             gt_error = "RGB GT comparison requires a source image";
                         } else {
@@ -3520,7 +3534,7 @@ namespace lfs::vis {
                             RenderedPanel compare_panel{};
                             std::string compare_error;
 
-                            if (gt_mode != GTComparisonMode::RGB) {
+                            if (!gtComparisonUsesRGBReference(gt_mode)) {
                                 // Overlay-only follow-ups deliver the pending image without
                                 // starting another readback. Preserve real changes that arrive
                                 // while the previous camera's ticket is still in flight.
@@ -3802,14 +3816,14 @@ namespace lfs::vis {
 
                             if (!compare_panel.image && compare_panel.external_image_view == VK_NULL_HANDLE &&
                                 !compare_error.empty() &&
-                                !(gt_mode == GTComparisonMode::RGB &&
+                                !(gtComparisonUsesRGBReference(gt_mode) &&
                                   isRetryableSharedScratchUnavailable(compare_error))) {
                                 LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
                                 compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
-                                if (gt_mode == GTComparisonMode::RGB) {
+                                if (gtComparisonUsesRGBReference(gt_mode)) {
                                     bool compare_panel_ppisp_applied = false;
                                     if (!compare_panel.image &&
                                         compare_panel.external_image_view != VK_NULL_HANDLE &&
@@ -3872,6 +3886,7 @@ namespace lfs::vis {
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(gt_comparison_size, true, gt_size);
                                 pending_split_view.enabled = true;
+                                pending_split_view.loss_visualization = gtComparisonShowsLoss(gt_mode);
                                 pending_split_view.split_position = frame_settings.split_position;
                                 pending_split_view.background = frame_settings.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
@@ -3892,6 +3907,10 @@ namespace lfs::vis {
                                     mode_label = "GT Normal Compare";
                                     left_name = "GT Normal";
                                     right_name = "Rendered Normal";
+                                } else if (gt_mode == GTComparisonMode::Loss) {
+                                    mode_label = "GT Loss";
+                                    left_name = "Loss";
+                                    right_name = "";
                                 }
                                 rendered_split_info = SplitViewInfo{
                                     .enabled = true,

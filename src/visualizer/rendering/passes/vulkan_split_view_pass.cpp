@@ -56,7 +56,7 @@ namespace lfs::vis {
             float rect[4];                // x, y, w, h
             float panel_norm[4];          // left_start, left_end, right_start, right_end
             float panel_flags[4];         // left_normalize, right_normalize, left_filter, right_filter
-            float background[4];          // rgb + pad
+            float background[4];          // rgb + loss visualization
             float divider[4];             // bar_half_w, handle_half_w, handle_half_h, corner_radius
             float grip[4];                // spacing, half_w, half_l, line_count
             float left_uv_scale_clamp[4]; // xy scale, zw clamp
@@ -1209,7 +1209,7 @@ namespace lfs::vis {
             push.background[0] = params.background.r;
             push.background[1] = params.background.g;
             push.background[2] = params.background.b;
-            push.background[3] = 1.0f;
+            push.background[3] = params.loss_visualization ? 1.0f : 0.0f;
 
             // Mirrors compositeSplitImages constants (kMinBarWidthPx etc).
             push.divider[0] = 4.0f * 0.5f;  // bar half-width

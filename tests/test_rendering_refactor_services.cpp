@@ -486,7 +486,7 @@ namespace lfs::vis {
     }
 
     TEST_F(GTComparisonAsyncTest, RgbAndOverlayRefreshKeepSettledPixelsAndIdle) {
-        for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal, GTComparisonMode::Depth}) {
+        for (const auto mode : {GTComparisonMode::RGB, GTComparisonMode::Normal, GTComparisonMode::Depth, GTComparisonMode::Loss}) {
             settings.gt_comparison_mode = mode;
             manager->updateSettings(settings);
             refreshReference();
