@@ -319,7 +319,18 @@
     "video_intro": "360度等距柱状投影图像训练",
     "video_reality_scan": "Reality Scan数据集",
     "video_colmap": "COLMAP教程",
-    "video_masks": "蒙版教程"
+    "video_masks": "蒙版教程",
+    "tab_editing": "编辑",
+    "video_editing_navigation": "1. 导航",
+    "video_editing_align": "2. 三点对齐",
+    "video_editing_crop": "3. 裁剪框",
+    "video_editing_transform": "4. 镜像、变换和分组",
+    "video_editing_selection": "5. 选择工具",
+    "video_editing_depth_selection": "6. 直方图和深度选择",
+    "video_editing_publish": "7. 保存、导出和发布",
+    "video_blender": "在 Blender 中使用高斯泼溅",
+    "video_normals": "在高斯泼溅中使用法线",
+    "more_videos": "更多视频"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

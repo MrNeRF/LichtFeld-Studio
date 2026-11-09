@@ -319,7 +319,18 @@
     "video_intro": "Training op 360 Equirectangulaire Afbeeldingen",
     "video_reality_scan": "Reality Scan-dataset",
     "video_colmap": "COLMAP-tutorial",
-    "video_masks": "Maskers Tutorial"
+    "video_masks": "Maskers Tutorial",
+    "tab_editing": "Bewerken",
+    "video_editing_navigation": "1. Navigatie",
+    "video_editing_align": "2. Uitlijnen met drie punten",
+    "video_editing_crop": "3. Bijsnijdvakken",
+    "video_editing_transform": "4. Spiegelen, transformeren en groepen",
+    "video_editing_selection": "5. Selectiegereedschappen",
+    "video_editing_depth_selection": "6. Histogram en diepteselectie",
+    "video_editing_publish": "7. Opslaan, exporteren en publiceren",
+    "video_blender": "Gaussiaanse splats in Blender",
+    "video_normals": "Normalen gebruiken bij Gaussian Splatting",
+    "more_videos": "Meer video’s"
   },
   "about": {
     "title": "LICHTFELD STUDIO",

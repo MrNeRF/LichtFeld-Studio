@@ -376,3 +376,22 @@ def test_getting_started_ignores_thumbnail_completion_after_unmount(panel_module
     assert panel._thumb_card_map == {}
     assert old_handle.request_update_count == 0
     assert new_handle.request_update_count == 0
+
+
+def test_getting_started_defaults_to_editing_and_switches_all_tabs(panel_modules):
+    _, getting_started = panel_modules
+    panel = getting_started.GettingStartedPanel()
+    views, events, dirty = {}, {}, []
+    model = SimpleNamespace(
+        bind_func=lambda name, getter: views.update({name: getter}),
+        bind_event=lambda name, callback: events.update({name: callback}),
+        get_handle=lambda: SimpleNamespace(dirty=dirty.append),
+    )
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _name: model))
+    assert views["show_editing"]()
+    tab_fields = {name for name in views if name.startswith("show_")}
+    for selected in ("highlights", "training", "datasets", "editing"):
+        dirty.clear()
+        events[f"show_{selected}"]()
+        assert {name for name in tab_fields if views[name]()} == {f"show_{selected}"}
+        assert set(dirty) == tab_fields
