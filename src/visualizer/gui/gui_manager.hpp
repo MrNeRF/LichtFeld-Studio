@@ -433,6 +433,7 @@ namespace lfs::vis {
             bool ui_visibility_target_ready_ = false;
             bool ui_visibility_target_hidden_ = false;
             ViewportLayout ui_visibility_target_layout_{};
+            float ui_visibility_target_console_width_ = -1.0f;
             std::chrono::steady_clock::time_point fullscreen_toggle_next_allowed_at_{};
             std::chrono::steady_clock::time_point interactive_transition_guard_until_{};
             bool fullscreen_toggle_pending_ = false;

@@ -227,6 +227,29 @@ namespace lfs::vis {
         EXPECT_FALSE(gui->ui_toggle_pending_);
         EXPECT_FALSE(gui->ui_visibility_target_hidden_);
         EXPECT_TRUE(gui->ui_visibility_target_ready_);
+        // Reopening a dock must commit the same console width used by its prepared frame.
+        gui->ui_visibility_resize_active_ = false;
+        gui->ui_visibility_layout_committed_ = false;
+        gui->ui_visibility_target_ready_ = false;
+        const gui::ScreenState screen{.work_size = {900.0f, 600.0f}};
+        gui->ui_hidden_ = false;
+        gui->window_states_["python_console"] = true;
+        gui->last_ui_layout_work_pos_ = screen.work_pos;
+        gui->last_ui_layout_work_size_ = screen.work_size;
+        gui->panel_layout_.setSideDockCollapsed(false, true);
+        gui->panel_layout_.setRightPanelWidth(360.0f, screen);
+        gui->panel_layout_.setSideDockCollapsed(true, true);
+        gui->panel_layout_.setPythonConsoleWidth(450.0f);
+        gui->side_dock_toggle_pending_ = 2;
+        gui->updateUiVisibilityTransition();
+        ASSERT_TRUE(gui->ui_visibility_target_ready_);
+        const auto prepared = gui->ui_visibility_target_layout_;
+        EXPECT_FLOAT_EQ(prepared.size.x, 198.0f);
+        EXPECT_FLOAT_EQ(gui->panel_layout_.getPythonConsoleWidth(), 450.0f);
+        gui->commitUiVisibilityTransitionIfFrameReady(true);
+        EXPECT_FLOAT_EQ(gui->panel_layout_.getPythonConsoleWidth(), 338.0f);
+        gui->panel_layout_.enforceWidthConstraints(true, false, screen);
+        EXPECT_EQ(gui->panel_layout_.computeViewportLayout(true, false, true, screen).size, prepared.size);
     }
 
 } // namespace lfs::vis

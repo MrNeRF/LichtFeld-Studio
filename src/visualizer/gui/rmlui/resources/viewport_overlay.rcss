@@ -2332,8 +2332,9 @@ body {
     z-index: 15;
 }
 .side-dock-toggle.hidden { display: none; }
-.side-dock-toggle.left { left: 0; }
-.side-dock-toggle.right { right: 0; }
+/* Keep targets beyond the 4 dp dock resize bands. */
+.side-dock-toggle.left { left: 6dp; }
+.side-dock-toggle.right { right: 6dp; }
 .side-dock-grip { width: 2dp; height: 16dp; border-radius: 1dp; }
 .side-dock-toggle .dock-collapse-arrow,
 .side-dock-toggle .dock-expand-arrow { display: none; }

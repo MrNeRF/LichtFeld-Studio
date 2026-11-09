@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
@@ -34,6 +37,13 @@ namespace lfs::vis::gui {
             overlay.rml_context_ = document->GetContext();
             overlay.vp_size_ = {920, 840};
             overlay.toolbar_position_preference_dirty_ = false;
+        }
+        static void bindDockControls(RmlViewportOverlay& overlay) {
+            for (const char* id : {"left-side-dock-toggle", "right-side-dock-toggle"}) {
+                auto* element = overlay.document_->GetElementById(id);
+                element->AddEventListener("keydown", &overlay.side_dock_listener_);
+                element->AddEventListener("click", &overlay.side_dock_listener_);
+            }
         }
         static bool update(RmlViewportOverlay& overlay) { return overlay.updateToolbarRoots(); }
         static void bindStore(RmlViewportOverlay& overlay) { overlay.bindReactiveStore(); }
@@ -314,11 +324,15 @@ namespace {
         ASSERT_NE(doc, nullptr);
         lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, doc);
         doc->Show();
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::bindDockControls(overlay_);
+        int toggles = 0;
+        lfs::event::ScopedHandler subscription;
+        subscription.subscribe<lfs::core::events::ui::ToggleSideDock>([&](const auto&) { ++toggles; });
         for (float scale : {1.0f, 1.5f, 2.0f}) {
             real_context_->SetDensityIndependentPixelRatio(scale);
             for (int width : {360, 720}) {
                 real_context_->SetDimensions({int(width * scale), int(400 * scale)});
-                overlay_.setToolbarPanels(0.0f, width * scale, 18.0f * scale);
+                overlay_.setToolbarPanels(0.0f, width * scale, 22.0f * scale);
                 for (bool collapsed : {false, true}) {
                     overlay_.setSideDocks(true, collapsed, true, !collapsed);
                     real_context_->Update();
@@ -329,8 +343,8 @@ namespace {
                         const auto pos = button->GetAbsoluteOffset(Rml::BoxArea::Border);
                         const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
                         EXPECT_GT(size.x, 0.0f);
-                        EXPECT_GE(pos.x, 0.0f);
-                        EXPECT_LE(pos.x + size.x, width * scale);
+                        EXPECT_GT(pos.x, 4.0f * scale);
+                        EXPECT_LT(pos.x + size.x, (width - 4.0f) * scale);
                         if (std::string_view(id) == "left-side-dock-toggle") {
                             auto* tools = doc->GetElementById("primary-utility-toolbar");
                             ASSERT_NE(tools, nullptr);
@@ -348,10 +362,17 @@ namespace {
                             real_context_->Update();
                             EXPECT_NE(grip->GetDisplay(), Rml::Style::Display::None);
                             EXPECT_EQ(arrow->GetDisplay(), Rml::Style::Display::None);
+                            Rml::Dictionary key;
+                            key["key_identifier"] = int(Rml::Input::KI_SPACE);
+                            const int before = toggles;
+                            button->DispatchEvent("keydown", key);
+                            EXPECT_EQ(toggles, before);
                             button->SetPseudoClass("focus-visible", true);
                             real_context_->Update();
                             EXPECT_EQ(grip->GetDisplay(), Rml::Style::Display::None);
                             EXPECT_NE(arrow->GetDisplay(), Rml::Style::Display::None);
+                            button->DispatchEvent("keydown", key);
+                            EXPECT_EQ(toggles, before + 1);
                             button->SetPseudoClass("focus-visible", false);
                             button->SetPseudoClass("focus", false);
                             real_context_->Update();
@@ -364,6 +385,25 @@ namespace {
                 }
             }
         }
+        auto& locale = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(locale.initialize((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        const auto previous_language = locale.getCurrentLanguage();
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::bindStore(overlay_);
+        overlay_.setSideDocks(true, false, true, false);
+        for (const char* language : {"de", "it"}) {
+            EXPECT_TRUE(locale.setLanguage(language));
+            lfs::vis::app_store().language_generation.set(locale.getCurrentLanguageGeneration());
+            (void)lfs::vis::app_store().store().drain_dirty_into_frame();
+            for (const auto& [id, key] : std::array{
+                     std::pair{"left-side-dock-toggle", "input_settings.action.toggle_left_dock"},
+                     std::pair{"right-side-dock-toggle", "input_settings.action.toggle_right_dock"}}) {
+                auto* button = doc->GetElementById(id);
+                EXPECT_EQ(button->GetAttribute<Rml::String>("title", ""), locale.get(key));
+                EXPECT_EQ(button->GetAttribute<Rml::String>("aria-label", ""), locale.get(key));
+            }
+        }
+        EXPECT_TRUE(locale.setLanguage(previous_language.empty() ? "en" : previous_language));
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::releaseStore(overlay_);
     }
 
     TEST_F(ViewportDepthLayoutTest, LocalizedDepthControlsStayOutsideTheAxisCorner) {

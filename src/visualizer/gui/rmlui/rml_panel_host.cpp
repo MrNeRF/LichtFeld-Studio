@@ -1251,6 +1251,29 @@ namespace lfs::vis::gui {
             event.StopPropagation();
     }
 
+    void RmlPanelHost::suspendInput() {
+        if (!rml_context_)
+            return;
+        manager_->deactivateInput(rml_context_);
+        manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, false);
+        manager_->setContextTooltipRevealDeadline(rml_context_, std::nullopt);
+        rml_context_->ProcessMouseLeave();
+        tooltip_.setHover({}, nullptr);
+        input_ = nullptr;
+        last_hovered_ = false;
+        last_forwarded_mx_ = last_forwarded_my_ = -1;
+        manual_dropdown_hover_ = nullptr;
+        manual_dropdown_mouse_captured_ = false;
+        for (auto& captured : mouse_captured_)
+            captured = false;
+        for (auto& pressed : pointer_press_target_)
+            pressed.reset();
+        resize_cursor_override_.clear();
+        live_inspector_resize_target_ = nullptr;
+        has_text_focus_ = wants_keyboard_ = false;
+        direct_cache_dirty_ = render_needed_ = true;
+    }
+
     void RmlPanelHost::setWindowPresentation(std::optional<FloatingWindowState> state) {
         if (!desktop_requested_ && presentation_ == state)
             return;

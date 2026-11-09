@@ -783,6 +783,12 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlPythonPanelAdapter::suspendInput() {
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (host_ && ops.suspend_input)
+            ops.suspend_input(host_);
+    }
+
     void RmlPythonPanelAdapter::on_layout_changed() {
         content_dirty_ = true;
         last_prepare_frame_ = 0;

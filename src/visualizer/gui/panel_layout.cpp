@@ -214,16 +214,8 @@ namespace lfs::vis::gui {
             float_blocks_right_panel ? mask_mouse_input(input) : input;
 
         const bool python_console_visible = window_states["python_console"];
-        const float available_for_split = screen.work_size.x - getRightPanelWidth() - PANEL_GAP;
-
-        if (python_console_visible && python_console_width_ < 0.0f) {
-            python_console_width_ = (available_for_split - PANEL_GAP) / 2.0f;
-        }
-
-        if (python_console_visible) {
-            const float max_console_w = available_for_split - PYTHON_CONSOLE_MIN_WIDTH;
-            python_console_width_ = std::clamp(python_console_width_, PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
-        }
+        if (python_console_visible)
+            python_console_width_ = resolvePythonConsoleWidth(screen);
 
         const float right_panel_x = screen.work_pos.x + screen.work_size.x - getRightPanelWidth();
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
@@ -466,15 +458,8 @@ namespace lfs::vis::gui {
             right_panel_width_ = std::clamp(right_panel_preferred_width_, min_w, max_w);
 
         const bool python_console_visible = window_states["python_console"];
-        const float available_for_split = screen.work_size.x - getRightPanelWidth() - PANEL_GAP;
-
-        if (python_console_visible && python_console_width_ < 0.0f)
-            python_console_width_ = (available_for_split - PANEL_GAP) / 2.0f;
-
-        if (python_console_visible) {
-            const float max_console_w = available_for_split - PYTHON_CONSOLE_MIN_WIDTH;
-            python_console_width_ = std::clamp(python_console_width_, PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
-        }
+        if (python_console_visible)
+            python_console_width_ = resolvePythonConsoleWidth(screen);
 
         const float right_panel_x = screen.work_pos.x + screen.work_size.x - getRightPanelWidth();
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
@@ -1104,19 +1089,21 @@ namespace lfs::vis::gui {
                LEFT_DOCK_MIN_WIDTH * lfs::python::get_shared_dpi_scale();
     }
 
+    float PanelLayoutManager::resolvePythonConsoleWidth(const ScreenState& screen) const {
+        const float available = std::max(0.0f, screen.work_size.x - getRightPanelWidth() - PANEL_GAP);
+        const float max_width = std::max(0.0f, available - PYTHON_CONSOLE_MIN_WIDTH);
+        const float min_width = std::min(PYTHON_CONSOLE_MIN_WIDTH, max_width);
+        const float requested = python_console_width_ < 0.0f ? (available - PANEL_GAP) / 2.0f : python_console_width_;
+        return std::clamp(requested, min_width, max_width);
+    }
+
     float PanelLayoutManager::computeViewportWidth(const bool show_main_panel,
                                                    const bool ui_hidden,
                                                    const bool python_console_visible,
                                                    const ScreenState& screen) const {
-        float console_w = 0.0f;
-        if (python_console_visible && show_main_panel && !ui_hidden) {
-            if (python_console_width_ < 0.0f) {
-                const float available = screen.work_size.x - getRightPanelWidth() - PANEL_GAP;
-                console_w = (available - PANEL_GAP) / 2.0f + PANEL_GAP;
-            } else {
-                console_w = python_console_width_ + PANEL_GAP;
-            }
-        }
+        const float console_w = python_console_visible
+                                    ? resolvePythonConsoleWidth(screen) + PANEL_GAP
+                                    : 0.0f;
 
         if (!(show_main_panel && !ui_hidden))
             return screen.work_size.x;
@@ -1163,8 +1150,8 @@ namespace lfs::vis::gui {
         const float dpi = lfs::python::get_shared_dpi_scale();
         const float panel_w = computeLeftDockReservedWidth(show_main_panel, ui_hidden, screen);
         const float edge_x = screen.work_pos.x + panel_w;
-        // The 14 dp collapse target and the tools must never share a hit region.
-        constexpr float kSideDockToolbarInset = 18.0f;
+        // The 6 dp inset plus 14 dp collapse target must stay clear of the tools.
+        constexpr float kSideDockToolbarInset = 22.0f;
         const bool dock_controls = show_main_panel && !ui_hidden &&
                                    PanelRegistry::instance().has_panels(PanelSpace::LeftDock);
         const float toolbar_inset = (dock_controls ? kSideDockToolbarInset : TOOLBAR_INSET) * dpi;

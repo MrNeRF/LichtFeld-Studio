@@ -404,7 +404,8 @@ namespace lfs::vis::gui {
             return;
         if (event.GetId() == Rml::EventId::Keydown) {
             const auto key = event.GetParameter<int>("key_identifier", 0);
-            if (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE)
+            if (!target->IsPseudoClassSet("focus-visible") ||
+                (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
                 return;
         }
         lfs::core::events::ui::ToggleSideDock{.right = target->GetId() == "right-side-dock-toggle"}.emit();
@@ -602,7 +603,11 @@ namespace lfs::vis::gui {
                 markRenderNeeded(RenderReason::ToolbarLayout);
             }));
         document_sync_subscriptions_.push_back(
-            store.language_generation.subscribe(mark_document_dirty));
+            store.language_generation.subscribe([this](const auto&) {
+                applySideDocks();
+                markDocumentSyncDirty();
+                markRenderNeeded(RenderReason::ToolbarLayout);
+            }));
         document_sync_subscriptions_.push_back(
             store.import_overlay_state.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));

@@ -4690,6 +4690,7 @@ namespace lfs::vis::gui {
                                     std::string(name), std::string(rml),
                                     inline_rcss ? std::string(inline_rcss) : std::string{});
         };
+        ops.suspend_input = [](void* host) { static_cast<RmlPanelHost*>(host)->suspendInput(); };
         ops.destroy = [](void* host) {
             if (lfs::python::on_graphics_thread()) {
                 delete static_cast<RmlPanelHost*>(host);
@@ -5735,6 +5736,9 @@ namespace lfs::vis::gui {
                 target_layout.setSideDockCollapsed(true, ui_target_right_collapsed_);
                 target_layout.enforceWidthConstraints(
                     show_main_panel_, ui_visibility_target_hidden_, transition_screen);
+                ui_visibility_target_console_width_ = show_main_panel_ && !ui_visibility_target_hidden_ && window_states_["python_console"]
+                                                          ? target_layout.resolvePythonConsoleWidth(transition_screen)
+                                                          : target_layout.getPythonConsoleWidth();
                 ui_visibility_target_layout_ = target_layout.computeViewportLayout(
                     show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
                     transition_screen);
@@ -6457,8 +6461,13 @@ namespace lfs::vis::gui {
 
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
-            if (panel_layout_.isRightDockCollapsed() && !last_ui_layout_right_collapsed_)
+            if (panel_layout_.isRightDockCollapsed() && !last_ui_layout_right_collapsed_) {
                 rml_right_panel_.suspendInput();
+                reg.suspend_input(PanelSpace::SceneHeader);
+                reg.suspend_input(PanelSpace::MainPanelTab);
+            }
+            if (panel_layout_.isLeftDockCollapsed() && !last_ui_layout_left_collapsed_)
+                reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
                 ui_hidden_ != last_ui_layout_ui_hidden_) {
@@ -8108,6 +8117,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::commitUiVisibilityTransition(const bool matched_frame) {
+        panel_layout_.setPythonConsoleWidth(ui_visibility_target_console_width_);
         panel_layout_.setSideDockCollapsed(false, ui_target_left_collapsed_);
         panel_layout_.setSideDockCollapsed(true, ui_target_right_collapsed_);
         ui_hidden_ = ui_visibility_target_hidden_;

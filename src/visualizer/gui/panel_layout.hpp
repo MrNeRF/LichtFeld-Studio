@@ -160,6 +160,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
         void setScenePanelHeight(float height, float panel_height);
         float getPythonConsoleWidth() const { return python_console_width_; }
+        float resolvePythonConsoleWidth(const ScreenState& screen) const;
+        void setPythonConsoleWidth(float width) { python_console_width_ = width; }
         float getBottomDockHeight() const { return bottom_dock_height_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
