@@ -32,18 +32,18 @@ namespace lfs::vis {
         bool enabled = true;
         bool activity = true;
         bool training_progress = true;
+        bool eta = true;
         bool camera = true;
         bool gaussians = true;
         bool selected = true;
         bool fps = true;
         bool vram = true;
-        bool frame_time = false;
-        bool gpu_utilization = false;
-        bool gpu_name = false;
+        bool gpu_name = true;
         bool renderer = false;
         bool training_loss = false;
         bool training_speed = false;
-        bool elapsed = false;
+        bool elapsed = true;
+        bool build_version = false;
         bool mcp = false;
         bool portal = false;
         bool operator==(const StatusBarPreferences&) const = default;
@@ -57,18 +57,18 @@ namespace lfs::vis {
         {"enabled", &StatusBarPreferences::enabled},
         {"activity", &StatusBarPreferences::activity},
         {"training_progress", &StatusBarPreferences::training_progress},
+        {"eta", &StatusBarPreferences::eta},
         {"camera", &StatusBarPreferences::camera},
         {"gaussians", &StatusBarPreferences::gaussians},
         {"selected", &StatusBarPreferences::selected},
         {"fps", &StatusBarPreferences::fps},
         {"vram", &StatusBarPreferences::vram},
-        {"frame_time", &StatusBarPreferences::frame_time},
-        {"gpu_utilization", &StatusBarPreferences::gpu_utilization},
         {"gpu_name", &StatusBarPreferences::gpu_name},
         {"renderer", &StatusBarPreferences::renderer},
         {"training_loss", &StatusBarPreferences::training_loss},
         {"training_speed", &StatusBarPreferences::training_speed},
         {"elapsed", &StatusBarPreferences::elapsed},
+        {"build_version", &StatusBarPreferences::build_version},
         {"mcp", &StatusBarPreferences::mcp},
         {"portal", &StatusBarPreferences::portal},
     }};

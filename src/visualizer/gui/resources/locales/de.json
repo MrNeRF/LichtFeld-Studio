@@ -1199,15 +1199,13 @@
     "status_bar": "Statusleiste",
     "status_bar_hint": "Aktivierte Elemente erscheinen nur bei Bedarf. Warnungen bleiben bei aktivierter Statusleiste sichtbar.",
     "status_bar_enabled": "Statusleiste anzeigen",
-    "status_bar_activity": "Aktuelle Aktivität und Fortschritt",
-    "status_bar_training_progress": "Trainingsiteration und Restzeit",
+    "status_bar_activity": "Fortschrittsbalken",
+    "status_bar_training_progress": "Trainingsiteration",
     "status_bar_camera": "Aktive Kamera und Vergleichsmodus",
     "status_bar_gaussians": "Anzahl der Gauß-Punkte",
     "status_bar_selected": "Ausgewählte Gauß-Punkte",
     "status_bar_fps": "Viewport-FPS",
     "status_bar_vram": "VRAM-Nutzung",
-    "status_bar_frame_time": "Bildzeit",
-    "status_bar_gpu_utilization": "GPU-Auslastung",
     "status_bar_gpu_name": "GPU-Name",
     "status_bar_renderer": "Renderer / Backend",
     "status_bar_training_loss": "Trainingsverlust",
@@ -1215,7 +1213,9 @@
     "status_bar_elapsed": "Verstrichene Trainingszeit",
     "status_bar_mcp": "MCP-Verbindungsstatus",
     "status_bar_portal": "Portal-Verbindungsstatus",
-    "status_bar_reset": "Statusleiste zurücksetzen"
+    "status_bar_reset": "Statusleiste zurücksetzen",
+    "status_bar_eta": "Geschätzte Restzeit",
+    "status_bar_build_version": "Build-Version"
   },
   "main_panel": {
     "console": "Konsole",

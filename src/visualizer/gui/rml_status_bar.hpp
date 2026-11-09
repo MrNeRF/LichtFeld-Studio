@@ -136,6 +136,7 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
+        void updatePortalStatus();
         LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
@@ -144,6 +145,7 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         bool document_registered_ = false;
         Rml::DataModelHandle model_handle_;
+        Rml::EventListener* portal_listener_ = nullptr;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
@@ -205,10 +207,11 @@ namespace lfs::vis::gui {
             std::string renderer_text;
             std::string camera_text;
             std::string selected_text;
-            std::string frame_time_text;
-            std::string gpu_utilization_text;
             std::string training_speed_text;
             std::string portal_text;
+            std::string portal_tooltip;
+            std::string portal_icon;
+            std::string portal_tone;
 
             bool safe_mode = false;
             std::string safe_mode_text;

@@ -100,3 +100,41 @@ body,
 #gpu-icon {
     image-color: @{text_dim};
 }
+
+.status-portal-connection:hover {
+    background-color: @{menu.hover};
+}
+
+.status-portal-connection.connected {
+    color: @{success};
+}
+
+.status-portal-connection.connected img {
+    image-color: @{success};
+}
+
+.status-portal-connection.connecting,
+.status-portal-connection.transferring {
+    color: @{info};
+}
+
+.status-portal-connection.connecting img,
+.status-portal-connection.transferring img {
+    image-color: @{info};
+}
+
+.status-portal-connection.disconnected {
+    color: @{text_dim};
+}
+
+.status-portal-connection.disconnected img {
+    image-color: @{text_dim};
+}
+
+.status-portal-connection.error {
+    color: @{error};
+}
+
+.status-portal-connection.error img {
+    image-color: @{error};
+}

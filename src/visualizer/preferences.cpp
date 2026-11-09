@@ -1246,6 +1246,8 @@ namespace lfs::vis {
         auto& values = impl_->values["status_bar"];
         if (!values.is_object())
             values = json::object();
+        values.erase("frame_time");
+        values.erase("gpu_utilization");
         for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS)
             values[field.key] = state.*field.member;
         impl_->saveLocked();

@@ -5,6 +5,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "visualizer/app_store.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_progress.hpp"
 #include "gui/status_bar_training.hpp"
@@ -40,6 +41,13 @@ namespace lfs::vis::gui {
             status_bar.fit_level_ = 0;
             status_bar.applyFitLevel(0);
             status_bar.updateFpsReservedWidths();
+        }
+
+        static std::pair<std::string, std::string> portalStatus(RmlStatusBar& bar, Rml::DataModelHandle handle) {
+            bar.model_handle_ = handle;
+            bar.updatePortalStatus();
+            bar.model_handle_ = {};
+            return {bar.model_.portal_text, bar.model_.portal_tooltip};
         }
 
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
@@ -127,10 +135,11 @@ namespace {
         std::string renderer_text;
         std::string camera_text;
         std::string selected_text;
-        std::string frame_time_text;
-        std::string gpu_utilization_text;
         std::string training_speed_text;
         std::string portal_text;
+        std::string portal_tooltip;
+        std::string portal_icon;
+        std::string portal_tone;
 
         bool safe_mode = false;
         std::string safe_mode_text = "Safe Mode";
@@ -279,10 +288,11 @@ namespace {
             bound &= constructor.Bind("renderer_text", &model_.renderer_text);
             bound &= constructor.Bind("camera_text", &model_.camera_text);
             bound &= constructor.Bind("selected_text", &model_.selected_text);
-            bound &= constructor.Bind("frame_time_text", &model_.frame_time_text);
-            bound &= constructor.Bind("gpu_utilization_text", &model_.gpu_utilization_text);
             bound &= constructor.Bind("training_speed_text", &model_.training_speed_text);
             bound &= constructor.Bind("portal_text", &model_.portal_text);
+            bound &= constructor.Bind("portal_tooltip", &model_.portal_tooltip);
+            bound &= constructor.Bind("portal_icon", &model_.portal_icon);
+            bound &= constructor.Bind("portal_tone", &model_.portal_tone);
             bound &= constructor.Bind("safe_mode", &model_.safe_mode);
             bound &= constructor.Bind("safe_mode_text", &model_.safe_mode_text);
             bound &= constructor.Bind("mode_text", &model_.mode_text);
@@ -661,10 +671,10 @@ namespace {
         EXPECT_TRUE(document_->GetElementById("fps-group")->IsVisible());
         EXPECT_FALSE(document_->GetElementById("loss-metric")->IsVisible());
         EXPECT_FALSE(document_->GetElementById("mcp-chip")->IsVisible());
-        EXPECT_FALSE(document_->GetElementById("time-value")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("time-value")->IsVisible());
         EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
         model_.preferences.fps = false;
-        model_.preferences.training_progress = false;
+        model_.preferences.eta = false;
         model_.preferences.elapsed = true;
         model_handle_.DirtyAllVariables();
         context_->Update();
@@ -676,6 +686,47 @@ namespace {
         document_->GetElementById("body")->SetClass("fit-9", true);
         context_->Update();
         EXPECT_TRUE(document_->GetElementById("status-message-section")->IsVisible());
+    }
+
+    TEST_F(StatusBarFitTest, BottomPortalBadgePreservesConnectionStatesAndAccountTooltip) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(loc.initialize((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        ASSERT_TRUE(loc.setLanguage("en"));
+        auto& store = lfs::vis::app_store();
+        const auto previous_account = store.account_state.get();
+        const auto previous_gallery = store.gallery_state.get();
+        store.gallery_state.set({});
+        const auto label_for = [&](lfs::vis::AppStore::AccountState account) {
+            store.account_state.set(std::move(account));
+            return lfs::vis::gui::RmlStatusBarTestAccess::portalStatus(status_bar_, model_handle_);
+        };
+        EXPECT_EQ(label_for({}).first, "Portal: Not connected");
+        EXPECT_EQ(label_for({.authorized = true}).first, "Portal connected, switched off");
+        EXPECT_EQ(label_for({.linking = true, .label = "ABCD-EFGH"}).first, "Portal: Connecting… ABCD-EFGH");
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .disconnecting = true}).first, "Portal: Disconnecting…");
+        const std::string name = "Katharina Theodora Extremely Long Display Name";
+        const auto connected = label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = name});
+        EXPECT_EQ(connected.first, "KT · Portal");
+        EXPECT_NE(connected.second.find(name), std::string::npos);
+        store.account_state.set(previous_account);
+        store.gallery_state.set(previous_gallery);
+        loc.reset();
+    }
+
+    TEST_F(StatusBarFitTest, BuildVersionAndEstimatedTimeHaveIndependentToggles) {
+        model_.preferences = {};
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_FALSE(document_->GetElementById("git-commit")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
+        model_.preferences.build_version = true;
+        model_.preferences.training_progress = false;
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_TRUE(document_->GetElementById("git-commit")->IsVisible());
+        EXPECT_FALSE(document_->GetElementById("step-metric")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("time-value")->IsVisible());
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

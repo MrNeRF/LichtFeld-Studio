@@ -709,18 +709,18 @@
           <div data-if="status_bar_enabled">
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_activity</span><input type="checkbox" data-checked="status_bar_activity" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_progress</span><input type="checkbox" data-checked="status_bar_training_progress" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_eta</span><input type="checkbox" data-checked="status_bar_eta" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_camera</span><input type="checkbox" data-checked="status_bar_camera" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gaussians</span><input type="checkbox" data-checked="status_bar_gaussians" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_selected</span><input type="checkbox" data-checked="status_bar_selected" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_fps</span><input type="checkbox" data-checked="status_bar_fps" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_vram</span><input type="checkbox" data-checked="status_bar_vram" /></div>
-          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_frame_time</span><input type="checkbox" data-checked="status_bar_frame_time" /></div>
-          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gpu_utilization</span><input type="checkbox" data-checked="status_bar_gpu_utilization" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gpu_name</span><input type="checkbox" data-checked="status_bar_gpu_name" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_renderer</span><input type="checkbox" data-checked="status_bar_renderer" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_loss</span><input type="checkbox" data-checked="status_bar_training_loss" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_speed</span><input type="checkbox" data-checked="status_bar_training_speed" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_elapsed</span><input type="checkbox" data-checked="status_bar_elapsed" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_build_version</span><input type="checkbox" data-checked="status_bar_build_version" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_mcp</span><input type="checkbox" data-checked="status_bar_mcp" /></div>
           <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_portal</span><input type="checkbox" data-checked="status_bar_portal" /></div>
           </div>

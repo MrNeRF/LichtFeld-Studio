@@ -305,10 +305,11 @@ namespace lfs::vis::gui {
         ctor.Bind("renderer_text", &model_.renderer_text);
         ctor.Bind("camera_text", &model_.camera_text);
         ctor.Bind("selected_text", &model_.selected_text);
-        ctor.Bind("frame_time_text", &model_.frame_time_text);
-        ctor.Bind("gpu_utilization_text", &model_.gpu_utilization_text);
         ctor.Bind("training_speed_text", &model_.training_speed_text);
         ctor.Bind("portal_text", &model_.portal_text);
+        ctor.Bind("portal_tooltip", &model_.portal_tooltip);
+        ctor.Bind("portal_icon", &model_.portal_icon);
+        ctor.Bind("portal_tone", &model_.portal_tone);
         ctor.Bind("safe_mode", &model_.safe_mode);
         ctor.Bind("safe_mode_text", &model_.safe_mode_text);
         ctor.Bind("mode_text", &model_.mode_text);
@@ -451,6 +452,8 @@ namespace lfs::vis::gui {
         model_animation_active_ = false;
         rml_animation_active_ = false;
         animation_active_ = false;
+        delete portal_listener_;
+        portal_listener_ = nullptr;
         delete git_commit_listener_;
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
@@ -711,6 +714,13 @@ namespace lfs::vis::gui {
             git_commit_listener_ = new GitCommitClickListener(&model_.git_commit);
         if (auto* el = document_->GetElementById("git-commit"))
             el->AddEventListener(Rml::EventId::Click, git_commit_listener_);
+
+        if (!portal_listener_)
+            portal_listener_ = new CallbackListener([] {
+                lfs::python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
+            });
+        if (auto* el = document_->GetElementById("portal-status"))
+            el->AddEventListener(Rml::EventId::Click, portal_listener_);
 
         if (!gpu_icon_listener_)
             gpu_icon_listener_ = new VramHudToggleListener();
@@ -1063,6 +1073,84 @@ namespace lfs::vis::gui {
             save_step_interaction_.hover_step = next_hover;
             markModelDirty();
         }
+    }
+
+    void RmlStatusBar::updatePortalStatus() {
+        if (!model_handle_)
+            return;
+
+        const auto account = lfs::vis::app_store().account_state.get();
+        const auto gallery = lfs::vis::app_store().gallery_state.get();
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        const bool needs_approval = account.signed_in && gallery.relink_required;
+        const std::string connection = account.disconnecting ? "disconnecting"
+                                       : account.linking     ? "linking"
+                                       : needs_approval      ? "approval_needed"
+                                       : account.signed_in   ? "connected"
+                                       : account.authorized  ? "switched_off"
+                                                             : "not_connected";
+        const bool connected = account.signed_in;
+        const bool checking = account.linking || account.disconnecting;
+        const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
+        const std::string tone = checking ? "connecting" : needs_approval || !account.error.empty() ? "error"
+                                                       : transferring                               ? "transferring"
+                                                       : connected                                  ? "connected"
+                                                                                                    : "disconnected";
+        const std::string icon = checking         ? "ring"
+                                 : needs_approval ? "cloud-bang"
+                                 : transferring   ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
+                                                     : gallery.active_uploads > 0                               ? "cloud-up"
+                                                                                                                : "cloud-down")
+                                 : connected      ? "cloud-check"
+                                                  : "cloud-strike";
+        const auto set = [this](const char* name, auto& current, auto value) {
+            if (current != value) {
+                current = std::move(value);
+                model_handle_.DirtyVariable(name);
+                model_dirty_ = true;
+            }
+        };
+        const std::string activity = transferring && connection == "connected"
+                                         ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
+                                            : gallery.active_uploads > 0                               ? "uploading"
+                                                                                                       : "downloading")
+                                         : connection;
+        const auto connection_key = "portal.status." + (activity == "not_connected" ? "disconnected" : activity);
+        std::string label = localization.get(connection_key);
+        if (connection == "connected" && !account.label.empty()) {
+            label = localization.get("portal.status.toolbar_connected");
+            constexpr std::string_view kInitialsToken = "{initials}";
+            if (const auto initials = label.find(kInitialsToken); initials != std::string::npos)
+                label.replace(initials, kInitialsToken.size(), account.label);
+        } else if (account.linking && !account.label.empty())
+            label += " " + account.label;
+        set("portal_text", model_.portal_text, std::move(label));
+        std::string tooltip = localization.get(needs_approval       ? "portal.status.reauthorize"
+                                               : connected          ? "portal.status.disconnect"
+                                               : account.linking    ? "portal.status.cancel"
+                                               : account.authorized ? "portal.status.turn_on"
+                                                                    : "portal.status.connect");
+        if (connected && !account.display_name.empty()) {
+            std::string connected_as = localization.get("portal.status.connected_as");
+            constexpr std::string_view kNameToken = "{name}";
+            if (const auto name = connected_as.find(kNameToken); name != std::string::npos)
+                connected_as.replace(name, kNameToken.size(), account.display_name);
+            tooltip += "\n" + connected_as;
+        } else if (!account.tooltip.empty())
+            tooltip += "\n" + account.tooltip;
+        if (transferring)
+            tooltip += "\n" + gallery.tooltip;
+        if (!account.error.empty()) {
+            const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
+                                          : account.error == "sign_in_failed"    ? "account.error.generic"
+                                          : account.error == "unsafe_portal_url" ? "projects.gallery.error.unsafe_url"
+                                                                                 : "account.error." + account.error;
+            tooltip += "\n" + std::string(localization.hasKey(error_key) ? localization.get(error_key)
+                                                                         : localization.get("account.error.generic"));
+        }
+        set("portal_tooltip", model_.portal_tooltip, std::move(tooltip));
+        set("portal_icon", model_.portal_icon, "../icon/gallery-" + icon + ".png");
+        set("portal_tone", model_.portal_tone, tone);
     }
 
     bool RmlStatusBar::updateContent(const PanelDrawContext& ctx) {
@@ -1490,15 +1578,7 @@ namespace lfs::vis::gui {
         const auto selected = sm && preferences.selected ? sm->getScene().selectedCount() : 0;
         setModelString("selected_text", model_.selected_text,
                        selected > 0 ? std::format("{} {}", fmtCount(selected), LOC("status_bar.selected")) : "");
-        const auto account = app_store().account_state.get();
-        const auto gallery = app_store().gallery_state.get();
-        const char* portal_key = account.disconnecting ? "portal.status.disconnecting"
-                                 : account.linking ? "portal.status.linking"
-                                 : account.signed_in && gallery.relink_required ? "portal.status.approval_needed"
-                                 : account.signed_in ? "portal.status.connected"
-                                 : account.authorized ? "portal.status.switched_off"
-                                 : "portal.status.disconnected";
-        setModelString("portal_text", model_.portal_text, LOC(portal_key));
+        updatePortalStatus();
         std::string rate_text;
         if (running && tm && preferences.training_speed) {
             const int iteration = tm->getCurrentIteration();
@@ -1610,17 +1690,13 @@ namespace lfs::vis::gui {
         const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
         const float scene_fps = rates.view;
         const float presented_fps = rates.ui;
-        setModelString("frame_time_text", model_.frame_time_text,
-                       scene_fps > 0.0f ? std::format("{:.1f} ms", 1000.0f / scene_fps) : "");
-        setModelString("gpu_utilization_text", model_.gpu_utilization_text,
-                       mem.gpu_utilization_valid ? std::format("{} {:.0f}%", LOC("status_bar.gpu"), mem.gpu_utilization_percent) : "");
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
         setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
         setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
         setModelString("fps_view_label", model_.fps_view_label, "3D");
         setModelString("fps_color", model_.fps_color, colorToRml(p.text));
         setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
-        setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
+        setModelString("git_commit", model_.git_commit, GIT_TAGGED_VERSION);
 
         section_signature_ =
             (model_.show_training ? uint32_t{1} << 0 : 0) |

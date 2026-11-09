@@ -1199,15 +1199,13 @@
     "status_bar": "상태 표시줄",
     "status_bar_hint": "활성화된 항목은 관련된 경우에만 표시됩니다. 상태 표시줄이 활성화된 동안 경고는 계속 표시됩니다.",
     "status_bar_enabled": "상태 표시줄 표시",
-    "status_bar_activity": "현재 작업 및 진행률",
-    "status_bar_training_progress": "학습 반복 및 남은 시간",
+    "status_bar_activity": "진행률 표시줄",
+    "status_bar_training_progress": "학습 반복",
     "status_bar_camera": "활성 카메라 및 비교 모드",
     "status_bar_gaussians": "가우시안 수",
     "status_bar_selected": "선택한 가우시안 수",
     "status_bar_fps": "뷰포트 FPS",
     "status_bar_vram": "VRAM 사용량",
-    "status_bar_frame_time": "프레임 시간",
-    "status_bar_gpu_utilization": "GPU 사용률",
     "status_bar_gpu_name": "GPU 이름",
     "status_bar_renderer": "렌더러 / 백엔드",
     "status_bar_training_loss": "학습 손실",
@@ -1215,7 +1213,9 @@
     "status_bar_elapsed": "학습 경과 시간",
     "status_bar_mcp": "MCP 연결 상태",
     "status_bar_portal": "Portal 연결 상태",
-    "status_bar_reset": "상태 표시줄 기본값 복원"
+    "status_bar_reset": "상태 표시줄 기본값 복원",
+    "status_bar_eta": "예상 남은 시간",
+    "status_bar_build_version": "빌드 버전"
   },
   "main_panel": {
     "console": "콘솔",

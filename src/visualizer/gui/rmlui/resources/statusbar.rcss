@@ -630,3 +630,39 @@ body.fit-9.has-notice #status-left > * { display: none; }
 body.fit-9.has-notice #status-message-section,
 body.fit-9.has-notice #preview-reduced-section { display: flex; }
 body.fit-9.has-notice #status-left > .hidden { display: none; }
+
+.status-portal-connection {
+    display: flex;
+    align-items: center;
+    height: 20dp;
+    padding: 0 8dp;
+    gap: 6dp;
+    margin: 0 3dp;
+    border-radius: 5dp;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 34dp;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+/* Keep connection details compact beside the other status items. */
+.status-portal-connection span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-portal-connection img {
+    width: 14dp;
+    height: 14dp;
+}
+
+@keyframes portal-transfer-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
+.status-portal-connection.transferring img {
+    animation: portal-transfer-pulse 0.8s quadratic-in-out infinite alternate;
+}

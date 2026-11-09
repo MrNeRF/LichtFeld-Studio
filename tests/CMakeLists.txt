@@ -358,7 +358,7 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
         lfs_io lfs_visualizer lfs_core lfs_python_runtime
         GTest::gtest_main Zep::Zep SDL3::SDL3)
-    add_executable(lichtfeld_status_bar_tests test_status_bar_fit.cpp test_status_bar_preferences.cpp)
+    add_executable(lichtfeld_status_bar_tests test_status_bar_fit.cpp test_status_bar_preferences.cpp test_menu_bar_title.cpp)
     target_compile_features(lichtfeld_status_bar_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_status_bar_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)

@@ -48,7 +48,7 @@ namespace {
         for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS) {
             const std::string key = field.key;
             const bool expected = key == "enabled" || key == "activity" || key == "training_progress" ||
-                                  key == "camera" || key == "gaussians" || key == "selected" || key == "fps" || key == "vram";
+                                  key == "camera" || key == "gaussians" || key == "selected" || key == "fps" || key == "vram" || key == "eta" || key == "elapsed" || key == "gpu_name";
             EXPECT_EQ(state.*field.member, expected) << key;
         }
     }

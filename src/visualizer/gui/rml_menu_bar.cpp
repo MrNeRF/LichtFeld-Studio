@@ -793,10 +793,6 @@ namespace lfs::vis::gui {
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_render_buttons", &render_buttons_);
         ctor.Bind("menu_projection_buttons", &projection_buttons_);
-        ctor.Bind("portal_connection_label", &portal_connection_label_);
-        ctor.Bind("portal_connection_tooltip", &portal_connection_tooltip_);
-        ctor.Bind("portal_connection_icon", &portal_connection_icon_);
-        ctor.Bind("portal_connection_tone", &portal_connection_tone_);
         ctor.Bind("gallery_progress_label", &gallery_progress_label_);
         ctor.Bind("gallery_progress_detail", &gallery_progress_detail_);
         ctor.Bind("gallery_progress_tooltip", &gallery_progress_tooltip_);
@@ -2089,83 +2085,18 @@ namespace lfs::vis::gui {
         }
     }
 
-    void RmlMenuBar::rebuildPortalStatus() {
+    void RmlMenuBar::rebuildGalleryStatus() {
         if (!menu_model_)
             return;
-
-        const auto account = lfs::vis::app_store().account_state.get();
         const auto gallery = lfs::vis::app_store().gallery_state.get();
-        const auto& localization = lfs::event::LocalizationManager::getInstance();
-        const bool needs_approval = account.signed_in && gallery.relink_required;
-        const std::string connection = account.disconnecting ? "disconnecting"
-                                       : account.linking     ? "linking"
-                                       : needs_approval      ? "approval_needed"
-                                       : account.signed_in   ? "connected"
-                                       : account.authorized  ? "switched_off"
-                                                             : "not_connected";
-        const bool connected = account.signed_in;
-        const bool checking = account.linking || account.disconnecting;
-        const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
-        const std::string tone = checking ? "connecting" : needs_approval || !account.error.empty() ? "error"
-                                                       : transferring                               ? "transferring"
-                                                       : connected                                  ? "connected"
-                                                                                                    : "disconnected";
-        const std::string icon = checking         ? "ring"
-                                 : needs_approval ? "cloud-bang"
-                                 : transferring   ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
-                                                     : gallery.active_uploads > 0                               ? "cloud-up"
-                                                                                                                : "cloud-down")
-                                 : connected      ? "cloud-check"
-                                                  : "cloud-strike";
-        const auto set = [this](const char* name, auto& current, auto value) {
-            if (current != value) {
-                current = std::move(value);
+        const auto set = [this](const char* name, auto& field, auto value) {
+            if (field != value) {
+                field = std::move(value);
                 menu_model_.DirtyVariable(name);
                 render_needed_ = true;
             }
         };
-        const std::string activity = transferring && connection == "connected"
-                                         ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
-                                            : gallery.active_uploads > 0                               ? "uploading"
-                                                                                                       : "downloading")
-                                         : connection;
-        const auto connection_key = "portal.status." + (activity == "not_connected" ? "disconnected" : activity);
-        std::string label = localization.get(connection_key);
-        if (connection == "connected" && !account.label.empty()) {
-            label = localization.get("portal.status.toolbar_connected");
-            constexpr std::string_view kInitialsToken = "{initials}";
-            if (const auto initials = label.find(kInitialsToken); initials != std::string::npos)
-                label.replace(initials, kInitialsToken.size(), account.label);
-        } else if (account.linking && !account.label.empty())
-            label += " " + account.label;
-        set("portal_connection_label", portal_connection_label_, std::move(label));
-        std::string tooltip = localization.get(needs_approval       ? "portal.status.reauthorize"
-                                               : connected          ? "portal.status.disconnect"
-                                               : account.linking    ? "portal.status.cancel"
-                                               : account.authorized ? "portal.status.turn_on"
-                                                                    : "portal.status.connect");
-        if (connected && !account.display_name.empty()) {
-            std::string connected_as = localization.get("portal.status.connected_as");
-            constexpr std::string_view kNameToken = "{name}";
-            if (const auto name = connected_as.find(kNameToken); name != std::string::npos)
-                connected_as.replace(name, kNameToken.size(), account.display_name);
-            tooltip += "\n" + connected_as;
-        } else if (!account.tooltip.empty())
-            tooltip += "\n" + account.tooltip;
-        if (transferring)
-            tooltip += "\n" + gallery.tooltip;
-        if (!account.error.empty()) {
-            const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
-                                          : account.error == "sign_in_failed"    ? "account.error.generic"
-                                          : account.error == "unsafe_portal_url" ? "projects.gallery.error.unsafe_url"
-                                                                                 : "account.error." + account.error;
-            tooltip += "\n" + std::string(localization.hasKey(error_key) ? localization.get(error_key)
-                                                                         : localization.get("account.error.generic"));
-        }
-        set("portal_connection_tooltip", portal_connection_tooltip_, std::move(tooltip));
-        set("portal_connection_icon", portal_connection_icon_, "../icon/gallery-" + icon + ".png");
-        set("portal_connection_tone", portal_connection_tone_, tone);
-        portal_transfer_animation_active_ = tone == "transferring";
+        portal_transfer_animation_active_ = gallery.active_uploads > 0 || gallery.active_downloads > 0;
         set("gallery_has_progress", gallery_has_progress_, gallery.active_uploads > 0 || gallery.active_downloads > 0);
         set("gallery_progress_label", gallery_progress_label_, gallery.label);
         set("gallery_progress_detail", gallery_progress_detail_, gallery.detail);
@@ -2230,8 +2161,7 @@ namespace lfs::vis::gui {
         } else if (action == "toggle_independent_split_view") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->toggleIndependentSplitView();
-        } else if (action == "portal_connection") {
-            python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
+
         } else if (action == "gallery_transfers") {
             python::invoke_operator("lfs_plugins.help_menu.GalleryTransfersOperator");
         } else if (action == "window_toggle_ui") {
@@ -2633,7 +2563,7 @@ namespace lfs::vis::gui {
             return;
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
-        rebuildPortalStatus();
+        rebuildGalleryStatus();
 
         if (menu_window_split_view_) {
             const bool split_view = [&] {

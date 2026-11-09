@@ -1199,15 +1199,13 @@
     "status_bar": "Barra de estado",
     "status_bar_hint": "Los elementos activados aparecen solo cuando son relevantes. Las advertencias siguen visibles mientras la barra esté activada.",
     "status_bar_enabled": "Mostrar barra de estado",
-    "status_bar_activity": "Actividad actual y progreso",
-    "status_bar_training_progress": "Iteración y tiempo restante",
+    "status_bar_activity": "Barra de progreso",
+    "status_bar_training_progress": "Iteración de entrenamiento",
     "status_bar_camera": "Cámara activa y modo de comparación",
     "status_bar_gaussians": "Número de gaussianas",
     "status_bar_selected": "Gaussianas seleccionadas",
     "status_bar_fps": "FPS de la vista",
     "status_bar_vram": "Uso de VRAM",
-    "status_bar_frame_time": "Tiempo por fotograma",
-    "status_bar_gpu_utilization": "Utilización de GPU",
     "status_bar_gpu_name": "Nombre de GPU",
     "status_bar_renderer": "Renderizador / backend",
     "status_bar_training_loss": "Pérdida de entrenamiento",
@@ -1215,7 +1213,9 @@
     "status_bar_elapsed": "Tiempo de entrenamiento transcurrido",
     "status_bar_mcp": "Estado de conexión MCP",
     "status_bar_portal": "Estado de conexión Portal",
-    "status_bar_reset": "Restablecer barra de estado"
+    "status_bar_reset": "Restablecer barra de estado",
+    "status_bar_eta": "Tiempo restante estimado",
+    "status_bar_build_version": "Versión de compilación"
   },
   "main_panel": {
     "console": "Consola",

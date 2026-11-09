@@ -1199,15 +1199,13 @@
     "status_bar": "ステータスバー",
     "status_bar_hint": "有効な項目は必要な場合のみ表示されます。ステータスバーが有効な間、警告は表示されます。",
     "status_bar_enabled": "ステータスバーを表示",
-    "status_bar_activity": "現在の処理と進行状況",
-    "status_bar_training_progress": "学習の反復回数と残り時間",
+    "status_bar_activity": "進行状況バー",
+    "status_bar_training_progress": "学習の反復回数",
     "status_bar_camera": "現在のカメラと比較モード",
     "status_bar_gaussians": "ガウシアン数",
     "status_bar_selected": "選択中のガウシアン数",
     "status_bar_fps": "ビューポートFPS",
     "status_bar_vram": "VRAM使用量",
-    "status_bar_frame_time": "フレーム時間",
-    "status_bar_gpu_utilization": "GPU使用率",
     "status_bar_gpu_name": "GPU名",
     "status_bar_renderer": "レンダラー / バックエンド",
     "status_bar_training_loss": "学習損失",
@@ -1215,7 +1213,9 @@
     "status_bar_elapsed": "学習経過時間",
     "status_bar_mcp": "MCP接続状態",
     "status_bar_portal": "Portal接続状態",
-    "status_bar_reset": "ステータスバーを既定に戻す"
+    "status_bar_reset": "ステータスバーを既定に戻す",
+    "status_bar_eta": "推定残り時間",
+    "status_bar_build_version": "ビルドバージョン"
   },
   "main_panel": {
     "console": "コンソール",

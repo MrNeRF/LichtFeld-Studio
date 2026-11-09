@@ -6,8 +6,8 @@
   <div id="status-row">
     <div id="status-left">
         <span id="safe-mode-badge" class="hidden" data-class-hidden="!safe_mode" data-attr-title="safe_mode_text">{{ safe_mode_text }}</span>
-        <span id="mode-text" data-class-hidden="!pref_activity" data-style-color="mode_color">{{ mode_text }}</span>
-        <div id="training-section" class="hidden" data-class-hidden="!show_training || (!pref_activity && !pref_training_progress && !pref_training_loss && !pref_gaussians && !pref_elapsed)">
+        <span id="mode-text" data-style-color="mode_color">{{ mode_text }}</span>
+        <div id="training-section" class="hidden" data-class-hidden="!show_training || (!pref_activity && !pref_training_progress && !pref_training_loss && !pref_gaussians && !pref_elapsed && !pref_eta)">
             <span class="separator section-sep">|</span>
             <div id="progress-group" class="status-item" data-class-hidden="!pref_activity">
                 <div id="progress-container" data-class-miner="progress_miner" data-class-tessle="progress_tessle">
@@ -47,11 +47,11 @@
                 <span id="gaussians-label" class="dim metric-label">{{ gaussians_label }}</span>
                 <span id="gaussians-value">{{ gaussians_value }}</span>
             </div>
-            <div id="time-metric" class="status-item" data-class-hidden="!pref_elapsed && !pref_training_progress">
+            <div id="time-metric" class="status-item" data-class-hidden="!pref_elapsed && !pref_eta">
                 <span class="separator">|</span>
                 <span id="time-value" data-class-hidden="!pref_elapsed">{{ time_value }}</span>
-                <span id="eta-label" data-class-hidden="!pref_training_progress" class="dim metric-label">{{ eta_label }}</span>
-                <span id="eta-value" data-class-hidden="!pref_training_progress">{{ eta_value }}</span>
+                <span id="eta-label" data-class-hidden="!pref_eta" class="dim metric-label">{{ eta_label }}</span>
+                <span id="eta-value" data-class-hidden="!pref_eta">{{ eta_value }}</span>
             </div>
         </div>
         <div id="splat-section" class="hidden" data-class-hidden="!show_splats || !pref_gaussians">
@@ -107,7 +107,7 @@
             </div>
         </div>
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
-        <img id="gpu-icon" data-class-hidden="!pref_vram && !pref_gpu_utilization" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
+        <img id="gpu-icon" data-class-hidden="!pref_vram" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
         <div id="lfs-mem-group" class="status-item" data-class-hidden="!pref_vram">
             <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
             <span class="separator thin">|</span>
@@ -118,10 +118,8 @@
             <div class="fps-metric hidden" data-tooltip="status_bar.ui_fps_tooltip"><span class="fps-caption dim">{{ fps_ui_label }}</span><span id="fps-value" class="fps-number">{{ fps_value }}</span></div>
             <div class="fps-metric" data-tooltip="status_bar.view_fps_tooltip"><span class="fps-caption dim hidden">{{ fps_view_label }}</span><span id="fps-view-value" class="fps-number" data-style-color="fps_color">{{ fps_view_value }}</span></div>
         </div>
-        <span class="status-item" data-class-hidden="!pref_portal || portal_text == ''">{{ portal_text }}</span>
-        <span class="status-item" data-class-hidden="!pref_gpu_utilization || gpu_utilization_text == ''">{{ gpu_utilization_text }}</span>
-        <span class="status-item" data-class-hidden="!pref_frame_time || frame_time_text == ''">{{ frame_time_text }}</span>
-        <span id="git-commit" class="dim hidden">{{ git_commit }}</span>
+        <div id="portal-status" class="status-item status-portal-connection" data-class-connected="portal_tone == 'connected'" data-class-transferring="portal_tone == 'transferring'" data-class-connecting="portal_tone == 'connecting'" data-class-error="portal_tone == 'error'" data-class-disconnected="portal_tone == 'disconnected'" data-class-hidden="!pref_portal" data-attr-title="portal_tooltip"><img data-attr-src="portal_icon" /><span>{{ portal_text }}</span></div>
+        <span id="git-commit" class="dim" data-class-hidden="!pref_build_version">{{ git_commit }}</span>
     </div>
   </div>
 </body>

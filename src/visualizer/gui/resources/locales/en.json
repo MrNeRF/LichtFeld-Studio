@@ -1208,15 +1208,13 @@
     "status_bar": "Status bar",
     "status_bar_hint": "Enabled items appear only when relevant. Warnings remain visible while the status bar is enabled.",
     "status_bar_enabled": "Show status bar",
-    "status_bar_activity": "Current activity and progress",
-    "status_bar_training_progress": "Training iteration and ETA",
+    "status_bar_activity": "Progress bar",
+    "status_bar_training_progress": "Training iteration",
     "status_bar_camera": "Active camera and comparison mode",
     "status_bar_gaussians": "Gaussian count",
     "status_bar_selected": "Selected Gaussian count",
     "status_bar_fps": "Viewport FPS",
     "status_bar_vram": "VRAM usage",
-    "status_bar_frame_time": "Frame time",
-    "status_bar_gpu_utilization": "GPU utilization",
     "status_bar_gpu_name": "GPU name",
     "status_bar_renderer": "Renderer / backend",
     "status_bar_training_loss": "Training loss",
@@ -1224,7 +1222,9 @@
     "status_bar_elapsed": "Training elapsed time",
     "status_bar_mcp": "MCP connection status",
     "status_bar_portal": "Portal connection status",
-    "status_bar_reset": "Reset status bar defaults"
+    "status_bar_reset": "Reset status bar defaults",
+    "status_bar_eta": "Estimated remaining time",
+    "status_bar_build_version": "Build version"
   },
   "main_panel": {
     "console": "Console",
