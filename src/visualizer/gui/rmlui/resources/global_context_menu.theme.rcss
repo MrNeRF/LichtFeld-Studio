@@ -2,8 +2,8 @@
 
 .context-menu {
     background-color: @{overlay.surface};
-    border-color: @{overlay.border};
-    border-radius: @{num(size.window_rounding)}dp;
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
 }
 
 .context-menu-item {

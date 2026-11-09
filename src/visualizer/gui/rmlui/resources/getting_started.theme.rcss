@@ -1,3 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.card-body {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Getting started panel theme overrides. */
 
 .card-body {
@@ -33,12 +39,12 @@
 .guide-tab:focus-visible {
     color: @{text};
     background-color: @{panel.tab_hover_bg};
-    border-color: @{panel.tab_hover_border};
+    border-color: @{primary};
 }
 
 .guide-tab.active {
     color: @{text};
     background-color: @{panel.tab_active_bg};
-    border-color: @{panel.tab_active_border};
-    font-weight: bold;
+    border-color: @{primary};
+    font-weight: 600;
 }

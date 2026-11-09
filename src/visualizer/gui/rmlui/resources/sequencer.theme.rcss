@@ -1,14 +1,153 @@
+/* Shared border roles and shape scale. */
+
+.transport-btn {
+    border-radius: @{radius.control}dp;
+}
+
+.transport-btn.toggle {
+    border-radius: @{radius.control}dp;
+}
+
+.play-btn {
+    border-radius: @{radius.surface}dp;
+}
+
+.sequence-fps-field {
+    border-color: transparent;
+    border-radius: @{radius.control}dp;
+}
+
+.sequence-fps-field:hover,
+.sequence-fps-field.active,
+.sequence-fps-field.is-editing {
+    border-color: @{border};
+}
+
+.snap-check {
+    border-radius: @{radius.control}dp;
+}
+
+#track-bar {
+    border-radius: @{radius.control}dp;
+}
+
+#ply-sequence-clip.selected {
+    border-color: @{border};
+}
+
+.reveal-clip {
+    border-color: @{primary};
+}
+
+.sequence-clip {
+    border-color: @{primary};
+    border-radius: @{radius.control}dp;
+}
+
+.keyframe {
+    border-radius: @{radius.control}dp;
+    background-color: @{primary};
+}
+
+.keyframe.alternate {
+    background-color: @{secondary};
+}
+
+.keyframe.selected {
+    border-color: @{primary};
+    border-width: @{stroke.emphasis}dp;
+    background-color: @{lighten(primary,0.2)};
+}
+
+.keyframe.alternate.selected {
+    background-color: @{lighten(secondary,0.2)};
+}
+
+.keyframe.loop-point {
+    border-radius: @{radius.control}dp;
+    background-color: @{info};
+}
+
+.keyframe.loop-point.selected {
+    background-color: @{lighten(info,0.2)};
+}
+
+#playhead-handle {
+    border-radius: @{radius.control}dp;
+}
+
+#timeline-scrollbar {
+    border-radius: @{radius.control}dp;
+}
+
+#timeline-scrollbar-thumb {
+    border-radius: @{radius.control}dp;
+}
+
+#duration-field {
+    border-color: transparent;
+    border-radius: @{radius.control}dp;
+}
+
+#duration-field:hover,
+#duration-field.is-editing {
+    border-color: @{border};
+}
+
+.easing-curve-segment {
+    border-radius: @{radius.control}dp;
+}
+
+.easing-dot {
+    border-radius: @{radius.round}dp;
+}
+
+.easing-indicator.ease-in,
+.easing-indicator.ease-out {
+    border-left-color: transparent;
+    border-right-color: transparent;
+}
+
+.easing-indicator.ease-in-out {
+    border-radius: @{radius.control}dp;
+}
+
+#film-strip-groove {
+    border-radius: @{radius.control}dp;
+}
+
+.film-thumb {
+    border-radius: @{radius.control}dp;
+}
+
+.film-thumb-outline {
+    border-radius: @{radius.control}dp;
+    border-color: transparent;
+}
+
+.film-strip-marker-cap {
+    border-radius: @{radius.control}dp;
+}
+
+.film-strip-sprocket {
+    border-radius: @{radius.control}dp;
+}
+
+#timeline-tooltip {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Theme-dependent sequencer panel styles. */
 
 #panel {
     @{panel.body_decor};
     border-width: 1dp;
-    border-color: @{alpha(border,0.4)};
-    border-radius: @{num(size.window_rounding)}dp;
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
 }
 
 #panel.film-strip-attached {
-    border-radius: @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp 0dp 0dp;
+    border-radius: @{radius.surface}dp;
 }
 
 .transport-icon {
@@ -18,7 +157,7 @@
 #track-bar {
     background-color: @{background};
     border-width: 1dp;
-    border-color: @{alpha(border,0.3)};
+    border-color: @{border};
 }
 
 #hint {
@@ -71,12 +210,12 @@
 
 #easing-stripe {
     background-color: @{surface};
-    border-top: 1dp @{alpha(border,0.3)};
+    border-top: 1dp @{border};
 }
 
 #transport-row {
     @{components.header_decor};
-    border-bottom: 1dp @{alpha(border,0.3)};
+    border-bottom: 1dp @{border};
 }
 
 .transport-sep {
@@ -102,7 +241,7 @@
 #btn-camera-path.active {
     background-color: @{alpha(primary,0.30)};
     border-width: 1dp;
-    border-color: @{alpha(primary,0.50)};
+    border-color: @{primary};
 }
 
 #btn-add .transport-icon,
@@ -117,21 +256,21 @@
 
 #btn-export {
     border-width: 1dp;
-    border-color: @{alpha(primary,0.40)};
+    border-color: @{primary};
 }
 
 #btn-clear {
     background-color: @{alpha(error,0.15)};
     border-width: 1dp;
-    border-color: @{alpha(error,0.15)};
+    border-color: @{error};
 }
 
 #film-strip-panel {
     @{panel.body_decor};
-    border-left: 1dp @{alpha(border,0.4)};
-    border-right: 1dp @{alpha(border,0.4)};
-    border-bottom: 1dp @{alpha(border,0.4)};
-    border-radius: 0dp 0dp @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp;
+    border-left: 1dp @{border};
+    border-right: 1dp @{border};
+    border-bottom: 1dp @{border};
+    border-radius: @{radius.surface}dp;
 }
 
 #film-strip-groove {
@@ -171,15 +310,15 @@
 }
 
 .film-thumb.hovered .film-thumb-outline {
-    border-color: @{text};
+    border-color: @{border};
 }
 
 .film-thumb.contains-hovered-keyframe .film-thumb-outline {
-    border-color: @{alpha(secondary,0.50)};
+    border-color: @{primary};
 }
 
 .film-thumb.contains-selected .film-thumb-outline {
-    border-color: @{alpha(primary,0.65)};
+    border-color: @{primary};
 }
 
 .film-thumb-midline.shadow {
@@ -239,7 +378,7 @@
 }
 
 .easing-indicator.secondary.ease-in {
-    border-bottom-color: @{secondary};
+    border-bottom-color: @{primary};
 }
 
 .easing-indicator.primary.ease-out {
@@ -247,7 +386,7 @@
 }
 
 .easing-indicator.secondary.ease-out {
-    border-top-color: @{secondary};
+    border-top-color: @{primary};
 }
 
 .timeline-guide.hovered {
@@ -268,7 +407,7 @@
 
 #timeline-tooltip {
     background-color: @{alpha(surface,0.96)};
-    border-color: @{alpha(border,0.75)};
+    border-color: @{border};
 }
 
 .timeline-tooltip-line.title {

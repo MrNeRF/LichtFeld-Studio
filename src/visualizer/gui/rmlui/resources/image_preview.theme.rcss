@@ -1,3 +1,26 @@
+/* Shared border roles and shape scale. */
+
+.thumb-item {
+    border-color: transparent;
+    border-radius: @{radius.control}dp;
+}
+
+.nav-arrow {
+    border-radius: @{radius.surface}dp;
+}
+
+.btn-copy {
+    border-radius: @{radius.control}dp;
+}
+
+.view-btn {
+    border-radius: @{radius.control}dp;
+}
+
+.hk-key {
+    border-radius: @{radius.control}dp;
+}
+
 /* Image preview panel theme overrides. */
 
 #filmstrip {
@@ -82,23 +105,23 @@
 .view-btn {
     color: @{alpha(text,0.86)};
     background-color: @{alpha(white,0.05)};
-    border-color: @{alpha(border,0.43)};
+    border-color: @{border};
 }
 
 .nav-arrow:hover,
 .view-btn:hover {
     color: @{text};
     background-color: @{alpha(white,0.10)};
-    border-color: @{alpha(primary,0.43)};
+    border-color: @{primary};
 }
 
 .view-btn:active {
     background-color: @{alpha(white,0.15)};
-    border-color: @{alpha(primary,0.59)};
+    border-color: @{primary};
 }
 
 .view-btn:focus-visible {
-    border-color: @{alpha(primary,0.63)};
+    border-color: @{primary};
     box-shadow: 0 0 0 1dp @{alpha(primary,0.39)};
 }
 
@@ -115,3 +138,11 @@
 .sam-box { border-color: @{primary}; }
 .sam-point-selected, .sam-box-selected { border-color: @{warning}; }
 .sam-box-handle { background-color: @{primary}; border-color: @{white}; }
+
+#sam-controls {
+    border-bottom-color: @{border};
+}
+
+.sam-point {
+    border-radius: @{radius.round}dp;
+}

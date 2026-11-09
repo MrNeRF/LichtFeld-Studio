@@ -56,11 +56,11 @@ namespace lfs::vis {
 
     // Size configuration
     struct ThemeSizes {
-        float window_rounding = 6.0f;
-        float frame_rounding = 2.0f;
-        float popup_rounding = 4.0f;
-        float scrollbar_rounding = 6.0f;
-        float grab_rounding = 2.0f;
+        float window_rounding = 8.0f;
+        float frame_rounding = 4.0f;
+        float popup_rounding = 8.0f;
+        float scrollbar_rounding = 4.0f;
+        float grab_rounding = 4.0f;
         float tab_rounding = 4.0f;
         float border_size = 0.0f;
         float child_border_size = 1.0f;
@@ -93,7 +93,7 @@ namespace lfs::vis {
         float hover_lighten = 0.08f;
         float active_alpha = 0.35f;
         float popup_lighten = 0.02f;
-        float popup_rounding = 6.0f;
+        float popup_rounding = 8.0f;
         float popup_border_size = 1.0f;
         float border_alpha = 0.6f;
         float bottom_border_darken = 0.08f;
@@ -103,7 +103,7 @@ namespace lfs::vis {
     };
 
     struct ThemeContextMenu {
-        float rounding = 6.0f;
+        float rounding = 8.0f;
         float header_alpha = 0.4f;
         float header_hover_alpha = 0.6f;
         float header_active_alpha = 0.8f;

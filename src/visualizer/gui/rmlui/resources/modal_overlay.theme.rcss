@@ -1,3 +1,5 @@
+/* Shared border roles and shape scale. */
+
 /* Theme-dependent modal overlay styles. */
 
 .modal-backdrop {
@@ -6,8 +8,8 @@
 
 .modal-dialog {
     background-color: @{modal.surface};
-    border-color: @{modal.border};
-    border-radius: @{num(size.window_rounding)}dp;
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
 }
 
 .modal-title,

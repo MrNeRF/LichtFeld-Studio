@@ -237,14 +237,19 @@ namespace lfs::vis::gui {
 
         std::string panel_theme = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
         try {
-            auto theme_path = resolveDocumentPath(rml_path_);
-            theme_path.replace_extension(".theme.rcss");
-            std::error_code ec;
-            if (lfs::core::native_fs::exists(theme_path, ec)) {
-                if (!panel_theme.empty())
-                    panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
-            }
+            const auto document_path = resolveDocumentPath(rml_path_);
+            std::unordered_set<std::string> loaded_themes;
+            const auto append_theme = [&](std::filesystem::path path) {
+                if (isThemeProvidedStaticStylesheet(path))
+                    return;
+                path.replace_extension(".theme.rcss");
+                appendBaseRCSS(panel_theme, loaded_themes, path);
+            };
+            // Shared linked sheets (for example import dialogs and tabs) own
+            // theme rules too. Load them before the document-specific overrides.
+            for (const auto& path : rml_documents::loadLinkedStylesheetPaths(document_path))
+                append_theme(path);
+            append_theme(document_path);
         } catch (const std::exception&) {
             // Sibling theme files are optional; missing ones should not produce startup noise.
         }

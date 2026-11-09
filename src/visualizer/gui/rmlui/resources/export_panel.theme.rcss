@@ -1,3 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.ep-format-dot {
+    border-radius: @{radius.round}dp;
+}
+
 /* Export panel theme overrides. */
 
 .ep-section-title {

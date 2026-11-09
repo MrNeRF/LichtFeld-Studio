@@ -1,11 +1,28 @@
+/* Shared border roles and shape scale. */
+
+#overlay-box {
+    border-color: transparent;
+}
+
+#plugin-load-track {
+    background-color: @{surface};
+    border-color: @{border};
+    border-radius: @{radius.round}dp;
+}
+
+#plugin-load-fill {
+    background-color: @{primary};
+    border-radius: @{radius.round}dp;
+}
+
 /* Theme-dependent startup overlay styles.
  * Static brand/icon colors remain in startup.rcss so live edits are not hidden
  * behind generated C++ rules. */
 
 #overlay-box {
     background-color: @{startup.overlay_bg};
-    border: 1dp @{startup.overlay_border};
-    border-radius: 12dp;
+    border: 1dp @{border};
+    border-radius: @{radius.surface}dp;
 }
 
 .dim-text,
@@ -41,7 +58,7 @@ select {
 }
 
 select:hover {
-    border-color: @{startup.primary};
+    border-color: @{primary};
 }
 
 selectbox option:hover {

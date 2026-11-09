@@ -138,7 +138,7 @@
 
 .empty-title {
     font-size: 14dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .empty-message {
@@ -190,7 +190,7 @@
 }
 
 .stat-value {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 #histogram-range-of-interest,
@@ -242,7 +242,7 @@
     flex: 1;
     min-height: 128dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     overflow: hidden;
 }
 
@@ -287,7 +287,7 @@
     bottom: 0;
     min-width: 2dp;
     border-width: 1dp;
-    border-radius: 2dp;
+
     pointer-events: none;
 }
 
@@ -303,7 +303,6 @@
 .histogram-bar-fill {
     width: 100%;
     min-height: 1dp;
-    border-radius: 2dp 2dp 0 0;
 }
 
 #histogram-axis {
@@ -361,7 +360,7 @@
     flex: 1;
     min-height: 240dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     overflow: hidden;
 }
 
@@ -379,7 +378,7 @@
     min-width: 2dp;
     min-height: 2dp;
     border-width: 1dp;
-    border-radius: 2dp;
+
     pointer-events: none;
 }
 
@@ -398,7 +397,6 @@
     height: 100%;
     min-width: 1dp;
     min-height: 1dp;
-    border-radius: 4dp;
 }
 
 #compare-axis {

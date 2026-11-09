@@ -1,3 +1,17 @@
+/* Shared border roles and shape scale. */
+
+.preferences-mcp-switch-track {
+    border-radius: @{radius.control}dp;
+}
+
+.preferences-mcp-switch-knob {
+    border-radius: @{radius.round}dp;
+}
+
+.preferences-conflict-dialog {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Theme-dependent styles for the Preferences panel. */
 
 .preferences-nav {
@@ -25,16 +39,16 @@
 .preferences-nav-item:focus-visible {
     color: @{text};
     background-color: @{panel.tab_hover_bg};
-    border-color: @{panel.tab_hover_border};
+    border-color: @{primary};
 }
 
 .preferences-nav-item.active {
     color: @{text};
     background-color: @{panel.tab_active_bg};
-    border-color: @{panel.tab_active_border};
+    border-color: @{primary};
     border-left-color: @{primary};
-    border-left-width: 3dp;
-    font-weight: bold;
+    border-left-width: 2dp;
+    font-weight: 600;
 }
 
 .preferences-nav-child,

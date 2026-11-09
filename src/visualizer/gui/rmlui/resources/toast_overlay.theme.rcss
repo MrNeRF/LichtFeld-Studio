@@ -1,8 +1,10 @@
+/* Shared border roles and shape scale. */
+
 /* Theme-dependent toast overlay styles. */
 
 .toast {
     background-color: @{modal.surface};
-    border-radius: @{num(size.window_rounding)}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 .toast-title,

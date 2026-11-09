@@ -104,7 +104,7 @@ body.floating-panel {
     flex: 1 1 180dp;
     min-width: 0;
     font-size: 16dp;
-    font-weight: bold;
+    font-weight: 600;
     white-space: normal;
 }
 
@@ -122,7 +122,7 @@ body.floating-panel {
     display: block;
     margin-top: 8dp;
     margin-bottom: 4dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .preferences-metric-row {
@@ -377,7 +377,6 @@ body.floating-panel {
     width: 22dp;
     height: 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 .preferences-mcp-switch-knob {
@@ -387,7 +386,6 @@ body.floating-panel {
     top: 1dp;
     width: 6dp;
     height: 6dp;
-    border-radius: 4dp;
 }
 
 .preferences-mcp-toggle.is-on .preferences-mcp-switch-knob {
@@ -439,7 +437,7 @@ body.floating-panel {
 .preferences-binding-section {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     padding: 3dp 4dp;
     margin-top: 4dp;
 }
@@ -499,7 +497,7 @@ body.floating-panel {
 
 .preferences-conflict-dialog {
     border-width: 1dp;
-    border-radius: 6dp;
+
     padding: 14dp;
     min-width: 280dp;
     max-width: 380dp;
@@ -508,7 +506,7 @@ body.floating-panel {
 .preferences-conflict-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 6dp;
 }
 

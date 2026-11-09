@@ -1,3 +1,41 @@
+/* Shared border roles and shape scale. */
+
+.im-plot-graph {
+    border-radius: @{radius.control}dp;
+}
+
+.im-color-swatch {
+    border-radius: @{radius.control}dp;
+}
+
+.im-color-btn {
+    border-radius: @{radius.control}dp;
+}
+
+.im-image-frame {
+    border-radius: @{radius.control}dp;
+}
+
+.im-menu-panel {
+    border-radius: @{radius.control}dp;
+}
+
+.im-tooltip {
+    border-radius: @{radius.control}dp;
+}
+
+.im-box {
+    border-radius: @{radius.control}dp;
+}
+
+.im-child-bordered {
+    border-radius: @{radius.control}dp;
+}
+
+.im-popup-dialog {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Immediate-mode bridge theme overrides. */
 
 .im-radio:hover {
@@ -17,22 +55,22 @@
 
 .im-color-swatch,
 .im-color-btn {
-    border-color: @{alpha(text,0.20)};
+    border-color: @{border};
 }
 
 .im-tooltip {
     color: @{text};
     background-color: @{alpha(surface,0.94)};
-    border-color: @{alpha(border,0.50)};
+    border-color: @{border};
 }
 
 .im-child-bordered {
-    border-color: @{alpha(border,0.30)};
+    border-color: @{border};
 }
 
 .im-box {
     background-color: @{alpha(surface_bright,0.18)};
-    border-color: @{alpha(border,0.30)};
+    border-color: @{border};
 }
 
 .im-popup-backdrop {
@@ -42,10 +80,10 @@
 .im-popup-dialog {
     color: @{text};
     background-color: @{alpha(surface,0.96)};
-    border-color: @{alpha(border,0.50)};
+    border-color: @{border};
 }
 
 .im-popup-title {
     color: @{text};
-    border-bottom-color: @{alpha(border,0.30)};
+    border-bottom-color: @{border};
 }

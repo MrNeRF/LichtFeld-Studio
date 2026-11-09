@@ -1,0 +1,5 @@
+/* Shared border roles and shape scale. */
+
+.bugreport-radio-option {
+    border-radius: @{radius.control}dp;
+}

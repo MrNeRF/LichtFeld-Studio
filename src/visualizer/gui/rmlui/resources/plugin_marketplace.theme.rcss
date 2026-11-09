@@ -1,3 +1,45 @@
+/* Shared border roles and shape scale. */
+
+.mp-intro > .mp-warning-note {
+    border-radius: @{radius.control}dp;
+}
+
+.mp-controls {
+    border-radius: @{radius.control}dp;
+}
+
+.mp-manual-section {
+    border-radius: @{radius.control}dp;
+}
+
+.mp-empty-state {
+    border-radius: @{radius.control}dp;
+}
+
+.mp-empty-mark {
+    border-radius: @{radius.surface}dp;
+}
+
+.plugin-card {
+    border-radius: @{radius.surface}dp;
+}
+
+.card-feedback {
+    border-radius: @{radius.control}dp;
+}
+
+.plugin-list-row {
+    border-radius: @{radius.control}dp;
+}
+
+.mp-status-dot {
+    border-radius: @{radius.round}dp;
+}
+
+.confirm-dialog {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Plugin Marketplace theme overrides. */
 
 /* ── Intro and controls ──────────────────────────────────── */
@@ -15,7 +57,7 @@
 .mp-manual-section,
 .mp-empty-state {
     background-color: @{alpha(surface_bright,0.36)};
-    border-color: @{alpha(border,0.75)};
+    border-color: @{border};
 }
 
 .mp-control-label,
@@ -59,7 +101,7 @@
 .mp-view-btn:hover {
     color: @{text};
     background-color: @{alpha(primary,0.10)};
-    border-color: @{alpha(primary,0.60)};
+    border-color: @{primary};
 }
 
 .mp-view-btn.selected,
@@ -101,7 +143,7 @@
 
 .mp-empty-mark {
     color: @{primary};
-    border-color: @{alpha(primary,0.60)};
+    border-color: @{primary};
     background-color: @{alpha(primary,0.08)};
 }
 
@@ -113,7 +155,7 @@
 
 .plugin-card {
     background-color: @{surface};
-    border-color: @{alpha(border,0.88)};
+    border-color: @{border};
 }
 
 .plugin-card.card--in-progress {
@@ -172,7 +214,7 @@
 
 .card-feedback {
     background-color: @{alpha(surface_bright,0.55)};
-    border-color: @{alpha(border,0.78)};
+    border-color: @{border};
 }
 
 .card-progress {
@@ -188,7 +230,7 @@
 
 .plugin-list-row {
     background-color: @{surface};
-    border-color: @{alpha(border,0.78)};
+    border-color: @{border};
 }
 
 .plugin-list-row.card--in-progress {
@@ -204,7 +246,7 @@
 }
 
 .plugin-list-details {
-    border-top-color: @{alpha(border,0.65)};
+    border-top-color: @{border};
 }
 
 .plugin-list-disclosure {

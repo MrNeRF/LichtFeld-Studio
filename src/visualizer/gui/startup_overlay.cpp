@@ -466,8 +466,8 @@ namespace lfs::vis::gui {
             track->SetProperty("display", "block");
             track->SetProperty("width", "300dp");
             track->SetProperty("height", "14dp");
-            track->SetProperty("background-color", "rgba(255, 255, 255, 0.06)");
-            track->SetProperty("border-color", "rgba(255, 255, 255, 0.15)");
+            track->RemoveProperty("background-color");
+            track->RemoveProperty("border-color");
             fill->SetProperty("display", "block");
             percent->SetProperty("display", "block");
             row->SetProperty("height", "16dp");
