@@ -2338,9 +2338,9 @@ body {
 .side-dock-toggle .dock-collapse-arrow,
 .side-dock-toggle .dock-expand-arrow { display: none; }
 .side-dock-toggle:hover .side-dock-grip,
-.side-dock-toggle:focus .side-dock-grip,
+.side-dock-toggle:focus-visible .side-dock-grip,
 .side-dock-toggle.collapsed .side-dock-grip { display: none; }
 .side-dock-toggle:hover .dock-collapse-arrow,
-.side-dock-toggle:focus .dock-collapse-arrow,
+.side-dock-toggle:focus-visible .dock-collapse-arrow,
 .side-dock-toggle.collapsed .dock-expand-arrow { display: inline; }
 .side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }

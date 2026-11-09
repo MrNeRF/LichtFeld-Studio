@@ -340,6 +340,22 @@ namespace {
                         ASSERT_NE(grip, nullptr);
                         const bool is_collapsed = button->IsClassSet("collapsed");
                         EXPECT_EQ(grip->GetDisplay() == Rml::Style::Display::None, is_collapsed);
+                        if (!is_collapsed) {
+                            auto* arrow = button->QuerySelector(".dock-collapse-arrow");
+                            ASSERT_NE(arrow, nullptr);
+                            // Pointer focus persists after clicking; only keyboard focus reveals the arrow.
+                            button->SetPseudoClass("focus", true);
+                            real_context_->Update();
+                            EXPECT_NE(grip->GetDisplay(), Rml::Style::Display::None);
+                            EXPECT_EQ(arrow->GetDisplay(), Rml::Style::Display::None);
+                            button->SetPseudoClass("focus-visible", true);
+                            real_context_->Update();
+                            EXPECT_EQ(grip->GetDisplay(), Rml::Style::Display::None);
+                            EXPECT_NE(arrow->GetDisplay(), Rml::Style::Display::None);
+                            button->SetPseudoClass("focus-visible", false);
+                            button->SetPseudoClass("focus", false);
+                            real_context_->Update();
+                        }
                         auto* hit = real_context_->GetElementAtPoint(pos + size * 0.5f);
                         while (hit && hit != button)
                             hit = hit->GetParentNode();
