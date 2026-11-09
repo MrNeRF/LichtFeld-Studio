@@ -1900,6 +1900,8 @@
     "action.node_pick": "选取节点",
     "action.node_rect_select": "矩形选择节点",
     "action.toggle_ui": "切换 UI",
+    "action.toggle_left_dock": "折叠/展开左侧停靠栏",
+    "action.toggle_right_dock": "折叠/展开右侧停靠栏",
     "action.toggle_fullscreen": "切换全屏",
     "action.open_preferences": "打开偏好设置",
     "action.toggle_mcp_server": "切换 MCP 服务器",

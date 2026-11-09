@@ -1900,6 +1900,8 @@
     "action.node_pick": "Sélectionner le nœud",
     "action.node_rect_select": "Sélection rectangulaire de nœuds",
     "action.toggle_ui": "Basculer l'interface",
+    "action.toggle_left_dock": "Replier/déplier le panneau gauche",
+    "action.toggle_right_dock": "Replier/déplier le panneau droit",
     "action.toggle_fullscreen": "Basculer le plein écran",
     "action.open_preferences": "Ouvrir les préférences",
     "action.toggle_mcp_server": "Activer/désactiver le serveur MCP",

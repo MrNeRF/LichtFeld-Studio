@@ -303,6 +303,43 @@ namespace {
         }
     }
 
+    TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/viewport_overlay.rml";
+        std::ifstream input(path);
+        std::string markup((std::istreambuf_iterator<char>(input)), {});
+        markup.replace(markup.find("<head>"), 6, "<head><link type=\"text/rcss\" href=\"components.rcss\"/>");
+        real_context_ = Rml::CreateContext("viewport_depth_layout_real", {720, 400}, &renderer_);
+        ASSERT_NE(real_context_, nullptr);
+        auto* doc = real_context_->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
+        ASSERT_NE(doc, nullptr);
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, doc);
+        doc->Show();
+        for (float scale : {1.0f, 1.5f, 2.0f}) {
+            real_context_->SetDensityIndependentPixelRatio(scale);
+            for (int width : {360, 720}) {
+                real_context_->SetDimensions({int(width * scale), int(400 * scale)});
+                for (bool collapsed : {false, true}) {
+                    overlay_.setSideDocks(true, collapsed, true, !collapsed);
+                    real_context_->Update();
+                    for (const char* id : {"left-side-dock-toggle", "right-side-dock-toggle"}) {
+                        auto* button = doc->GetElementById(id);
+                        ASSERT_NE(button, nullptr);
+                        ASSERT_TRUE(button->IsVisible());
+                        const auto pos = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_GT(size.x, 0.0f);
+                        EXPECT_GE(pos.x, 0.0f);
+                        EXPECT_LE(pos.x + size.x, width * scale);
+                        auto* hit = real_context_->GetElementAtPoint(pos + size * 0.5f);
+                        while (hit && hit != button)
+                            hit = hit->GetParentNode();
+                        EXPECT_EQ(hit, button) << id << " scale=" << scale << " width=" << width;
+                    }
+                }
+            }
+        }
+    }
+
     TEST_F(ViewportDepthLayoutTest, LocalizedDepthControlsStayOutsideTheAxisCorner) {
         const auto resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
         const auto path = resources / "rmlui/resources/viewport_overlay.rml";

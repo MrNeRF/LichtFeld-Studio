@@ -2313,3 +2313,26 @@ body {
 .gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
 
 .gamepad-navigation-indicator.hidden { display: none; }
+
+/* Edge handles use the existing overlay context and shared button states. */
+.side-dock-toggle {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    top: 50%;
+    margin-top: -24dp;
+    width: 20dp;
+    height: 48dp;
+    min-width: 0;
+    padding: 0;
+    font-size: 20dp;
+    z-index: 15;
+}
+.side-dock-toggle.hidden { display: none; }
+.side-dock-toggle.left { left: 0; }
+.side-dock-toggle.right { right: 0; }
+.side-dock-toggle .dock-expand-arrow,
+.side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }
+.side-dock-toggle.collapsed .dock-expand-arrow { display: inline; }

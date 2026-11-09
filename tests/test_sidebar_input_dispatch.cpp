@@ -305,6 +305,22 @@ namespace lfs::vis {
         window_->setGamepadDiagnosticsActive(false);
     }
 
+    TEST_F(SidebarInputDispatchTest, CollapsingSidebarReleasesOwnedPointerDragAndInput) {
+        setupSidebar();
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_MIDDLE;
+        event.button.x = 20.0f;
+        event.button.y = 200.0f;
+        dispatch(event);
+        ASSERT_TRUE(sidebar().isResizeInteractionActive());
+        sidebar().suspendInput();
+        EXPECT_FALSE(sidebar().isResizeInteractionActive());
+        EXPECT_FALSE(sidebar().wantsInput());
+        EXPECT_FALSE(sidebar().wantsKeyboard());
+        EXPECT_EQ(sidebar().getCursorRequest(), gui::CursorRequest::None);
+    }
+
     TEST_F(SidebarInputDispatchTest, SidebarCtrlWheelRemainsAvailableToScrollableContent) {
         gui::RmlPanelHost host(&manager(), "sidebar-content", "");
         attachInputHost(host, 400, 300,

@@ -195,6 +195,8 @@ namespace lfs::vis::input {
         IMAGE_PREVIEW_DELETE,
         IMAGE_PREVIEW_GENERATE,
         IMAGE_PREVIEW_REMOVE_POINT,
+        TOGGLE_LEFT_DOCK,
+        TOGGLE_RIGHT_DOCK,
     };
 
     enum class ShortcutScope : uint8_t {

@@ -1913,6 +1913,8 @@
     "action.node_pick": "Seleziona nodo",
     "action.node_rect_select": "Selezione rettangolare di nodi",
     "action.toggle_ui": "Attiva UI",
+    "action.toggle_left_dock": "Comprimi/espandi il dock sinistro",
+    "action.toggle_right_dock": "Comprimi/espandi il dock destro",
     "action.toggle_fullscreen": "Attiva schermo intero",
     "action.open_preferences": "Apri preferenze",
     "action.toggle_mcp_server": "Attiva/disattiva server MCP",

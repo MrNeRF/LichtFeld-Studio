@@ -84,6 +84,8 @@ namespace lfs::vis::gui {
         float python_console_width = -1.0f;
         float bottom_dock_height = 320.0f;
         float left_dock_width = 320.0f;
+        bool left_dock_collapsed = false;
+        bool right_dock_collapsed = false;
         bool show_sequencer = false;
         std::string active_tab_id;
         std::string bottom_dock_active_tab_id;
@@ -150,7 +152,10 @@ namespace lfs::vis::gui {
         void enforceWidthConstraints(bool show_main_panel, bool ui_hidden,
                                      const ScreenState& screen);
 
-        float getRightPanelWidth() const { return right_panel_width_; }
+        float getRightPanelWidth() const { return right_dock_collapsed_ ? 0.0f : right_panel_width_; }
+        bool isLeftDockCollapsed() const { return left_dock_collapsed_; }
+        bool isRightDockCollapsed() const { return right_dock_collapsed_; }
+        void setSideDockCollapsed(bool right, bool collapsed);
         float getScenePanelRatio() const { return scene_panel_ratio_; }
         [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
         void setScenePanelHeight(float height, float panel_height);
@@ -210,6 +215,8 @@ namespace lfs::vis::gui {
 
         // Effective widths are clamped to the window every frame; preferred widths
         // hold the user's choice so the panels grow back when the window does.
+        bool left_dock_collapsed_ = false;
+        bool right_dock_collapsed_ = false;
         float right_panel_width_ = 360.0f;
         float right_panel_preferred_width_ = 360.0f;
         float scene_panel_ratio_ = 0.4f;

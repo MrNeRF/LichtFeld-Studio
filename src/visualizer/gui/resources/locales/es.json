@@ -1900,6 +1900,8 @@
     "action.node_pick": "Seleccionar nodo",
     "action.node_rect_select": "Selección rectangular de nodos",
     "action.toggle_ui": "Alternar UI",
+    "action.toggle_left_dock": "Contraer/expandir el panel izquierdo",
+    "action.toggle_right_dock": "Contraer/expandir el panel derecho",
     "action.toggle_fullscreen": "Alternar pantalla completa",
     "action.open_preferences": "Abrir preferencias",
     "action.toggle_mcp_server": "Activar/desactivar servidor MCP",

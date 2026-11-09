@@ -3287,6 +3287,8 @@ NB_MODULE(lichtfeld, m) {
             return capabilities;
         },
         "Return Vulkan device capabilities used to gate rendering controls");
+    m.def("toggle_side_dock", [](bool right) { lfs::core::events::ui::ToggleSideDock{.right = right}.emit(); }, nb::arg("right"), "Toggle the right sidebar, or the left project dock when right is false.");
+
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");

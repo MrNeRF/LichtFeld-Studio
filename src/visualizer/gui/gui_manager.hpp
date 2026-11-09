@@ -160,7 +160,7 @@ namespace lfs::vis {
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
             [[nodiscard]] bool isSequencerVisible() const { return !ui_hidden_ && panel_layout_.isShowSequencer(); }
-            void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
+            void focusMainPanelTab(std::string panel_id) { revealPanel(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
@@ -374,6 +374,8 @@ namespace lfs::vis {
                 std::chrono::steady_clock::time_point now,
                 bool training_active);
             void queueUiVisibilityToggle();
+            void queueSideDockToggle(bool right);
+            void revealPanel(const std::string& id);
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
             void commitUiVisibilityTransition(bool matched_frame);
@@ -423,6 +425,9 @@ namespace lfs::vis {
             bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
+            uint8_t side_dock_toggle_pending_ = 0;
+            bool ui_target_left_collapsed_ = false;
+            bool ui_target_right_collapsed_ = false;
             bool ui_visibility_resize_active_ = false;
             bool ui_visibility_layout_committed_ = false;
             bool ui_visibility_target_ready_ = false;
@@ -538,6 +543,8 @@ namespace lfs::vis {
             float last_ui_layout_python_console_w_ = -1.0f;
             float last_ui_layout_bottom_dock_h_ = -1.0f;
             float last_ui_layout_left_dock_w_ = -1.0f;
+            bool last_ui_layout_left_collapsed_ = false;
+            bool last_ui_layout_right_collapsed_ = false;
             bool last_ui_layout_show_main_panel_ = false;
             bool last_ui_layout_show_sequencer_ = false;
             bool last_ui_layout_ui_hidden_ = false;

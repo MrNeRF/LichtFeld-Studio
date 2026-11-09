@@ -1900,6 +1900,8 @@
     "action.node_pick": "ノードを選択",
     "action.node_rect_select": "ノードを矩形選択",
     "action.toggle_ui": "UI切替",
+    "action.toggle_left_dock": "左ドックを折りたたむ／展開する",
+    "action.toggle_right_dock": "右ドックを折りたたむ／展開する",
     "action.toggle_fullscreen": "全画面切替",
     "action.open_preferences": "設定を開く",
     "action.toggle_mcp_server": "MCP サーバーのオン/オフ",

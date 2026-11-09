@@ -346,6 +346,8 @@ namespace lfs::core {
             EVENT(SplitPositionChanged, float position;);
             EVENT(FocusTrainingPanel, );
             EVENT(ToggleUI, );
+            EVENT(ToggleSideDock, bool right;);
+            EVENT(RevealPanel, std::string id;);
             EVENT(ToggleFullscreen, );
             EVENT(ToggleVramHud, );
             EVENT(TogglePerfHudExpanded, );

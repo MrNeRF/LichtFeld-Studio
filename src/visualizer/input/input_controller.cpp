@@ -2586,6 +2586,12 @@ namespace lfs::vis {
                 updateZoomSpeed(false);
                 return;
 
+            case input::Action::TOGGLE_LEFT_DOCK:
+                ui::ToggleSideDock{.right = false}.emit();
+                return;
+            case input::Action::TOGGLE_RIGHT_DOCK:
+                ui::ToggleSideDock{.right = true}.emit();
+                return;
             case input::Action::TOGGLE_UI:
                 ui::ToggleUI{}.emit();
                 return;

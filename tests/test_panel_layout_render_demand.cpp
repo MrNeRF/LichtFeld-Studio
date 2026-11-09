@@ -325,6 +325,65 @@ namespace {
 
 } // namespace
 
+TEST_F(PanelLayoutRenderDemandTest, SideDockCollapsePreservesPanelsAndSkipsLiveAndCachedDraws) {
+    using namespace lfs::vis::gui;
+    auto left = registerPanel("collapse.left", PanelSpace::LeftDock, 500.0f);
+    auto right = registerPanel("collapse.right", PanelSpace::MainPanelTab, 500.0f);
+    PanelLayoutManager layout;
+    layout.setActiveTab("collapse.right");
+    layout.setSideDockCollapsed(false, true);
+    layout.setSideDockCollapsed(true, true);
+    std::unordered_map<std::string, bool> windows;
+    std::string focus;
+    layout.renderLeftDock({}, true, false, {}, screen());
+    layout.renderLeftDockCached({}, true, false, {}, screen());
+    layout.renderRightPanel({}, {}, true, false, windows, focus, {}, screen());
+    layout.renderRightPanelCached({}, {}, true, false, windows, focus, {}, screen());
+    for (const auto& panel : {left, right}) {
+        EXPECT_EQ(panel->preload_count, 0);
+        EXPECT_EQ(panel->draw_count, 0);
+        EXPECT_EQ(panel->cached_draw_count, 0);
+    }
+    EXPECT_TRUE(PanelRegistry::instance().is_panel_enabled("collapse.left"));
+    EXPECT_TRUE(PanelRegistry::instance().is_panel_enabled("collapse.right"));
+    EXPECT_EQ(layout.getActiveTab(), "collapse.right");
+    const auto viewport = layout.computeViewportLayout(true, false, false, screen());
+    EXPECT_FLOAT_EQ(viewport.pos.x, screen().work_pos.x);
+    EXPECT_FLOAT_EQ(viewport.size.x, screen().work_size.x);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, SideDocksCollapseIndependentlyAndRestorePreferredWidthsAfterResize) {
+    using namespace lfs::vis::gui;
+    registerPanel("collapse.left", PanelSpace::LeftDock, 500.0f);
+    PanelLayoutManager layout;
+    layout.setLeftDockWidth(290.0f);
+    layout.setRightPanelWidth(370.0f, screen());
+    const auto original = layout.computeViewportLayout(true, false, false, screen());
+    layout.setSideDockCollapsed(false, true);
+    const auto left_closed = layout.computeViewportLayout(true, false, false, screen());
+    EXPECT_FLOAT_EQ(left_closed.size.x, original.size.x + original.pos.x);
+    EXPECT_FALSE(layout.isRightDockCollapsed());
+    layout.setSideDockCollapsed(true, true);
+    ScreenState narrow{.work_size = {300.0f, 400.0f}};
+    layout.enforceWidthConstraints(true, false, narrow);
+    EXPECT_FLOAT_EQ(layout.computeViewportLayout(true, false, false, narrow).size.x, 300.0f);
+    const auto saved = layout.captureProjectState();
+    EXPECT_FLOAT_EQ(saved.left_dock_width, 290.0f);
+    EXPECT_FLOAT_EQ(saved.right_panel_width, 370.0f);
+    PanelLayoutManager restored;
+    restored.applyProjectState(saved);
+    EXPECT_TRUE(restored.isLeftDockCollapsed());
+    EXPECT_TRUE(restored.isRightDockCollapsed());
+    EXPECT_FLOAT_EQ(restored.computeViewportLayout(true, true, false, screen()).size.x, screen().work_size.x);
+    restored.setSideDockCollapsed(false, false);
+    restored.setSideDockCollapsed(true, false);
+    restored.enforceWidthConstraints(true, false, screen());
+    const auto reopened = restored.computeViewportLayout(true, false, false, screen());
+    EXPECT_FLOAT_EQ(reopened.pos.x, original.pos.x);
+    EXPECT_FLOAT_EQ(reopened.size.x, original.size.x);
+    EXPECT_EQ(restored.captureProjectState().active_tab_id, saved.active_tab_id);
+}
+
 TEST_F(PanelLayoutRenderDemandTest, BottomDockDrawsOnlyActivePanelAtFullContentHeight) {
     using namespace lfs::vis::gui;
 
