@@ -1204,7 +1204,27 @@
     "viewport_defaults_invalid": "Enter a valid value within the supported range.",
     "sidebar_defaults_description": "Save the current right sidebar width, scene split and active tab for application startup. Existing .licht projects restore their own workspace. New Project keeps the current workspace.",
     "save_startup_sidebar": "Save sidebar for startup",
-    "clear_startup_sidebar": "Clear startup sidebar"
+    "clear_startup_sidebar": "Clear startup sidebar",
+    "status_bar": "Status bar",
+    "status_bar_hint": "Enabled items appear only when relevant. Warnings remain visible while the status bar is enabled.",
+    "status_bar_enabled": "Show status bar",
+    "status_bar_activity": "Current activity and progress",
+    "status_bar_training_progress": "Training iteration and ETA",
+    "status_bar_camera": "Active camera and comparison mode",
+    "status_bar_gaussians": "Gaussian count",
+    "status_bar_selected": "Selected Gaussian count",
+    "status_bar_fps": "Viewport FPS",
+    "status_bar_vram": "VRAM usage",
+    "status_bar_frame_time": "Frame time",
+    "status_bar_gpu_utilization": "GPU utilization",
+    "status_bar_gpu_name": "GPU name",
+    "status_bar_renderer": "Renderer / backend",
+    "status_bar_training_loss": "Training loss",
+    "status_bar_training_speed": "Training speed",
+    "status_bar_elapsed": "Training elapsed time",
+    "status_bar_mcp": "MCP connection status",
+    "status_bar_portal": "Portal connection status",
+    "status_bar_reset": "Reset status bar defaults"
   },
   "main_panel": {
     "console": "Console",
@@ -2562,7 +2582,9 @@
     "ui_fps_tooltip": "Interface frames presented per second.",
     "view_fps_tooltip": "3D viewport frames rendered per second. A static view can show 0 while the interface remains responsive.",
     "ui": "UI",
-    "view": "View"
+    "view": "View",
+    "selected": "selected",
+    "iterations_per_second": "iter/s"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL or shorthand:",

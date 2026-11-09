@@ -11,6 +11,7 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "preferences.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
@@ -200,6 +201,15 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point progress_style_checked_at_{};
 
         struct ModelState {
+            StatusBarPreferences preferences;
+            std::string renderer_text;
+            std::string camera_text;
+            std::string selected_text;
+            std::string frame_time_text;
+            std::string gpu_utilization_text;
+            std::string training_speed_text;
+            std::string portal_text;
+
             bool safe_mode = false;
             std::string safe_mode_text;
             std::string mode_text;
@@ -282,6 +292,9 @@ namespace lfs::vis::gui {
         };
 
         ModelState model_;
+        int rate_sample_iteration_ = -1;
+        std::chrono::steady_clock::time_point rate_sample_at_{};
+        float training_rate_ = 0.0f;
         SplitViewInfo split_info_cache_;
         std::uint64_t split_info_generation_ = 0;
         std::function<RuntimeServiceStatus()> mcp_status_provider_;

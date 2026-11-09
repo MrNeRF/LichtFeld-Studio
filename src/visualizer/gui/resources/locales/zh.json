@@ -1195,7 +1195,27 @@
     "viewport_defaults_invalid": "请输入支持范围内的有效值。",
     "sidebar_defaults_description": "保存当前右侧边栏宽度、场景分区和活动选项卡，供应用启动时使用。现有 .licht 项目会恢复各自的工作区。新建项目保留当前工作区。",
     "save_startup_sidebar": "保存启动侧边栏布局",
-    "clear_startup_sidebar": "清除启动侧边栏布局"
+    "clear_startup_sidebar": "清除启动侧边栏布局",
+    "status_bar": "状态栏",
+    "status_bar_hint": "启用的项目仅在相关时显示。状态栏启用时，警告始终可见。",
+    "status_bar_enabled": "显示状态栏",
+    "status_bar_activity": "当前活动和进度",
+    "status_bar_training_progress": "训练迭代和剩余时间",
+    "status_bar_camera": "当前相机和比较模式",
+    "status_bar_gaussians": "高斯数量",
+    "status_bar_selected": "选中的高斯数量",
+    "status_bar_fps": "视口帧率",
+    "status_bar_vram": "显存使用量",
+    "status_bar_frame_time": "帧时间",
+    "status_bar_gpu_utilization": "GPU 使用率",
+    "status_bar_gpu_name": "GPU 名称",
+    "status_bar_renderer": "渲染器 / 后端",
+    "status_bar_training_loss": "训练损失",
+    "status_bar_training_speed": "训练速度",
+    "status_bar_elapsed": "训练已用时间",
+    "status_bar_mcp": "MCP 连接状态",
+    "status_bar_portal": "Portal 连接状态",
+    "status_bar_reset": "恢复状态栏默认设置"
   },
   "main_panel": {
     "console": "控制台",
@@ -2551,7 +2571,9 @@
     "ui_fps_tooltip": "每秒显示的界面帧数。",
     "view_fps_tooltip": "每秒渲染的3D视图帧数。静止视图可能显示为0，此时界面仍可正常响应。",
     "ui": "界面",
-    "view": "视图"
+    "view": "视图",
+    "selected": "已选",
+    "iterations_per_second": "迭代/秒"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",

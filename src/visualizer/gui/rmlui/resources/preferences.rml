@@ -698,6 +698,36 @@
         </div>
       </div>
 
+      <div class="preferences-section" data-if="show_interface">
+        <div class="section-header text-accent" data-class-is-expanded="status_bar_expanded" data-event-click="toggle_section('status_bar')">
+          <span class="section-arrow text-accent" data-class-is-expanded="status_bar_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.status_bar</span>
+        </div>
+        <div class="section-content" data-if="status_bar_expanded">
+          <span class="preferences-description">@tr:preferences.status_bar_hint</span>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_enabled</span><input type="checkbox" data-checked="status_bar_enabled" /></div>
+          <div data-if="status_bar_enabled">
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_activity</span><input type="checkbox" data-checked="status_bar_activity" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_progress</span><input type="checkbox" data-checked="status_bar_training_progress" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_camera</span><input type="checkbox" data-checked="status_bar_camera" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gaussians</span><input type="checkbox" data-checked="status_bar_gaussians" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_selected</span><input type="checkbox" data-checked="status_bar_selected" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_fps</span><input type="checkbox" data-checked="status_bar_fps" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_vram</span><input type="checkbox" data-checked="status_bar_vram" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_frame_time</span><input type="checkbox" data-checked="status_bar_frame_time" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gpu_utilization</span><input type="checkbox" data-checked="status_bar_gpu_utilization" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_gpu_name</span><input type="checkbox" data-checked="status_bar_gpu_name" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_renderer</span><input type="checkbox" data-checked="status_bar_renderer" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_loss</span><input type="checkbox" data-checked="status_bar_training_loss" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_training_speed</span><input type="checkbox" data-checked="status_bar_training_speed" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_elapsed</span><input type="checkbox" data-checked="status_bar_elapsed" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_mcp</span><input type="checkbox" data-checked="status_bar_mcp" /></div>
+          <div class="preferences-row preferences-checkbox-row"><span class="preferences-label">@tr:preferences.status_bar_portal</span><input type="checkbox" data-checked="status_bar_portal" /></div>
+          </div>
+          <div class="preferences-inline-actions"><button class="btn btn--secondary" data-event-click="reset_status_bar">@tr:preferences.status_bar_reset</button></div>
+        </div>
+      </div>
+
       <div class="preferences-section preferences-scene-graph-section" data-if="show_interface">
         <div class="section-header text-accent" data-class-is-expanded="scene_graph_expanded" data-event-click="toggle_section('scene_graph')">
           <span class="section-arrow text-accent" data-class-is-expanded="scene_graph_expanded">&#x25B6;</span>

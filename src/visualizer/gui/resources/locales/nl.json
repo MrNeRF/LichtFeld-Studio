@@ -1195,7 +1195,27 @@
     "viewport_defaults_invalid": "Voer een geldige waarde binnen het ondersteunde bereik in.",
     "sidebar_defaults_description": "Sla de huidige breedte van de rechterzijbalk, de scèneverdeling en het actieve tabblad op voor het starten van de toepassing. Bestaande .licht-projecten herstellen hun eigen werkruimte. Een nieuw project behoudt de huidige werkruimte.",
     "save_startup_sidebar": "Zijbalk opslaan voor opstarten",
-    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen"
+    "clear_startup_sidebar": "Opstartinstellingen van zijbalk wissen",
+    "status_bar": "Statusbalk",
+    "status_bar_hint": "Ingeschakelde onderdelen verschijnen alleen wanneer relevant. Waarschuwingen blijven zichtbaar zolang de statusbalk aan staat.",
+    "status_bar_enabled": "Statusbalk tonen",
+    "status_bar_activity": "Huidige activiteit en voortgang",
+    "status_bar_training_progress": "Trainingsiteratie en resterende tijd",
+    "status_bar_camera": "Actieve camera en vergelijkingsmodus",
+    "status_bar_gaussians": "Aantal Gaussianen",
+    "status_bar_selected": "Aantal geselecteerde Gaussianen",
+    "status_bar_fps": "Viewport-FPS",
+    "status_bar_vram": "VRAM-gebruik",
+    "status_bar_frame_time": "Frametijd",
+    "status_bar_gpu_utilization": "GPU-belasting",
+    "status_bar_gpu_name": "GPU-naam",
+    "status_bar_renderer": "Renderer / backend",
+    "status_bar_training_loss": "Trainingsverlies",
+    "status_bar_training_speed": "Trainingssnelheid",
+    "status_bar_elapsed": "Verstreken trainingstijd",
+    "status_bar_mcp": "MCP-verbindingsstatus",
+    "status_bar_portal": "Portal-verbindingsstatus",
+    "status_bar_reset": "Statusbalk herstellen"
   },
   "main_panel": {
     "console": "Console",
@@ -2551,7 +2571,9 @@
     "ui_fps_tooltip": "Weergegeven interfaceframes per seconde.",
     "view_fps_tooltip": "Gerenderde frames van de 3D-weergave per seconde. Een statische weergave kan 0 tonen terwijl de interface blijft reageren.",
     "ui": "UI",
-    "view": "Beeld"
+    "view": "Beeld",
+    "selected": "geselecteerd",
+    "iterations_per_second": "iter/s"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",

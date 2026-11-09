@@ -5,6 +5,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
@@ -299,6 +300,15 @@ namespace lfs::vis::gui {
 
         auto ctor = rml_context_->CreateDataModel("status_bar");
         assert(ctor);
+        for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS)
+            ctor.Bind("pref_" + std::string(field.key), &(model_.preferences.*field.member));
+        ctor.Bind("renderer_text", &model_.renderer_text);
+        ctor.Bind("camera_text", &model_.camera_text);
+        ctor.Bind("selected_text", &model_.selected_text);
+        ctor.Bind("frame_time_text", &model_.frame_time_text);
+        ctor.Bind("gpu_utilization_text", &model_.gpu_utilization_text);
+        ctor.Bind("training_speed_text", &model_.training_speed_text);
+        ctor.Bind("portal_text", &model_.portal_text);
         ctor.Bind("safe_mode", &model_.safe_mode);
         ctor.Bind("safe_mode_text", &model_.safe_mode_text);
         ctor.Bind("mode_text", &model_.mode_text);
@@ -530,6 +540,11 @@ namespace lfs::vis::gui {
         bind(store.scene_generation);
         bind(store.selection_generation);
         bind(store.mode_text);
+        bind(store.import_overlay_state);
+        bind(store.video_export_overlay_state);
+        bind(store.export_progress_state);
+        bind(store.account_state);
+        bind(store.gallery_state);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
             markModelDirty();
@@ -856,6 +871,8 @@ namespace lfs::vis::gui {
     }
 
     std::optional<RmlStatusBar::ProgressBarGeometry> RmlStatusBar::progressBarGeometry() const {
+        if (!model_.preferences.activity)
+            return std::nullopt;
         if (!document_)
             return std::nullopt;
 
@@ -1057,6 +1074,14 @@ namespace lfs::vis::gui {
 
         const auto& p = lfs::vis::theme().palette;
 
+        const auto preferences = UserPreferences::instance().statusBar();
+        for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS) {
+            const auto name = "pref_" + std::string(field.key);
+            setModelBool(name.c_str(), model_.preferences.*field.member, preferences.*field.member);
+        }
+        if (!preferences.mcp)
+            setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
+
         setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
         setModelString("mcp_preferences_label", model_.mcp_preferences_label,
                        LOC("status_bar.mcp_preferences"));
@@ -1156,6 +1181,7 @@ namespace lfs::vis::gui {
 
         std::string mode_rml;
         std::string mode_color;
+        std::string renderer_text;
 
         if (viewer && viewer->isTrainingStartPending()) {
             mode_rml = LOC("training_panel.preparing_training");
@@ -1185,7 +1211,8 @@ namespace lfs::vis::gui {
                 strat_name = LOC("status_bar.strategy_default");
             }
 
-            auto suffix = std::format(" ({}/{})", strat_name, method);
+            renderer_text = std::format("{}/{}", strat_name, method);
+            const std::string suffix;
 
             switch (training_state) {
             case TrainingState::Running:
@@ -1228,6 +1255,19 @@ namespace lfs::vis::gui {
                 break;
             }
         }
+        // Renderer details are optional; activity remains useful on its own.
+        if (renderer_text.empty() && rm && content_type != SceneManager::ContentType::Empty)
+            renderer_text = lfs::rendering::isGutBackend(rm->getSettings().raster_backend) ? "3DGUT" : "3DGS";
+        setModelString("renderer_text", model_.renderer_text, std::move(renderer_text));
+        const auto import_state = app_store().import_overlay_state.get();
+        const auto export_scene = app_store().export_progress_state.get();
+        const auto export_video = app_store().video_export_overlay_state.get();
+        if (import_state.active)
+            mode_rml = std::format("{} {:.0f}%", import_state.stage, import_state.progress * 100.0f);
+        else if (export_scene.active)
+            mode_rml = std::format("{} {:.0f}%", export_scene.stage, export_scene.progress * 100.0f);
+        else if (export_video.active)
+            mode_rml = std::format("{} {:.0f}%", export_video.stage, export_video.progress * 100.0f);
         setModelString("mode_text", model_.mode_text, std::move(mode_rml));
         setModelString("mode_color", model_.mode_color, std::move(mode_color));
 
@@ -1441,6 +1481,46 @@ namespace lfs::vis::gui {
             setModelString("split_detail", model_.split_detail, "");
         }
 
+        std::string camera_text;
+        if (preferences.camera && !split_enabled && sm && rm && rm->getCurrentCameraId() >= 0) {
+            if (const auto camera = sm->getScene().getCameraByUid(rm->getCurrentCameraId()))
+                camera_text = camera->image_name();
+        }
+        setModelString("camera_text", model_.camera_text, std::move(camera_text));
+        const auto selected = sm && preferences.selected ? sm->getScene().selectedCount() : 0;
+        setModelString("selected_text", model_.selected_text,
+                       selected > 0 ? std::format("{} {}", fmtCount(selected), LOC("status_bar.selected")) : "");
+        const auto account = app_store().account_state.get();
+        const auto gallery = app_store().gallery_state.get();
+        const char* portal_key = account.disconnecting ? "portal.status.disconnecting"
+                                 : account.linking ? "portal.status.linking"
+                                 : account.signed_in && gallery.relink_required ? "portal.status.approval_needed"
+                                 : account.signed_in ? "portal.status.connected"
+                                 : account.authorized ? "portal.status.switched_off"
+                                 : "portal.status.disconnected";
+        setModelString("portal_text", model_.portal_text, LOC(portal_key));
+        std::string rate_text;
+        if (running && tm && preferences.training_speed) {
+            const int iteration = tm->getCurrentIteration();
+            if (rate_sample_iteration_ < 0 || iteration < rate_sample_iteration_) {
+                rate_sample_iteration_ = iteration;
+                rate_sample_at_ = now;
+                training_rate_ = 0.0f;
+            }
+            const float seconds = std::chrono::duration<float>(now - rate_sample_at_).count();
+            if (seconds >= 1.0f) {
+                training_rate_ = (iteration - rate_sample_iteration_) / seconds;
+                rate_sample_iteration_ = iteration;
+                rate_sample_at_ = now;
+            }
+            if (training_rate_ > 0.0f)
+                rate_text = std::format("{:.1f} {}", training_rate_, LOC("status_bar.iterations_per_second"));
+        } else {
+            rate_sample_iteration_ = -1;
+            training_rate_ = 0.0f;
+        }
+        setModelString("training_speed_text", model_.training_speed_text, std::move(rate_text));
+
         // Speed overlays
         auto [wasd_speed, wasd_alpha] = speed_state_.getWasd();
         bool wasd_visible = wasd_alpha > 0.0f;
@@ -1509,7 +1589,7 @@ namespace lfs::vis::gui {
                                              : "")
                            : "LFS —");
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(mem.process_over_budget ? p.error : p.info));
-        setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
+        setModelBool("show_gpu_model", model_.show_gpu_model, preferences.gpu_name && !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
                        std::format("{} {}{}/{} GiB", LOC("status_bar.gpu"),
@@ -1530,6 +1610,10 @@ namespace lfs::vis::gui {
         const auto rates = rm ? rm->guiFrameRates() : FrameRates{};
         const float scene_fps = rates.view;
         const float presented_fps = rates.ui;
+        setModelString("frame_time_text", model_.frame_time_text,
+                       scene_fps > 0.0f ? std::format("{:.1f} ms", 1000.0f / scene_fps) : "");
+        setModelString("gpu_utilization_text", model_.gpu_utilization_text,
+                       mem.gpu_utilization_valid ? std::format("{} {:.0f}%", LOC("status_bar.gpu"), mem.gpu_utilization_percent) : "");
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", presented_fps));
         setModelString("fps_view_value", model_.fps_view_value, std::format("{:.0f}", scene_fps));
         setModelString("fps_ui_label", model_.fps_ui_label, LOC("status_bar.ui"));
@@ -1549,8 +1633,13 @@ namespace lfs::vis::gui {
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
+        for (size_t index = 0; index < STATUS_BAR_PREFERENCE_FIELDS.size(); ++index) {
+            if (preferences.*STATUS_BAR_PREFERENCE_FIELDS[index].member)
+                section_signature_ |= uint32_t{1} << (index + 13);
+        }
+
         // Freeze themed progress animations while training is paused.
-        const bool progress_animation_visible = (model_.progress_miner || model_.progress_tessle) && show_training &&
+        const bool progress_animation_visible = preferences.activity && (model_.progress_miner || model_.progress_tessle) && show_training &&
                                                 training_state == TrainingState::Running;
         model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
                                   progress_animation_visible;

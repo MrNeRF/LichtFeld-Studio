@@ -358,6 +358,21 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
         lfs_io lfs_visualizer lfs_core lfs_python_runtime
         GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_executable(lichtfeld_status_bar_tests test_status_bar_fit.cpp test_status_bar_preferences.cpp)
+    target_compile_features(lichtfeld_status_bar_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_status_bar_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_status_bar_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_status_bar_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime
+        GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_status_bar_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_status_bar_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.status_bar COMMAND lichtfeld_status_bar_tests)
+    set_tests_properties(lichtfeld.status_bar PROPERTIES LABELS "cpu;ui" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
         --gtest_filter=SidebarInputDispatchTest.Sidebar*)
     set_tests_properties(lichtfeld.sidebar_input PROPERTIES

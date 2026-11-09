@@ -1195,7 +1195,27 @@
     "viewport_defaults_invalid": "Saisissez une valeur valide dans la plage autorisée.",
     "sidebar_defaults_description": "Enregistrer la largeur de la barre latérale droite, la répartition de la scène et l’onglet actif pour le démarrage de l’application. Les projets .licht existants restaurent leur propre espace de travail. Un nouveau projet conserve l’espace de travail actuel.",
     "save_startup_sidebar": "Enregistrer la barre latérale au démarrage",
-    "clear_startup_sidebar": "Effacer la barre latérale de démarrage"
+    "clear_startup_sidebar": "Effacer la barre latérale de démarrage",
+    "status_bar": "Barre d’état",
+    "status_bar_hint": "Les éléments activés apparaissent uniquement si nécessaire. Les avertissements restent visibles lorsque la barre est activée.",
+    "status_bar_enabled": "Afficher la barre d’état",
+    "status_bar_activity": "Activité et progression",
+    "status_bar_training_progress": "Itération et temps restant",
+    "status_bar_camera": "Caméra active et mode de comparaison",
+    "status_bar_gaussians": "Nombre de gaussiennes",
+    "status_bar_selected": "Gaussiennes sélectionnées",
+    "status_bar_fps": "FPS de la vue",
+    "status_bar_vram": "Utilisation VRAM",
+    "status_bar_frame_time": "Durée par image",
+    "status_bar_gpu_utilization": "Utilisation GPU",
+    "status_bar_gpu_name": "Nom du GPU",
+    "status_bar_renderer": "Moteur de rendu / backend",
+    "status_bar_training_loss": "Perte d’entraînement",
+    "status_bar_training_speed": "Vitesse d’entraînement",
+    "status_bar_elapsed": "Temps d’entraînement écoulé",
+    "status_bar_mcp": "État de connexion MCP",
+    "status_bar_portal": "État de connexion Portal",
+    "status_bar_reset": "Réinitialiser la barre d’état"
   },
   "main_panel": {
     "console": "Console",
@@ -2551,7 +2571,9 @@
     "ui_fps_tooltip": "Images de l’interface affichées par seconde.",
     "view_fps_tooltip": "Images de la vue 3D calculées par seconde. Une vue statique peut afficher 0 alors que l’interface reste réactive.",
     "ui": "IU",
-    "view": "Vue"
+    "view": "Vue",
+    "selected": "sélectionnées",
+    "iterations_per_second": "itér./s"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub ou raccourci :",

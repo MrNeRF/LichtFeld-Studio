@@ -618,3 +618,15 @@ body.fit-8 #fps-group { margin-left: 6dp; }
     opacity: 1;
     background-color: transparent;
 }
+
+/* Preference visibility wins over per-item layout rules. */
+#status-row .hidden { display: none; }
+#status-row .status-item { flex-shrink: 0; }
+#status-right .status-item { margin-left: 6dp; }
+/* Preserve notices even at the most compact fit level. */
+body.fit-9.has-notice #status-left { display: flex; min-width: 0; flex-shrink: 1; }
+body.fit-9.has-notice #status-right,
+body.fit-9.has-notice #status-left > * { display: none; }
+body.fit-9.has-notice #status-message-section,
+body.fit-9.has-notice #preview-reduced-section { display: flex; }
+body.fit-9.has-notice #status-left > .hidden { display: none; }

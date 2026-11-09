@@ -1943,3 +1943,40 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+
+def test_status_bar_choices_use_partial_updates_and_dedicated_reset(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    defaults = panel.STATUS_BAR_DEFAULTS
+    saved = defaults.copy()
+    updates = []
+    monkeypatch.setattr(module.lf.ui, "get_status_bar_preferences", lambda: saved.copy(), raising=False)
+    def update(values):
+        updates.append(values)
+        saved.update(values)
+    monkeypatch.setattr(module.lf.ui, "set_status_bar_preferences", update, raising=False)
+    monkeypatch.setattr(module.lf.ui, "reset_status_bar_preferences", lambda: (saved.clear(), saved.update(defaults)), raising=False)
+    panel._set_status_bar_preference("fps", False)
+    assert updates == [{"fps": False}]
+    assert not panel._status_bar_preferences()["fps"]
+    assert saved["activity"] and saved["vram"]
+    panel._reset_status_bar()
+    assert saved == defaults
+
+
+def test_status_bar_defaults_match_native_defaults_and_have_no_untranslated_labels():
+    import ast
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/python/lfs_plugins/preferences_panel.py").read_text()
+    tree = ast.parse(source)
+    panel = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PreferencesPanel")
+    defaults = next(ast.literal_eval(node.value) for node in panel.body if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "STATUS_BAR_DEFAULTS" for target in node.targets))
+    native = (root / "src/visualizer/preferences.hpp").read_text()
+    rml = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text()
+    for key, value in defaults.items():
+        assert f"bool {key} = {str(value).lower()};" in native
+        assert f'data-checked="status_bar_{key}"' in rml
+        assert f"@tr:preferences.status_bar_{key}" in rml
+    assert 'data-event-click="reset_status_bar"' in rml

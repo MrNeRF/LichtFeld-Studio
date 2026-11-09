@@ -1195,7 +1195,27 @@
     "viewport_defaults_invalid": "Geben Sie einen gültigen Wert im unterstützten Bereich ein.",
     "sidebar_defaults_description": "Die aktuelle Breite der rechten Seitenleiste, die Szenenaufteilung und den aktiven Tab für den Programmstart speichern. Bestehende .licht-Projekte stellen ihren eigenen Arbeitsbereich wieder her. Ein neues Projekt behält den aktuellen Arbeitsbereich bei.",
     "save_startup_sidebar": "Seitenleiste für den Start speichern",
-    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen"
+    "clear_startup_sidebar": "Startlayout der Seitenleiste löschen",
+    "status_bar": "Statusleiste",
+    "status_bar_hint": "Aktivierte Elemente erscheinen nur bei Bedarf. Warnungen bleiben bei aktivierter Statusleiste sichtbar.",
+    "status_bar_enabled": "Statusleiste anzeigen",
+    "status_bar_activity": "Aktuelle Aktivität und Fortschritt",
+    "status_bar_training_progress": "Trainingsiteration und Restzeit",
+    "status_bar_camera": "Aktive Kamera und Vergleichsmodus",
+    "status_bar_gaussians": "Anzahl der Gauß-Punkte",
+    "status_bar_selected": "Ausgewählte Gauß-Punkte",
+    "status_bar_fps": "Viewport-FPS",
+    "status_bar_vram": "VRAM-Nutzung",
+    "status_bar_frame_time": "Bildzeit",
+    "status_bar_gpu_utilization": "GPU-Auslastung",
+    "status_bar_gpu_name": "GPU-Name",
+    "status_bar_renderer": "Renderer / Backend",
+    "status_bar_training_loss": "Trainingsverlust",
+    "status_bar_training_speed": "Trainingsgeschwindigkeit",
+    "status_bar_elapsed": "Verstrichene Trainingszeit",
+    "status_bar_mcp": "MCP-Verbindungsstatus",
+    "status_bar_portal": "Portal-Verbindungsstatus",
+    "status_bar_reset": "Statusleiste zurücksetzen"
   },
   "main_panel": {
     "console": "Konsole",
@@ -2551,7 +2571,9 @@
     "ui_fps_tooltip": "Pro Sekunde angezeigte Benutzeroberflächen-Frames.",
     "view_fps_tooltip": "Pro Sekunde gerenderte Frames der 3D-Ansicht. Eine statische Ansicht kann 0 anzeigen, während die Oberfläche weiterhin reagiert.",
     "ui": "UI",
-    "view": "Ansicht"
+    "view": "Ansicht",
+    "selected": "ausgewählt",
+    "iterations_per_second": "Iter./s"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL oder Kurzform:",
