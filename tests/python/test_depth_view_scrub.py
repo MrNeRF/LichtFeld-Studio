@@ -74,6 +74,8 @@ def depth(monkeypatch):
     module = import_module("lfs_plugins.depth_view_controls")
     values = [5.0, 200.0]
     lf = SimpleNamespace(
+        get_viewport_render_mode=lambda: "rgb", get_num_gaussians=lambda: 20,
+        get_render_mode_controls_open=lambda: False,
         get_depth_view_range=lambda: tuple(values),
         set_depth_view_range=lambda near, far: values.__setitem__(slice(None), [near, far]),
         get_depth_view_mode=lambda: "palette", has_scene=lambda: True,
@@ -354,10 +356,10 @@ def test_render_selector_visibility_is_independent_of_mode(depth, monkeypatch, m
     monkeypatch.setattr(module.lf, "get_viewport_render_mode", lambda: state["mode"], raising=False)
     monkeypatch.setattr(module.lf, "set_render_mode_controls_open", lambda value: state.update(open=value), raising=False)
     panel._refresh_state()
-    assert panel._depth_view_active()
+    assert panel._render_mode_selector_open()
     assert panel._render_mode == mode
     panel._on_action(None, None, [])
-    assert not panel._depth_view_active()
+    assert not panel._render_mode_selector_open()
     assert state["mode"] == mode
 
 

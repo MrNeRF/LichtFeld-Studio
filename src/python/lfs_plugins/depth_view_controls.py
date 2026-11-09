@@ -153,7 +153,7 @@ class DepthViewControlsController:
     def update(self, doc):
         dirty = False
         dirty_reasons = []
-        visible = self._depth_view_active()
+        visible = self._render_mode_selector_open()
         wrap = doc.get_element_by_id("depth-view-block")
         if wrap:
             wrap.set_class("hidden", not visible)
@@ -189,23 +189,16 @@ class DepthViewControlsController:
         self._last_state_items = None
         self._scrub_fields.unmount()
 
-    def _depth_view_active(self):
-        getter = getattr(lf, "get_render_mode_controls_open", None)
-        if not callable(getter):
-            getter = getattr(lf, "get_depth_view", None)
-        if not callable(getter):
-            return False
+    def _render_mode_selector_open(self):
         try:
-            return bool(getter())
+            return bool(lf.get_render_mode_controls_open())
         except Exception:
             return False
 
     def _refresh_state(self):
         self._has_scene = self._scene_available()
-        getter = getattr(lf, "get_viewport_render_mode", None)
-        self._render_mode = getter() if callable(getter) else ("depth" if self._depth_view_active() else "rgb")
-        count = getattr(lf, "get_num_gaussians", None)
-        self._has_gaussians = bool(count() > 0) if callable(count) else self._has_scene
+        self._render_mode = lf.get_viewport_render_mode()
+        self._has_gaussians = lf.get_num_gaussians() > 0
         try:
             near, far = lf.get_depth_view_range()
         except Exception:
@@ -356,11 +349,7 @@ class DepthViewControlsController:
     def _on_action(self, handle, event, args):
         del handle, event, args
         try:
-            close = getattr(lf, "set_render_mode_controls_open", None)
-            if callable(close):
-                close(False)
-            else:
-                lf.set_depth_view(False)
+            lf.set_render_mode_controls_open(False)
         except Exception as exc:
             self._report_error(str(exc).strip() or "Could not disable depth map.")
         self._dirty_all()

@@ -2236,7 +2236,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2366,9 +2366,9 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
 
     # Overlay availability changes must invalidate cached crop toolbar records.
     normal_signature = controller._toolbar_signature(None)
-    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
+    monkeypatch.setattr(lf_stub, "get_render_mode_controls_open", lambda: True)
     assert controller._toolbar_signature(None) != normal_signature
-    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: False)
+    monkeypatch.setattr(lf_stub, "get_render_mode_controls_open", lambda: False)
     monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison")
     assert controller._toolbar_signature(None) != normal_signature
 
@@ -2391,7 +2391,7 @@ def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(has_scene=True), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2437,7 +2437,7 @@ def test_viewport_export_close_action_hides_overlay_immediately(toolbar_module, 
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(has_scene=True), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2566,7 +2566,7 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)

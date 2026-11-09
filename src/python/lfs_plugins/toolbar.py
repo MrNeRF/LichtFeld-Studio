@@ -1766,7 +1766,7 @@ class _ViewportToolbarController:
             numeric_overlay_available=not (
                 self._viewport_export_controls.visible
                 or self._gt_compare_controls._gt_compare_active()
-                or self._depth_view_controls._depth_view_active()
+                or self._depth_view_controls._render_mode_selector_open()
             ),
         )
 
@@ -2182,7 +2182,7 @@ class _ViewportToolbarController:
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             self._viewport_export_controls.visible,
             self._gt_compare_controls._gt_compare_active(),
-            self._depth_view_controls._depth_view_active(),
+            self._depth_view_controls._render_mode_selector_open(),
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
             call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),
