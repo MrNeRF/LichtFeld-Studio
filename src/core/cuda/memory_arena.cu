@@ -1681,12 +1681,15 @@ namespace lfs::core {
                 break;
             }
             if (LFS_CUDA_DRIVER(cuMemMap)(ptr, piece, 0, handle, 0) != CUDA_SUCCESS) {
-                LFS_CUDA_DRIVER(cuMemRelease)(handle);
+                LFS_CUDA_DRIVER(cuMemRelease)
+                (handle);
                 break;
             }
             if (LFS_CUDA_DRIVER(cuMemSetAccess)(ptr, piece, &access_desc, 1) != CUDA_SUCCESS) {
-                LFS_CUDA_DRIVER(cuMemUnmap)(ptr, piece);
-                LFS_CUDA_DRIVER(cuMemRelease)(handle);
+                LFS_CUDA_DRIVER(cuMemUnmap)
+                (ptr, piece);
+                LFS_CUDA_DRIVER(cuMemRelease)
+                (handle);
                 break;
             }
             {

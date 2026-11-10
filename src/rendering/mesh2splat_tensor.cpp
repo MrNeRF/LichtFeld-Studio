@@ -14,10 +14,10 @@
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
-#include <algorithm>
 #include <mutex>
 #include <span>
 #include <vector>

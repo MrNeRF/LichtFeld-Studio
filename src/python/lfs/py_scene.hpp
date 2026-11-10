@@ -12,8 +12,8 @@
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
-#include "visualizer/scene/point_cloud_updates.hpp"
 #include "visualizer/scene/external_preview.hpp"
+#include "visualizer/scene/point_cloud_updates.hpp"
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>

@@ -90,7 +90,6 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.replace_parent_weights");
     }
 
-
     // Ascending float order as unsigned radix keys, matching sort_less_op:
     // NaN after everything and -0 equal to +0.
     __device__ __forceinline__ uint32_t ascending_float_key(const float value) {

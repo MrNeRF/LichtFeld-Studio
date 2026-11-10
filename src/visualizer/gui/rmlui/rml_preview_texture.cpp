@@ -227,8 +227,8 @@ namespace lfs::vis::gui {
                         const unsigned char g = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 1 ? 1 : 0)));
                         const unsigned char b = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 2 ? 2 : 0)));
                         const unsigned char a = encoded && mask_overlay ? r
-                                                : channels > 3  ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3)))
-                                                                : 255;
+                                                : channels > 3          ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3)))
+                                                                        : 255;
                         Rml::byte* dst = result.pixels.data() +
                                          (static_cast<std::size_t>(y) *
                                               static_cast<std::size_t>(output_width) +

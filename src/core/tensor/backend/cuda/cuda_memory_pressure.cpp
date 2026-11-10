@@ -3,9 +3,9 @@
 #include "../../internal/tensor_impl.hpp"
 #include "../native_pressure.hpp"
 #include "core/alloc_counter.hpp"
+#include "core/cuda_allocation.hpp"
 #include "core/cuda_error.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "core/cuda_allocation.hpp"
 #include "runtime/lazy_device_storage.hpp"
 #include "runtime/memory_pool.hpp"
 #include <cuda_runtime.h>
