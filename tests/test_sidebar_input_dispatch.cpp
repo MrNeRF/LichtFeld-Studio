@@ -323,57 +323,64 @@ namespace lfs::vis {
     }
 
     TEST_F(SidebarInputDispatchTest, SuspendingContentHostCancelsPointerWithoutClosingDocument) {
-        gui::RmlPanelHost host(&manager(), "suspended-content", "");
-        attachInputHost(host, 400, 300,
-                        "<rml><head><style>body {width:400px;height:300px;}"
-                        "#drag {width:200px;height:100px;drag:drag;}</style></head>"
-                        "<body><div id='drag'>Drag</div></body></rml>");
-        struct PayloadListener final : Rml::EventListener {
-            explicit PayloadListener(gui::RmlUIManager& owner) : owner(owner) {}
-            gui::RmlUIManager& owner;
-            uint64_t token = 0;
-            int cancelled = 0;
-            void ProcessEvent(Rml::Event& event) override {
-                if (event.GetType() == "dragstart")
-                    token = owner.beginDragPayload("project", "test-dock-project");
-                else if (event.GetType() == "dragend") {
-                    cancelled += event.GetParameter("cancelled", false);
-                    owner.endDragPayload(token);
+        for (const bool minimized : {false, true}) {
+            gui::RmlPanelHost host(&manager(), minimized ? "minimized-content" : "suspended-content", "");
+            attachInputHost(host, 400, 300,
+                            "<rml><head><style>body {width:400px;height:300px;}"
+                            "#drag {width:200px;height:100px;drag:drag;}</style></head>"
+                            "<body><div id='drag'>Drag</div></body></rml>");
+            struct PayloadListener final : Rml::EventListener {
+                explicit PayloadListener(gui::RmlUIManager& owner) : owner(owner) {}
+                gui::RmlUIManager& owner;
+                uint64_t token = 0;
+                int cancelled = 0;
+                void ProcessEvent(Rml::Event& event) override {
+                    if (event.GetType() == "dragstart")
+                        token = owner.beginDragPayload("project", "test-dock-project");
+                    else if (event.GetType() == "dragend") {
+                        cancelled += event.GetParameter("cancelled", false);
+                        owner.endDragPayload(token);
+                    }
                 }
+            } listener(manager());
+            auto* drag = host.getDocument()->GetElementById("drag");
+            drag->AddEventListener("dragstart", &listener);
+            drag->AddEventListener("dragend", &listener);
+            forwardHost(host, 0, 0);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.x = 40;
+            event.button.y = 40;
+            dispatch(event);
+            EXPECT_TRUE(hostOwnsPointer(host));
+            SDL_Event motion{};
+            motion.type = SDL_EVENT_MOUSE_MOTION;
+            motion.motion.x = 100;
+            motion.motion.y = 60;
+            dispatch(motion);
+            EXPECT_NE(listener.token, 0);
+            EXPECT_TRUE(manager().dragPayload().has_value());
+            if (minimized) {
+                host.setFloating(true);
+                host.setWindowPresentation(gui::FloatingWindowState::Minimized);
+            } else {
+                host.suspendInput();
             }
-        } listener(manager());
-        auto* drag = host.getDocument()->GetElementById("drag");
-        drag->AddEventListener("dragstart", &listener);
-        drag->AddEventListener("dragend", &listener);
-        forwardHost(host, 0, 0);
-        SDL_Event event{};
-        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        event.button.button = SDL_BUTTON_LEFT;
-        event.button.x = 40;
-        event.button.y = 40;
-        dispatch(event);
-        EXPECT_TRUE(hostOwnsPointer(host));
-        SDL_Event motion{};
-        motion.type = SDL_EVENT_MOUSE_MOTION;
-        motion.motion.x = 100;
-        motion.motion.y = 60;
-        dispatch(motion);
-        EXPECT_NE(listener.token, 0);
-        EXPECT_TRUE(manager().dragPayload().has_value());
-        host.suspendInput();
-        EXPECT_FALSE(manager().dragPayload().has_value());
+            EXPECT_FALSE(manager().dragPayload().has_value());
 
-        EXPECT_FALSE(hostOwnsPointer(host));
-        EXPECT_TRUE(host.isDocumentLoaded());
-        EXPECT_FALSE(host.wantsKeyboard());
-        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
-        dispatch(event);
-        forwardHost(host, 0, 0);
-        EXPECT_FALSE(hostOwnsPointer(host));
-        EXPECT_EQ(listener.cancelled, 1);
-        EXPECT_FALSE(manager().takeReleasedDragPayload().has_value());
-        drag->RemoveEventListener("dragstart", &listener);
-        drag->RemoveEventListener("dragend", &listener);
+            EXPECT_FALSE(hostOwnsPointer(host));
+            EXPECT_TRUE(host.isDocumentLoaded());
+            EXPECT_FALSE(host.wantsKeyboard());
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            dispatch(event);
+            forwardHost(host, 0, 0);
+            EXPECT_FALSE(hostOwnsPointer(host));
+            EXPECT_EQ(listener.cancelled, 1);
+            EXPECT_FALSE(manager().takeReleasedDragPayload().has_value());
+            drag->RemoveEventListener("dragstart", &listener);
+            drag->RemoveEventListener("dragend", &listener);
+        }
     }
 
     TEST_F(SidebarInputDispatchTest, SidebarCtrlWheelRemainsAvailableToScrollableContent) {

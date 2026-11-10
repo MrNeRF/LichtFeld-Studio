@@ -333,8 +333,8 @@ TEST_F(PanelLayoutRenderDemandTest, SideDockCollapsePreservesPanelsAndSkipsLiveA
     auto right = registerPanel("collapse.right", PanelSpace::MainPanelTab, 500.0f);
     PanelLayoutManager layout;
     layout.setActiveTab("collapse.right");
-    layout.setSideDockCollapsed(false, true);
-    layout.setSideDockCollapsed(true, true);
+    layout.setSideDockCollapsed(lfs::core::SideDock::Left, true);
+    layout.setSideDockCollapsed(lfs::core::SideDock::Right, true);
     std::unordered_map<std::string, bool> windows;
     std::string focus;
     layout.renderLeftDock({}, true, false, {}, screen());
@@ -361,11 +361,11 @@ TEST_F(PanelLayoutRenderDemandTest, SideDocksCollapseIndependentlyAndRestorePref
     layout.setLeftDockWidth(290.0f);
     layout.setRightPanelWidth(370.0f, screen());
     const auto original = layout.computeViewportLayout(true, false, false, screen());
-    layout.setSideDockCollapsed(false, true);
+    layout.setSideDockCollapsed(lfs::core::SideDock::Left, true);
     const auto left_closed = layout.computeViewportLayout(true, false, false, screen());
     EXPECT_FLOAT_EQ(left_closed.size.x, original.size.x + original.pos.x);
     EXPECT_FALSE(layout.isRightDockCollapsed());
-    layout.setSideDockCollapsed(true, true);
+    layout.setSideDockCollapsed(lfs::core::SideDock::Right, true);
     ScreenState narrow{.work_size = {300.0f, 400.0f}};
     layout.enforceWidthConstraints(true, false, narrow);
     EXPECT_FLOAT_EQ(layout.computeViewportLayout(true, false, false, narrow).size.x, 300.0f);
@@ -377,8 +377,8 @@ TEST_F(PanelLayoutRenderDemandTest, SideDocksCollapseIndependentlyAndRestorePref
     EXPECT_TRUE(restored.isLeftDockCollapsed());
     EXPECT_TRUE(restored.isRightDockCollapsed());
     EXPECT_FLOAT_EQ(restored.computeViewportLayout(true, true, false, screen()).size.x, screen().work_size.x);
-    restored.setSideDockCollapsed(false, false);
-    restored.setSideDockCollapsed(true, false);
+    restored.setSideDockCollapsed(lfs::core::SideDock::Left, false);
+    restored.setSideDockCollapsed(lfs::core::SideDock::Right, false);
     restored.enforceWidthConstraints(true, false, screen());
     const auto reopened = restored.computeViewportLayout(true, false, false, screen());
     EXPECT_FLOAT_EQ(reopened.pos.x, original.pos.x);
@@ -896,11 +896,11 @@ TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
             EXPECT_FLOAT_EQ(projects->last_cached_width,
                             resizeContentWidth(docked.panel_width, dpi));
 
-            layout.setSideDockCollapsed(false, true);
+            layout.setSideDockCollapsed(lfs::core::SideDock::Left, true);
             const auto collapsed = layout.computeLeftDockLayout(true, false, s);
             EXPECT_FLOAT_EQ(collapsed.panel_width, 0.0f);
             EXPECT_FLOAT_EQ(collapsed.toolbar_x, s.work_pos.x + 22.0f * dpi);
-            layout.setSideDockCollapsed(false, false);
+            layout.setSideDockCollapsed(lfs::core::SideDock::Left, false);
 
             reg.set_panel_enabled("lfs.asset_manager", false);
             layout.renderLeftDock(ctx, true, false, input, s);
@@ -1045,7 +1045,7 @@ TEST_F(PanelLayoutRenderDemandTest, ConsoleResolutionMatchesPreparedViewportWhen
     lfs::python::set_shared_dpi_scale(1.0f);
     PanelLayoutManager layout;
     const ScreenState screen{.work_size = {900.0f, 600.0f}};
-    layout.setSideDockCollapsed(false, true);
+    layout.setSideDockCollapsed(lfs::core::SideDock::Left, true);
     layout.setRightPanelWidth(360.0f, screen);
     layout.setPythonConsoleWidth(450.0f);
     layout.enforceWidthConstraints(true, false, screen);

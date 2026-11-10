@@ -110,8 +110,8 @@ namespace lfs::vis::gui {
         if (std::isfinite(state.left_dock_width) &&
             state.left_dock_width > 0.0f)
             left_dock_width_ = left_dock_preferred_width_ = state.left_dock_width;
-        setSideDockCollapsed(false, state.left_dock_collapsed);
-        setSideDockCollapsed(true, state.right_dock_collapsed);
+        setSideDockCollapsed(lfs::core::SideDock::Left, state.left_dock_collapsed);
+        setSideDockCollapsed(lfs::core::SideDock::Right, state.right_dock_collapsed);
         setShowSequencer(state.show_sequencer);
         active_tab_id_ = state.active_tab_id;
         setBottomDockActiveTab(state.bottom_dock_active_tab_id);
@@ -122,7 +122,8 @@ namespace lfs::vis::gui {
                                  : 0.0f;
     }
 
-    void PanelLayoutManager::setSideDockCollapsed(const bool right, const bool collapsed) {
+    void PanelLayoutManager::setSideDockCollapsed(const lfs::core::SideDock side, const bool collapsed) {
+        const bool right = side == lfs::core::SideDock::Right;
         (right ? right_dock_collapsed_ : left_dock_collapsed_) = collapsed;
         if (right) {
             python_console_resizing_ = python_console_hovering_edge_ = false;

@@ -35,6 +35,7 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+#include <bitset>
 
 #include <atomic>
 #include <chrono>
@@ -374,7 +375,8 @@ namespace lfs::vis {
                 std::chrono::steady_clock::time_point now,
                 bool training_active);
             void queueUiVisibilityToggle();
-            void queueSideDockToggle(bool right);
+            void queueSideDockToggle(lfs::core::SideDock side);
+            bool rightDockRendered() const;
             void revealPanel(const std::string& id);
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
@@ -425,7 +427,7 @@ namespace lfs::vis {
             bool last_hud_expanded_ = false;
             std::chrono::steady_clock::time_point ui_visibility_deadline_{};
             bool ui_toggle_pending_ = false;
-            uint8_t side_dock_toggle_pending_ = 0;
+            std::bitset<2> side_dock_toggle_pending_;
             bool ui_target_left_collapsed_ = false;
             bool ui_target_right_collapsed_ = false;
             bool ui_visibility_resize_active_ = false;
@@ -545,7 +547,7 @@ namespace lfs::vis {
             float last_ui_layout_bottom_dock_h_ = -1.0f;
             float last_ui_layout_left_dock_w_ = -1.0f;
             bool last_ui_layout_left_collapsed_ = false;
-            bool last_ui_layout_right_collapsed_ = false;
+            bool last_ui_layout_right_rendered_ = false;
             bool last_ui_layout_show_main_panel_ = false;
             bool last_ui_layout_show_sequencer_ = false;
             bool last_ui_layout_ui_hidden_ = false;

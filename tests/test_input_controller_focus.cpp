@@ -2538,7 +2538,7 @@ namespace lfs::vis {
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
         handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
         handlers.subscribe<core::events::ui::ToggleSideDock>([&](const auto& event) {
-            ++dispatched[event.right ? Action::TOGGLE_RIGHT_DOCK : Action::TOGGLE_LEFT_DOCK];
+            ++dispatched[event.side == lfs::core::SideDock::Right ? Action::TOGGLE_RIGHT_DOCK : Action::TOGGLE_LEFT_DOCK];
         });
         handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
         handlers.subscribe<core::events::cmd::SetVrActive>(record(Action::EXIT_VR));

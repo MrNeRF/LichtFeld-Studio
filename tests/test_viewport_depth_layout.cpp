@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -385,25 +384,6 @@ namespace {
                 }
             }
         }
-        auto& locale = lfs::event::LocalizationManager::getInstance();
-        ASSERT_TRUE(locale.initialize((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
-        const auto previous_language = locale.getCurrentLanguage();
-        lfs::vis::gui::ViewportDepthLayoutTestAccess::bindStore(overlay_);
-        overlay_.setSideDocks(true, false, true, false);
-        for (const char* language : {"de", "it"}) {
-            EXPECT_TRUE(locale.setLanguage(language));
-            lfs::vis::app_store().language_generation.set(locale.getCurrentLanguageGeneration());
-            (void)lfs::vis::app_store().store().drain_dirty_into_frame();
-            for (const auto& [id, key] : std::array{
-                     std::pair{"left-side-dock-toggle", "input_settings.action.toggle_left_dock"},
-                     std::pair{"right-side-dock-toggle", "input_settings.action.toggle_right_dock"}}) {
-                auto* button = doc->GetElementById(id);
-                EXPECT_EQ(button->GetAttribute<Rml::String>("title", ""), locale.get(key));
-                EXPECT_EQ(button->GetAttribute<Rml::String>("aria-label", ""), locale.get(key));
-            }
-        }
-        EXPECT_TRUE(locale.setLanguage(previous_language.empty() ? "en" : previous_language));
-        lfs::vis::gui::ViewportDepthLayoutTestAccess::releaseStore(overlay_);
     }
 
     TEST_F(ViewportDepthLayoutTest, LocalizedDepthControlsStayOutsideTheAxisCorner) {

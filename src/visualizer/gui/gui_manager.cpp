@@ -5153,7 +5153,7 @@ namespace lfs::vis::gui {
         endInteractiveTransitionGuard();
         interactive_transition_pause_pending_ = false;
         ui_toggle_pending_ = false;
-        side_dock_toggle_pending_ = 0;
+        side_dock_toggle_pending_.reset();
         fullscreen_toggle_pending_ = false;
         interactive_transition_guard_until_ = {};
 
@@ -5648,19 +5648,16 @@ namespace lfs::vis::gui {
         const bool collapsed = ui_visibility_resize_active_
                                    ? (right ? ui_target_right_collapsed_ : ui_target_left_collapsed_)
                                    : (right ? panel_layout_.isRightDockCollapsed() : panel_layout_.isLeftDockCollapsed());
-        const uint8_t bit = right ? 2 : 1;
-        if (collapsed)
-            side_dock_toggle_pending_ |= bit;
-        else
-            side_dock_toggle_pending_ &= ~bit;
+        const auto side = right ? lfs::core::SideDock::Right : lfs::core::SideDock::Left;
+        side_dock_toggle_pending_.set(std::to_underlying(side), collapsed);
         lfs::python::request_redraw();
     }
 
-    void GuiManager::queueSideDockToggle(const bool right) {
+    void GuiManager::queueSideDockToggle(const lfs::core::SideDock side) {
         if (!viewer_)
             return;
-        const auto request = [this, right] {
-            side_dock_toggle_pending_ |= right ? 2 : 1;
+        const auto request = [this, side] {
+            side_dock_toggle_pending_.set(std::to_underlying(side));
             if (auto* wm = viewer_->getWindowManager())
                 wm->wakeEventLoop();
         };
@@ -5689,23 +5686,23 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::updateUiVisibilityTransition() {
-        if ((!ui_toggle_pending_ && !side_dock_toggle_pending_) || ui_visibility_resize_active_) {
+        if ((!ui_toggle_pending_ && !side_dock_toggle_pending_.any()) || ui_visibility_resize_active_) {
             return;
         }
 
         auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr;
         if (!wm) {
             ui_toggle_pending_ = false;
-            side_dock_toggle_pending_ = 0;
+            side_dock_toggle_pending_.reset();
             return;
         }
 
         const auto now = std::chrono::steady_clock::now();
         ui_visibility_target_hidden_ = ui_toggle_pending_ ? !ui_hidden_ : ui_hidden_;
-        ui_target_left_collapsed_ = panel_layout_.isLeftDockCollapsed() != bool(side_dock_toggle_pending_ & 1);
-        ui_target_right_collapsed_ = panel_layout_.isRightDockCollapsed() != bool(side_dock_toggle_pending_ & 2);
+        ui_target_left_collapsed_ = panel_layout_.isLeftDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Left));
+        ui_target_right_collapsed_ = panel_layout_.isRightDockCollapsed() != side_dock_toggle_pending_.test(std::to_underlying(lfs::core::SideDock::Right));
         ui_toggle_pending_ = false;
-        side_dock_toggle_pending_ = 0;
+        side_dock_toggle_pending_.reset();
         // UI visibility only resizes renderer output. Each renderer already
         // retires its image consumers before replacing that output, so do not
         // drain all GUI frames or inherit fullscreen's training/cooldown guard.
@@ -5732,8 +5729,8 @@ namespace lfs::vis::gui {
                 transition_screen.work_pos = last_ui_layout_work_pos_;
                 transition_screen.work_size = last_ui_layout_work_size_;
                 auto target_layout = panel_layout_;
-                target_layout.setSideDockCollapsed(false, ui_target_left_collapsed_);
-                target_layout.setSideDockCollapsed(true, ui_target_right_collapsed_);
+                target_layout.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+                target_layout.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
                 target_layout.enforceWidthConstraints(
                     show_main_panel_, ui_visibility_target_hidden_, transition_screen);
                 ui_visibility_target_console_width_ = show_main_panel_ && !ui_visibility_target_hidden_ && window_states_["python_console"]
@@ -5756,8 +5753,8 @@ namespace lfs::vis::gui {
         if (!ui_visibility_target_ready_) {
             // Startup/no-layout fallback: there is no prior scene rectangle to
             // preserve, so commit directly and let the normal layout pass resolve it.
-            panel_layout_.setSideDockCollapsed(false, ui_target_left_collapsed_);
-            panel_layout_.setSideDockCollapsed(true, ui_target_right_collapsed_);
+            panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+            panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
             ui_hidden_ = ui_visibility_target_hidden_;
             ui_visibility_layout_committed_ = true;
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -6425,6 +6422,7 @@ namespace lfs::vis::gui {
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
+        const bool left_dock_rendered = panel_layout_.willRenderLeftDock(show_main_panel_, ui_hidden_, screen);
         const bool ui_layout_changed =
             std::abs(screen.work_pos.x - last_ui_layout_work_pos_.x) > 0.5f ||
             std::abs(screen.work_pos.y - last_ui_layout_work_pos_.y) > 0.5f ||
@@ -6436,13 +6434,13 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
             std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
             panel_layout_.isLeftDockCollapsed() != last_ui_layout_left_collapsed_ ||
-            panel_layout_.isRightDockCollapsed() != last_ui_layout_right_collapsed_ ||
+            rightDockRendered() != last_ui_layout_right_rendered_ ||
             show_main_panel_ != last_ui_layout_show_main_panel_ ||
             panel_layout_.isShowSequencer() != last_ui_layout_show_sequencer_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
+            left_dock_rendered != last_ui_layout_left_dock_visible_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6461,12 +6459,12 @@ namespace lfs::vis::gui {
 
         if (ui_layout_changed) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.layout_state_update", 0.25);
-            if (panel_layout_.isRightDockCollapsed() && !last_ui_layout_right_collapsed_) {
+            if (last_ui_layout_right_rendered_ && !rightDockRendered()) {
                 rml_right_panel_.suspendInput();
                 reg.suspend_input(PanelSpace::SceneHeader);
                 reg.suspend_input(PanelSpace::MainPanelTab);
             }
-            if (panel_layout_.isLeftDockCollapsed() && !last_ui_layout_left_collapsed_)
+            if (last_ui_layout_left_dock_visible_ && !left_dock_rendered)
                 reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
@@ -6483,13 +6481,13 @@ namespace lfs::vis::gui {
             last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
             last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
             last_ui_layout_left_collapsed_ = panel_layout_.isLeftDockCollapsed();
-            last_ui_layout_right_collapsed_ = panel_layout_.isRightDockCollapsed();
+            last_ui_layout_right_rendered_ = rightDockRendered();
             last_ui_layout_show_main_panel_ = show_main_panel_;
             last_ui_layout_show_sequencer_ = panel_layout_.isShowSequencer();
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
+            last_ui_layout_left_dock_visible_ = left_dock_rendered;
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
@@ -6509,7 +6507,7 @@ namespace lfs::vis::gui {
         bool right_panel_active_tab_live = false;
         bool right_panel_pointer_over_scene_header = false;
         bool right_panel_pointer_over_active_tab = false;
-        if (show_main_panel_ && !ui_hidden_ && !panel_layout_.isRightDockCollapsed()) {
+        if (rightDockRendered()) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
@@ -6945,9 +6943,11 @@ namespace lfs::vis::gui {
             overlay_pos, overlay_size,
             {panel_input.screen_x, panel_input.screen_y});
         rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);
+        // Reopen controls remain available while a dock is collapsed.
+        const bool dock_controls_available = show_main_panel_ && !ui_hidden_;
         rml_viewport_overlay_.setSideDocks(
-            show_main_panel_ && !ui_hidden_ && reg.has_panels(PanelSpace::LeftDock),
-            panel_layout_.isLeftDockCollapsed(), show_main_panel_ && !ui_hidden_,
+            dock_controls_available && reg.has_panels(PanelSpace::LeftDock),
+            panel_layout_.isLeftDockCollapsed(), dock_controls_available,
             panel_layout_.isRightDockCollapsed());
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
@@ -8118,8 +8118,8 @@ namespace lfs::vis::gui {
 
     void GuiManager::commitUiVisibilityTransition(const bool matched_frame) {
         panel_layout_.setPythonConsoleWidth(ui_visibility_target_console_width_);
-        panel_layout_.setSideDockCollapsed(false, ui_target_left_collapsed_);
-        panel_layout_.setSideDockCollapsed(true, ui_target_right_collapsed_);
+        panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, ui_target_left_collapsed_);
+        panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, ui_target_right_collapsed_);
         ui_hidden_ = ui_visibility_target_hidden_;
         if (viewer_) {
             viewer_->projectMarkSessionChapterCommitted("GUIL");
@@ -8151,8 +8151,12 @@ namespace lfs::vis::gui {
         return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
+    bool GuiManager::rightDockRendered() const {
+        return show_main_panel_ && !ui_hidden_ && !panel_layout_.isRightDockCollapsed();
+    }
+
     bool GuiManager::isPositionOverRightPanelResizeEdge(const double x, const double y) const {
-        if (!show_main_panel_ || ui_hidden_ || panel_layout_.isRightDockCollapsed() ||
+        if (!rightDockRendered() ||
             last_ui_layout_work_size_.x <= 0.0f || last_ui_layout_work_size_.y <= 0.0f) {
             return false;
         }
@@ -8347,7 +8351,7 @@ namespace lfs::vis::gui {
         });
 
         ui::ToggleSideDock::when([this](const auto& event) {
-            queueSideDockToggle(event.right);
+            queueSideDockToggle(event.side);
         });
 
         ui::ToggleUI::when([this](const auto&) {
@@ -8771,7 +8775,7 @@ namespace lfs::vis::gui {
             return;
         last_pre_scene_panel_sync_generation_ = sync_generation;
 
-        if (!viewer_ || !show_main_panel_ || ui_hidden_) {
+        if (!viewer_ || !rightDockRendered()) {
             return;
         }
 
@@ -8781,8 +8785,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (panel_layout_.isRightDockCollapsed())
-            return;
         panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
         const std::string& active_tab = panel_layout_.getActiveTab();
         if (active_tab.empty()) {
@@ -8890,7 +8892,7 @@ namespace lfs::vis::gui {
                 rendering->markDirty(DirtyFlag::OVERLAY, lfs::vis::FrameReason::Overlay);
             return true;
         }
-        const bool ui_toggle_due = ui_toggle_pending_ || side_dock_toggle_pending_ || ui_visibility_resize_active_;
+        const bool ui_toggle_due = ui_toggle_pending_ || side_dock_toggle_pending_.any() || ui_visibility_resize_active_;
         const bool fullscreen_toggle_due =
             fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_;
         if (ui_toggle_due || fullscreen_toggle_due || interactive_transition_resume_training_ ||
@@ -8919,7 +8921,7 @@ namespace lfs::vis::gui {
             return true;
         if (rml_menu_bar_.needsAnimationFrame())
             return true;
-        if (!panel_layout_.isRightDockCollapsed() && rml_right_panel_.needsAnimationFrame())
+        if (rightDockRendered() && rml_right_panel_.needsAnimationFrame())
             return true;
         if (rml_bottom_dock_.needsAnimationFrame())
             return true;
@@ -8950,7 +8952,7 @@ namespace lfs::vis::gui {
             result += source;
         };
 
-        add(ui_toggle_pending_ || side_dock_toggle_pending_ || ui_visibility_resize_active_, "ui_visibility");
+        add(ui_toggle_pending_ || side_dock_toggle_pending_.any() || ui_visibility_resize_active_, "ui_visibility");
         add(cameraThumbnailRefreshDue(now), "camera_thumbnails");
         add(fullscreen_toggle_pending_ && now >= fullscreen_toggle_next_allowed_at_,
             "fullscreen_toggle");
@@ -9012,7 +9014,7 @@ namespace lfs::vis::gui {
         return {
             .active_main_tab = panel_layout_.getActiveTab(),
             .ui_visible = !ui_hidden_,
-            .right_panel_visible = show_main_panel_ && !ui_hidden_ && !panel_layout_.isRightDockCollapsed(),
+            .right_panel_visible = rightDockRendered(),
             .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
             .left_dock_visible = panel_layout_.isLeftDockVisible(),
         };

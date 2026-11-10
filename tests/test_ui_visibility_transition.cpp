@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace lfs::vis {
     void installSessionTestInputController(VisualizerImpl& viewer);
@@ -72,6 +73,7 @@ namespace lfs::vis {
 
         gui->commitUiVisibilityTransitionIfFrameReady(false);
         EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_TRUE(gui->panelAnimationVisibility().right_panel_visible);
         EXPECT_FALSE(gui->panel_layout_.isLeftDockCollapsed());
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
         EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
@@ -80,6 +82,7 @@ namespace lfs::vis {
 
         gui->commitUiVisibilityTransitionIfFrameReady(true);
         EXPECT_TRUE(gui->ui_hidden_);
+        EXPECT_FALSE(gui->panelAnimationVisibility().right_panel_visible);
         EXPECT_TRUE(gui->panel_layout_.isLeftDockCollapsed());
         EXPECT_FALSE(gui->panel_layout_.isRightDockCollapsed());
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(0.0f, 0.0f));
@@ -101,6 +104,7 @@ namespace lfs::vis {
 
         gui->commitUiVisibilityTransitionIfFrameReady(true);
         EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_TRUE(gui->panelAnimationVisibility().right_panel_visible);
         EXPECT_TRUE(gui->panel_layout_.isLeftDockCollapsed());
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
         EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
@@ -236,11 +240,11 @@ namespace lfs::vis {
         gui->window_states_["python_console"] = true;
         gui->last_ui_layout_work_pos_ = screen.work_pos;
         gui->last_ui_layout_work_size_ = screen.work_size;
-        gui->panel_layout_.setSideDockCollapsed(false, true);
+        gui->panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Left, true);
         gui->panel_layout_.setRightPanelWidth(360.0f, screen);
-        gui->panel_layout_.setSideDockCollapsed(true, true);
+        gui->panel_layout_.setSideDockCollapsed(lfs::core::SideDock::Right, true);
         gui->panel_layout_.setPythonConsoleWidth(450.0f);
-        gui->side_dock_toggle_pending_ = 2;
+        gui->side_dock_toggle_pending_.set(std::to_underlying(lfs::core::SideDock::Right));
         gui->updateUiVisibilityTransition();
         ASSERT_TRUE(gui->ui_visibility_target_ready_);
         const auto prepared = gui->ui_visibility_target_layout_;

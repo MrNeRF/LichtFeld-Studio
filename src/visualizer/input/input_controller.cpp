@@ -2587,10 +2587,10 @@ namespace lfs::vis {
                 return;
 
             case input::Action::TOGGLE_LEFT_DOCK:
-                ui::ToggleSideDock{.right = false}.emit();
+                ui::ToggleSideDock{.side = lfs::core::SideDock::Left}.emit();
                 return;
             case input::Action::TOGGLE_RIGHT_DOCK:
-                ui::ToggleSideDock{.right = true}.emit();
+                ui::ToggleSideDock{.side = lfs::core::SideDock::Right}.emit();
                 return;
             case input::Action::TOGGLE_UI:
                 ui::ToggleUI{}.emit();

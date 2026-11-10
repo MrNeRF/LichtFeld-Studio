@@ -3287,7 +3287,10 @@ NB_MODULE(lichtfeld, m) {
             return capabilities;
         },
         "Return Vulkan device capabilities used to gate rendering controls");
-    m.def("toggle_side_dock", [](bool right) { lfs::core::events::ui::ToggleSideDock{.right = right}.emit(); }, nb::arg("right"), "Toggle the right sidebar, or the left project dock when right is false.");
+    m.def("toggle_side_dock", [](const std::string& side) {
+        if (side != "left" && side != "right")
+            throw nb::value_error("side must be 'left' or 'right'");
+        lfs::core::events::ui::ToggleSideDock{.side = side == "left" ? lfs::core::SideDock::Left : lfs::core::SideDock::Right}.emit(); }, nb::arg("side"), "Toggle the left or right side dock.");
 
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },

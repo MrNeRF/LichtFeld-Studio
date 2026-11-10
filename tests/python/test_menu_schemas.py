@@ -182,7 +182,7 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.set_home = lambda: state.setdefault("home_calls", []).append("set")
     lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.toggle_ui = lambda: state.__setitem__("ui_toggled", True)
-    lf_stub.toggle_side_dock = lambda right: state.__setitem__("dock_toggled", right)
+    lf_stub.toggle_side_dock = lambda side: state.__setitem__("dock_toggled", side)
     lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
     lf_stub.set_vr_active = lambda active: state["vr_calls"].append(("active", active))
     lf_stub.recenter_vr = lambda: state["vr_calls"].append(("recenter",))
@@ -373,9 +373,9 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[4]["selected"]
     view_items[4]["callback"]()
     view_items[5]["callback"]()
-    assert state["dock_toggled"] is False
+    assert state["dock_toggled"] == "left"
     view_items[6]["callback"]()
-    assert state["dock_toggled"] is True
+    assert state["dock_toggled"] == "right"
     view_items[7]["callback"]()
     assert state["split_toggled"] and state["ui_toggled"]
 

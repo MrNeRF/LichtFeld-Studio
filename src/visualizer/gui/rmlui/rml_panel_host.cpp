@@ -1251,10 +1251,10 @@ namespace lfs::vis::gui {
             event.StopPropagation();
     }
 
-    void RmlPanelHost::suspendInput() {
+    void RmlPanelHost::suspendInput(const bool keep_pointer_input) {
         if (!rml_context_)
             return;
-        manager_->deactivateInput(rml_context_);
+        manager_->deactivateInput(rml_context_, keep_pointer_input);
         manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, false);
         manager_->setContextTooltipRevealDeadline(rml_context_, std::nullopt);
         rml_context_->ProcessMouseLeave();
@@ -1298,13 +1298,8 @@ namespace lfs::vis::gui {
                 window_scroll_top_ = scroll_el_->GetScrollTop();
             document_->SetClass("window-minimized", desired == FloatingWindowState::Minimized);
             document_->SetClass("window-maximized", desired == FloatingWindowState::Maximized);
-            if (desired == FloatingWindowState::Minimized) {
-                tooltip_.setHover({}, nullptr);
-                if (auto* focused = rml_context_->GetFocusElement())
-                    focused->Blur();
-                manager_->deactivateInput(rml_context_, true);
-                has_text_focus_ = wants_keyboard_ = false;
-            }
+            if (desired == FloatingWindowState::Minimized)
+                suspendInput(true);
             if (was_minimized || desired == FloatingWindowState::Normal)
                 last_content_height_ = 0.0f;
             content_dirty_ = render_needed_ = direct_cache_dirty_ = true;

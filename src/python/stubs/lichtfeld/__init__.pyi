@@ -725,10 +725,8 @@ def is_fullscreen() -> bool:
 def get_vulkan_capabilities() -> dict:
     """Return Vulkan device capabilities used to gate rendering controls"""
 
-def toggle_side_dock(right: bool) -> None:
-    """
-    Toggle the right sidebar, or the left project dock when right is false.
-    """
+def toggle_side_dock(side: str) -> None:
+    """Toggle the left or right side dock."""
 
 def toggle_ui() -> None:
     """Toggle UI overlay visibility"""

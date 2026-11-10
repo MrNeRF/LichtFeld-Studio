@@ -408,7 +408,7 @@ namespace lfs::vis::gui {
                 (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
                 return;
         }
-        lfs::core::events::ui::ToggleSideDock{.right = target->GetId() == "right-side-dock-toggle"}.emit();
+        lfs::core::events::ui::ToggleSideDock{.side = target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right : lfs::core::SideDock::Left}.emit();
         event.StopPropagation();
     }
 
@@ -428,19 +428,15 @@ namespace lfs::vis::gui {
     void RmlViewportOverlay::applySideDocks() {
         if (!document_)
             return;
-        auto& loc = lfs::event::LocalizationManager::getInstance();
-        const auto apply = [&](const char* id, const bool available, const bool collapsed, const bool right) {
+        const auto apply = [&](const char* id, const bool available, const bool collapsed) {
             if (auto* element = document_->GetElementById(id)) {
                 element->SetClass("hidden", !available);
                 element->SetClass("collapsed", collapsed);
-                const auto label = loc.get(right ? "input_settings.action.toggle_right_dock" : "input_settings.action.toggle_left_dock");
-                element->SetAttribute("title", label);
-                element->SetAttribute("aria-label", label);
                 element->SetAttribute("aria-expanded", collapsed ? "false" : "true");
             }
         };
-        apply("left-side-dock-toggle", left_dock_available_, left_dock_collapsed_, false);
-        apply("right-side-dock-toggle", right_dock_available_, right_dock_collapsed_, true);
+        apply("left-side-dock-toggle", left_dock_available_, left_dock_collapsed_);
+        apply("right-side-dock-toggle", right_dock_available_, right_dock_collapsed_);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
@@ -603,11 +599,7 @@ namespace lfs::vis::gui {
                 markRenderNeeded(RenderReason::ToolbarLayout);
             }));
         document_sync_subscriptions_.push_back(
-            store.language_generation.subscribe([this](const auto&) {
-                applySideDocks();
-                markDocumentSyncDirty();
-                markRenderNeeded(RenderReason::ToolbarLayout);
-            }));
+            store.language_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(
             store.import_overlay_state.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));

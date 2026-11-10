@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/side_dock.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/resize_geometry.hpp"
@@ -155,7 +156,7 @@ namespace lfs::vis::gui {
         float getRightPanelWidth() const { return right_dock_collapsed_ ? 0.0f : right_panel_width_; }
         bool isLeftDockCollapsed() const { return left_dock_collapsed_; }
         bool isRightDockCollapsed() const { return right_dock_collapsed_; }
-        void setSideDockCollapsed(bool right, bool collapsed);
+        void setSideDockCollapsed(lfs::core::SideDock side, bool collapsed);
         float getScenePanelRatio() const { return scene_panel_ratio_; }
         [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
         void setScenePanelHeight(float height, float panel_height);
@@ -176,6 +177,8 @@ namespace lfs::vis::gui {
         float getLeftDockPreferredWidth() const { return left_dock_preferred_width_; }
         void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
+        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
+                                              const ScreenState& screen) const;
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v);
 
@@ -208,8 +211,6 @@ namespace lfs::vis::gui {
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
                                            const ScreenState& screen) const;
         [[nodiscard]] bool shouldReserveLeftDockWidth() const;
-        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
-                                              const ScreenState& screen) const;
         [[nodiscard]] float maxLeftDockPanelWidth(bool show_main_panel, bool ui_hidden,
                                                   const ScreenState& screen) const;
         [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,
