@@ -2119,11 +2119,12 @@ namespace lfs::training {
         optimizer.set_crop_damping_mask(rejected);
     }
 
-    void Trainer::crop_to_training_cropbox() {
+    lfs::Status Trainer::crop_to_training_cropbox() {
+        final_roi_crop_completed_.store(false, std::memory_order_release);
         refresh_cropbox_snapshot();
         if (!cropbox_ || !strategy_) {
-            LOG_WARN("--crop: the training model has no active crop box or polygon, nothing is removed");
-            return;
+            LOG_WARN("--crop-to-roi: the training model has no active ROI, nothing is removed");
+            return {};
         }
         // Removing rows rebuilds each per-splat buffer beside the old one; a
         // model grown to the VRAM limit needs the idle rasterizer memory back.
@@ -2142,8 +2143,10 @@ namespace lfs::training {
                 ~MutationLockMark() { mark_live_model_mutation_lock_held(false); }
             } mutation_lock_mark;
             waitForModelReaders();
-            if (model.size() == 0)
-                return;
+            if (model.size() == 0) {
+                final_roi_crop_completed_.store(true, std::memory_order_release);
+                return {};
+            }
             const auto before = model.visible_count();
             const auto outside = training_cropbox_crop_mask(model, *cropbox_);
             LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
@@ -2152,13 +2155,29 @@ namespace lfs::training {
                 const auto barrier = beginExportableDensifyBarrier();
                 if (barrier == ExportableDensifyBarrierBegin::Failed) {
                     LOG_ERROR("Failed to acquire exportable densify barrier before post-training ROI crop");
-                    return;
+                    return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = "Post-training ROI crop failed.",
+                        .detail = "Failed to acquire exportable densify barrier before post-training ROI crop",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
                 }
                 try {
                     ++mutation_epoch_;
                     strategy_->remove_gaussians(*outside);
                     if (auto storage = ensureModelTensorAllocatorStorage(model, "post-training ROI crop"); !storage) {
                         LOG_ERROR("{}", storage.error());
+                        return lfs::Status::failure(
+                            lfs::from_legacy_expected<void>(
+                                std::unexpected(storage.error()),
+                                lfs::LegacyErrorContext{
+                                    .code = lfs::ErrorCode::Internal,
+                                    .domain = lfs::ErrorDomain::Training,
+                                    .operation = "ensure model tensor allocator storage (post-training ROI crop)",
+                                    .source = LFS_SOURCE_SITE_CURRENT(),
+                                })
+                                .error());
                     }
                     recordParamsReady();
                     removed_any = true;
@@ -2167,8 +2186,15 @@ namespace lfs::training {
                         (void)endExportableDensifyBarrier();
                     throw;
                 }
-                if (barrier == ExportableDensifyBarrierBegin::Acquired)
-                    (void)endExportableDensifyBarrier();
+                if (barrier == ExportableDensifyBarrierBegin::Acquired && !endExportableDensifyBarrier()) {
+                    return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = "Post-training ROI crop failed.",
+                        .detail = "Failed to re-import exportable densify barrier after post-training ROI crop",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
+                }
             }
             // MCMC soft-deletes removed splats, so count the live ones.
             const char* const shape = cropbox_->is_polygon() ? "polygon" :
@@ -2180,6 +2206,8 @@ namespace lfs::training {
             syncTrainingSceneTopology(scene_, model);
             lfs::core::Tensor::trim_memory_pool();
         }
+        final_roi_crop_completed_.store(true, std::memory_order_release);
+        return {};
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -9842,8 +9870,12 @@ namespace lfs::training {
         const bool training_failed = terminal_error.has_value();
         // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
         // are cropped instead (export_cropbox()).
-        if (!terminal_error && !user_stopped && should_crop_model_after_training())
-            crop_to_training_cropbox();
+        final_roi_crop_completed_.store(false, std::memory_order_release);
+        if (!terminal_error && !user_stopped && should_crop_model_after_training()) {
+            if (auto crop_status = crop_to_training_cropbox(); !crop_status) {
+                append_terminal_error(std::move(crop_status).error());
+            }
+        }
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);

@@ -154,7 +154,8 @@ namespace lfs::vis::gui::camera_selection {
     float crop_coverage(const Snapshot& camera, const std::vector<glm::vec3>& points,
                         const glm::mat4& world_to_local, const glm::vec3 box_min,
                         const glm::vec3 box_max,
-                        const std::optional<bool> center_is_inside = std::nullopt) {
+                        const std::optional<bool> center_is_inside = std::nullopt,
+                        const bool is_polygon_prism = false) {
         if (!camera.pose_valid || points.empty())
             return 0.0F;
         const glm::vec3 local_center = glm::vec3(world_to_local * glm::vec4(camera.center, 1.0F));
@@ -178,9 +179,37 @@ namespace lfs::vis::gui::camera_selection {
             max_y = std::max(max_y, y);
             projected = true;
         };
+        const auto clip_edge = [&](const size_t i, const size_t j) {
+            const glm::vec3& a = view[i];
+            const glm::vec3& b = view[j];
+            if ((a.z < near_z) == (b.z < near_z))
+                return;
+            const float t = (near_z - a.z) / (b.z - a.z);
+            project(glm::vec3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), near_z));
+        };
         for (const auto& p : view)
             if (p.z >= near_z)
                 project(p);
+        if (!is_polygon_prism && view.size() == 8) {
+            for (size_t i = 0; i < 8; ++i)
+                for (size_t bit : {1ULL, 2ULL, 4ULL}) {
+                    const size_t j = i ^ bit;
+                    if (j > i)
+                        clip_edge(i, j);
+                }
+        } else if (is_polygon_prism && view.size() >= 6 && (view.size() % 2 == 0)) {
+            const size_t n = view.size() / 2;
+            for (size_t k = 0; k < n; ++k) {
+                const size_t next = (k + 1) % n;
+                clip_edge(2 * k, 2 * k + 1);
+                clip_edge(2 * k, 2 * next);
+                clip_edge(2 * k + 1, 2 * next + 1);
+            }
+        } else {
+            for (size_t i = 0; i < view.size(); ++i)
+                for (size_t j = i + 1; j < view.size(); ++j)
+                    clip_edge(i, j);
+        }
         if (!projected)
             return 0.0F;
         const float width = std::max(0.0F, std::min(camera.width, max_x) - std::max(0.0F, min_x));

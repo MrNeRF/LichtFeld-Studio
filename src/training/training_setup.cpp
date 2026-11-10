@@ -1387,7 +1387,7 @@ namespace lfs::training {
             roi.max = {box[3], box[4], box[5]};
             roi.inverse = params.roi_invert;
             roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
-            roi.crop_model_after_training = params.crop_to_roi;
+            roi.crop_model_after_training = params.crop_to_roi || params.optimization.crop_to_cropbox;
             roi.select_relevant_cameras = params.roi_relevant_cameras;
             roi.camera_coverage_percent = params.roi_camera_coverage;
             if (params.roi_rotation) {
@@ -1399,6 +1399,20 @@ namespace lfs::training {
                 roi.min = -roi.max;
             }
             context.preserved_region_of_interest = std::move(roi);
+        } else if (params.has_explicit_roi_controls() || params.optimization.crop_to_cropbox) {
+            if (!context.preserved_region_of_interest) {
+                return std::unexpected("ROI controls need --roi, or a resumed project with an ROI");
+            }
+            if (params.roi_invert)
+                context.preserved_region_of_interest->inverse = true;
+            if (params.roi_crop_point_cloud)
+                context.preserved_region_of_interest->crop_point_cloud_before_training = true;
+            if (params.crop_to_roi || params.optimization.crop_to_cropbox)
+                context.preserved_region_of_interest->crop_model_after_training = true;
+            if (params.roi_relevant_cameras)
+                context.preserved_region_of_interest->select_relevant_cameras = true;
+            if (params.roi_camera_coverage_set)
+                context.preserved_region_of_interest->camera_coverage_percent = params.roi_camera_coverage;
         }
         warnIfMeshResolutionIgnored(params.optimization);
         const lfs::core::PointCloud* point_cloud =
@@ -1410,6 +1424,7 @@ namespace lfs::training {
             // The temporary copy is deliberately distinct from the PointCloud held by Scene.
             point_cloud_to_use = *point_cloud;
             if (context.preserved_region_of_interest &&
+                context.preserved_region_of_interest->enabled &&
                 context.preserved_region_of_interest->crop_point_cloud_before_training) {
                 const auto before = point_cloud_to_use.size();
                 if (!crop_point_cloud_to_roi(point_cloud_to_use, *context.preserved_region_of_interest)) {
@@ -1576,7 +1591,7 @@ namespace lfs::training {
     lfs::Status applyTrainingRoi(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene) {
-        if (!params.roi)
+        if (!params.roi && !params.has_explicit_roi_controls() && !params.optimization.crop_to_cropbox)
             return {};
         const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
         if (!model)
@@ -1586,23 +1601,46 @@ namespace lfs::training {
                 .user_message = "--roi needs the training model in the scene",
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
-        const auto& box = *params.roi;
         lfs::core::RegionOfInterestData roi;
-        roi.shape = lfs::core::RegionOfInterestShape::Box;
-        roi.min = {box[0], box[1], box[2]};
-        roi.max = {box[3], box[4], box[5]};
-        roi.inverse = params.roi_invert;
-        roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
-        roi.crop_model_after_training = params.crop_to_roi;
-        roi.select_relevant_cameras = params.roi_relevant_cameras;
-        roi.camera_coverage_percent = params.roi_camera_coverage;
-        if (params.roi_rotation) {
-            const auto& degrees = *params.roi_rotation;
-            roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
-                                  glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
-                                                     glm::radians(degrees[2]));
-            roi.max = (roi.max - roi.min) * 0.5f;
-            roi.min = -roi.max;
+        if (params.roi) {
+            const auto& box = *params.roi;
+            roi.shape = lfs::core::RegionOfInterestShape::Box;
+            roi.min = {box[0], box[1], box[2]};
+            roi.max = {box[3], box[4], box[5]};
+            roi.inverse = params.roi_invert;
+            roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
+            roi.crop_model_after_training = params.crop_to_roi || params.optimization.crop_to_cropbox;
+            roi.select_relevant_cameras = params.roi_relevant_cameras;
+            roi.camera_coverage_percent = params.roi_camera_coverage;
+            if (params.roi_rotation) {
+                const auto& degrees = *params.roi_rotation;
+                roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
+                                      glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
+                                                         glm::radians(degrees[2]));
+                roi.max = (roi.max - roi.min) * 0.5f;
+                roi.min = -roi.max;
+            }
+        } else {
+            const auto* existing = scene.getRegionOfInterestData(model->id);
+            if (!existing) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = "ROI controls need --roi, or a resumed project with an ROI",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            roi = *existing;
+            if (params.roi_invert)
+                roi.inverse = true;
+            if (params.roi_crop_point_cloud)
+                roi.crop_point_cloud_before_training = true;
+            if (params.crop_to_roi || params.optimization.crop_to_cropbox)
+                roi.crop_model_after_training = true;
+            if (params.roi_relevant_cameras)
+                roi.select_relevant_cameras = true;
+            if (params.roi_camera_coverage_set)
+                roi.camera_coverage_percent = params.roi_camera_coverage;
         }
         if (!scene.setRegionOfInterestData(model->id, roi)) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
@@ -1820,6 +1858,10 @@ namespace lfs::training {
             preloaded_model.set_frozen_ranges(hydrated->frozen_ranges());
             preloaded_model_ptr = &preloaded_model;
         }
+        if (const auto applied = applyTrainingRoi(params, scene); !applied) {
+            return std::unexpected(std::string(applied.error().user_message()));
+        }
+        static_cast<void>(select_relevant_roi_cameras(scene));
         if (const auto initialized =
                 trainer->initialize(params);
             !initialized) {

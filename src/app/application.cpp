@@ -608,6 +608,14 @@ namespace lfs::app {
                 cli_params.cli_step_values_set;
             checkpoint_params.cli_bg_color_set =
                 cli_params.cli_bg_color_set;
+            checkpoint_params.roi = cli_params.roi;
+            checkpoint_params.roi_rotation = cli_params.roi_rotation;
+            checkpoint_params.roi_invert = cli_params.roi_invert;
+            checkpoint_params.roi_crop_point_cloud = cli_params.roi_crop_point_cloud;
+            checkpoint_params.crop_to_roi = cli_params.crop_to_roi;
+            checkpoint_params.roi_relevant_cameras = cli_params.roi_relevant_cameras;
+            checkpoint_params.roi_camera_coverage = cli_params.roi_camera_coverage;
+            checkpoint_params.roi_camera_coverage_set = cli_params.roi_camera_coverage_set;
             checkpoint_params.overrides = cli_params.overrides;
             core::param::apply_explicit_training_overrides(
                 checkpoint_params, checkpoint_params.overrides);

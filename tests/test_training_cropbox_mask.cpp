@@ -1217,6 +1217,13 @@ TEST(TrainingCropBoxMask, VirtualRoiNodeNameResolvesAndTransformsWithoutMovingPa
     expect_mat4_eq(scene.getRegionOfInterestData(model_id)->local_transform, updated_roi_transform);
     // Parent transform must remain untouched.
     expect_mat4_eq(scene.getNodeTransform("PointCloud"), parent_transform);
+
+    // If a real node named PointCloud_ROI is added, the virtual ROI node name disambiguates to PointCloud_ROI_2.
+    (void)scene.addSplat("PointCloud_ROI", make_test_splat({0.0f, 0.0f, 0.0f}));
+    EXPECT_EQ(scene.getRoiNodeName(model_id), "PointCloud_ROI_2");
+    EXPECT_EQ(scene.resolveRoiTargetNode("PointCloud_ROI"), nullptr);
+    ASSERT_NE(scene.resolveRoiTargetNode("PointCloud_ROI_2"), nullptr);
+    EXPECT_EQ(scene.resolveRoiTargetNode("PointCloud_ROI_2")->id, model_id);
 }
 
 TEST(TrainingCropBoxMask, RelevantRoiCameraSelectionWorksOnPointCloudWithZeroCoverageThreshold) {

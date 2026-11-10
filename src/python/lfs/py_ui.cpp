@@ -4786,37 +4786,69 @@ namespace lfs::python {
             return lfs::core::NULL_NODE;
         };
 
+        struct RoiTrainingSettingsSnapshot {
+            bool exists = false;
+            bool enabled = true;
+            bool locked = false;
+            std::string target_name;
+            std::string roi_node_name;
+            std::string shape = "box";
+            bool inverse = false;
+            bool crop_point_cloud_before_training = false;
+            bool crop_model_after_training = false;
+            bool select_relevant_cameras = false;
+            float camera_coverage_percent = 0.0f;
+        };
+
         m.def(
             "get_roi_training_settings",
             [resolve_roi_target_node_id](const std::string& node_name) -> nb::dict {
+                const auto snapshot = invoke_on_viewer(
+                    [resolve_roi_target_node_id, node_name]() -> RoiTrainingSettingsSnapshot {
+                        RoiTrainingSettingsSnapshot out;
+                        lfs::core::Scene* scene = get_application_scene();
+                        if (!scene)
+                            scene = get_scene_for_python();
+                        const auto target_id = scene ? resolve_roi_target_node_id(*scene, node_name)
+                                                     : lfs::core::NULL_NODE;
+                        const auto* const target = (scene && target_id != lfs::core::NULL_NODE)
+                                                       ? scene->getNodeById(target_id)
+                                                       : nullptr;
+                        const auto* roi = target ? scene->getRegionOfInterestData(target_id) : nullptr;
+                        out.exists = roi != nullptr;
+                        if (!roi || !target)
+                            return out;
+                        out.enabled = roi->enabled;
+                        out.locked = scene->isNodeEffectivelyLocked(target_id);
+                        out.target_name = target->name;
+                        out.roi_node_name = scene->getRoiNodeName(target_id);
+                        out.shape = roi->shape == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid"
+                                    : roi->shape == lfs::core::RegionOfInterestShape::Polygon ? "polygon"
+                                                                                              : "box";
+                        out.inverse = roi->inverse;
+                        out.crop_point_cloud_before_training = roi->crop_point_cloud_before_training;
+                        out.crop_model_after_training = roi->crop_model_after_training;
+                        out.select_relevant_cameras = roi->select_relevant_cameras;
+                        out.camera_coverage_percent = roi->camera_coverage_percent;
+                        return out;
+                    },
+                    RoiTrainingSettingsSnapshot{});
+
                 nb::dict result;
-                lfs::core::Scene* scene = get_application_scene();
-                if (!scene)
-                    scene = get_scene_for_python();
-                const auto target_id = scene ? resolve_roi_target_node_id(*scene, node_name)
-                                             : lfs::core::NULL_NODE;
-                const auto* const target = (scene && target_id != lfs::core::NULL_NODE)
-                                               ? scene->getNodeById(target_id)
-                                               : nullptr;
-                const auto* roi = target ? scene->getRegionOfInterestData(target_id) : nullptr;
-                result["exists"] = roi != nullptr;
-                if (!roi || !target)
+                result["exists"] = snapshot.exists;
+                if (!snapshot.exists)
                     return result;
-                const char* shape_name =
-                    roi->shape == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid"
-                    : roi->shape == lfs::core::RegionOfInterestShape::Polygon ? "polygon"
-                                                                              : "box";
-                result["enabled"] = roi->enabled;
-                result["locked"] = scene->isNodeEffectivelyLocked(target_id);
-                result["target_name"] = target->name;
-                result["roi_node_name"] = scene->getRoiNodeName(target_id);
-                result["shape"] = shape_name;
-                result["inverse"] = roi->inverse;
-                result["invert"] = roi->inverse;
-                result["crop_point_cloud_before_training"] = roi->crop_point_cloud_before_training;
-                result["crop_model_after_training"] = roi->crop_model_after_training;
-                result["select_relevant_cameras"] = roi->select_relevant_cameras;
-                result["camera_coverage_percent"] = roi->camera_coverage_percent;
+                result["enabled"] = snapshot.enabled;
+                result["locked"] = snapshot.locked;
+                result["target_name"] = snapshot.target_name;
+                result["roi_node_name"] = snapshot.roi_node_name;
+                result["shape"] = snapshot.shape;
+                result["inverse"] = snapshot.inverse;
+                result["invert"] = snapshot.inverse;
+                result["crop_point_cloud_before_training"] = snapshot.crop_point_cloud_before_training;
+                result["crop_model_after_training"] = snapshot.crop_model_after_training;
+                result["select_relevant_cameras"] = snapshot.select_relevant_cameras;
+                result["camera_coverage_percent"] = snapshot.camera_coverage_percent;
                 return result;
             },
             nb::arg("node_name") = "", "Read training controls for a target-owned ROI");
@@ -4830,67 +4862,78 @@ namespace lfs::python {
                                          const std::optional<bool>& crop_model_after_training,
                                          const std::optional<bool>& select_relevant_cameras,
                                          const std::optional<float>& camera_coverage_percent) {
-                lfs::core::Scene* scene = get_application_scene();
-                if (!scene)
-                    scene = get_scene_for_python();
-                const auto target_id = scene ? resolve_roi_target_node_id(*scene, node_name)
-                                             : lfs::core::NULL_NODE;
-                const auto* const target = (scene && target_id != lfs::core::NULL_NODE)
-                                               ? scene->getNodeById(target_id)
-                                               : nullptr;
-                const auto* existing = target ? scene->getRegionOfInterestData(target_id) : nullptr;
-                if (!existing || !target)
-                    return false;
-                const bool was_selecting_cameras = existing->enabled && existing->select_relevant_cameras;
-                const bool camera_criteria_changed =
-                    enabled.has_value() || inverse.has_value() ||
-                    select_relevant_cameras.has_value() || camera_coverage_percent.has_value();
-                auto roi = *existing;
-                if (enabled.has_value())
-                    roi.enabled = *enabled;
-                if (inverse.has_value())
-                    roi.inverse = *inverse;
-                if (crop_point_cloud_before_training.has_value())
-                    roi.crop_point_cloud_before_training = *crop_point_cloud_before_training;
-                if (crop_model_after_training.has_value())
-                    roi.crop_model_after_training = *crop_model_after_training;
-                if (select_relevant_cameras.has_value())
-                    roi.select_relevant_cameras = *select_relevant_cameras;
-                if (camera_coverage_percent.has_value())
-                    roi.camera_coverage_percent = *camera_coverage_percent;
+                return invoke_on_viewer(
+                    [=]() -> bool {
+                        lfs::core::Scene* scene = get_application_scene();
+                        if (!scene)
+                            scene = get_scene_for_python();
+                        const auto target_id = scene ? resolve_roi_target_node_id(*scene, node_name)
+                                                     : lfs::core::NULL_NODE;
+                        const auto* const target = (scene && target_id != lfs::core::NULL_NODE)
+                                                       ? scene->getNodeById(target_id)
+                                                       : nullptr;
+                        const auto* existing = target ? scene->getRegionOfInterestData(target_id) : nullptr;
+                        if (!existing || !target)
+                            return false;
+                        const bool was_selecting_cameras = existing->enabled && existing->select_relevant_cameras;
+                        const bool camera_criteria_changed =
+                            enabled.has_value() || inverse.has_value() ||
+                            select_relevant_cameras.has_value() || camera_coverage_percent.has_value();
+                        auto roi = *existing;
+                        if (enabled.has_value())
+                            roi.enabled = *enabled;
+                        if (inverse.has_value())
+                            roi.inverse = *inverse;
+                        if (crop_point_cloud_before_training.has_value())
+                            roi.crop_point_cloud_before_training = *crop_point_cloud_before_training;
+                        if (crop_model_after_training.has_value())
+                            roi.crop_model_after_training = *crop_model_after_training;
+                        if (select_relevant_cameras.has_value())
+                            roi.select_relevant_cameras = *select_relevant_cameras;
+                        if (camera_coverage_percent.has_value())
+                            roi.camera_coverage_percent = *camera_coverage_percent;
 
-                auto* const sm = lfs::python::get_scene_manager();
-                const lfs::vis::op::SceneGraphCaptureOptions history_options{
-                    .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
-                    .include_selected_nodes = false,
-                    .include_scene_context = false,
-                    .payload_uuids = std::vector<lfs::core::Uuid>{},
-                };
-                std::optional<lfs::vis::op::SceneGraphStateSnapshot> before;
-                if (sm)
-                    before = lfs::vis::op::SceneGraphPatchEntry::captureState(*sm, {target->name}, history_options);
+                        auto* const sm = lfs::python::get_scene_manager();
+                        const lfs::vis::op::SceneGraphCaptureOptions history_options{
+                            .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+                            .include_selected_nodes = false,
+                            .include_scene_context = false,
+                            .payload_uuids = std::vector<lfs::core::Uuid>{},
+                        };
+                        std::vector<lfs::core::NodeId> capture_ids{target_id};
+                        if (camera_criteria_changed && ((roi.enabled && roi.select_relevant_cameras) || was_selecting_cameras)) {
+                            for (const auto* const node : scene->getNodes()) {
+                                if (node && node->type == lfs::core::NodeType::CAMERA)
+                                    capture_ids.push_back(node->id);
+                            }
+                        }
+                        std::optional<lfs::vis::op::SceneGraphStateSnapshot> before;
+                        if (sm)
+                            before = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(*sm, capture_ids, history_options);
 
-                if (!scene->setRegionOfInterestData(target_id, roi))
-                    return false;
+                        if (!scene->setRegionOfInterestData(target_id, roi))
+                            return false;
 
-                if (camera_criteria_changed) {
-                    if (roi.enabled && roi.select_relevant_cameras) {
-                        (void)lfs::training::select_relevant_roi_cameras(*scene);
-                    } else if (was_selecting_cameras) {
-                        (void)scene->setAllCameraTrainingEnabled(true);
-                    }
-                }
+                        if (camera_criteria_changed) {
+                            if (roi.enabled && roi.select_relevant_cameras) {
+                                (void)lfs::training::select_relevant_roi_cameras(*scene);
+                            } else if (was_selecting_cameras) {
+                                (void)scene->setAllCameraTrainingEnabled(true);
+                            }
+                        }
 
-                if (sm && before) {
-                    auto after = lfs::vis::op::SceneGraphPatchEntry::captureState(*sm, {target->name}, history_options);
-                    lfs::vis::op::undoHistory().push(std::make_unique<lfs::vis::op::SceneGraphPatchEntry>(
-                        *sm, "roi.settings", std::move(*before), std::move(after)));
-                }
-                if (auto* const gui = lfs::python::get_gui_manager())
-                    (void)gui->gizmo().ensureCropToolStateForRestore();
-                if (auto* const rm = lfs::python::get_rendering_manager())
-                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
-                return true;
+                        if (sm && before) {
+                            auto after = lfs::vis::op::SceneGraphPatchEntry::captureStateByIds(*sm, capture_ids, history_options);
+                            lfs::vis::op::undoHistory().push(std::make_unique<lfs::vis::op::SceneGraphPatchEntry>(
+                                *sm, "roi.settings", std::move(*before), std::move(after)));
+                        }
+                        if (auto* const gui = lfs::python::get_gui_manager())
+                            (void)gui->gizmo().ensureCropToolStateForRestore();
+                        if (auto* const rm = lfs::python::get_rendering_manager())
+                            rm->markDirty(lfs::vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+                        return true;
+                    },
+                    false);
             },
             nb::arg("node_name") = "",
             nb::arg("enabled") = nb::none(),

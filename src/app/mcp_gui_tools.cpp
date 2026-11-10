@@ -2501,11 +2501,18 @@ namespace lfs::app {
                     const auto* group = scene.getNodeById(group_id);
                     if (!group || group->type != core::NodeType::CAMERA_GROUP)
                         return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
-                    const core::NodeId roi_target_id = args.contains("roi_target")
-                                                            ? scene.getNodeIdByName(args.value("roi_target", ""))
-                                                            : core::NULL_NODE;
+                    const bool has_roi_target = args.contains("roi_target") && !args["roi_target"].is_null();
+                    core::NodeId roi_target_id = core::NULL_NODE;
+                    if (has_roi_target) {
+                        const std::string target_name = args.value("roi_target", "");
+                        if (const auto* const resolved = scene.resolveRoiTargetNode(target_name))
+                            roi_target_id = resolved->id;
+                        else
+                            roi_target_id = scene.getNodeIdByName(target_name);
+                    }
                     if (type == Selection::CameraSelectionOperation::RoiVisibility &&
-                        roi_target_id != core::NULL_NODE && !scene.getRegionOfInterestData(roi_target_id))
+                        has_roi_target &&
+                        (roi_target_id == core::NULL_NODE || !scene.getRegionOfInterestData(roi_target_id)))
                         return mcp::invalid_argument_result("A valid ROI target is required", "roi_target");
                     const auto handle = gui->asyncTasks().startCameraSelection({.operation = type,
                                                                                 .percentage = args.value("percentage", 25.0F),

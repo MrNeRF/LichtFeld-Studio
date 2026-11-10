@@ -2437,8 +2437,15 @@ namespace lfs::vis::cap {
             .include_scene_context = false,
             .payload_uuids = std::vector<lfs::core::Uuid>{},
         };
+        std::vector<core::NodeId> capture_ids{target_id};
+        if (updated.enabled && updated.select_relevant_cameras) {
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::CAMERA)
+                    capture_ids.push_back(node->id);
+            }
+        }
         auto history_before =
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options);
+            vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
             return std::unexpected("Invalid ROI geometry");
         if (updated.enabled && updated.select_relevant_cameras)
@@ -2450,7 +2457,7 @@ namespace lfs::vis::cap {
             scene_manager,
             use_percentile ? "Fit ROI (Trimmed)" : "Fit ROI",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options)));
+            vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options)));
         return {};
     }
 
@@ -2485,8 +2492,15 @@ namespace lfs::vis::cap {
             .include_scene_context = false,
             .payload_uuids = std::vector<lfs::core::Uuid>{},
         };
+        std::vector<core::NodeId> capture_ids{target_id};
+        if (updated.enabled && updated.select_relevant_cameras) {
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::CAMERA)
+                    capture_ids.push_back(node->id);
+            }
+        }
         auto history_before =
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options);
+            vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
             return std::unexpected("Invalid ROI geometry");
         if (updated.enabled && updated.select_relevant_cameras)
@@ -2498,7 +2512,7 @@ namespace lfs::vis::cap {
             scene_manager,
             "Reset ROI",
             std::move(history_before),
-            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options)));
+            vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options)));
         return {};
     }
 

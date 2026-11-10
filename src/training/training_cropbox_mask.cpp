@@ -356,18 +356,20 @@ namespace lfs::training {
         [[nodiscard]] float roi_camera_crop_coverage(
             const RoiCameraSnapshot& camera,
             const std::vector<glm::vec3>& points,
-            const bool center_is_inside) {
+            const bool center_is_inside,
+            const bool is_polygon_prism = false) {
             if (!camera.pose_valid || points.empty())
                 return 0.0F;
             if (center_is_inside)
                 return 100.0F;
             constexpr float near_z = 1.e-6F;
+            std::vector<glm::vec3> view;
+            view.reserve(points.size());
+            for (const auto& point : points)
+                view.push_back(glm::vec3(camera.world_to_camera * glm::vec4(point, 1.0F)));
             float min_x = camera.width, max_x = 0.0F, min_y = camera.height, max_y = 0.0F;
             bool projected = false;
-            for (const auto& point : points) {
-                const glm::vec3 p = glm::vec3(camera.world_to_camera * glm::vec4(point, 1.0F));
-                if (p.z < near_z)
-                    continue;
+            const auto project = [&](const glm::vec3& p) {
                 const float x = camera.focal_x * p.x / p.z + camera.center_x;
                 const float y = camera.focal_y * p.y / p.z + camera.center_y;
                 min_x = std::min(min_x, x);
@@ -375,6 +377,38 @@ namespace lfs::training {
                 min_y = std::min(min_y, y);
                 max_y = std::max(max_y, y);
                 projected = true;
+            };
+            const auto clip_edge = [&](const size_t i, const size_t j) {
+                const glm::vec3& a = view[i];
+                const glm::vec3& b = view[j];
+                if ((a.z < near_z) == (b.z < near_z))
+                    return;
+                const float t = (near_z - a.z) / (b.z - a.z);
+                project(glm::vec3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), near_z));
+            };
+            for (const auto& p : view) {
+                if (p.z >= near_z)
+                    project(p);
+            }
+            if (!is_polygon_prism && view.size() == 8) {
+                for (size_t i = 0; i < 8; ++i)
+                    for (size_t bit : {1ULL, 2ULL, 4ULL}) {
+                        const size_t j = i ^ bit;
+                        if (j > i)
+                            clip_edge(i, j);
+                    }
+            } else if (is_polygon_prism && view.size() >= 6 && (view.size() % 2 == 0)) {
+                const size_t n = view.size() / 2;
+                for (size_t k = 0; k < n; ++k) {
+                    const size_t next = (k + 1) % n;
+                    clip_edge(2 * k, 2 * k + 1);
+                    clip_edge(2 * k, 2 * next);
+                    clip_edge(2 * k + 1, 2 * next + 1);
+                }
+            } else {
+                for (size_t i = 0; i < view.size(); ++i)
+                    for (size_t j = i + 1; j < view.size(); ++j)
+                        clip_edge(i, j);
             }
             if (!projected)
                 return 0.0F;
@@ -414,11 +448,13 @@ namespace lfs::training {
 
         std::unordered_set<core::NodeId> selected;
         const float threshold = std::clamp(roi->camera_coverage_percent, 0.0F, 100.0F);
+        const bool is_polygon_prism = roi->shape == core::RegionOfInterestShape::Polygon;
         for (const auto& [id, camera] : cameras) {
             const glm::vec3 local_center = glm::vec3(
                 geometry->world_to_cropbox * glm::vec4(camera.center, 1.0F));
             float coverage = roi_camera_crop_coverage(
-                camera, points, training_crop_region_contains(*geometry, local_center));
+                camera, points, training_crop_region_contains(*geometry, local_center),
+                is_polygon_prism);
             if (roi->inverse)
                 coverage = 100.0F - coverage;
             if (coverage > 0.0F && coverage >= threshold)

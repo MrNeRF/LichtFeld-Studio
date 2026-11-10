@@ -4797,9 +4797,12 @@ namespace lfs::vis::gui {
                             const auto center_is_inside = roi_snapshot
                                                               ? std::optional<bool>(roi_contains_local(*roi_snapshot, local_center))
                                                               : std::nullopt;
+                            const bool is_polygon_prism =
+                                roi_snapshot && roi_snapshot->shape == core::RegionOfInterestShape::Polygon;
                             float coverage = camera_selection::crop_coverage(
                                 cameras[index], cropbox_points, snapshot_cropbox_world_to_local,
-                                snapshot_cropbox_min, snapshot_cropbox_max, center_is_inside);
+                                snapshot_cropbox_min, snapshot_cropbox_max, center_is_inside,
+                                is_polygon_prism);
                             if (roi_inverse)
                                 coverage = 100.0F - coverage;
                             if (coverage > 0.0F && coverage >= std::clamp(options.coverage, 0.0F, 100.0F))

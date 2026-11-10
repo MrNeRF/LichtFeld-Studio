@@ -339,6 +339,9 @@ namespace lfs::training {
         // The ROI to use for final exports when its persistent final-crop control is enabled.
         [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
         [[nodiscard]] bool should_crop_model_after_training() const;
+        [[nodiscard]] bool has_completed_final_roi_crop() const noexcept {
+            return final_roi_crop_completed_.load(std::memory_order_acquire);
+        }
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -696,7 +699,8 @@ namespace lfs::training {
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
         // Removes the splats outside the training crop box (inside it when inverse).
-        void crop_to_training_cropbox();
+        [[nodiscard]] lfs::Status crop_to_training_cropbox();
+        std::atomic<bool> final_roi_crop_completed_{false};
         // Whether the camera stands inside the crop box (host pose, no device read).
         [[nodiscard]] bool cropbox_contains_camera(const lfs::core::Camera& camera) const;
         [[nodiscard]] bool morton_reorder_due(int iter) const;

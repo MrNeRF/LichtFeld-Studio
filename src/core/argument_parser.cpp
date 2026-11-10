@@ -50,10 +50,10 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--morton-reorder-interval", "morton_reorder_interval", Integer},
             OptimizationCliBinding{"--max-cap", "max_cap", Integer},
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
-            OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
-            OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
-            OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
-            OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
+            OptimizationCliBinding{"--roi-lr-scale", "cropbox_lr_scale", Float},
+            OptimizationCliBinding{"--roi-loss-weight", "cropbox_loss_weight", Float},
+            OptimizationCliBinding{"--roi-growth-inside", "cropbox_growth_inside", Float},
+            OptimizationCliBinding{"--crop-to-roi", "crop_to_cropbox", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
@@ -811,19 +811,16 @@ namespace {
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
-            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Add a pre-training Crop box with the given dataset-space bounds. This does not define the training ROI.", {"cropbox"});
-            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Rotate the pre-training --cropbox about its centre by Rx*Ry*Rz degrees.", {"cropbox-rotation"});
-            ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<std::string> roi(training_group, "x0,y0,z0,x1,y1,z1", "Set the dedicated training ROI in dataset coordinates.", {"roi"});
             ::args::ValueFlag<std::string> roi_rotation(training_group, "rx,ry,rz", "Rotate --roi about its centre by Rx*Ry*Rz degrees.", {"roi-rotation"});
             ::args::Flag roi_invert(training_group, "enabled", "Train the region outside --roi.", {"roi-invert"});
             ::args::Flag roi_crop_point_cloud(training_group, "enabled", "Use a temporary ROI-cropped PointCloud seed without changing the saved PointCloud.", {"roi-crop-point-cloud"});
-            ::args::Flag crop_to_roi(training_group, "enabled", "Permanently crop the completed model and exports to the ROI.", {"crop-to-roi"});
+            ::args::Flag crop_to_roi(training_group, "crop-to-roi", lfs::core::args::optimization_cli_help("--crop-to-roi"), {"crop-to-roi"});
             ::args::Flag roi_relevant_cameras(training_group, "enabled", "Select relevant training cameras from ROI coverage before training.", {"roi-relevant-cameras"});
             ::args::ValueFlag<float> roi_camera_coverage(training_group, "percent", "ROI camera coverage threshold (0-100).", {"roi-camera-coverage"});
-            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
-            ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
-            ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
+            ::args::ValueFlag<float> roi_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--roi-lr-scale"), {"roi-lr-scale"});
+            ::args::ValueFlag<float> roi_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--roi-loss-weight"), {"roi-loss-weight"});
+            ::args::ValueFlag<float> roi_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--roi-growth-inside"), {"roi-growth-inside"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1335,24 +1332,6 @@ namespace {
                 }
             }
 
-            if (cropbox) {
-                const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(cropbox));
-                if (!box)
-                    return std::unexpected(std::format(
-                        "Invalid --cropbox '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
-                        ::args::get(cropbox)));
-                params.cropbox = *box;
-            }
-            if (cropbox_rotation) {
-                if (!params.cropbox)
-                    return std::unexpected("--cropbox-rotation turns the --cropbox box about its centre: it needs --cropbox");
-                const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(cropbox_rotation));
-                if (!rotation)
-                    return std::unexpected(std::format(
-                        "Invalid --cropbox-rotation '{}'. A rotation needs three finite numbers rx,ry,rz in degrees",
-                        ::args::get(cropbox_rotation)));
-                params.cropbox_rotation = *rotation;
-            }
             if (roi) {
                 const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(roi));
                 if (!box)
@@ -1363,7 +1342,7 @@ namespace {
             }
             if (roi_rotation) {
                 if (!params.roi)
-                    return std::unexpected("--roi-rotation needs --roi");
+                    return std::unexpected("--roi-rotation turns the --roi box about its centre: it needs --roi");
                 const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(roi_rotation));
                 if (!rotation)
                     return std::unexpected(std::format(
@@ -1371,9 +1350,6 @@ namespace {
                         ::args::get(roi_rotation)));
                 params.roi_rotation = *rotation;
             }
-            if ((roi_invert || roi_crop_point_cloud || crop_to_roi || roi_relevant_cameras || roi_camera_coverage) &&
-                !params.roi && !params.resume_checkpoint && !params.resume_project)
-                return std::unexpected("ROI controls need --roi, or a resumed project with an ROI");
             if (roi_camera_coverage &&
                 (!std::isfinite(::args::get(roi_camera_coverage)) || ::args::get(roi_camera_coverage) < 0.0f ||
                  ::args::get(roi_camera_coverage) > 100.0f))
@@ -1382,16 +1358,10 @@ namespace {
             params.roi_crop_point_cloud = static_cast<bool>(roi_crop_point_cloud);
             params.crop_to_roi = static_cast<bool>(crop_to_roi);
             params.roi_relevant_cameras = static_cast<bool>(roi_relevant_cameras);
-            if (roi_camera_coverage)
+            if (roi_camera_coverage) {
                 params.roi_camera_coverage = ::args::get(roi_camera_coverage);
-            // Keep --crop as a compatibility spelling for final ROI cropping;
-            // --cropbox itself remains a separate pre-training helper.
-            if (crop)
-                params.crop_to_roi = true;
-            if (crop && !params.cropbox && !params.roi && !params.resume_checkpoint && !params.resume_project)
-                return std::unexpected(
-                    "--crop removes splats outside the training ROI when training completes and when exporting: "
-                    "it needs --roi or --cropbox, or a resumed project that has an ROI");
+                params.roi_camera_coverage_set = true;
+            }
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {
@@ -1517,6 +1487,12 @@ namespace {
                         }
                     }
                 }
+            }
+
+            if (params.has_explicit_roi_controls() &&
+                !params.roi && !params.resume_project && !params.dataset_project) {
+                return std::unexpected(
+                    "ROI controls need --roi, or a resumed project with an ROI");
             }
 
             if (strategy) {
@@ -1691,9 +1667,9 @@ namespace {
                                         sh_degree_val = cli_option_present({"--sh-degree"}) ? std::optional<int>(::args::get(sh_degree)) : std::optional<int>(),
                                         min_opacity_val = cli_option_present({"--min-opacity"}) ? std::optional<float>(::args::get(min_opacity)) : std::optional<float>(),
                                         eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
-                                        cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
-                                        cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
-                                        cropbox_growth_inside_val = cli_option_present({"--cropbox-growth-inside"}) ? std::optional<float>(::args::get(cropbox_growth_inside)) : std::optional<float>(),
+                                        cropbox_lr_scale_val = cli_option_present({"--roi-lr-scale"}) ? std::optional<float>(::args::get(roi_lr_scale)) : std::optional<float>(),
+                                        cropbox_loss_weight_val = cli_option_present({"--roi-loss-weight"}) ? std::optional<float>(::args::get(roi_loss_weight)) : std::optional<float>(),
+                                        cropbox_growth_inside_val = cli_option_present({"--roi-growth-inside"}) ? std::optional<float>(::args::get(roi_growth_inside)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
                                         init_mesh_resolution_val = cli_option_present({"--init-mesh-resolution"}) ? std::optional<int>(::args::get(init_mesh_resolution)) : std::optional<int>(),
@@ -1728,7 +1704,7 @@ namespace {
                                         use_exposure_correction_flag = bool(use_exposure_correction),
                                         no_exposure_correction_flag = bool(no_exposure_correction),
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
-                                        crop_flag = bool(crop),
+                                        crop_flag = bool(crop_to_roi),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),

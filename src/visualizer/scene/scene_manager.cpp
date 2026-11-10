@@ -3723,10 +3723,18 @@ namespace lfs::vis {
         // did during training (rendering uses getWorldTransform).
         const glm::mat4 old_model_world =
             scene_.getWorldTransform(model_node->id);
+        const bool final_crop_completed =
+            !stopped_active_training &&
+            (trainer
+                 ? trainer->has_completed_final_roi_crop()
+                 : (trainer_mgr &&
+                    trainer_mgr->getState() == TrainingState::Finished &&
+                    trainer_mgr->getStateMachine().getFinishReason() != FinishReason::UserStopped &&
+                    trainer_mgr->getStateMachine().getFinishReason() != FinishReason::Error));
         std::optional<core::RegionOfInterestData> roi_snapshot;
         if (const auto* roi = scene_.getRegionOfInterestData(model_node->id)) {
             roi_snapshot = *roi;
-            if (stopped_active_training) {
+            if (!final_crop_completed) {
                 roi_snapshot->crop_model_after_training = false;
             }
         }

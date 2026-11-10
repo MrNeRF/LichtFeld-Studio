@@ -377,7 +377,7 @@ class TransformControlsController:
                 ) or {}
                 if (
                     bool(roi.get("exists", False))
-                    and str(roi.get("shape", "box")) in ("box", "ellipsoid")
+                    and str(roi.get("shape", "box")) in ("box", "ellipsoid", "polygon")
                     and roi.get("roi_node_name")
                 ):
                     self._selected = [str(roi["roi_node_name"])]

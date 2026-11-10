@@ -6661,20 +6661,37 @@ namespace lfs::core {
         const auto* const node = getNodeById(node_id);
         if (!node || !node->region_of_interest)
             return {};
-        return node->name + "_ROI";
+        const auto collides = [&](const std::string& candidate) {
+            if (getNodeIdByName(candidate) != NULL_NODE)
+                return true;
+            for (const auto& other : nodes_) {
+                if (!other)
+                    continue;
+                if (other->id == node_id)
+                    break;
+                if (other->region_of_interest && getRoiNodeName(other->id) == candidate)
+                    return true;
+            }
+            return false;
+        };
+        std::string candidate = node->name + "_ROI";
+        if (!collides(candidate))
+            return candidate;
+        for (size_t suffix = 2;; ++suffix) {
+            candidate = std::format("{}_ROI_{}", node->name, suffix);
+            if (!collides(candidate))
+                return candidate;
+        }
     }
 
     const SceneNode* Scene::resolveRoiTargetNode(const std::string_view name) const {
-        constexpr std::string_view kRoiSuffix = "_ROI";
-        if (!name.ends_with(kRoiSuffix) || name.size() <= kRoiSuffix.size())
+        if (name.empty() || getNodeIdByName(std::string(name)) != NULL_NODE)
             return nullptr;
-        if (getNodeIdByName(std::string(name)) != NULL_NODE)
-            return nullptr;
-        const std::string target_name(name.substr(0, name.size() - kRoiSuffix.size()));
-        const auto* const target = getNode(target_name);
-        if (!target || !target->region_of_interest)
-            return nullptr;
-        return target;
+        for (const auto& node : nodes_) {
+            if (node && node->region_of_interest && getRoiNodeName(node->id) == name)
+                return node.get();
+        }
+        return nullptr;
     }
 
     SceneNode* Scene::resolveMutableRoiTargetNode(const std::string_view name) {

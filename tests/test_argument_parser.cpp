@@ -1545,7 +1545,7 @@ TEST(ArgumentParserTest, TrainingRejectsFrozenLrScaleOutsideUnitInterval) {
     }
 }
 
-TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
+TEST(ArgumentParserTest, TrainingParsesRoiLrScale) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_lr_scale_output");
 
@@ -1556,7 +1556,7 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
         data_path.c_str(),
         "--output-path",
         output_path.c_str(),
-        "--cropbox-lr-scale",
+        "--roi-lr-scale",
         "0.25"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
@@ -1564,7 +1564,7 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.25f);
 }
 
-TEST(ArgumentParserTest, TrainingRejectsCropBoxLrScaleOutsideUnitInterval) {
+TEST(ArgumentParserTest, TrainingRejectsRoiLrScaleOutsideUnitInterval) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_lr_scale_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_lr_scale_output");
 
@@ -1577,7 +1577,7 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxLrScaleOutsideUnitInterval) {
             data_path.c_str(),
             "--output-path",
             output_path.c_str(),
-            "--cropbox-lr-scale",
+            "--roi-lr-scale",
             scale};
 
         auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
@@ -1587,7 +1587,7 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxLrScaleOutsideUnitInterval) {
     }
 }
 
-TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
+TEST(ArgumentParserTest, TrainingParsesRoiLossWeight) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_loss_weight_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_loss_weight_output");
 
@@ -1598,7 +1598,7 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
         data_path.c_str(),
         "--output-path",
         output_path.c_str(),
-        "--cropbox-loss-weight",
+        "--roi-loss-weight",
         "0.4"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
@@ -1627,7 +1627,7 @@ TEST(ArgumentParserTest, TrainingParsesColorVarianceLoss) {
     EXPECT_FALSE(parse("--color-variance-warmup-iters=-1").has_value());
 }
 
-TEST(ArgumentParserTest, TrainingParsesCropBoxRegionOfInterest) {
+TEST(ArgumentParserTest, TrainingParsesRegionOfInterest) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_output");
 
@@ -1638,52 +1638,81 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxRegionOfInterest) {
         data_path.c_str(),
         "--output-path",
         output_path.c_str(),
-        "--cropbox",
+        "--roi",
         "-0.5, -0.25,0,0.5,0.25 ,1.75",
-        "--cropbox-loss-weight",
+        "--roi-loss-weight",
         "0"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
-    ASSERT_TRUE((*parsed)->cropbox.has_value());
-    EXPECT_EQ(*(*parsed)->cropbox, (std::array<float, 6>{-0.5f, -0.25f, 0.f, 0.5f, 0.25f, 1.75f}));
+    ASSERT_TRUE((*parsed)->roi.has_value());
+    EXPECT_EQ(*(*parsed)->roi, (std::array<float, 6>{-0.5f, -0.25f, 0.f, 0.5f, 0.25f, 1.75f}));
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.f);
 }
 
-// Catches --crop not reaching the training parameters, or being on without the flag.
-TEST(ArgumentParserTest, TrainingParsesCropAtTheEnd) {
+// Catches --crop-to-roi not reaching the training parameters, or being on without the flag.
+TEST(ArgumentParserTest, TrainingParsesCropToRoiAtTheEnd) {
     const auto data_path = make_test_path("lfs_arg_parser_crop_data");
     const auto output_path = make_test_path("lfs_arg_parser_crop_output");
     const auto parse = [&](const bool crop) {
         std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
-                                      "--output-path", output_path.c_str(), "--cropbox", "-1,-1,-1,1,1,1"};
+                                      "--output-path", output_path.c_str(), "--roi", "-1,-1,-1,1,1,1"};
         if (crop)
-            argv.push_back("--crop");
+            argv.push_back("--crop-to-roi");
         return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
     };
 
     const auto cropped = parse(true);
     ASSERT_TRUE(cropped.has_value()) << cropped.error();
+    EXPECT_TRUE((*cropped)->crop_to_roi);
     EXPECT_TRUE((*cropped)->optimization.crop_to_cropbox);
 
     const auto kept = parse(false);
     ASSERT_TRUE(kept.has_value()) << kept.error();
+    EXPECT_FALSE((*kept)->crop_to_roi);
     EXPECT_FALSE((*kept)->optimization.crop_to_cropbox);
 }
 
-// Catches --crop accepted without a region of interest to crop to.
-TEST(ArgumentParserTest, TrainingRejectsCropWithoutCropBox) {
+// Catches --crop-to-roi accepted without a region of interest or .licht project to crop to.
+TEST(ArgumentParserTest, TrainingRejectsCropToRoiWithoutRoiOrProject) {
     const auto data_path = make_test_path("lfs_arg_parser_crop_without_box_data");
     const auto output_path = make_test_path("lfs_arg_parser_crop_without_box_output");
     const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
-                          "--output-path", output_path.c_str(), "--crop"};
+                          "--output-path", output_path.c_str(), "--crop-to-roi"};
 
     const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
-    EXPECT_NE(parsed.error().find("--cropbox"), std::string::npos);
+    EXPECT_NE(parsed.error().find("--roi"), std::string::npos);
+
+    // A .licht project may already carry an ROI; allow ROI control overrides without --roi.
+    const auto project_dir = make_test_path("lfs_arg_parser_roi_controls_project");
+    const auto project_path = std::filesystem::path(project_dir) / "scene.licht";
+    std::ofstream(project_path).put('\n');
+    const auto project_str = project_path.string();
+    const char* project_argv[] = {"LichtFeld-Studio", "--headless", "--resume", project_str.c_str(),
+                                  "--output-path", output_path.c_str(), "--crop-to-roi",
+                                  "--roi-invert", "--roi-camera-coverage", "35"};
+    const auto project_parsed =
+        lfs::core::args::parse_args_and_params(static_cast<int>(std::size(project_argv)), project_argv);
+    ASSERT_TRUE(project_parsed.has_value()) << project_parsed.error();
+    EXPECT_TRUE((*project_parsed)->crop_to_roi);
+    EXPECT_TRUE((*project_parsed)->roi_invert);
+    EXPECT_TRUE((*project_parsed)->roi_camera_coverage_set);
+    EXPECT_FLOAT_EQ((*project_parsed)->roi_camera_coverage, 35.0f);
+
+    // A .ckpt path is ignored for ROI control validation unless --roi is also passed.
+    const auto ckpt_path = std::filesystem::path(project_dir) / "checkpoint.resume";
+    std::ofstream(ckpt_path).put('\n');
+    const auto ckpt_str = ckpt_path.string();
+    const char* ckpt_argv[] = {"LichtFeld-Studio", "--headless", "--resume", ckpt_str.c_str(),
+                               "--output-path", output_path.c_str(), "--crop-to-roi"};
+    const auto ckpt_parsed =
+        lfs::core::args::parse_args_and_params(static_cast<int>(std::size(ckpt_argv)), ckpt_argv);
+    ASSERT_FALSE(ckpt_parsed.has_value());
+    EXPECT_NE(ckpt_parsed.error().find("--roi"), std::string::npos);
 }
 
-TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
+TEST(ArgumentParserTest, TrainingRejectsRoiWithoutVolume) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_output");
 
@@ -1696,24 +1725,24 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxWithoutVolume) {
             data_path.c_str(),
             "--output-path",
             output_path.c_str(),
-            "--cropbox",
+            "--roi",
             box};
 
         auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
-        EXPECT_NE(parsed.error().find("Invalid --cropbox"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("Invalid --roi"), std::string::npos) << parsed.error();
     }
 }
 
-// Catches --cropbox-rotation not reaching the parameters or training_config.json, or set without the flag.
-TEST(ArgumentParserTest, TrainingParsesCropBoxRotation) {
+// Catches --roi-rotation not reaching the parameters or training_config.json, or set without the flag.
+TEST(ArgumentParserTest, TrainingParsesRoiRotation) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_output");
     const auto parse = [&](const char* rotation) {
         std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
-                                      "--output-path", output_path.c_str(), "--cropbox", "-1,-2,-3,1,2,3"};
+                                      "--output-path", output_path.c_str(), "--roi", "-1,-2,-3,1,2,3"};
         if (rotation) {
-            argv.push_back("--cropbox-rotation");
+            argv.push_back("--roi-rotation");
             argv.push_back(rotation);
         }
         return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
@@ -1721,8 +1750,8 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxRotation) {
 
     const auto rotated = parse("-30, 45.5 ,400");
     ASSERT_TRUE(rotated.has_value()) << rotated.error();
-    ASSERT_TRUE((*rotated)->cropbox_rotation.has_value());
-    EXPECT_EQ(*(*rotated)->cropbox_rotation, (std::array<float, 3>{-30.f, 45.5f, 400.f}));
+    ASSERT_TRUE((*rotated)->roi_rotation.has_value());
+    EXPECT_EQ(*(*rotated)->roi_rotation, (std::array<float, 3>{-30.f, 45.5f, 400.f}));
 
     const auto config_path = std::filesystem::path(make_test_path("lfs_arg_parser_cropbox_rotation_config")) /
                              "training_config.json";
@@ -1730,43 +1759,43 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxRotation) {
     ASSERT_TRUE(saved.has_value()) << saved.error();
     std::ifstream config_file(config_path);
     const auto config = nlohmann::json::parse(config_file);
-    EXPECT_EQ(config.at("cropbox"), nlohmann::json::parse("[-1, -2, -3, 1, 2, 3]"));
-    EXPECT_EQ(config.at("cropbox_rotation"), nlohmann::json::parse("[-30, 45.5, 400]"));
+    EXPECT_EQ(config.at("roi"), nlohmann::json::parse("[-1, -2, -3, 1, 2, 3]"));
+    EXPECT_EQ(config.at("roi_rotation"), nlohmann::json::parse("[-30, 45.5, 400]"));
 
     const auto unrotated = parse(nullptr);
     ASSERT_TRUE(unrotated.has_value()) << unrotated.error();
-    EXPECT_FALSE((*unrotated)->cropbox_rotation.has_value());
+    EXPECT_FALSE((*unrotated)->roi_rotation.has_value());
 }
 
-TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutCropBox) {
+TEST(ArgumentParserTest, TrainingRejectsRoiRotationWithoutRoi) {
     const auto data_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_data");
     const auto output_path = make_test_path("lfs_arg_parser_cropbox_rotation_without_box_output");
     const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
-                          "--output-path", output_path.c_str(), "--cropbox-rotation", "0,0,30"};
+                          "--output-path", output_path.c_str(), "--roi-rotation", "0,0,30"};
 
     const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
-    EXPECT_NE(parsed.error().find("--cropbox-rotation"), std::string::npos) << parsed.error();
-    EXPECT_NE(parsed.error().find("needs --cropbox"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("--roi-rotation"), std::string::npos) << parsed.error();
+    EXPECT_NE(parsed.error().find("needs --roi"), std::string::npos) << parsed.error();
 }
 
-TEST(ArgumentParserTest, TrainingRejectsCropBoxRotationWithoutThreeFiniteNumbers) {
+TEST(ArgumentParserTest, TrainingRejectsRoiRotationWithoutThreeFiniteNumbers) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_rotation_output");
 
     for (const char* rotation : {"0,30", "0,0,30,0", "0,,30", "a,0,0", "nan,0,0", "0,inf,0", "0,0,1e40"}) {
         SCOPED_TRACE(rotation);
         const char* argv[] = {"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
-                              "--output-path", output_path.c_str(), "--cropbox", "-1,-1,-1,1,1,1",
-                              "--cropbox-rotation", rotation};
+                              "--output-path", output_path.c_str(), "--roi", "-1,-1,-1,1,1,1",
+                              "--roi-rotation", rotation};
 
         const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
-        EXPECT_NE(parsed.error().find("Invalid --cropbox-rotation"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("Invalid --roi-rotation"), std::string::npos) << parsed.error();
     }
 }
 
-TEST(ArgumentParserTest, TrainingRejectsCropBoxLossWeightOutsideUnitInterval) {
+TEST(ArgumentParserTest, TrainingRejectsRoiLossWeightOutsideUnitInterval) {
     const auto data_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_data");
     const auto output_path = make_test_path("lfs_arg_parser_invalid_cropbox_loss_weight_output");
 
@@ -1779,7 +1808,7 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxLossWeightOutsideUnitInterval) {
             data_path.c_str(),
             "--output-path",
             output_path.c_str(),
-            "--cropbox-loss-weight",
+            "--roi-loss-weight",
             weight};
 
         auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);

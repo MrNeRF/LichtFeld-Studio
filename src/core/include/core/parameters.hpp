@@ -619,6 +619,12 @@ namespace lfs::core {
             bool crop_to_roi = false;
             bool roi_relevant_cameras = false;
             float roi_camera_coverage = 40.0f;
+            bool roi_camera_coverage_set = false;
+
+            [[nodiscard]] constexpr bool has_explicit_roi_controls() const noexcept {
+                return roi_invert || roi_crop_point_cloud || crop_to_roi ||
+                       roi_relevant_cameras || roi_camera_coverage_set;
+            }
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

@@ -1293,7 +1293,7 @@ namespace lfs::vis::gui {
                     : node->region_of_interest->shape == core::RegionOfInterestShape::Polygon
                         ? core::NodeType::CROP_POLYGON
                         : core::NodeType::CROPBOX;
-                roi_snapshot.name = node->name + "_ROI";
+                roi_snapshot.name = scene.getRoiNodeName(node->id);
                 roi_snapshot.label = roi_snapshot.name;
                 roi_snapshot.visible = node->region_of_interest->enabled;
                 roi_snapshot.locked = static_cast<bool>(node->locked);
