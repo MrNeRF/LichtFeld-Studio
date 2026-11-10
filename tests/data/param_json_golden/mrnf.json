@@ -100,6 +100,7 @@
   "popspa_ssim_weight": 0.20000000298023224,
   "popspa_target_count": 256000,
   "popspa_thin_scale_weight": 1.0,
+  "pose_opt": false,
   "ppisp_controller_activation_step": -1,
   "ppisp_controller_lr": 0.0020000000949949026,
   "ppisp_exposure_from_exif": true,

@@ -1102,6 +1102,38 @@ namespace lfs::core {
         }
     }
 
+    void Camera::set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream) {
+        auto R_cpu = R.cpu().contiguous();
+        auto T_cpu = T.cpu().contiguous();
+        if (R_cpu.numel() != 9 || T_cpu.numel() != 3)
+            throw std::invalid_argument("Camera::set_pose expects a 3x3 R and a 3-element T");
+        const auto r = R_cpu.to_vector();
+        const auto t = T_cpu.to_vector();
+        const std::array<float, 16> w2c{r[0], r[1], r[2], t[0], r[3], r[4], r[5], t[1],
+                                        r[6], r[7], r[8], t[2], 0.0f, 0.0f, 0.0f, 1.0f};
+        std::array<float, 3> centre{};
+        for (int j = 0; j < 3; ++j)
+            centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+        LFS_CUDA_TRY(cudaMemcpyAsync(_world_view_transform.ptr<float>(), w2c.data(), sizeof(w2c),
+                                     cudaMemcpyHostToDevice, stream),
+                     stream, "camera pose upload");
+        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), centre.data(), sizeof(centre),
+                                     cudaMemcpyHostToDevice, stream),
+                     stream, "camera position upload");
+        LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, "camera pose upload sync");
+        _R = R_cpu.reshape({3, 3});
+        _T = T_cpu.reshape({3});
+    }
+
+    void Camera::set_device_pose(const float* w2c, const float* cam_position, cudaStream_t stream) {
+        LFS_CUDA_TRY(cudaMemcpyAsync(_world_view_transform.ptr<float>(), w2c, 16 * sizeof(float),
+                                     cudaMemcpyDeviceToDevice, stream),
+                     stream, "camera device pose");
+        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), cam_position, 3 * sizeof(float),
+                                     cudaMemcpyDeviceToDevice, stream),
+                     stream, "camera device position");
+    }
+
     bool Camera::has_distortion() const noexcept {
         // Equirectangular is a complete projection model handled natively by the
         // rasterizer; there is no pinhole image to "undistort" to, so it must not

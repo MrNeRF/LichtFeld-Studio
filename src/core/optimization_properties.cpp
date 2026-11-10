@@ -704,6 +704,12 @@ namespace lfs::core::param {
             .locale("training_params.mip_filter")
             .tooltip("training.tooltip.mip_filter")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::pose_opt,
+                       "pose_opt", "Pose Refinement", d.pose_opt,
+                       "Refine the training camera poses during training; the refined poses replace the cameras' own")
+            .locale("training_params.pose_opt")
+            .tooltip("training.tooltip.pose_opt")
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,
                        "Enable per-camera physically plausible image signal processing")

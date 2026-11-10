@@ -266,6 +266,13 @@ namespace lfs::core {
         // Translate the camera by trans in world space (cam_pos += trans, T updated accordingly)
         void translate(const Tensor& trans);
 
+        // Moves the camera to the world-to-camera pose [R | T] (R 3x3, T 3), finished on `stream` when this returns.
+        // The device transform and position are rewritten in place, so their device pointers stay valid.
+        void set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream);
+        // Moves only the device transform (float [16], row-major) and position (float [3]), ordered on `stream`
+        // without a host sync. R() and T() keep the previous pose until set_pose.
+        void set_device_pose(const float* w2c, const float* cam_position, cudaStream_t stream);
+
         void precompute_undistortion(float blank_pixels = 0.0f);
         enum class UndistortDestination { Calibration,
                                           Explicit };

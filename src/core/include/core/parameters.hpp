@@ -362,6 +362,9 @@ namespace lfs::core {
                 return use_ppisp || use_exposure_correction;
             }
 
+            // Refines every training camera's pose with the model (training/components/camera_pose_refinement.hpp).
+            bool pose_opt = false;
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;
