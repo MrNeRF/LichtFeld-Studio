@@ -59,6 +59,7 @@ SEAMS = {
     "src/visualizer/rendering/vksplat_viewport_renderer.cpp": "Viewport interop connects Vulkan rendering to the CUDA trainer.",
     "src/visualizer/rendering/vksplat_viewport_renderer.hpp": "Viewport interop owns the CUDA trainer handshake handles.",
     "src/visualizer/gui/gpu_memory_query.cpp": "Device telemetry queries native GPU identity and memory.",
+    "src/visualizer/gui/assisted_masking.cpp": "SAM2.1 runs on CUDA streams; builds without CUDA compile assisted_masking_unsupported.cpp.",
     "src/rendering/raster_rendering_engine.cpp": "Raster engine dispatches the native CUDA point-cloud renderer.",
     "src/visualizer/project/project_lifecycle.cpp": "Project loading binds the CUDA trainer thread to its device.",
     "src/visualizer/gui/gui_manager.cpp": "The GUI reports failure of the selected CUDA runtime.",
@@ -70,6 +71,10 @@ SEAMS = {
 }
 # Exact private-interface exceptions pending ownership changes in other lanes.
 PRIVATE_SEAMS = {
+    "src/core/cuda/memory_arena.cu": {
+        ("private-header", "core/tensor/backend/cuda/runtime/memory_pool.hpp"):
+            "The CUDA rasterizer arena trims the live CUDA pool before releasing its cache.",
+    },
     "src/core/memory_pressure.cpp": {
         ("private-header", "core/tensor/backend/cuda/runtime/memory_pool.hpp"):
             "Core-owned CUDA pressure client and allocator use the CUDA pool.",
