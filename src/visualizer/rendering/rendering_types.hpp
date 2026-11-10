@@ -6,8 +6,8 @@
 
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/frame_contract.hpp"
-#include "rendering/render_constants.hpp"
 #include "rendering/rasterizer/vulkan/src/gt_loss_heatmap.h"
+#include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
