@@ -1067,6 +1067,70 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    std::string_view AsyncTaskManager::modelCacheActionName() const {
+        switch (model_cache_action_) {
+        case ModelCacheAction::Download: return "download";
+        case ModelCacheAction::Verify: return "verify";
+        case ModelCacheAction::Remove: return "remove";
+        }
+        return {};
+    }
+
+    std::vector<AsyncTaskManager::ModelCacheEntry> AsyncTaskManager::modelCacheEntries() const {
+        const auto job = modelCacheJob();
+        const bool running = job && job->running();
+        std::vector<ModelCacheEntry> entries;
+        for (const auto& descriptor : preprocessing::model_catalog()) {
+            ModelCacheEntry entry{.descriptor = descriptor};
+            const auto cache = preprocessing::inspect_cached_model(descriptor.id);
+            if (cache) {
+                entry.cache = *cache;
+                entry.status = cache->busy ? "in_use" : cache->present ? "installed"
+                                                                       : "missing";
+            } else {
+                entry.status = "failed";
+                entry.error = cache.error().detail();
+                entry.error_code = lfs::to_string(cache.error().code());
+            }
+            entry.message = entry.status;
+            const bool owns_job = job && model_cache_model_ == descriptor.id;
+            if (owns_job) {
+                entry.running = running;
+                entry.canceling = running && job->cancel_requested;
+                if (running) {
+                    entry.status = "working";
+                    entry.message = entry.canceling ? "canceling" : model_cache_action_ == ModelCacheAction::Verify ? "verifying"
+                                                                : model_cache_action_ == ModelCacheAction::Remove   ? "removing"
+                                                                                                                    : "working";
+                    if (!entry.canceling) {
+                        if (job->stage.starts_with("downloading"))
+                            entry.message = "downloading";
+                        else if (job->stage.starts_with("verifying"))
+                            entry.message = "verifying";
+                        entry.show_progress = job->stage.ends_with("_progress");
+                        entry.progress = job->progress;
+                    }
+                } else if (job->status == JobStatus::Canceled) {
+                    entry.message = "canceled";
+                } else if (cache && !job->error.empty() && (entry.cache.present || model_cache_action_ != ModelCacheAction::Verify)) {
+                    entry.status = entry.message = "failed";
+                    entry.error = job->error;
+                    entry.error_code = job->error_code ? lfs::to_string(*job->error_code) : "";
+                } else if (job->status == JobStatus::Completed && entry.error.empty()) {
+                    if (entry.cache.present && model_cache_action_ != ModelCacheAction::Remove)
+                        entry.message = model_cache_action_ == ModelCacheAction::Verify ? "verified" : "ready";
+                    else if (!entry.cache.present && model_cache_action_ == ModelCacheAction::Remove)
+                        entry.message = "removed";
+                }
+            }
+            const bool available = !running && !entry.cache.busy && cache.has_value();
+            entry.can_download = available;
+            entry.can_verify = entry.can_remove = available && entry.cache.present;
+            entries.push_back(std::move(entry));
+        }
+        return entries;
+    }
+
     bool AsyncTaskManager::startModelCache(const preprocessing::CachedModel model, const ModelCacheAction action) {
         if (!beginJob(model_cache_job_, JobType::ModelCache, "working"))
             return false;
@@ -1089,7 +1153,7 @@ namespace lfs::vis::gui {
                             jobs_.finishWork(job, false, std::string(result.error().detail()), result.error().code(), result.error());
                             return;
                         }
-                        jobs_.finishWork(job, false, {}, {}, {}, *result);
+                        jobs_.finishPublishedWork(job, *result);
                     } else {
                         const auto progress = [this, job](preprocessing::ModelPreparationPhase phase, std::uintmax_t done, std::uintmax_t total) {
                             using Phase = preprocessing::ModelPreparationPhase;
@@ -1100,13 +1164,12 @@ namespace lfs::vis::gui {
                             jobs_.report(job, total ? static_cast<float>(static_cast<double>(done) / static_cast<double>(total)) : 0.0f, std::move(stage));
                         };
                         const auto mode = action == ModelCacheAction::Verify ? preprocessing::ModelPreparationMode::Verify : preprocessing::ModelPreparationMode::Acquire;
-                        const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode);
-                        if (!result) {
+                        if (const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode); !result) {
                             jobs_.finishWork(job, result.error().code() == lfs::ErrorCode::Cancelled,
                                              std::string(result.error().detail()), result.error().code(), result.error());
                             return;
                         }
-                        jobs_.finishWork(job, false, {}, {}, {}, action == ModelCacheAction::Download);
+                        jobs_.finishPublishedWork(job, action == ModelCacheAction::Download);
                     }
                 } catch (const std::exception& error) {
                     // LFS-CENSUS-OK(empty-catch): publish the failure to the existing job lifecycle; never escape a worker thread.

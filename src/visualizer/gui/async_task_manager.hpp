@@ -69,6 +69,16 @@ namespace lfs::vis {
             enum class ModelCacheAction { Download,
                                           Verify,
                                           Remove };
+            struct ModelCacheEntry {
+                preprocessing::ModelDescriptor descriptor;
+                preprocessing::ModelCacheState cache;
+                std::string status, message, error, error_code;
+                bool running = false, canceling = false, show_progress = false;
+                float progress = 0;
+                bool can_download = false, can_verify = false, can_remove = false;
+            };
+            [[nodiscard]] std::vector<ModelCacheEntry> modelCacheEntries() const;
+            [[nodiscard]] std::string_view modelCacheActionName() const;
             bool startModelCache(preprocessing::CachedModel model, ModelCacheAction action);
             void cancelModelCache(uint64_t expected_job = 0);
             [[nodiscard]] std::optional<JobSnapshot> modelCacheJob() const { return jobs_.peek(model_cache_job_); }

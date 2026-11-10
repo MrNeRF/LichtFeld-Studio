@@ -35,6 +35,10 @@ namespace lfs::core::nn::models {
                                        std::optional<DataType> compute = std::nullopt,
                                        InputScaling scaling = InputScaling::Identity,
                                        std::size_t activation_budget_bytes = 1536ULL * 1024ULL * 1024ULL);
+        static lfs::Result<Lpips> load(const WeightFile& file, Device device,
+                                       std::optional<DataType> compute = std::nullopt,
+                                       InputScaling scaling = InputScaling::Identity,
+                                       std::size_t activation_budget_bytes = 1536ULL * 1024ULL * 1024ULL);
 
         // RGB fp32 [0,1] on CUDA, supplied as [3,H,W] or [1,3,H,W].
         lfs::Result<float> forward(const Tensor& pred, const Tensor& target,
@@ -84,7 +88,6 @@ namespace lfs::core::nn::models {
         Tensor normalize_feature(const Tensor& x);
         Tensor ensure_workspace(std::size_t bytes, const Tensor& like);
 
-        std::shared_ptr<const void> weights_source_;
         std::unordered_map<std::string, Tensor> weights_;
         Tensor workspace_;
         Tensor feature_x_hold_;

@@ -44,20 +44,14 @@ namespace lfs::core::nn {
 
         WeightFile() = default;
         WeightFile(WeightFile&&) noexcept = default;
-        WeightFile& operator=(WeightFile&&) noexcept;
+        WeightFile& operator=(WeightFile&&) noexcept = default;
         WeightFile(const WeightFile&) = delete;
         WeightFile& operator=(const WeightFile&) = delete;
 
         [[nodiscard]] static lfs::Result<WeightFile> open(const std::filesystem::path& path);
 
-        // Models retain this lightweight token after releasing the file mapping.
-        // Cache removal is serialized with open and refused while any token lives.
-        [[nodiscard]] std::shared_ptr<const void> retain_source() const { return source_; }
-        [[nodiscard]] static std::shared_ptr<const void> retain_source(const std::filesystem::path& path);
-        // Process-wide across app/extension DLLs, including statically linked callers.
+        // Shared across DLLs: serialize managed-cache acquisition and removal.
         [[nodiscard]] static std::shared_ptr<std::timed_mutex> source_operation(const std::filesystem::path& path);
-        [[nodiscard]] static bool source_in_use(const std::filesystem::path& path);
-        [[nodiscard]] static lfs::Result<bool> remove_unused_source(const std::filesystem::path& path);
 
         [[nodiscard]] bool contains(std::string_view name) const;
         [[nodiscard]] std::vector<std::string> names() const;
@@ -75,8 +69,6 @@ namespace lfs::core::nn {
         load_all(Device device, std::optional<DataType> cast = std::nullopt) const;
 
     private:
-        // Declared before mapped_ so the mapping closes before the token expires.
-        std::shared_ptr<const void> source_;
         MappedFile mapped_;
         nlohmann::json header_;
         nlohmann::json meta_;

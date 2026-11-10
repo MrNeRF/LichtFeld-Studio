@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/error.hpp"
-#include "core/nn/weight_source.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 
 #include <cstdint>
@@ -36,7 +36,6 @@ namespace lfs::preprocessing {
         std::filesystem::path path;
         std::uintmax_t bytes = 0;
         bool present = false;
-        bool in_use = false;
         bool busy = false;
     };
 
@@ -51,14 +50,14 @@ namespace lfs::preprocessing {
     // Verification reads only the managed archive; acquisition may migrate it.
     enum class ModelPreparationMode { Acquire,
                                       Verify };
-    [[nodiscard]] lfs::Result<core::nn::WeightSource> prepare_cached_model(
+    [[nodiscard]] lfs::Result<core::nn::WeightFile> prepare_cached_model(
         CachedModel model, bool allow_download, const std::function<bool()>& cancel_requested = {},
         const ModelPreparationCallback& progress = {}, ModelPreparationMode mode = ModelPreparationMode::Acquire);
     [[nodiscard]] lfs::Result<bool> remove_cached_model(CachedModel model);
 
-    [[nodiscard]] lfs::Result<core::nn::WeightSource> ensure_lpips_weights(bool allow_download);
+    [[nodiscard]] lfs::Result<core::nn::WeightFile> ensure_lpips_weights(bool allow_download);
 
-    [[nodiscard]] lfs::Result<core::nn::WeightSource> ensure_sam2_weights(
+    [[nodiscard]] lfs::Result<core::nn::WeightFile> ensure_sam2_weights(
         bool allow_download, const std::function<bool()>& cancel_requested = {});
 
     using PreprocessProgressCallback = std::function<void(

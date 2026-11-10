@@ -1946,75 +1946,41 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
 
 
 
-def test_model_preferences_removal_respects_native_ownership(preferences_panel_module, monkeypatch):
+def test_model_preferences_preserves_metadata_and_renders_native_state(preferences_panel_module, monkeypatch):
     module, _state = preferences_panel_module
     section = module.ModelPreferencesSection()
     records = {}
-    section.handle = SimpleNamespace(
-        update_record_list=lambda key, rows: records.update({key: rows}), dirty=lambda key: None,
-    )
-    snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
-                            "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
-                            "in_use": True, "busy": False, "error": ""}], "job": {}}
+    section.handle = SimpleNamespace(update_record_list=lambda key, rows: records.update({key: rows}), dirty=lambda key: None)
+    native = {"id": 0, "name": "SAM 2.1", "category_key": "masking", "path": "/cache/sam.lfw",
+              "bytes": 4096, "present": True, "busy": False, "status": "installed", "message": "verified",
+              "can_download": True, "can_verify": True, "can_remove": True}
+    snapshot = {"models": [native], "job": {"model": 0, "action": "verify"}}
     monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
     section.sync(force=True)
-    row = records["managed_models"][0]
-    assert not row["can_remove"]
-    assert not row["can_download"]
-    assert row["can_verify"]
-    snapshot["models"][0]["in_use"] = False
-    section.sync(force=True)
-    assert records["managed_models"][0]["can_remove"]
-    snapshot["models"][0].update(busy=True, present=False, bytes=0)
-    section.sync(force=True)
-    assert records["managed_models"][0]["path"] == "/cache/sam.lfw"
-    assert records["managed_models"][0]["size"]
-    assert not records["managed_models"][0]["can_verify"]
-    snapshot["models"][0].update(busy=False, present=True, bytes=4096)
-    snapshot["job"] = {"id": 42, "running": True}
-    section.sync(force=True)
-    assert not records["managed_models"][0]["can_remove"]
-    assert not records["managed_models"][0]["can_verify"]
-    snapshot["job"] = {}
-    snapshot["models"][0].update(present=False, path="/cache/sam.lfw")
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
+    native.update(busy=True, present=False, bytes=0, status="in_use", message="in_use",
+                  can_download=False, can_verify=False, can_remove=False)
     section.sync(force=True)
     row = records["managed_models"][0]
-    assert row["path"] == ""
-    assert row["can_download"]
-    assert not row["can_verify"]
-    assert not row["can_remove"]
-    assert not row["can_open"]
-    assert not row["available"]
+    assert row["path"] == "/cache/sam.lfw" and row["size"]
     starts = []
     monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
     section._action(None, None, ["0", "verify"])
     section._action(None, None, ["0", "remove"])
-    assert starts == []
-    snapshot["models"][0]["busy"] = True
+    assert not starts
+    native.update(busy=False, status="missing", message="missing", can_download=True)
     section.sync(force=True)
-    assert records["managed_models"][0]["working"]
-    assert not records["managed_models"][0]["can_download"]
-    snapshot["models"][0]["busy"] = False
-    snapshot["job"] = {"model": 0, "action": 1, "completed": True}
-    section.sync(force=True)
-    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.missing")
-    snapshot["models"][0]["present"] = True
-    section.sync(force=True)
-    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
-    assert records["managed_models"][0]["available"]
-    snapshot["job"] = {"id": 43, "model": 0, "action": 1, "error": "bad checksum"}
+    row = records["managed_models"][0]
+    assert not row["path"] and not row["can_open"] and not row["available"]
+    native.update(status="failed", message="failed", error="bad checksum")
     section.sync(force=True)
     assert records["managed_models"][0]["failed"]
-    snapshot["models"][0]["present"] = False
-    section.sync(force=True)
-    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.missing")
-    assert not records["managed_models"][0]["failed"]
-    snapshot["job"] = {"id": 44, "model": 0, "action": 0, "running": True,
-                       "stage": "downloading_progress", "progress": 0.42}
+    assert records["managed_models"][0]["detail"] == "bad checksum"
+    native.update(status="working", message="downloading", error="", running=True, show_progress=True, progress=.42)
     monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{stage} {percent}%" if key == "gallery.status.progress" else key)
     section.sync(force=True)
     assert records["managed_models"][0]["status"] == "preferences.models.downloading 42%"
-    snapshot["job"].update(stage="verifying_progress", progress=0.8)
+    native.update(message="verifying", progress=.8)
     section.sync(force=True)
     assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
 
@@ -2075,7 +2041,8 @@ def test_model_preferences_unchanged_poll_preserves_rows_and_focus(preferences_p
     )
     snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
                             "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
-                            "in_use": False, "busy": False, "error": ""}], "job": {}}
+                            "status": "installed", "message": "installed", "can_download": True,
+                            "can_verify": True, "can_remove": True, "busy": False, "error": ""}], "job": {}}
     monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
     section.sync(force=True)
     changes = list(dirty)

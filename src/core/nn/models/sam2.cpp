@@ -152,19 +152,24 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2> Sam2::load(const std::filesystem::path& weights, Device device,
                                  std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
-            return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a CUDA device");
-        }
         auto file = WeightFile::open(weights);
         if (!file) {
             return std::move(file.error());
+        }
+        return load(*file, device, compute);
+    }
+
+    lfs::Result<Sam2> Sam2::load(const WeightFile& file, Device device,
+                                 std::optional<DataType> compute) {
+        if (device != Device::CUDA) {
+            return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a CUDA device");
         }
         DataType dtype = DataType::Float32;
         if (compute) {
             dtype = *compute;
         } else {
-            for (const auto& name : file->names()) {
-                const auto* info = file->info(name);
+            for (const auto& name : file.names()) {
+                const auto* info = file.info(name);
                 if (info && info->dtype == DataType::Float16) {
                     dtype = DataType::Float16;
                     break;
@@ -175,7 +180,7 @@ namespace lfs::core::nn::models {
             return sam_error(lfs::ErrorCode::InvalidArgument,
                              "SAM2 compute dtype must be float16 or float32");
         }
-        auto loaded = file->load_all(device, dtype);
+        auto loaded = file.load_all(device, dtype);
         if (!loaded) {
             return std::move(loaded.error());
         }
@@ -183,7 +188,6 @@ namespace lfs::core::nn::models {
         model.device_ = device;
         model.compute_ = dtype;
         model.encoder_compute_ = dtype;
-        model.weights_source_ = file->retain_source();
         model.weights_ = std::move(*loaded);
         configure_nn_mempool();
         const std::array<const char*, 8> required = {

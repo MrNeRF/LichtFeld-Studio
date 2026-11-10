@@ -2814,27 +2814,33 @@ namespace lfs::python {
             require_ui_texture_creation_thread();
             nb::dict result;
             nb::list models;
-            for (const auto& descriptor : preprocessing::model_catalog()) {
-                nb::dict row;
-                row["id"] = static_cast<int>(descriptor.id);
-                row["name"] = std::string(descriptor.name);
-                row["category_key"] = std::string(descriptor.category_key);
-                row["source"] = std::string(descriptor.url);
-                row["sha256"] = std::string(descriptor.sha256);
-                const auto state = preprocessing::inspect_cached_model(descriptor.id);
-                if (state) {
-                    row["path"] = core::path_to_utf8(state->path);
-                    row["bytes"] = state->bytes;
-                    row["present"] = state->present;
-                    row["in_use"] = state->in_use;
-                    row["busy"] = state->busy;
-                    row["error"] = "";
-                } else {
-                    row["error"] = std::string(state.error().detail());
-                    row["error_code"] = lfs::to_string(state.error().code());
+            auto* gui = get_gui_manager();
+            if (gui)
+                for (const auto& entry : gui->asyncTasks().modelCacheEntries()) {
+                    const auto& descriptor = entry.descriptor;
+                    nb::dict row;
+                    row["id"] = static_cast<int>(descriptor.id);
+                    row["name"] = std::string(descriptor.name);
+                    row["category_key"] = std::string(descriptor.category_key);
+                    row["source"] = std::string(descriptor.url);
+                    row["sha256"] = std::string(descriptor.sha256);
+                    row["path"] = core::path_to_utf8(entry.cache.path);
+                    row["bytes"] = entry.cache.bytes;
+                    row["present"] = entry.cache.present;
+                    row["busy"] = entry.cache.busy;
+                    row["status"] = entry.status;
+                    row["message"] = entry.message;
+                    row["error"] = entry.error;
+                    row["error_code"] = entry.error_code;
+                    row["running"] = entry.running;
+                    row["canceling"] = entry.canceling;
+                    row["show_progress"] = entry.show_progress;
+                    row["progress"] = entry.progress;
+                    row["can_download"] = entry.can_download;
+                    row["can_verify"] = entry.can_verify;
+                    row["can_remove"] = entry.can_remove;
+                    models.append(row);
                 }
-                models.append(row);
-            }
             result["models"] = models;
             nb::dict job;
             if (auto* gui = get_gui_manager()) {
@@ -2842,7 +2848,7 @@ namespace lfs::python {
                 if (const auto state = tasks.modelCacheJob()) {
                     job["id"] = state->handle.id;
                     job["model"] = static_cast<int>(tasks.modelCacheModel());
-                    job["action"] = static_cast<int>(tasks.modelCacheAction());
+                    job["action"] = std::string(tasks.modelCacheActionName());
                     job["stage"] = state->stage;
                     job["progress"] = state->progress;
                     job["running"] = state->running();

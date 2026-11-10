@@ -50,74 +50,36 @@ class ModelPreferencesSection:
             return
         self.job = dict(snapshot.get("job", {}))
         self.rows = list(snapshot.get("models", []))
-        running = bool(self.job.get("running"))
         tr = lf.ui.tr
-        self.error = str(self.job.get("error", "")) if not running and not self.job.get("canceled") else ""
-        if self.error and self.job.get("error_code") == "FailedPrecondition":
-            self.error = tr("preferences.models.locked")
-        elif self.error and self.job.get("error_code") == "Unsupported":
-            self.error = tr("preferences.models.not_file")
-        if running:
-            stage = str(self.job.get("stage", ""))
-            key = "preferences.models.canceling" if self.job.get("cancel_requested") else {
-                1: "preferences.models.verifying", 2: "preferences.models.removing",
-            }.get(self.job.get("action"), "preferences.models.working")
-            if not self.job.get("cancel_requested"):
-                if stage.startswith("downloading"):
-                    key = "preferences.models.downloading"
-                elif stage.startswith("verifying"):
-                    key = "preferences.models.verifying"
-            self.message = tr(key)
-            if stage.endswith("_progress") and not self.job.get("cancel_requested"):
-                percent = round(max(0.0, min(1.0, float(self.job.get("progress", 0)))) * 100)
-                self.message = tr("gallery.status.progress").format(stage=self.message, percent=percent)
-        elif self.error:
-            self.message = tr("preferences.models.failed")
-            if self.job.get("error_code") in ("FailedPrecondition", "Unsupported"):
-                self.message += " " + self.error
-        elif self.job.get("canceled"):
-            self.message = tr("preferences.models.canceled")
-        elif self.job.get("completed"):
-            key = {0: "preferences.models.ready", 1: "preferences.models.verified", 2: "preferences.models.removed"}.get(self.job.get("action"), "preferences.models.ready")
-            self.message = tr(key)
-        else:
-            self.message = ""
         records = []
+        self.error = self.message = ""
         for row in self.rows:
-            present = bool(row.get("present"))
-            busy = bool(row.get("busy"))
+            present, busy = bool(row.get("present")), bool(row.get("busy"))
             previous = next((record for record in self._records or () if record["id"] == str(row["id"])), {})
-            # Busy snapshots intentionally omit file metadata. Preserve only the
-            # last rendered path/size so an operation does not collapse its card.
+            # Cache inspection avoids waiting on a running operation. Keep only
+            # its last rendered metadata until the native snapshot supplies it.
             if busy:
                 present = bool(previous.get("has_path"))
-            in_use = bool(row.get("in_use"))
-            status = "in_use" if in_use else "working" if busy else "installed" if present else "missing"
-            row_error = str(row.get("error", ""))
-            if row_error and row.get("error_code") == "Unsupported":
-                row_error = tr("preferences.models.not_file")
-            owns_job = row["id"] == self.job.get("model")
-            relevant = owns_job and (running or bool(self.error) and (present or self.job.get("action") != 1) or bool(self.job.get("canceled")) or
-                                    (bool(self.job.get("completed")) and
-                                     (present if self.job.get("action") in (0, 1) else not present)))
+            detail = self._error_text(row.get("error", ""), row.get("error_code", ""))
+            message = tr("preferences.models." + row["message"])
+            if row.get("show_progress"):
+                percent = round(max(0.0, min(1.0, float(row["progress"]))) * 100)
+                message = tr("gallery.status.progress").format(stage=message, percent=percent)
+            if row["id"] == self.job.get("model"):
+                self.error, self.message = detail, message
             records.append({
-                "id": str(row["id"]), "name": row["name"],
-                "category": tr(row["category_key"]),
-                "status": self.message if relevant else tr("preferences.models.failed" if row_error else "preferences.models." + status),
-                "detail": self.error if relevant else row_error,
-                "failed": bool(self.error) if relevant else bool(row_error),
-                "running": owns_job and running,
-                "canceling": owns_job and bool(self.job.get("cancel_requested")),
+                "id": str(row["id"]), "name": row["name"], "category": tr(row["category_key"]),
+                "status": message, "detail": detail, "failed": row["status"] == "failed",
+                "running": bool(row.get("running")), "canceling": bool(row.get("canceling")),
                 "size": previous.get("size", "") if busy else format_size(row.get("bytes", 0)) if present else "",
-                "path": str(row.get("path", "")) if present else "",
-                "has_path": present,
-                "available": present and not busy and not row_error and not (owns_job and bool(self.error)),
-                "working": busy,
-                "can_download": not running and not busy and not in_use and not row_error,
-                "can_verify": present and not running and not busy and not row_error,
-                "can_remove": present and not running and not busy and not in_use and not row_error,
-                "can_open": present,
+                "path": str(row.get("path", "")) if present else "", "has_path": present,
+                "available": row["status"] == "installed", "working": busy or bool(row.get("running")),
+                "can_download": bool(row["can_download"]), "can_verify": bool(row["can_verify"]),
+                "can_remove": bool(row["can_remove"]), "can_open": present,
             })
+        if not any(row["id"] == self.job.get("model") for row in self.rows):
+            self.error = self._error_text(self.job.get("error", ""), self.job.get("error_code", ""))
+            self.message = tr("preferences.models.failed") if self.error else ""
         if records != self._records:
             self.handle.update_record_list("managed_models", records)
             self.handle.dirty("managed_models")
@@ -126,6 +88,11 @@ class ModelPreferencesSection:
         if name and self.message:
             self.message = tr("preferences.models.operation").format(name=name, message=self.message)
         self._publish()
+
+    @staticmethod
+    def _error_text(error, code):
+        key = {"FailedPrecondition": "preferences.models.locked", "Unsupported": "preferences.models.not_file"}.get(code)
+        return lf.ui.tr(key) if error and key else str(error)
 
     def _publish(self):
         if self.handle is not None:

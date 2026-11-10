@@ -211,7 +211,7 @@ UI refreshes.
 
 The on-demand download remains available from each feature. Preferences uses the
 same acquisition, hashing and atomic publication code. Concurrent acquisitions
-of the same archive serialize through the process-wide weight-source owner in
+of the same archive serialize through the shared cache-operation lock in
 `lfs_core`, including callers linked into different Windows DLLs. Cancel applies
 to the Preferences operation; other callers retain their own cancellation and
 can continue acquiring the model. Closing Preferences leaves its operation
@@ -221,9 +221,11 @@ show a percentage for the current phase when its byte total is known; waiting or
 unknown-size transfers do not show an estimated percentage.
 
 Remove requires confirmation and affects only the selected managed cache file.
-It is refused during preparation or while a consumer holds its weights, including
-the handoff to a loader and deferred LPIPS evaluation. Models retain a small use
-token after releasing their file mapping. Removing cached weights does not edit
+It is refused during preparation. Acquisition opens the verified archive before
+releasing its cache lock, so removal cannot invalidate the handoff to a loader.
+Loaded models own their tensors and no longer reserve the cached file. LPIPS
+acquires its archive at the first evaluation rather than retaining a path from
+training startup. Removing cached weights does not edit
 projects, masks or arbitrary custom weight files; the next on-demand request can
 download the model again. Reset settings does not remove model files.
 

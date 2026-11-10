@@ -3,7 +3,6 @@
 
 #include "core/native_fs.hpp"
 #include "core/nn/weight_file.hpp"
-#include "core/nn/weight_source.hpp"
 #include "core/path_utils.hpp"
 #include "licht_test_support.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -59,24 +58,19 @@ namespace {
         EXPECT_EQ(progress.back().first, state->bytes);
         EXPECT_EQ(progress.back().second, state->bytes);
         EXPECT_EQ(fs::file_size(path), state->bytes);
-        EXPECT_FALSE(lfs::core::nn::WeightFile::source_in_use(path));
     }
 
-    TEST_F(ModelCacheTest, PreparedConsumerPreventsRemovalUntilReleased) {
-        {
-            const lfs::core::nn::WeightSource consumer{path};
-            const auto state = inspect_cached_model(CachedModel::Sam2);
-            ASSERT_TRUE(state);
-            EXPECT_TRUE(state->in_use);
-            const auto removed = remove_cached_model(CachedModel::Sam2);
-            ASSERT_FALSE(removed);
-            EXPECT_EQ(removed.error().code(), lfs::ErrorCode::FailedPrecondition);
-            EXPECT_TRUE(fs::exists(path));
-        }
+    TEST_F(ModelCacheTest, RemovalOnlyDeletesTheManagedArchive) {
+        const auto neighbor = path.parent_path() / "custom.lfw";
+        std::ofstream output;
+        ASSERT_TRUE(lfs::core::open_file_for_write(neighbor, std::ios::binary, output));
+        output << "custom weights";
+        output.close();
         const auto removed = remove_cached_model(CachedModel::Sam2);
         ASSERT_TRUE(removed);
         EXPECT_TRUE(*removed);
         EXPECT_FALSE(fs::exists(path));
+        EXPECT_TRUE(fs::exists(neighbor));
     }
 
     TEST_F(ModelCacheTest, VerificationDoesNotReadOrMigrateALegacyCache) {
@@ -129,6 +123,9 @@ namespace {
         const auto prepared = prepare_cached_model(CachedModel::Sam2, false);
         ASSERT_FALSE(prepared);
         EXPECT_EQ(prepared.error().code(), lfs::ErrorCode::Unsupported);
+        const auto removed = remove_cached_model(CachedModel::Sam2);
+        ASSERT_FALSE(removed);
+        EXPECT_EQ(removed.error().code(), lfs::ErrorCode::Unsupported);
         EXPECT_TRUE(fs::is_directory(path));
     }
 

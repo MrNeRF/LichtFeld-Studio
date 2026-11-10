@@ -44,6 +44,8 @@ namespace lfs::core::nn::models {
     public:
         static lfs::Result<Sam2> load(const std::filesystem::path& weights, Device device,
                                       std::optional<DataType> compute = std::nullopt);
+        static lfs::Result<Sam2> load(const WeightFile& file, Device device,
+                                      std::optional<DataType> compute = std::nullopt);
 
         // NCHW RGB in [0, 1], any H/W. Resizes to 1024x1024 internally (squash, like the
         // official predictor), normalizes, runs the image encoder, caches embeddings.
@@ -122,7 +124,6 @@ namespace lfs::core::nn::models {
         Tensor raw_image_embed_;
         Tensor video_image_position_;
         Tensor video_memory_position_;
-        std::shared_ptr<const void> weights_source_;
         std::unordered_map<std::string, Tensor> weights_;
         std::unordered_map<std::string, Tensor> encoder_weights_; // image_encoder.* in encoder_compute_, when it differs
         bool encoding_ = false;

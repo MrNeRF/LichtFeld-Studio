@@ -556,9 +556,7 @@ namespace {
                     if (!allow_download)
                         throw;
                     std::cerr << e.what() << "\n";
-                    const auto removed = lfs::core::nn::WeightFile::remove_unused_source(path);
-                    if (!removed)
-                        throw lfs::Exception(removed.error());
+                    fs::remove(path);
                     std::cerr << "Removed untrusted cached " << label << "; re-downloading "
                               << path_to_string(path) << "\n";
                 }
@@ -614,7 +612,7 @@ namespace {
         return std::move(*ensured);
     }
 
-    lfs::core::nn::WeightSource ensure_default_model(const bool no_download) {
+    lfs::core::nn::WeightFile ensure_default_model(const bool no_download) {
         auto result = lfs::preprocessing::prepare_cached_model(CachedModel::Moge2, !no_download);
         if (!result)
             throw lfs::Exception(result.error());
@@ -814,8 +812,9 @@ namespace {
 
     class NativeMogeSession {
     public:
-        explicit NativeMogeSession(const fs::path& lfw_path) {
-            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
+        explicit NativeMogeSession(const fs::path& lfw_path, const lfs::core::nn::WeightFile* prepared) {
+            auto loaded = prepared ? lfs::core::nn::models::Moge2::load(*prepared, lfs::core::Device::CUDA)
+                                   : lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
             if (!loaded)
                 throw std::runtime_error("Failed to load native MoGe-2 weights from " +
                                          path_to_string(lfw_path) + ": " +
@@ -1250,7 +1249,8 @@ namespace {
     void process_dataset(const lfs::core::param::PreprocessParameters& params,
                          const fs::path& model_path,
                          const PreprocessPlan& plan,
-                         const lfs::preprocessing::PreprocessProgressCallback& progress) {
+                         const lfs::preprocessing::PreprocessProgressCallback& progress,
+                         std::optional<lfs::core::nn::WeightFile> prepared) {
         if (!progress)
             print_plan_summary(params, plan, &model_path);
 
@@ -1260,8 +1260,10 @@ namespace {
         }
 
         const fs::path lfw_path = lfw_path_for_onnx(model_path);
-        ensure_native_weights(lfw_path, model_path);
-        NativeMogeSession native_session(lfw_path);
+        if (!prepared)
+            ensure_native_weights(lfw_path, model_path);
+        NativeMogeSession native_session(lfw_path, prepared ? &*prepared : nullptr);
+        prepared.reset();
         if (!progress)
             std::cout << "Weights: " << path_to_string(lfw_path) << "\n";
 
@@ -1396,8 +1398,10 @@ namespace {
         try {
             if (params.download_only) {
                 fs::path model_path = params.model_path;
-                if (model_path.empty())
-                    model_path = ensure_default_model(params.no_download).path;
+                if (model_path.empty()) {
+                    (void)ensure_default_model(params.no_download);
+                    model_path = cached_model_path(model_descriptor(CachedModel::Moge2).filename);
+                }
                 if (!progress)
                     std::cout << "Cached model: " << path_to_string(model_path) << "\n";
                 return result;
@@ -1416,17 +1420,17 @@ namespace {
                 return result;
             }
 
-            std::optional<lfs::core::nn::WeightSource> prepared_weights;
+            std::optional<lfs::core::nn::WeightFile> prepared_weights;
             fs::path model_path = params.model_path;
             if (model_path.empty()) {
                 prepared_weights = ensure_default_model(params.no_download);
-                model_path = prepared_weights->path;
+                model_path = cached_model_path(model_descriptor(CachedModel::Moge2).filename);
             }
 
-            if (!fs::is_regular_file(model_path))
+            if (!prepared_weights && !fs::is_regular_file(model_path))
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
 
-            process_dataset(params, model_path, plan, progress);
+            process_dataset(params, model_path, plan, progress, std::move(prepared_weights));
             result.processed = plan.jobs.size();
             precompute_depth_anchors(params);
             return result;
@@ -1456,7 +1460,6 @@ namespace lfs::preprocessing {
             state.present = cached_weight_file_present(state.path);
             if (state.present) {
                 state.bytes = fs::file_size(state.path);
-                state.in_use = core::nn::WeightFile::source_in_use(state.path);
             }
             return state;
         } catch (const lfs::Exception& error) {
@@ -1470,7 +1473,7 @@ namespace lfs::preprocessing {
         }
     }
 
-    lfs::Result<core::nn::WeightSource> prepare_cached_model(
+    lfs::Result<core::nn::WeightFile> prepare_cached_model(
         const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested,
         const ModelPreparationCallback& progress, const ModelPreparationMode mode) {
         try {
@@ -1489,8 +1492,7 @@ namespace lfs::preprocessing {
                                                     mode == ModelPreparationMode::Acquire && allow_download, descriptor.name, cancel_requested, progress);
             if (!result)
                 return result.error();
-            auto source = core::nn::WeightFile::retain_source(*result);
-            return core::nn::WeightSource{std::move(*result), std::move(source)};
+            return core::nn::WeightFile::open(*result);
         } catch (const lfs::Exception& error) {
             return error.error();
         } catch (const std::exception& error) {
@@ -1514,7 +1516,12 @@ namespace lfs::preprocessing {
                                         .detail = std::string(descriptor.name),
                                         .detection = LFS_SOURCE_SITE_CURRENT()});
             }
-            return core::nn::WeightFile::remove_unused_source(cached_model_path(descriptor.filename));
+            const auto path = cached_model_path(descriptor.filename);
+            if (!cached_weight_file_present(path))
+                return false;
+            return fs::remove(path);
+        } catch (const lfs::Exception& error) {
+            return error.error();
         } catch (const std::exception& error) {
             return lfs::make_error({.code = lfs::ErrorCode::Unavailable,
                                     .domain = lfs::ErrorDomain::Preprocess,
@@ -1524,11 +1531,11 @@ namespace lfs::preprocessing {
         }
     }
 
-    lfs::Result<core::nn::WeightSource> ensure_lpips_weights(const bool allow_download) {
+    lfs::Result<core::nn::WeightFile> ensure_lpips_weights(const bool allow_download) {
         return prepare_cached_model(CachedModel::Lpips, allow_download);
     }
 
-    lfs::Result<core::nn::WeightSource> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
+    lfs::Result<core::nn::WeightFile> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
         return prepare_cached_model(CachedModel::Sam2, allow_download, cancel_requested);
     }
 

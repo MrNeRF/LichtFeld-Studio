@@ -11,7 +11,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "core/camera.hpp"
 #include "core/error.hpp"
-#include "core/nn/weight_source.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "dataset.hpp"
@@ -339,7 +339,7 @@ namespace lfs::training {
         void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
         // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
         [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
-        void set_lpips_weights_path(std::optional<core::nn::WeightSource> path);
+        void set_lpips_weights_preparer(std::function<std::optional<core::nn::WeightFile>()> preparer);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
@@ -1079,7 +1079,7 @@ namespace lfs::training {
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
-        std::optional<core::nn::WeightSource> lpips_weights_path_;
+        std::function<std::optional<core::nn::WeightFile>()> lpips_weights_preparer_;
         std::optional<lfs::Error> deferred_evaluation_error_;
         // Failed standalone --save-project-at-iter saves; they fail the run at
         // its end. Guarded by project_snapshot_mutex_: writers record their own.
