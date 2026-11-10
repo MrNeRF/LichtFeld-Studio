@@ -1,5 +1,10 @@
 /* Theme-dependent styles for the Preferences panel. */
 
+.preferences-model-card { border-color: @{border}; }
+.preferences-model-dot { background-color: @{error}; }
+.preferences-model-dot.is-available { background-color: @{success}; }
+.preferences-model-dot.is-working { background-color: @{warning}; }
+
 .preferences-nav {
     background-color: @{surface};
     border-right-color: @{border};

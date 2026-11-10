@@ -1710,22 +1710,21 @@ namespace lfs::training {
         std::array<MaskSetScores, lfs::core::param::kEvalPixelSets.size()> set_scores;
         bool mask_sets_scored = false;
 
-        if (!_lpips_load_attempted && _lpips_weights_path) {
+        if (!_lpips_load_attempted && _lpips_weights_preparer) {
             _lpips_load_attempted = true;
-            const auto& weights_path = *_lpips_weights_path;
             try {
-                auto loaded = lfs::core::nn::models::Lpips::load(
-                    weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
-                if (loaded) {
-                    _lpips_metric.emplace(std::move(*loaded));
-                } else {
-                    LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
-                             lfs::core::path_to_utf8(weights_path), loaded.error().detail());
+                if (auto weights = _lpips_weights_preparer()) {
+                    auto loaded = lfs::core::nn::models::Lpips::load(
+                        *weights, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
+                        lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
+                    if (loaded) {
+                        _lpips_metric.emplace(std::move(*loaded));
+                    } else {
+                        LOG_WARN("Eval: LPIPS unavailable ({})", loaded.error().detail());
+                    }
                 }
             } catch (const std::exception& e) {
-                LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
-                         lfs::core::path_to_utf8(weights_path), e.what());
+                LOG_WARN("Eval: LPIPS unavailable ({})", e.what());
             }
         }
         if (_lpips_metric) {

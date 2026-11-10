@@ -355,17 +355,19 @@ namespace lfs::vis::gui {
                             if (!plan)
                                 throw std::runtime_error(std::string(plan.error().user_message()));
                             if (!model) {
+                                std::optional<core::nn::WeightFile> prepared_weights;
                                 auto weights = w.input.weights;
                                 if (weights.empty()) {
-                                    const auto cached = preprocessing::ensure_sam2_weights(true, obsolete);
+                                    auto cached = preprocessing::ensure_sam2_weights(true, obsolete);
                                     if (!cached)
                                         throw std::runtime_error(std::string(cached.error().user_message()));
-                                    weights = *cached;
+                                    prepared_weights = std::move(*cached);
                                 }
                                 if (obsolete())
                                     continue;
                                 model_failure = true;
-                                auto loaded = Sam2::load(weights, Device::CUDA, DataType::Float32);
+                                auto loaded = prepared_weights ? Sam2::load(*prepared_weights, Device::CUDA, DataType::Float32)
+                                                               : Sam2::load(weights, Device::CUDA, DataType::Float32);
                                 if (!loaded)
                                     throw std::runtime_error(std::string(loaded.error().user_message()));
                                 model.emplace(std::move(*loaded));
