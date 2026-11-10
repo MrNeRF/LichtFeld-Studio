@@ -12,7 +12,7 @@ namespace lfs::app {
 
     int run_compare(const lfs::core::param::CompareParameters& params) {
         install_image_loader(false);
-        const auto result = lfs::training::compare_image_sets(params, prepare_lpips_weights(!params.no_download));
+        const auto result = lfs::training::compare_image_sets(params, [allow_download = !params.no_download] { return prepare_lpips_weights(allow_download); });
         if (!result) {
             std::println(stderr, "Error: {}", result.error().user_message());
             return 1;

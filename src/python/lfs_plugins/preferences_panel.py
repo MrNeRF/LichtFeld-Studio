@@ -10,6 +10,7 @@ from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
 
 from .keymap_bindings import KeymapBindingsSection
+from .model_preferences import ModelPreferencesSection
 from .gamepad_preferences import GamepadTestSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
@@ -120,6 +121,7 @@ class PreferencesPanel(Panel):
 
     def __init__(self):
         self._rendering_defaults = RenderingDefaultsSection()
+        self._models = ModelPreferencesSection()
         self._handle = None
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
@@ -176,6 +178,9 @@ class PreferencesPanel(Panel):
                        lambda value, k=key: self._set_gallery_preference(k, value))
         model.bind_func("gallery_preferences_error", lambda: getattr(self, "_gallery_preferences_error", ""))
         self._rendering_defaults.bind(model)
+        self._models.bind(model)
+        model.bind_func("show_models", lambda: self._section == "models")
+        model.bind_event("show_models", lambda *_: self._set_section("models"))
         model.bind_func("show_viewport", lambda: self._section == "viewport")
         model.bind_event("show_viewport", lambda *_: self._set_section("viewport"))
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
@@ -375,6 +380,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("navigation_modes")
         model.bind_record_list("file_associations")
         self._handle = model.get_handle()
+        self._models.handle = self._handle
         self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
         self._gamepad_test.bind(model)
@@ -425,6 +431,8 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._models.handle = None
+        self._models.cancel_pending_confirmation()
         self._gamepad_test.close()
         self._rendering_defaults.unmount()
         self._portal_state_binding.close()
@@ -436,9 +444,12 @@ class PreferencesPanel(Panel):
 
     def on_visibility_changed(self, visible):
         if not visible:
+            self._models.cancel_pending_confirmation()
             self._gamepad_test.deactivate()
 
     def on_update(self, doc):
+        if self._section == "models":
+            self._models.sync()
         if self._section == "input" and self._input_page == "gamepad":
             self._gamepad_test.activate()
             self._gamepad_test.sync()
@@ -1517,7 +1528,7 @@ class PreferencesPanel(Panel):
 
     def _consume_section_request(self):
         section = lf.ui.take_preferences_section_request()
-        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace"):
+        if section in ("general", "appearance", "viewport", "input", "interface", "file_associations", "mcp", "marketplace", "models"):
             if section == "file_associations" and not self._has_file_associations():
                 return
             self._set_section(section)
@@ -1593,11 +1604,14 @@ class PreferencesPanel(Panel):
             lf.keymap.cancel_capture()
             self._gamepad_test.deactivate()
         self._section = section
+        if section == "models":
+            self._models.sync(force=True)
         self._dirty_input_pages()
         self._reset_content_scroll()
         self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
+                "show_models",
                 "show_viewport",
                 "show_general",
                 "show_appearance",
@@ -1678,7 +1692,7 @@ class PreferencesPanel(Panel):
         return connection_action(self._portal_connection_state())[0]
 
     def _show_section_reset(self):
-        return self._section not in ("portal", "file_associations") and not (
+        return self._section not in ("portal", "file_associations", "models") and not (
             self._section == "mcp" and self._mcp_safe_mode) and not (
             self._section == "input" and self._input_page == "gamepad" and self._gamepad_page != "controls")
 

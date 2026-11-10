@@ -4,6 +4,7 @@
 
 #include "gui/rml_viewport_overlay.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
@@ -177,12 +178,15 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
+            document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
+            document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
             document_->Show();
             bindReactiveStore();
             refreshGTMetricsOverlayFromStore();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
+            applySideDocks();
             attachToolbarDragListeners();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
@@ -265,6 +269,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
                 return;
             }
+            document_->AddEventListener(Rml::EventId::Click, &side_dock_listener_);
+            document_->AddEventListener(Rml::EventId::Keydown, &side_dock_listener_);
             cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
@@ -272,6 +278,7 @@ namespace lfs::vis::gui {
             applyLeftDockResizeIndicator();
             applyLodStatsOverlay();
             applyProjectDragOverlay();
+            applySideDocks();
             attachToolbarDragListeners();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
@@ -387,6 +394,49 @@ namespace lfs::vis::gui {
             vram_hud_->setViewportGeometry(
                 viewport_content_offset_, 0.0f,
                 vp_size_.x - viewport_content_offset_, vp_size_.y);
+    }
+
+    void RmlViewportOverlay::SideDockListener::ProcessEvent(Rml::Event& event) {
+        auto* target = event.GetTargetElement();
+        while (target && target->GetId() != "left-side-dock-toggle" && target->GetId() != "right-side-dock-toggle")
+            target = target->GetParentNode();
+        if (!target)
+            return;
+        if (event.GetId() == Rml::EventId::Keydown) {
+            const auto key = event.GetParameter<int>("key_identifier", 0);
+            if (!target->IsPseudoClassSet("focus-visible") ||
+                (key != Rml::Input::KI_RETURN && key != Rml::Input::KI_SPACE))
+                return;
+        }
+        lfs::core::events::ui::ToggleSideDock{.side = target->GetId() == "right-side-dock-toggle" ? lfs::core::SideDock::Right : lfs::core::SideDock::Left}.emit();
+        event.StopPropagation();
+    }
+
+    void RmlViewportOverlay::setSideDocks(const bool left_visible, const bool left_collapsed,
+                                          const bool right_visible, const bool right_collapsed) {
+        if (left_dock_available_ == left_visible && left_dock_collapsed_ == left_collapsed &&
+            right_dock_available_ == right_visible && right_dock_collapsed_ == right_collapsed)
+            return;
+        left_dock_available_ = left_visible;
+        left_dock_collapsed_ = left_collapsed;
+        right_dock_available_ = right_visible;
+        right_dock_collapsed_ = right_collapsed;
+        applySideDocks();
+        markRenderNeeded(RenderReason::ToolbarLayout);
+    }
+
+    void RmlViewportOverlay::applySideDocks() {
+        if (!document_)
+            return;
+        const auto apply = [&](const char* id, const bool available, const bool collapsed) {
+            if (auto* element = document_->GetElementById(id)) {
+                element->SetClass("hidden", !available);
+                element->SetClass("collapsed", collapsed);
+                element->SetAttribute("aria-expanded", collapsed ? "false" : "true");
+            }
+        };
+        apply("left-side-dock-toggle", left_dock_available_, left_dock_collapsed_);
+        apply("right-side-dock-toggle", right_dock_available_, right_dock_collapsed_);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
@@ -1427,6 +1477,7 @@ namespace lfs::vis::gui {
         applyLeftDockResizeIndicator();
         applyLodStatsOverlay();
         applyProjectDragOverlay();
+        applySideDocks();
         attachToolbarDragListeners();
         if (vram_hud_)
             vram_hud_->onDocumentLoaded(document_);

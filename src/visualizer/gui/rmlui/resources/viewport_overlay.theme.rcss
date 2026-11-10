@@ -614,3 +614,13 @@
 .viewport-gt-color-scale {
     border-color: @{overlay.border};
 }
+
+.side-dock-toggle {
+    color: @{overlay.icon};
+    background-color: transparent;
+    border-color: transparent;
+}
+.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; }
+.side-dock-toggle:hover,
+.side-dock-toggle:focus-visible { background-color: @{alpha(overlay.icon,0.12)}; }
+.side-dock-toggle:active { background-color: @{alpha(overlay.icon,0.20)}; }
