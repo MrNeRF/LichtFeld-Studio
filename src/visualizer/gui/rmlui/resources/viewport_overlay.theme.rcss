@@ -610,3 +610,7 @@
 .gamepad-indicator-dot { background-color: @{text_dim}; }
 .gamepad-navigation-indicator.is-ready .gamepad-indicator-dot { background-color: @{success}; }
 .gamepad-navigation-indicator.needs-action .gamepad-indicator-dot { background-color: @{warning}; }
+
+.viewport-gt-color-scale {
+    border-color: @{overlay.border};
+}

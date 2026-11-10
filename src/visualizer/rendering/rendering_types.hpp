@@ -7,6 +7,7 @@
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/frame_contract.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/rasterizer/vulkan/src/gt_loss_heatmap.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -62,27 +63,7 @@ namespace lfs::vis {
     [[nodiscard]] inline glm::vec3 gtLossHeatmapColor(
         const glm::vec3& ground_truth,
         const glm::vec3& rendered) noexcept {
-        const glm::vec3 difference = glm::abs(ground_truth - rendered);
-        const float mean_absolute_error = (difference.r + difference.g + difference.b) / 3.0f;
-        const float intensity = std::isfinite(mean_absolute_error)
-                                    ? std::clamp(1.0f - std::exp(-8.0f * std::max(mean_absolute_error, 0.0f)), 0.0f, 1.0f)
-                                    : 1.0f;
-
-        constexpr glm::vec3 black{0.0f, 0.0f, 0.0f};
-        constexpr glm::vec3 purple{0.22f, 0.02f, 0.47f};
-        constexpr glm::vec3 red{0.72f, 0.12f, 0.29f};
-        constexpr glm::vec3 yellow{0.99f, 0.65f, 0.04f};
-        constexpr glm::vec3 white{1.0f, 1.0f, 0.75f};
-        if (intensity < 0.25f) {
-            return glm::mix(black, purple, intensity * 4.0f);
-        }
-        if (intensity < 0.5f) {
-            return glm::mix(purple, red, (intensity - 0.25f) * 4.0f);
-        }
-        if (intensity < 0.75f) {
-            return glm::mix(red, yellow, (intensity - 0.5f) * 4.0f);
-        }
-        return glm::mix(yellow, white, (intensity - 0.75f) * 4.0f);
+        return lfs::rendering::lfsGtLossHeatmapColor(ground_truth, rendered);
     }
 
     enum class SplitViewPanelId : uint8_t {

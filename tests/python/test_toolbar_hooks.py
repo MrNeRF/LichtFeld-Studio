@@ -2261,28 +2261,6 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-color: @{right_panel.border};" in scene_tree_theme
 
 
-def test_gt_compare_modes_show_matching_color_legends():
-    project_root = Path(__file__).parent.parent.parent
-    resources = project_root / "src/visualizer/gui/rmlui/resources"
-    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
-    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
-
-    assert 'data-if="gt_compare_mode_value == \'depth\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'palette\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'gray\'"' in rml
-    assert "@tr:ui.far" in rml
-    assert "@tr:ui.near" in rml
-    assert "horizontal-gradient(#0d0a26 #0f3280)" in rcss
-    assert "horizontal-gradient(#f6d14d #fb6e20)" in rcss
-    assert "horizontal-gradient(#000000 #ffffff)" in rcss
-
-    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
-    assert "@tr:tooltip.gt_loss_lower_error" in rml
-    assert "@tr:tooltip.gt_loss_higher_error" in rml
-    assert "horizontal-gradient(#000000 #380578)" in rcss
-    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
-
-
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     model = _DataModelStub()

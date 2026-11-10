@@ -735,7 +735,6 @@ body {
     display: flex;
     overflow: hidden;
     border-width: 1dp;
-    border-color: #585b70;
     border-radius: 3dp;
 }
 

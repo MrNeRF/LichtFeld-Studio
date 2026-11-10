@@ -3927,7 +3927,7 @@ namespace lfs::vis {
                                         pending_split_view.left = {placeholder, 0.0f, frame_settings.split_position, false, true};
                                         pending_split_view.right = {placeholder, frame_settings.split_position, 1.0f, false, true};
                                         mode_label = std::format("GT Loss - {}", LOC(gt_loading ? "status.loading"
-                                                                                                : "dataset_relocate.unavailable"));
+                                                                                                : "gt_compare.unavailable"));
                                     }
                                 }
                                 rendered_split_info = SplitViewInfo{

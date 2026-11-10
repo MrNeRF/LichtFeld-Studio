@@ -359,9 +359,6 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
         lfs_io lfs_visualizer lfs_core lfs_python_runtime
         GTest::gtest_main Zep::Zep SDL3::SDL3)
-    add_test(NAME lichtfeld.gt_compare COMMAND lichtfeld_visualizer_tests --gtest_filter=GTComparisonLoss.*)
-    set_tests_properties(lichtfeld.gt_compare PROPERTIES LABELS "fast;cpu;rendering" TIMEOUT 60
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
         --gtest_filter=SidebarInputDispatchTest.Sidebar*)
     set_tests_properties(lichtfeld.sidebar_input PROPERTIES

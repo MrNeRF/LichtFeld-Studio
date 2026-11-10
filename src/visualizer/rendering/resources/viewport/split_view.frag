@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_LOSS_INLINE
+#define LFS_LOSS_VEC3 vec3
+#define LFS_LOSS_ISFINITE(value) (!(isnan(value) || isinf(value)))
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/gt_loss_heatmap.inc"
 
 layout(location = 0) in vec2 TexCoord;
 layout(location = 0) out vec4 frag_color;
@@ -25,8 +30,9 @@ layout(push_constant) uniform Push {
     // Per-panel flags packed as (left normalize, right normalize, left filter, right filter).
     vec4 panel_flags;
 
-    // Background RGB for letterboxed regions; w enables the loss heatmap.
-    vec4 background;
+    // Background RGB for letterboxed regions.
+    vec3 background;
+    float loss_visualization;
 
     // Divider visual constants: bar half-width, handle half-width, handle half-height,
     // corner radius (px).
@@ -70,31 +76,6 @@ vec4 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     return vec4(clamp(sharpened, neighborhood_min, neighborhood_max), center.a);
 }
 
-vec3 loss_heatmap(vec3 ground_truth, vec3 rendered) {
-    vec3 difference = abs(ground_truth - rendered);
-    float mean_absolute_error =
-        (difference.r + difference.g + difference.b) / 3.0;
-    float intensity = (isnan(mean_absolute_error) || isinf(mean_absolute_error))
-        ? 1.0
-        : clamp(1.0 - exp(-8.0 * max(mean_absolute_error, 0.0)), 0.0, 1.0);
-
-    const vec3 black = vec3(0.0, 0.0, 0.0);
-    const vec3 purple = vec3(0.22, 0.02, 0.47);
-    const vec3 red = vec3(0.72, 0.12, 0.29);
-    const vec3 yellow = vec3(0.99, 0.65, 0.04);
-    const vec3 white = vec3(1.0, 1.0, 0.75);
-    if (intensity < 0.25) {
-        return mix(black, purple, intensity * 4.0);
-    }
-    if (intensity < 0.5) {
-        return mix(purple, red, (intensity - 0.25) * 4.0);
-    }
-    if (intensity < 0.75) {
-        return mix(red, yellow, (intensity - 0.5) * 4.0);
-    }
-    return mix(yellow, white, (intensity - 0.75) * 4.0);
-}
-
 void main() {
     // Pixel-space coordinate (gl_FragCoord origin top-left in Vulkan).
     vec2 px = gl_FragCoord.xy;
@@ -114,7 +95,7 @@ void main() {
         (px.x - pc.rect.x) / max(pc.rect.z, 1.0),
         (px.y - pc.rect.y) / max(pc.rect.w, 1.0));
 
-    if (pc.background.w > 0.5) {
+    if (pc.loss_visualization > 0.5) {
         vec3 ground_truth = sample_panel(
             u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
             pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
@@ -125,7 +106,7 @@ void main() {
             pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
             pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw,
             pc.right_texcoord_scale_offset.xy, pc.right_texcoord_scale_offset.zw).rgb;
-        frag_color = vec4(loss_heatmap(ground_truth, rendered), 1.0);
+        frag_color = vec4(lfsGtLossHeatmapColor(ground_truth, rendered), 1.0);
         return;
     }
 
