@@ -7,7 +7,7 @@ from typing import Optional
 from .tool_defs.builtin import BUILTIN_TOOLS, get_tool_by_id
 from .tool_defs.definition import ToolDef
 
-_OPERATOR_BACKED_BUILTIN_TOOL_IDS = {"builtin.cropbox"}
+_OPERATOR_BACKED_BUILTIN_TOOL_IDS = {"builtin.cropbox", "builtin.roi"}
 _NATIVE_BUILTIN_TOOL_IDS = {tool.id for tool in BUILTIN_TOOLS} - _OPERATOR_BACKED_BUILTIN_TOOL_IDS
 
 

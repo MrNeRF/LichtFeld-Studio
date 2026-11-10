@@ -44,17 +44,20 @@ namespace lfs::vis {
         glm::vec3 cropbox_min{0}, cropbox_max{0};
         glm::mat4 cropbox_transform{1};
         bool cropbox_affects_render = true;
+        bool cropbox_is_roi = false;
         int cropbox_parent_node_index = -1;
         bool ellipsoid_active = false;
         glm::vec3 ellipsoid_radii{1};
         glm::mat4 ellipsoid_transform{1};
         bool ellipsoid_affects_render = true;
+        bool ellipsoid_is_roi = false;
         int ellipsoid_parent_node_index = -1;
         bool crop_polygon_active = false;
         std::vector<glm::vec2> crop_polygon_vertices;
         float crop_polygon_half_depth = 1.0f;
         glm::mat4 crop_polygon_transform{1};
         bool crop_polygon_affects_render = true;
+        bool crop_polygon_is_roi = false;
         int crop_polygon_parent_node_index = -1;
         // Outline being drawn, in visualizer world space; the cursor point
         // lies on the drawing plane and trails the last placed vertex.

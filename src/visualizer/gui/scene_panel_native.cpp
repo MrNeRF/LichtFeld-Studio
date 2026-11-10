@@ -14,6 +14,7 @@
 #include "gui/utils/summary_labels.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
@@ -488,6 +489,7 @@ namespace lfs::vis::gui {
         stamp.training_state = store.training_state.get();
         stamp.eval_psnr_milli = optionalMetricMilli(store.eval_psnr.get());
         stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());
+        stamp.active_tool = UnifiedToolRegistry::instance().getActiveTool();
 
         return stamp;
     }

@@ -908,6 +908,7 @@
     "select_every_n_cameras": "Wybierz co N kamer",
     "select_distinct_cameras": "Wybierz różne",
     "select_cropbox_cameras": "Wybierz według widoczności pola kadrowania",
+    "select_roi_cameras": "Wybierz według widoczności ROI",
     "hide_disabled_cameras": "Ukryj wyłączone kamery",
     "camera_percentage": "Procent",
     "camera_every_n": "Co N kamer",
@@ -917,9 +918,11 @@
     "camera_coverage": "Minimalne pokrycie kadru",
     "camera_selection_no_scene": "Brak dostępnej sceny.",
     "camera_selection_cropbox_required": "Wybierz prawidłowe pole kadrowania.",
+    "camera_selection_roi_required": "Wybierz prawidłowy ROI.",
     "camera_selection_group_required": "Wybierz prawidłową grupę kamer.",
     "camera_selection_already_running": "Wybór kamer jest już uruchomiony.",
     "camera_selection_pinhole_required": "Widoczność pola kadrowania wymaga kamer otworkowych.",
+    "camera_selection_roi_pinhole_required": "Widoczność ROI wymaga kamer otworkowych.",
     "camera_selection_stale": "Scena zmieniła się podczas wyboru kamer.",
     "camera_selection_progress": "Postęp wyboru",
     "go_to_keyframe": "Przejdź do widoku klatki kluczowej",
@@ -1280,7 +1283,8 @@
     "mirror": "Odbij",
     "crop": "Przytnij",
     "align": "Wyrównaj",
-    "scale_distance": "Skaluj według odległości"
+    "scale_distance": "Skaluj według odległości",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "Zmierzono:",
     "scale_distance_set": "Ustaw odległość:",
     "scale_distance_apply": "Zatwierdź skalę",
-    "scale_distance_reset": "Zresetuj punkty"
+    "scale_distance_reset": "Zresetuj punkty",
+    "training_roi": "ROI treningu",
+    "roi_settings": "Ustawienia ROI",
+    "roi_seed_crop": "Przytnij chmurę",
+    "roi_seed_crop_tooltip": "Przytnij chmurę punktów przed treningiem",
+    "roi_final_crop": "Przytnij model",
+    "roi_final_crop_tooltip": "Przytnij model po treningu",
+    "roi_relevant_cameras": "Użyj istotnych kamer",
+    "roi_relevant_cameras_tooltip": "Używaj tylko kamer istotnych dla treningu ROI",
+    "roi_camera_coverage": "Pokrycie kamery (%)",
+    "roi_camera_coverage_tooltip": "Minimalne pokrycie kadru kamery dla treningu ROI"
   },
   "transform": {
     "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "Przytnij nieprzezroczystość:",
     "ppisp_settings": "Ustawienia PPISP",
     "ppisp_enable_controller": "Włącz kontroler:",
+    "crop_to_cropbox": "Przytnij model po treningu",
     "disabled": "Wyłączony"
   },
   "image_preview": {

@@ -908,6 +908,7 @@
     "select_every_n_cameras": "Elke N camera's selecteren",
     "select_distinct_cameras": "Onderscheidende selecteren",
     "select_cropbox_cameras": "Selecteren op zichtbaarheid van snijvak",
+    "select_roi_cameras": "Selecteren op zichtbaarheid van ROI",
     "hide_disabled_cameras": "Uitgeschakelde camera's verbergen",
     "camera_percentage": "Percentage",
     "camera_every_n": "Elke N camera's",
@@ -917,9 +918,11 @@
     "camera_coverage": "Minimale beelddekking",
     "camera_selection_no_scene": "Geen scène beschikbaar.",
     "camera_selection_cropbox_required": "Kies een geldig snijvak.",
+    "camera_selection_roi_required": "Kies een geldige ROI.",
     "camera_selection_group_required": "Kies een geldige cameragroep.",
     "camera_selection_already_running": "Cameraselectie wordt al uitgevoerd.",
     "camera_selection_pinhole_required": "Zichtbaarheid van het snijvak vereist pinholecamera's.",
+    "camera_selection_roi_pinhole_required": "ROI-zichtbaarheid vereist pinholecamera's.",
     "camera_selection_stale": "De scène is gewijzigd tijdens de cameraselectie.",
     "camera_selection_progress": "Selectievoortgang",
     "go_to_keyframe": "Ga naar keyframe-weergave",
@@ -1280,7 +1283,8 @@
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
     "align": "Uitlijnen",
-    "scale_distance": "Afstand schalen"
+    "scale_distance": "Afstand schalen",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "Gemeten:",
     "scale_distance_set": "Afstand instellen:",
     "scale_distance_apply": "Schaling bevestigen",
-    "scale_distance_reset": "Punten resetten"
+    "scale_distance_reset": "Punten resetten",
+    "training_roi": "Trainings-ROI",
+    "roi_settings": "ROI-instellingen",
+    "roi_seed_crop": "Initiële uitsnede",
+    "roi_seed_crop_tooltip": "Puntenwolk bijsnijden vóór de training",
+    "roi_final_crop": "Einduitsnede",
+    "roi_final_crop_tooltip": "Model bijsnijden na de training",
+    "roi_relevant_cameras": "Relevante camera's gebruiken",
+    "roi_relevant_cameras_tooltip": "Alleen voor ROI-training relevante camera's gebruiken",
+    "roi_camera_coverage": "Cameradekking (%)",
+    "roi_camera_coverage_tooltip": "Minimale framedekking voor ROI-training"
   },
   "transform": {
     "scale_apriltag": "Scène schalen met AprilTags",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "Opaciteit snoeien:",
     "ppisp_settings": "PPISP Instellingen",
     "ppisp_enable_controller": "Controller inschakelen:",
+    "crop_to_cropbox": "Model bijsnijden na de training",
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {

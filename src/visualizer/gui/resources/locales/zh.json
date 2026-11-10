@@ -908,6 +908,7 @@
     "select_every_n_cameras": "每 N 个相机选择",
     "select_distinct_cameras": "选择不同相机",
     "select_cropbox_cameras": "按裁剪框可见性选择",
+    "select_roi_cameras": "按 ROI 可见性选择",
     "hide_disabled_cameras": "隐藏已禁用相机",
     "camera_percentage": "百分比",
     "camera_every_n": "每 N 个相机",
@@ -917,9 +918,11 @@
     "camera_coverage": "最小画面覆盖",
     "camera_selection_no_scene": "没有可用场景。",
     "camera_selection_cropbox_required": "请选择有效的裁剪框。",
+    "camera_selection_roi_required": "请选择有效的 ROI。",
     "camera_selection_group_required": "请选择有效的相机组。",
     "camera_selection_already_running": "相机选择已在运行。",
     "camera_selection_pinhole_required": "裁剪框可见性需要针孔相机。",
+    "camera_selection_roi_pinhole_required": "ROI 可见性需要针孔相机。",
     "camera_selection_stale": "相机选择期间场景已更改。",
     "camera_selection_progress": "选择进度",
     "go_to_keyframe": "转到关键帧视图",
@@ -1280,7 +1283,8 @@
     "mirror": "镜像",
     "crop": "裁剪",
     "align": "对齐",
-    "scale_distance": "按距离缩放"
+    "scale_distance": "按距离缩放",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "选择",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "测量值:",
     "scale_distance_set": "设置距离:",
     "scale_distance_apply": "确认缩放",
-    "scale_distance_reset": "重置点"
+    "scale_distance_reset": "重置点",
+    "training_roi": "训练 ROI",
+    "roi_settings": "ROI 设置",
+    "roi_seed_crop": "初始点云裁剪",
+    "roi_seed_crop_tooltip": "训练前裁剪点云",
+    "roi_final_crop": "最终模型裁剪",
+    "roi_final_crop_tooltip": "训练后裁剪模型",
+    "roi_relevant_cameras": "使用相关相机",
+    "roi_relevant_cameras_tooltip": "仅使用与 ROI 训练相关的相机",
+    "roi_camera_coverage": "相机覆盖率 (%)",
+    "roi_camera_coverage_tooltip": "ROI 训练所需的最小相机画面覆盖率"
   },
   "transform": {
     "scale_apriltag": "使用 AprilTag 缩放场景",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "不透明度修剪:",
     "ppisp_settings": "PPISP设置",
     "ppisp_enable_controller": "启用控制器:",
+    "crop_to_cropbox": "训练后裁剪模型",
     "disabled": "已禁用"
   },
   "image_preview": {

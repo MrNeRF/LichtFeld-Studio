@@ -41,6 +41,7 @@ namespace lfs::training {
         // The point cloud's crop polygon, carried to the model like its crop box.
         std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
         glm::mat4 preserved_crop_polygon_transform{1.0f};
+        std::optional<lfs::core::RegionOfInterestData> preserved_region_of_interest;
     };
 
     /// Owner-thread snapshot of the graph inputs initializeTrainingModel needs.
@@ -55,6 +56,7 @@ namespace lfs::training {
         bool has_preserved_cropbox = false;
         std::optional<lfs::core::CropPolygonData> preserved_crop_polygon;
         glm::mat4 preserved_crop_polygon_transform{1.0f};
+        std::optional<lfs::core::RegionOfInterestData> preserved_region_of_interest;
         lfs::core::SplatData* training_model = nullptr;
         lfs::core::Tensor scene_center;
         glm::vec3 training_data_origin{0.0f};
@@ -165,6 +167,11 @@ namespace lfs::training {
     /// Give the training model the enabled --cropbox crop box, turned by --cropbox-rotation about its centre.
     /// Does nothing without --cropbox.
     [[nodiscard]] lfs::Status applyTrainingCropBox(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene);
+
+    /// Give the training model the dedicated CLI ROI. Does nothing without --roi.
+    [[nodiscard]] lfs::Status applyTrainingRoi(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
 

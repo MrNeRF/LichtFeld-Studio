@@ -1233,6 +1233,54 @@ def test_crop_numeric_controls_respect_volume_lock(transform_controls_module):
     assert not state.set_local_calls
 
 
+@pytest.mark.parametrize("shape", ["box", "ellipsoid"])
+@pytest.mark.parametrize("operation,group", [("translate", "pos"), ("rotate", "rot"), ("scale", "scale")])
+def test_roi_numeric_controls_edit_only_roi_volume_with_one_undo_entry(
+    transform_controls_module, history_panel, shape, operation, group
+):
+    module, _ = transform_controls_module
+    panel, state, history = history_panel
+    if operation == "scale":
+        module.lf.decompose_transform = lambda matrix: {
+            **_decompose_transform(matrix),
+            "scale": [math.sqrt(sum(matrix[axis * 4 + row] ** 2 for row in range(3)))
+                      for axis in range(3)],
+        }
+    state.active_tool = "builtin.roi"
+    state.selected_names = ["bicycle"]
+    original = _translation_matrix(.1, .2, .3)
+    state.local_transforms = {"bicycle_ROI": original.copy(), "bicycle": original.copy()}
+    state.visualizer_world_transforms = {name: matrix.copy() for name, matrix in state.local_transforms.items()}
+    module.lf.ui.get_roi_training_settings = lambda _name="": {
+        "exists": True,
+        "enabled": True,
+        "locked": False,
+        "target_name": "bicycle",
+        "roi_node_name": "bicycle_ROI",
+        "shape": shape,
+    }
+    module.lf.ui.get_crop_tool_shape = lambda: shape
+    module.lf.ui.get_crop_tool_operation = lambda: operation
+    module.lf.ui.get_transform_space = lambda: 1
+    model = _DataModelStub()
+    panel.bind_model(model)
+    doc = _DocumentStub()
+    panel.update(doc)
+
+    assert "hidden" not in doc.wrap.classes
+    assert model.bound_funcs["transform_is_crop"]()
+    assert model.bound_funcs["transform_show_" + operation]()
+    assert not model.bound_funcs["transform_show_actions"]()
+    panel._set_value(group, 0, "2")
+    panel._set_value(group, 0, "2.5")
+    panel._commit_active_edit()
+
+    assert state.local_transforms["bicycle"] == original
+    assert state.local_transforms["bicycle_ROI"] != original
+    assert len(history) == 1
+    assert history[0][0] == {"bicycle_ROI": original}
+
+
 def _ui_event(mouse_x=0.0, button=0):
     params = {"mouse_x": str(mouse_x), "button": str(button)}
     return SimpleNamespace(get_parameter=lambda name, default="0": params.get(name, default),

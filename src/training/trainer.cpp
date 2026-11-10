@@ -2047,9 +2047,13 @@ namespace lfs::training {
     }
 
     std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
-        if (!getParams().optimization.crop_to_cropbox)
-            return std::nullopt;
-        return current_cropbox();
+        const auto roi = current_cropbox();
+        return roi && roi->crop_model_after_training ? roi : std::nullopt;
+    }
+
+    bool Trainer::should_crop_model_after_training() const {
+        const auto roi = current_cropbox();
+        return roi && roi->crop_model_after_training;
     }
 
     namespace {
@@ -2075,6 +2079,10 @@ namespace lfs::training {
                     .count = static_cast<int>(region.polygon.size()),
                     .half_depth = region.max.z};
         }
+
+        lfs::training::kernels::RoiEllipsoid roi_ellipsoid(const TrainingCropBoxGeometry& region) {
+            return {.radii = region.ellipsoid_radii};
+        }
     } // namespace
 
     void Trainer::install_cropbox_view_damping(
@@ -2097,6 +2105,11 @@ namespace lfs::training {
                 means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
                 camera.cam_position_ptr(), roi_polygon(*cropbox_), cropbox_->inverse,
                 deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        } else if (cropbox_->is_ellipsoid()) {
+            lfs::training::kernels::launch_roi_view_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
+                camera.cam_position_ptr(), roi_ellipsoid(*cropbox_), cropbox_->inverse,
+                deleted_rows(model), rejected.ptr<bool>(), lfs::core::getCurrentCUDAStream());
         } else {
             lfs::training::kernels::launch_roi_view_reject_mask(
                 means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox, cropbox_->world_to_cropbox,
@@ -2116,21 +2129,57 @@ namespace lfs::training {
         // model grown to the VRAM limit needs the idle rasterizer memory back.
         resize_rasterizer_arena_at_boundary("B3 crop", true);
         lfs::core::Tensor::trim_memory_pool();
-        std::unique_lock render_lock(render_mutex_);
-        std::unique_lock model_lock(model_access_mutex_);
-        waitForModelReaders();
-        const auto& model = strategy_->get_model();
-        if (model.size() == 0)
-            return;
-        const auto before = model.visible_count();
-        const auto outside = training_cropbox_crop_mask(model, *cropbox_);
-        LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
-        // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
-        if (outside->sum_scalar() > 0)
-            strategy_->remove_gaussians(*outside);
-        // MCMC soft-deletes removed splats, so count the live ones.
-        LOG_INFO("Cropped the trained model to its crop {}: {} of {} splats kept",
-                 cropbox_->is_polygon() ? "polygon" : "box", strategy_->get_model().visible_count(), before);
+        auto& model = strategy_->get_model();
+        bool removed_any = false;
+        {
+            std::unique_lock render_lock(render_mutex_);
+            std::unique_lock<std::mutex> combined_lock;
+            if (scene_)
+                combined_lock = scene_->acquireCombinedModelExclusive();
+            std::unique_lock model_lock(model_access_mutex_);
+            struct MutationLockMark {
+                MutationLockMark() { mark_live_model_mutation_lock_held(true); }
+                ~MutationLockMark() { mark_live_model_mutation_lock_held(false); }
+            } mutation_lock_mark;
+            waitForModelReaders();
+            if (model.size() == 0)
+                return;
+            const auto before = model.visible_count();
+            const auto outside = training_cropbox_crop_mask(model, *cropbox_);
+            LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
+            // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
+            if (outside->sum_scalar() > 0) {
+                const auto barrier = beginExportableDensifyBarrier();
+                if (barrier == ExportableDensifyBarrierBegin::Failed) {
+                    LOG_ERROR("Failed to acquire exportable densify barrier before post-training ROI crop");
+                    return;
+                }
+                try {
+                    ++mutation_epoch_;
+                    strategy_->remove_gaussians(*outside);
+                    if (auto storage = ensureModelTensorAllocatorStorage(model, "post-training ROI crop"); !storage) {
+                        LOG_ERROR("{}", storage.error());
+                    }
+                    recordParamsReady();
+                    removed_any = true;
+                } catch (...) {
+                    if (barrier == ExportableDensifyBarrierBegin::Acquired)
+                        (void)endExportableDensifyBarrier();
+                    throw;
+                }
+                if (barrier == ExportableDensifyBarrierBegin::Acquired)
+                    (void)endExportableDensifyBarrier();
+            }
+            // MCMC soft-deletes removed splats, so count the live ones.
+            const char* const shape = cropbox_->is_polygon() ? "polygon" :
+                                      cropbox_->is_ellipsoid() ? "ellipsoid" : "box";
+            LOG_INFO("Cropped the trained model to its ROI {}: {} of {} splats kept",
+                     shape, model.visible_count(), before);
+        }
+        if (removed_any) {
+            syncTrainingSceneTopology(scene_, model);
+            lfs::core::Tensor::trim_memory_pool();
+        }
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -2192,6 +2241,12 @@ namespace lfs::training {
                 means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox,
                 cropbox_camera_centres_.ptr<float>(), static_cast<int>(cropbox_camera_centres_.size(0)),
                 roi_polygon(*cropbox_), cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(),
+                in_roi.ptr<bool>(), lfs::core::getCurrentCUDAStream());
+        } else if (cropbox_->is_ellipsoid()) {
+            lfs::training::kernels::launch_roi_relevance_reject_mask(
+                means.ptr<float>(), scales.ptr<float>(), n, cropbox_->model_to_cropbox,
+                cropbox_camera_centres_.ptr<float>(), static_cast<int>(cropbox_camera_centres_.size(0)),
+                roi_ellipsoid(*cropbox_), cropbox_->inverse, deleted_rows(model), rejected.ptr<bool>(),
                 in_roi.ptr<bool>(), lfs::core::getCurrentCUDAStream());
         } else {
             lfs::training::kernels::launch_roi_relevance_reject_mask(
@@ -3280,12 +3335,10 @@ namespace lfs::training {
                                  cloud->means.shape()[0], (*splat)[0], (*splat)[1]);
                     } else if (lfs::core::param::is_eval_mask_cropbox(params_.optimization.eval_mask)) {
                         const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
-                        // A crop polygon trains as the ROI, but the evaluation mask stays box-only.
-                        if (!cropbox || cropbox->is_polygon())
-                            return std::unexpected("Evaluation mask 'cropbox' needs an enabled crop box on the training model");
-                        evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
-                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox->inverse));
-                        LOG_INFO("Evaluation mask: crop box{}", cropbox->inverse ? " (inverted)" : "");
+                        if (!cropbox)
+                            return std::unexpected("Evaluation mask 'cropbox' needs an enabled ROI on the training model");
+                        evaluator_->set_eval_mesh(lfs::training::make_evaluation_roi_mesh(*cropbox));
+                        LOG_INFO("Evaluation mask: ROI{}", cropbox->inverse ? " (inverted)" : "");
                     } else {
                         LOG_INFO("Evaluation mask: {}", params_.optimization.eval_mask);
                     }
@@ -7124,6 +7177,13 @@ namespace lfs::training {
                                     roi_surface ? roi_surface_alpha.ptr<float>() : nullptr,
                                     map.ptr<float>(),
                                     roi_stream);
+                            } else if (cropbox_->is_ellipsoid()) {
+                                lfs::training::kernels::launch_roi_weight_map(
+                                    cam->world_view_transform_ptr(), cam->cam_position_ptr(), fx, fy, cx, cy,
+                                    output.width, output.height, cropbox_->world_to_cropbox, roi_ellipsoid(*cropbox_),
+                                    cropbox_->inverse, outside_weight, roi_rays,
+                                    roi_surface ? roi_surface_depth.ptr<float>() : nullptr,
+                                    roi_surface ? roi_surface_alpha.ptr<float>() : nullptr, map.ptr<float>(), roi_stream);
                             } else {
                                 lfs::training::kernels::launch_roi_weight_map(
                                     cam->world_view_transform_ptr(),
@@ -9782,7 +9842,7 @@ namespace lfs::training {
         const bool training_failed = terminal_error.has_value();
         // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
         // are cropped instead (export_cropbox()).
-        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
+        if (!terminal_error && !user_stopped && should_crop_model_after_training())
             crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {
@@ -10526,9 +10586,25 @@ namespace lfs::training {
                                                 with_noise_outside_cap(params_.optimization, &strategy_->get_model()).max_cap)) {
                 LOG_WARN("Max cap ({}) is less than the {} splats of the checkpoint, randomly removing the rest",
                          params_.optimization.max_cap, strategy_->get_model().visible_count());
-                std::unique_lock model_lock(model_access_mutex_);
-                waitForModelReaders();
-                strategy_->remove_gaussians(*over);
+                {
+                    std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+                    std::unique_lock<std::mutex> combined_lock;
+                    if (scene_)
+                        combined_lock = scene_->acquireCombinedModelExclusive();
+                    std::unique_lock model_lock(model_access_mutex_);
+                    struct MutationLockMark {
+                        MutationLockMark() { mark_live_model_mutation_lock_held(true); }
+                        ~MutationLockMark() { mark_live_model_mutation_lock_held(false); }
+                    } mutation_lock_mark;
+                    waitForModelReaders();
+                    strategy_->remove_gaussians(*over);
+                    if (auto storage_result = ensureModelTensorAllocatorStorage(
+                            strategy_->get_model(), "checkpoint max_cap trim");
+                        !storage_result) {
+                        return std::unexpected(storage_result.error());
+                    }
+                    recordParamsReady();
+                }
                 syncTrainingSceneTopology(scene_, strategy_->get_model());
             }
         }

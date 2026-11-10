@@ -608,12 +608,17 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
-            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
-            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
+            // Pre-training Crop operation. This is intentionally independent of the training ROI.
             std::optional<std::array<float, 6>> cropbox = std::nullopt;
-            // Turns the --cropbox box about its centre by X, Y, Z degrees about the dataset's axes, as Rx * Ry * Rz.
-            // Unset keeps the box axis-aligned with its corners stored as given.
             std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
+            // Dedicated training ROI, min x, y, z then max x, y, z in dataset coordinates.
+            std::optional<std::array<float, 6>> roi = std::nullopt;
+            std::optional<std::array<float, 3>> roi_rotation = std::nullopt;
+            bool roi_invert = false;
+            bool roi_crop_point_cloud = false;
+            bool crop_to_roi = false;
+            bool roi_relevant_cameras = false;
+            float roi_camera_coverage = 40.0f;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

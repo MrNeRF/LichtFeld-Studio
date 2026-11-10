@@ -273,7 +273,7 @@ namespace lfs::vis {
                 Random,
                 EveryN,
                 Distinct,
-                CropBoxVisibility,
+                RoiVisibility,
             };
             struct CameraSelectionOptions {
                 CameraSelectionOperation operation = CameraSelectionOperation::Random;
@@ -282,6 +282,8 @@ namespace lfs::vis {
                 float overlap = 65.0F;
                 float coverage = 40.0F;
                 core::NodeId camera_group_id = core::NULL_NODE;
+                // Retained only for Python ABI compatibility; visibility uses
+                // the active target-owned ROI, never a Crop helper.
                 core::NodeId cropbox_id = core::NULL_NODE;
             };
             [[nodiscard]] std::expected<JobHandle, lfs::Error> startCameraSelection(CameraSelectionOptions options);

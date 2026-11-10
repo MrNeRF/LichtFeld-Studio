@@ -2473,7 +2473,7 @@ namespace lfs::app {
             McpTool{
                 .name = "camera_selection.start",
                 .description = "Start a cancellable camera-group training selection job",
-                .input_schema = {.type = "object", .properties = json{{"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility"})}}}, {"camera_group", {{"type", "string"}}}, {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"every_n", {{"type", "integer"}, {"minimum", 1}}}, {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"cropbox", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
+                .input_schema = {.type = "object", .properties = json{{"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "roi_visibility", "cropbox_visibility"})}}}, {"camera_group", {{"type", "string"}}}, {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"every_n", {{"type", "integer"}, {"minimum", 1}}}, {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"roi_target", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
                 .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
@@ -2490,29 +2490,30 @@ namespace lfs::app {
                                       : operation == "random"             ? Selection::CameraSelectionOperation::Random
                                       : operation == "every_n"            ? Selection::CameraSelectionOperation::EveryN
                                       : operation == "distinct"           ? Selection::CameraSelectionOperation::Distinct
-                                      : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
+                                      : (operation == "roi_visibility" || operation == "cropbox_visibility")
+                                          ? Selection::CameraSelectionOperation::RoiVisibility
                                                                           : Selection::CameraSelectionOperation::Random;
                     if (operation != "enable_all" && operation != "disable_all" && operation != "invert" &&
-                        operation != "random" && operation != "every_n" && operation != "distinct" && operation != "cropbox_visibility")
+                        operation != "random" && operation != "every_n" && operation != "distinct" &&
+                        operation != "roi_visibility" && operation != "cropbox_visibility")
                         return mcp::invalid_argument_result("Unsupported camera selection operation", "operation");
                     const auto group_id = scene.getNodeIdByName(args.value("camera_group", ""));
                     const auto* group = scene.getNodeById(group_id);
                     if (!group || group->type != core::NodeType::CAMERA_GROUP)
                         return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
-                    core::NodeId cropbox_id = core::NULL_NODE;
-                    if (type == Selection::CameraSelectionOperation::CropBoxVisibility) {
-                        cropbox_id = scene.getNodeIdByName(args.value("cropbox", ""));
-                        const auto* cropbox = scene.getNodeById(cropbox_id);
-                        if (!cropbox || !cropbox->cropbox)
-                            return mcp::invalid_argument_result("A valid crop box is required", "cropbox");
-                    }
+                    const core::NodeId roi_target_id = args.contains("roi_target")
+                                                            ? scene.getNodeIdByName(args.value("roi_target", ""))
+                                                            : core::NULL_NODE;
+                    if (type == Selection::CameraSelectionOperation::RoiVisibility &&
+                        roi_target_id != core::NULL_NODE && !scene.getRegionOfInterestData(roi_target_id))
+                        return mcp::invalid_argument_result("A valid ROI target is required", "roi_target");
                     const auto handle = gui->asyncTasks().startCameraSelection({.operation = type,
                                                                                 .percentage = args.value("percentage", 25.0F),
                                                                                 .every_n = args.value("every_n", 2),
                                                                                 .overlap = args.value("overlap", 65.0F),
                                                                                 .coverage = args.value("coverage", 40.0F),
                                                                                 .camera_group_id = group_id,
-                                                                                .cropbox_id = cropbox_id});
+                                                                                .cropbox_id = roi_target_id});
                     if (!handle)
                         return json{{"error", std::string(handle.error().user_message())}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};

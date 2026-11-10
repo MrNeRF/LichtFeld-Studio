@@ -54,6 +54,7 @@
 #include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "vr/openxr_service.hpp"
@@ -5046,6 +5047,26 @@ namespace lfs::vis {
 
         const auto preserved_camera = viewport_.camera;
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
+        std::optional<core::RegionOfInterestData> preserved_roi;
+        {
+            const auto& scene = scene_manager_->getScene();
+            if (const auto* model_node = scene.getNodeById(scene.getTrainingModelNodeId());
+                model_node && model_node->region_of_interest) {
+                preserved_roi = *model_node->region_of_interest;
+            } else if (const auto* pc_node = scene.getDatasetPointCloudNode();
+                       pc_node && pc_node->region_of_interest) {
+                preserved_roi = *pc_node->region_of_interest;
+            } else {
+                for (const auto* const node : scene.getNodes()) {
+                    if (node &&
+                        (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) &&
+                        node->region_of_interest) {
+                        preserved_roi = *node->region_of_interest;
+                        break;
+                    }
+                }
+            }
+        }
         // Reloading the source dataset reconstructs cameras, but project-only
         // masks belong to those images, not to the newly generated node UUIDs.
         struct CameraMask {
@@ -5142,6 +5163,20 @@ namespace lfs::vis {
             }
             if (restored)
                 scene.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED);
+        }
+
+        if (preserved_roi) {
+            auto& scene = scene_manager_->getScene();
+            core::NodeId roi_target_id = core::NULL_NODE;
+            if (const auto* const pc_node = scene.getDatasetPointCloudNode()) {
+                roi_target_id = pc_node->id;
+            } else if (const auto model_id = scene.getTrainingModelNodeId(); model_id != core::NULL_NODE) {
+                roi_target_id = model_id;
+            }
+            if (roi_target_id != core::NULL_NODE && scene.setRegionOfInterestData(roi_target_id, *preserved_roi)) {
+                if (preserved_roi->enabled && preserved_roi->select_relevant_cameras)
+                    (void)lfs::training::select_relevant_roi_cameras(scene);
+            }
         }
 
         restore_camera();

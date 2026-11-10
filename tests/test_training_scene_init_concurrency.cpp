@@ -539,6 +539,13 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareAndInstallCarryTheCropPolygon) {
         .inverse = true};
     const glm::mat4 local = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f));
     ASSERT_NE(scene.addCropPolygon("PointCloud_crop_polygon", pc, polygon, local), lfs::core::NULL_NODE);
+    lfs::core::RegionOfInterestData roi;
+    roi.shape = lfs::core::RegionOfInterestShape::Polygon;
+    roi.vertices = polygon.vertices;
+    roi.half_depth = polygon.half_depth;
+    roi.inverse = polygon.inverse;
+    roi.local_transform = local;
+    ASSERT_TRUE(scene.setRegionOfInterestData(pc, roi));
 
     lfs::core::param::TrainingParameters params;
     params.optimization.sh_degree = 0;
@@ -549,6 +556,7 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareAndInstallCarryTheCropPolygon) {
     ASSERT_TRUE(prepared->has_value());
     ASSERT_TRUE((*prepared)->preserved_crop_polygon.has_value());
     EXPECT_EQ((*prepared)->preserved_crop_polygon_transform, local);
+    ASSERT_TRUE((*prepared)->preserved_region_of_interest.has_value());
 
     ASSERT_TRUE(lfs::training::installTrainingModel(scene, std::move(**prepared)));
     const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
@@ -559,6 +567,8 @@ TEST_F(TrainingSceneInitConcurrencyTest, PrepareAndInstallCarryTheCropPolygon) {
     EXPECT_FLOAT_EQ(scene.getCropPolygonData(polygon_id)->half_depth, polygon.half_depth);
     EXPECT_TRUE(scene.getCropPolygonData(polygon_id)->inverse);
     EXPECT_EQ(scene.getNodeById(polygon_id)->local_transform.get(), local);
+    ASSERT_NE(scene.getRegionOfInterestData(model->id), nullptr);
+    EXPECT_EQ(scene.getRegionOfInterestData(model->id)->vertices, polygon.vertices);
     const auto region = lfs::training::resolve_training_cropbox_geom(scene);
     ASSERT_TRUE(region.has_value());
     EXPECT_TRUE(region->is_polygon());

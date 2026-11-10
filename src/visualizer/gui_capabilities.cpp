@@ -21,6 +21,7 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include <algorithm>
 #include <cmath>
@@ -1038,15 +1039,40 @@ namespace lfs::vis::cap {
             return std::unexpected("No transform targets provided");
 
         const auto transform_targets = top_level_transform_targets(scene_manager.getScene(), targets);
-        auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
-        entry->captureTransforms(transform_targets);
-
+        std::vector<std::string> regular_targets;
+        std::vector<std::string> roi_parent_names;
         for (const auto& name : transform_targets) {
+            if (const auto* const roi_target = scene_manager.getScene().resolveRoiTargetNode(name)) {
+                if (scene_manager.getScene().isNodeEffectivelyLocked(roi_target->id))
+                    return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+                if (std::ranges::find(roi_parent_names, roi_target->name) == roi_parent_names.end())
+                    roi_parent_names.push_back(roi_target->name);
+                continue;
+            }
             const auto* node = scene_manager.getScene().getNode(name);
             if (!node)
                 return std::unexpected(std::format("Cannot transform '{}': node not found", name));
             if (scene_manager.getScene().isNodeEffectivelyLocked(node->id))
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+            regular_targets.push_back(name);
+        }
+
+        const vis::op::SceneGraphCaptureOptions roi_history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+            .payload_uuids = std::vector<lfs::core::Uuid>{},
+        };
+        std::optional<vis::op::SceneGraphStateSnapshot> roi_before;
+        if (!roi_parent_names.empty()) {
+            roi_before = vis::op::SceneGraphPatchEntry::captureState(
+                scene_manager, roi_parent_names, roi_history_options);
+        }
+
+        std::unique_ptr<vis::op::SceneSnapshot> entry;
+        if (!regular_targets.empty()) {
+            entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
+            entry->captureTransforms(regular_targets);
         }
 
         for (const auto& name : transform_targets) {
@@ -1054,8 +1080,16 @@ namespace lfs::vis::cap {
                 return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
         }
 
-        entry->captureAfter();
-        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+        if (entry) {
+            entry->captureAfter();
+            vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+        }
+        if (roi_before) {
+            auto roi_after = vis::op::SceneGraphPatchEntry::captureState(
+                scene_manager, roi_parent_names, roi_history_options);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager, std::string(undo_label), std::move(*roi_before), std::move(roi_after)));
+        }
         return {};
     }
 
@@ -2333,6 +2367,138 @@ namespace lfs::vis::cap {
         auto entry = std::make_unique<vis::op::CropPolygonUndoEntry>(scene_manager, name, before, transform, show);
         if (entry->hasChanges())
             vis::op::undoHistory().push(std::move(entry));
+        return {};
+    }
+
+    std::expected<void, std::string> fitRoiToParent(SceneManager& scene_manager,
+                                                    RenderingManager* rendering_manager,
+                                                    const core::NodeId target_id,
+                                                    const bool use_percentile) {
+        constexpr float CIRCUMSCRIBE_FACTOR = 1.732050808f; // sqrt(3)
+
+        auto& scene = scene_manager.getScene();
+        const auto* const target = scene.getNodeById(target_id);
+        const auto* const roi = scene.getRegionOfInterestData(target_id);
+        if (!target || !roi)
+            return std::unexpected("Invalid ROI target");
+
+        glm::vec3 min_bounds, max_bounds;
+        bool bounds_valid = false;
+        if (target->type == core::NodeType::SPLAT && target->model && target->model->size() > 0) {
+            bounds_valid = core::compute_bounds(*target->model, min_bounds, max_bounds, 0.0f, use_percentile);
+        } else if (target->type == core::NodeType::POINTCLOUD && target->point_cloud && target->point_cloud->size() > 0) {
+            bounds_valid = core::compute_bounds(*target->point_cloud, min_bounds, max_bounds, 0.0f, use_percentile);
+        }
+        if (!bounds_valid)
+            return std::unexpected("Cannot compute bounds for node: " + target->name);
+
+        auto updated = *roi;
+        const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
+        const glm::vec3 half_size = glm::max((max_bounds - min_bounds) * 0.5f, glm::vec3(kCropVolumeMinExtent));
+
+        if (updated.shape == core::RegionOfInterestShape::Box) {
+            updated.min = -half_size;
+            updated.max = half_size;
+            updated.local_transform = glm::translate(glm::mat4(1.0f), center);
+        } else if (updated.shape == core::RegionOfInterestShape::Ellipsoid) {
+            updated.radii = glm::max(half_size * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
+            updated.local_transform = glm::translate(glm::mat4(1.0f), center);
+        } else {
+            const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
+            if (!frame)
+                return std::unexpected("The ROI polygon transform is singular");
+
+            const glm::mat4 frame_from_parent = glm::inverse(*frame);
+            glm::vec3 lo(std::numeric_limits<float>::max());
+            glm::vec3 hi(std::numeric_limits<float>::lowest());
+            for (int corner = 0; corner < 8; ++corner) {
+                const glm::vec3 point((corner & 1) ? max_bounds.x : min_bounds.x,
+                                      (corner & 2) ? max_bounds.y : min_bounds.y,
+                                      (corner & 4) ? max_bounds.z : min_bounds.z);
+                const glm::vec3 local(frame_from_parent * glm::vec4(point, 1.0f));
+                lo = glm::min(lo, local);
+                hi = glm::max(hi, local);
+            }
+
+            const glm::vec3 prism_half_extents(
+                core::crop_polygon::outlineHalfExtents(updated.vertices), updated.half_depth);
+            const glm::vec3 fitted_half_extents =
+                glm::max((hi - lo) * 0.5f, glm::vec3(core::crop_polygon::kMinHalfDepth));
+            glm::mat4 fitted = *frame;
+            fitted[3] = *frame * glm::vec4((lo + hi) * 0.5f, 1.0f);
+            for (int axis = 0; axis < 3; ++axis)
+                fitted[axis] *= fitted_half_extents[axis] / prism_half_extents[axis];
+            updated.local_transform = fitted;
+        }
+
+        const vis::op::SceneGraphCaptureOptions history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+            .payload_uuids = std::vector<lfs::core::Uuid>{},
+        };
+        auto history_before =
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options);
+        if (!scene.setRegionOfInterestData(target_id, updated))
+            return std::unexpected("Invalid ROI geometry");
+        if (updated.enabled && updated.select_relevant_cameras)
+            (void)lfs::training::select_relevant_roi_cameras(scene);
+        if (rendering_manager)
+            rendering_manager->markDirty(vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+        vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+            scene_manager,
+            use_percentile ? "Fit ROI (Trimmed)" : "Fit ROI",
+            std::move(history_before),
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options)));
+        return {};
+    }
+
+    std::expected<void, std::string> resetRoi(SceneManager& scene_manager,
+                                              RenderingManager* rendering_manager,
+                                              const core::NodeId target_id) {
+        auto& scene = scene_manager.getScene();
+        const auto* const target = scene.getNodeById(target_id);
+        const auto* const roi = scene.getRegionOfInterestData(target_id);
+        if (!target || !roi)
+            return std::unexpected("Invalid ROI target");
+
+        auto updated = *roi;
+        updated.inverse = false;
+        if (updated.shape == core::RegionOfInterestShape::Box) {
+            updated.min = glm::vec3(-1.0f);
+            updated.max = glm::vec3(1.0f);
+            updated.local_transform = glm::mat4(1.0f);
+        } else if (updated.shape == core::RegionOfInterestShape::Ellipsoid) {
+            updated.radii = glm::vec3(1.0f);
+            updated.local_transform = glm::mat4(1.0f);
+        } else {
+            const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
+            if (!frame)
+                return std::unexpected("The ROI polygon transform is singular");
+            updated.local_transform = *frame;
+        }
+
+        const vis::op::SceneGraphCaptureOptions history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+            .payload_uuids = std::vector<lfs::core::Uuid>{},
+        };
+        auto history_before =
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options);
+        if (!scene.setRegionOfInterestData(target_id, updated))
+            return std::unexpected("Invalid ROI geometry");
+        if (updated.enabled && updated.select_relevant_cameras)
+            (void)lfs::training::select_relevant_roi_cameras(scene);
+        if (rendering_manager)
+            rendering_manager->markDirty(vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+        vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+            scene_manager,
+            "Reset ROI",
+            std::move(history_before),
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {target->name}, history_options)));
         return {};
     }
 

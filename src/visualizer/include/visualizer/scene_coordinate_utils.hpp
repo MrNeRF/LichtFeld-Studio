@@ -23,6 +23,10 @@ namespace lfs::vis::scene_coords {
     [[nodiscard]] inline std::optional<glm::mat4> nodeVisualizerWorldTransform(
         const core::Scene& scene,
         const std::string& name) {
+        if (const auto* const roi_target = scene.resolveRoiTargetNode(name)) {
+            return rendering::dataWorldTransformToVisualizerWorld(
+                scene.getWorldTransform(roi_target->id) * roi_target->region_of_interest->local_transform);
+        }
         const auto* const node = scene.getNode(name);
         if (!node)
             return std::nullopt;
@@ -51,6 +55,12 @@ namespace lfs::vis::scene_coords {
         const core::Scene& scene,
         const std::string& name,
         const glm::mat4& visualizer_world_transform) {
+        if (const auto* const roi_target = scene.resolveRoiTargetNode(name)) {
+            const glm::mat4 parent_world_transform = scene.getWorldTransform(roi_target->id);
+            const glm::mat4 data_world_transform =
+                rendering::visualizerWorldTransformToDataWorld(visualizer_world_transform);
+            return core::finiteLocalTransform(parent_world_transform, data_world_transform);
+        }
         const auto* const node = scene.getNode(name);
         if (!node)
             return std::nullopt;

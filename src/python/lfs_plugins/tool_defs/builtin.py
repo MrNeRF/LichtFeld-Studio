@@ -253,6 +253,17 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         poll=_poll_can_cropbox,
     ),
     ToolDef(
+        id="builtin.roi",
+        label="ROI",
+        label_key="tool_defs.roi",
+        icon="focus-selection",
+        group="utility",
+        order=71,
+        description="Define the region used for training",
+        gizmo="translate",
+        poll=_poll_can_cropbox,
+    ),
+    ToolDef(
         id="builtin.align",
         label="Align",
         label_key="tool_defs.align",

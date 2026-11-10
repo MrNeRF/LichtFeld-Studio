@@ -122,6 +122,34 @@ namespace lfs::core {
         float flash_intensity = 0.0f;
     };
 
+    // Unlike Crop helpers, an ROI is non-destructive scene state owned by the
+    // point cloud or splat it trains.  Keeping it off helper nodes allows both
+    // workflows to exist on the same target.
+    enum class RegionOfInterestShape : uint8_t {
+        Box,
+        Ellipsoid,
+        Polygon,
+    };
+
+    struct RegionOfInterestData {
+        RegionOfInterestShape shape = RegionOfInterestShape::Box;
+        glm::vec3 min{-1.0f, -1.0f, -1.0f};
+        glm::vec3 max{1.0f, 1.0f, 1.0f};
+        glm::vec3 radii{1.0f, 1.0f, 1.0f};
+        std::vector<glm::vec2> vertices;
+        float half_depth = 1.0f;
+        // ROI-local to owning-node-local.  Crop helpers retain their own node
+        // transforms, so editing one can never move the other.
+        glm::mat4 local_transform{1.0f};
+        bool inverse = false;
+        bool enabled = true;
+        bool crop_point_cloud_before_training = false;
+        bool crop_model_after_training = false;
+        bool select_relevant_cameras = false;
+        float camera_coverage_percent = 40.0f;
+        glm::vec3 color{0.67f, 0.35f, 0.95f};
+    };
+
     struct GeoreferencePose {
         glm::dquat rotation{1.0, 0.0, 0.0, 0.0};
         glm::dvec3 translation{0.0};
@@ -193,6 +221,7 @@ namespace lfs::core {
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<CropPolygonData> crop_polygon;
+        std::unique_ptr<RegionOfInterestData> region_of_interest;
         std::unique_ptr<KeyframeData> keyframe;
         std::atomic<size_t> gaussian_count{0};
         glm::vec3 centroid{0.0f};
@@ -292,6 +321,7 @@ namespace lfs::core {
             std::shared_ptr<lfs::core::Camera> camera;
             std::unique_ptr<KeyframeData> keyframe;
             std::unique_ptr<CropPolygonData> crop_polygon;
+            std::unique_ptr<RegionOfInterestData> region_of_interest;
             std::shared_ptr<const CollisionVolume> collision{};
         };
 
@@ -509,6 +539,15 @@ namespace lfs::core {
         [[nodiscard]] const CropPolygonData* getCropPolygonData(NodeId polygon_id) const;
         // Rejects an invalid outline or half depth and keeps the current data.
         bool setCropPolygonData(NodeId polygon_id, const CropPolygonData& data);
+
+        [[nodiscard]] RegionOfInterestData* getRegionOfInterestData(NodeId node_id);
+        [[nodiscard]] const RegionOfInterestData* getRegionOfInterestData(NodeId node_id) const;
+        // Rejects malformed geometry and leaves the installed ROI unchanged.
+        bool setRegionOfInterestData(NodeId node_id, const RegionOfInterestData& data);
+        void clearRegionOfInterestData(NodeId node_id);
+        [[nodiscard]] std::string getRoiNodeName(NodeId node_id) const;
+        [[nodiscard]] const SceneNode* resolveRoiTargetNode(std::string_view name) const;
+        [[nodiscard]] SceneNode* resolveMutableRoiTargetNode(std::string_view name);
 
         struct RenderableCropPolygon {
             NodeId node_id = NULL_NODE;

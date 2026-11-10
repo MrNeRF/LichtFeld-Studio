@@ -77,6 +77,7 @@ namespace lfs::vis::gui {
             int dp_ratio_milli = 1000;
             bool invert_masks = false;
             bool scene_graph_selection_markers = false;
+            std::string active_tool;
 
             bool operator==(const SyncStamp&) const = default;
         };

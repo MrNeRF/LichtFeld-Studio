@@ -4546,8 +4546,8 @@ namespace lfs::vis::gui {
     }
 
     namespace {
-        bool same_cropbox_points(const std::vector<glm::vec3>& first,
-                                 const std::vector<glm::vec3>& second) {
+        bool same_roi_points(const std::vector<glm::vec3>& first,
+                             const std::vector<glm::vec3>& second) {
             if (first.size() != second.size())
                 return false;
             for (size_t index = 0; index < first.size(); ++index) {
@@ -4557,20 +4557,53 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        std::vector<glm::vec3> cropbox_world_points(const core::Scene& scene,
-                                                    const core::SceneNode& cropbox) {
+        std::vector<glm::vec3> roi_world_points(const core::Scene& scene,
+                                                const core::SceneNode& target,
+                                                const core::RegionOfInterestData& data) {
             std::vector<glm::vec3> points;
-            if (!cropbox.cropbox)
-                return points;
-            const auto& data = *cropbox.cropbox;
-            const glm::mat4 transform = scene.getWorldTransform(cropbox.id);
-            points.reserve(9);
-            for (const float x : {data.min.x, data.max.x})
-                for (const float y : {data.min.y, data.max.y})
-                    for (const float z : {data.min.z, data.max.z})
-                        points.push_back(glm::vec3(transform * glm::vec4{x, y, z, 1.0F}));
-            points.push_back(glm::vec3(transform * glm::vec4{(data.min + data.max) * 0.5F, 1.0F}));
+            const glm::mat4 transform = scene.getWorldTransform(target.id) * data.local_transform;
+            const auto append = [&](const glm::vec3 point) {
+                points.push_back(glm::vec3(transform * glm::vec4(point, 1.0F)));
+            };
+            if (data.shape == core::RegionOfInterestShape::Polygon) {
+                points.reserve(data.vertices.size() * 2);
+                for (const auto& vertex : data.vertices) {
+                    append({vertex.x, vertex.y, -data.half_depth});
+                    append({vertex.x, vertex.y, data.half_depth});
+                }
+            } else if (data.shape == core::RegionOfInterestShape::Ellipsoid) {
+                // Axis and diagonal samples bound the projected ellipsoid without treating it as a crop box.
+                for (const float x : {-1.0F, 0.0F, 1.0F})
+                    for (const float y : {-1.0F, 0.0F, 1.0F})
+                        for (const float z : {-1.0F, 0.0F, 1.0F}) {
+                            const glm::vec3 direction{x, y, z};
+                            if (glm::dot(direction, direction) > 0.0F)
+                                append(glm::normalize(direction) * data.radii);
+                        }
+            } else {
+                for (const float x : {data.min.x, data.max.x})
+                    for (const float y : {data.min.y, data.max.y})
+                        for (const float z : {data.min.z, data.max.z})
+                            append({x, y, z});
+            }
             return points;
+        }
+
+        [[nodiscard]] bool roi_contains_local(const core::RegionOfInterestData& roi,
+                                              const glm::vec3 local) {
+            switch (roi.shape) {
+            case core::RegionOfInterestShape::Box:
+                return glm::all(glm::greaterThanEqual(local, roi.min)) &&
+                       glm::all(glm::lessThanEqual(local, roi.max));
+            case core::RegionOfInterestShape::Ellipsoid: {
+                const glm::vec3 normalized = local / roi.radii;
+                return glm::dot(normalized, normalized) <= 1.0F;
+            }
+            case core::RegionOfInterestShape::Polygon:
+                return std::abs(local.z) <= roi.half_depth &&
+                       core::crop_polygon::containsPoint(roi.vertices, glm::vec2(local));
+            }
+            return false;
         }
     } // namespace
 
@@ -4632,12 +4665,35 @@ namespace lfs::vis::gui {
             }
         }
         std::vector<glm::vec3> cropbox_points;
+        std::optional<core::RegionOfInterestData> roi_snapshot;
         core::Uuid cropbox_uuid;
         bool has_cropbox = false;
-        const auto* cropbox = scene.getNodeById(options.cropbox_id);
-        if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
-            if (!cropbox || !cropbox->cropbox)
-                return selection_error(LOC("scene.camera_selection_cropbox_required"));
+        auto resolve_roi_target_id = [&]() -> core::NodeId {
+            if (options.cropbox_id != core::NULL_NODE && scene.getRegionOfInterestData(options.cropbox_id))
+                return options.cropbox_id;
+            if (const auto model_id = scene.getTrainingModelNodeId();
+                model_id != core::NULL_NODE && scene.getRegionOfInterestData(model_id)) {
+                return model_id;
+            }
+            if (const auto* const pc = scene.getDatasetPointCloudNode();
+                pc && scene.getRegionOfInterestData(pc->id)) {
+                return pc->id;
+            }
+            for (const auto* const node : scene.getNodes()) {
+                if (node &&
+                    (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) &&
+                    node->region_of_interest && node->region_of_interest->enabled) {
+                    return node->id;
+                }
+            }
+            return options.cropbox_id != core::NULL_NODE ? options.cropbox_id : scene.getTrainingModelNodeId();
+        };
+        const auto roi_target_id = resolve_roi_target_id();
+        const auto* roi_target = scene.getNodeById(roi_target_id);
+        if (options.operation == CameraSelectionOperation::RoiVisibility) {
+            const auto* roi = scene.getRegionOfInterestData(roi_target_id);
+            if (!roi_target || !roi || !roi->enabled)
+                return selection_error(LOC("scene.camera_selection_roi_required"));
             if (std::ranges::any_of(cameras, [](const auto& camera) {
                     return camera.model != core::CameraModelType::PINHOLE;
                 })) {
@@ -4645,13 +4701,14 @@ namespace lfs::vis::gui {
                               LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
                     return selection_error(LOC("scene.camera_selection_already_running"));
                 jobs_.failed(camera_selection_state_.job,
-                             LOC("scene.camera_selection_pinhole_required"),
+                             LOC("scene.camera_selection_roi_pinhole_required"),
                              LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS));
                 publishCameraSelectionState();
                 return camera_selection_state_.job;
             }
-            cropbox_points = cropbox_world_points(scene, *cropbox);
-            cropbox_uuid = cropbox->uuid;
+            cropbox_points = roi_world_points(scene, *roi_target, *roi);
+            roi_snapshot = *roi;
+            cropbox_uuid = roi_target->uuid;
             has_cropbox = true;
         }
         if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
@@ -4669,9 +4726,20 @@ namespace lfs::vis::gui {
             camera_selection_state_.cropbox_uuid = cropbox_uuid;
             camera_selection_state_.cropbox_points = std::move(cropbox_points);
             if (has_cropbox) {
-                camera_selection_state_.cropbox_world_to_local = glm::inverse(scene.getWorldTransform(cropbox->id));
-                camera_selection_state_.cropbox_min = cropbox->cropbox->min;
-                camera_selection_state_.cropbox_max = cropbox->cropbox->max;
+                const auto* roi = scene.getRegionOfInterestData(roi_target_id);
+                camera_selection_state_.cropbox_world_to_local = glm::inverse(
+                    scene.getWorldTransform(roi_target_id) * roi->local_transform);
+                if (roi->shape == core::RegionOfInterestShape::Ellipsoid) {
+                    camera_selection_state_.cropbox_min = -roi->radii;
+                    camera_selection_state_.cropbox_max = roi->radii;
+                } else if (roi->shape == core::RegionOfInterestShape::Polygon) {
+                    const auto extents = core::crop_polygon::outlineHalfExtents(roi->vertices);
+                    camera_selection_state_.cropbox_min = {-extents.x, -extents.y, -roi->half_depth};
+                    camera_selection_state_.cropbox_max = {extents.x, extents.y, roi->half_depth};
+                } else {
+                    camera_selection_state_.cropbox_min = roi->min;
+                    camera_selection_state_.cropbox_max = roi->max;
+                }
             }
             camera_selection_state_.has_cropbox = has_cropbox;
             camera_selection_state_.selected_indices.clear();
@@ -4690,7 +4758,8 @@ namespace lfs::vis::gui {
             snapshot_cropbox_min = camera_selection_state_.cropbox_min;
             snapshot_cropbox_max = camera_selection_state_.cropbox_max;
         }
-        camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points), snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max](std::stop_token stop) mutable {
+        const bool roi_inverse = has_cropbox && scene.getRegionOfInterestData(roi_target_id)->inverse;
+        camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points), snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max, roi_inverse, roi_snapshot = std::move(roi_snapshot)](std::stop_token stop) mutable {
             jobs_.work(job);
             std::vector<size_t> selected;
             std::string error;
@@ -4716,14 +4785,24 @@ namespace lfs::vis::gui {
                     selected = camera_selection::distinct(cameras, options.overlap, cancelled, [&](const float progress) {
                         jobs_.report(job, progress, LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
                     });
-                } else if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
+                } else if (options.operation == CameraSelectionOperation::RoiVisibility) {
                     if (cropbox_points.empty())
-                        error = LOC("scene.camera_selection_cropbox_required");
+                        error = LOC("scene.camera_selection_roi_required");
                     else
                         for (size_t index = 0; index < count; ++index) {
                             if (cancelled())
                                 break;
-                            if (camera_selection::crop_coverage(cameras[index], cropbox_points, snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max) >= std::clamp(options.coverage, 0.0F, 100.0F))
+                            const glm::vec3 local_center = glm::vec3(
+                                snapshot_cropbox_world_to_local * glm::vec4(cameras[index].center, 1.0F));
+                            const auto center_is_inside = roi_snapshot
+                                                              ? std::optional<bool>(roi_contains_local(*roi_snapshot, local_center))
+                                                              : std::nullopt;
+                            float coverage = camera_selection::crop_coverage(
+                                cameras[index], cropbox_points, snapshot_cropbox_world_to_local,
+                                snapshot_cropbox_min, snapshot_cropbox_max, center_is_inside);
+                            if (roi_inverse)
+                                coverage = 100.0F - coverage;
+                            if (coverage > 0.0F && coverage >= std::clamp(options.coverage, 0.0F, 100.0F))
                                 selected.push_back(index);
                             if ((index & 63U) == 0U)
                                 jobs_.report(job, 0.9F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
@@ -4804,9 +4883,10 @@ namespace lfs::vis::gui {
                         std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
             }
             if (valid && has_cropbox) {
-                const auto* cropbox = manager->getScene().getNodeByUuid(cropbox_uuid);
-                valid = cropbox && cropbox->cropbox &&
-                        same_cropbox_points(cropbox_points, cropbox_world_points(manager->getScene(), *cropbox));
+                const auto* target = manager->getScene().getNodeByUuid(cropbox_uuid);
+                const auto* roi = target ? manager->getScene().getRegionOfInterestData(target->id) : nullptr;
+                valid = target && roi && roi->enabled &&
+                        same_roi_points(cropbox_points, roi_world_points(manager->getScene(), *target, *roi));
             }
             if (valid) {
                 for (const size_t index : selected_indices) {
@@ -4824,6 +4904,12 @@ namespace lfs::vis::gui {
                 jobs_.canceled(camera_selection_state_.job);
             } else if (!valid || (selected.empty() && !selected_indices.empty())) {
                 jobs_.failed(camera_selection_state_.job, LOC("scene.camera_selection_stale"),
+                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+            } else if (has_cropbox && selected.empty()) {
+                // The ROI operation is all-or-nothing: do not replace a usable
+                // training set with an empty one when its threshold has no matches.
+                jobs_.failed(camera_selection_state_.job,
+                             "No camera reaches the ROI coverage threshold.",
                              LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
             } else {
                 const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);

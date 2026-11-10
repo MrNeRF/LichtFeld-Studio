@@ -2784,6 +2784,14 @@ namespace lfs::vis {
     // ========== Node Transforms ==========
 
     bool SceneManager::setNodeTransform(const std::string& name, const glm::mat4& transform) {
+        if (const auto* const roi_target = scene_.resolveRoiTargetNode(name)) {
+            if (scene_.isNodeEffectivelyLocked(roi_target->id)) {
+                LOG_WARN("Cannot transform '{}': node is locked", name);
+                return false;
+            }
+            scene_.setNodeTransform(name, transform);
+            return true;
+        }
         const auto* node = scene_.getNode(name);
         if (!node)
             return false;

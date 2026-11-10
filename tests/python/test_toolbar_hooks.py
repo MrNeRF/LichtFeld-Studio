@@ -1112,21 +1112,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
             "opacity": "1",
         }
     ]
-    assert snapshot["crop_settings_buttons"] == [
-        {
-            "button_id": "crop-roi-settings",
-            "action": "toggle_crop_roi_settings",
-            "value": "",
-            "icon_src": "../icon/settings.png",
-            "label": "",
-            "tooltip_key": "toolbar.crop_roi_settings",
-            "tooltip_text": "Crop ROI Settings",
-            "action_id": "",
-            "selected": False,
-            "enabled": True,
-            "opacity": "1",
-        }
-    ]
+    assert snapshot["crop_settings_buttons"] == []
 
     controller.dispatch("crop_toggle_enabled", "")
 
@@ -1147,7 +1133,7 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
         assert snapshot["show_crop_edit_controls"] is False
         assert snapshot["show_crop_enable_separator"] is False
         assert snapshot["crop_enable_buttons"][0]["selected"] is False
-        assert snapshot["crop_settings_buttons"][0]["selected"] is False
+        assert snapshot["crop_settings_buttons"] == []
         assert snapshot["crop_object_buttons"] == []
         assert snapshot["crop_transform_buttons"] == []
         assert snapshot["crop_action_buttons"] == []
@@ -1167,6 +1153,7 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     set_calls = []
+    roi_set_calls = []
 
     class Params:
         cropbox_lr_scale = 0.1
@@ -1186,26 +1173,54 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
             setattr(self, name, value)
 
     params = Params()
-    cropbox = SimpleNamespace(enabled=True)
-    crop_node = SimpleNamespace(
+    roi_state = {
+        "exists": True,
+        "enabled": True,
+        "locked": False,
+        "target_name": "bicycle",
+        "roi_node_name": "bicycle_ROI",
+        "shape": "box",
+        "inverse": False,
+        "crop_point_cloud_before_training": False,
+        "crop_model_after_training": False,
+        "select_relevant_cameras": False,
+        "camera_coverage_percent": 25.0,
+    }
+
+    def set_roi_training_settings(**kwargs):
+        roi_set_calls.append(kwargs)
+        for key, value in kwargs.items():
+            if value is not None and key in roi_state:
+                roi_state[key] = value
+        return True
+
+    target_node = SimpleNamespace(
         id=7,
-        name="bicycle_cropbox",
-        type=SimpleNamespace(name="CROPBOX"),
+        name="bicycle",
+        type=SimpleNamespace(name="POINTCLOUD"),
         children=(),
-        cropbox=lambda: cropbox,
     )
     scene = SimpleNamespace(
-        get_node=lambda name: crop_node if name == crop_node.name else None,
-        get_node_by_id=lambda node_id: crop_node if node_id == crop_node.id else None,
+        get_node=lambda name: target_node if name == target_node.name else None,
+        get_node_by_id=lambda node_id: target_node if node_id == target_node.id else None,
     )
 
     monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
     monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
     monkeypatch.setattr(
-        lf_stub, "get_selected_node_names", lambda: [crop_node.name], raising=False
+        lf_stub, "get_selected_node_names", lambda: [target_node.name], raising=False
     )
     monkeypatch.setattr(
         lf_stub.ui, "get_content_type", lambda: "dataset", raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_active_tool", lambda: "builtin.roi", raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_roi_training_settings", lambda _name="": dict(roi_state), raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "set_roi_training_settings", set_roi_training_settings, raising=False
     )
 
     controller = module._ViewportToolbarController()
@@ -1217,11 +1232,23 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
     growth_getter, growth_setter = model.bound_binds["cropbox_growth_inside"]
     growth_percent = model.bound_funcs["cropbox_growth_inside_percent"]
+    seed_getter, seed_setter = model.bound_binds["roi_crop_point_cloud_before_training"]
+    cameras_getter, cameras_setter = model.bound_binds["roi_select_relevant_cameras"]
+    coverage_getter, coverage_setter = model.bound_binds["roi_camera_coverage_percent"]
+    coverage_percent = model.bound_funcs["roi_camera_coverage_percent_str"]
 
     assert controller._gizmo.cropbox_toolbar_signature() == (
-        "bicycle_cropbox",
+        "bicycle",
+        "roi",
         True,
         True,
+        False,
+        "box",
+        False,
+        False,
+        False,
+        False,
+        25.0,
         0.1,
         0.1,
         0.8,
@@ -1247,15 +1274,25 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     crop_getter, crop_setter = model.bound_binds["crop_to_cropbox"]
     crop_setter(True)
     assert set_calls[-1] == ("crop_to_cropbox", True)
+    assert roi_set_calls[-1] == {"node_name": "bicycle", "crop_model_after_training": True}
     assert crop_getter() is True
     assert model.handle.request_update_calls == 4
+
+    seed_setter(True)
+    cameras_setter(True)
+    coverage_setter("60")
+    assert seed_getter() is True
+    assert cameras_getter() is True
+    assert coverage_getter() == "60"
+    assert coverage_percent() == "60%"
 
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
     params.cropbox_growth_inside = 1.0
     params.crop_to_cropbox = False
+    roi_state["crop_model_after_training"] = False
     signature = controller._gizmo.cropbox_toolbar_signature()
-    assert signature[3:] == (0.42, 0.73, 1.0, False)
+    assert signature[-4:] == (0.42, 0.73, 1.0, False)
 
     controller._sync_crop_roi_params(signature)
 
@@ -1311,9 +1348,8 @@ def test_crop_roi_controls_and_enable_toggle_serve_a_crop_polygon(toolbar_module
     monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
 
     controller = module._GizmoToolbarController()
-    # The selected training model's polygon is its region of interest, like a crop box.
     assert controller.cropbox_toolbar_signature() == ("Model_crop_polygon", True, True, 0.2, 0.3, 0.5, False)
-    assert controller._build_crop_settings_records(False)[0]["button_id"] == "crop-roi-settings"
+    assert controller._build_crop_settings_records(False) == []
     enable = controller._build_crop_enable_records()[0]
     assert (enable["tooltip_key"], enable["tooltip_text"], enable["selected"]) == (
         "toolbar.enable_crop_polygon",
@@ -1327,11 +1363,19 @@ def test_crop_roi_controls_and_enable_toggle_serve_a_crop_polygon(toolbar_module
     assert controller._build_crop_enable_records()[0]["selected"] is False
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
+@pytest.mark.parametrize(
+    "signature",
+    [
+        None,
+        ("crop", "roi", True, False, False, "box", False, False, False, False, 25.0, 0.1, 0.1, 0.8, False),
+    ],
+)
 def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
     module, *_ = toolbar_module
     controller = module._ViewportToolbarController()
-    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6, True))
+    controller._sync_crop_roi_params(
+        ("crop", "roi", True, True, False, "box", False, True, True, True, 50.0, 0.0, 0.37, 0.6, True)
+    )
 
     controller._sync_crop_roi_params(signature)
 
@@ -1342,7 +1386,13 @@ def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module
     assert controller._crop_to_cropbox is True
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
+@pytest.mark.parametrize(
+    "signature",
+    [
+        None,
+        ("crop", "roi", True, False, False, "box", False, False, False, False, 25.0, 0.1, 0.1, 0.8, False),
+    ],
+)
 def test_crop_roi_stale_slider_events_do_not_write_live_params(
     toolbar_module, monkeypatch, signature
 ):

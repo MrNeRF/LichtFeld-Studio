@@ -99,6 +99,30 @@ namespace lfs::training::kernels {
             return t_exit >= 0.0f;
         }
 
+        __device__ __forceinline__ bool ellipsoid_contains(const float3 point, const float3 radii) {
+            const float x = point.x / radii.x;
+            const float y = point.y / radii.y;
+            const float z = point.z / radii.z;
+            return x * x + y * y + z * z <= 1.0f;
+        }
+
+        __device__ __forceinline__ bool ray_intersects_ellipsoid(
+            const float3 origin, const float3 direction, const float3 radii) {
+            if (!(radii.x > 0.0f && radii.y > 0.0f && radii.z > 0.0f))
+                return false;
+            const float3 o = make_float3(origin.x / radii.x, origin.y / radii.y, origin.z / radii.z);
+            const float3 d = make_float3(direction.x / radii.x, direction.y / radii.y, direction.z / radii.z);
+            const float a = d.x * d.x + d.y * d.y + d.z * d.z;
+            if (a <= kParallelEpsilon)
+                return ellipsoid_contains(origin, radii);
+            const float b = 2.0f * (o.x * d.x + o.y * d.y + o.z * d.z);
+            const float c = o.x * o.x + o.y * o.y + o.z * o.z - 1.0f;
+            const float discriminant = b * b - 4.0f * a * c;
+            if (discriminant < 0.0f)
+                return false;
+            return (-b + sqrtf(discriminant)) / (2.0f * a) >= 0.0f;
+        }
+
         __global__ void roi_weight_map_kernel(
             const float* __restrict__ world_to_camera,
             const float* __restrict__ camera_position,
@@ -111,6 +135,7 @@ namespace lfs::training::kernels {
             const Affine3x4 world_to_cropbox,
             const float3 crop_min,
             const float3 crop_max,
+            const bool ellipsoid,
             const bool inverse,
             const float outside_weight,
             const float* __restrict__ camera_rays,
@@ -165,11 +190,13 @@ namespace lfs::training::kernels {
                         const float3 p = make_float3(origin_in_box.x + t * direction_in_box.x,
                                                      origin_in_box.y + t * direction_in_box.y,
                                                      origin_in_box.z + t * direction_in_box.z);
-                        in_roi = p.x >= crop_min.x && p.x <= crop_max.x && p.y >= crop_min.y &&
-                                 p.y <= crop_max.y && p.z >= crop_min.z && p.z <= crop_max.z;
+                        in_roi = ellipsoid ? ellipsoid_contains(p, crop_max) :
+                                              (p.x >= crop_min.x && p.x <= crop_max.x && p.y >= crop_min.y &&
+                                               p.y <= crop_max.y && p.z >= crop_min.z && p.z <= crop_max.z);
                     }
                 } else {
-                    in_roi = ray_intersects_aabb(origin_in_box, direction_in_box, crop_min, crop_max);
+                    in_roi = ellipsoid ? ray_intersects_ellipsoid(origin_in_box, direction_in_box, crop_max) :
+                                         ray_intersects_aabb(origin_in_box, direction_in_box, crop_min, crop_max);
                 }
                 const bool full_weight = inverse ? !in_roi : in_roi;
                 output[idx] = full_weight ? 1.0f : outside_weight;
@@ -198,6 +225,13 @@ namespace lfs::training::kernels {
             return ray_intersects_aabb(camera_in_box, direction, lo, hi);
         }
 
+        __device__ __forceinline__ bool splat_sees_ellipsoid(
+            const float3 camera, const float3 centre, const float3 radii, const float margin) {
+            const float3 grown = make_float3(radii.x + margin, radii.y + margin, radii.z + margin);
+            const float3 direction = make_float3(centre.x - camera.x, centre.y - camera.y, centre.z - camera.z);
+            return ray_intersects_ellipsoid(camera, direction, grown);
+        }
+
         // Three standard deviations of the splat's largest axis, in box units.
         __device__ __forceinline__ float splat_margin(
             const float* __restrict__ scaling_raw, const size_t i, const float margin_scale) {
@@ -217,6 +251,7 @@ namespace lfs::training::kernels {
             const float* __restrict__ camera_position,
             const float3 crop_min,
             const float3 crop_max,
+            const bool ellipsoid,
             const bool inverse,
             const bool* __restrict__ deleted,
             bool* __restrict__ rejected) {
@@ -233,8 +268,10 @@ namespace lfs::training::kernels {
                     model_to_cropbox, make_float3(means[3 * i], means[3 * i + 1], means[3 * i + 2]));
                 // Inverse boxes shrink instead, so the splats on their rim train with the outside.
                 const float margin = splat_margin(scaling_raw, i, margin_scale);
-                const bool sees = splat_sees_box(
-                    camera_in_box, centre, crop_min, crop_max, inverse ? -margin : margin);
+                const bool sees = ellipsoid ? splat_sees_ellipsoid(camera_in_box, centre, crop_max,
+                                                                    inverse ? -margin : margin)
+                                            : splat_sees_box(camera_in_box, centre, crop_min, crop_max,
+                                                              inverse ? -margin : margin);
                 rejected[i] = inverse ? sees : !sees;
             }
         }
@@ -249,6 +286,7 @@ namespace lfs::training::kernels {
             const int num_cameras,
             const float3 crop_min,
             const float3 crop_max,
+            const bool ellipsoid,
             const bool inverse,
             const bool* __restrict__ deleted,
             bool* __restrict__ rejected,
@@ -264,9 +302,10 @@ namespace lfs::training::kernels {
                 const float3 centre = transform_point(
                     model_to_cropbox, make_float3(means[3 * i], means[3 * i + 1], means[3 * i + 2]));
                 if (in_roi) {
-                    const bool inside = centre.x >= crop_min.x && centre.x <= crop_max.x &&
-                                        centre.y >= crop_min.y && centre.y <= crop_max.y &&
-                                        centre.z >= crop_min.z && centre.z <= crop_max.z;
+                    const bool inside = ellipsoid ? ellipsoid_contains(centre, crop_max) :
+                                                    (centre.x >= crop_min.x && centre.x <= crop_max.x &&
+                                                     centre.y >= crop_min.y && centre.y <= crop_max.y &&
+                                                     centre.z >= crop_min.z && centre.z <= crop_max.z);
                     in_roi[i] = inverse ? !inside : inside;
                 }
                 // Inverse boxes keep splats that some camera sees outside the box.
@@ -275,8 +314,10 @@ namespace lfs::training::kernels {
                 for (int c = 0; c < num_cameras && !relevant; ++c) {
                     const float3 camera = make_float3(
                         cameras_in_box[3 * c], cameras_in_box[3 * c + 1], cameras_in_box[3 * c + 2]);
-                    const bool sees = splat_sees_box(
-                        camera, centre, crop_min, crop_max, inverse ? -margin : margin);
+                    const bool sees = ellipsoid ? splat_sees_ellipsoid(camera, centre, crop_max,
+                                                                        inverse ? -margin : margin)
+                                                : splat_sees_box(camera, centre, crop_min, crop_max,
+                                                                  inverse ? -margin : margin);
                     relevant = inverse ? !sees : sees;
                 }
                 rejected[i] = !relevant;
@@ -613,6 +654,7 @@ namespace lfs::training::kernels {
             pack_affine(world_to_cropbox),
             make_float3(crop_min.x, crop_min.y, crop_min.z),
             make_float3(crop_max.x, crop_max.y, crop_max.z),
+            false,
             inverse,
             outside_weight,
             camera_rays,
@@ -620,6 +662,25 @@ namespace lfs::training::kernels {
             surface_alpha,
             output);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_weight_map");
+    }
+
+    void launch_roi_weight_map(
+        const float* world_to_camera, const float* camera_position, const float fx, const float fy,
+        const float cx, const float cy, const int width, const int height, const glm::mat4& world_to_ellipsoid,
+        const RoiEllipsoid& ellipsoid, const bool inverse, const float outside_weight, const float* camera_rays,
+        const float* surface_depth, const float* surface_alpha, float* output, cudaStream_t stream) {
+        LFS_ASSERT_MSG(ellipsoid.radii.x > 0.0f && ellipsoid.radii.y > 0.0f && ellipsoid.radii.z > 0.0f,
+                       "ROI ellipsoid radii must be positive");
+        stream = resolve_stream(stream);
+        const size_t num_pixels = static_cast<size_t>(width) * height;
+        const int num_blocks = static_cast<int>(
+            std::min((num_pixels + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks));
+        roi_weight_map_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+            world_to_camera, camera_position, fx, fy, cx, cy, width, height, pack_affine(world_to_ellipsoid),
+            make_float3(-ellipsoid.radii.x, -ellipsoid.radii.y, -ellipsoid.radii.z),
+            make_float3(ellipsoid.radii.x, ellipsoid.radii.y, ellipsoid.radii.z), true, inverse, outside_weight,
+            camera_rays, surface_depth, surface_alpha, output);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_weight_map_ellipsoid");
     }
 
     void launch_roi_weight_map(
@@ -700,8 +761,27 @@ namespace lfs::training::kernels {
             pack_affine(world_to_cropbox), camera_position,
             make_float3(crop_min.x, crop_min.y, crop_min.z),
             make_float3(crop_max.x, crop_max.y, crop_max.z),
+            false,
             inverse, deleted, rejected);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_view_reject_mask");
+    }
+
+    void launch_roi_view_reject_mask(
+        const float* means, const float* scaling_raw, const size_t n, const glm::mat4& model_to_ellipsoid,
+        const glm::mat4& world_to_ellipsoid, const float* camera_position, const RoiEllipsoid& ellipsoid,
+        const bool inverse, const bool* deleted, bool* rejected, cudaStream_t stream) {
+        if (n == 0)
+            return;
+        LFS_ASSERT_MSG(means != nullptr && camera_position != nullptr && rejected != nullptr,
+                       "ROI view mask pointers must not be null");
+        stream = resolve_stream(stream);
+        const int num_blocks = static_cast<int>(std::min((n + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks));
+        roi_view_reject_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+            means, scaling_raw, n, pack_affine(model_to_ellipsoid), box_units_per_model_unit(model_to_ellipsoid),
+            pack_affine(world_to_ellipsoid), camera_position,
+            make_float3(-ellipsoid.radii.x, -ellipsoid.radii.y, -ellipsoid.radii.z),
+            make_float3(ellipsoid.radii.x, ellipsoid.radii.y, ellipsoid.radii.z), true, inverse, deleted, rejected);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_view_reject_mask_ellipsoid");
     }
 
     void launch_roi_view_reject_mask(
@@ -755,8 +835,29 @@ namespace lfs::training::kernels {
             cameras_in_box, num_cameras,
             make_float3(crop_min.x, crop_min.y, crop_min.z),
             make_float3(crop_max.x, crop_max.y, crop_max.z),
+            false,
             inverse, deleted, rejected, in_roi);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_relevance_reject_mask");
+    }
+
+    void launch_roi_relevance_reject_mask(
+        const float* means, const float* scaling_raw, const size_t n, const glm::mat4& model_to_ellipsoid,
+        const float* cameras_in_ellipsoid, const int num_cameras, const RoiEllipsoid& ellipsoid,
+        const bool inverse, const bool* deleted, bool* rejected, bool* in_roi, cudaStream_t stream) {
+        if (n == 0)
+            return;
+        LFS_ASSERT_MSG(means != nullptr && rejected != nullptr &&
+                           (num_cameras == 0 || cameras_in_ellipsoid != nullptr),
+                       "ROI relevance mask pointers must not be null");
+        stream = resolve_stream(stream);
+        const int num_blocks = static_cast<int>(std::min((n + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks));
+        roi_relevance_reject_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+            means, scaling_raw, n, pack_affine(model_to_ellipsoid), box_units_per_model_unit(model_to_ellipsoid),
+            cameras_in_ellipsoid, num_cameras,
+            make_float3(-ellipsoid.radii.x, -ellipsoid.radii.y, -ellipsoid.radii.z),
+            make_float3(ellipsoid.radii.x, ellipsoid.radii.y, ellipsoid.radii.z), true, inverse, deleted, rejected,
+            in_roi);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.roi_relevance_reject_mask_ellipsoid");
     }
 
     void launch_roi_relevance_reject_mask(

@@ -908,6 +908,7 @@
     "select_every_n_cameras": "Seleccionar cada N cámaras",
     "select_distinct_cameras": "Seleccionar distintas",
     "select_cropbox_cameras": "Seleccionar por visibilidad de caja de recorte",
+    "select_roi_cameras": "Seleccionar por visibilidad de ROI",
     "hide_disabled_cameras": "Ocultar cámaras desactivadas",
     "camera_percentage": "Porcentaje",
     "camera_every_n": "Cada N cámaras",
@@ -917,9 +918,11 @@
     "camera_coverage": "Cobertura mínima del fotograma",
     "camera_selection_no_scene": "No hay escena disponible.",
     "camera_selection_cropbox_required": "Elija una caja de recorte válida.",
+    "camera_selection_roi_required": "Elija una ROI válida.",
     "camera_selection_group_required": "Seleccione un grupo de cámaras válido.",
     "camera_selection_already_running": "La selección de cámaras ya se está ejecutando.",
     "camera_selection_pinhole_required": "La visibilidad de la caja de recorte requiere cámaras estenopeicas.",
+    "camera_selection_roi_pinhole_required": "La visibilidad de ROI requiere cámaras estenopeicas.",
     "camera_selection_stale": "La escena cambió durante la selección de cámaras.",
     "camera_selection_progress": "Progreso de selección",
     "go_to_keyframe": "Ir a la Vista del Fotograma Clave",
@@ -1280,7 +1283,8 @@
     "mirror": "Reflejar",
     "crop": "Recortar",
     "align": "Alinear",
-    "scale_distance": "Escalar distancia"
+    "scale_distance": "Escalar distancia",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "Selección",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "Medido:",
     "scale_distance_set": "Establecer distancia:",
     "scale_distance_apply": "Confirmar escala",
-    "scale_distance_reset": "Restablecer puntos"
+    "scale_distance_reset": "Restablecer puntos",
+    "training_roi": "ROI de entrenamiento",
+    "roi_settings": "Ajustes de ROI",
+    "roi_seed_crop": "Recorte inicial",
+    "roi_seed_crop_tooltip": "Recortar la nube de puntos antes del entrenamiento",
+    "roi_final_crop": "Recorte final",
+    "roi_final_crop_tooltip": "Recortar el modelo después del entrenamiento",
+    "roi_relevant_cameras": "Usar cámaras relevantes",
+    "roi_relevant_cameras_tooltip": "Usar solo cámaras relevantes para el entrenamiento ROI",
+    "roi_camera_coverage": "Cobertura de cámara (%)",
+    "roi_camera_coverage_tooltip": "Cobertura mínima del fotograma para el entrenamiento ROI"
   },
   "transform": {
     "scale_apriltag": "Escalar escena con AprilTags",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "Podar opacidad:",
     "ppisp_settings": "Ajustes PPISP",
     "ppisp_enable_controller": "Activar Controlador:",
+    "crop_to_cropbox": "Recortar el modelo después del entrenamiento",
     "disabled": "Desactivado"
   },
   "image_preview": {

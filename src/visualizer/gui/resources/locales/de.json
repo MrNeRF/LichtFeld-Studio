@@ -908,6 +908,7 @@
     "select_every_n_cameras": "Jede N-te Kamera auswählen",
     "select_distinct_cameras": "Unterschiedliche auswählen",
     "select_cropbox_cameras": "Nach Crop-Box-Sichtbarkeit auswählen",
+    "select_roi_cameras": "Nach ROI-Sichtbarkeit auswählen",
     "hide_disabled_cameras": "Deaktivierte Kameras ausblenden",
     "camera_percentage": "Prozentsatz",
     "camera_every_n": "Jede N-te Kamera",
@@ -917,9 +918,11 @@
     "camera_coverage": "Minimale Bildabdeckung",
     "camera_selection_no_scene": "Keine Szene verfügbar.",
     "camera_selection_cropbox_required": "Eine gültige Crop-Box auswählen.",
+    "camera_selection_roi_required": "Eine gültige ROI auswählen.",
     "camera_selection_group_required": "Eine gültige Kameragruppe auswählen.",
     "camera_selection_already_running": "Kameraauswahl wird bereits ausgeführt.",
     "camera_selection_pinhole_required": "Die Sichtbarkeit der Crop-Box erfordert Lochkameras.",
+    "camera_selection_roi_pinhole_required": "Die ROI-Sichtbarkeit erfordert Lochkameras.",
     "camera_selection_stale": "Die Szene hat sich während der Kameraselektion geändert.",
     "camera_selection_progress": "Auswahlfortschritt",
     "go_to_keyframe": "Zur Keyframe-Ansicht",
@@ -1280,7 +1283,8 @@
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
     "align": "Ausrichten",
-    "scale_distance": "Abstand skalieren"
+    "scale_distance": "Abstand skalieren",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "Gemessen:",
     "scale_distance_set": "Abstand festlegen:",
     "scale_distance_apply": "Skalierung bestätigen",
-    "scale_distance_reset": "Punkte zurücksetzen"
+    "scale_distance_reset": "Punkte zurücksetzen",
+    "training_roi": "Trainings-ROI",
+    "roi_settings": "ROI-Einstellungen",
+    "roi_seed_crop": "Seed-Zuschnitt",
+    "roi_seed_crop_tooltip": "Punktwolke vor dem Training zuschneiden",
+    "roi_final_crop": "Endzuschnitt",
+    "roi_final_crop_tooltip": "Modell nach dem Training zuschneiden",
+    "roi_relevant_cameras": "Relevante Kameras verwenden",
+    "roi_relevant_cameras_tooltip": "Nur für das ROI-Training relevante Kameras verwenden",
+    "roi_camera_coverage": "Kameraabdeckung (%)",
+    "roi_camera_coverage_tooltip": "Mindestabdeckung des Kamerabilds für das ROI-Training"
   },
   "transform": {
     "scale_apriltag": "Szene mit AprilTags skalieren",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "Opazität beschneiden:",
     "ppisp_settings": "PPISP-Einstellungen",
     "ppisp_enable_controller": "Controller aktivieren:",
+    "crop_to_cropbox": "Modell nach dem Training zuschneiden",
     "disabled": "Deaktiviert"
   },
   "image_preview": {

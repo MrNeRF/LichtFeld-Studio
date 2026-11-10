@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include <nanoflann.hpp>
 #include <numeric>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -152,17 +153,20 @@ namespace lfs::vis::gui::camera_selection {
     template <class Snapshot>
     float crop_coverage(const Snapshot& camera, const std::vector<glm::vec3>& points,
                         const glm::mat4& world_to_local, const glm::vec3 box_min,
-                        const glm::vec3 box_max) {
-        if (!camera.pose_valid || points.size() < 8)
+                        const glm::vec3 box_max,
+                        const std::optional<bool> center_is_inside = std::nullopt) {
+        if (!camera.pose_valid || points.empty())
             return 0.0F;
         const glm::vec3 local_center = glm::vec3(world_to_local * glm::vec4(camera.center, 1.0F));
-        if (glm::all(glm::greaterThanEqual(local_center, box_min)) &&
-            glm::all(glm::lessThanEqual(local_center, box_max)))
+        const bool box_contains_center = glm::all(glm::greaterThanEqual(local_center, box_min)) &&
+                                         glm::all(glm::lessThanEqual(local_center, box_max));
+        if (center_is_inside.value_or(box_contains_center))
             return 100.0F;
         constexpr float near_z = 1.e-6F;
-        std::array<glm::vec3, 8> view;
-        for (size_t i = 0; i < view.size(); ++i)
-            view[i] = glm::vec3(camera.world_to_camera * glm::vec4(points[i], 1.0F));
+        std::vector<glm::vec3> view;
+        view.reserve(points.size());
+        for (const auto& point : points)
+            view.push_back(glm::vec3(camera.world_to_camera * glm::vec4(point, 1.0F)));
         float min_x = camera.width, max_x = 0.0F, min_y = camera.height, max_y = 0.0F;
         bool projected = false;
         const auto project = [&](const glm::vec3& p) {
@@ -177,18 +181,6 @@ namespace lfs::vis::gui::camera_selection {
         for (const auto& p : view)
             if (p.z >= near_z)
                 project(p);
-        // Corner order is x-major, then y, then z; differing one bit is an edge.
-        for (size_t i = 0; i < view.size(); ++i) {
-            for (const size_t bit : {size_t{1}, size_t{2}, size_t{4}}) {
-                const size_t j = i ^ bit;
-                if (j <= i || (view[i].z >= near_z) == (view[j].z >= near_z))
-                    continue;
-                const float t = (near_z - view[i].z) / (view[j].z - view[i].z);
-                auto p = view[i] + t * (view[j] - view[i]);
-                p.z = near_z;
-                project(p);
-            }
-        }
         if (!projected)
             return 0.0F;
         const float width = std::max(0.0F, std::min(camera.width, max_x) - std::max(0.0F, min_x));

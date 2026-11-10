@@ -28,8 +28,13 @@ namespace lfs::training {
         glm::mat4 model_to_cropbox;
         bool inverse = false;
         std::vector<glm::vec2> polygon;
+        glm::vec3 ellipsoid_radii{1.0f};
+        bool ellipsoid = false;
+        // This comes from the persistent ROI, not the legacy crop-box option.
+        bool crop_model_after_training = false;
 
         [[nodiscard]] bool is_polygon() const { return !polygon.empty(); }
+        [[nodiscard]] bool is_ellipsoid() const { return ellipsoid; }
     };
 
     [[nodiscard]] std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_geom(
@@ -65,6 +70,13 @@ namespace lfs::training {
         bool inverse,
         const core::Tensor* deleted_mask = nullptr);
 
+    [[nodiscard]] std::optional<core::Tensor> compute_ellipsoid_remove_mask(
+        const core::Tensor& means,
+        const glm::vec3& radii,
+        const glm::mat4& points_to_ellipsoid,
+        bool inverse,
+        const core::Tensor* deleted_mask = nullptr);
+
     [[nodiscard]] std::optional<core::Tensor> compute_training_cropbox_remove_mask(
         const core::Scene& scene,
         const core::SplatData& model);
@@ -79,5 +91,13 @@ namespace lfs::training {
     [[nodiscard]] std::optional<core::SplatData> crop_copy_to_training_cropbox(
         const core::SplatData& model,
         const TrainingCropBoxGeometry& geometry);
+
+    // Persistently updates camera training_enabled flags using the active ROI's coverage threshold when
+    // select_relevant_cameras is enabled. Atomically preserves existing flags if no camera reaches the threshold.
+    bool select_relevant_roi_cameras(core::Scene& scene);
+
+    // Creates a visible, disabled Crop helper matching the active ROI when crop_model_after_training is false
+    // and no matching Crop helper already exists on the training target.
+    void add_manual_crop_from_roi(core::Scene& scene);
 
 } // namespace lfs::training

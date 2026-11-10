@@ -2541,8 +2541,8 @@ NB_MODULE(lichtfeld, m) {
                     return Task::CameraSelectionOperation::EveryN;
                 if (operation == "distinct")
                     return Task::CameraSelectionOperation::Distinct;
-                if (operation == "cropbox_visibility")
-                    return Task::CameraSelectionOperation::CropBoxVisibility;
+                if (operation == "roi_visibility" || operation == "cropbox_visibility")
+                    return Task::CameraSelectionOperation::RoiVisibility;
                 throw std::invalid_argument("Unknown camera selection operation: " + operation);
             }();
             auto* viewer = lfs::python::get_visualizer();
@@ -2567,18 +2567,18 @@ NB_MODULE(lichtfeld, m) {
                 const lfs::core::TaskContext context{.name = "python.camera_selection_start", .domain = lfs::ErrorDomain::Python, .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
                 auto result = lfs::vis::post_guarded_and_wait<std::expected<lfs::vis::JobHandle, lfs::Error>>(*viewer, context, start, python_viewer_shutdown_error());
                 if (!result)
-                    throw std::runtime_error(lfs::format_for_developer(result.error()));
+                    throw std::runtime_error(std::string(result.error().user_message()));
                 handle = *result;
             }
             if (!*handle)
-                throw std::runtime_error(lfs::format_for_developer(handle->error()));
+                throw std::runtime_error(std::string(handle->error().user_message()));
             nb::dict result;
             result["job_id"] = "camera.selection";
             result["handle"] = handle->value().id;
             result["operation"] = operation;
             return result;
         },
-        nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2, nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0, "Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.");
+        nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2, nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0, "Start a cancellable camera-group selection job. roi_visibility uses the active training ROI; cropbox_visibility is accepted as a compatibility alias.");
 
     m.def(
         "camera_selection_status", []() -> nb::dict {
@@ -2930,20 +2930,59 @@ NB_MODULE(lichtfeld, m) {
                 return;
             if (names.size() != before.size())
                 throw nb::value_error("Expected one transform per node");
-            std::vector<glm::mat4> transforms;
-            transforms.reserve(before.size());
-            for (const auto& matrix : before) {
+            std::vector<std::string> regular_names;
+            std::vector<glm::mat4> regular_transforms;
+            std::vector<std::pair<lfs::core::NodeId, glm::mat4>> roi_transforms;
+            for (size_t i = 0; i < names.size(); ++i) {
+                const auto& matrix = before[i];
                 if (matrix.size() != 16)
                     throw nb::value_error("Expected 16 floats per transform");
                 glm::mat4 transform;
                 std::memcpy(&transform[0][0], matrix.data(), 16 * sizeof(float));
-                transforms.push_back(transform);
+                if (const auto* const roi_target = sm->getScene().resolveRoiTargetNode(names[i])) {
+                    roi_transforms.emplace_back(roi_target->id, transform);
+                } else {
+                    regular_names.push_back(names[i]);
+                    regular_transforms.push_back(transform);
+                }
             }
-            auto entry = std::make_unique<lfs::vis::op::SceneSnapshot>(*sm, "transform.batch");
-            if (!entry->captureTransformsBefore(names, transforms))
-                return;
-            entry->captureAfter();
-            lfs::vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+            if (!regular_names.empty()) {
+                auto entry = std::make_unique<lfs::vis::op::SceneSnapshot>(*sm, "transform.batch");
+                if (entry->captureTransformsBefore(regular_names, regular_transforms)) {
+                    entry->captureAfter();
+                    lfs::vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+                }
+            }
+            if (!roi_transforms.empty()) {
+                auto& scene = sm->getScene();
+                std::vector<std::string> roi_parent_names;
+                std::vector<glm::mat4> after_transforms;
+                for (const auto& [target_id, before_transform] : roi_transforms) {
+                    const auto* const target = scene.getNodeById(target_id);
+                    auto* const roi = scene.getRegionOfInterestData(target_id);
+                    if (!target || !roi)
+                        continue;
+                    roi_parent_names.push_back(target->name);
+                    after_transforms.push_back(roi->local_transform);
+                    roi->local_transform = before_transform;
+                }
+                const lfs::vis::op::SceneGraphCaptureOptions roi_options{
+                    .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .payload_uuids = std::vector<lfs::core::Uuid>{},
+                };
+                auto state_before =
+                    lfs::vis::op::SceneGraphPatchEntry::captureState(*sm, roi_parent_names, roi_options);
+                for (size_t i = 0; i < roi_transforms.size() && i < after_transforms.size(); ++i) {
+                    if (auto* const roi = scene.getRegionOfInterestData(roi_transforms[i].first))
+                        roi->local_transform = after_transforms[i];
+                }
+                auto state_after =
+                    lfs::vis::op::SceneGraphPatchEntry::captureState(*sm, roi_parent_names, roi_options);
+                lfs::vis::op::undoHistory().push(std::make_unique<lfs::vis::op::SceneGraphPatchEntry>(
+                    *sm, "roi.transform", std::move(state_before), std::move(state_after)));
+            }
         },
         nb::arg("node_names"), nb::arg("old_transforms"), "Record a completed preview edit as one undo step using its original local transforms");
 

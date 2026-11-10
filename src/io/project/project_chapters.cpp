@@ -2517,6 +2517,91 @@ namespace lfs::io::project {
             };
         }
 
+        lfs::Result<RegionOfInterestRecord> parse_region_of_interest(
+            const Json& value, const std::string_view field) {
+            if (auto valid = require_object(value, "SCNG", field); !valid)
+                return std::move(valid).error();
+            auto shape = required<std::string>(value, "shape", "SCNG", field);
+            const auto min_member = value.find("min");
+            const auto max_member = value.find("max");
+            const auto radii_member = value.find("radii");
+            const auto transform_member = value.find("local_transform");
+            const auto color_member = value.find("color");
+            if (min_member == value.end() || max_member == value.end() ||
+                radii_member == value.end() || transform_member == value.end() ||
+                color_member == value.end()) {
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss,
+                    "A region of interest is incomplete.",
+                    std::format("SCNG.{} is missing a required geometry field", field), "SCNG", field);
+            }
+            auto min = fixed_array<float, 3>(*min_member, "SCNG", std::format("{}.min", field));
+            auto max = fixed_array<float, 3>(*max_member, "SCNG", std::format("{}.max", field));
+            auto radii = fixed_array<float, 3>(*radii_member, "SCNG", std::format("{}.radii", field));
+            auto half_depth = required<float>(value, "half_depth", "SCNG", field);
+            auto transform = fixed_array<float, 16>(*transform_member, "SCNG", std::format("{}.local_transform", field));
+            auto inverse = required<bool>(value, "inverse", "SCNG", field);
+            auto enabled = required<bool>(value, "enabled", "SCNG", field);
+            auto crop_seed = required<bool>(value, "crop_point_cloud_before_training", "SCNG", field);
+            auto crop_model = required<bool>(value, "crop_model_after_training", "SCNG", field);
+            auto select_cameras = required<bool>(value, "select_relevant_cameras", "SCNG", field);
+            auto coverage = required<float>(value, "camera_coverage_percent", "SCNG", field);
+            auto color = fixed_array<float, 3>(*color_member, "SCNG", std::format("{}.color", field));
+            if (!shape || !min || !max || !radii || !half_depth || !transform || !inverse || !enabled ||
+                !crop_seed || !crop_model || !select_cameras || !coverage || !color)
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
+                                                    std::format("SCNG.{} is missing a required field", field), "SCNG", field);
+            const bool valid_box = (*min)[0] < (*max)[0] && (*min)[1] < (*max)[1] && (*min)[2] < (*max)[2];
+            const bool valid_radii = (*radii)[0] > 0.0f && (*radii)[1] > 0.0f && (*radii)[2] > 0.0f;
+            if ((*shape != "box" && *shape != "ellipsoid" && *shape != "polygon") ||
+                !std::isfinite(*half_depth) || !std::isfinite(*coverage) || *coverage < 0.0f || *coverage > 100.0f ||
+                (*shape == "box" && !valid_box) || (*shape == "ellipsoid" && !valid_radii))
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                                                    std::format("SCNG.{} has invalid shape or settings", field), "SCNG", field);
+            RegionOfInterestRecord result{.shape = std::move(*shape), .min = *min, .max = *max, .radii = *radii,
+                                          .half_depth = *half_depth, .local_transform = *transform, .inverse = *inverse,
+                                          .enabled = *enabled, .crop_point_cloud_before_training = *crop_seed,
+                                          .crop_model_after_training = *crop_model, .select_relevant_cameras = *select_cameras,
+                                          .camera_coverage_percent = *coverage, .color = *color};
+            if (const Json* vertices = JsonChapterDom::read_json_ref(value, "vertices")) {
+                if (!vertices->is_array())
+                    return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "ROI vertices are invalid.",
+                                                        std::format("SCNG.{}.vertices is not an array", field), "SCNG", field);
+                for (std::size_t index = 0; index < vertices->size(); ++index) {
+                    auto vertex = fixed_array<float, 2>((*vertices)[index], "SCNG", std::format("{}.vertices[{}]", field, index));
+                    if (!vertex)
+                        return std::move(vertex).error();
+                    result.vertices.push_back(*vertex);
+                }
+            }
+            if (result.shape == "polygon") {
+                std::vector<glm::vec2> outline;
+                outline.reserve(result.vertices.size());
+                for (const auto& vertex : result.vertices)
+                    outline.emplace_back(vertex[0], vertex[1]);
+                if (!lfs::core::crop_polygon::isValidOutline(outline) ||
+                    !lfs::core::crop_polygon::isValidHalfDepth(result.half_depth)) {
+                    return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss,
+                        "A region of interest polygon is invalid.",
+                        std::format("SCNG.{} has a degenerate outline or depth", field), "SCNG", field);
+                }
+            }
+            return result;
+        }
+
+        Json region_of_interest_json(const RegionOfInterestRecord& value) {
+            Json vertices = Json::array();
+            for (const auto& vertex : value.vertices)
+                vertices.push_back(json_array(vertex));
+            return Json{{"shape", value.shape}, {"min", json_array(value.min)}, {"max", json_array(value.max)},
+                        {"radii", json_array(value.radii)}, {"vertices", std::move(vertices)},
+                        {"half_depth", value.half_depth}, {"local_transform", json_array(value.local_transform)},
+                        {"inverse", value.inverse}, {"enabled", value.enabled},
+                        {"crop_point_cloud_before_training", value.crop_point_cloud_before_training},
+                        {"crop_model_after_training", value.crop_model_after_training},
+                        {"select_relevant_cameras", value.select_relevant_cameras},
+                        {"camera_coverage_percent", value.camera_coverage_percent}, {"color", json_array(value.color)}};
+        }
+
         lfs::Result<std::vector<float>> finite_float_vector(
             const Json& object, const std::string_view key,
             const std::string_view field, const std::size_t maximum_size) {
@@ -2744,6 +2829,7 @@ namespace lfs::io::project {
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
                 .crop_polygon = std::nullopt,
+                .region_of_interest = std::nullopt,
             };
             if (JsonChapterDom::read_json_ref(element, "point_cloud_source")) {
                 auto point_source = JsonChapterDom::read<bool>(element, "point_cloud_source");
@@ -2827,6 +2913,12 @@ namespace lfs::io::project {
                     return std::move(parsed).error();
                 }
                 result.crop_polygon = std::move(*parsed);
+            }
+            if (const Json* region = JsonChapterDom::read_json_ref(element, "region_of_interest")) {
+                auto parsed = parse_region_of_interest(*region, "nodes.region_of_interest");
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.region_of_interest = std::move(*parsed);
             }
             if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
                 auto parsed = parse_uuid(*collision, "SCNG", "nodes.collision");
@@ -3054,6 +3146,11 @@ namespace lfs::io::project {
                 element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
             } else {
                 element.erase("crop_polygon");
+            }
+            if (value.region_of_interest) {
+                element["region_of_interest"] = region_of_interest_json(*value.region_of_interest);
+            } else {
+                element.erase("region_of_interest");
             }
             if (value.collision)
                 element["collision"] = value.collision->to_string();

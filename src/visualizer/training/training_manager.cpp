@@ -21,6 +21,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
+#include "gui/camera_selection_algorithms.hpp"
 #include "gui/gui_manager.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
@@ -40,6 +41,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -54,6 +56,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 #ifdef __GLIBC__
@@ -477,6 +480,10 @@ namespace lfs::vis {
                 }
                 if (node.crop_polygon) {
                     result.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
+                }
+                if (node.region_of_interest) {
+                    result.region_of_interest =
+                        std::make_unique<lfs::core::RegionOfInterestData>(*node.region_of_interest);
                 }
                 return result;
             }
@@ -1293,14 +1300,10 @@ namespace lfs::vis {
     }
 
     std::optional<lfs::training::TrainingCropBoxGeometry> TrainerManager::exportCropBox() const {
-        // The editable setting is what the toolbar shows; it reaches the trainer only while training runs.
-        const auto* const params = services().paramsOrNull();
-        const bool crop = params && params->isLoaded()
-                              ? params->getActiveParams().crop_to_cropbox
-                              : trainer_ && trainer_->getParams().optimization.crop_to_cropbox;
-        if (!crop || !scene_)
+        if (!scene_)
             return std::nullopt;
-        return lfs::training::resolve_training_cropbox_geom(*scene_);
+        const auto roi = lfs::training::resolve_training_cropbox_geom(*scene_);
+        return roi && roi->crop_model_after_training ? roi : std::nullopt;
     }
 
     void TrainerManager::notifyUnusedCameraMasks() {
@@ -1566,6 +1569,13 @@ namespace lfs::vis {
                             scene_->notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                         }
                         if (install_result) {
+                            // A first training run creates its model here. Apply
+                            // the persisted ROI camera rule only after that
+                            // ownership transfer, while this is still the scene
+                            // owner thread, then publish the same ROI snapshot
+                            // the trainer will consume.
+                            static_cast<void>(lfs::training::select_relevant_roi_cameras(*scene_));
+                            syncCropBox();
                             if (auto* model = scene_->getTrainingModel()) {
                                 installExportableCapacityEnsure(*model);
                             }
@@ -1933,6 +1943,8 @@ namespace lfs::vis {
         completion_pending_.store(true, std::memory_order_release);
 
         last_training_error_.clear();
+        if (scene_)
+            static_cast<void>(lfs::training::select_relevant_roi_cameras(*scene_));
         syncCropBox();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
@@ -2014,6 +2026,10 @@ namespace lfs::vis {
             LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
                      completion.iteration, completion.final_loss, completion.elapsed_seconds);
             completion_pending_.store(false, std::memory_order_release);
+            if (completion.success && !completion.user_stopped && scene_) {
+                lfs::training::add_manual_crop_from_roi(*scene_);
+                scene_->notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+            }
             std::string error_message_key;
             if (completion.typed_error && !completion.typed_error->frames().empty()) {
                 for (const auto& field : completion.typed_error->frames().front().fields.entries()) {

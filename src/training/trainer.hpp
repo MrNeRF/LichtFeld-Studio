@@ -336,8 +336,9 @@ namespace lfs::training {
         // training thread never reads scene nodes while they are being edited. Without a
         // publisher (headless) the trainer reads the scene itself at each step.
         void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
-        // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
+        // The ROI to use for final exports when its persistent final-crop control is enabled.
         [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
+        [[nodiscard]] bool should_crop_model_after_training() const;
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);

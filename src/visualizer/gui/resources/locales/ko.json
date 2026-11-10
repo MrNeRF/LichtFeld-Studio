@@ -908,6 +908,7 @@
     "select_every_n_cameras": "N개마다 선택",
     "select_distinct_cameras": "서로 다른 카메라 선택",
     "select_cropbox_cameras": "크롭 상자 가시성으로 선택",
+    "select_roi_cameras": "ROI 가시성으로 선택",
     "hide_disabled_cameras": "비활성화된 카메라 숨기기",
     "camera_percentage": "백분율",
     "camera_every_n": "N개마다",
@@ -917,9 +918,11 @@
     "camera_coverage": "최소 프레임 범위",
     "camera_selection_no_scene": "사용 가능한 장면이 없습니다.",
     "camera_selection_cropbox_required": "유효한 크롭 상자를 선택하세요.",
+    "camera_selection_roi_required": "유효한 ROI를 선택하세요.",
     "camera_selection_group_required": "유효한 카메라 그룹을 선택하세요.",
     "camera_selection_already_running": "카메라 선택이 이미 실행 중입니다.",
     "camera_selection_pinhole_required": "크롭 상자 가시성에는 핀홀 카메라가 필요합니다.",
+    "camera_selection_roi_pinhole_required": "ROI 가시성에는 핀홀 카메라가 필요합니다.",
     "camera_selection_stale": "카메라 선택 중 장면이 변경되었습니다.",
     "camera_selection_progress": "선택 진행률",
     "go_to_keyframe": "키프레임 뷰로 이동",
@@ -1280,7 +1283,8 @@
     "mirror": "미러",
     "crop": "자르기",
     "align": "정렬",
-    "scale_distance": "거리 기준 크기 조절"
+    "scale_distance": "거리 기준 크기 조절",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "선택",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "측정치:",
     "scale_distance_set": "거리 설정:",
     "scale_distance_apply": "크기 조절 확정",
-    "scale_distance_reset": "점 재설정"
+    "scale_distance_reset": "점 재설정",
+    "training_roi": "학습 ROI",
+    "roi_settings": "ROI 설정",
+    "roi_seed_crop": "초기 점구름 자르기",
+    "roi_seed_crop_tooltip": "학습 전 포인트 클라우드 자르기",
+    "roi_final_crop": "최종 모델 자르기",
+    "roi_final_crop_tooltip": "학습 후 모델 자르기",
+    "roi_relevant_cameras": "관련 카메라 사용",
+    "roi_relevant_cameras_tooltip": "ROI 학습과 관련된 카메라만 사용",
+    "roi_camera_coverage": "카메라 커버리지 (%)",
+    "roi_camera_coverage_tooltip": "ROI 학습을 위한 최소 카메라 프레임 커버리지"
   },
   "transform": {
     "scale_apriltag": "AprilTag로 장면 크기 조정",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "불투명도 가지치기:",
     "ppisp_settings": "PPISP 설정",
     "ppisp_enable_controller": "컨트롤러 활성화:",
+    "crop_to_cropbox": "학습 후 모델 자르기",
     "disabled": "비활성화됨"
   },
   "image_preview": {

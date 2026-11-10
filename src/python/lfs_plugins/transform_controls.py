@@ -336,12 +336,19 @@ class TransformControlsController:
         prev_space = self._transform_space
         prev_selected = tuple(self._selected)
 
-        active_tool = _native_store_value("active_tool", _MISSING)
-        if active_tool is _MISSING:
-            active_tool = lf.ui.get_active_tool() or ""
-        self._crop_active = active_tool == "builtin.cropbox"
+        raw_active_tool = _native_store_value("active_tool", _MISSING)
+        if raw_active_tool is _MISSING:
+            raw_active_tool = lf.ui.get_active_tool() or ""
+        else:
+            raw_active_tool = raw_active_tool or ""
+        self._crop_active = raw_active_tool in ("builtin.cropbox", "builtin.roi")
+        active_tool = raw_active_tool
         if self._crop_active:
-            operation = lf.ui.get_crop_tool_operation()
+            operation = (
+                lf.ui.get_crop_tool_operation()
+                or (lf.ui.get_gizmo_type() if raw_active_tool == "builtin.roi" else "")
+                or "translate"
+            )
             active_tool = f"builtin.{operation}"
         self._active_tool = active_tool or ""
         active_transform_tool = self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS
@@ -359,23 +366,40 @@ class TransformControlsController:
         self._selected = lf.get_selected_node_names() or []
         self._crop_locked = False
         if self._crop_active:
-            # Only the volume selected by the crop tool may receive numeric edits.
+            # Only the volume selected by the crop/ROI tool may receive numeric edits.
             # A parent selection during tool activation must never move the model.
-            scene = lf.get_scene()
-            node = scene.get_node(self._selected[0]) if scene and len(self._selected) == 1 else None
-            shape = lf.ui.get_crop_tool_shape()
-            volume = None
-            if node:
-                if shape == "box":
-                    volume = node.cropbox()
-                elif shape == "polygon":
-                    volume = node.crop_polygon()
+            if raw_active_tool == "builtin.roi":
+                roi_getter = getattr(lf.ui, "get_roi_training_settings", None)
+                roi = (
+                    roi_getter(self._selected[0])
+                    if callable(roi_getter) and len(self._selected) == 1
+                    else {}
+                ) or {}
+                if (
+                    bool(roi.get("exists", False))
+                    and str(roi.get("shape", "box")) in ("box", "ellipsoid")
+                    and roi.get("roi_node_name")
+                ):
+                    self._selected = [str(roi["roi_node_name"])]
+                    self._crop_locked = bool(roi.get("locked", False))
                 else:
-                    volume = node.ellipsoid()
-            if volume is None:
-                self._selected = []
+                    self._selected = []
             else:
-                self._crop_locked = bool(node.locked)
+                scene = lf.get_scene()
+                node = scene.get_node(self._selected[0]) if scene and len(self._selected) == 1 else None
+                shape = lf.ui.get_crop_tool_shape()
+                volume = None
+                if node:
+                    if shape == "box":
+                        volume = node.cropbox()
+                    elif shape == "polygon":
+                        volume = node.crop_polygon()
+                    else:
+                        volume = node.ellipsoid()
+                if volume is None:
+                    self._selected = []
+                else:
+                    self._crop_locked = bool(node.locked)
         self._editable = bool(self._can_edit_selection())
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()

@@ -329,6 +329,16 @@
                     </div>
                 </div>
                 <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.roi_crop_point_cloud">
+                    <span class="setting-row__label-col">{{label_roi_crop_point_cloud}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="primary-roi-crop-point-cloud"
+                               type="checkbox"
+                               data-checked="roi_crop_point_cloud_before_training"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
                      data-tooltip="tooltip.crop_to_cropbox">
                     <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
                     <div class="setting-row__control-col">
@@ -336,6 +346,32 @@
                                type="checkbox"
                                data-checked="crop_to_cropbox"
                                data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.roi_select_relevant_cameras">
+                    <span class="setting-row__label-col">{{label_roi_select_relevant_cameras}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="primary-roi-select-relevant-cameras"
+                               type="checkbox"
+                               data-checked="roi_select_relevant_cameras"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-class-hidden="!roi_select_relevant_cameras"
+                     data-tooltip="tooltip.roi_camera_coverage">
+                    <span class="setting-row__label-col">{{label_roi_camera_coverage}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="primary-roi-camera-coverage"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="100"
+                               step="5"
+                               data-value="roi_camera_coverage_percent"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{roi_camera_coverage_percent_str}}</span>
                     </div>
                 </div>
             </div>
@@ -640,6 +676,16 @@
                     </div>
                 </div>
                 <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.roi_crop_point_cloud">
+                    <span class="setting-row__label-col">{{label_roi_crop_point_cloud}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="secondary-roi-crop-point-cloud"
+                               type="checkbox"
+                               data-checked="roi_crop_point_cloud_before_training"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
                      data-tooltip="tooltip.crop_to_cropbox">
                     <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
                     <div class="setting-row__control-col">
@@ -647,6 +693,32 @@
                                type="checkbox"
                                data-checked="crop_to_cropbox"
                                data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.roi_select_relevant_cameras">
+                    <span class="setting-row__label-col">{{label_roi_select_relevant_cameras}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="secondary-roi-select-relevant-cameras"
+                               type="checkbox"
+                               data-checked="roi_select_relevant_cameras"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-class-hidden="!roi_select_relevant_cameras"
+                     data-tooltip="tooltip.roi_camera_coverage">
+                    <span class="setting-row__label-col">{{label_roi_camera_coverage}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="secondary-roi-camera-coverage"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="100"
+                               step="5"
+                               data-value="roi_camera_coverage_percent"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{roi_camera_coverage_percent_str}}</span>
                     </div>
                 </div>
             </div>

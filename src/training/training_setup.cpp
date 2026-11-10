@@ -30,6 +30,7 @@
 #include "rendering/mesh2splat.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "trainer.hpp"
+#include "training_cropbox_mask.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -115,6 +116,84 @@ namespace lfs::training {
             select_rows(point_cloud.opacity);
             select_rows(point_cloud.scaling);
             select_rows(point_cloud.rotation);
+        }
+
+        std::optional<TrainingCropBoxGeometry> point_cloud_roi_geometry(
+            const lfs::core::RegionOfInterestData& roi) {
+            if (!roi.enabled)
+                return std::nullopt;
+            const glm::mat4 point_cloud_to_roi = glm::inverse(roi.local_transform);
+            TrainingCropBoxGeometry geometry{
+                .min = roi.min,
+                .max = roi.max,
+                .world_to_cropbox = point_cloud_to_roi,
+                .model_to_cropbox = point_cloud_to_roi,
+                .inverse = roi.inverse,
+                .crop_model_after_training = roi.crop_model_after_training,
+            };
+            switch (roi.shape) {
+            case lfs::core::RegionOfInterestShape::Box:
+                return geometry;
+            case lfs::core::RegionOfInterestShape::Ellipsoid:
+                geometry.min = -roi.radii;
+                geometry.max = roi.radii;
+                geometry.ellipsoid_radii = roi.radii;
+                geometry.ellipsoid = true;
+                return geometry;
+            case lfs::core::RegionOfInterestShape::Polygon:
+                if (!lfs::core::crop_polygon::isValidOutline(roi.vertices) ||
+                    !lfs::core::crop_polygon::isValidHalfDepth(roi.half_depth))
+                    return std::nullopt;
+                geometry.polygon = roi.vertices;
+                const glm::vec2 extents = lfs::core::crop_polygon::outlineHalfExtents(roi.vertices);
+                geometry.min = glm::vec3(-extents, -roi.half_depth);
+                geometry.max = glm::vec3(extents, roi.half_depth);
+                return geometry;
+            }
+            return std::nullopt;
+        }
+
+        bool crop_point_cloud_to_roi(lfs::core::PointCloud& point_cloud,
+                                     const lfs::core::RegionOfInterestData& roi) {
+            const auto geometry = point_cloud_roi_geometry(roi);
+            if (!geometry || !point_cloud.means.is_valid() || point_cloud.size() == 0)
+                return false;
+            std::optional<lfs::core::Tensor> removed;
+            if (geometry->is_polygon()) {
+                removed = compute_crop_polygon_remove_mask(
+                    point_cloud.means, geometry->polygon, geometry->max.z,
+                    geometry->model_to_cropbox, geometry->inverse);
+            } else if (geometry->is_ellipsoid()) {
+                removed = compute_ellipsoid_remove_mask(
+                    point_cloud.means, geometry->ellipsoid_radii,
+                    geometry->model_to_cropbox, geometry->inverse);
+            } else {
+                removed = compute_cropbox_remove_mask(
+                    point_cloud.means, geometry->min, geometry->max,
+                    geometry->model_to_cropbox, geometry->inverse);
+            }
+            if (!removed)
+                return false;
+            const auto keep = removed->logical_not();
+            if (keep.count_nonzero() == 0)
+                return false;
+            if (removed->count_nonzero() == 0)
+                return true;
+            const auto indices = keep.nonzero().squeeze(-1);
+            const int64_t rows = point_cloud.size();
+            const auto select_rows = [&](lfs::core::Tensor& tensor) {
+                if (tensor.is_valid() && tensor.ndim() > 0 && tensor.size(0) == rows)
+                    tensor = tensor.index_select(0, indices).contiguous();
+            };
+            select_rows(point_cloud.means);
+            select_rows(point_cloud.colors);
+            select_rows(point_cloud.normals);
+            select_rows(point_cloud.sh0);
+            select_rows(point_cloud.shN);
+            select_rows(point_cloud.opacity);
+            select_rows(point_cloud.scaling);
+            select_rows(point_cloud.rotation);
+            return true;
         }
 
         lfs::io::CentralizeDataset parse_centralize(const std::string& s) {
@@ -465,6 +544,7 @@ namespace lfs::training {
             install.preserved_cropbox_transform = context.preserved_cropbox_transform;
             install.preserved_crop_polygon = context.preserved_crop_polygon;
             install.preserved_crop_polygon_transform = context.preserved_crop_polygon_transform;
+            install.preserved_region_of_interest = context.preserved_region_of_interest;
             return install;
         }
 
@@ -1161,6 +1241,24 @@ namespace lfs::training {
             context.parent_id = node->parent_id;
             context.node_transform = node->transform();
             context.point_cloud = *node->point_cloud;
+            if (node->region_of_interest)
+                context.preserved_region_of_interest = *node->region_of_interest;
+        }
+        if (!context.preserved_region_of_interest) {
+            if (const auto* model_node = scene.getNodeById(scene.getTrainingModelNodeId());
+                model_node && model_node->region_of_interest) {
+                context.preserved_region_of_interest = *model_node->region_of_interest;
+            } else {
+                for (const auto* const node : scene.getNodes()) {
+                    if (node &&
+                        (node->type == lfs::core::NodeType::SPLAT ||
+                         node->type == lfs::core::NodeType::POINTCLOUD) &&
+                        node->region_of_interest) {
+                        context.preserved_region_of_interest = *node->region_of_interest;
+                        break;
+                    }
+                }
+            }
         }
         if (context.point_cloud_node_id == lfs::core::NULL_NODE) {
             return context;
@@ -1279,9 +1377,29 @@ namespace lfs::training {
             return std::optional<TrainingModelGraphInstall>{};
         }
 
-        const TrainingModelGraphCapture owned_capture =
-            graph_capture ? TrainingModelGraphCapture{} : captureTrainingModelGraph(scene);
-        const TrainingModelGraphCapture& context = graph_capture ? *graph_capture : owned_capture;
+        TrainingModelGraphCapture context =
+            graph_capture ? *graph_capture : captureTrainingModelGraph(scene);
+        if (params.roi) {
+            const auto& box = *params.roi;
+            lfs::core::RegionOfInterestData roi;
+            roi.shape = lfs::core::RegionOfInterestShape::Box;
+            roi.min = {box[0], box[1], box[2]};
+            roi.max = {box[3], box[4], box[5]};
+            roi.inverse = params.roi_invert;
+            roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
+            roi.crop_model_after_training = params.crop_to_roi;
+            roi.select_relevant_cameras = params.roi_relevant_cameras;
+            roi.camera_coverage_percent = params.roi_camera_coverage;
+            if (params.roi_rotation) {
+                const auto& degrees = *params.roi_rotation;
+                roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
+                                      glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
+                                                         glm::radians(degrees[2]));
+                roi.max = (roi.max - roi.min) * 0.5f;
+                roi.min = -roi.max;
+            }
+            context.preserved_region_of_interest = std::move(roi);
+        }
         warnIfMeshResolutionIgnored(params.optimization);
         const lfs::core::PointCloud* point_cloud =
             context.point_cloud ? &*context.point_cloud : nullptr;
@@ -1289,9 +1407,16 @@ namespace lfs::training {
         const int max_cap = params.optimization.max_cap;
 
         if (point_cloud && point_cloud->size() > 0) {
-            // An enabled crop box previews the region and supplies ROI weights.
-            // Only an explicit Apply removes seed points before training.
+            // The temporary copy is deliberately distinct from the PointCloud held by Scene.
             point_cloud_to_use = *point_cloud;
+            if (context.preserved_region_of_interest &&
+                context.preserved_region_of_interest->crop_point_cloud_before_training) {
+                const auto before = point_cloud_to_use.size();
+                if (!crop_point_cloud_to_roi(point_cloud_to_use, *context.preserved_region_of_interest)) {
+                    return std::unexpected("ROI seed crop leaves no usable point-cloud points");
+                }
+                LOG_INFO("ROI seed crop kept {} of {} points", point_cloud_to_use.size(), before);
+            }
             if (max_cap > 0) {
                 point_cloud_to_use.means = point_cloud_to_use.means.cpu();
                 point_cloud_to_use.colors = point_cloud_to_use.colors.cpu();
@@ -1390,6 +1515,9 @@ namespace lfs::training {
             static_cast<void>(scene.addCropPolygon("Model_crop_polygon", model_id, *install.preserved_crop_polygon,
                                                    install.preserved_crop_polygon_transform));
         }
+        if (install.preserved_region_of_interest) {
+            static_cast<void>(scene.setRegionOfInterestData(model_id, *install.preserved_region_of_interest));
+        }
         return {};
     }
 
@@ -1416,7 +1544,7 @@ namespace lfs::training {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
                 .domain = lfs::ErrorDomain::Training,
-                .user_message = "Failed to add the --cropbox region of interest to the training model",
+                .user_message = "Failed to add the --cropbox Crop helper to the training model",
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
@@ -1427,7 +1555,7 @@ namespace lfs::training {
         data.max = {box[3], box[4], box[5]};
         data.inverse = false;
         data.enabled = true;
-        LOG_INFO("Region of interest: crop box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
+        LOG_INFO("Pre-training Crop helper: box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
                  box[5]);
         glm::mat4 transform{1.0f};
         if (params.cropbox_rotation) {
@@ -1437,11 +1565,53 @@ namespace lfs::training {
                         glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]), glm::radians(degrees[2]));
             data.max = (data.max - data.min) * 0.5f;
             data.min = -data.max;
-            LOG_INFO("Region of interest: crop box turned by ({}, {}, {}) degrees about its centre", degrees[0],
+            LOG_INFO("Pre-training Crop helper: box turned by ({}, {}, {}) degrees about its centre", degrees[0],
                      degrees[1], degrees[2]);
         }
         scene.setCropBoxData(cropbox_id, data);
         scene.setNodeTransform(cropbox_id, transform);
+        return {};
+    }
+
+    lfs::Status applyTrainingRoi(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene) {
+        if (!params.roi)
+            return {};
+        const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        if (!model)
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "--roi needs the training model in the scene",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        const auto& box = *params.roi;
+        lfs::core::RegionOfInterestData roi;
+        roi.shape = lfs::core::RegionOfInterestShape::Box;
+        roi.min = {box[0], box[1], box[2]};
+        roi.max = {box[3], box[4], box[5]};
+        roi.inverse = params.roi_invert;
+        roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
+        roi.crop_model_after_training = params.crop_to_roi;
+        roi.select_relevant_cameras = params.roi_relevant_cameras;
+        roi.camera_coverage_percent = params.roi_camera_coverage;
+        if (params.roi_rotation) {
+            const auto& degrees = *params.roi_rotation;
+            roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
+                                  glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
+                                                     glm::radians(degrees[2]));
+            roi.max = (roi.max - roi.min) * 0.5f;
+            roi.min = -roi.max;
+        }
+        if (!scene.setRegionOfInterestData(model->id, roi)) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Failed to set the --roi on the training model",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
         return {};
     }
 
@@ -1453,15 +1623,18 @@ namespace lfs::training {
         if (!prepared) {
             return std::unexpected(std::move(prepared.error()));
         }
-        if (!*prepared) {
-            return {};
-        }
-        if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed) {
-            return installed;
+        if (*prepared) {
+            if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed) {
+                return installed;
+            }
         }
         if (auto applied = applyTrainingCropBox(params, scene); !applied) {
             return std::unexpected(std::string(applied.error().user_message()));
         }
+        if (auto applied = applyTrainingRoi(params, scene); !applied) {
+            return std::unexpected(std::string(applied.error().user_message()));
+        }
+        static_cast<void>(select_relevant_roi_cameras(scene));
         return {};
     }
 

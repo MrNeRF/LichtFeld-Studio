@@ -264,6 +264,9 @@ namespace lfs::vis::gui {
         bool isModelsHeaderTarget(Rml::Element* target) const;
         void requestDeleteNodes(const std::vector<core::NodeId>& node_ids);
         void deleteSelectedNodes();
+        void setRoiRowVisibility(core::NodeId roi_row_id, bool visible);
+        void deleteRoiRow(core::NodeId roi_row_id);
+        void activateRoiRow(core::NodeId roi_row_id);
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
         void executeAction(const std::string& action);
@@ -333,6 +336,7 @@ namespace lfs::vis::gui {
         uint64_t state_revision_ = 1;
         uint64_t last_bound_revision_ = 0;
         uint32_t last_selection_generation_ = std::numeric_limits<uint32_t>::max();
+        bool last_roi_tool_active_ = false;
         size_t last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
         size_t last_visible_start_ = kUnsetVisibleRange;
         size_t last_visible_end_ = kUnsetVisibleRange;

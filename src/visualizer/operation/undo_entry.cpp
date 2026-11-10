@@ -1001,6 +1001,10 @@ namespace lfs::vis::op {
             if (capture_payload && node.crop_polygon) {
                 snapshot.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
             }
+            if (node.region_of_interest) {
+                snapshot.region_of_interest =
+                    std::make_unique<lfs::core::RegionOfInterestData>(*node.region_of_interest);
+            }
             if (capture_payload && node.keyframe) {
                 snapshot.keyframe = std::make_unique<lfs::core::KeyframeData>(*node.keyframe);
             }
@@ -1297,6 +1301,10 @@ namespace lfs::vis::op {
                 desc.name = restored_name;
                 desc.gaussian_count = snapshot.gaussian_count;
                 desc.payload_hydration = snapshot.payload_hydration;
+                if (snapshot.region_of_interest) {
+                    desc.region_of_interest =
+                        std::make_unique<lfs::core::RegionOfInterestData>(*snapshot.region_of_interest);
+                }
 
                 try {
                     switch (snapshot.type) {
@@ -1501,6 +1509,10 @@ namespace lfs::vis::op {
                 total += sizeof(*snapshot.crop_polygon) +
                          snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
+            if (snapshot.region_of_interest) {
+                total += sizeof(*snapshot.region_of_interest) +
+                         snapshot.region_of_interest->vertices.size() * sizeof(glm::vec2);
+            }
             if (snapshot.keyframe) {
                 total += sizeof(*snapshot.keyframe);
             }
@@ -1552,6 +1564,10 @@ namespace lfs::vis::op {
             if (snapshot.crop_polygon) {
                 total.cpu_bytes += sizeof(*snapshot.crop_polygon) +
                                    snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
+            }
+            if (snapshot.region_of_interest) {
+                total.cpu_bytes += sizeof(*snapshot.region_of_interest) +
+                                   snapshot.region_of_interest->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total.cpu_bytes += sizeof(*snapshot.keyframe);
@@ -1670,11 +1686,27 @@ namespace lfs::vis::op {
                     }
                     scene.replaceNodeModel(node.name, std::move(restored_model));
                 }
+                if (snapshot.region_of_interest) {
+                    node.region_of_interest =
+                        std::make_unique<lfs::core::RegionOfInterestData>(*snapshot.region_of_interest);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+                } else if (node.region_of_interest) {
+                    node.region_of_interest.reset();
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+                }
                 break;
             case lfs::core::NodeType::POINTCLOUD:
                 if (snapshot.point_cloud) {
                     node.point_cloud = clonePointCloud(*snapshot.point_cloud);
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                }
+                if (snapshot.region_of_interest) {
+                    node.region_of_interest =
+                        std::make_unique<lfs::core::RegionOfInterestData>(*snapshot.region_of_interest);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+                } else if (node.region_of_interest) {
+                    node.region_of_interest.reset();
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
             case lfs::core::NodeType::COLLISION:
@@ -1756,6 +1788,7 @@ namespace lfs::vis::op {
                     existing->cropbox.reset();
                     existing->ellipsoid.reset();
                     existing->crop_polygon.reset();
+                    existing->region_of_interest.reset();
                     existing->camera.reset();
                     existing->keyframe.reset();
                     existing->camera_uid = -1;
@@ -2378,6 +2411,10 @@ namespace lfs::vis::op {
         }
         if (other.crop_polygon) {
             crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*other.crop_polygon);
+        }
+        if (other.region_of_interest) {
+            region_of_interest =
+                std::make_unique<lfs::core::RegionOfInterestData>(*other.region_of_interest);
         }
         if (other.keyframe) {
             keyframe = std::make_unique<lfs::core::KeyframeData>(*other.keyframe);

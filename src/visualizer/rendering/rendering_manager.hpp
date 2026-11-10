@@ -745,19 +745,19 @@ namespace lfs::vis {
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
                                   const glm::mat4& world_transform, bool affects_render,
-                                  int parent_node_index) {
-            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render, parent_node_index);
+                                  int parent_node_index, bool is_roi = false) {
+            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render, parent_node_index, is_roi);
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
                                     const glm::mat4& world_transform, bool affects_render,
-                                    int parent_node_index) {
-            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
+                                    int parent_node_index, bool is_roi = false) {
+            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index, is_roi);
         }
         void setCropPolygonGizmoState(bool active, const std::vector<glm::vec2>& vertices, float half_depth,
                                       const glm::mat4& world_transform, bool affects_render,
-                                      int parent_node_index) {
+                                      int parent_node_index, bool is_roi = false) {
             viewport_overlay_service_.setCropPolygon(active, vertices, half_depth, world_transform, affects_render,
-                                                     parent_node_index);
+                                                     parent_node_index, is_roi);
         }
         void setCropPolygonGizmoActive(bool active) { viewport_overlay_service_.setCropPolygonActive(active); }
         // Polygon outline being drawn (visualizer world); empty clears the preview.

@@ -32,15 +32,19 @@
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "operation/undo_entry.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "core/editor_context.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
@@ -75,6 +79,19 @@ namespace lfs::vis::gui {
     namespace {
 
         constexpr std::string_view kContextActionPrefix = "scene_panel:";
+        constexpr std::string_view kRoiIconColor = "rgba(171, 89, 242, 255)";
+
+        [[nodiscard]] constexpr bool isRoiRowId(const core::NodeId id) {
+            return id <= -2;
+        }
+
+        [[nodiscard]] constexpr core::NodeId roiRowId(const core::NodeId parent_id) {
+            return -2 - parent_id;
+        }
+
+        [[nodiscard]] constexpr core::NodeId roiTargetNodeId(const core::NodeId roi_row_id) {
+            return -2 - roi_row_id;
+        }
 
         [[nodiscard]] std::string tr(const char* key) {
             const std::string value = LOC(key);
@@ -1094,6 +1111,7 @@ namespace lfs::vis::gui {
         last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
         row_top_dp_cache_.clear();
         last_selection_generation_ = std::numeric_limits<uint32_t>::max();
+        last_roi_tool_active_ = false;
         last_visible_start_ = kUnsetVisibleRange;
         last_visible_end_ = kUnsetVisibleRange;
         last_bound_dp_ratio_ = -1.0f;
@@ -1130,19 +1148,26 @@ namespace lfs::vis::gui {
                                                    SceneManager* scene_manager) {
         const uint32_t selection_generation =
             scene_manager ? scene_manager->selectionState().generation() : 0;
-        if (selection_generation == last_selection_generation_)
+        const bool roi_tool_active = UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi";
+        if (selection_generation == last_selection_generation_ &&
+            roi_tool_active == last_roi_tool_active_)
             return false;
 
         std::unordered_set<core::NodeId> selected_ids;
         if (scene_manager) {
             for (const std::string& name : scene_manager->getSelectedNodeNames()) {
                 const core::NodeId id = scene.getNodeIdByName(name);
-                if (id != core::NULL_NODE)
-                    selected_ids.insert(id);
+                if (id != core::NULL_NODE) {
+                    if (roi_tool_active && scene.getRegionOfInterestData(id) != nullptr)
+                        selected_ids.insert(roiRowId(id));
+                    else
+                        selected_ids.insert(id);
+                }
             }
         }
 
         last_selection_generation_ = selection_generation;
+        last_roi_tool_active_ = roi_tool_active;
         if (selected_ids == selected_ids_)
             return false;
 
@@ -1253,6 +1278,30 @@ namespace lfs::vis::gui {
                 break;
             }
 
+            if ((node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) &&
+                node->region_of_interest) {
+                const core::NodeId roi_id = roiRowId(node->id);
+                snapshot.children.push_back(roi_id);
+                snapshot.has_children = true;
+
+                NodeSnapshot roi_snapshot;
+                roi_snapshot.id = roi_id;
+                roi_snapshot.parent_id = node->id;
+                roi_snapshot.type =
+                    node->region_of_interest->shape == core::RegionOfInterestShape::Ellipsoid
+                        ? core::NodeType::ELLIPSOID
+                    : node->region_of_interest->shape == core::RegionOfInterestShape::Polygon
+                        ? core::NodeType::CROP_POLYGON
+                        : core::NodeType::CROPBOX;
+                roi_snapshot.name = node->name + "_ROI";
+                roi_snapshot.label = roi_snapshot.name;
+                roi_snapshot.visible = node->region_of_interest->enabled;
+                roi_snapshot.locked = static_cast<bool>(node->locked);
+                roi_snapshot.has_children = false;
+                roi_snapshot.camera_loss_icon_color = std::string(kRoiIconColor);
+                snapshots.emplace(roi_id, std::move(roi_snapshot));
+            }
+
             snapshots.emplace(snapshot.id, std::move(snapshot));
             if (node->parent_id == core::NULL_NODE)
                 root_ids.push_back(node->id);
@@ -1276,6 +1325,20 @@ namespace lfs::vis::gui {
         }
 
         for (auto& [id, snapshot] : snapshots) {
+            if (isRoiRowId(id)) {
+                const core::NodeId target_id = roiTargetNodeId(id);
+                const auto* const target_node = scene.getNodeById(target_id);
+                const bool read_only = !target_node || target_node->isExternalPreview();
+                snapshot.draggable = false;
+                snapshot.can_delete = !read_only;
+                snapshot.delete_enabled =
+                    !read_only && !snapshot.locked && !delete_blocked_ids.contains(target_id);
+                snapshot.can_rename = false;
+                snapshot.rename_enabled = false;
+                snapshot.can_toggle_training = false;
+                snapshot.camera_frustum_container = false;
+                continue;
+            }
             const bool read_only = scene.getNodeById(id)->isExternalPreview();
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
@@ -2052,6 +2115,19 @@ namespace lfs::vis::gui {
         if (!scene)
             return;
 
+        if (isRoiRowId(node_id)) {
+            if (action == "toggle-vis") {
+                if (const auto it = node_snapshots_.find(node_id); it != node_snapshots_.end()) {
+                    setRoiRowVisibility(node_id, !it->second.visible);
+                }
+            } else if (action == "delete") {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it != node_snapshots_.end() && snapshot_it->second.delete_enabled)
+                    deleteRoiRow(node_id);
+            }
+            return;
+        }
+
         const auto* node = scene->getNodeById(node_id);
         if (!node)
             return;
@@ -2117,15 +2193,21 @@ namespace lfs::vis::gui {
     void SceneGraphElement::collectCheckboxSelectionIds(
         const core::NodeId node_id,
         std::vector<core::NodeId>& ids) const {
+        if (isRoiRowId(node_id))
+            return;
         const auto it = node_snapshots_.find(node_id);
         if (it == node_snapshots_.end())
             return;
-        if (it->second.children.empty()) {
-            ids.push_back(node_id);
-            return;
+        bool has_scene_children = false;
+        for (const core::NodeId child_id : it->second.children) {
+            if (!isRoiRowId(child_id)) {
+                has_scene_children = true;
+                collectCheckboxSelectionIds(child_id, ids);
+            }
         }
-        for (const core::NodeId child_id : it->second.children)
-            collectCheckboxSelectionIds(child_id, ids);
+        if (!has_scene_children) {
+            ids.push_back(node_id);
+        }
     }
 
     void SceneGraphElement::toggleCheckboxSelection(const core::NodeId node_id) {
@@ -2155,6 +2237,8 @@ namespace lfs::vis::gui {
     void SceneGraphElement::collectHierarchyIds(
         const core::NodeId node_id,
         std::unordered_set<core::NodeId>& ids) const {
+        if (isRoiRowId(node_id))
+            return;
         const auto it = node_snapshots_.find(node_id);
         if (it == node_snapshots_.end() || !ids.insert(node_id).second)
             return;
@@ -2206,8 +2290,10 @@ namespace lfs::vis::gui {
         if (!scene_manager || node_snapshots_.empty())
             return false;
         selected_ids_.clear();
-        for (const auto& [id, _] : node_snapshots_)
-            selected_ids_.insert(id);
+        for (const auto& [id, _] : node_snapshots_) {
+            if (!isRoiRowId(id))
+                selected_ids_.insert(id);
+        }
         scene_manager->selectNodesById(
             std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
         markStateDirty();
@@ -2240,11 +2326,40 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
+    void SceneGraphElement::activateRoiRow(const core::NodeId roi_row_id) {
+        if (!isRoiRowId(roi_row_id))
+            return;
+        auto* const scene_manager = services().sceneOrNull();
+        auto* const scene = scene_manager ? &scene_manager->getScene() : nullptr;
+        const core::NodeId target_id = roiTargetNodeId(roi_row_id);
+        if (!scene_manager || !scene || !scene->getNodeById(target_id))
+            return;
+
+        scene_manager->selectNode(target_id);
+        if (auto* const editor = services().editorOrNull())
+            editor->setActiveOperator("builtin.roi", "translate");
+        UnifiedToolRegistry::instance().setActiveTool("builtin.roi");
+        if (auto* const gui = services().guiOrNull()) {
+            (void)gui->gizmo().ensureCropToolStateForRestore();
+        }
+        selected_ids_.clear();
+        selected_ids_.insert(roi_row_id);
+        click_anchor_id_ = roi_row_id;
+        keyboard_cursor_id_ = roi_row_id;
+        last_roi_tool_active_ = true;
+        markStateDirty();
+    }
+
     void SceneGraphElement::handlePrimaryClick(const core::NodeId node_id) {
         auto* scene_manager = services().sceneOrNull();
         auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
         if (!scene || !node_snapshots_.contains(node_id))
             return;
+
+        if (isRoiRowId(node_id)) {
+            activateRoiRow(node_id);
+            return;
+        }
 
         const bool ctrl = ctrlDown();
         const bool shift = shiftDown();
@@ -2262,15 +2377,26 @@ namespace lfs::vis::gui {
         } else if (ctrl) {
             if (selected_ids_.contains(node_id)) {
                 selected_ids_.erase(node_id);
-                scene_manager->selectNodesById(std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+                std::vector<core::NodeId> scene_ids;
+                scene_ids.reserve(selected_ids_.size());
+                for (const core::NodeId id : selected_ids_) {
+                    if (!isRoiRowId(id))
+                        scene_ids.push_back(id);
+                }
+                scene_manager->selectNodesById(scene_ids);
             } else {
                 scene_manager->addToSelection(node_id);
                 selected_ids_.insert(node_id);
             }
             click_anchor_id_ = node_id;
         } else {
-            if (selected_ids_.size() == 1 && selected_ids_.contains(node_id))
+            if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") {
+                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::None)}.emit();
+                UnifiedToolRegistry::instance().clearActiveTool();
+                last_roi_tool_active_ = false;
+            } else if (selected_ids_.size() == 1 && selected_ids_.contains(node_id)) {
                 return;
+            }
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
@@ -2288,11 +2414,20 @@ namespace lfs::vis::gui {
 
         focusTree();
         if (!selected_ids_.contains(node_id)) {
-            scene_manager->selectNode(node_id);
-            selected_ids_.clear();
-            selected_ids_.insert(node_id);
-            click_anchor_id_ = node_id;
-            markStateDirty();
+            if (isRoiRowId(node_id)) {
+                activateRoiRow(node_id);
+            } else {
+                if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") {
+                    lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::None)}.emit();
+                    UnifiedToolRegistry::instance().clearActiveTool();
+                    last_roi_tool_active_ = false;
+                }
+                scene_manager->selectNode(node_id);
+                selected_ids_.clear();
+                selected_ids_.insert(node_id);
+                click_anchor_id_ = node_id;
+                markStateDirty();
+            }
         }
         showContextMenu(node_id, mouse_x, mouse_y);
     }
@@ -2325,8 +2460,9 @@ namespace lfs::vis::gui {
         const auto ita = flat_index_by_id_.find(a);
         const auto itb = flat_index_by_id_.find(b);
         if (ita == flat_index_by_id_.end() || itb == flat_index_by_id_.end()) {
-            return node_snapshots_.contains(b) ? std::vector<core::NodeId>{b}
-                                               : std::vector<core::NodeId>{};
+            return (node_snapshots_.contains(b) && !isRoiRowId(b))
+                       ? std::vector<core::NodeId>{b}
+                       : std::vector<core::NodeId>{};
         }
 
         const size_t lo = std::min(ita->second, itb->second);
@@ -2335,7 +2471,7 @@ namespace lfs::vis::gui {
         ids.reserve(hi - lo + 1);
         for (size_t i = lo; i <= hi; ++i) {
             const core::NodeId id = flat_rows_[i].id;
-            if (node_snapshots_.contains(id))
+            if (node_snapshots_.contains(id) && !isRoiRowId(id))
                 ids.push_back(id);
         }
         return ids;
@@ -2402,17 +2538,33 @@ namespace lfs::vis::gui {
             }
         } else if (toggle) {
             const core::NodeId toggled = current != core::NULL_NODE ? current : target;
-            if (selected_ids_.contains(toggled))
-                selected_ids_.erase(toggled);
-            else
-                selected_ids_.insert(toggled);
-            scene_manager->selectNodesById(
-                std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+            if (!isRoiRowId(toggled)) {
+                if (selected_ids_.contains(toggled))
+                    selected_ids_.erase(toggled);
+                else
+                    selected_ids_.insert(toggled);
+                std::vector<core::NodeId> scene_ids;
+                scene_ids.reserve(selected_ids_.size());
+                for (const core::NodeId id : selected_ids_) {
+                    if (!isRoiRowId(id))
+                        scene_ids.push_back(id);
+                }
+                scene_manager->selectNodesById(scene_ids);
+            }
         } else {
-            scene_manager->selectNode(target);
-            selected_ids_.clear();
-            selected_ids_.insert(target);
-            click_anchor_id_ = target;
+            if (isRoiRowId(target)) {
+                activateRoiRow(target);
+            } else {
+                if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") {
+                    lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::None)}.emit();
+                    UnifiedToolRegistry::instance().clearActiveTool();
+                    last_roi_tool_active_ = false;
+                }
+                scene_manager->selectNode(target);
+                selected_ids_.clear();
+                selected_ids_.insert(target);
+                click_anchor_id_ = target;
+            }
         }
         keyboard_cursor_id_ = target;
         if (camera_preview_navigation_active_ &&
@@ -2911,6 +3063,8 @@ namespace lfs::vis::gui {
                 continue;
             if (snapshot_it->second.camera_frustum_container) {
                 update_frustums = true;
+            } else if (isRoiRowId(id)) {
+                setRoiRowVisibility(id, visible);
             } else if (snapshot_it->second.visible != visible) {
                 scene_manager->setNodeVisibility(id, visible);
             }
@@ -2976,17 +3130,112 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
+    void SceneGraphElement::setRoiRowVisibility(const core::NodeId roi_row_id, const bool visible) {
+        if (!isRoiRowId(roi_row_id))
+            return;
+        auto* const scene_manager = services().sceneOrNull();
+        if (!scene_manager)
+            return;
+        auto& scene = scene_manager->getScene();
+        const core::NodeId target_id = roiTargetNodeId(roi_row_id);
+        const auto* const target = scene.getNodeById(target_id);
+        const auto* const current = scene.getRegionOfInterestData(target_id);
+        if (!target || !current || static_cast<bool>(target->locked) || current->enabled == visible)
+            return;
+
+        const op::SceneGraphCaptureOptions history_options{
+            .mode = op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+            .payload_uuids = std::vector<lfs::core::Uuid>{},
+        };
+        auto before = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);
+        auto updated = *current;
+        updated.enabled = visible;
+        if (!scene.setRegionOfInterestData(target_id, updated))
+            return;
+        auto after = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+            *scene_manager, "roi.visibility", std::move(before), std::move(after)));
+
+        if (auto it = node_snapshots_.find(roi_row_id); it != node_snapshots_.end())
+            it->second.visible = visible;
+        if (auto* const gui = services().guiOrNull()) {
+            (void)gui->gizmo().ensureCropToolStateForRestore();
+        }
+        if (auto* const rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        }
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
+    void SceneGraphElement::deleteRoiRow(const core::NodeId roi_row_id) {
+        if (!isRoiRowId(roi_row_id))
+            return;
+        auto* const scene_manager = services().sceneOrNull();
+        if (!scene_manager)
+            return;
+        auto& scene = scene_manager->getScene();
+        const core::NodeId target_id = roiTargetNodeId(roi_row_id);
+        const auto* const target = scene.getNodeById(target_id);
+        if (!target || !scene.getRegionOfInterestData(target_id) || static_cast<bool>(target->locked))
+            return;
+
+        const op::SceneGraphCaptureOptions history_options{
+            .mode = op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+            .payload_uuids = std::vector<lfs::core::Uuid>{},
+        };
+        auto before = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);
+        scene.clearRegionOfInterestData(target_id);
+        auto after = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+            *scene_manager, "roi.delete", std::move(before), std::move(after)));
+
+        if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") {
+            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::None)}.emit();
+            UnifiedToolRegistry::instance().clearActiveTool();
+            last_roi_tool_active_ = false;
+        }
+        if (auto* const rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        }
+        if (selected_ids_.erase(roi_row_id) > 0) {
+            selected_ids_.insert(target_id);
+            click_anchor_id_ = target_id;
+            keyboard_cursor_id_ = target_id;
+        }
+        tree_rebuild_needed_ = true;
+        markStateDirty();
+    }
+
     void SceneGraphElement::requestDeleteNodes(const std::vector<core::NodeId>& node_ids) {
         auto* gui = services().guiOrNull();
         auto* scene_manager = services().sceneOrNull();
         if (!gui || !scene_manager || node_ids.empty())
             return;
 
+        std::vector<core::NodeId> regular_node_ids;
+        regular_node_ids.reserve(node_ids.size());
+        for (const core::NodeId node_id : node_ids) {
+            if (isRoiRowId(node_id)) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it != node_snapshots_.end() && snapshot_it->second.delete_enabled)
+                    deleteRoiRow(node_id);
+            } else {
+                regular_node_ids.push_back(node_id);
+            }
+        }
+        if (regular_node_ids.empty())
+            return;
+
         const auto& scene = scene_manager->getScene();
         std::vector<core::Uuid> node_uuids;
-        node_uuids.reserve(node_ids.size());
+        node_uuids.reserve(regular_node_ids.size());
         std::string single_name;
-        for (const core::NodeId node_id : node_ids) {
+        for (const core::NodeId node_id : regular_node_ids) {
             const auto snapshot_it = node_snapshots_.find(node_id);
             const auto* node = scene.getNodeById(node_id);
             if (node && static_cast<bool>(node->locked)) {
@@ -3112,6 +3361,20 @@ namespace lfs::vis::gui {
             return;
 
         std::vector<ContextMenuItem> items;
+        if (isRoiRowId(node_id)) {
+            const auto snapshot_it = node_snapshots_.find(node_id);
+            if (snapshot_it != node_snapshots_.end() && snapshot_it->second.delete_enabled) {
+                items.push_back(makeAction(
+                    tr(string_keys::Scene::DELETE_ITEM),
+                    prefixedAction(std::format("delete:{}", node_id)),
+                    false));
+                context_menu_node_id_ = node_id;
+                gui->globalContextMenu().request(std::move(items),
+                                                 panel_screen_x_ + mouse_x,
+                                                 panel_screen_y_ + mouse_y);
+            }
+            return;
+        }
         const auto* node = scene->getNodeById(node_id);
         if (!node)
             return;
@@ -3259,8 +3522,8 @@ namespace lfs::vis::gui {
                                                prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
-                    items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
-                                               prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_roi_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:roi_visibility:{}", node_id))));
                 }
                 break;
             case core::NodeType::DATASET:

@@ -20,6 +20,7 @@ namespace lfs::vis {
         constexpr int ORDER_SCALE = 40;
         constexpr int ORDER_MIRROR = 50;
         constexpr int ORDER_CROP = 70;
+        constexpr int ORDER_ROI = 71;
         constexpr int ORDER_ALIGN = 80;
         constexpr int ORDER_SCALE_DISTANCE = 90;
 
@@ -64,6 +65,21 @@ namespace lfs::vis {
             UnifiedToolRegistry::instance().registerTool(std::move(desc));
         }
 
+        void addRoiTool() {
+            ToolDescriptor desc;
+            desc.id = "builtin.roi";
+            desc.label = "ROI";
+            desc.icon = "focus-selection";
+            desc.group = "utility";
+            desc.order = ORDER_ROI;
+            desc.source = ToolSource::CPP;
+            desc.poll_fn = [] {
+                const auto* editor = services().editorOrNull();
+                return editor && editor->hasSelection() && !editor->isToolsDisabled();
+            };
+            UnifiedToolRegistry::instance().registerTool(std::move(desc));
+        }
+
     } // namespace
 
     void registerBuiltinTools() {
@@ -80,6 +96,7 @@ namespace lfs::vis {
         addTool("builtin.scale", "Scale", "scaling", "4", "transform", ORDER_SCALE, ToolType::Scale);
         addTool("builtin.mirror", "Mirror", "mirror", "5", "transform", ORDER_MIRROR, ToolType::Mirror);
         addCropTool();
+        addRoiTool();
         addTool("builtin.align", "Align", "align", "6", "align", ORDER_ALIGN, ToolType::Align);
         addTool("builtin.scale_distance", "Scale Distance", "bounds", "7", "align", ORDER_SCALE_DISTANCE, ToolType::ScaleDistance);
     }

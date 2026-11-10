@@ -548,6 +548,7 @@ namespace lfs::vis::op {
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
         std::unique_ptr<lfs::core::EllipsoidData> ellipsoid;
         std::unique_ptr<lfs::core::CropPolygonData> crop_polygon;
+        std::unique_ptr<lfs::core::RegionOfInterestData> region_of_interest;
         std::unique_ptr<lfs::core::KeyframeData> keyframe;
         std::optional<SceneGraphCameraSnapshot> camera;
         std::vector<SceneGraphNodeSnapshot> children;

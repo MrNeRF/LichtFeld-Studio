@@ -31,6 +31,7 @@
 #include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -480,13 +481,17 @@ namespace lfs::vis::gui {
         return UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox";
     }
 
+    bool GizmoManager::isRoiToolActive() const {
+        return UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi";
+    }
+
     bool GizmoManager::isSelectionVolumeMode() const {
         return UnifiedToolRegistry::instance().getActiveTool() == "builtin.select" &&
                isSelectionVolumeSubMode(selection_mode_);
     }
 
     bool GizmoManager::isVolumeGizmoToolActive() const {
-        return isCropToolActive() || isSelectionVolumeMode();
+        return isCropToolActive() || isRoiToolActive() || isSelectionVolumeMode();
     }
 
     bool GizmoManager::isCropboxGizmoActive() const {
@@ -500,7 +505,8 @@ namespace lfs::vis::gui {
     }
 
     bool GizmoManager::isCropPolygonGizmoActive() const {
-        return isCropToolActive() && crop_tool_initialized_ && crop_tool_shape_ == CropToolShape::Polygon;
+        return (isCropToolActive() || isRoiToolActive()) && crop_tool_initialized_ &&
+               crop_tool_shape_ == CropToolShape::Polygon;
     }
 
     std::optional<core::NodeId> GizmoManager::selectedCropTargetNodeId() const {
@@ -551,6 +557,20 @@ namespace lfs::vis::gui {
                 }
             }
         }
+        if (isRoiToolActive()) {
+            const std::string& training_name = scene.getTrainingModelNodeName();
+            if (!training_name.empty()) {
+                if (const auto* const node = scene.getNode(training_name);
+                    node && (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)) {
+                    return node->id;
+                }
+            }
+            for (const auto* const node : scene.getNodes()) {
+                if (node && (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)) {
+                    return node->id;
+                }
+            }
+        }
         return std::nullopt;
     }
 
@@ -560,6 +580,12 @@ namespace lfs::vis::gui {
             return std::nullopt;
 
         const auto& scene = sm->getScene();
+        // A training ROI is persistent data on its target, not a child Crop
+        // helper. Returning the target here lets the shared volume gizmo edit
+        // it without ever selecting or mutating Crop state.
+        if (isRoiToolActive()) {
+            return scene.getRegionOfInterestData(target_id) ? std::optional(target_id) : std::nullopt;
+        }
         core::NodeId selected_id = core::NULL_NODE;
         core::NodeId attached_id = core::NULL_NODE;
         switch (crop_tool_shape_) {
@@ -596,6 +622,60 @@ namespace lfs::vis::gui {
             return false;
 
         const auto target_id = selectedCropTargetNodeId();
+        if (isRoiToolActive()) {
+            if (!target_id)
+                return false;
+            auto& scene = sm->getScene();
+            if (const auto* const target = scene.getNodeById(*target_id)) {
+                const auto selected_names = sm->getSelectedNodeNames();
+                if (selected_names.size() != 1 || selected_names.front() != target->name) {
+                    selecting_roi_target_ = true;
+                    sm->selectNode(target->name);
+                    selecting_roi_target_ = false;
+                }
+            }
+            if (!scene.getRegionOfInterestData(*target_id)) {
+                glm::vec3 world_min, world_max;
+                // An ROI remains usable while a point cloud's bounds are
+                // still being populated: begin with a visible unit shape.
+                if (!scene.getNodeBounds(*target_id, world_min, world_max)) {
+                    world_min = {-1.0F, -1.0F, -1.0F};
+                    world_max = {1.0F, 1.0F, 1.0F};
+                }
+                const glm::vec3 center = (world_min + world_max) * 0.5F;
+                const glm::vec3 half_size = glm::max((world_max - world_min) * 0.5F, glm::vec3(MIN_GIZMO_SCALE));
+                core::RegionOfInterestData roi;
+                roi.local_transform = glm::translate(glm::mat4(1.0F), center);
+                roi.shape = crop_tool_shape_ == CropToolShape::Ellipsoid
+                                ? core::RegionOfInterestShape::Ellipsoid
+                                : crop_tool_shape_ == CropToolShape::Polygon
+                                      ? core::RegionOfInterestShape::Polygon
+                                      : core::RegionOfInterestShape::Box;
+                roi.min = -half_size;
+                roi.max = half_size;
+                roi.radii = half_size;
+                if (roi.shape == core::RegionOfInterestShape::Polygon) {
+                    roi.vertices = {{-half_size.x, -half_size.y}, {half_size.x, -half_size.y}, {half_size.x, half_size.y}, {-half_size.x, half_size.y}};
+                    roi.half_depth = half_size.z;
+                }
+                const auto* const target = scene.getNodeById(*target_id);
+                if (!target)
+                    return false;
+                const op::SceneGraphCaptureOptions options{
+                    .mode = op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .payload_uuids = std::vector<lfs::core::Uuid>{},
+                };
+                auto before = op::SceneGraphPatchEntry::captureState(*sm, {target->name}, options);
+                if (!scene.setRegionOfInterestData(*target_id, roi))
+                    return false;
+                op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                    *sm, "roi.create", std::move(before),
+                    op::SceneGraphPatchEntry::captureState(*sm, {target->name}, options)));
+            }
+            return true;
+        }
         // A polygon exists only once drawn; there is no default one to create.
         if (!target_id || crop_tool_shape_ == CropToolShape::Polygon)
             return false;
@@ -631,12 +711,32 @@ namespace lfs::vis::gui {
         if (!node)
             return false;
 
-        const glm::mat4 next_transform = scene_coords::nodeVisualizerWorldTransform(scene, volume_node_id);
+        const auto* const roi = isRoiToolActive() ? scene.getRegionOfInterestData(target_id) : nullptr;
+        if (roi) {
+            const auto roi_shape = roi->shape == core::RegionOfInterestShape::Ellipsoid ? CropToolShape::Ellipsoid
+                                   : roi->shape == core::RegionOfInterestShape::Polygon ? CropToolShape::Polygon
+                                                                                        : CropToolShape::Box;
+            if (crop_tool_shape_ != roi_shape) {
+                crop_tool_shape_ = roi_shape;
+                crop_tool_initialized_ = false;
+            }
+        }
+        const glm::mat4 next_transform = roi
+                                            ? rendering::dataWorldTransformToVisualizerWorld(
+                                                  scene.getWorldTransform(target_id) * roi->local_transform)
+                                            : scene_coords::nodeVisualizerWorldTransform(scene, volume_node_id);
         bool state_changed = !crop_tool_initialized_ || crop_tool_target_node_id_ != target_id ||
                              crop_tool_volume_node_id_ != volume_node_id ||
                              !nearlyEqual(crop_tool_visualizer_transform_, next_transform);
 
         if (crop_tool_shape_ == CropToolShape::Box) {
+            if (roi) {
+                state_changed = state_changed || !nearlyEqual(crop_tool_box_min_, roi->min) ||
+                                !nearlyEqual(crop_tool_box_max_, roi->max);
+                crop_tool_box_min_ = roi->min;
+                crop_tool_box_max_ = roi->max;
+                goto crop_tool_state_done;
+            }
             if (!node->cropbox)
                 return false;
             state_changed = state_changed || !nearlyEqual(crop_tool_box_min_, node->cropbox->min) ||
@@ -644,6 +744,15 @@ namespace lfs::vis::gui {
             crop_tool_box_min_ = node->cropbox->min;
             crop_tool_box_max_ = node->cropbox->max;
         } else if (crop_tool_shape_ == CropToolShape::Polygon) {
+            if (roi) {
+                const glm::vec3 half_extents(core::crop_polygon::outlineHalfExtents(roi->vertices), roi->half_depth);
+                state_changed = state_changed || crop_tool_polygon_vertices_ != roi->vertices ||
+                                !nearlyEqual(crop_tool_polygon_half_extents_, half_extents);
+                crop_tool_polygon_vertices_ = roi->vertices;
+                crop_tool_polygon_half_depth_ = roi->half_depth;
+                crop_tool_polygon_half_extents_ = half_extents;
+                goto crop_tool_state_done;
+            }
             if (!node->crop_polygon)
                 return false;
             const auto& polygon = *node->crop_polygon;
@@ -654,12 +763,18 @@ namespace lfs::vis::gui {
             crop_tool_polygon_half_depth_ = polygon.half_depth;
             crop_tool_polygon_half_extents_ = half_extents;
         } else {
+            if (roi) {
+                state_changed = state_changed || !nearlyEqual(crop_tool_ellipsoid_radii_, roi->radii);
+                crop_tool_ellipsoid_radii_ = roi->radii;
+                goto crop_tool_state_done;
+            }
             if (!node->ellipsoid)
                 return false;
             state_changed = state_changed || !nearlyEqual(crop_tool_ellipsoid_radii_, node->ellipsoid->radii);
             crop_tool_ellipsoid_radii_ = node->ellipsoid->radii;
         }
 
+    crop_tool_state_done:
         crop_tool_visualizer_transform_ = next_transform;
         crop_tool_target_node_id_ = target_id;
         crop_tool_volume_node_id_ = volume_node_id;
@@ -693,11 +808,60 @@ namespace lfs::vis::gui {
 
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(crop_tool_visualizer_transform_);
-        const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
+        // ROI data belongs to the target itself.  Crop helpers are children and
+        // therefore keep their historical parent-relative behavior.
+        const glm::mat4 parent_world = isRoiToolActive() ? scene.getWorldTransform(crop_tool_target_node_id_)
+                                                         : scene.getWorldTransform(node->parent_id);
         const auto local_transform = core::finiteLocalTransform(parent_world, data_world_transform);
         if (!local_transform) {
             LOG_WARN("Cannot commit crop tool transform: parent transform cannot preserve a finite world transform");
             return false;
+        }
+
+        if (isRoiToolActive()) {
+            const auto* const existing = scene.getRegionOfInterestData(crop_tool_target_node_id_);
+            if (!existing)
+                return false;
+
+            const op::SceneGraphCaptureOptions history_options{
+                .mode = op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = false,
+                .include_scene_context = false,
+                .payload_uuids = std::vector<lfs::core::Uuid>{},
+            };
+            const std::string target_name = node->name;
+            auto before = op::SceneGraphPatchEntry::captureState(*sm, {target_name}, history_options);
+            auto roi = *existing;
+            roi.local_transform = *local_transform;
+            switch (crop_tool_shape_) {
+            case CropToolShape::Box:
+                roi.shape = core::RegionOfInterestShape::Box;
+                roi.min = crop_tool_box_min_;
+                roi.max = crop_tool_box_max_;
+                break;
+            case CropToolShape::Ellipsoid:
+                roi.shape = core::RegionOfInterestShape::Ellipsoid;
+                roi.radii = glm::max(crop_tool_ellipsoid_radii_, glm::vec3(MIN_GIZMO_SCALE));
+                break;
+            case CropToolShape::Polygon:
+                roi.shape = core::RegionOfInterestShape::Polygon;
+                roi.vertices = crop_tool_polygon_vertices_;
+                roi.half_depth = crop_tool_polygon_half_depth_;
+                break;
+            }
+            if (enable)
+                roi.enabled = true;
+            if (!scene.setRegionOfInterestData(crop_tool_target_node_id_, roi))
+                return false;
+            if (roi.enabled && roi.select_relevant_cameras)
+                (void)lfs::training::select_relevant_roi_cameras(scene);
+            if (rm)
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+            auto after = op::SceneGraphPatchEntry::captureState(*sm, {target_name}, history_options);
+            op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                *sm, "roi.transform", std::move(before), std::move(after)));
+            return true;
         }
 
         if (crop_tool_shape_ == CropToolShape::Box) {
@@ -802,7 +966,9 @@ namespace lfs::vis::gui {
             return false;
         }
 
-        const auto volume_id = selectedCropVolumeNodeId(*target_id);
+        auto volume_id = selectedCropVolumeNodeId(*target_id);
+        if (!volume_id && isRoiToolActive() && ensureCropVolumeForCurrentSelection())
+            volume_id = *target_id;
         if (!volume_id) {
             crop_tool_initialized_ = false;
             crop_tool_target_node_id_ = core::NULL_NODE;
@@ -1037,6 +1203,14 @@ namespace lfs::vis::gui {
                     }
                 }
             }
+        } else if (isRoiToolActive()) {
+            // ROI is a training-domain overlay, never a live render crop.
+            if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
+                const auto& scene = sm->getScene();
+                const auto* const roi = scene.getRegionOfInterestData(crop_tool_target_node_id_);
+                effectively_visible = roi && roi->enabled && scene.isNodeEffectivelyVisible(crop_tool_target_node_id_);
+                parent_node_index = scene.getVisibleNodeIndex(crop_tool_target_node_id_);
+            }
         }
         rm->setCropboxGizmoActive(false);
         rm->setEllipsoidGizmoActive(false);
@@ -1048,15 +1222,17 @@ namespace lfs::vis::gui {
         switch (crop_tool_shape_) {
         case CropToolShape::Box:
             rm->setCropboxGizmoState(
-                true, crop_tool_box_min_, crop_tool_box_max_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
+                true, crop_tool_box_min_, crop_tool_box_max_, crop_tool_visualizer_transform_, affects_render, parent_node_index,
+                isRoiToolActive());
             break;
         case CropToolShape::Ellipsoid:
             rm->setEllipsoidGizmoState(
-                true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
+                true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index,
+                isRoiToolActive());
             break;
         case CropToolShape::Polygon:
             rm->setCropPolygonGizmoState(true, crop_tool_polygon_vertices_, crop_tool_polygon_half_depth_,
-                                         crop_tool_visualizer_transform_, affects_render, parent_node_index);
+                                         crop_tool_visualizer_transform_, affects_render, parent_node_index, isRoiToolActive());
             break;
         }
         rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -1066,8 +1242,73 @@ namespace lfs::vis::gui {
         crop_tool_shape_ = shape == "ellipsoid" ? CropToolShape::Ellipsoid
                            : shape == "polygon" ? CropToolShape::Polygon
                                                 : CropToolShape::Box;
+        if (isRoiToolActive()) {
+            auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+            const auto target_id = selectedCropTargetNodeId();
+            auto* const roi = sm && target_id ? sm->getScene().getRegionOfInterestData(*target_id) : nullptr;
+            if (roi) {
+                // Make the new shape valid before synchronising the shared
+                // gizmo.  This preserves all training controls and transform.
+                auto updated = *roi;
+                glm::vec3 source_half = (updated.max - updated.min) * 0.5f;
+                switch (updated.shape) {
+                case core::RegionOfInterestShape::Box:
+                    source_half = (updated.max - updated.min) * 0.5f;
+                    break;
+                case core::RegionOfInterestShape::Ellipsoid:
+                    source_half = updated.radii;
+                    break;
+                case core::RegionOfInterestShape::Polygon:
+                    source_half = glm::vec3(core::crop_polygon::outlineHalfExtents(updated.vertices), updated.half_depth);
+                    break;
+                }
+                const glm::vec3 half = glm::max(source_half, glm::vec3(MIN_GIZMO_SCALE));
+                switch (crop_tool_shape_) {
+                case CropToolShape::Box:
+                    updated.shape = core::RegionOfInterestShape::Box;
+                    updated.min = -half;
+                    updated.max = half;
+                    break;
+                case CropToolShape::Ellipsoid:
+                    updated.shape = core::RegionOfInterestShape::Ellipsoid;
+                    updated.radii = half;
+                    break;
+                case CropToolShape::Polygon:
+                    updated.shape = core::RegionOfInterestShape::Polygon;
+                    updated.vertices = {{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}};
+                    updated.half_depth = half.z;
+                    break;
+                }
+                const auto* const node = sm->getScene().getNodeById(*target_id);
+                const op::SceneGraphCaptureOptions options{
+                    .mode = op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .payload_uuids = std::vector<lfs::core::Uuid>{},
+                };
+                if (node) {
+                    auto before = op::SceneGraphPatchEntry::captureState(*sm, {node->name}, options);
+                    if (sm->getScene().setRegionOfInterestData(*target_id, updated)) {
+                    op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                        *sm, "roi.shape", std::move(before),
+                        op::SceneGraphPatchEntry::captureState(*sm, {node->name}, options)));
+                    }
+                }
+                crop_tool_initialized_ = false;
+            }
+        }
         if (ensureCropToolState())
             updateCropToolOverlayState();
+    }
+
+    bool GizmoManager::ensureCropToolStateForRestore() {
+        // The ROI has no scene helper node to wake the regular Crop
+        // overlay path. Always publish the refreshed state here so
+        // activating ROI immediately draws its shape.
+        const bool ready = ensureCropToolState();
+        if (ready)
+            updateCropToolOverlayState();
+        return ready;
     }
 
     std::string GizmoManager::cropToolShape() const {
@@ -1109,6 +1350,14 @@ namespace lfs::vis::gui {
 
         if (isSelectionVolumeMode()) {
             (void)applySelectionVolumeFromGizmo(true);
+            return;
+        }
+
+        // ROI is intentionally non-destructive in the editor.  Its training
+        // settings decide whether a temporary seed or the completed model is
+        // cropped; the ordinary Crop Apply action remains unchanged.
+        if (isRoiToolActive()) {
+            (void)persistActiveCropToolToNode(true);
             return;
         }
 
@@ -1169,6 +1418,33 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::deleteActiveCropToolVolume() {
+        if (isRoiToolActive() && ensureCropToolState()) {
+            auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+            if (!sm)
+                return;
+            auto& scene = sm->getScene();
+            const auto* const node = scene.getNodeById(crop_tool_target_node_id_);
+            if (!node)
+                return;
+            const op::SceneGraphCaptureOptions history_options{
+                .mode = op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = false,
+                .include_scene_context = false,
+                .payload_uuids = std::vector<lfs::core::Uuid>{},
+            };
+            auto before = op::SceneGraphPatchEntry::captureState(*sm, {node->name}, history_options);
+            scene.clearRegionOfInterestData(node->id);
+            auto after = op::SceneGraphPatchEntry::captureState(*sm, {node->name}, history_options);
+            op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                *sm, "roi.delete", std::move(before), std::move(after)));
+            crop_tool_initialized_ = false;
+            clearCropToolOverlayState();
+            UnifiedToolRegistry::instance().clearActiveTool();
+            viewer_->getEditorContext().clearActiveOperator();
+            if (auto* const rm = viewer_->getRenderingManager())
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+            return;
+        }
         if (!isCropToolActive() || !ensureCropToolState())
             return;
 
@@ -1215,6 +1491,10 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::fitSelectedCropPolygon(const bool use_percentile) {
+        if (isRoiToolActive()) {
+            fitSelectedRoi(use_percentile);
+            return;
+        }
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
         if (polygon_id == core::NULL_NODE)
@@ -1224,10 +1504,67 @@ namespace lfs::vis::gui {
             LOG_WARN("Failed to fit crop polygon: {}", result.error().user_message());
     }
 
+    void GizmoManager::fitSelectedRoi(const bool use_percentile) {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!sm)
+            return;
+        const auto target_id = selectedCropTargetNodeId();
+        if (!target_id)
+            return;
+        if (auto result = cap::fitRoiToParent(*sm, viewer_->getRenderingManager(), *target_id, use_percentile);
+            !result) {
+            LOG_WARN("Failed to fit ROI: {}", result.error());
+            return;
+        }
+        if (ensureCropToolState())
+            updateCropToolOverlayState();
+    }
+
+    void GizmoManager::resetSelectedRoi() {
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!sm)
+            return;
+        const auto target_id = selectedCropTargetNodeId();
+        if (!target_id)
+            return;
+        if (auto result = cap::resetRoi(*sm, viewer_->getRenderingManager(), *target_id); !result) {
+            LOG_WARN("Failed to reset ROI: {}", result.error());
+            return;
+        }
+        if (ensureCropToolState())
+            updateCropToolOverlayState();
+    }
+
     void GizmoManager::toggleSelectedCropInverse() {
         auto* const sm = viewer_->getSceneManager();
         if (!sm)
             return;
+
+        if (isRoiToolActive() && ensureCropToolState()) {
+            auto& scene = sm->getScene();
+            const auto* const node = scene.getNodeById(crop_tool_target_node_id_);
+            const auto* const current = scene.getRegionOfInterestData(crop_tool_target_node_id_);
+            if (!node || !current)
+                return;
+            const op::SceneGraphCaptureOptions options{
+                .mode = op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = false,
+                .include_scene_context = false,
+                .payload_uuids = std::vector<lfs::core::Uuid>{},
+            };
+            auto before = op::SceneGraphPatchEntry::captureState(*sm, {node->name}, options);
+            auto roi = *current;
+            roi.inverse = !roi.inverse;
+            if (!scene.setRegionOfInterestData(node->id, roi))
+                return;
+            if (roi.enabled && roi.select_relevant_cameras)
+                (void)lfs::training::select_relevant_roi_cameras(scene);
+            op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                *sm, "roi.inverse", std::move(before),
+                op::SceneGraphPatchEntry::captureState(*sm, {node->name}, options)));
+            updateCropToolOverlayState();
+            return;
+        }
 
         if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
             auto* const node = sm->getScene().getNodeById(polygon_id);
@@ -1277,6 +1614,11 @@ namespace lfs::vis::gui {
         auto* const sm = viewer_->getSceneManager();
         if (!sm)
             return std::nullopt;
+        if (isRoiToolActive()) {
+            const auto target_id = selectedCropTargetNodeId();
+            const auto* const roi = target_id ? sm->getScene().getRegionOfInterestData(*target_id) : nullptr;
+            return roi ? std::optional<bool>(roi->inverse) : std::nullopt;
+        }
         if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
             const auto* const node = sm->getScene().getNodeById(polygon_id);
             return node && node->crop_polygon ? std::optional<bool>(node->crop_polygon->inverse) : std::nullopt;
@@ -1293,6 +1635,10 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::resetSelectedCropPolygon() {
+        if (isRoiToolActive()) {
+            resetSelectedRoi();
+            return;
+        }
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
         if (polygon_id == core::NULL_NODE)
@@ -1344,8 +1690,15 @@ namespace lfs::vis::gui {
         }
 
         auto* const sm = viewer_->getSceneManager();
-        if (!sm || !sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_))
+        if (!sm)
             return handles;
+        if (isRoiToolActive()) {
+            const auto* const roi = sm->getScene().getRegionOfInterestData(crop_tool_target_node_id_);
+            if (!roi || !roi->enabled || !sm->getScene().isNodeEffectivelyVisible(crop_tool_target_node_id_))
+                return handles;
+        } else if (!sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_)) {
+            return handles;
+        }
 
         // Handles sit on the cap that faces the camera.
         const glm::mat4& to_world = crop_tool_visualizer_transform_;
@@ -1431,7 +1784,42 @@ namespace lfs::vis::gui {
     bool GizmoManager::commitCropPolygonOutline(std::vector<glm::vec2> vertices) {
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         bool committed = false;
-        if (sm && crop_tool_volume_node_id_ != core::NULL_NODE) {
+        if (sm && isRoiToolActive() && crop_tool_target_node_id_ != core::NULL_NODE) {
+            auto& scene = sm->getScene();
+            const auto* const target = scene.getNodeById(crop_tool_target_node_id_);
+            const auto* const current = scene.getRegionOfInterestData(crop_tool_target_node_id_);
+            if (target && current && core::crop_polygon::isValidOutline(vertices)) {
+                glm::vec2 lo(std::numeric_limits<float>::max());
+                glm::vec2 hi(std::numeric_limits<float>::lowest());
+                for (const glm::vec2& vertex : vertices) {
+                    lo = glm::min(lo, vertex);
+                    hi = glm::max(hi, vertex);
+                }
+                const glm::vec2 centre = (lo + hi) * 0.5f;
+                for (glm::vec2& vertex : vertices)
+                    vertex -= centre;
+
+                const op::SceneGraphCaptureOptions options{
+                    .mode = op::SceneGraphCaptureMode::FULL,
+                    .include_selected_nodes = false,
+                    .include_scene_context = false,
+                    .payload_uuids = std::vector<lfs::core::Uuid>{},
+                };
+                auto before = op::SceneGraphPatchEntry::captureState(*sm, {target->name}, options);
+                auto roi = *current;
+                roi.shape = core::RegionOfInterestShape::Polygon;
+                roi.vertices = std::move(vertices);
+                roi.local_transform = glm::translate(roi.local_transform, glm::vec3(centre, 0.0f));
+                committed = scene.setRegionOfInterestData(target->id, roi);
+                if (committed) {
+                    if (roi.enabled && roi.select_relevant_cameras)
+                        (void)lfs::training::select_relevant_roi_cameras(scene);
+                    op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                        *sm, "roi.polygon", std::move(before),
+                        op::SceneGraphPatchEntry::captureState(*sm, {target->name}, options)));
+                }
+            }
+        } else if (sm && crop_tool_volume_node_id_ != core::NULL_NODE) {
             if (auto result = cap::setCropPolygonOutline(*sm, viewer_->getRenderingManager(), crop_tool_volume_node_id_,
                                                          std::move(vertices));
                 result) {
@@ -1456,8 +1844,12 @@ namespace lfs::vis::gui {
             const bool selected_crop_target = selected_node &&
                                               (selected_node->type == core::NodeType::SPLAT ||
                                                selected_node->type == core::NodeType::POINTCLOUD);
-            const bool active_crop_operator = UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox" ||
-                                              viewer_->getEditorContext().getActiveOperator() == "builtin.cropbox";
+            const auto is_active_volume_operator = [&] {
+                const std::string active_tool = UnifiedToolRegistry::instance().getActiveTool();
+                const std::string& active_operator = viewer_->getEditorContext().getActiveOperator();
+                return active_tool == "builtin.cropbox" || active_tool == "builtin.roi" ||
+                       active_operator == "builtin.cropbox" || active_operator == "builtin.roi";
+            };
 
             const bool history_playback = op::undoHistory().isPlaybackActive();
             if (!history_playback) {
@@ -1472,8 +1864,13 @@ namespace lfs::vis::gui {
                     if (ensureCropToolState())
                         updateCropToolOverlayState();
                 } else {
-                    if (active_crop_operator) {
-                        leaveCropTool(true, false, true);
+                    if (is_active_volume_operator()) {
+                        if (isRoiToolActive() && selecting_roi_target_) {
+                            if (ensureCropToolState())
+                                updateCropToolOverlayState();
+                        } else {
+                            leaveCropTool(true, false, true);
+                        }
                     } else {
                         python::cancel_active_operator();
                     }
@@ -1500,7 +1897,15 @@ namespace lfs::vis::gui {
             node_selection_bounds_cache_valid_ = false;
         });
         ui::NodeDeselected::when([this](const auto&) {
-            python::cancel_active_operator();
+            const std::string active_tool = UnifiedToolRegistry::instance().getActiveTool();
+            const std::string& active_operator =
+                viewer_ ? viewer_->getEditorContext().getActiveOperator() : std::string{};
+            if (active_tool == "builtin.cropbox" || active_tool == "builtin.roi" ||
+                active_operator == "builtin.cropbox" || active_operator == "builtin.roi") {
+                leaveCropTool(true, false, true);
+            } else {
+                python::cancel_active_operator();
+            }
             setPointPickToolsEnabled(viewer_->getAlignTool(), viewer_->getScaleDistanceTool());
             node_bounds_cache_valid_ = false;
             node_selection_bounds_cache_valid_ = false;
@@ -1520,6 +1925,7 @@ namespace lfs::vis::gui {
             const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
                                               isCropVolumeType(sm->getSelectedNodeType());
             if (registry.getActiveTool() == "builtin.cropbox" ||
+                registry.getActiveTool() == "builtin.roi" ||
                 (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
             } else if (editor.hasActiveOperator() && tool != ToolType::Selection) {
@@ -1746,6 +2152,7 @@ namespace lfs::vis::gui {
         const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
         const bool is_crop_tool = active_tool_id == "builtin.cropbox";
+        const bool is_roi_tool = active_tool_id == "builtin.roi";
         const bool is_selection_mode = active_tool_id == "builtin.select";
         const bool is_selection_volume_tool = is_selection_mode && isSelectionVolumeSubMode(selection_mode_);
         const bool selected_crop_volume = has_selected_node && scene_manager &&
@@ -1775,7 +2182,7 @@ namespace lfs::vis::gui {
         if (scene_manager && !ui_hidden) {
             bool is_transform_tool = false;
             if (has_selected_node && !gizmo_type.empty()) {
-                is_transform_tool = !is_crop_tool;
+                is_transform_tool = !is_crop_tool && !is_roi_tool;
                 if (gizmo_type == "translate") {
                     node_gizmo_operation_ = GizmoOperation::Translate;
                     current_operation_ = GizmoOperation::Translate;
@@ -1800,7 +2207,7 @@ namespace lfs::vis::gui {
             if (!is_selection_volume_tool && selection_volume_source_generation_ != 0)
                 clearSelectionVolumeState();
 
-            if (is_crop_tool && has_selected_node) {
+            if ((is_crop_tool && has_selected_node) || is_roi_tool) {
                 if (ensureCropToolState())
                     updateCropToolOverlayState();
             } else if (is_selection_volume_tool) {
@@ -2574,8 +2981,9 @@ namespace lfs::vis::gui {
             // The crop tool scales the transform; its floor is the transform's axis scale.
             const glm::vec3 box_extent = glm::max(crop_tool_box_max_ - crop_tool_box_min_, glm::vec3(1e-6f));
             bounds_config.min_half_extents_world =
-                isCropToolActive() ? box_extent * (gizmo_ops::MIN_VOLUME_AXIS_SCALE * 0.5f)
-                                   : world_scale * (MIN_GIZMO_SCALE * 0.5f);
+                (isCropToolActive() || isRoiToolActive())
+                    ? box_extent * (gizmo_ops::MIN_VOLUME_AXIS_SCALE * 0.5f)
+                    : world_scale * (MIN_GIZMO_SCALE * 0.5f);
             bounds_config.draw_list = &overlay_drawlist;
             bounds_config.input = gizmo_input;
             bounds_config.input_enabled = !scale_gizmo_has_priority;
@@ -2586,7 +2994,7 @@ namespace lfs::vis::gui {
             is_using = is_using || bounds_result.active;
             changed = changed || bounds_result.changed;
             if (bounds_result.changed) {
-                if (isCropToolActive()) {
+                if (isCropToolActive() || isRoiToolActive()) {
                     const glm::vec3 ratio = bounds_result.half_extents_world * 2.0f / (world_scale * box_extent);
                     for (int axis = 0; axis < 3; ++axis)
                         crop_tool_visualizer_transform_[axis] *= ratio[axis];
@@ -2671,7 +3079,7 @@ namespace lfs::vis::gui {
             is_using = is_using || scale_result.active;
             changed = changed || scale_result.changed;
             if (scale_result.changed) {
-                if (isCropToolActive()) {
+                if (isCropToolActive() || isRoiToolActive()) {
                     scaleCropToolTransform(scale_result.total_scale);
                 } else {
                     crop_tool_box_min_ *= scale_result.delta_scale;
@@ -2684,7 +3092,7 @@ namespace lfs::vis::gui {
 
         if (isSelectionVolumeMode() && is_using && !selection_volume_gizmo_active_)
             beginSelectionVolumeGizmoDrag();
-        if (isCropToolActive() && is_using && !crop_tool_drag_active_) {
+        if ((isCropToolActive() || isRoiToolActive()) && is_using && !crop_tool_drag_active_) {
             crop_tool_drag_active_ = true;
             crop_tool_drag_changed_ = false;
             crop_tool_box_min_before_drag_ = crop_tool_box_min_;
@@ -2705,18 +3113,20 @@ namespace lfs::vis::gui {
             bool affects_render = false;
             bool effectively_visible = true;
             int parent_node_index = -1;
-            if (isCropToolActive()) {
+            if (isCropToolActive() || isRoiToolActive()) {
                 if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
                     if (const auto* const node = sm->getScene().getNodeById(crop_tool_volume_node_id_)) {
                         effectively_visible = sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_);
-                        affects_render = node->cropbox && node->cropbox->enabled;
-                        parent_node_index = sm->getScene().getVisibleNodeIndex(node->parent_id);
+                        affects_render = !isRoiToolActive() && node->cropbox && node->cropbox->enabled;
+                        parent_node_index = sm->getScene().getVisibleNodeIndex(
+                            isRoiToolActive() ? crop_tool_target_node_id_ : node->parent_id);
                     }
                 }
             }
             if (effectively_visible) {
                 render_manager->setCropboxGizmoState(
-                    true, crop_tool_box_min_, crop_tool_box_max_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
+                    true, crop_tool_box_min_, crop_tool_box_max_, crop_tool_visualizer_transform_, affects_render,
+                    parent_node_index, isRoiToolActive());
             } else {
                 render_manager->setCropboxGizmoActive(false);
             }
@@ -2724,7 +3134,7 @@ namespace lfs::vis::gui {
 
         if (isSelectionVolumeMode() && !is_using && selection_volume_gizmo_active_)
             finishSelectionVolumeGizmoDrag();
-        if (isCropToolActive() && !is_using && crop_tool_drag_active_) {
+        if ((isCropToolActive() || isRoiToolActive()) && !is_using && crop_tool_drag_active_) {
             const bool should_persist = crop_tool_drag_changed_;
             crop_tool_drag_active_ = false;
             crop_tool_scale_start_.reset();
@@ -3080,7 +3490,7 @@ namespace lfs::vis::gui {
 
         // Vertex handles take the pointer only on themselves; elsewhere the gizmos keep it.
         CropPolygonHandles polygon_handles;
-        if (polygon && isCropToolActive())
+        if (polygon && (isCropToolActive() || isRoiToolActive()))
             polygon_handles = updateCropPolygonVertexEdit(active_panel->pos, active_panel->size, view, projection);
 
         const glm::vec3 world_scale = glm::max(extractScale(crop_tool_visualizer_transform_), glm::vec3(1e-6f));
@@ -3129,7 +3539,9 @@ namespace lfs::vis::gui {
             bounds_config.half_extents_world = extractScale(gizmo_matrix);
             const glm::vec3 radii = glm::max(half_extents, glm::vec3(1e-6f));
             bounds_config.min_half_extents_world =
-                isCropToolActive() ? radii * gizmo_ops::MIN_VOLUME_AXIS_SCALE : world_scale * MIN_GIZMO_SCALE;
+                (isCropToolActive() || isRoiToolActive())
+                    ? radii * gizmo_ops::MIN_VOLUME_AXIS_SCALE
+                    : world_scale * MIN_GIZMO_SCALE;
             bounds_config.draw_list = &overlay_drawlist;
             bounds_config.input = gizmo_input;
             bounds_config.input_enabled = !scale_gizmo_has_priority;
@@ -3140,7 +3552,7 @@ namespace lfs::vis::gui {
             is_using = is_using || bounds_result.active;
             changed = changed || bounds_result.changed;
             if (bounds_result.changed) {
-                if (isCropToolActive()) {
+                if (isCropToolActive() || isRoiToolActive()) {
                     const glm::vec3 ratio = bounds_result.half_extents_world / (world_scale * radii);
                     for (int axis = 0; axis < 3; ++axis)
                         crop_tool_visualizer_transform_[axis] *= ratio[axis];
@@ -3220,7 +3632,7 @@ namespace lfs::vis::gui {
             is_using = is_using || scale_result.active;
             changed = changed || scale_result.changed;
             if (scale_result.changed) {
-                if (isCropToolActive()) {
+                if (isCropToolActive() || isRoiToolActive()) {
                     scaleCropToolTransform(scale_result.total_scale);
                 } else {
                     half_extents *= scale_result.delta_scale;
@@ -3232,7 +3644,7 @@ namespace lfs::vis::gui {
 
         if (isSelectionVolumeMode() && is_using && !selection_volume_gizmo_active_)
             beginSelectionVolumeGizmoDrag();
-        if (isCropToolActive() && is_using && !crop_tool_drag_active_) {
+        if ((isCropToolActive() || isRoiToolActive()) && is_using && !crop_tool_drag_active_) {
             crop_tool_drag_active_ = true;
             crop_tool_drag_changed_ = false;
             crop_tool_box_min_before_drag_ = crop_tool_box_min_;
@@ -3253,13 +3665,14 @@ namespace lfs::vis::gui {
             bool affects_render = false;
             bool effectively_visible = true;
             int parent_node_index = -1;
-            if (isCropToolActive()) {
+            if (isCropToolActive() || isRoiToolActive()) {
                 if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
                     if (const auto* const node = sm->getScene().getNodeById(crop_tool_volume_node_id_)) {
                         effectively_visible = sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_);
-                        affects_render = polygon ? node->crop_polygon && node->crop_polygon->enabled
-                                                 : node->ellipsoid && node->ellipsoid->enabled;
-                        parent_node_index = sm->getScene().getVisibleNodeIndex(node->parent_id);
+                        affects_render = !isRoiToolActive() && (polygon ? node->crop_polygon && node->crop_polygon->enabled
+                                                                        : node->ellipsoid && node->ellipsoid->enabled);
+                        parent_node_index = sm->getScene().getVisibleNodeIndex(
+                            isRoiToolActive() ? crop_tool_target_node_id_ : node->parent_id);
                     }
                 }
             }
@@ -3269,16 +3682,17 @@ namespace lfs::vis::gui {
             } else if (polygon) {
                 render_manager->setCropPolygonGizmoState(true, crop_tool_polygon_vertices_, crop_tool_polygon_half_depth_,
                                                          crop_tool_visualizer_transform_, affects_render,
-                                                         parent_node_index);
+                                                         parent_node_index, isRoiToolActive());
             } else {
                 render_manager->setEllipsoidGizmoState(
-                    true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render, parent_node_index);
+                    true, crop_tool_ellipsoid_radii_, crop_tool_visualizer_transform_, affects_render,
+                    parent_node_index, isRoiToolActive());
             }
         }
 
         if (isSelectionVolumeMode() && !is_using && selection_volume_gizmo_active_)
             finishSelectionVolumeGizmoDrag();
-        if (isCropToolActive() && !is_using && crop_tool_drag_active_) {
+        if ((isCropToolActive() || isRoiToolActive()) && !is_using && crop_tool_drag_active_) {
             const bool should_persist = crop_tool_drag_changed_;
             crop_tool_drag_active_ = false;
             crop_tool_scale_start_.reset();
@@ -3290,8 +3704,12 @@ namespace lfs::vis::gui {
         for (size_t i = 0; i < polygon_handles.screen.size(); ++i) {
             if (const auto& point = polygon_handles.screen[i]) {
                 const bool hot = static_cast<int>(i) == polygon_handles.hot;
+                const OverlayColor fill = isRoiToolActive()
+                                              ? (hot ? overlayColor(205, 130, 255, 245)
+                                                     : overlayColor(170, 90, 240, 235))
+                                              : (hot ? CROP_POLYGON_HANDLE_HOT_COLOR : CROP_POLYGON_HANDLE_COLOR);
                 overlay_drawlist.AddCircleFilled(*point, CROP_POLYGON_HANDLE_RADIUS_PX,
-                                                 hot ? CROP_POLYGON_HANDLE_HOT_COLOR : CROP_POLYGON_HANDLE_COLOR);
+                                                 fill);
                 overlay_drawlist.AddCircle(*point, CROP_POLYGON_HANDLE_RADIUS_PX, CROP_POLYGON_HANDLE_OUTLINE, 16, 1.0f);
             }
         }

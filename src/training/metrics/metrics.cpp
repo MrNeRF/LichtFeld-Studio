@@ -28,6 +28,7 @@
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "mesh_mask_kernels.cuh"
+#include "training/training_cropbox_mask.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -642,6 +643,165 @@ namespace lfs::training {
             .indices = lfs::core::Tensor::from_vector(faces, lfs::core::TensorShape({12, 3}), lfs::core::Device::CUDA),
             .z_near = std::max(1.0e-6f, 1.0e-4f * diagonal),
             .invert = invert};
+    }
+
+    namespace {
+        [[nodiscard]] float cross_2d(const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
+            return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        }
+
+        [[nodiscard]] bool point_in_triangle_2d(const glm::vec2& p,
+                                                const glm::vec2& a,
+                                                const glm::vec2& b,
+                                                const glm::vec2& c) {
+            const float c1 = cross_2d(a, b, p);
+            const float c2 = cross_2d(b, c, p);
+            const float c3 = cross_2d(c, a, p);
+            const bool has_neg = (c1 < -1.0e-6f) || (c2 < -1.0e-6f) || (c3 < -1.0e-6f);
+            const bool has_pos = (c1 > 1.0e-6f) || (c2 > 1.0e-6f) || (c3 > 1.0e-6f);
+            return !(has_neg && has_pos);
+        }
+
+        [[nodiscard]] std::vector<std::array<int, 3>> triangulate_polygon_2d(
+            const std::vector<glm::vec2>& polygon) {
+            std::vector<std::array<int, 3>> triangles;
+            const int n = static_cast<int>(polygon.size());
+            if (n < 3)
+                return triangles;
+            double signed_area = 0.0;
+            for (int i = 0; i < n; ++i) {
+                const auto& a = polygon[static_cast<size_t>(i)];
+                const auto& b = polygon[static_cast<size_t>((i + 1) % n)];
+                signed_area += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+            }
+            const float orient = signed_area >= 0.0 ? 1.0f : -1.0f;
+            std::vector<int> ring(static_cast<size_t>(n));
+            std::iota(ring.begin(), ring.end(), 0);
+            int guard = n * n;
+            while (ring.size() > 3 && guard-- > 0) {
+                bool clipped = false;
+                const size_t m = ring.size();
+                for (size_t i = 0; i < m; ++i) {
+                    const int i0 = ring[(i + m - 1) % m];
+                    const int i1 = ring[i];
+                    const int i2 = ring[(i + 1) % m];
+                    const auto& a = polygon[static_cast<size_t>(i0)];
+                    const auto& b = polygon[static_cast<size_t>(i1)];
+                    const auto& c = polygon[static_cast<size_t>(i2)];
+                    if (orient * cross_2d(a, b, c) <= 1.0e-7f)
+                        continue;
+                    bool contains_other = false;
+                    for (size_t j = 0; j < m; ++j) {
+                        const int idx = ring[j];
+                        if (idx == i0 || idx == i1 || idx == i2)
+                            continue;
+                        if (point_in_triangle_2d(polygon[static_cast<size_t>(idx)], a, b, c)) {
+                            contains_other = true;
+                            break;
+                        }
+                    }
+                    if (!contains_other) {
+                        triangles.push_back({i0, i1, i2});
+                        ring.erase(ring.begin() + static_cast<std::ptrdiff_t>(i));
+                        clipped = true;
+                        break;
+                    }
+                }
+                if (!clipped)
+                    break;
+            }
+            if (ring.size() == 3) {
+                triangles.push_back({ring[0], ring[1], ring[2]});
+            } else if (triangles.empty()) {
+                for (int i = 1; i + 1 < n; ++i)
+                    triangles.push_back({0, i, i + 1});
+            }
+            return triangles;
+        }
+    } // namespace
+
+    EvaluationMesh make_evaluation_roi_mesh(const TrainingCropBoxGeometry& geometry) {
+        if (!geometry.is_polygon() && !geometry.is_ellipsoid()) {
+            return make_evaluation_box(training_cropbox_model_corners(geometry), geometry.inverse);
+        }
+
+        const glm::mat4 cropbox_to_model = glm::inverse(geometry.model_to_cropbox);
+        const auto corners = training_cropbox_model_corners(geometry);
+        const auto& corner_a = corners[0];
+        const auto& corner_b = corners[7];
+        const float diagonal = std::hypot(
+            corner_b[0] - corner_a[0], corner_b[1] - corner_a[1], corner_b[2] - corner_a[2]);
+
+        std::vector<float> vertices;
+        std::vector<int> faces;
+        const auto push_vertex = [&](const glm::vec3& local) {
+            const glm::vec4 model = cropbox_to_model * glm::vec4(local, 1.0f);
+            const int idx = static_cast<int>(vertices.size() / 3);
+            vertices.insert(vertices.end(), {model.x, model.y, model.z});
+            return idx;
+        };
+
+        if (geometry.is_ellipsoid()) {
+            constexpr int kLatRings = 16;
+            constexpr int kLonSegments = 32;
+            constexpr float kPi = 3.14159265358979323846f;
+            const glm::vec3 r = geometry.ellipsoid_radii;
+            const int north_pole = push_vertex({0.0f, 0.0f, r.z});
+            for (int lat = 1; lat < kLatRings; ++lat) {
+                const float theta = kPi * static_cast<float>(lat) / static_cast<float>(kLatRings);
+                const float sin_theta = std::sin(theta);
+                const float cos_theta = std::cos(theta);
+                for (int lon = 0; lon < kLonSegments; ++lon) {
+                    const float phi = 2.0f * kPi * static_cast<float>(lon) / static_cast<float>(kLonSegments);
+                    push_vertex({r.x * sin_theta * std::cos(phi), r.y * sin_theta * std::sin(phi), r.z * cos_theta});
+                }
+            }
+            const int south_pole = push_vertex({0.0f, 0.0f, -r.z});
+
+            for (int lon = 0; lon < kLonSegments; ++lon) {
+                const int next_lon = (lon + 1) % kLonSegments;
+                faces.insert(faces.end(), {north_pole, 1 + lon, 1 + next_lon});
+            }
+            for (int lat = 0; lat + 2 < kLatRings; ++lat) {
+                const int row0 = 1 + lat * kLonSegments;
+                const int row1 = row0 + kLonSegments;
+                for (int lon = 0; lon < kLonSegments; ++lon) {
+                    const int next_lon = (lon + 1) % kLonSegments;
+                    faces.insert(faces.end(), {row0 + lon, row1 + lon, row1 + next_lon,
+                                               row0 + lon, row1 + next_lon, row0 + next_lon});
+                }
+            }
+            const int last_row = 1 + (kLatRings - 2) * kLonSegments;
+            for (int lon = 0; lon < kLonSegments; ++lon) {
+                const int next_lon = (lon + 1) % kLonSegments;
+                faces.insert(faces.end(), {south_pole, last_row + next_lon, last_row + lon});
+            }
+        } else {
+            const int n = static_cast<int>(geometry.polygon.size());
+            for (const auto& v : geometry.polygon)
+                push_vertex({v.x, v.y, geometry.min.z});
+            for (const auto& v : geometry.polygon)
+                push_vertex({v.x, v.y, geometry.max.z});
+            for (const auto& tri : triangulate_polygon_2d(geometry.polygon)) {
+                faces.insert(faces.end(), {tri[0], tri[2], tri[1],
+                                           n + tri[0], n + tri[1], n + tri[2]});
+            }
+            for (int i = 0; i < n; ++i) {
+                const int next = (i + 1) % n;
+                faces.insert(faces.end(), {i, next, n + next,
+                                           i, n + next, n + i});
+            }
+        }
+
+        const size_t num_vertices = vertices.size() / 3;
+        const size_t num_faces = faces.size() / 3;
+        return EvaluationMesh{
+            .vertices = lfs::core::Tensor::from_vector(
+                vertices, lfs::core::TensorShape({num_vertices, 3}), lfs::core::Device::CUDA),
+            .indices = lfs::core::Tensor::from_vector(
+                faces, lfs::core::TensorShape({num_faces, 3}), lfs::core::Device::CUDA),
+            .z_near = std::max(1.0e-6f, 1.0e-4f * diagonal),
+            .invert = geometry.inverse};
     }
 
     lfs::Result<PreparedEvaluationView> prepare_evaluation_view(

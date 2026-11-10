@@ -394,6 +394,26 @@ namespace lfs::io::project {
         friend bool operator==(const CropPolygonRecord&, const CropPolygonRecord&) = default;
     };
 
+    struct RegionOfInterestRecord {
+        std::string shape = "box";
+        std::array<float, 3> min{-1.0f, -1.0f, -1.0f};
+        std::array<float, 3> max{1.0f, 1.0f, 1.0f};
+        std::array<float, 3> radii{1.0f, 1.0f, 1.0f};
+        std::vector<std::array<float, 2>> vertices;
+        float half_depth = 1.0f;
+        std::array<float, 16> local_transform{1, 0, 0, 0, 0, 1, 0, 0,
+                                               0, 0, 1, 0, 0, 0, 0, 1};
+        bool inverse = false;
+        bool enabled = true;
+        bool crop_point_cloud_before_training = false;
+        bool crop_model_after_training = false;
+        bool select_relevant_cameras = false;
+        float camera_coverage_percent = 40.0f;
+        std::array<float, 3> color{0.67f, 0.35f, 0.95f};
+
+        friend bool operator==(const RegionOfInterestRecord&, const RegionOfInterestRecord&) = default;
+    };
+
     // Camera calibration in SCNG is always the source (pre-rectification) calibration
     // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
@@ -453,6 +473,7 @@ namespace lfs::io::project {
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
         std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
+        std::optional<RegionOfInterestRecord> region_of_interest = std::nullopt;
         // Shared immutable occupancy in the COLV instance with this UUID.
         std::optional<lfs::core::Uuid> collision = std::nullopt;
 

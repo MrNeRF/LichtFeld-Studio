@@ -963,6 +963,16 @@ namespace lfs::core {
     }
 
     void Scene::setNodeTransform(const std::string& name, const glm::mat4& transform) {
+        if (auto* const roi_target = resolveMutableRoiTargetNode(name)) {
+            if (!isNodeEffectivelyLocked(roi_target->id)) {
+                auto data = *roi_target->region_of_interest;
+                data.local_transform = transform;
+                (void)setRegionOfInterestData(roi_target->id, data);
+            } else {
+                LOG_WARN("Cannot transform '{}': node is locked", name);
+            }
+            return;
+        }
         setNodeTransform(getNodeIdByName(name), transform);
     }
 
@@ -977,6 +987,8 @@ namespace lfs::core {
     }
 
     glm::mat4 Scene::getNodeTransform(const std::string& name) const {
+        if (const auto* const roi_target = resolveRoiTargetNode(name))
+            return roi_target->region_of_interest->local_transform;
         return getNodeTransform(getNodeIdByName(name));
     }
 
@@ -4790,6 +4802,7 @@ namespace lfs::core {
                 return NULL_NODE;
             }
             node->model = std::move(desc.model);
+            node->region_of_interest = std::move(desc.region_of_interest);
             break;
         case NodeType::POINTCLOUD:
             if (!desc.point_cloud &&
@@ -4798,6 +4811,7 @@ namespace lfs::core {
                 return NULL_NODE;
             }
             node->point_cloud = std::move(desc.point_cloud);
+            node->region_of_interest = std::move(desc.region_of_interest);
             break;
         case NodeType::MESH:
             if (!desc.mesh &&
@@ -5357,6 +5371,10 @@ namespace lfs::core {
                 new_node->visible.setQuiet(src_visible);
                 new_node->locked.setQuiet(src_locked);
                 new_node->point_cloud_source = getNodeById(src_id)->point_cloud_source;
+                if (const auto* source = getNodeById(src_id); source && source->region_of_interest) {
+                    new_node->region_of_interest =
+                        std::make_unique<RegionOfInterestData>(*source->region_of_interest);
+                }
                 new_node->transform_dirty = true;
             }
 
@@ -6589,6 +6607,79 @@ namespace lfs::core {
         }
         *node->crop_polygon = data;
         return true;
+    }
+
+    RegionOfInterestData* Scene::getRegionOfInterestData(const NodeId node_id) {
+        auto* const node = getNodeById(node_id);
+        return node ? node->region_of_interest.get() : nullptr;
+    }
+
+    const RegionOfInterestData* Scene::getRegionOfInterestData(const NodeId node_id) const {
+        const auto* const node = getNodeById(node_id);
+        return node ? node->region_of_interest.get() : nullptr;
+    }
+
+    bool Scene::setRegionOfInterestData(const NodeId node_id, const RegionOfInterestData& data) {
+        auto* const node = getNodeById(node_id);
+        if (!node || (node->type != NodeType::SPLAT && node->type != NodeType::POINTCLOUD))
+            return false;
+        const auto finite_vec3 = [](const glm::vec3& value) {
+            return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+        };
+        const bool finite_box = finite_vec3(data.min) && finite_vec3(data.max) &&
+                                data.min.x < data.max.x && data.min.y < data.max.y && data.min.z < data.max.z;
+        const bool finite_radii = finite_vec3(data.radii) && data.radii.x > 0.0f &&
+                                  data.radii.y > 0.0f && data.radii.z > 0.0f;
+        bool finite_transform = true;
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                finite_transform = finite_transform && std::isfinite(data.local_transform[column][row]);
+        const bool finite_settings = std::isfinite(data.camera_coverage_percent) &&
+                                     data.camera_coverage_percent >= 0.0f &&
+                                     data.camera_coverage_percent <= 100.0f;
+        if (!finite_transform || !finite_settings ||
+            (data.shape == RegionOfInterestShape::Box && !finite_box) ||
+            (data.shape == RegionOfInterestShape::Ellipsoid && !finite_radii) ||
+            (data.shape == RegionOfInterestShape::Polygon &&
+             (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)))) {
+            LOG_WARN("Rejected invalid region-of-interest data for '{}'", node->name);
+            return false;
+        }
+        node->region_of_interest = std::make_unique<RegionOfInterestData>(data);
+        notifyMutation(MutationType::TRANSFORM_CHANGED);
+        return true;
+    }
+
+    void Scene::clearRegionOfInterestData(const NodeId node_id) {
+        if (auto* const node = getNodeById(node_id); node && node->region_of_interest) {
+            node->region_of_interest.reset();
+            notifyMutation(MutationType::TRANSFORM_CHANGED);
+        }
+    }
+
+    std::string Scene::getRoiNodeName(const NodeId node_id) const {
+        const auto* const node = getNodeById(node_id);
+        if (!node || !node->region_of_interest)
+            return {};
+        return node->name + "_ROI";
+    }
+
+    const SceneNode* Scene::resolveRoiTargetNode(const std::string_view name) const {
+        constexpr std::string_view kRoiSuffix = "_ROI";
+        if (!name.ends_with(kRoiSuffix) || name.size() <= kRoiSuffix.size())
+            return nullptr;
+        if (getNodeIdByName(std::string(name)) != NULL_NODE)
+            return nullptr;
+        const std::string target_name(name.substr(0, name.size() - kRoiSuffix.size()));
+        const auto* const target = getNode(target_name);
+        if (!target || !target->region_of_interest)
+            return nullptr;
+        return target;
+    }
+
+    SceneNode* Scene::resolveMutableRoiTargetNode(const std::string_view name) {
+        const auto* const target = resolveRoiTargetNode(name);
+        return target ? getNodeById(target->id) : nullptr;
     }
 
     std::vector<Scene::RenderableCropPolygon> Scene::getRenderableCropPolygons() const {

@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 namespace lfs::vis {
 
-    void registerBuiltinTools();
+    LFS_VIS_API void registerBuiltinTools();
 
 } // namespace lfs::vis

@@ -399,6 +399,30 @@ namespace lfs::io::project {
                 }
                 result.crop_polygon = std::move(record);
             }
+            if (node.region_of_interest) {
+                const auto& roi = *node.region_of_interest;
+                RegionOfInterestRecord record{
+                    .shape = roi.shape == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid" :
+                             roi.shape == lfs::core::RegionOfInterestShape::Polygon ? "polygon" : "box",
+                    .min = {roi.min.x, roi.min.y, roi.min.z},
+                    .max = {roi.max.x, roi.max.y, roi.max.z},
+                    .radii = {roi.radii.x, roi.radii.y, roi.radii.z},
+                    .vertices = {},
+                    .half_depth = roi.half_depth,
+                    .local_transform = {},
+                    .inverse = roi.inverse,
+                    .enabled = roi.enabled,
+                    .crop_point_cloud_before_training = roi.crop_point_cloud_before_training,
+                    .crop_model_after_training = roi.crop_model_after_training,
+                    .select_relevant_cameras = roi.select_relevant_cameras,
+                    .camera_coverage_percent = roi.camera_coverage_percent,
+                    .color = {roi.color.x, roi.color.y, roi.color.z},
+                };
+                std::copy_n(glm::value_ptr(roi.local_transform), 16, record.local_transform.begin());
+                for (const auto& vertex : roi.vertices)
+                    record.vertices.push_back({vertex.x, vertex.y});
+                result.region_of_interest = std::move(record);
+            }
             if (node.camera) {
                 if (node.camera->has_in_memory_mask()) {
                     return fail<SceneNodeRecord>(
@@ -718,6 +742,8 @@ namespace lfs::io::project {
                     record.collision.has_value() != (*type == lfs::core::NodeType::COLLISION) ||
                     record.ellipsoid.has_value() != is_ellipsoid ||
                     record.crop_polygon.has_value() != is_crop_polygon ||
+                    (record.region_of_interest.has_value() &&
+                     *type != lfs::core::NodeType::SPLAT && *type != lfs::core::NodeType::POINTCLOUD) ||
                     record.camera.has_value() != is_camera ||
                     record.payload.has_value() != is_geometry) {
                     return fail<void>(
@@ -725,7 +751,7 @@ namespace lfs::io::project {
                         "A scene node has mismatched type-specific state.",
                         std::format(
                             "SCNG node {} type '{}' has an absent or extraneous "
-                            "payload/cropbox/ellipsoid/crop_polygon/camera record",
+                            "payload/cropbox/ellipsoid/crop_polygon/ROI/camera record",
                             record.uuid.to_string(), record.type),
                         record.uuid);
                 }
@@ -773,6 +799,7 @@ namespace lfs::io::project {
                     .camera = nullptr,
                     .keyframe = nullptr,
                     .crop_polygon = nullptr,
+                    .region_of_interest = nullptr,
                 };
                 if (record.georef_pose) {
                     desc.georef_pose = lfs::core::GeoreferencePose{
@@ -848,6 +875,28 @@ namespace lfs::io::project {
                                             record.crop_polygon->color[2]);
                     data->line_width = record.crop_polygon->line_width;
                     desc.crop_polygon = std::move(data);
+                }
+                if (record.region_of_interest) {
+                    const auto& roi = *record.region_of_interest;
+                    auto data = std::make_unique<lfs::core::RegionOfInterestData>();
+                    data->shape = roi.shape == "ellipsoid" ? lfs::core::RegionOfInterestShape::Ellipsoid :
+                                  roi.shape == "polygon" ? lfs::core::RegionOfInterestShape::Polygon :
+                                                           lfs::core::RegionOfInterestShape::Box;
+                    data->min = glm::vec3(roi.min[0], roi.min[1], roi.min[2]);
+                    data->max = glm::vec3(roi.max[0], roi.max[1], roi.max[2]);
+                    data->radii = glm::vec3(roi.radii[0], roi.radii[1], roi.radii[2]);
+                    data->half_depth = roi.half_depth;
+                    data->local_transform = glm::make_mat4(roi.local_transform.data());
+                    data->inverse = roi.inverse;
+                    data->enabled = roi.enabled;
+                    data->crop_point_cloud_before_training = roi.crop_point_cloud_before_training;
+                    data->crop_model_after_training = roi.crop_model_after_training;
+                    data->select_relevant_cameras = roi.select_relevant_cameras;
+                    data->camera_coverage_percent = roi.camera_coverage_percent;
+                    data->color = glm::vec3(roi.color[0], roi.color[1], roi.color[2]);
+                    for (const auto& vertex : roi.vertices)
+                        data->vertices.emplace_back(vertex[0], vertex[1]);
+                    desc.region_of_interest = std::move(data);
                 }
                 if (record.camera) {
                     try {

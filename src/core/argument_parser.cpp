@@ -811,9 +811,16 @@ namespace {
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
-            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
-            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
+            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Add a pre-training Crop box with the given dataset-space bounds. This does not define the training ROI.", {"cropbox"});
+            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Rotate the pre-training --cropbox about its centre by Rx*Ry*Rz degrees.", {"cropbox-rotation"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
+            ::args::ValueFlag<std::string> roi(training_group, "x0,y0,z0,x1,y1,z1", "Set the dedicated training ROI in dataset coordinates.", {"roi"});
+            ::args::ValueFlag<std::string> roi_rotation(training_group, "rx,ry,rz", "Rotate --roi about its centre by Rx*Ry*Rz degrees.", {"roi-rotation"});
+            ::args::Flag roi_invert(training_group, "enabled", "Train the region outside --roi.", {"roi-invert"});
+            ::args::Flag roi_crop_point_cloud(training_group, "enabled", "Use a temporary ROI-cropped PointCloud seed without changing the saved PointCloud.", {"roi-crop-point-cloud"});
+            ::args::Flag crop_to_roi(training_group, "enabled", "Permanently crop the completed model and exports to the ROI.", {"crop-to-roi"});
+            ::args::Flag roi_relevant_cameras(training_group, "enabled", "Select relevant training cameras from ROI coverage before training.", {"roi-relevant-cameras"});
+            ::args::ValueFlag<float> roi_camera_coverage(training_group, "percent", "ROI camera coverage threshold (0-100).", {"roi-camera-coverage"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
@@ -1346,10 +1353,45 @@ namespace {
                         ::args::get(cropbox_rotation)));
                 params.cropbox_rotation = *rotation;
             }
-            if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
+            if (roi) {
+                const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(roi));
+                if (!box)
+                    return std::unexpected(std::format(
+                        "Invalid --roi '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
+                        ::args::get(roi)));
+                params.roi = *box;
+            }
+            if (roi_rotation) {
+                if (!params.roi)
+                    return std::unexpected("--roi-rotation needs --roi");
+                const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(roi_rotation));
+                if (!rotation)
+                    return std::unexpected(std::format(
+                        "Invalid --roi-rotation '{}'. A rotation needs three finite numbers rx,ry,rz in degrees",
+                        ::args::get(roi_rotation)));
+                params.roi_rotation = *rotation;
+            }
+            if ((roi_invert || roi_crop_point_cloud || crop_to_roi || roi_relevant_cameras || roi_camera_coverage) &&
+                !params.roi && !params.resume_checkpoint && !params.resume_project)
+                return std::unexpected("ROI controls need --roi, or a resumed project with an ROI");
+            if (roi_camera_coverage &&
+                (!std::isfinite(::args::get(roi_camera_coverage)) || ::args::get(roi_camera_coverage) < 0.0f ||
+                 ::args::get(roi_camera_coverage) > 100.0f))
+                return std::unexpected("--roi-camera-coverage must be within 0 and 100");
+            params.roi_invert = static_cast<bool>(roi_invert);
+            params.roi_crop_point_cloud = static_cast<bool>(roi_crop_point_cloud);
+            params.crop_to_roi = static_cast<bool>(crop_to_roi);
+            params.roi_relevant_cameras = static_cast<bool>(roi_relevant_cameras);
+            if (roi_camera_coverage)
+                params.roi_camera_coverage = ::args::get(roi_camera_coverage);
+            // Keep --crop as a compatibility spelling for final ROI cropping;
+            // --cropbox itself remains a separate pre-training helper.
+            if (crop)
+                params.crop_to_roi = true;
+            if (crop && !params.cropbox && !params.roi && !params.resume_checkpoint && !params.resume_project)
                 return std::unexpected(
-                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
-                    "it needs --cropbox, or a resumed project that has a crop box");
+                    "--crop removes splats outside the training ROI when training completes and when exporting: "
+                    "it needs --roi or --cropbox, or a resumed project that has an ROI");
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {

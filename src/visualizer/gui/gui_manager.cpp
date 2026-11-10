@@ -3282,45 +3282,52 @@ namespace lfs::vis::gui {
             }
 
             const auto selected_cropbox_is_visible = [&]() {
-                if (!scene_state || !scene_manager)
+                if (gizmo.cropbox_is_roi || !scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
                 return activeVolumeGuideVisible(gizmo.cropbox_affects_render, selected_id, scene_state->cropboxes);
             };
             const auto selected_ellipsoid_is_visible = [&]() {
-                if (!scene_state || !scene_manager)
+                if (gizmo.ellipsoid_is_roi || !scene_state || !scene_manager)
                     return true;
                 const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
                 return activeVolumeGuideVisible(gizmo.ellipsoid_affects_render, selected_id, scene_state->ellipsoids);
             };
 
             if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
+                const glm::vec3 guide_color = gizmo.cropbox_is_roi ? glm::vec3(0.67f, 0.35f, 0.95f)
+                                                                    : glm::vec3(1.0f, 1.0f, 0.0f);
                 appendProjectedBox(params, panel, settings,
                                    gizmo.cropbox_min,
                                    gizmo.cropbox_max,
                                    gizmo.cropbox_transform,
-                                   cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f),
+                                   cropGuideColor(guide_color, false, 0.0f),
                                    2.0f);
             }
 
             if (gizmo.ellipsoid_active && selected_ellipsoid_is_visible()) {
+                const glm::vec3 guide_color = gizmo.ellipsoid_is_roi ? glm::vec3(0.67f, 0.35f, 0.95f)
+                                                                      : glm::vec3(0.5f, 0.85f, 1.0f);
                 appendProjectedEllipsoid(params, panel, settings,
                                          gizmo.ellipsoid_radii,
                                          gizmo.ellipsoid_transform,
-                                         cropGuideColor(glm::vec3(0.5f, 0.85f, 1.0f), false, 0.0f),
+                                         cropGuideColor(guide_color, false, 0.0f),
                                          2.0f);
             }
 
             const auto selected_polygon_id = scene_manager ? scene_manager->getSelectedNodeCropPolygonId()
                                                            : core::NULL_NODE;
             if (gizmo.crop_polygon_active &&
-                (!scene_state || activeVolumeGuideVisible(gizmo.crop_polygon_affects_render, selected_polygon_id,
-                                                          scene_state->crop_polygons))) {
+                (gizmo.crop_polygon_is_roi || !scene_state ||
+                 activeVolumeGuideVisible(gizmo.crop_polygon_affects_render, selected_polygon_id,
+                                          scene_state->crop_polygons))) {
+                const glm::vec3 guide_color = gizmo.crop_polygon_is_roi ? glm::vec3(0.67f, 0.35f, 0.95f)
+                                                                         : glm::vec3(1.0f, 1.0f, 0.0f);
                 appendProjectedCropPolygon(params, panel, settings,
                                            gizmo.crop_polygon_vertices,
                                            gizmo.crop_polygon_half_depth,
                                            gizmo.crop_polygon_transform,
-                                           cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f),
+                                           cropGuideColor(guide_color, false, 0.0f),
                                            2.0f);
             }
 
@@ -3333,6 +3340,65 @@ namespace lfs::vis::gui {
                 if (gizmo.crop_polygon_draft_cursor)
                     addProjectedOverlayLine(params, panel, settings, draft.back(), *gizmo.crop_polygon_draft_cursor,
                                             glm::vec4(glm::vec3(draft_color), 0.6f), 1.5f);
+            }
+
+            if (scene_manager) {
+                const auto& scene = scene_manager->getScene();
+                const bool active_roi_gizmo =
+                    (gizmo.cropbox_active && gizmo.cropbox_is_roi) ||
+                    (gizmo.ellipsoid_active && gizmo.ellipsoid_is_roi) ||
+                    (gizmo.crop_polygon_active && gizmo.crop_polygon_is_roi);
+                core::NodeId active_roi_target_id = core::NULL_NODE;
+                if (active_roi_gizmo) {
+                    for (const auto& name : scene_manager->getSelectedNodeNames()) {
+                        const auto* const selected = scene.getNode(name);
+                        if (selected &&
+                            (selected->type == core::NodeType::SPLAT ||
+                             selected->type == core::NodeType::POINTCLOUD) &&
+                            selected->region_of_interest) {
+                            active_roi_target_id = selected->id;
+                            break;
+                        }
+                    }
+                    if (active_roi_target_id == core::NULL_NODE) {
+                        if (const core::NodeId model_id = scene.getTrainingModelNodeId();
+                            model_id != core::NULL_NODE && scene.getRegionOfInterestData(model_id)) {
+                            active_roi_target_id = model_id;
+                        } else if (const auto* const pc = scene.getDatasetPointCloudNode();
+                                   pc && pc->region_of_interest) {
+                            active_roi_target_id = pc->id;
+                        }
+                    }
+                }
+                for (const auto* const node : scene.getNodes()) {
+                    if (!node ||
+                        (node->type != core::NodeType::SPLAT &&
+                         node->type != core::NodeType::POINTCLOUD)) {
+                        continue;
+                    }
+                    if (active_roi_gizmo && node->id == active_roi_target_id)
+                        continue;
+                    const auto* const roi = scene.getRegionOfInterestData(node->id);
+                    if (!roi || !roi->enabled || !scene.isNodeEffectivelyVisible(node->id))
+                        continue;
+                    const glm::mat4 roi_world =
+                        lfs::rendering::dataWorldTransformToVisualizerWorld(
+                            scene.getWorldTransform(node->id) * roi->local_transform);
+                    const glm::vec4 roi_color =
+                        cropGuideColor(glm::vec3(0.67f, 0.35f, 0.95f), false, 0.0f);
+                    switch (roi->shape) {
+                    case core::RegionOfInterestShape::Box:
+                        appendProjectedBox(params, panel, settings, roi->min, roi->max, roi_world, roi_color, 2.0f);
+                        break;
+                    case core::RegionOfInterestShape::Ellipsoid:
+                        appendProjectedEllipsoid(params, panel, settings, roi->radii, roi_world, roi_color, 2.0f);
+                        break;
+                    case core::RegionOfInterestShape::Polygon:
+                        appendProjectedCropPolygon(params, panel, settings, roi->vertices, roi->half_depth, roi_world,
+                                                   roi_color, 2.0f);
+                        break;
+                    }
+                }
             }
 
             if (!scene_state || !scene_manager) {

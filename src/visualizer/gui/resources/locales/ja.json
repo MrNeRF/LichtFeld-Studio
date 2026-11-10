@@ -908,6 +908,7 @@
     "select_every_n_cameras": "N台ごとに選択",
     "select_distinct_cameras": "異なるカメラを選択",
     "select_cropbox_cameras": "クロップボックスの可視性で選択",
+    "select_roi_cameras": "ROI の可視性で選択",
     "hide_disabled_cameras": "無効なカメラを隠す",
     "camera_percentage": "割合",
     "camera_every_n": "N台ごと",
@@ -917,9 +918,11 @@
     "camera_coverage": "最小フレーム被覆率",
     "camera_selection_no_scene": "利用可能なシーンはありません。",
     "camera_selection_cropbox_required": "有効なクロップボックスを選択してください。",
+    "camera_selection_roi_required": "有効な ROI を選択してください。",
     "camera_selection_group_required": "有効なカメラグループを選択してください。",
     "camera_selection_already_running": "カメラ選択はすでに実行中です。",
     "camera_selection_pinhole_required": "クロップボックスの可視性にはピンホールカメラが必要です。",
+    "camera_selection_roi_pinhole_required": "ROI の可視性にはピンホールカメラが必要です。",
     "camera_selection_stale": "カメラ選択中にシーンが変更されました。",
     "camera_selection_progress": "選択の進行状況",
     "go_to_keyframe": "キーフレームビューに移動",
@@ -1280,7 +1283,8 @@
     "mirror": "ミラー",
     "crop": "切り抜き",
     "align": "整列",
-    "scale_distance": "距離で拡大縮小"
+    "scale_distance": "距離で拡大縮小",
+    "roi": "ROI"
   },
   "toolbar": {
     "selection": "選択",
@@ -1356,7 +1360,17 @@
     "scale_distance_measured": "測定値:",
     "scale_distance_set": "距離を設定:",
     "scale_distance_apply": "スケールを確定",
-    "scale_distance_reset": "点をリセット"
+    "scale_distance_reset": "点をリセット",
+    "training_roi": "学習 ROI",
+    "roi_settings": "ROI 設定",
+    "roi_seed_crop": "初期点群クロップ",
+    "roi_seed_crop_tooltip": "学習前に点群をクロップ",
+    "roi_final_crop": "最終モデルクロップ",
+    "roi_final_crop_tooltip": "学習後にモデルをクロップ",
+    "roi_relevant_cameras": "関連カメラを使用",
+    "roi_relevant_cameras_tooltip": "ROI 学習に関連するカメラのみを使用",
+    "roi_camera_coverage": "カメラカバー率 (%)",
+    "roi_camera_coverage_tooltip": "ROI 学習に必要なカメラフレームの最小カバー率"
   },
   "transform": {
     "scale_apriltag": "AprilTagでシーンのスケールを調整",
@@ -2032,6 +2046,7 @@
     "prune_opacity": "不透明度のプルーニング:",
     "ppisp_settings": "PPISP設定",
     "ppisp_enable_controller": "コントローラー有効化:",
+    "crop_to_cropbox": "学習後にモデルをクロップ",
     "disabled": "無効"
   },
   "image_preview": {

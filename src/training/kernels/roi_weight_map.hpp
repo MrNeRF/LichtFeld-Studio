@@ -17,6 +17,12 @@ namespace lfs::training::kernels {
         float half_depth = 0.0f;
     };
 
+    // An ellipsoid centred at the local origin.  Keeping it as a distinct
+    // argument prevents callers from accidentally using its bounding box.
+    struct RoiEllipsoid {
+        glm::vec3 radii{1.0f};
+    };
+
     void launch_roi_weight_map(
         const float* world_to_camera, // [1,4,4] or [4,4] CUDA, row-major
         const float* camera_position, // [3] CUDA
@@ -38,6 +44,12 @@ namespace lfs::training::kernels {
         const float* surface_alpha, // [H,W] CUDA accumulated alpha, or null
         float* output,              // [H,W] CUDA
         cudaStream_t stream = nullptr);
+
+    void launch_roi_weight_map(
+        const float* world_to_camera, const float* camera_position, float fx, float fy, float cx, float cy,
+        int width, int height, const glm::mat4& world_to_ellipsoid, const RoiEllipsoid& ellipsoid, bool inverse,
+        float outside_weight, const float* camera_rays, const float* surface_depth, const float* surface_alpha,
+        float* output, cudaStream_t stream = nullptr);
 
     // launch_roi_weight_map for a crop polygon: a pixel is in the ROI when its ray passes through the prism
     // (or, for a camera inside the prism, when the surface it shows lies in it). The test is exact for
@@ -81,6 +93,11 @@ namespace lfs::training::kernels {
         bool* rejected,      // [N] CUDA
         cudaStream_t stream = nullptr);
 
+    void launch_roi_view_reject_mask(
+        const float* means, const float* scaling_raw, size_t n, const glm::mat4& model_to_ellipsoid,
+        const glm::mat4& world_to_ellipsoid, const float* camera_position, const RoiEllipsoid& ellipsoid,
+        bool inverse, const bool* deleted, bool* rejected, cudaStream_t stream = nullptr);
+
     // launch_roi_view_reject_mask for a crop polygon. The footprint margin grows the outline by a disc and the
     // slab by the same distance; inverse polygons shrink only the slab, as eroding a concave outline per splat
     // is far costlier than the test itself.
@@ -114,6 +131,11 @@ namespace lfs::training::kernels {
         bool* rejected,      // [N] CUDA
         bool* in_roi,        // [N] CUDA or null
         cudaStream_t stream = nullptr);
+
+    void launch_roi_relevance_reject_mask(
+        const float* means, const float* scaling_raw, size_t n, const glm::mat4& model_to_ellipsoid,
+        const float* cameras_in_ellipsoid, int num_cameras, const RoiEllipsoid& ellipsoid, bool inverse,
+        const bool* deleted, bool* rejected, bool* in_roi, cudaStream_t stream = nullptr);
 
     // launch_roi_relevance_reject_mask for a crop polygon, with the margin of launch_roi_view_reject_mask.
     void launch_roi_relevance_reject_mask(

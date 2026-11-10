@@ -166,10 +166,11 @@ namespace lfs::vis {
 
         void setCropbox(bool active, const glm::vec3& min, const glm::vec3& max,
                         const glm::mat4& world_transform, bool affects_render = true,
-                        int parent_node_index = -1) {
+                        int parent_node_index = -1, bool is_roi = false) {
             cropbox_active_ = active;
             cropbox_affects_render_ = affects_render;
             cropbox_parent_node_index_ = parent_node_index;
+            cropbox_is_roi_ = is_roi;
             if (active) {
                 cropbox_min_ = min;
                 cropbox_max_ = max;
@@ -178,10 +179,11 @@ namespace lfs::vis {
         }
 
         void setEllipsoid(bool active, const glm::vec3& radii, const glm::mat4& world_transform,
-                          bool affects_render = true, int parent_node_index = -1) {
+                          bool affects_render = true, int parent_node_index = -1, bool is_roi = false) {
             ellipsoid_active_ = active;
             ellipsoid_affects_render_ = affects_render;
             ellipsoid_parent_node_index_ = parent_node_index;
+            ellipsoid_is_roi_ = is_roi;
             if (active) {
                 ellipsoid_radii_ = radii;
                 ellipsoid_transform_ = world_transform;
@@ -190,10 +192,11 @@ namespace lfs::vis {
 
         void setCropPolygon(bool active, const std::vector<glm::vec2>& vertices, const float half_depth,
                             const glm::mat4& world_transform, bool affects_render = true,
-                            int parent_node_index = -1) {
+                            int parent_node_index = -1, bool is_roi = false) {
             crop_polygon_active_ = active;
             crop_polygon_affects_render_ = affects_render;
             crop_polygon_parent_node_index_ = parent_node_index;
+            crop_polygon_is_roi_ = is_roi;
             if (active) {
                 crop_polygon_vertices_ = vertices;
                 crop_polygon_half_depth_ = half_depth;
@@ -206,6 +209,7 @@ namespace lfs::vis {
             if (!active) {
                 crop_polygon_affects_render_ = true;
                 crop_polygon_parent_node_index_ = -1;
+                crop_polygon_is_roi_ = false;
             }
         }
 
@@ -219,6 +223,7 @@ namespace lfs::vis {
             if (!active) {
                 cropbox_affects_render_ = true;
                 cropbox_parent_node_index_ = -1;
+                cropbox_is_roi_ = false;
             }
         }
         void setEllipsoidActive(bool active) {
@@ -226,6 +231,7 @@ namespace lfs::vis {
             if (!active) {
                 ellipsoid_affects_render_ = true;
                 ellipsoid_parent_node_index_ = -1;
+                ellipsoid_is_roi_ = false;
             }
         }
         [[nodiscard]] GizmoState makeFrameGizmoState() const {
@@ -235,17 +241,20 @@ namespace lfs::vis {
                 .cropbox_max = cropbox_max_,
                 .cropbox_transform = cropbox_transform_,
                 .cropbox_affects_render = cropbox_affects_render_,
+                .cropbox_is_roi = cropbox_is_roi_,
                 .cropbox_parent_node_index = cropbox_parent_node_index_,
                 .ellipsoid_active = ellipsoid_active_,
                 .ellipsoid_radii = ellipsoid_radii_,
                 .ellipsoid_transform = ellipsoid_transform_,
                 .ellipsoid_affects_render = ellipsoid_affects_render_,
+                .ellipsoid_is_roi = ellipsoid_is_roi_,
                 .ellipsoid_parent_node_index = ellipsoid_parent_node_index_,
                 .crop_polygon_active = crop_polygon_active_,
                 .crop_polygon_vertices = crop_polygon_active_ ? crop_polygon_vertices_ : std::vector<glm::vec2>{},
                 .crop_polygon_half_depth = crop_polygon_half_depth_,
                 .crop_polygon_transform = crop_polygon_transform_,
                 .crop_polygon_affects_render = crop_polygon_affects_render_,
+                .crop_polygon_is_roi = crop_polygon_is_roi_,
                 .crop_polygon_parent_node_index = crop_polygon_parent_node_index_,
                 .crop_polygon_draft = crop_polygon_draft_,
                 .crop_polygon_draft_cursor = crop_polygon_draft_cursor_,
@@ -291,8 +300,10 @@ namespace lfs::vis {
         bool cropbox_active_ = false;
         bool ellipsoid_active_ = false;
         bool cropbox_affects_render_ = true;
+        bool cropbox_is_roi_ = false;
         int cropbox_parent_node_index_ = -1;
         bool ellipsoid_affects_render_ = true;
+        bool ellipsoid_is_roi_ = false;
         int ellipsoid_parent_node_index_ = -1;
         glm::vec3 cropbox_min_{0.0f};
         glm::vec3 cropbox_max_{0.0f};
@@ -301,6 +312,7 @@ namespace lfs::vis {
         glm::mat4 ellipsoid_transform_{1.0f};
         bool crop_polygon_active_ = false;
         bool crop_polygon_affects_render_ = true;
+        bool crop_polygon_is_roi_ = false;
         int crop_polygon_parent_node_index_ = -1;
         std::vector<glm::vec2> crop_polygon_vertices_;
         float crop_polygon_half_depth_ = 1.0f;
