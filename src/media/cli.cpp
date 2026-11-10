@@ -371,13 +371,16 @@ namespace {
                 const auto result = MediaIngest::probe(request.input, probe);
                 if (!result)
                     return failed(result.error());
-                auto media = json_detail::description(*result);
+                std::optional<json> dji_metadata;
                 if (dji_ac204) {
                     const auto interpreted = interpretDjiAc204Metadata(*result->timed_metadata);
                     if (!interpreted)
                         return failed(interpreted.error());
-                    media["dji_ac204"] = json_detail::djiAc204Metadata(*interpreted);
+                    dji_metadata = json_detail::djiAc204Metadata(*interpreted);
                 }
+                auto media = json_detail::description(*result);
+                if (dji_metadata)
+                    media["dji_ac204"] = std::move(*dji_metadata);
                 std::cout << json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}}.dump() << '\n';
                 return 0;
             }

@@ -251,7 +251,7 @@ namespace lfs::media {
             if (observation.codec_tag != djmd || observation.packets.empty())
                 throw Failure{ErrorCode::Unsupported, "DJI AC204 interpretation requires a nonempty djmd observation"};
             if (observation.packets.size() > timed_metadata_maxima.records)
-                throw Failure{ErrorCode::ResourceExhausted, "DJI packet count exceeds collection maximum"};
+                throw Failure{ErrorCode::ResourceExhausted, "DJI packet count exceeds collection maximum (packets=" + std::to_string(observation.packets.size()) + "/" + std::to_string(timed_metadata_maxima.records) + ")"};
             std::size_t bytes = 0;
             DjiAc204Metadata result;
             result.samples.reserve(observation.packets.size());
@@ -260,7 +260,7 @@ namespace lfs::media {
                 if (packet.bytes.empty())
                     malformed("Empty DJI packet");
                 if (packet.bytes.size() > timed_metadata_maxima.bytes - bytes)
-                    throw Failure{ErrorCode::ResourceExhausted, "DJI payload bytes exceed collection maximum"};
+                    throw Failure{ErrorCode::ResourceExhausted, "DJI payload bytes exceed collection maximum (retained=" + std::to_string(bytes) + ", packet=" + std::to_string(packet.bytes.size()) + ", maximum=" + std::to_string(timed_metadata_maxima.bytes) + ")"};
                 bytes += packet.bytes.size();
                 PacketParser parser;
                 parser.sample.packet_index = i;

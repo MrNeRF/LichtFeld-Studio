@@ -9,12 +9,12 @@
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/video_player.hpp"
-#include <cmath>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
 }
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -462,9 +462,15 @@ namespace {
         require(first.packet_index == 0 && !first.sequence && first.camera_timestamp == 2000746133 && first.iso == 252.0f &&
                     first.exposure_time_ratio == std::array<std::uint64_t, 2>{1, 3111} && first.white_balance_cct == 5219,
                 "real camera values, absent wire zero and raw clock match the independent corpus expectations");
-        require(first.quaternion_wxyz && std::abs(*(*first.quaternion_wxyz)[0] - 0.80715305f) < 1e-6f &&
-                    first.accelerometer_xyz && std::abs(*(*first.accelerometer_xyz)[0] + 1.011326f) < 1e-5f,
-                "real orientation and acceleration stay in device representation");
+        require(first.quaternion_wxyz && first.accelerometer_xyz, "real orientation and acceleration observations are present");
+        const std::array<std::uint32_t, 4> quaternion_bits{0x3f4ea195, 0xbbee4b74, 0xbf1668d2, 0x3d699071};
+        const std::array<std::uint32_t, 3> accelerometer_bits{0xbf817321, 0x3d3de3ce, 0xbe5b6470};
+        for (std::size_t i = 0; i < quaternion_bits.size(); ++i)
+            require((*first.quaternion_wxyz)[i] && std::bit_cast<std::uint32_t>(*(*first.quaternion_wxyz)[i]) == quaternion_bits[i],
+                    "every quaternion component retains the original corpus bits and order");
+        for (std::size_t i = 0; i < accelerometer_bits.size(); ++i)
+            require((*first.accelerometer_xyz)[i] && std::bit_cast<std::uint32_t>(*(*first.accelerometer_xyz)[i]) == accelerometer_bits[i],
+                    "every accelerometer component retains the original corpus bits and order");
         for (std::size_t i = 0; i < result->samples.size(); ++i)
             require(result->samples[i].packet_index == i && result->samples[i].gps_status == 1,
                     "invalid GPS status remains observed, never fabricated as coordinates");
@@ -519,11 +525,15 @@ namespace {
                 "unknown byte fields are skipped without guessing nested messages; omitted components remain absent");
         broken = observation;
         broken.packets.resize(timed_metadata_maxima.records + 1);
-        require(!interpretDjiAc204Metadata(broken), "caller-created observations obey packet maxima");
+        const auto too_many = interpretDjiAc204Metadata(broken);
+        require(!too_many && too_many.error().code() == lfs::ErrorCode::ResourceExhausted &&
+                    too_many.error().detail().find("packets=100001/100000") != std::string_view::npos,
+                "caller-created observations obey packet maxima and report observed/allowed counts");
         broken.packets.clear();
         broken.packets.emplace_back().bytes.resize(timed_metadata_maxima.bytes + 1);
         const auto over_budget = interpretDjiAc204Metadata(broken);
-        require(!over_budget && over_budget.error().code() == lfs::ErrorCode::ResourceExhausted,
+        require(!over_budget && over_budget.error().code() == lfs::ErrorCode::ResourceExhausted &&
+                    over_budget.error().detail().find("retained=0, packet=33554433, maximum=33554432") != std::string_view::npos,
                 "caller-created payloads exceeding the byte ceiling are refused before interpretation");
         observation.packets.clear();
         require(result->samples.front().iso == 252.0f, "interpretation owns its values after raw observation release");
