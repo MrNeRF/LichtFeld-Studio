@@ -3634,11 +3634,7 @@ namespace lfs::vis {
         core::NodeId addCamera(core::Scene& scene, const std::string& name,
                                const core::NodeId parent, const std::filesystem::path& image_path,
                                const int uid) {
-            return scene.addCamera(name, parent, std::make_shared<core::Camera>(
-                core::Tensor::eye(3, core::Device::CPU),
-                core::Tensor::zeros({3}, core::Device::CPU),
-                100.f, 110.f, 32.f, 24.f, core::Tensor{}, core::Tensor{},
-                core::CameraModelType::PINHOLE, name, image_path, std::filesystem::path{}, 64, 48, uid));
+            return scene.addCamera(name, parent, std::make_shared<core::Camera>(core::Tensor::eye(3, core::Device::CPU), core::Tensor::zeros({3}, core::Device::CPU), 100.f, 110.f, 32.f, 24.f, core::Tensor{}, core::Tensor{}, core::CameraModelType::PINHOLE, name, image_path, std::filesystem::path{}, 64, 48, uid));
         }
 
         Rml::ElementDocument* openCameraMenu(gui::NativeScenePanel& panel,
@@ -3675,8 +3671,8 @@ namespace lfs::vis {
                 return nullptr;
             }
             row->DispatchEvent("mousedown", {{"button", Rml::Variant(1)},
-                                              {"mouse_x", Rml::Variant(10.f)},
-                                              {"mouse_y", Rml::Variant(10.f)}});
+                                             {"mouse_x", Rml::Variant(10.f)},
+                                             {"mouse_y", Rml::Variant(10.f)}});
             auto* const menu_context = manager().getContext("global_context_menu");
             if (!menu_context || !menu_context->GetDocument(0)) {
                 ADD_FAILURE() << "Missing context menu";

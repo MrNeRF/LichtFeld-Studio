@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "core/event_bridge/scoped_handler.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
