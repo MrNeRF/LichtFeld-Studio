@@ -44,8 +44,9 @@ namespace fast_lfs::rasterization {
         float2* grad_mean2d_helper,
         float3* grad_conic_helper,
         float* grad_depth_helper,
-        float3* grad_normal_helper, // [N] or nullptr, required when grad_normal != nullptr
-        float4* grad_w2c,
+        float3* grad_normal_helper,  // [N] or nullptr, required when grad_normal != nullptr
+        float4* grad_w2c,            // [4] rows or nullptr; dL/d(w2c) rows 0-2 are added
+        float3* grad_cam_position,   // [1] or nullptr, required with grad_w2c; dL/d(cam_position) is added
         float* densification_weight, // [N] or nullptr
         float* densification_error,  // [N] or nullptr
         const int n_primitives,

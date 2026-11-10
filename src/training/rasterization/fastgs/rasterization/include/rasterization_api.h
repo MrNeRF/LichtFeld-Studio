@@ -143,7 +143,8 @@ namespace fast_lfs::rasterization {
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         const ForwardContext& forward_ctx,
-        float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
+        float* grad_w2c_ptr,          // Device pointer [4*4] - output or nullptr: dL/d(w2c), rows 0-2
+        float* grad_cam_position_ptr, // Device pointer [3] - output, required with grad_w2c_ptr: dL/d(cam_position)
         int n_primitives,
         int n_visible,
         int active_sh_bases,

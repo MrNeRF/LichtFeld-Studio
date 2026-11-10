@@ -170,6 +170,55 @@ namespace lfs::training {
                     stream);
             }
         }
+
+        // The blend backward derives the background alpha gradient per pixel
+        // from grad_image and the background; no [H, W] map is materialized.
+        [[nodiscard]] fast_lfs::rasterization::BackgroundAlphaGradient background_alpha_gradient(
+            const FastRasterizeContext& ctx, const core::Tensor& grad_image) {
+            fast_lfs::rasterization::BackgroundAlphaGradient background_grad;
+            if (has_background_image(ctx.bg_image)) {
+                core::pin_operands({&grad_image, &ctx.bg_image});
+                background_grad.bg_image = ctx.bg_image.ptr<float>();
+            } else if (ctx.bg_color.is_valid() && ctx.bg_color.numel() >= 3) {
+                core::pin_operands({&grad_image, &ctx.bg_color});
+                background_grad.bg_color = ctx.bg_color.ptr<float>();
+            }
+            return background_grad;
+        }
+
+        struct BackwardShNBind {
+            const float* values = nullptr;
+            const float* bounds = nullptr;
+            unsigned n_cells = 0u;
+            unsigned bits = 0u;
+        };
+
+        // the backward binds shN-rest exactly like the forward
+        // generation-checked resolve plus EXPLICIT representation params
+        // (bounds / n_cells / bits). The fused Adam settings' sh_value_* copy is
+        // enablement-gated (null through SH warmup) and gates only the update
+        // path; the first ACTIVE_SH_BASES>1 backward lands on the degree-up
+        // iteration, which at default cadence (interval 1000 == warmup) decoded
+        // q16 u16 codes as fp32 float4-swizzle → ~3x region overread → Warp MMU
+        // fault on the exportable block's committed-page edge (GUI); silent
+        // garbage gradients on plain arenas (headless).
+        [[nodiscard]] BackwardShNBind backward_shN_bind(core::SplatData& gaussian_model, const FastRasterizeContext& ctx) {
+            BackwardShNBind bind;
+            if (gaussian_model.shN_value_quantized()) {
+                const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
+                bind.values = q16.codes;
+                bind.bounds = q16.bounds;
+                bind.n_cells = q16.n_cells_per_prim;
+                bind.bits = 16u;
+            } else if (gaussian_model.shN_ieee_f16()) {
+                bind.values = static_cast<const float*>(
+                    lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+                bind.bits = 16u;
+            } else if (ctx.shN.is_valid()) {
+                bind.values = ctx.shN.ptr<float>();
+            }
+            return bind;
+        }
     } // namespace
 
     /**
@@ -738,16 +787,7 @@ namespace lfs::training {
             variance.loss_out = loss.is_valid() ? loss.ptr<float>() : nullptr;
         }
 
-        // The blend backward derives the background alpha gradient per pixel
-        // from grad_image and the background; no [H, W] map is materialized.
-        fast_lfs::rasterization::BackgroundAlphaGradient background_grad;
-        if (has_background_image(ctx.bg_image)) {
-            core::pin_operands({&grad_image, &ctx.bg_image});
-            background_grad.bg_image = ctx.bg_image.ptr<float>();
-        } else if (ctx.bg_color.is_valid() && ctx.bg_color.numel() >= 3) {
-            core::pin_operands({&grad_image, &ctx.bg_color});
-            background_grad.bg_color = ctx.bg_color.ptr<float>();
-        }
+        auto background_grad = background_alpha_gradient(ctx, grad_image);
         core::Tensor grad_alpha_extra_2d;
         if (grad_alpha_extra.is_valid() && grad_alpha_extra.numel() > 0) {
             grad_alpha_extra_2d = (grad_alpha_extra.ndim() == 3 && grad_alpha_extra.shape()[0] == 1)
@@ -868,32 +908,7 @@ namespace lfs::training {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
 
-        // the backward binds shN-rest exactly like the forward
-        // generation-checked resolve plus EXPLICIT representation params
-        // (bounds / n_cells / bits). The fused Adam settings' sh_value_* copy is
-        // enablement-gated (null through SH warmup) and gates only the update
-        // path; the first ACTIVE_SH_BASES>1 backward lands on the degree-up
-        // iteration, which at default cadence (interval 1000 == warmup) decoded
-        // q16 u16 codes as fp32 float4-swizzle → ~3x region overread → Warp MMU
-        // fault on the exportable block's committed-page edge (GUI); silent
-        // garbage gradients on plain arenas (headless).
-        const float* bwd_shN_ptr = nullptr;
-        const float* bwd_shN_bounds_ptr = nullptr;
-        unsigned bwd_shN_n_cells = 0u;
-        unsigned bwd_shN_bits = 0u;
-        if (gaussian_model.shN_value_quantized()) {
-            const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
-            bwd_shN_ptr = q16.codes;
-            bwd_shN_bounds_ptr = q16.bounds;
-            bwd_shN_n_cells = q16.n_cells_per_prim;
-            bwd_shN_bits = 16u;
-        } else if (gaussian_model.shN_ieee_f16()) {
-            bwd_shN_ptr = static_cast<const float*>(
-                lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
-            bwd_shN_bits = 16u;
-        } else if (ctx.shN.is_valid()) {
-            bwd_shN_ptr = ctx.shN.ptr<float>();
-        }
+        const auto shN = backward_shN_bind(gaussian_model, ctx);
         auto backward_result = fast_lfs::rasterization::backward_raw(
             densification_rows.weight,
             densification_rows.error,
@@ -908,11 +923,12 @@ namespace lfs::training {
             ctx.raw_scales.ptr<float>(),
             ctx.raw_rotations.ptr<float>(),
             ctx.raw_opacities.ptr<float>(),
-            bwd_shN_ptr,
+            shN.values,
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
-            nullptr,
+            fused_extra_gradients.grad_w2c,
+            fused_extra_gradients.grad_cam_position,
             n_primitives,
             ctx.forward_ctx.n_visible,
             ctx.active_sh_bases,
@@ -926,9 +942,9 @@ namespace lfs::training {
             ctx.mip_filter,
             densification_type,
             &fused_adam,
-            bwd_shN_bounds_ptr,
-            bwd_shN_n_cells,
-            bwd_shN_bits,
+            shN.bounds,
+            shN.n_cells,
+            shN.bits,
             fused_extra_gradients.edge_weight_map,
             fused_extra_gradients.edge_score_out,
             fused_extra_gradients.impact_sum_out,
@@ -944,6 +960,64 @@ namespace lfs::training {
         }
         if (fused_adam.enabled && !defer_optimizer_step) {
             optimizer.commit_fastgs_fused_adam(iteration);
+        }
+    }
+
+    void fast_rasterize_camera_backward(
+        FastRasterizeContext& ctx,
+        const core::Tensor& grad_image,
+        core::SplatData& gaussian_model,
+        float* grad_w2c,
+        float* grad_cam_position) {
+        if (grad_image.ndim() != 3 || grad_image.shape()[0] != 3 ||
+            grad_image.shape()[1] != static_cast<size_t>(ctx.height) ||
+            grad_image.shape()[2] != static_cast<size_t>(ctx.width)) {
+            throw std::runtime_error("FastGS camera backward expects a [3, H, W] image gradient of the render");
+        }
+        const auto background_grad = background_alpha_gradient(ctx, grad_image);
+        const auto shN = backward_shN_bind(gaussian_model, ctx);
+        // Enabled with no parameter bound: the kernels form every gradient and apply none.
+        fast_lfs::rasterization::FusedAdamSettings frozen;
+        frozen.enabled = true;
+        auto backward_result = fast_lfs::rasterization::backward_raw(
+            nullptr,
+            nullptr,
+            nullptr,
+            grad_image.ptr<float>(),
+            background_grad,
+            nullptr,
+            nullptr,
+            ctx.image.ptr<float>(),
+            ctx.alpha.ptr<float>(),
+            ctx.means.ptr<float>(),
+            ctx.raw_scales.ptr<float>(),
+            ctx.raw_rotations.ptr<float>(),
+            ctx.raw_opacities.ptr<float>(),
+            shN.values,
+            ctx.w2c_ptr,
+            ctx.cam_position_ptr,
+            ctx.forward_ctx,
+            grad_w2c,
+            grad_cam_position,
+            checked_dim_to_int(ctx.means.shape()[0], "n_primitives"),
+            ctx.forward_ctx.n_visible,
+            ctx.active_sh_bases,
+            ctx.forward_ctx.sh_layout_bases,
+            ctx.width,
+            ctx.height,
+            ctx.focal_x,
+            ctx.focal_y,
+            ctx.center_x,
+            ctx.center_y,
+            ctx.mip_filter,
+            DensificationType::None,
+            &frozen,
+            shN.bounds,
+            shN.n_cells,
+            shN.bits);
+        ctx.mark_forward_context_released();
+        if (!backward_result.success) {
+            throw std::runtime_error(std::string("Camera backward failed: ") + backward_result.error_message);
         }
     }
 
