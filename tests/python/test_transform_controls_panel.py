@@ -1233,7 +1233,7 @@ def test_crop_numeric_controls_respect_volume_lock(transform_controls_module):
     assert not state.set_local_calls
 
 
-@pytest.mark.parametrize("shape", ["box", "ellipsoid"])
+@pytest.mark.parametrize("shape", ["box", "ellipsoid", "polygon"])
 @pytest.mark.parametrize("operation,group", [("translate", "pos"), ("rotate", "rot"), ("scale", "scale")])
 def test_roi_numeric_controls_edit_only_roi_volume_with_one_undo_entry(
     transform_controls_module, history_panel, shape, operation, group

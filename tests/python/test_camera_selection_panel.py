@@ -100,6 +100,7 @@ def test_roi_activation_materializes_a_visible_target_owned_roi_and_toolbar_stat
     root = Path(__file__).parents[2]
     ui = (root / "src/python/lfs/py_ui.cpp").read_text(encoding="utf-8")
     gizmo = (root / "src/visualizer/gui/gizmo_manager.cpp").read_text(encoding="utf-8")
+    scene = (root / "src/core/scene.cpp").read_text(encoding="utf-8")
     graph = (root / "src/visualizer/gui/rmlui/elements/scene_graph_element.cpp").read_text(encoding="utf-8")
     toolbar = (root / "src/python/lfs_plugins/toolbar.py").read_text(encoding="utf-8")
     rml = (root / "src/visualizer/gui/rmlui/resources/viewport_overlay.rml").read_text(encoding="utf-8")
@@ -108,7 +109,8 @@ def test_roi_activation_materializes_a_visible_target_owned_roi_and_toolbar_stat
     assert "ensureCropToolStateForRestore" in ui
     assert "world_min = {-1.0F, -1.0F, -1.0F}" in gizmo
     assert 'snapshot.label += "  [ROI]"' not in graph
-    assert 'node->name + "_ROI"' in graph
+    assert "scene.getRoiNodeName(node->id)" in graph
+    assert 'node->name + "_ROI"' in scene
     assert "def _resolve_selected_roi()" in toolbar
     assert "ROI Settings" in toolbar
     assert "roi_crop_point_cloud_before_training" in rml
