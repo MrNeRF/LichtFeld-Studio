@@ -1107,6 +1107,7 @@ class _GizmoToolbarController:
             tool_def = ToolRegistry.get("builtin.select")
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
+            lf.set_render_mode_controls_open(False)
             if lf.ui.get_active_tool() != "builtin.select":
                 ToolRegistry.set_active("builtin.select")
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
@@ -1118,8 +1119,11 @@ class _GizmoToolbarController:
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
+            selector_was_open = lf.get_render_mode_controls_open()
+            lf.set_render_mode_controls_open(False)
             if lf.ui.get_active_tool() == value:
-                ToolRegistry.clear_active()
+                if not selector_was_open:
+                    ToolRegistry.clear_active()
             else:
                 if value == self._CROP_TOOL_ID:
                     self._activate_crop_tool("translate")
@@ -1721,6 +1725,9 @@ class _ViewportToolbarController:
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
+        else:
+            self._selection_controls.update(doc)
+            self._transform_controls.update(doc)
 
         try:
             import lichtfeld as lf
