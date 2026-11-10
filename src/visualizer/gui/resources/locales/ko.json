@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "낮은 오차",
+    "loss_higher_error": "높은 오차",
+    "unavailable": "사용할 수 없음"
+  },
   "preferences.models.downloading": "다운로드 중…",
   "preferences.models.prepare": "다운로드 / 복구",
   "preferences.models.verifying": "무결성 확인 중…",
@@ -1574,7 +1579,7 @@
     "depth_view_panel": "깊이 맵 컨트롤",
     "depth_view_tool": "활성 깊이 맵 보기",
     "depth_view_mode": "깊이 맵 색상 모드 선택",
-    "gt_compare_mode": "RGB, 법선 또는 깊이 정답 비교 선택",
+    "gt_compare_mode": "RGB, 법선, 깊이 또는 손실 정답 시각화 선택",
     "depth_view_range": "깊이 맵 시각화 범위",
     "depth_view_near": "깊이 범위의 가까운 경계",
     "depth_view_far": "깊이 범위의 먼 경계",

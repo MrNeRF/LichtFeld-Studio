@@ -2053,7 +2053,7 @@ namespace lfs::vis::project {
                 {"VIEW", "render_settings.ppisp_mode", integers({0, 1}), static_cast<int>(PPISP::AUTO)},
                 {"VIEW", "render_settings.environment_mode", integers({0, 1}), static_cast<int>(Environment::SolidColor)},
                 {"VIEW", "render_settings.split_view_mode", integers({0, 1, 2, 3}), static_cast<int>(SplitViewMode::Disabled)},
-                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2}), static_cast<int>(Comparison::RGB)},
+                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2, 3}), static_cast<int>(Comparison::RGB)},
                 {"VIEW", "render_settings.depth_visualization_mode", integers({0, 1}), static_cast<int>(Depth::Palette)},
                 {"VIEW", "tools.selection_submode", string_parser([](const std::string_view value) {
                      return selection_submode_from_name(value).has_value();

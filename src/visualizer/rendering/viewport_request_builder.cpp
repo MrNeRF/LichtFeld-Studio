@@ -603,7 +603,9 @@ namespace lfs::vis {
                  // Same FrameContext snapshot as emphasis.mask — no cross-frame lag.
                  .has_selection = gaussian_selection_visible && ctx.scene_state.has_selection},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
-            .depth_view = ctx.settings.depth_view,
+            .depth_view = ctx.settings.depth_view &&
+                          !(splitViewUsesGTComparison(ctx.settings.split_view_mode) &&
+                            gtComparisonShowsLoss(ctx.settings.gt_comparison_mode)),
             .require_exact_depth = ctx.exact_surface_picking || ctx.settings.show_camera_frustums ||
                                    std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
                                                [](const auto& mesh) { return mesh.mesh != nullptr; }),

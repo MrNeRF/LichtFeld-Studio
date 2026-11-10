@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Lower error",
+    "loss_higher_error": "Higher error",
+    "unavailable": "Unavailable"
+  },
   "preferences.models.downloading": "Downloading…",
   "preferences.models.prepare": "Download / repair",
   "preferences.models.verifying": "Verifying integrity…",
@@ -1585,7 +1590,7 @@
     "depth_view_panel": "Depth-map controls",
     "depth_view_tool": "Active depth-map view",
     "depth_view_mode": "Choose depth-map color mode",
-    "gt_compare_mode": "Choose RGB, normal, or depth ground-truth comparison",
+    "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",
     "depth_view_far": "Far edge of the depth-map range",
