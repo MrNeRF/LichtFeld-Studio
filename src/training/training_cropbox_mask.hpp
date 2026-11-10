@@ -7,11 +7,14 @@
 #include "core/tensor.hpp"
 
 #include <array>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <optional>
 #include <vector>
 
 namespace lfs::core {
+    using NodeId = int32_t;
+    struct RegionOfInterestData;
     class Scene;
     class SplatData;
 } // namespace lfs::core
@@ -96,8 +99,12 @@ namespace lfs::training {
     // select_relevant_cameras is enabled. Atomically preserves existing flags if no camera reaches the threshold.
     bool select_relevant_roi_cameras(core::Scene& scene);
 
-    // Creates a visible, disabled Crop helper matching the active ROI when crop_model_after_training is false
-    // and no matching Crop helper already exists on the training target.
+    // Creates a disabled Crop helper matching the given ROI when crop_model_after_training is false
+    // and no matching Crop helper already exists on the target.
+    void add_manual_crop_from_roi(
+        core::Scene& scene,
+        core::NodeId target_id,
+        const core::RegionOfInterestData& roi);
     void add_manual_crop_from_roi(core::Scene& scene);
 
 } // namespace lfs::training

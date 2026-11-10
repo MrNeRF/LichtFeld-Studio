@@ -1262,3 +1262,29 @@ TEST(TrainingCropBoxMask, RelevantRoiCameraSelectionWorksOnPointCloudWithZeroCov
     EXPECT_TRUE(scene.getNodeById(front_id)->training_enabled);
     EXPECT_FALSE(scene.getNodeById(back_id)->training_enabled);
 }
+
+TEST(TrainingCropBoxMask, EditModeManualCropFromRoiAttachesUnappliedCropShapeToTargetModel) {
+    lfs::core::Scene scene;
+    const auto edit_model_id = scene.addSplat("Trained Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_EQ(scene.getTrainingModelNodeId(), lfs::core::NULL_NODE);
+
+    lfs::core::RegionOfInterestData roi;
+    roi.shape = lfs::core::RegionOfInterestShape::Box;
+    roi.min = {-2.5f, -1.5f, -3.5f};
+    roi.max = {2.5f, 1.5f, 3.5f};
+    roi.inverse = true;
+    roi.crop_model_after_training = false;
+    roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 4.0f));
+
+    lfs::training::add_manual_crop_from_roi(scene, edit_model_id, roi);
+
+    const auto crop_id = scene.getCropBoxForSplat(edit_model_id);
+    ASSERT_NE(crop_id, lfs::core::NULL_NODE);
+    const auto* crop_data = scene.getCropBoxData(crop_id);
+    ASSERT_NE(crop_data, nullptr);
+    EXPECT_FALSE(crop_data->enabled);
+    EXPECT_TRUE(crop_data->inverse);
+    expect_vec3_eq(crop_data->min, roi.min);
+    expect_vec3_eq(crop_data->max, roi.max);
+    expect_mat4_eq(scene.getNodeTransform(crop_id), roi.local_transform);
+}

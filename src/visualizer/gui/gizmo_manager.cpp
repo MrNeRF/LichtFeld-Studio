@@ -1856,6 +1856,20 @@ namespace lfs::vis::gui {
                 if (selected_crop_volume) {
                     if (!selected_node->visible)
                         sm->setNodeVisibilityTransient(selected_node->id, true);
+                    auto& scene = sm->getScene();
+                    if (selected_node->cropbox && !selected_node->cropbox->enabled) {
+                        auto data = *selected_node->cropbox;
+                        data.enabled = true;
+                        scene.setCropBoxData(selected_node->id, data);
+                    } else if (selected_node->ellipsoid && !selected_node->ellipsoid->enabled) {
+                        auto data = *selected_node->ellipsoid;
+                        data.enabled = true;
+                        scene.setEllipsoidData(selected_node->id, data);
+                    } else if (selected_node->crop_polygon && !selected_node->crop_polygon->enabled) {
+                        auto data = *selected_node->crop_polygon;
+                        data.enabled = true;
+                        scene.setCropPolygonData(selected_node->id, data);
+                    }
                     viewer_->getEditorContext().setActiveOperator("builtin.cropbox", "translate");
                     UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
                     setCropToolShape(selected_node->type == core::NodeType::ELLIPSOID      ? "ellipsoid"

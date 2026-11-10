@@ -40,6 +40,7 @@
 #include "training/components/ppisp_file.hpp"
 #include "training/noise_infill.hpp"
 #include "training/trainer.hpp"
+#include "training/training_cropbox_mask.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -3678,6 +3679,8 @@ namespace lfs::vis {
         std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool;
         auto* trainer_mgr = services().trainerOrNull();
         lfs::training::Trainer* trainer = nullptr;
+        const bool stopped_active_training =
+            trainer_mgr && (trainer_mgr->isTrainingActive() || trainer_mgr->isPaused());
         if (trainer_mgr) {
             if (trainer_mgr->isPaused()) {
                 if (auto* active_trainer = trainer_mgr->getTrainer()) {
@@ -3720,6 +3723,13 @@ namespace lfs::vis {
         // did during training (rendering uses getWorldTransform).
         const glm::mat4 old_model_world =
             scene_.getWorldTransform(model_node->id);
+        std::optional<core::RegionOfInterestData> roi_snapshot;
+        if (const auto* roi = scene_.getRegionOfInterestData(model_node->id)) {
+            roi_snapshot = *roi;
+            if (stopped_active_training) {
+                roi_snapshot->crop_model_after_training = false;
+            }
+        }
 
         if (trainer_mgr) {
             if (!trainer_mgr->clearTrainer()) {
@@ -3756,10 +3766,13 @@ namespace lfs::vis {
         const core::NodeId edit_model_id = scene_.addSplat(MODEL_NAME, std::move(splat_data));
         assert(edit_model_id != core::NULL_NODE);
         scene_.markPayloadDiverged(edit_model_id);
-        selectNode(edit_model_id);
 
         // Restore the world transform
         scene_.setNodeTransform(edit_model_id, old_model_world);
+        if (roi_snapshot) {
+            lfs::training::add_manual_crop_from_roi(scene_, edit_model_id, *roi_snapshot);
+        }
+        selectNode(edit_model_id);
 
         if (ppisp) {
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));

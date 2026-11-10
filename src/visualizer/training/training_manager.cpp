@@ -2027,7 +2027,6 @@ namespace lfs::vis {
                      completion.iteration, completion.final_loss, completion.elapsed_seconds);
             completion_pending_.store(false, std::memory_order_release);
             if (completion.success && !completion.user_stopped && scene_) {
-                lfs::training::add_manual_crop_from_roi(*scene_);
                 scene_->notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             }
             std::string error_message_key;

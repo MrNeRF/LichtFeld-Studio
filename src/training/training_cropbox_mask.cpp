@@ -432,62 +432,71 @@ namespace lfs::training {
         return true;
     }
 
-    void add_manual_crop_from_roi(core::Scene& scene) {
-        const auto training_id = scene.getTrainingModelNodeId();
-        const auto* training_node = scene.getNodeById(training_id);
-        const auto* roi = scene.getRegionOfInterestData(training_id);
-        if (!training_node || !roi || !roi->enabled || roi->crop_model_after_training)
+    void add_manual_crop_from_roi(
+        core::Scene& scene,
+        const core::NodeId target_id,
+        const core::RegionOfInterestData& roi) {
+        const auto* target_node = scene.getNodeById(target_id);
+        if (!target_node || !roi.enabled || roi.crop_model_after_training)
             return;
 
         // Never repurpose a user's existing Crop helper. The fallback is
-        // only an optional, disabled manual action after successful ROI training.
-        switch (roi->shape) {
+        // only an optional, disabled manual action when switching to edit mode.
+        switch (roi.shape) {
         case core::RegionOfInterestShape::Box: {
-            if (scene.getCropBoxForSplat(training_id) != core::NULL_NODE)
+            if (scene.getCropBoxForSplat(target_id) != core::NULL_NODE)
                 return;
-            const auto id = scene.addCropBox(training_node->name + "_roi_crop", training_id);
+            const auto id = scene.addCropBox(target_node->name + "_roi_crop", target_id);
             auto* data = scene.getCropBoxData(id);
             const auto* node = scene.getNodeById(id);
             if (!data || !node)
                 return;
-            data->min = roi->min;
-            data->max = roi->max;
-            data->inverse = roi->inverse;
+            data->min = roi.min;
+            data->max = roi.max;
+            data->inverse = roi.inverse;
             data->enabled = false;
-            scene.setNodeTransform(node->id, roi->local_transform);
+            scene.setNodeTransform(node->id, roi.local_transform);
             scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
             return;
         }
         case core::RegionOfInterestShape::Ellipsoid: {
-            if (scene.getEllipsoidForSplat(training_id) != core::NULL_NODE)
+            if (scene.getEllipsoidForSplat(target_id) != core::NULL_NODE)
                 return;
-            const auto id = scene.addEllipsoid(training_node->name + "_roi_ellipsoid", training_id);
+            const auto id = scene.addEllipsoid(target_node->name + "_roi_ellipsoid", target_id);
             auto* data = scene.getEllipsoidData(id);
             const auto* node = scene.getNodeById(id);
             if (!data || !node)
                 return;
-            data->radii = roi->radii;
-            data->inverse = roi->inverse;
+            data->radii = roi.radii;
+            data->inverse = roi.inverse;
             data->enabled = false;
-            scene.setNodeTransform(node->id, roi->local_transform);
+            scene.setNodeTransform(node->id, roi.local_transform);
             scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
             return;
         }
         case core::RegionOfInterestShape::Polygon: {
-            if (scene.getCropPolygonForSplat(training_id) != core::NULL_NODE ||
-                !core::crop_polygon::isValidOutline(roi->vertices) ||
-                !core::crop_polygon::isValidHalfDepth(roi->half_depth))
+            if (scene.getCropPolygonForSplat(target_id) != core::NULL_NODE ||
+                !core::crop_polygon::isValidOutline(roi.vertices) ||
+                !core::crop_polygon::isValidHalfDepth(roi.half_depth))
                 return;
             core::CropPolygonData data;
-            data.vertices = roi->vertices;
-            data.half_depth = roi->half_depth;
-            data.inverse = roi->inverse;
+            data.vertices = roi.vertices;
+            data.half_depth = roi.half_depth;
+            data.inverse = roi.inverse;
             data.enabled = false;
             static_cast<void>(scene.addCropPolygon(
-                training_node->name + "_roi_polygon", training_id, std::move(data), roi->local_transform));
+                target_node->name + "_roi_polygon", target_id, std::move(data), roi.local_transform));
             return;
         }
         }
+    }
+
+    void add_manual_crop_from_roi(core::Scene& scene) {
+        const auto training_id = scene.getTrainingModelNodeId();
+        const auto* roi = scene.getRegionOfInterestData(training_id);
+        if (!roi)
+            return;
+        add_manual_crop_from_roi(scene, training_id, *roi);
     }
 
 } // namespace lfs::training
