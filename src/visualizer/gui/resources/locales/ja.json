@@ -938,6 +938,7 @@
     "disable_for_training": "トレーニングから除外",
     "enable_all_training": "選択したカメラを有効化",
     "disable_all_training": "選択したカメラを無効化",
+    "remove_disabled_cameras": "無効なカメラを削除",
     "camera_selection": "カメラ選択",
     "invert_camera_selection": "選択を反転",
     "enable_all_cameras": "すべて有効化",

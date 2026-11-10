@@ -947,6 +947,7 @@
     "disable_for_training": "Disable for Training",
     "enable_all_training": "Enable Selected Cams",
     "disable_all_training": "Disable Selected Cams",
+    "remove_disabled_cameras": "Remove Disabled Cameras",
     "camera_selection": "Camera Selection",
     "invert_camera_selection": "Invert Selection",
     "enable_all_cameras": "Enable All",

@@ -938,6 +938,7 @@
     "disable_for_training": "Uitschakelen voor training",
     "enable_all_training": "Geselecteerde camera's inschakelen",
     "disable_all_training": "Geselecteerde camera's uitschakelen",
+    "remove_disabled_cameras": "Uitgeschakelde camera's verwijderen",
     "camera_selection": "Cameraselectie",
     "invert_camera_selection": "Selectie omkeren",
     "enable_all_cameras": "Alles inschakelen",

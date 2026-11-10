@@ -951,6 +951,7 @@
     "disable_for_training": "Disabilita per il Training",
     "enable_all_training": "Abilita camere selezionate",
     "disable_all_training": "Disabilita camere selezionate",
+    "remove_disabled_cameras": "Rimuovi fotocamere disabilitate",
     "camera_selection": "Selezione fotocamere",
     "invert_camera_selection": "Inverti selezione",
     "enable_all_cameras": "Abilita tutte",
