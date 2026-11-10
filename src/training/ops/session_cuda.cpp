@@ -46,7 +46,7 @@ namespace lfs::training {
         std::optional<lfs::gpu_ops::ArenaMemoryInfo> arena_memory_info() {
             if (auto* arena = core::GlobalArenaManager::instance().try_get_arena()) {
                 const auto info = arena->get_memory_info();
-                return lfs::gpu_ops::ArenaMemoryInfo{info.arena_capacity, info.required_bytes, info.current_usage, info.peak_usage};
+                return lfs::gpu_ops::ArenaMemoryInfo{info.arena_capacity, info.required_bytes, info.current_usage, info.peak_usage, info.recommit_bytes};
             }
             return std::nullopt;
         }

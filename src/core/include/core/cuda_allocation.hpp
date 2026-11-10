@@ -5,6 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/export.hpp"
 
 #include <cuda_runtime.h>
 
@@ -16,19 +17,39 @@
 
 namespace lfs::core {
 
+    // Device allocation made outside the tensor pool, such as kernel scratch.
+    // When the device is full it relieves memory pressure and retries once,
+    // then throws MemoryAllocationError so training can recover.
+    [[nodiscard]] LFS_CORE_API void* allocate_device_scratch(size_t bytes, cudaStream_t stream,
+                                                             bool stream_ordered, std::string_view label);
+
+    struct DirectCudaAllocator {
+        [[nodiscard]] void* allocate(const size_t bytes,
+                                     const cudaStream_t stream,
+                                     const std::string_view label) const {
+            return allocate_device_scratch(bytes, stream, false, label);
+        }
+
+        void deallocate(void* ptr, cudaStream_t) const noexcept {
+            const cudaError_t status = cudaFree(ptr);
+            if (status != cudaSuccess) {
+                ensure_cuda_success(
+                    status, "direct CUDA allocation free", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                cudaGetLastError();
+            }
+        }
+    };
+
     struct StreamOrderedCudaAllocator {
         [[nodiscard]] void* allocate(const size_t bytes,
                                      const cudaStream_t stream,
                                      const std::string_view label) const {
-            void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
-                               "stream-ordered CUDA allocation '{}' ({} bytes)", label, bytes);
+            return allocate_device_scratch(bytes, stream, true, label);
 #else
-            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                               "CUDA allocation '{}' ({} bytes)", label, bytes);
+            return allocate_device_scratch(bytes, stream, false, label);
 #endif
-            return ptr;
         }
 
         void deallocate(void* ptr, const cudaStream_t stream) const noexcept {

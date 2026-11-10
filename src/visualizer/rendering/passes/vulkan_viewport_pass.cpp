@@ -6,11 +6,13 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "core/services.hpp"
 #include "core/tensor_vignette.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/ui_texture.hpp"
 #include "gui/vulkan_ui_texture.hpp"
 #include "rendering/output_image_pool.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/scene_upscaler_plugin.hpp"
 #include "rendering/viewport_geometry.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -328,7 +330,11 @@ namespace lfs::vis {
                 reset();
                 return false;
             }
-            if (!mesh_pass.init(ctx, color_format, depth_stencil_format, gpu_assets)) {
+            if (!mesh_pass.init(ctx, color_format, depth_stencil_format, gpu_assets,
+                                [rendering = services().renderingOrNull()] {
+                                    if (rendering)
+                                        rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::AsyncCompletion, "collision_upload");
+                                })) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;

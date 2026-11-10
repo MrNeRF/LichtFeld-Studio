@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <functional>
 #include <gtest/gtest.h>
 #include <limits>
 #include <vector>
@@ -352,6 +353,24 @@ TEST_F(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
     }
 }
 
+// Output is in descending key order: rows whose weight no Gumbel noise can
+// overcome come first, in their weight order.
+TEST_F(DensifyEvents4x, GumbelOrdersPicksByKey) {
+    constexpr size_t n = 1000;
+    std::vector<float> weights(n, 1.0f);
+    weights[700] = 1.0e30f;
+    weights[3] = 1.0e20f;
+    weights[512] = 1.0e10f;
+    const auto w = Tensor::from_vector(weights, TensorShape({n}), Device::GPU);
+    auto picks = Tensor::empty({5}, Device::GPU, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, 5, 7, picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto values = picks.cpu().to_vector_int64();
+    EXPECT_EQ(values[0], 700);
+    EXPECT_EQ(values[1], 3);
+    EXPECT_EQ(values[2], 512);
+}
+
 TEST_F(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     constexpr size_t n = 257;
     constexpr size_t k = 31;
@@ -407,6 +426,48 @@ TEST_F(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
     EXPECT_FALSE(gumbel.indices.is_valid());
 }
 
+TEST_F(DensifyEvents4x, GumbelLargeSelectionIsUniqueAndPositive) {
+    constexpr size_t n = size_t{3} << 20;
+    constexpr size_t k = size_t{1} << 20;
+    std::vector<float> weights(n);
+    for (size_t i = 0; i < n; ++i)
+        weights[i] = i % 3 == 1 ? 0.0f : 1.0f + static_cast<float>((i * 2654435761u) % 997);
+    const auto w = Tensor::from_vector(weights, TensorShape({n}), Device::GPU);
+    auto picks = Tensor::empty({k}, Device::GPU, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, 99, picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto values = picks.cpu().to_vector_int64();
+    for (const int64_t v : values)
+        ASSERT_GT(weights[static_cast<size_t>(v)], 0.0f);
+    std::sort(values.begin(), values.end());
+    EXPECT_EQ(std::adjacent_find(values.begin(), values.end()), values.end());
+}
+
+TEST_F(DensifyEvents4x, KthLargestMatchesASortOverIncludedRows) {
+    constexpr size_t n = size_t{1} << 20;
+    std::vector<float> values(n);
+    std::vector<float> included_values;
+    std::vector<float> include_flags(n);
+    for (size_t i = 0; i < n; ++i) {
+        // Few distinct values, so the threshold is shared by many rows.
+        values[i] = static_cast<float>(static_cast<int>((i * 2654435761u) % 4001) - 2000) * 0.25f;
+        include_flags[i] = (i % 5 != 0) ? 1.0f : 0.0f;
+        if (include_flags[i] != 0.0f)
+            included_values.push_back(values[i]);
+    }
+    std::sort(included_values.begin(), included_values.end(), std::greater<float>());
+    const auto v = Tensor::from_vector(values, TensorShape({n}), Device::GPU);
+    const auto include = Tensor::from_vector(include_flags, TensorShape({n}), Device::GPU) > 0.5f;
+    for (const size_t k : {size_t{1}, size_t{777}, included_values.size() / 2, included_values.size()}) {
+        SCOPED_TRACE(k);
+        EXPECT_EQ(mrnf_strategy::launch_kth_largest(v.ptr<float>(), include.ptr<bool>(), n, k),
+                  included_values[k - 1]);
+    }
+    std::vector<float> all = values;
+    std::sort(all.begin(), all.end(), std::greater<float>());
+    EXPECT_EQ(mrnf_strategy::launch_kth_largest(v.ptr<float>(), nullptr, n, 12345), all[12344]);
+}
+
 TEST_F(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
     DensifyChildWorkspace ws;
     ws.ensure(100, 0, false, false, Device::GPU);
@@ -454,4 +515,31 @@ TEST_F(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
     ensure_densification_info_shape_inplace(info, 40, Device::GPU);
     EXPECT_EQ(info.shape()[1], 40u);
     EXPECT_NE(info.ptr<float>(), p0); // reallocated for new N
+}
+
+TEST_F(DensifyEvents4x, DensificationInfoLayoutChangeKeepsTheErrorRow) {
+    constexpr size_t n = 6;
+    const std::vector<float> weight = {1, 2, 3, 4, 5, 6};
+    const std::vector<float> error = {0.5f, 0.f, 7.f, 0.25f, 9.f, 1.f};
+    std::vector<float> rows = weight;
+    rows.insert(rows.end(), error.begin(), error.end());
+    Tensor info = Tensor::from_vector(rows, {2, n}, Device::GPU);
+
+    ensure_densification_info_shape_inplace(info, n, Device::GPU, 1);
+    ASSERT_EQ(info.ndim(), 1u);
+    ASSERT_EQ(info.shape()[0], n);
+    EXPECT_EQ(to_host(info), error);
+    float* const single = info.ptr<float>();
+    ensure_densification_info_shape_inplace(info, n, Device::GPU, 1);
+    EXPECT_EQ(info.ptr<float>(), single);
+
+    ensure_densification_info_shape_inplace(info, n, Device::GPU);
+    ASSERT_EQ(info.ndim(), 2u);
+    ASSERT_EQ(info.shape()[0], 2u);
+    const auto both = to_host(info);
+    EXPECT_EQ(std::vector<float>(both.begin(), both.begin() + n), std::vector<float>(n, 0.f));
+    EXPECT_EQ(std::vector<float>(both.begin() + n, both.end()), error);
+
+    ensure_densification_info_shape_inplace(info, n + 2, Device::GPU, 1);
+    EXPECT_EQ(to_host(info), std::vector<float>(n + 2, 0.f));
 }

@@ -14,6 +14,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/extracted_frame.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/image_output.hpp"
 
@@ -95,12 +96,13 @@ namespace lfs::io {
         VideoFrameExtractor();
         ~VideoFrameExtractor();
 
-        struct WrittenFrame {
-            std::filesystem::path path;
-            int width = 0, height = 0;
-            double timestamp = 0;
-            int source_frame = 0;
+        // A kept stretch of the video in seconds; an end of -1 runs to the end of the video.
+        struct Segment {
+            double start = 0.0;
+            double end = -1.0;
         };
+
+        using WrittenFrame = core::ExtractedFrame;
 
         struct Params {
             std::filesystem::path video_path;
@@ -119,6 +121,9 @@ namespace lfs::io {
             // Trim range
             double start_time = 0.0;
             double end_time = -1.0; // -1 means end of video
+            // Kept stretches in time order, touching ones extracted as one; when set they replace the trim range.
+            // Frames keep their source frame numbers, so the stretches cut between them leave gaps in the names.
+            std::vector<Segment> segments;
 
             // Resolution
             ResolutionMode resolution_mode = ResolutionMode::Original;
@@ -164,6 +169,8 @@ namespace lfs::io {
             std::size_t rgb_bytes = 0;
         };
 
+        // `segments` with those that touch, as a split leaves them, joined into one stretch.
+        [[nodiscard]] static std::vector<Segment> joinTouching(std::vector<Segment> segments);
         [[nodiscard]] static bool validateParams(const Params& params, int source_width,
                                                  int source_height, double stream_time_base,
                                                  ValidatedLayout& layout, std::string& error);

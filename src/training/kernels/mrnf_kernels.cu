@@ -9,7 +9,9 @@
 #include "mrnf_kernels.hpp"
 #include "training/kernels/cuda_scratch.hpp"
 #include <algorithm>
+#include <climits>
 #include <cmath>
+#include <cstring>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -86,6 +88,123 @@ namespace lfs::training::mrnf_strategy {
         replace_parent_weights_kernel<<<blocks, threads, 0, s>>>(
             opacities, visibility, active_mask, trainable_mask, edge_guidance, output, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.replace_parent_weights");
+    }
+
+
+    // Ascending float order as unsigned radix keys, matching sort_less_op:
+    // NaN after everything and -0 equal to +0.
+    __device__ __forceinline__ uint32_t ascending_float_key(const float value) {
+        const uint32_t bits = __float_as_uint(value);
+        if ((bits & 0x7fffffffu) > 0x7f800000u)
+            return 0xffffffffu;
+        if (bits == 0x80000000u)
+            return 0x80000000u;
+        return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+    }
+
+    __global__ void exchange_importance_keys_kernel(
+        const float* __restrict__ importance,
+        const bool* __restrict__ eligible,
+        uint32_t* __restrict__ keys,
+        uint32_t* __restrict__ rows,
+        const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+        keys[i] = ascending_float_key(eligible[i] ? importance[i] : INFINITY);
+        rows[i] = static_cast<uint32_t>(i);
+    }
+
+    __global__ void exchange_positions_kernel(
+        const uint32_t* __restrict__ sorted_rows,
+        int32_t* __restrict__ ranks,
+        const bool first,
+        const size_t N) {
+        const size_t position = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (position >= N)
+            return;
+        const uint32_t row = sorted_rows[position];
+        const auto rank = static_cast<int32_t>(position);
+        ranks[row] = first ? rank : max(ranks[row], rank);
+    }
+
+    __global__ void exchange_rank_keys_kernel(
+        const int32_t* __restrict__ ranks,
+        const bool* __restrict__ eligible,
+        uint32_t* __restrict__ keys,
+        uint32_t* __restrict__ rows,
+        const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+        keys[i] = static_cast<uint32_t>(eligible[i] ? ranks[i] : INT_MAX);
+        rows[i] = static_cast<uint32_t>(i);
+    }
+
+    __global__ void widen_rows_kernel(
+        const uint32_t* __restrict__ rows,
+        int64_t* __restrict__ out,
+        const size_t count) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < count)
+            out[i] = static_cast<int64_t>(rows[i]);
+    }
+
+    void launch_rank_exchange_rows(
+        const float* primary,
+        const float* secondary,
+        const bool* eligible,
+        const size_t N,
+        const size_t count,
+        int64_t* rows,
+        void* stream) {
+        if (N == 0 || count == 0)
+            return;
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(INT_MAX) && count <= N,
+                       "MRNF growth exchange exceeds int32 rank capacity");
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        const cudaStream_t s = resolve_stream(stream);
+        // Two key and two row buffers serve every sort; 20 bytes a row in all.
+        const size_t bytes = cuda_scratch::checked_bytes(N, sizeof(uint32_t), "MRNF growth exchange");
+        cuda_scratch::DeviceBuffer keys_a(bytes, s, "mrnf.exchange.keys_a");
+        cuda_scratch::DeviceBuffer keys_b(bytes, s, "mrnf.exchange.keys_b");
+        cuda_scratch::DeviceBuffer rows_a(bytes, s, "mrnf.exchange.rows_a");
+        cuda_scratch::DeviceBuffer rows_b(bytes, s, "mrnf.exchange.rows_b");
+        cuda_scratch::DeviceBuffer ranks(bytes, s, "mrnf.exchange.ranks");
+        const auto u32 = [](cuda_scratch::DeviceBuffer& b) { return b.as<uint32_t>(); };
+
+        // Stable, so equal keys keep row order, as the comparator sorts did.
+        const auto sort = [&](const int end_bit) {
+            cub::DoubleBuffer<uint32_t> keys(u32(keys_a), u32(keys_b));
+            cub::DoubleBuffer<uint32_t> values(u32(rows_a), u32(rows_b));
+            const auto radix_sort = [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys, values,
+                                                       static_cast<int>(N), 0, end_bit, s);
+            };
+            cuda_scratch::CubWorkspace workspace("cub::DeviceRadixSort::SortPairs", s, radix_sort);
+            workspace.run(radix_sort);
+            return values.Current();
+        };
+
+        const auto rank_by = [&](const float* importance, const bool first) {
+            exchange_importance_keys_kernel<<<blocks, threads, 0, s>>>(
+                importance, eligible, u32(keys_a), u32(rows_a), N);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_importance_keys");
+            exchange_positions_kernel<<<blocks, threads, 0, s>>>(sort(32), ranks.as<int32_t>(), first, N);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_positions");
+        };
+        rank_by(primary, true);
+        if (secondary != nullptr)
+            rank_by(secondary, false);
+
+        exchange_rank_keys_kernel<<<blocks, threads, 0, s>>>(
+            ranks.as<int32_t>(), eligible, u32(keys_a), u32(rows_a), N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_rank_keys");
+        const uint32_t* ranked = sort(31);
+        widen_rows_kernel<<<static_cast<int>((count + threads - 1) / threads), threads, 0, s>>>(
+            ranked, rows, count);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_widen_rows");
     }
 
     __global__ void mrnf_noise_injection_kernel(
@@ -508,6 +627,150 @@ namespace lfs::training::mrnf_strategy {
         if (idx < N) {
             output[idx] = static_cast<int64_t>(input[idx]);
         }
+    }
+
+    namespace {
+        // Unsigned bits that order like the float: a larger key has larger bits.
+        __host__ __device__ __forceinline__ uint32_t orderable_bits(const uint32_t bits) {
+            return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+        }
+
+        __host__ __device__ __forceinline__ uint32_t float_bits_from_orderable(const uint32_t bits) {
+            return (bits & 0x80000000u) ? (bits & 0x7fffffffu) : ~bits;
+        }
+
+        __global__ void orderable_value_bits_kernel(
+            const float* __restrict__ values,
+            const bool* __restrict__ include,
+            uint32_t* __restrict__ key_bits,
+            const size_t N) {
+            const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+            if (idx < N) {
+                key_bits[idx] = include && !include[idx] ? 0u : orderable_bits(__float_as_uint(values[idx]));
+            }
+        }
+
+        // Radix select state: bits decided so far, how many keys rank above
+        // them, and how many of the keys equal to them are still wanted.
+        struct RadixSelectState {
+            uint32_t prefix;
+            uint32_t remaining;
+            uint32_t greater;
+            uint32_t equal;
+        };
+
+        constexpr int RADIX_BITS = 8;
+        constexpr int RADIX_BINS = 1 << RADIX_BITS;
+
+        __global__ void radix_histogram_kernel(
+            const uint32_t* __restrict__ keys,
+            const size_t n,
+            const RadixSelectState* __restrict__ state,
+            const int shift,
+            uint32_t* __restrict__ histogram) {
+            __shared__ uint32_t local[RADIX_BINS];
+            for (int bin = threadIdx.x; bin < RADIX_BINS; bin += blockDim.x)
+                local[bin] = 0;
+            __syncthreads();
+
+            const uint32_t prefix = state->prefix;
+            const uint32_t decided = shift + RADIX_BITS >= 32 ? 0u : (0xffffffffu << (shift + RADIX_BITS));
+            const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+            for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < n; i += stride) {
+                const uint32_t key = keys[i];
+                if (((key ^ prefix) & decided) == 0)
+                    atomicAdd(&local[(key >> shift) & (RADIX_BINS - 1)], 1u);
+            }
+            __syncthreads();
+            for (int bin = threadIdx.x; bin < RADIX_BINS; bin += blockDim.x) {
+                if (local[bin] != 0)
+                    atomicAdd(&histogram[bin], local[bin]);
+            }
+        }
+
+        __global__ void radix_pick_kernel(
+            RadixSelectState* __restrict__ state,
+            uint32_t* __restrict__ histogram,
+            const int shift) {
+            uint32_t above = 0;
+            for (int digit = RADIX_BINS - 1; digit >= 0; --digit) {
+                const uint32_t count = histogram[digit];
+                if (above + count >= state->remaining) {
+                    state->prefix |= static_cast<uint32_t>(digit) << shift;
+                    state->remaining -= above;
+                    state->greater += above;
+                    state->equal = count;
+                    break;
+                }
+                above += count;
+            }
+            for (int digit = 0; digit < RADIX_BINS; ++digit)
+                histogram[digit] = 0;
+        }
+
+        struct RadixThreshold {
+            uint32_t bits = 0;
+            size_t greater = 0;
+            size_t equal = 0;
+            size_t remaining = 0;
+        };
+
+        // The K-th largest of `keys` by 8-bit radix passes over the data:
+        // a 256-bin histogram per pass instead of sorting every key.
+        RadixThreshold radix_select_largest(const uint32_t* keys, const size_t n, const size_t K, const cudaStream_t s) {
+            cuda_scratch::DeviceBuffer state_buffer(sizeof(RadixSelectState), s, "mrnf.topk.state");
+            cuda_scratch::DeviceBuffer histogram_buffer(RADIX_BINS * sizeof(uint32_t), s, "mrnf.topk.histogram");
+            auto* state = state_buffer.as<RadixSelectState>();
+            auto* histogram = histogram_buffer.as<uint32_t>();
+            const RadixSelectState initial{0u, static_cast<uint32_t>(K), 0u, 0u};
+            LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(state, &initial, sizeof(initial), cudaMemcpyHostToDevice, s),
+                               "MRNF top-k state upload");
+            LFS_CUDA_CHECK_MSG(cudaMemsetAsync(histogram, 0, RADIX_BINS * sizeof(uint32_t), s),
+                               "MRNF top-k histogram clear");
+
+            constexpr int threads = 256;
+            int device = 0;
+            int sms = 0;
+            LFS_CUDA_CHECK(cudaGetDevice(&device));
+            LFS_CUDA_CHECK(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device));
+            const int blocks = static_cast<int>(std::min<size_t>((n + threads - 1) / threads,
+                                                                 static_cast<size_t>(std::max(sms, 1)) * 8));
+            for (int shift = 32 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
+                radix_histogram_kernel<<<blocks, threads, 0, s>>>(keys, n, state, shift, histogram);
+                LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.topk_histogram");
+                radix_pick_kernel<<<1, 1, 0, s>>>(state, histogram, shift);
+                LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.topk_pick");
+            }
+            RadixSelectState result{};
+            LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(&result, state, sizeof(result), cudaMemcpyDeviceToHost, s),
+                               "MRNF top-k state readback");
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF top-k state sync");
+            return {result.prefix, result.greater, result.equal, result.remaining};
+        }
+
+    } // namespace
+
+    float launch_kth_largest(
+        const float* values,
+        const bool* include,
+        const size_t N,
+        const size_t K,
+        void* stream) {
+        LFS_ASSERT(K > 0 && K <= N);
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "k-th largest input exceeds CUB's int item-count limit");
+        const cudaStream_t s = resolve_stream(stream);
+        cuda_scratch::DeviceBuffer key_buffer(
+            cuda_scratch::checked_bytes(N, sizeof(uint32_t), "k-th largest keys"), s, "mrnf.kth.keys");
+        constexpr int threads = 256;
+        orderable_value_bits_kernel<<<static_cast<int>((N + threads - 1) / threads), threads, 0, s>>>(
+            values, include, key_buffer.as<uint32_t>(), N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.kth_keys");
+        const auto threshold = radix_select_largest(key_buffer.as<uint32_t>(), N, K, s);
+        const uint32_t bits = float_bits_from_orderable(threshold.bits);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
     }
 
     void launch_gumbel_topk(

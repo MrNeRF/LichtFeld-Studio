@@ -568,8 +568,12 @@ namespace lfs::vis::gui {
         const PanelDirectRenderRequest& request,
         const PanelDrawContext& ctx) {
         setPanelSpace(request.space);
+        if (!ensureHost())
+            return {};
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        ops.set_window_presentation(host_, request.floating_window_state ? static_cast<int>(*request.floating_window_state) : -1);
         if (request.mode == PanelDirectRenderMode::Measure)
-            return {.handled = true, .height = getDirectDrawHeight()};
+            return {.handled = true, .height = getDirectDrawHeight(), .title_controls_bounds = request.input && request.input->mouse_clicked[0] ? titleControlsBounds() : std::nullopt};
 
         setInputClipY(request.clip_y_min, request.clip_y_max);
         setInput(request.input);
@@ -611,7 +615,15 @@ namespace lfs::vis::gui {
         setForcedHeight(0.0f);
         setInput(nullptr);
         setInputClipY(-1.0f, -1.0f);
-        return {.handled = handled, .height = height};
+        return {.handled = handled, .height = height, .title_controls_bounds = request.input && request.input->mouse_clicked[0] ? titleControlsBounds() : std::nullopt};
+    }
+
+    std::optional<PanelDrawBounds> RmlPythonPanelAdapter::titleControlsBounds() const {
+        float bounds[4];
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!host_ || !ops.title_controls_bounds(host_, bounds))
+            return std::nullopt;
+        return PanelDrawBounds{bounds[0], bounds[1], bounds[2], bounds[3]};
     }
 
     void RmlPythonPanelAdapter::drawDirect(float x, float y, float w, float h,

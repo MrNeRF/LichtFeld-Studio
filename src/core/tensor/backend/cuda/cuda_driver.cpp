@@ -181,6 +181,25 @@ namespace lfs::core::internal {
 #endif
                 return result;
             }
+            bool reset_pool_peaks(const bool used, const bool reserved) override {
+#if CUDART_VERSION >= 12080
+                int device = 0;
+                cudaMemPool_t pool = nullptr;
+                if (cudaGetDevice(&device) != cudaSuccess ||
+                    cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess || pool == nullptr)
+                    return false;
+                std::uint64_t reset = 0;
+                if (used && cudaMemPoolSetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &reset) != cudaSuccess)
+                    return false;
+                if (reserved && cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &reset) != cudaSuccess)
+                    return false;
+                return true;
+#else
+                (void)used;
+                (void)reserved;
+                return false;
+#endif
+            }
             std::optional<GpuDeviceInfo> device_info(int ordinal) override {
                 const int device_index = ordinal < 0 ? selected_device() : ordinal;
                 cudaDeviceProp properties{};

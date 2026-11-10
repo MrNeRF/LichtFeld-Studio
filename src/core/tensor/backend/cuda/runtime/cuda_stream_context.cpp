@@ -8,6 +8,7 @@
 #include "core/tensor_backend.hpp"
 #include "internal/tensor_impl.hpp"
 
+#include <cstring>
 #include <format>
 
 namespace lfs::core {

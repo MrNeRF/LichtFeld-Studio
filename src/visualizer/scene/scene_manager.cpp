@@ -3841,6 +3841,19 @@ namespace lfs::vis {
         // Keep the model owned by the scene until trainer teardown succeeds:
         // a deferred clear must not destroy it through a local unique_ptr.
         auto splat_data = std::move(model_node->model);
+        // Edit mode has no training left to guide: the noise infill ends here, as in every export.
+        try {
+            if (auto without_noise = lfs::core::without_noise_infill(*splat_data)) {
+                *splat_data = std::move(*without_noise);
+                const auto splat_allocator = makeViewerSplatTensorAllocator();
+                if (splat_allocator && !lfs::io::splatTensorsRendererReady(*splat_data)) {
+                    if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*splat_data, splat_allocator); !migrated)
+                        throw std::runtime_error(migrated.error().format());
+                }
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Edit mode keeps the noise infill: {}", e.what());
+        }
         const size_t num_gaussians = splat_data->size();
 
         scene_.clear();
@@ -3948,7 +3961,12 @@ namespace lfs::vis {
         const bool point_cloud_fallback = !options.metadata_only &&
                                           !hasRenderableGaussians(current_model) &&
                                           !visible_point_cloud_nodes.empty();
-        if (!point_cloud_fallback && cached_render_state_ &&
+        // A single visible point cloud is referenced, not copied, so its state stays valid; only a merge owns a copy.
+        const bool point_cloud_shared = point_cloud_fallback && visible_point_cloud_nodes.size() == 1;
+        if ((!point_cloud_fallback ||
+             (point_cloud_shared && cached_render_state_ &&
+              cached_render_state_->point_cloud == visible_point_cloud_nodes.front()->point_cloud.get())) &&
+            cached_render_state_ &&
             cached_render_scene_generation_ == scene_generation &&
             cached_render_selection_generation_ == selection_generation &&
             cached_render_gaussian_selection_generation_ == gaussian_selection_generation &&

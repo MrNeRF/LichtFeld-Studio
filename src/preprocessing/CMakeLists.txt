@@ -41,6 +41,7 @@ target_link_libraries(lfs_preprocessing
         lfs_core
         lfs_media               # video_mask_extraction.hpp extends the frame extractor
     PRIVATE
+        lfs_video               # Frame extraction used by video_mask_extraction.cpp
         lfs_io                  # Scene import (Loader) for depth-anchor precompute
         $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_depth_anchor>
         CURL::libcurl

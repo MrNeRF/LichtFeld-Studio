@@ -14,6 +14,7 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
+#include "strategies/strategy_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -63,8 +64,9 @@ namespace lfs::training {
                              std::size_t& used_high, std::size_t& reserved_high,
                              std::size_t& used_cur, std::size_t& reserved_cur) {
             used_high = reserved_high = used_cur = reserved_cur = 0;
-            used_high = stats.pool_used_high;
-            reserved_high = stats.pool_reserved_high;
+            // Frame probes and refine windows restart the pool's marks; fold their peaks in.
+            used_high = std::max(stats.pool_used_high, tensor_pool_used_high_bytes());
+            reserved_high = std::max(stats.pool_reserved_high, tensor_pool_reserved_high_bytes());
             used_cur = stats.pool_used_current;
             reserved_cur = stats.pool_reserved_current;
         }

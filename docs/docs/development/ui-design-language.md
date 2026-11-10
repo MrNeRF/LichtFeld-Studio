@@ -211,7 +211,12 @@ the intended control geometry instead of creating another row layout per panel.
 
 Use the floating template for an independent window. It supplies the shared
 title bar, close affordance, content padding, scroll behavior, border, radius,
-and theme-driven shadow. A retained Python panel normally looks like this:
+and theme-driven shadow. Its markup includes minimize and maximize controls for
+standard floating panels; the shared host enables them from the registry's render
+request. Keep the `title-bar`, `title-text`, `minimize-btn`, `maximize-btn`, and
+`close-btn` identifiers so the host can route title-bar actions without replacing
+the panel's content or close handler. The window icons share the main window's CSS shapes
+and theme colors. A retained Python panel normally looks like this:
 
 ```python
 from pathlib import Path
@@ -446,6 +451,17 @@ Before calling a window or panel complete, verify:
       in `on_unmount`/the native equivalent.
 
 ## Reference resources
+
+### Image inspection
+
+- At 100%, one source pixel occupies one physical screen pixel, independently
+  of UI density.
+- Fit reports its actual zoom percentage.
+- Picking a color does not change settings. Applying it to a background is an
+  explicit action.
+- Disabled actions keep their explanation accessible while rejecting activation.
+
+### Component references
 
 Use these files when implementing or reviewing a surface:
 

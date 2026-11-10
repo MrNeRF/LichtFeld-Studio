@@ -75,6 +75,24 @@ namespace lfs::gpu_ops {
         size_t (*compact_bool_indices)(In mask, Out indices, size_t count);
         void (*prune_bounds)(In means, In scale_max, Out mask, std::array<float, 3> center, float maximum, float log_maximum);
         void (*replace_parent_weights)(In opacity, In visibility, In active, In trainable, In edge, Out weights);
+
+        // The K-th largest value over the rows `include` keeps (all rows when
+        // invalid). Needs 0 < K <= the included rows.
+        float (*kth_largest)(In values, In include, size_t k);
+
+        // The rows.numel() rows the growth exchange gives up first. A row's
+        // rank is the later of its positions in ascending `primary` and
+        // `secondary` importance (secondary may be invalid; ties by row);
+        // rows come out by rank, ties by row, ineligible rows last.
+        void (*rank_exchange_rows)(In primary, In secondary, In eligible, Out rows);
     };
 
 } // namespace lfs::gpu_ops
+
+namespace lfs::training {
+    // kth_largest and rank_exchange_rows built from tensor ops, for backends
+    // without dedicated kernels.
+    float portable_mrnf_kth_largest(gpu_ops::In values, gpu_ops::In include, size_t k);
+    void portable_mrnf_rank_exchange_rows(gpu_ops::In primary, gpu_ops::In secondary, gpu_ops::In eligible,
+                                          gpu_ops::Out rows);
+} // namespace lfs::training

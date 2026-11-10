@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/raster_arena.hpp"
+#include "core/memory_pressure.hpp"
+
+#include <algorithm>
 
 #if LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
@@ -34,6 +37,12 @@ namespace lfs::core {
         }
 #endif
         return {};
+    }
+
+    size_t raster_arena_growth_headroom_bytes(const size_t total_memory) noexcept {
+        const size_t ceiling = std::min(size_t(1) << 30, total_memory / 10);
+        const size_t measured = measured_frame_headroom_bytes();
+        return measured == 0 ? ceiling : std::min(ceiling, measured);
     }
 
     void raster_arena_predict_viewer_frame(const bool predict) {

@@ -234,9 +234,12 @@ namespace lfs::core {
         lfs::core::prop::AnimatableProperty<bool> locked{false};
 
         [[nodiscard]] const glm::mat4& transform() const { return local_transform.get(); }
+        [[nodiscard]] bool isExternalPreview() const { return external_preview_; }
 
     private:
         friend class Scene;
+        bool external_preview_ = false;
+        glm::mat4 external_transform_{1.0f};
         struct ModelBoundsCache {
             const SplatData* model = nullptr;
             const void* means = nullptr;
@@ -335,19 +338,21 @@ namespace lfs::core {
             SELECTION_CHANGED = 1 << 7,
             CLEARED = 1 << 8,
             CAMERA_TRAINING_CHANGED = 1 << 9,
+            CAMERA_MASK_CHANGED = 1 << 10,
         };
 
-        void notifyMutation(MutationType type);
+        void notifyMutation(MutationType type, bool transient = false);
 
         class LFS_CORE_API Transaction {
         public:
-            explicit Transaction(Scene& scene);
+            explicit Transaction(Scene& scene, bool transient = false);
             ~Transaction();
             Transaction(const Transaction&) = delete;
             Transaction& operator=(const Transaction&) = delete;
 
         private:
             Scene& scene_;
+            bool transient_;
         };
 
         Scene();
@@ -402,6 +407,23 @@ namespace lfs::core {
         NodeId addGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addPlySequence(const std::string& name, NodeId parent = NULL_NODE, size_t frame_count = 0);
         NodeId addSplatPlaceholder(const std::string& name, NodeId parent = NULL_NODE);
+        // Transient observer nodes are owned by the session reader, independently
+        // of the user-toggleable lock. These operations run on the scene thread.
+        NodeId addExternalPreview(const std::string& name, const std::string& model_name);
+        [[nodiscard]] bool hasExternalPreview(NodeId root = NULL_NODE) const;
+        [[nodiscard]] std::unique_ptr<SplatData> updateExternalPreview(
+            const Uuid& uuid, std::unique_ptr<SplatData> model,
+            const glm::mat4& transform, const glm::vec3& centroid);
+        struct ExternalPreviewCamera {
+            std::shared_ptr<Camera> camera;
+            glm::mat4 transform{1.0f};
+        };
+        bool updateExternalPreviewCameras(
+            const Uuid& uuid, const std::string& group_name,
+            std::vector<ExternalPreviewCamera>& cameras);
+        // Detach on the scene thread; the upload owner reclaims returned resources.
+        std::pair<std::unique_ptr<SplatData>, std::vector<ExternalPreviewCamera>>
+        removeExternalPreview(const Uuid& uuid);
         NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
         NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE, Uuid* inserted_uuid = nullptr);
@@ -778,6 +800,7 @@ namespace lfs::core {
         [[nodiscard]] bool hasTrainingData() const;
 
         [[nodiscard]] std::shared_ptr<lfs::core::Camera> getCameraByUid(int uid);
+        [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
         // Immutable snapshot; the training thread and the UI read it concurrently.
         [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<lfs::core::Camera>>>
@@ -799,6 +822,14 @@ namespace lfs::core {
         [[nodiscard]] CameraTrainingCounts getCameraTrainingCounts(NodeId camera_group_id) const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);
         void setCameraTrainingEnabled(NodeId id, bool enabled);
+        // Sets the global training selection in one scene mutation.  A camera
+        // is enabled exactly when its id occurs in enabled_camera_ids.
+        [[nodiscard]] bool setCameraTrainingSelection(const std::unordered_set<NodeId>& enabled_camera_ids);
+        // Sets the direct camera children of a camera group in one scene mutation.
+        [[nodiscard]] bool setCameraGroupTrainingSelection(NodeId camera_group_id,
+                                                           const std::unordered_set<NodeId>& enabled_camera_ids);
+        void setAllCameraTrainingEnabled(bool enabled);
+        void invertAllCameraTrainingEnabled();
 
         [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
         [[nodiscard]] bool isCameraTrainingEnabled(int uid) const;
@@ -905,7 +936,10 @@ namespace lfs::core {
         NodeId next_node_id_ = 0;
 
         uint32_t pending_mutations_ = 0;
+        bool pending_document_change_ = false;
+        bool pending_selection_resize_ = false;
         int transaction_depth_ = 0;
+        int transient_transaction_depth_ = 0;
         std::uint64_t camera_list_generation_ = 0;
         void flushMutations();
         void removeConsolidatedNodeData(NodeId id);
@@ -1025,6 +1059,8 @@ namespace lfs::core {
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(NodeId id, bool keep_children);
+        std::unique_ptr<SplatData> swapNodeModelInternal(
+            SceneNode& node, std::unique_ptr<SplatData> model, const glm::vec3& centroid);
         void validateConsolidatedSelectionTopology() const;
         [[nodiscard]] size_t currentSelectionCapacity() const;
         [[nodiscard]] size_t

@@ -10,8 +10,11 @@
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace lfs::core;
@@ -51,6 +54,44 @@ namespace {
     }
 
 } // namespace
+
+// Catches a restart that keeps the full-run decay, which ends the run with the means rate above its final value, and one
+// that changes the decay of the scaling rate.
+template <class Strategy>
+void expect_restarted_rates_to_end_at(const double means_fraction, const double scaling_fraction) {
+    auto splat_data = create_test_splat_data(50);
+    Strategy strategy(splat_data);
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 20;
+    opt_params.max_cap = 64;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    (void)optimizer.get_grad(ParamType::Means);
+    const double initial_rate = optimizer.get_param_lr(ParamType::Means);
+    const double initial_scaling_rate = optimizer.get_param_lr(ParamType::Scaling);
+    int iter = 0;
+    for (; iter < 6; ++iter)
+        strategy.step(iter);
+    ASSERT_LT(optimizer.get_param_lr(ParamType::Means), initial_rate);
+
+    strategy.restart_mean_lr();
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate, initial_rate * 1e-6);
+    for (; iter < 20; ++iter)
+        strategy.step(iter);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Means), initial_rate * means_fraction, initial_rate * means_fraction * 1e-3);
+    EXPECT_NEAR(optimizer.get_param_lr(ParamType::Scaling), initial_scaling_rate * scaling_fraction,
+                initial_scaling_rate * scaling_fraction * 1e-3);
+}
+
+class NoiseInfillRestartTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(NoiseInfillRestartTest, McmcMeansRateEndsAtItsFinalValue) {
+    expect_restarted_rates_to_end_at<MCMC>(0.01, 1.0);
+}
+
+TEST_F(NoiseInfillRestartTest, IgsPlusMeansRateEndsAtItsFinalValue) {
+    expect_restarted_rates_to_end_at<ImprovedGSPlus>(0.1, 0.1);
+}
 
 class MCMCTest : public lfs::test::CudaBackendTest {};
 
@@ -205,6 +246,56 @@ TEST_F(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
     EXPECT_EQ(splat_data.size(), 8u);
 }
 
+// The split stages children in bounded chunks. A budget past one chunk must
+// still give every parent exactly one child carrying the parent's colour.
+TEST_F(ImprovedGSPlusTest, ChunkedSplitGivesEachParentOneChild) {
+    constexpr size_t n = 1'200'000; // more SH3 children than one 256 MiB chunk holds
+    // sh0 holds the exact parent id; shN holds values within q16 range of it.
+    const auto low_tag = [](const size_t i) { return static_cast<float>(i % 1024) / 1024.0f; };
+    const auto high_tag = [](const size_t i) { return -static_cast<float>((i / 1024) % 1024) / 1024.0f; };
+    std::vector<float> means(n * 3, 0.0f), sh0(n * 3, 0.0f), shN(n * 45, 0.0f);
+    std::vector<float> scaling(n * 3), rotation(n * 4, 0.0f), opacity(n, 0.5f);
+    for (size_t i = 0; i < n; ++i) {
+        sh0[i * 3] = static_cast<float>(i);
+        shN[i * 45] = low_tag(i);
+        shN[i * 45 + 44] = high_tag(i);
+        scaling[i * 3] = -1.0f;
+        scaling[i * 3 + 1] = -2.0f;
+        scaling[i * 3 + 2] = -3.0f;
+        rotation[i * 4] = 1.0f;
+    }
+    SplatData splat_data(3,
+                         Tensor::from_vector(means, TensorShape({n, 3}), Device::GPU),
+                         Tensor::from_vector(sh0, TensorShape({n, 1, 3}), Device::GPU),
+                         Tensor::from_vector(shN, TensorShape({n, 15, 3}), Device::GPU),
+                         Tensor::from_vector(scaling, TensorShape({n, 3}), Device::GPU),
+                         Tensor::from_vector(rotation, TensorShape({n, 4}), Device::GPU),
+                         Tensor::from_vector(opacity, TensorShape({n, 1}), Device::GPU),
+                         1.0f);
+    ImprovedGSPlus strategy(splat_data);
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 100;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 80;
+    opt_params.refine_every = 10;
+    opt_params.max_cap = static_cast<int>(2 * n);
+    strategy.initialize(opt_params);
+
+    strategy.densify_for_test(Tensor::ones({n}, Device::GPU), static_cast<int64_t>(n));
+
+    ASSERT_EQ(splat_data.size(), 2 * n);
+    const auto sh0_out = splat_data.sh0().cpu().to_vector();
+    const auto shN_out = splat_data.shN_canonical_cpu().to_vector();
+    std::vector<std::uint8_t> split(n, 0);
+    for (size_t row = n; row < 2 * n; ++row) {
+        const auto parent = static_cast<size_t>(sh0_out[row * 3]);
+        ASSERT_LT(parent, n);
+        ASSERT_EQ(split[parent]++, 0) << "parent " << parent << " split twice";
+        ASSERT_NEAR(shN_out[row * 45], low_tag(parent), 1e-4f) << "row " << row;
+        ASSERT_NEAR(shN_out[row * 45 + 44], high_tag(parent), 1e-4f) << "row " << row;
+    }
+}
+
 TEST_F(ImprovedGSPlusTest, FinalIterationPreservesOpacityAtResetBoundary) {
     for (const int iterations : {3000, 6000, 9000, 12000}) {
         SCOPED_TRACE(iterations);
@@ -311,6 +402,49 @@ TEST_F(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     EXPECT_TRUE(means_state->is_joint());
     EXPECT_TRUE(means_state->exp_avg.is_valid());
     EXPECT_TRUE(means_state->joint_bounds.is_valid());
+}
+
+// Relocation runs on the full model at the VRAM limit, so its temporaries
+// must stay a small fraction of the model: no per-row index lists sized for
+// every Gaussian, no extra copies of the sampling weights.
+TEST_F(MCMCTest, RelocateTransientStaysSmall) {
+    constexpr int n = 2'000'000;
+    auto splat_data = create_test_splat_data(n);
+    MCMC strategy(splat_data);
+
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 100;
+    opt_params.max_cap = n;
+    strategy.initialize(opt_params);
+
+    // Every fourth row dead, spread over the model.
+    std::vector<float> opacity(n, 0.5f);
+    for (int i = 0; i < n; i += 4) {
+        opacity[i] = -20.0f;
+    }
+    strategy.get_model().opacity_raw().copy_from(
+        Tensor::from_vector(opacity, TensorShape({static_cast<size_t>(n), 1}), Device::GPU));
+
+    int device = 0;
+    cudaMemPool_t pool = nullptr;
+    ASSERT_EQ(cudaGetDevice(&device), cudaSuccess);
+    ASSERT_EQ(cudaDeviceGetDefaultMemPool(&pool, device), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    std::uint64_t used_before = 0;
+    std::uint64_t reset = 0;
+    ASSERT_EQ(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &reset), cudaSuccess);
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used_before), cudaSuccess);
+
+    EXPECT_EQ(strategy.relocate_gs_test(), n / 4);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::uint64_t used_high = 0;
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &used_high), cudaSuccess);
+    // SH rows are staged in fixed-size chunks; everything else scales with N.
+    const size_t transient = used_high - used_before;
+    RecordProperty("relocate_transient_bytes", std::to_string(transient));
+    // Sampling holds the dead mask, weights, CDF and two index lists (~13 B/G).
+    EXPECT_LT(transient, size_t{16} * n + (size_t{96} << 20));
 }
 
 TEST_F(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {

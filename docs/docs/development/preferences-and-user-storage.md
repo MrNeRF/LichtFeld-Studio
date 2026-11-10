@@ -26,6 +26,19 @@ The Preferences panel currently exposes:
 - interface, layout, and window reset actions;
 - experimental native floating windows (restart required).
 
+Standard floating windows provide minimize, maximize, and restore controls in
+their title bar. Embedded windows maximize within the application work area,
+leaving the top commands and status bar accessible. Minimized windows remain
+open as a single row of title bars at the bottom of the viewport, outside the
+docked sidebars. The bars shorten as space decreases; scroll over them to reach
+additional windows when their controls would no longer fit. Status-bar popups
+and tooltips appear above these bars. Click a minimized title, or open the panel
+again from its menu, to restore it. Restore returns to the previous presentation and keeps
+the normal window geometry. Minimized windows suppress hover hints and hidden
+content animation. These presentation states are session-local;
+project layouts retain the normal geometry. Popups, viewport overlays, and
+self-managed windows do not acquire these controls.
+
 External floating panels are opt-in and disabled by default. Enable the
 experimental setting in Preferences > Interface and restart to allow dragging
 Preferences, Plugin Marketplace, or Video Extractor outside the main application
@@ -63,8 +76,11 @@ Recovered rectangles replace the unavailable positions in global preferences;
 reconnecting a monitor does not automatically move panels back to it.
 
 The desktop host is borderless and transparent: the panel keeps its RmlUi title,
-close button, theme and original dimensions. Its RmlUi title bar moves the window
-and its edges resize it. Confirmation and input popups remain embedded.
+window controls, theme and original dimensions. Its RmlUi title bar moves the
+window and its edges resize it. Minimize and maximize use the operating system's
+window states; reopening an already minimized panel raises and restores its
+existing window. Normal desktop geometry is preserved separately from minimized
+and maximized bounds. Confirmation and input popups remain embedded.
 Closing a panel window disables that panel without exiting the
 application and destroys its desktop surface, UI renderer, and auxiliary GPU
 device. Reopening recreates the host from the saved rectangle while retaining

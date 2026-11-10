@@ -39,6 +39,7 @@ namespace lfs::core {
         struct ExpressionPairingRequest;
         struct TensorAllocationRequest;
         struct NativeTensorAllocation;
+        class ReservedDeviceStorage;
         class LFS_CORE_API GpuBackendOps {
         public:
             virtual uint64_t expression_device_address(StorageRef) const = 0;
@@ -402,6 +403,14 @@ namespace lfs::core {
                                         ExecContext context) = 0;
             virtual void deallocate(StorageRef storage,
                                     ExecContext context) noexcept = 0;
+            // Reserves `bytes` of device address space and backs only the first
+            // `committed_bytes` (see Tensor::commit_rows). A backend that backs
+            // every allocation in full returns no reservation; the caller then
+            // allocates the whole size.
+            virtual std::shared_ptr<ReservedDeviceStorage> reserve_storage(
+                size_t /*bytes*/, size_t /*committed_bytes*/, ExecContext /*context*/) {
+                return nullptr;
+            }
             virtual void record_stream(StorageRef storage, ExecContext context) = 0;
             virtual void release_stream(ExecContext context) = 0;
             virtual void rehome_stream(StorageRef storage, ExecContext context) = 0;
@@ -454,6 +463,8 @@ namespace lfs::core {
             uint64_t expression_device_address(StorageRef) const override;
             void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
             NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
+            std::shared_ptr<ReservedDeviceStorage> reserve_storage(size_t bytes, size_t committed_bytes,
+                                                                   ExecContext context) override;
             std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
             std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
             StorageRef borrow_native_range(void*, size_t) override;

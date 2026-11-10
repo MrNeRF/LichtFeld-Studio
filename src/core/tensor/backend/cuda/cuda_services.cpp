@@ -20,6 +20,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/lazy_device_storage.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
@@ -77,6 +78,12 @@ namespace lfs::core {
 
     CudaMemoryPool* try_live_cuda_memory_pool() noexcept {
         return g_cuda_memory_pool_instance.load(std::memory_order_acquire);
+    }
+
+    void trim_live_cuda_memory_pool() {
+        if (CudaMemoryPool* const pool = try_live_cuda_memory_pool()) {
+            pool->trim_cached_memory();
+        }
     }
 
     void safe_cuda_pool_deallocate(void* const pointer, const cudaStream_t stream) noexcept {
@@ -297,6 +304,11 @@ namespace lfs::core {
                 return;
             }
             safe_cuda_pool_deallocate(storage.data, context.cuda_stream);
+        }
+
+        std::shared_ptr<ReservedDeviceStorage> CudaBackendOps::reserve_storage(
+            const size_t bytes, const size_t committed_bytes, const ExecContext context) {
+            return LazyDeviceStorage::create(bytes, committed_bytes, context.cuda_stream);
         }
 
         void CudaBackendOps::record_stream(

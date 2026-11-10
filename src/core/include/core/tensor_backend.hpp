@@ -53,6 +53,8 @@ namespace lfs::core {
     // Pool counters are optional because collecting them costs extra runtime queries.
     LFS_CORE_API MemoryInfo gpu_backend_memory_info(GpuBackend backend,
                                                     bool include_pool_stats = false);
+    // Restarts the pool high-water marks gpu_backend_memory_info reports; false when the backend keeps none.
+    [[nodiscard]] LFS_CORE_API bool gpu_backend_reset_pool_peaks(GpuBackend backend, bool used, bool reserved);
     LFS_CORE_API lfs::Status shutdown_gpu_backend(GpuBackend backend);
     LFS_CORE_API lfs::Status tensor_backend_selftest(GpuBackend backend);
 

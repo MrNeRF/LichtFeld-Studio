@@ -37,6 +37,20 @@ def tr_fallback(key, fallback):
     return result if result and result != key else fallback
 
 
+def _green_infill_mesh_available(params):
+    """Whether a mesh exists for the green infill of an evaluation."""
+    if params.noise_infill_mesh:
+        return True
+    return bool(params.eval_mask) and not params.eval_mask.startswith(
+        ("bbox:", "masks:", "depth:", "points", "splat:", "cropbox")
+    )
+
+
+def _green_infill_option_visible(params):
+    """An enabled option stays visible so it can be turned off once its mesh is gone."""
+    return params.enable_eval and (params.eval_green_infill or _green_infill_mesh_available(params))
+
+
 def _eval_mask_display(params):
     if not (params and params.has_params() and params.eval_mask):
         return tr("training.value.none")
@@ -91,6 +105,13 @@ class IterationRateTracker:
 
 
 _rate_tracker = IterationRateTracker()
+
+
+def _compact_count(count):
+    for limit, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if count >= limit:
+            return f"{count / limit:.1f}{suffix}"
+    return str(count)
 
 
 def _is_mrnf_strategy(strategy):
@@ -282,6 +303,8 @@ class TrainingPanel(Panel):
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._last_iteration = -1
         self._last_num_gaussians = -1
+        self._densify_vram = None
+        self._densify_vram_key = None
         self._last_progress_frac = -1.0
         self._last_bg_color = None
         self._doc = None
@@ -461,6 +484,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_bg_color", lambda: tr("training_params.bg_color"))
         model.bind_func("label_bg_image", lambda: tr("training_params.bg_image"))
         model.bind_func("label_eval_mask", lambda: tr("training_params.eval_mask"))
+        model.bind_func("label_noise_infill_mesh", lambda: tr("training.init.noise_infill_mesh"))
         model.bind_func("label_use_cropbox", lambda: tr("training_params.eval_mask_use_cropbox"))
         model.bind_func("label_mask_folder", lambda: tr("training_params.eval_mask_folder"))
         model.bind_func("label_eval_mask_spec", lambda: tr("training_params.eval_mask_spec"))
@@ -723,6 +747,7 @@ class TrainingPanel(Panel):
             "dep_undistort": params.undistort,
             "dep_eval_mask": params.enable_eval and bool(params.eval_mask),
             "dep_eval_mask_splat": params.enable_eval and params.eval_mask.startswith("splat:"),
+            "dep_eval_green_infill": _green_infill_option_visible(params),
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -943,6 +968,14 @@ class TrainingPanel(Panel):
         model.bind_func(
             "has_eval_mask_clear",
             lambda: p() is not None and p().has_params() and bool(p().eval_mask),
+        )
+        model.bind_func(
+            "dep_noise_infill",
+            lambda: p() is not None and p().has_params() and bool(p().noise_infill_mesh),
+        )
+        model.bind_func(
+            "dep_eval_green_infill",
+            lambda: p() is not None and p().has_params() and _green_infill_option_visible(p()),
         )
         model.bind_func(
             "dep_eval_holdout",
@@ -1429,6 +1462,26 @@ class TrainingPanel(Panel):
         def _status_gaussians():
             return tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}"
 
+        # Used share and Gaussians left of the capacity the last refine measured.
+        def _densify_vram():
+            capacity = self._densify_vram["capacity"] if self._densify_vram else 0
+            left = max(0, capacity - RuntimeState.num_gaussians.value)
+            return (1.0 - left / capacity if capacity else 1.0), left
+
+        def _densify_vram_text():
+            if not self._densify_vram:
+                return ""
+            _, left = _densify_vram()
+            if left == 0:
+                return tr("training_panel.densify_vram_full") % f"{RuntimeState.num_gaussians.value:,}"
+            gib = left * self._densify_vram["bytes_per_gaussian"] / 2**30
+            return tr("training_panel.densify_vram_left") % (_compact_count(left), f"{gib:.2f}")
+
+        def _densify_vram_class():
+            used, _ = _densify_vram()
+            level = sum(used >= step for step in (0.5, 0.7, 0.85, 0.95))
+            return f"training-progress-wrap densify-vram--level-{level}"
+
         def _progress_text():
             session = _training_session_state()
             it = RuntimeState.iteration.value
@@ -1458,6 +1511,11 @@ class TrainingPanel(Panel):
         model.bind_func("status_gaussians", _status_gaussians)
         model.bind_func("progress_text", _progress_text)
         model.bind_func("progress_value", lambda: self._progress_value)
+        model.bind_func("show_densify_vram", lambda: self._densify_vram is not None)
+        model.bind_func("densify_vram_label", lambda: tr("training_panel.densify_vram"))
+        model.bind_func("densify_vram_value", lambda: str(_densify_vram()[0]))
+        model.bind_func("densify_vram_text", _densify_vram_text)
+        model.bind_func("densify_vram_class", _densify_vram_class)
         model.bind_func("loss_label", lambda: self._loss_label)
         model.bind_func("loss_tick_max", lambda: self._loss_tick_max)
         model.bind_func("loss_tick_mid", lambda: self._loss_tick_mid)
@@ -1520,6 +1578,14 @@ class TrainingPanel(Panel):
             ),
         )
         model.bind_func("eval_mask_path_display", lambda: _eval_mask_display(p()))
+        model.bind_func(
+            "noise_infill_mesh_display",
+            lambda: (
+                os.path.basename(p().noise_infill_mesh)
+                if p() and p().has_params() and p().noise_infill_mesh
+                else tr("training.value.none")
+            ),
+        )
 
     def _bind_events(self, model):
         model.bind_event("toggle_section", self._on_toggle_section)
@@ -1901,7 +1967,8 @@ class TrainingPanel(Panel):
             ng = RuntimeState.num_gaussians.value
             if ng != self._last_num_gaussians:
                 self._last_num_gaussians = ng
-                self._handle.dirty("status_gaussians")
+                for name in ("status_gaussians", "densify_vram_value", "densify_vram_text", "densify_vram_class"):
+                    self._handle.dirty(name)
                 dirty = True
 
             project_saved_visible = (
@@ -1923,6 +1990,7 @@ class TrainingPanel(Panel):
 
         dirty |= self._update_step_repeat()
         dirty |= self._update_progress()
+        dirty |= self._update_densify_vram()
         dirty |= self._update_save_steps(doc)
         dirty |= self._update_color_swatch(doc)
         dirty |= self._update_loss_graph()
@@ -1941,6 +2009,21 @@ class TrainingPanel(Panel):
                 self._handle.dirty("progress_value")
             return True
         return False
+
+    def _update_densify_vram(self):
+        # The room changes only at refines, so it is read once per step.
+        key = (RuntimeState.trainer_state.value, RuntimeState.iteration.value)
+        if key == self._densify_vram_key:
+            return False
+        self._densify_vram_key = key
+        room = lf.trainer_densification_vram()
+        if room == self._densify_vram:
+            return False
+        self._densify_vram = room
+        if self._handle:
+            for name in ("show_densify_vram", "densify_vram_value", "densify_vram_text", "densify_vram_class"):
+                self._handle.dirty(name)
+        return True
 
     def _update_save_steps(self, doc):
         params = lf.optimization_params()
@@ -2997,12 +3080,30 @@ class TrainingPanel(Panel):
                 params.eval_mask = "cropbox"
                 if self._handle:
                     self._handle.dirty_all()
+        elif action == "browse_noise_infill_mesh":
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and os.path.isabs(params.noise_infill_mesh):
+                start_dir = os.path.dirname(params.noise_infill_mesh)
+            selected = lf.ui.open_mesh_file_dialog(start_dir)
+            if selected and params and params.has_params():
+                params.noise_infill_mesh = selected
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "clear_noise_infill_mesh":
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.noise_infill_mesh = ""
+                params.eval_green_infill = params.eval_green_infill and _green_infill_mesh_available(params)
+                if self._handle:
+                    self._handle.dirty_all()
         elif action == "clear_eval_mask":
             self._text_bufs["eval_mask_spec_str"] = None
             params = lf.optimization_params()
             if params and params.has_params():
                 params.eval_mask = ""
                 params.eval_mask_report = ""
+                params.eval_green_infill = params.eval_green_infill and _green_infill_mesh_available(params)
                 if self._handle:
                     self._handle.dirty_all()
         elif action == "clear_ppisp_sidecar":

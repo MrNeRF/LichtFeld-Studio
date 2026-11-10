@@ -298,7 +298,7 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR", "EDITOR")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR", "EDITOR", "IMAGE_PREVIEW")
                 )
             },
         ),
@@ -311,6 +311,9 @@ def preferences_panel_module(monkeypatch):
             EDITOR_TOGGLE_KIND=SimpleNamespace(name="EDITOR_TOGGLE_KIND", value=111),
             EDITOR_RUN=SimpleNamespace(name="EDITOR_RUN", value=112),
             EDITOR_STOP=SimpleNamespace(name="EDITOR_STOP", value=113),
+            IMAGE_PREVIEW_DELETE=SimpleNamespace(name="IMAGE_PREVIEW_DELETE", value=114),
+            IMAGE_PREVIEW_GENERATE=SimpleNamespace(name="IMAGE_PREVIEW_GENERATE", value=115),
+            IMAGE_PREVIEW_REMOVE_POINT=SimpleNamespace(name="IMAGE_PREVIEW_REMOVE_POINT", value=116),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),

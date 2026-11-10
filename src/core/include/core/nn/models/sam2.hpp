@@ -20,8 +20,11 @@
 
 namespace lfs::core::nn::models {
 
+    enum class Sam2MaskOutput { OriginalResolution,
+                                LowResolutionOnly };
+
     struct Sam2Prediction {
-        Tensor masks;          // [num_masks, H, W] fp32 logits, original image size
+        Tensor masks;          // [num_masks, H, W] fp32 logits; absent for LowResolutionOnly
         Tensor iou;            // [num_masks] fp32 predicted mask quality
         Tensor low_res_logits; // [num_masks, 256, 256] fp32
         Tensor object_pointer; // video tracking only
@@ -72,7 +75,8 @@ namespace lfs::core::nn::models {
         // prediction (1 x 1 x 256 x 256) to refine. Requires set_image first.
         lfs::Result<Sam2Prediction> predict(const std::vector<Sam2PointPrompt>& points,
                                             const std::optional<std::array<float, 4>>& box,
-                                            bool multimask = true, const Tensor* mask_logits = nullptr);
+                                            bool multimask = true, const Tensor* mask_logits = nullptr,
+                                            Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
 
         lfs::Result<std::pair<Sam2Prediction, Sam2Taps>>
         predict_with_taps(const std::vector<Sam2PointPrompt>& points,
@@ -82,7 +86,7 @@ namespace lfs::core::nn::models {
         // Video tracking runs on the CUDA tensor backend only; other backends report Unsupported.
         lfs::Result<void> set_video_image(const Tensor& image);
         lfs::Result<Sam2Prediction> seed_video(const Tensor& mask, int frame_index, int frame_count,
-                                               bool reverse);
+                                               bool reverse, float max_area = kSam2MaxArea);
         lfs::Result<Sam2Prediction> track_video(int frame_index);
         void reset_video();
         [[nodiscard]] bool supports_video() const;
@@ -107,7 +111,8 @@ namespace lfs::core::nn::models {
         lfs::Result<Sam2Prediction> run_decoder(const std::vector<Sam2PointPrompt>& points,
                                                 const std::optional<std::array<float, 4>>& box,
                                                 bool multimask, Sam2Taps* taps, bool video = false,
-                                                const Tensor* mask_input = nullptr);
+                                                const Tensor* mask_input = nullptr,
+                                                Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
 
         const Tensor& w(std::string_view name) const;
         Tensor conv1x1(const Tensor& x, std::string_view weight, std::string_view bias);
@@ -151,6 +156,7 @@ namespace lfs::core::nn::models {
         bool video_reverse_ = false;
         bool video_image_ = false;
         bool video_oversized_ = false;
+        float video_max_area_ = kSam2MaxArea;
         Tensor raw_image_embed_;
         Tensor video_image_position_;
         Tensor video_memory_position_;

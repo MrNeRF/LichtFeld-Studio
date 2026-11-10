@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 
 #include <RmlUi/Core/RenderInterface.h>
 
@@ -33,6 +34,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef DEBUG_BUILD
@@ -51,6 +53,7 @@ class RenderInterface_VK : public lfs::vis::gui::UiRenderer {
     friend class RenderInterfaceVKTestAccess;
 
 public:
+    using PreviewTextureStatus = lfs::vis::gui::PreviewTextureStatus;
     static constexpr uint32_t kSwapchainBackBufferCount = 3;
     // Retained panel geometry plus three in-flight generations of canvas meshes.
     static constexpr VkDeviceSize kVideoMemoryForAllocation = 16 * 1024 * 1024; // [bytes]
@@ -161,6 +164,12 @@ public:
     Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
     [[nodiscard]] uint64_t previewTextureGeneration() const override {
         return m_preview_textures.generation();
+    }
+    [[nodiscard]] PreviewTextureStatus previewTextureStatus(const std::string& source) const override {
+        return m_preview_textures.status(source);
+    }
+    void setPreviewMemoryProvider(lfs::vis::gui::PreviewMemoryProvider provider) override {
+        m_preview_textures.setMemoryProvider(std::move(provider));
     }
     [[nodiscard]] bool currentContextUsedPreviewTexture() const override {
         return m_current_context_used_preview_texture;

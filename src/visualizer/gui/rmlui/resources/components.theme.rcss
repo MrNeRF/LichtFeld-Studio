@@ -558,3 +558,21 @@ scrollbarhorizontal sliderbar:hover {
     background-color: @{alpha(surface,0.94)};
     border-color: @{alpha(border,0.50)};
 }
+
+.window-minimize-line,
+.window-close-line {
+    background-color: @{text};
+}
+
+.window-maximize-box,
+.window-restore-box {
+    border-color: @{text};
+}
+
+button.window-control .window-minimize-line {
+    background-color: @{text_dim};
+}
+button.window-control .window-maximize-box,
+button.window-control .window-restore-box {
+    border-color: @{text_dim};
+}

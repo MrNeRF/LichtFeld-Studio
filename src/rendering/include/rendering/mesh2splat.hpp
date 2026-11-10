@@ -9,6 +9,7 @@
 #include "core/mesh2splat.hpp"
 #include "core/splat_data.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <memory>
 
@@ -18,10 +19,12 @@ namespace lfs::core {
 
 namespace lfs::rendering {
 
+    // `min_output_entries` reserves space for that many splats when more than the estimate from the resolution will come.
     [[nodiscard]] std::expected<std::unique_ptr<core::SplatData>, std::string>
     mesh_to_splat(const core::MeshData& mesh,
                   const core::Mesh2SplatOptions& options = {},
-                  core::Mesh2SplatProgressCallback progress = nullptr);
+                  core::Mesh2SplatProgressCallback progress = nullptr,
+                  uint64_t min_output_entries = 0);
 
     // The converter as a tensor program on `backend`, which must support raster
     // draws. mesh_to_splat uses it in builds without the Vulkan converter.
@@ -29,6 +32,7 @@ namespace lfs::rendering {
     mesh_to_splat_tensor(const core::MeshData& mesh,
                          const core::Mesh2SplatOptions& options,
                          core::GpuBackend backend,
-                         core::Mesh2SplatProgressCallback progress = nullptr);
+                         core::Mesh2SplatProgressCallback progress = nullptr,
+                         uint64_t min_output_entries = 0);
 
 } // namespace lfs::rendering

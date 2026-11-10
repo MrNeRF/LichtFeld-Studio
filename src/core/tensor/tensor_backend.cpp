@@ -452,6 +452,10 @@ namespace lfs::core {
         return internal::backend_driver(backend).memory_info(include_pool_stats);
     }
 
+    bool gpu_backend_reset_pool_peaks(const GpuBackend backend, const bool used, const bool reserved) {
+        return internal::backend_driver(backend).reset_pool_peaks(used, reserved);
+    }
+
     struct TensorCompletion::Impl {
         std::mutex mutex;
         std::array<bool, kGpuBackendCount> backends{};

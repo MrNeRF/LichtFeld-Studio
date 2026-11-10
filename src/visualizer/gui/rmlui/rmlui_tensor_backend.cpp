@@ -819,6 +819,12 @@ namespace lfs::vis::gui {
         return impl_->texture_generation + uiTextureGeneration() + impl_->previews.generation();
     }
     bool TensorRmlUiRenderer::currentContextUsedPreviewTexture() const { return impl_->preview_used; }
+    PreviewTextureStatus TensorRmlUiRenderer::previewTextureStatus(const std::string& source) const {
+        return impl_->previews.status(source);
+    }
+    void TensorRmlUiRenderer::setPreviewMemoryProvider(PreviewMemoryProvider provider) {
+        impl_->previews.setMemoryProvider(std::move(provider));
+    }
     UiRendererMemoryStatistics TensorRmlUiRenderer::memoryStatistics() const {
         const std::size_t backdrop_bytes = impl_->frosted_glass.bytes();
         std::size_t layer_bytes = 0;

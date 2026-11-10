@@ -294,7 +294,7 @@ namespace lfs::training {
                 reads.push_back(ref(edge));
             launch(p, kParent, reads, writes, groups(n));
         }
-        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .gumbel = gumbel, .fold_error = fold_error, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights};
+        const MrnfOps kOps{.noise = noise, .decay = decay, .percentile_bounds = percentile_bounds, .gumbel = gumbel, .fold_error = fold_error, .compact_bool_indices = compact_bool, .prune_bounds = prune, .replace_parent_weights = parent_weights, .kth_largest = portable_mrnf_kth_largest, .rank_exchange_rows = portable_mrnf_rank_exchange_rows};
     } // namespace
     const MrnfOps& vulkan_mrnf_ops() { return kOps; }
 } // namespace lfs::training

@@ -21,6 +21,29 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // The `count` rows the growth exchange gives up first. A row's rank is the
+    // later of its positions in ascending `primary` and `secondary` importance
+    // (NaN last, ties by row; `secondary` may be null); rows come out by rank,
+    // ties by row, and ineligible rows rank after all eligible ones.
+    void launch_rank_exchange_rows(
+        const float* primary,
+        const float* secondary,
+        const bool* eligible,
+        size_t N,
+        size_t count,
+        int64_t* rows,
+        void* stream = nullptr);
+
+    // The K-th largest of values[i] over the rows where include[i] is set
+    // (all rows when include is null), without sorting. Needs K <= N and,
+    // with include, K <= the included rows.
+    [[nodiscard]] float launch_kth_largest(
+        const float* values,
+        const bool* include,
+        size_t N,
+        size_t K,
+        void* stream = nullptr);
+
     /**
      * Per-iteration exploration noise for low-opacity splats.
      *

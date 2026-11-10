@@ -394,15 +394,15 @@ namespace fast_lfs::rasterization {
     };
 
     // The visibility mask and its block scan are forward-only.  The original
-    // order map and compact IDs remain persistent because backward consumes
-    // both.  Keeping the map avoids a rank/popcount walk in the full-N
-    // backward preprocess.
+    // order map remains persistent because backward consumes it.  Keeping the
+    // map avoids a rank/popcount walk in the full-N backward preprocess.  The
+    // compact IDs are sized to the visible count once the scan knows it.
     struct VisibilityBuffers {
         uint* visibility_mask;
         uint* block_counts;
         uint* block_offsets;
         uint* primitive_work_indices;
-        uint* visible_indices;
+        uint* visible_indices = nullptr;
         char* cub_workspace;
         size_t cub_workspace_size;
 
@@ -416,7 +416,6 @@ namespace fast_lfs::rasterization {
             obtain(blob, buffers.block_counts, n_blocks, 128);
             obtain(blob, buffers.block_offsets, n_blocks, 128);
             obtain(blob, buffers.primitive_work_indices, n_primitives, 128);
-            obtain(blob, buffers.visible_indices, n_primitives, 128);
             LFS_CUDA_CHECK_MSG(
                 cub::DeviceScan::InclusiveSum(
                     nullptr, buffers.cub_workspace_size,

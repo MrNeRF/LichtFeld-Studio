@@ -318,8 +318,11 @@ namespace lfs::core {
         // Returns canonical SH coefficients in pageable host memory.
         Tensor shN_canonical_cpu() const;
 
-        // Decode selected compact q16 / IEEE-f16 SH rows into canonical pageable host memory.
+        // Gather resident FP32/f16/q16 rows into owned canonical Float32 CPU storage.
+        // Indices must be rank-1 CPU integers; call at a model read boundary.
+        // The one-argument form includes all stored SH bands.
         Tensor shN_canonical_cpu_rows(const Tensor& row_indices) const;
+        Tensor shN_canonical_cpu_rows(const Tensor& row_indices, int degree) const;
 
         // Returns channel-major PLY rest coefficients in pageable host memory.
         Tensor shN_ply_rest_cpu() const;
@@ -498,8 +501,16 @@ namespace lfs::core {
         }
 
     public:
-        // Holds the magnitude of the screen space gradient (used for densification)
+        // Holds the magnitude of the screen space gradient (used for densification).
+        // [rows >= 2, N] is a weight row, then an error row. [N] is the error
+        // row alone, for strategies that never read the weight.
         Tensor _densification_info;
+        struct DensificationRows {
+            float* weight = nullptr;
+            float* error = nullptr;
+        };
+        // The rows of _densification_info covering n splats; none when it does not.
+        [[nodiscard]] DensificationRows densification_rows(std::size_t n);
         // Per-splat max screen-share over the current refine window. [N] fp32.
         Tensor _max_screen_share;
 

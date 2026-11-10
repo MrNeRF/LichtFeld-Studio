@@ -1,0 +1,29 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+  <link type="text/rcss" href="external_training.rcss"/>
+</head>
+<body template="docked-panel" data-model="external_training">
+  <div class="et-current" data-if="has_preview">
+    <span class="section-label">{{current_title}}</span>
+    <span class="et-readonly">@tr:external_training.read_only</span>
+    <span>{{progress}}</span>
+    <span>{{preview}}</span>
+    <label><input type="checkbox" data-checked="show_cameras"/><span>@tr:external_training.camera_overlay</span></label>
+    <span class="text-disabled" data-if="!connected">@tr:external_training.disconnected</span>
+    <button class="btn btn--secondary btn--full" data-attrif-disabled="!has_snapshot" data-event-click="frame">@tr:external_training.frame</button>
+    <button class="btn btn--secondary btn--full" data-if="connected" data-event-click="disconnect">@tr:external_training.disconnect</button>
+    <button class="btn btn--secondary btn--full" data-event-click="remove">@tr:external_training.remove</button>
+  </div>
+  <span class="status-error" data-if="has_error">{{error}}</span>
+  <div class="separator"/>
+  <span class="section-label">@tr:external_training.available</span>
+  <span class="text-disabled" data-if="dataset_open">@tr:external_training.dataset_open</span>
+  <span class="text-disabled" data-if="!has_sessions">@tr:external_training.empty</span>
+  <select data-if="has_sessions" data-value="selected">
+    <option data-for="session : sessions" data-attr-value="session.id">{{session.label}}</option>
+  </select>
+  <button class="btn btn--primary btn--full" data-attrif-disabled="!can_connect" data-event-click="connect" data-tooltip="external_training.connect_hint">@tr:external_training.connect</button>
+  <button class="btn btn--secondary btn--full" data-event-click="refresh">@tr:external_training.refresh</button>
+</body>
+</rml>

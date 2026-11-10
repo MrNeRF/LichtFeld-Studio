@@ -269,6 +269,8 @@ namespace lfs::training {
             .compact_bool_indices = compact_bool_indices,
             .prune_bounds = prune_bounds,
             .replace_parent_weights = replace_parent_weights,
+            .kth_largest = portable_mrnf_kth_largest,
+            .rank_exchange_rows = portable_mrnf_rank_exchange_rows,
         };
         return ops;
     }

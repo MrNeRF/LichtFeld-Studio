@@ -447,19 +447,19 @@ namespace lfs::vis {
             std::size_t wave_count = 0;
             std::optional<VulkanGSRenderer::StochasticTileState> tiles;
         };
-        [[nodiscard]] static bool canReuseStochasticProjection(
+        [[nodiscard]] LFS_VIS_API static bool canReuseStochasticProjection(
             const StochasticFrame& frame, RenderTargetId slot, const StochasticProjectionCache& cache);
-        static void updateStochasticProjectionStats(
+        LFS_VIS_API static void updateStochasticProjectionStats(
             StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats);
-        [[nodiscard]] StochasticFrame prepareStochasticFrame(
+        [[nodiscard]] LFS_VIS_API StochasticFrame prepareStochasticFrame(
             VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
             RenderTargetId slot, bool content_changed, StochasticEffect effect);
         [[nodiscard]] const _VulkanBuffer* resolveStochasticFrame(
             const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
             RenderTargetId slot, const glm::vec3& background);
-        void commitStochasticFrame(const StochasticFrame& frame, RenderTargetId slot);
+        LFS_VIS_API void commitStochasticFrame(const StochasticFrame& frame, RenderTargetId slot);
         void retireStochasticBuffer(_VulkanBuffer& buffer, bool destroy_now);
-        void releaseUnusedStochasticBuffers(RenderTargetId slot, std::uint32_t mode);
+        LFS_VIS_API void releaseUnusedStochasticBuffers(RenderTargetId slot, std::uint32_t mode);
         void releaseStochasticBuffers();
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,

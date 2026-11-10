@@ -31,6 +31,8 @@ namespace lfs::vis::gui {
         void setTextureDebugName(Rml::TextureHandle, std::string_view) const override {}
         uint64_t previewTextureGeneration() const override;
         bool currentContextUsedPreviewTexture() const override;
+        PreviewTextureStatus previewTextureStatus(const std::string& source) const override;
+        void setPreviewMemoryProvider(PreviewMemoryProvider provider) override;
         UiRendererMemoryStatistics memoryStatistics() const override;
 
         Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices,

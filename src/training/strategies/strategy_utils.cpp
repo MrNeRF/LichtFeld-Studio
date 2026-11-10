@@ -4,16 +4,28 @@
 
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
+#include "core/gpu_device_runtime.hpp"
+#include "core/lazy_direct_storage.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
+#include "core/raster_arena.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_execution.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <random>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -106,7 +118,159 @@ namespace lfs::training {
         g_frozen_mask_rebuilds.store(0, std::memory_order_relaxed);
     }
 
+    namespace {
+        std::atomic<size_t> g_vram_limit_logged_n{0};
+        std::atomic<size_t> g_vram_extra_reserve{0};
+
+        // Written on the training thread, read by the GUI.
+        std::mutex g_densification_room_mutex;
+        std::optional<DensificationVramRoom> g_densification_room;
+
+        void store_densification_room(const std::optional<DensificationVramRoom>& room) {
+            const std::lock_guard lock(g_densification_room_mutex);
+            g_densification_room = room;
+        }
+
+        // Pool allocations made while the arena is at its high-water (loss
+        // workspaces, images, densify scratch) and views heavier than any seen.
+        constexpr size_t kPoolReserveBytes = size_t{256} << 20;
+
+        // Planned before any refine was measured (a run resumed near the
+        // limit); measured refines take over as this decays.
+        constexpr size_t kDefaultRefineTransientBytesPerGaussian = 64;
+        std::atomic<size_t> g_refine_transient_per_gaussian{kDefaultRefineTransientBytesPerGaussian};
+        std::atomic<bool> g_refine_window_open{false};
+        std::atomic<size_t> g_refine_window_start{0};
+        std::atomic<size_t> g_pool_reserved_high_closed{0};
+        std::atomic<size_t> g_pool_used_high_closed{0};
+        std::atomic<size_t> g_refine_windows{0};
+
+        constexpr int kFrameProbeInterval = 64;
+        constexpr size_t kFrameHeadroomMarginBytes = size_t{256} << 20;
+        std::atomic<size_t> g_frame_transient{0};
+
+        // Pool counters of the training device's tensor allocator.
+        [[nodiscard]] lfs::core::MemoryInfo pool_info() {
+            return lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend(), true);
+        }
+
+        // Restarts the pool's high-water marks; false when the backend keeps none.
+        [[nodiscard]] bool reset_pool_peaks(const bool used, const bool reserved) {
+            return lfs::core::gpu_backend_reset_pool_peaks(lfs::core::default_gpu_backend(), used, reserved);
+        }
+
+        [[nodiscard]] lfs::gpu_ops::ArenaMemoryInfo arena_info() {
+            return training_ops(lfs::core::default_gpu_backend()).session->arena_memory_info().value_or(lfs::gpu_ops::ArenaMemoryInfo{});
+        }
+
+        // Free and total device bytes; nullopt when the device cannot be queried.
+        [[nodiscard]] std::optional<std::pair<size_t, size_t>> device_free_total() {
+            const auto info = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend());
+            if (info.total_bytes == 0) {
+                return std::nullopt;
+            }
+            return std::pair{info.free_bytes, info.total_bytes};
+        }
+
+        void fold_high(std::atomic<size_t>& closed, const size_t bytes) {
+            size_t high = closed.load(std::memory_order_relaxed);
+            while (bytes > high && !closed.compare_exchange_weak(high, bytes, std::memory_order_relaxed)) {
+            }
+        }
+
+        // Pool bytes the open refine window reserved beyond its start.
+        [[nodiscard]] size_t refine_window_transient_bytes() {
+            if (!g_refine_window_open.load(std::memory_order_relaxed)) {
+                return 0;
+            }
+            const size_t high = pool_info().pool_reserved_high;
+            const size_t start = g_refine_window_start.load(std::memory_order_relaxed);
+            return high > start ? high - start : 0;
+        }
+    } // namespace
+
+    RefineVramWindow::RefineVramWindow(const lfs::core::SplatData& splat_data)
+        : splat_data_(splat_data),
+          pressure_episodes_(lfs::core::MemoryPressureCoordinator::instance().episode_count()) {
+        fold_high(g_pool_reserved_high_closed, pool_info().pool_reserved_high);
+        if (!reset_pool_peaks(false, true)) {
+            return;
+        }
+        g_refine_window_start.store(pool_info().pool_reserved_current, std::memory_order_relaxed);
+        g_refine_window_open.store(true, std::memory_order_relaxed);
+        g_refine_windows.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    RefineVramWindow::~RefineVramWindow() {
+        const size_t transient = refine_window_transient_bytes();
+        g_refine_window_open.store(false, std::memory_order_relaxed);
+        // Relief took the idle arena, which the next frame commits again, so
+        // the next refine would run short the same way.
+        if (lfs::core::MemoryPressureCoordinator::instance().episode_count() != pressure_episodes_) {
+            raise_vram_growth_reserve(kPoolReserveBytes);
+        }
+        const size_t n = static_cast<size_t>(splat_data_.size());
+        if (n == 0) {
+            return;
+        }
+        // The reserve growth always keeps covers a refine's fixed-size
+        // staging; only the rest scales with the model. Keep the largest
+        // recent refine: one that relocates or splits little must not hide the
+        // next one that does a lot. Decays by 1/8 a refine.
+        const size_t scaling = transient > kPoolReserveBytes ? transient - kPoolReserveBytes : 0;
+        const size_t previous = g_refine_transient_per_gaussian.load(std::memory_order_relaxed);
+        g_refine_transient_per_gaussian.store(std::max(scaling / n, previous - previous / 8),
+                                              std::memory_order_relaxed);
+    }
+
+    FrameVramProbe::FrameVramProbe(const int iter) {
+        if (iter % kFrameProbeInterval != 0) {
+            return;
+        }
+        fold_high(g_pool_used_high_closed, pool_info().pool_used_high);
+        if (!reset_pool_peaks(true, false)) {
+            return;
+        }
+        start_used_ = pool_info().pool_used_current;
+        refines_ = g_refine_windows.load(std::memory_order_relaxed);
+        active_ = true;
+    }
+
+    FrameVramProbe::~FrameVramProbe() {
+        // A step that refined measures the refine; RefineVramWindow has it.
+        if (!active_ || g_refine_windows.load(std::memory_order_relaxed) != refines_) {
+            return;
+        }
+        const size_t high = pool_info().pool_used_high;
+        const size_t transient = high > start_used_ ? high - start_used_ : 0;
+        // Keep the largest recent step, decaying by 1/8 a sample.
+        const size_t previous = g_frame_transient.load(std::memory_order_relaxed);
+        const size_t planned = std::max(transient, previous - previous / 8);
+        g_frame_transient.store(planned, std::memory_order_relaxed);
+        lfs::core::set_measured_frame_headroom_bytes(planned + kFrameHeadroomMarginBytes);
+    }
+
+    size_t refine_transient_bytes_per_gaussian() {
+        return g_refine_transient_per_gaussian.load(std::memory_order_relaxed);
+    }
+
+    size_t tensor_pool_reserved_high_bytes() {
+        return std::max(g_pool_reserved_high_closed.load(std::memory_order_relaxed),
+                        pool_info().pool_reserved_high);
+    }
+
+    size_t tensor_pool_used_high_bytes() {
+        return std::max(g_pool_used_high_closed.load(std::memory_order_relaxed),
+                        pool_info().pool_used_high);
+    }
+
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap) {
+        g_vram_extra_reserve.store(0, std::memory_order_relaxed);
+        g_frame_transient.store(0, std::memory_order_relaxed);
+        lfs::core::set_measured_frame_headroom_bytes(0);
+        g_vram_limit_logged_n.store(0, std::memory_order_relaxed);
+        store_densification_room(std::nullopt);
+        g_refine_transient_per_gaussian.store(kDefaultRefineTransientBytesPerGaussian, std::memory_order_relaxed);
         // Tensors are already on GPU in the new framework (created with Device::GPU by default)
         // Gradients are now owned by AdamOptimizer, not SplatData
 
@@ -173,6 +337,196 @@ namespace lfs::training {
         const double gamma = std::pow(0.01, 1.0 / params.iterations);
 
         return std::make_unique<ExponentialLR>(optimizer, gamma, std::vector<ParamType>{ParamType::Means});
+    }
+
+    double restart_decay_gamma(
+        const lfs::core::param::OptimizationParameters& params,
+        const AdamOptimizer& optimizer,
+        const double final_fraction) {
+        const auto completed_steps = static_cast<size_t>(std::max<int64_t>(0, optimizer.get_step_count(ParamType::Means)));
+        const size_t steps_left = params.iterations > completed_steps ? params.iterations - completed_steps : 1;
+        return std::pow(final_fraction, 1.0 / static_cast<double>(steps_left));
+    }
+
+    std::optional<lfs::core::Tensor> rows_over_cap(const lfs::core::SplatData& splat_data, const int max_cap) {
+        const auto rows = static_cast<size_t>(splat_data.size());
+        const size_t live = rows - std::min(rows, splat_data.deleted_count());
+        if (max_cap <= 0 || live <= static_cast<size_t>(max_cap))
+            return std::nullopt;
+        const auto frozen = make_frozen_mask(splat_data, rows, lfs::core::Device::CPU);
+        const auto frozen_rows = frozen.is_valid() ? frozen.to_vector_bool() : std::vector<bool>(rows, false);
+        const auto deleted_rows = splat_data.deleted_mask_matches_size() ? splat_data.deleted().cpu().to_vector_bool()
+                                                                         : std::vector<bool>(rows, false);
+        std::vector<size_t> candidates;
+        for (size_t row = 0; row < rows; ++row)
+            if (!frozen_rows[row] && !deleted_rows[row])
+                candidates.push_back(row);
+        std::mt19937 rng(0);
+        std::shuffle(candidates.begin(), candidates.end(), rng);
+        candidates.resize(std::min(candidates.size(), live - static_cast<size_t>(max_cap)));
+        std::vector<bool> remove(rows, false);
+        for (const size_t row : candidates)
+            remove[row] = true;
+        return lfs::core::Tensor::from_vector(remove, lfs::core::TensorShape({rows}), splat_data.means().device());
+    }
+
+    namespace {
+        // Per-Gaussian strategy buffers the ledger does not count (refine
+        // weights, screen share, edge scores, densify scratch).
+        constexpr size_t kStrategyBytesPerGaussian = 32;
+        // The arena's per-Gaussian bytes vary with the view.
+        constexpr double kArenaViewVariance = 1.05;
+
+    } // namespace
+
+    void raise_vram_growth_reserve(const size_t bytes) {
+        const size_t reserve = g_vram_extra_reserve.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+        LOG_WARN("Training ran out of VRAM; densification now keeps {} MiB more free", reserve >> 20);
+    }
+
+    size_t vram_growth_limit(const lfs::core::SplatData& splat_data,
+                             const AdamOptimizer* optimizer,
+                             const size_t transient_bytes_per_gaussian) {
+        // Blocks the pool caches without using would otherwise look taken.
+        lfs::core::gpu_trim_cached_memory(lfs::core::default_gpu_backend());
+        const auto device = device_free_total();
+        if (!device) {
+            return std::numeric_limits<size_t>::max();
+        }
+        auto [free_bytes, total_bytes] = *device;
+        const size_t n = static_cast<size_t>(splat_data.size());
+        if (n == 0) {
+            return std::numeric_limits<size_t>::max();
+        }
+
+        size_t arena_bytes = 0;
+        size_t arena_recommit = 0;
+        {
+            const auto info = arena_info();
+            arena_bytes = std::max(info.arena_capacity + info.recommit_bytes, info.peak_usage);
+            arena_recommit = info.recommit_bytes;
+        }
+        const auto ledger = compute_training_state_ledger(splat_data, optimizer);
+        // Refines peak above the steady state; the grown model's refines
+        // must fit too. A refine already under way counts what it took so far.
+        const size_t transient = std::max({transient_bytes_per_gaussian,
+                                           g_refine_transient_per_gaussian.load(std::memory_order_relaxed),
+                                           refine_window_transient_bytes() / n});
+        const double per_gaussian =
+            static_cast<double>(ledger.total_bytes) / static_cast<double>(n) +
+            static_cast<double>(kStrategyBytesPerGaussian) +
+            kArenaViewVariance * static_cast<double>(arena_bytes) / static_cast<double>(n);
+
+        // The arena's growth headroom is needed while it commits in forward;
+        // a refine's transient comes after, with the arena already grown. The
+        // two never coexist, so the larger one is kept free, not their sum.
+        const double reserve =
+            static_cast<double>(kPoolReserveBytes + g_vram_extra_reserve.load(std::memory_order_relaxed));
+        const double arena_headroom =
+            static_cast<double>(lfs::core::raster_arena_growth_headroom_bytes(total_bytes));
+        // Arena memory a refine took under pressure is free only until the next frame.
+        double available = -static_cast<double>(arena_recommit);
+        // What the open refine holds is already part of its transient.
+        if (g_refine_window_open.load(std::memory_order_relaxed)) {
+            const size_t held = pool_info().pool_reserved_current;
+            const size_t start = g_refine_window_start.load(std::memory_order_relaxed);
+            available += static_cast<double>(held > start ? held - start : 0);
+        }
+        // Rows the viewer-shared parameter block keeps committed past live N
+        // need no new memory.
+        if (const auto& means = splat_data.means(); means.external_storage_kind() == "splat.exportable" &&
+                                                    means.capacity() > n) {
+            available += static_cast<double>(means.capacity() - n) *
+                         static_cast<double>(ledger.params_bytes) / static_cast<double>(n);
+        }
+        const auto rooms = [&](const size_t free_now) {
+            const double usable = static_cast<double>(free_now) + available - reserve;
+            return std::pair{usable - arena_headroom, usable - static_cast<double>(transient) * static_cast<double>(n)};
+        };
+        // Lazy tensors' commit-ahead pages serve only the tensor that mapped
+        // them, and a small growth leaves most of them unused, so they are not
+        // counted as free. Once they matter for the room left, hand them back.
+        auto [room_after_arena, room_after_refine] = rooms(free_bytes);
+        if (const size_t ahead = lfs::core::lazy_direct_storage_ahead_bytes();
+            ahead > 0 && std::min(room_after_arena, room_after_refine) < 2.0 * static_cast<double>(ahead)) {
+            lfs::core::release_lazy_direct_storage_ahead();
+            const auto after = device_free_total();
+            if (!after) {
+                return 0;
+            }
+            free_bytes = after->first;
+            std::tie(room_after_arena, room_after_refine) = rooms(free_bytes);
+        }
+        // Growth by d needs room - d * per_gaussian to stay positive: the
+        // reserve plus both the arena headroom and the grown model's refine
+        // transient remain free.
+        // Whichever bound is tighter sets what each new Gaussian costs.
+        const double refine_cost = per_gaussian + static_cast<double>(transient);
+        const bool refine_bound = room_after_refine / refine_cost < room_after_arena / per_gaussian;
+        const double cost = refine_bound ? refine_cost : per_gaussian;
+        const size_t limit = room_after_arena <= 0.0 || room_after_refine <= 0.0
+                                 ? 0
+                                 : static_cast<size_t>((refine_bound ? room_after_refine : room_after_arena) / cost);
+        store_densification_room(DensificationVramRoom{
+            .capacity = n + limit,
+            .bytes_per_gaussian = static_cast<size_t>(std::ceil(cost))});
+        return limit;
+    }
+
+    std::optional<DensificationVramRoom> densification_vram_room() {
+        const std::lock_guard lock(g_densification_room_mutex);
+        return g_densification_room;
+    }
+
+    void note_vram_growth_limit(const lfs::core::SplatData& splat_data,
+                                const AdamOptimizer* optimizer,
+                                const size_t granted,
+                                const size_t requested) {
+        // One line per 1% of model growth, not one per refine.
+        const size_t n = static_cast<size_t>(splat_data.size());
+        const size_t logged = g_vram_limit_logged_n.load(std::memory_order_relaxed);
+        if (n <= logged + logged / 100 && n + n / 100 >= logged) {
+            return;
+        }
+        g_vram_limit_logged_n.store(n, std::memory_order_relaxed);
+        const auto [free_bytes, total_bytes] = device_free_total().value_or(std::pair<size_t, size_t>{0, 0});
+        const size_t arena_bytes = arena_info().arena_capacity;
+        const size_t state_bytes = compute_training_state_ledger(splat_data, optimizer).total_bytes;
+        // Every per-Gaussian buffer (model, optimizer, strategy) is direct storage.
+        const size_t direct_bytes = std::max(
+            training_ops(lfs::core::default_gpu_backend()).session->direct_storage_live_bytes(), state_bytes);
+        const size_t pool_bytes = pool_info().pool_reserved_current;
+        const size_t used_bytes = total_bytes - std::min(free_bytes, total_bytes);
+        const size_t accounted = direct_bytes + arena_bytes + pool_bytes;
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        const size_t step_headroom = lfs::core::raster_arena_growth_headroom_bytes(total_bytes);
+        const size_t refine_plan = g_refine_transient_per_gaussian.load(std::memory_order_relaxed) * n;
+        LOG_INFO("VRAM limits densification at {} Gaussians (+{} of {} requested): Gaussians {:.2f} GiB "
+                 "({:.2f} GiB model and optimizer), rasterizer {:.2f} GiB, tensor pool {:.2f} GiB, "
+                 "other {:.2f} GiB, free {:.2f} GiB (keeps the larger of {:.2f} GiB step headroom and "
+                 "{:.2f} GiB refine peak, plus {:.2f} GiB reserve)",
+                 n, granted, requested, static_cast<double>(direct_bytes) / kGiB,
+                 static_cast<double>(state_bytes) / kGiB, static_cast<double>(arena_bytes) / kGiB,
+                 static_cast<double>(pool_bytes) / kGiB,
+                 static_cast<double>(used_bytes - std::min(used_bytes, accounted)) / kGiB,
+                 static_cast<double>(free_bytes) / kGiB, static_cast<double>(step_headroom) / kGiB,
+                 static_cast<double>(refine_plan) / kGiB,
+                 static_cast<double>(kPoolReserveBytes + g_vram_extra_reserve.load(std::memory_order_relaxed)) / kGiB);
+    }
+
+    size_t clamp_growth_to_vram(const size_t requested,
+                                const lfs::core::SplatData& splat_data,
+                                const AdamOptimizer* optimizer,
+                                const size_t transient_bytes_per_gaussian) {
+        if (requested == 0) {
+            return 0;
+        }
+        const size_t limit = vram_growth_limit(splat_data, optimizer, transient_bytes_per_gaussian);
+        if (limit >= requested) {
+            return requested;
+        }
+        note_vram_growth_limit(splat_data, optimizer, limit, requested);
+        return limit;
     }
 
     lfs::core::Tensor make_frozen_mask(
@@ -329,6 +683,14 @@ namespace lfs::training {
         split.roi_count = share > 0.0f ? std::min(split.roi_nnz, roi_first + (rest_quota - rest_first)) : roi_first;
         split.rest_count = share < 1.0f ? std::min(split.rest_nnz, rest_first + (roi_quota - roi_first)) : rest_first;
         return split;
+    }
+
+    bool reshapes_sampling_scores(const lfs::core::SplatData& splat_data,
+                                  const AdamOptimizer& optimizer) {
+        const auto& crop_mask = optimizer.crop_score_mask();
+        return splat_data.has_frozen_ranges() ||
+               (crop_mask.is_valid() && crop_mask.numel() > 0 && optimizer.cropbox_lr_scale() != 1.0f) ||
+               optimizer.crop_roi_rows().is_valid();
     }
 
     lfs::core::Tensor roi_share_sampling_weights(
@@ -576,18 +938,36 @@ namespace lfs::training {
         const size_t n_rows) {
         using namespace lfs::core;
         // densification_info is row-major [n_rows, N]: row k starts at offset k*N.
-        // Growing N cannot use append_zeros (that grows dim0). When shape already
-        // matches, reuse the buffer (caller zeros). On mismatch, allocate exact
-        // [n_rows,n]. Pre-sizing columns would break the rasterizer's row offsets.
-        const size_t rows = n_rows >= 2 ? n_rows : 2;
-        if (densification_info.is_valid() &&
-            densification_info.ndim() == 2 &&
-            densification_info.shape()[0] == rows &&
-            densification_info.shape()[1] == n) {
+        // One row is kept as [N]: the error row alone. Growing N cannot use
+        // append_zeros (that grows dim0). When shape already matches, reuse the
+        // buffer (caller zeros). On mismatch, allocate exact [n_rows,n] or [n].
+        // Pre-sizing columns would break the rasterizer's row offsets.
+        const bool error_row_only = n_rows == 1;
+        const size_t rows = error_row_only ? 1 : std::max<size_t>(n_rows, 2);
+        auto& info = densification_info;
+        if (info.is_valid() &&
+            (error_row_only ? info.ndim() == 1 && info.shape()[0] == n
+                            : info.ndim() == 2 && info.shape()[0] == rows && info.shape()[1] == n)) {
             return;
         }
-        densification_info = Tensor::zeros({rows, n}, device);
-        densification_info.set_name("splat.densification_info");
+        // The error row over the same splats survives a layout change: a
+        // resumed checkpoint can hold the last view before it was folded.
+        Tensor error_row;
+        if (info.is_valid() && info.dtype() == lfs::core::DataType::Float32 && n > 0) {
+            if (info.ndim() == 2 && info.shape()[0] >= 2 && info.shape()[1] == n)
+                error_row = info.slice(0, 1, 2).reshape({n});
+            else if (info.ndim() == 1 && info.shape()[0] == n)
+                error_row = info;
+        }
+        // Release the old buffer first so both never hold VRAM at once.
+        info = Tensor();
+        Tensor resized = error_row_only ? Tensor::zeros({n}, device) : Tensor::zeros({rows, n}, device);
+        if (error_row.is_valid()) {
+            Tensor destination = error_row_only ? resized : resized.slice(0, 1, 2).reshape({n});
+            destination.copy_(error_row);
+        }
+        info = std::move(resized);
+        info.set_name("splat.densification_info");
     }
 
     void ensure_score_buffer_inplace(
@@ -691,6 +1071,62 @@ namespace lfs::training {
             auto zeros = Tensor::zeros(TensorShape(dims), state->grad.device());
             state->grad.index_put_(indices, zeros);
         }
+    }
+
+    RefineRowSnapshot::RefineRowSnapshot(lfs::core::SplatData& splat, AdamOptimizer& optimizer,
+                                         const StrategyRows& strategy_rows)
+        : splat_(&splat) {
+        const auto record = [&](lfs::core::Tensor& tensor, const bool may_shrink) {
+            const bool valid = tensor.is_valid() && tensor.ndim() > 0;
+            tensors_.push_back({&tensor, valid ? tensor.size(0) : 0, valid, may_shrink});
+        };
+        for (auto* tensor : {&splat.means(), &splat.sh0(), &splat.shN(), &splat.shN_value_bounds(),
+                             &splat.scaling_raw(), &splat.rotation_raw(), &splat.opacity_raw()}) {
+            record(*tensor, false);
+        }
+        for (const auto type : AdamOptimizer::all_param_types()) {
+            if (auto* state = optimizer.get_state_mutable(type)) {
+                record(state->grad, false);
+                record(state->exp_avg, false);
+                record(state->joint_bounds, false);
+                state_sizes_.emplace_back(state, state->size);
+            }
+        }
+        // The deleted mask and strategy buffers may be dropped or rebuilt
+        // by a refine; one that did not exist before goes away again.
+        record(splat.deleted(), true);
+        if (strategy_rows) {
+            strategy_rows([&](lfs::core::Tensor& rows) { record(rows, true); });
+        }
+    }
+
+    bool RefineRowSnapshot::restore() const {
+        for (const auto& [tensor, rows, valid, may_shrink] : tensors_) {
+            const bool now_valid = tensor->is_valid() && tensor->ndim() > 0;
+            if (may_shrink) {
+                continue;
+            }
+            if (valid ? !now_valid || tensor->size(0) < rows || !tensor->is_contiguous() : now_valid) {
+                return false;
+            }
+        }
+        for (const auto& [tensor, rows, valid, may_shrink] : tensors_) {
+            const bool now_valid = tensor->is_valid() && tensor->ndim() > 0;
+            if (!valid) {
+                if (now_valid) {
+                    *tensor = lfs::core::Tensor();
+                }
+            } else if (now_valid && tensor->size(0) > rows && tensor->is_contiguous()) {
+                tensor->truncate_rows(rows);
+            }
+        }
+        for (const auto& [state, size] : state_sizes_) {
+            state->size = size;
+        }
+        splat_->reconcile_deleted_mask();
+        splat_->notify_deleted_mask_changed();
+        splat_->note_param_layout_changed();
+        return true;
     }
 
 } // namespace lfs::training

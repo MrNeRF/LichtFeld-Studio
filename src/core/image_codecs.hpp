@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -198,5 +199,9 @@ namespace lfs::core::image_codecs {
                                                int width, int height, int channels, int jpeg_quality,
                                                const std::optional<std::string>& comment, const AtomicFileOptions&,
                                                bool jpeg_full_chroma, std::span<const std::string_view> png_xmp);
+    // Encodes packed gray/gray-alpha/RGB/RGBA UINT8 pixels as PNG in memory.
+    // Empty when the layout does not match the pixel count or encoding fails.
+    LFS_IMAGE_CODECS_API std::vector<std::byte> encode_png(std::span<const std::uint8_t> pixels,
+                                                           int width, int height, int channels);
 
 } // namespace lfs::core::image_codecs

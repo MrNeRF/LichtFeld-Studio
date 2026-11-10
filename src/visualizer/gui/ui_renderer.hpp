@@ -3,11 +3,13 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 
 #include <RmlUi/Core/RenderInterface.h>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace lfs::vis {
@@ -67,6 +69,10 @@ namespace lfs::vis::gui {
                                          std::string_view name) const = 0;
         [[nodiscard]] virtual std::uint64_t previewTextureGeneration() const = 0;
         [[nodiscard]] virtual bool currentContextUsedPreviewTexture() const = 0;
+        // Render thread; the source identity is the complete revisioned preview URL.
+        [[nodiscard]] virtual PreviewTextureStatus previewTextureStatus(const std::string& source) const = 0;
+        // Resolves `preview://memory=` sources; decode workers receive only weak bytes.
+        virtual void setPreviewMemoryProvider(PreviewMemoryProvider provider) = 0;
         [[nodiscard]] virtual UiRendererMemoryStatistics memoryStatistics() const = 0;
     };
 

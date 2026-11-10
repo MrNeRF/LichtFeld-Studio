@@ -31,11 +31,11 @@ namespace lfs::core::internal {
             const auto* bounds = data<float>(*program.source_bounds);
             if (p.destination_format == ShFormat::Canonical) {
                 if (ids)
-                    sh_value_quant::decode_shN_u16_gathered_to_canonical(data<uint16_t>(source), bounds, ids, out, p.count, p.source_rows, p.source_rest, stream);
+                    sh_value_quant::decode_shN_u16_gathered_to_canonical(data<uint16_t>(source), bounds, ids, out, p.count, p.source_rows, p.source_rest, stream, p.destination_rest, p.match_cpu_rounding);
                 else
                     sh_value_quant::decode_shN_u16_range_to_canonical(data<uint16_t>(source), bounds, out, p.source_offset * p.destination_rest * 3, p.count * p.destination_rest * 3, p.source_rows, p.destination_rest, p.source_rest, stream);
             } else if (ids)
-                sh_value_quant::decode_shN_u16_gathered_to_float4(data<uint16_t>(source), bounds, ids, out, 0, p.count, p.source_rows, p.source_rest, stream);
+                sh_value_quant::decode_shN_u16_gathered_to_float4(data<uint16_t>(source), bounds, ids, out, 0, p.count, p.source_rows, p.source_rest, stream, p.match_cpu_rounding);
             else
                 sh_value_quant::decode_shN_u16_range_to_float4(data<uint16_t>(source), bounds, out, p.source_offset, p.count, p.source_rows, p.source_rest, stream, p.match_cpu_rounding);
         } else if (p.source_format == ShFormat::Float16) {

@@ -41,7 +41,8 @@ namespace lfs::vis {
 
     namespace op {
         class SceneSnapshot;
-    }
+        struct CameraMaskAssetSnapshot;
+    } // namespace op
 
     class LFS_VIS_API SceneManager {
     public:
@@ -113,6 +114,12 @@ namespace lfs::vis {
         // Service accessors (via service locator)
         TrainerManager* getTrainerManager() { return services().trainerOrNull(); }
         const TrainerManager* getTrainerManager() const { return services().trainerOrNull(); }
+        void setCameraMaskSnapshotCallback(std::function<std::shared_ptr<op::CameraMaskAssetSnapshot>(const core::Uuid&)> callback) {
+            camera_mask_snapshot_callback_ = std::move(callback);
+        }
+        [[nodiscard]] std::shared_ptr<op::CameraMaskAssetSnapshot> retainCameraMaskAsset(const core::Uuid& uuid) const {
+            return camera_mask_snapshot_callback_ ? camera_mask_snapshot_callback_(uuid) : nullptr;
+        }
         RenderingManager* getRenderingManager() { return services().renderingOrNull(); }
 
         void changeContentType(const ContentType& type);
@@ -529,6 +536,7 @@ namespace lfs::vis {
         std::mutex consolidated_compaction_mutex_;
         std::jthread consolidated_compaction_thread_;
         std::function<void(const std::optional<std::vector<uint8_t>>&)> import_license_callback_;
+        std::function<std::shared_ptr<op::CameraMaskAssetSnapshot>(const core::Uuid&)> camera_mask_snapshot_callback_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
 

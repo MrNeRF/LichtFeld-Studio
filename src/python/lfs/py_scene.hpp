@@ -13,6 +13,7 @@
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
 #include "visualizer/scene/point_cloud_updates.hpp"
+#include "visualizer/scene/external_preview.hpp"
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -253,6 +254,7 @@ namespace lfs::python {
         int32_t parent_id() const { return node().parent_id; }
         std::vector<int32_t> children() const { return node().children; }
         core::NodeType type() const { return node().type; }
+        bool read_only() const { return node().isExternalPreview(); }
 
         // Transform (special matrix conversion)
         void set_local_transform(nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
@@ -316,13 +318,13 @@ namespace lfs::python {
             const auto& live = node();
             if (!live.camera)
                 return std::nullopt;
-            return PyTensor(live.camera->R(), false);
+            return live.isExternalPreview() ? PyTensor(live.camera->R().clone()) : PyTensor(live.camera->R(), false);
         }
         std::optional<PyTensor> camera_T() const {
             const auto& live = node();
             if (!live.camera)
                 return std::nullopt;
-            return PyTensor(live.camera->T(), false);
+            return live.isExternalPreview() ? PyTensor(live.camera->T().clone()) : PyTensor(live.camera->T(), false);
         }
         std::optional<float> camera_focal_x() const {
             const auto& live = node();
@@ -335,6 +337,18 @@ namespace lfs::python {
             if (!live.camera)
                 return std::nullopt;
             return live.camera->focal_y();
+        }
+        std::optional<float> camera_center_x() const {
+            const auto& live = node();
+            if (!live.camera)
+                return std::nullopt;
+            return live.camera->center_x();
+        }
+        std::optional<float> camera_center_y() const {
+            const auto& live = node();
+            if (!live.camera)
+                return std::nullopt;
+            return live.camera->center_y();
         }
         std::optional<int> camera_width() const {
             const auto& live = node();
@@ -358,6 +372,8 @@ namespace lfs::python {
             return property().getattr(name);
         }
         void set(const std::string& name, nb::object value) {
+            if (node().isExternalPreview() && name != "visible")
+                throw std::runtime_error("External preview is read-only");
             if (name == "local_transform" && scene_->isNodeEffectivelyLocked(node().id))
                 return;
             property().setattr(name, value);
@@ -386,13 +402,13 @@ namespace lfs::python {
             nb::list result;
             for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
                                      "local_transform", "world_transform", "set_local_transform",
-                                     "gaussian_count", "centroid",
+                                     "gaussian_count", "centroid", "read_only",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "crop_polygon",
                                      "keyframe_data",
                                      "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
                                      "has_mask", "has_depth", "load_mask", "load_depth",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",
-                                     "camera_width", "camera_height",
+                                     "camera_center_x", "camera_center_y", "camera_width", "camera_height",
                                      "prop_info"}) {
                 result.append(attr);
             }
@@ -500,6 +516,12 @@ namespace lfs::python {
 
         // Node CRUD
         int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);
+        std::string create_external_preview(const std::string& name, const std::string& model_name);
+        bool upload_external_preview(std::shared_ptr<vis::ExternalPreviewUpdate> update);
+        void cancel_external_preview_upload();
+        bool apply_external_preview(const std::string& uuid, std::shared_ptr<vis::ExternalPreviewUpdate> update,
+                                    const std::string& cameras_label);
+        void remove_external_preview(const std::string& uuid);
         int32_t add_splat(const std::string& name,
                           const PyTensor& means,
                           const PyTensor& sh0,
@@ -620,7 +642,7 @@ namespace lfs::python {
         bool has_training_data() const { return scene_->hasTrainingData(); }
         bool is_point_cloud_modified() const { return scene_->isPointCloudModified(); }
         void set_point_cloud_modified(bool modified) { scene_->setPointCloudModified(modified); }
-        PyTensor scene_center() const;
+        std::optional<PyTensor> scene_center() const;
 
         // Counts
         size_t node_count() const { return scene_->getNodeCount(); }

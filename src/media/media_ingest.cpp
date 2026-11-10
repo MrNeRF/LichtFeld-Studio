@@ -52,6 +52,9 @@ namespace lfs::media {
             p.output_format = request.output_format;
             p.input_color = request.input_color;
             p.float_color_profile = request.float_color_profile;
+            for (const auto& segment : request.segments)
+                p.segments.push_back({segment.start, segment.end});
+            p.frame_written = request.frame_written;
             return p;
         }
         struct TrackingSink final : FrameSink {

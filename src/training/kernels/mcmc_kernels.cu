@@ -16,6 +16,8 @@
 #include <thrust/adjacent_difference.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 #include <thrust/scan.h>
 #include <thrust/scatter.h>
 #include <thrust/sequence.h>
@@ -55,19 +57,16 @@ namespace lfs::training::mcmc {
         LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
-    // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
-    __global__ void relocation_kernel(
-        const float* __restrict__ opacities,
-        const float* __restrict__ scales,
-        const int32_t* __restrict__ ratios,
+    // Equation (9) of "3D Gaussian Splatting as Markov Chain Monte Carlo": a
+    // Gaussian sampled n_idx times becomes n_idx copies that together render
+    // like the original.
+    __device__ __forceinline__ void relocated_opacity_scale(
+        const float source_opacity,
+        const float* source_scale,
+        const int n_idx,
         const float min_opacity,
-        float* __restrict__ new_opacities,
-        float* __restrict__ new_scales,
-        const size_t N) {
-
-        const size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= N)
-            return;
+        float& new_opacity,
+        float* new_scale) {
 
         constexpr float OPACITY_MIN = 1e-6f;
         constexpr float OPACITY_MAX = 1.0f - 1e-6f;
@@ -75,15 +74,13 @@ namespace lfs::training::mcmc {
         constexpr float COEFF_MAX = 1e6f;
         constexpr float SCALE_MIN = 1e-10f;
 
-        const int n_idx = ratios[idx];
-        const float opacity = fminf(fmaxf(opacities[idx], OPACITY_MIN), OPACITY_MAX);
+        const float opacity = fminf(fmaxf(source_opacity, OPACITY_MIN), OPACITY_MAX);
 
         // new_opacity = 1 - (1 - opacity)^(1/n_idx)
-        const float new_opacity = fminf(fmaxf(
-                                            1.0f - powf(1.0f - opacity, 1.0f / static_cast<float>(n_idx)),
-                                            fmaxf(OPACITY_MIN, min_opacity)),
-                                        OPACITY_MAX);
-        new_opacities[idx] = new_opacity;
+        new_opacity = fminf(fmaxf(
+                                1.0f - powf(1.0f - opacity, 1.0f / static_cast<float>(n_idx)),
+                                fmaxf(OPACITY_MIN, min_opacity)),
+                            OPACITY_MAX);
 
         // Compute denominator sum using pre-computed coefficients from __constant__ memory
         float denom_sum = 0.0f;
@@ -102,8 +99,24 @@ namespace lfs::training::mcmc {
         const float coeff = fminf(fmaxf(opacity / safe_denom, -COEFF_MAX), COEFF_MAX);
 
         for (int i = 0; i < 3; ++i) {
-            new_scales[idx * 3 + i] = fmaxf(fabsf(coeff * scales[idx * 3 + i]), SCALE_MIN);
+            new_scale[i] = fmaxf(fabsf(coeff * source_scale[i]), SCALE_MIN);
         }
+    }
+
+    __global__ void relocation_kernel(
+        const float* __restrict__ opacities,
+        const float* __restrict__ scales,
+        const int32_t* __restrict__ ratios,
+        const float min_opacity,
+        float* __restrict__ new_opacities,
+        float* __restrict__ new_scales,
+        const size_t N) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+        relocated_opacity_scale(opacities[idx], scales + idx * 3, ratios[idx], min_opacity,
+                                new_opacities[idx], new_scales + idx * 3);
     }
 
     void launch_relocation_kernel(
@@ -132,6 +145,88 @@ namespace lfs::training::mcmc {
             min_opacity,
             new_opacities,
             new_scales,
+            N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.relocation");
+    }
+
+    // Each copy row still holds its source's raw values. The relocated values
+    // go to the copy and to the source; copies of one source write the same
+    // values, and no thread reads a source row.
+    __global__ void relocate_copies_kernel(
+        const int64_t* __restrict__ src_indices,
+        const int64_t* __restrict__ copy_indices,
+        const int64_t first_copy,
+        const int32_t* __restrict__ ratios,
+        const float min_opacity,
+        float* __restrict__ scaling_raw,
+        float* __restrict__ opacity_raw,
+        const size_t n,
+        const size_t N) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= n)
+            return;
+
+        const int64_t src = src_indices[idx];
+        const int64_t copy = copy_indices ? copy_indices[idx] : first_copy + static_cast<int64_t>(idx);
+        if (src < 0 || src >= static_cast<int64_t>(N) || copy < 0 || copy >= static_cast<int64_t>(N)) {
+            return;
+        }
+
+        // Same expressions as SplatData::get_opacity(), get_scaling(), and
+        // Tensor::clamp/logit/log, so results match the tensor path bitwise.
+        const float source_opacity = 1.0f / (1.0f + expf(-opacity_raw[copy]));
+        float source_scale[3];
+        for (int i = 0; i < 3; ++i) {
+            source_scale[i] = expf(scaling_raw[copy * 3 + i]);
+        }
+        float new_opacity;
+        float new_scale[3];
+        relocated_opacity_scale(source_opacity, source_scale, ratios[idx], min_opacity, new_opacity, new_scale);
+
+        constexpr float LOGIT_EPS = 1e-7f;
+        new_opacity = fminf(fmaxf(new_opacity, min_opacity), 1.0f - LOGIT_EPS);
+        new_opacity = fminf(fmaxf(new_opacity, LOGIT_EPS), 1.0f - LOGIT_EPS);
+        const float raw_opacity = logf(new_opacity / (1.0f - new_opacity));
+        opacity_raw[copy] = raw_opacity;
+        opacity_raw[src] = raw_opacity;
+        for (int i = 0; i < 3; ++i) {
+            const float raw_scale = logf(new_scale[i]);
+            scaling_raw[copy * 3 + i] = raw_scale;
+            scaling_raw[src * 3 + i] = raw_scale;
+        }
+    }
+
+    void launch_relocate_copies(
+        const int64_t* src_indices,
+        const int64_t* copy_indices,
+        int64_t first_copy,
+        const int32_t* ratios,
+        float min_opacity,
+        float* scaling_raw,
+        float* opacity_raw,
+        size_t n,
+        size_t N,
+        void* stream) {
+
+        if (n == 0) {
+            return;
+        }
+
+        dim3 threads(256);
+        dim3 grid((n + threads.x - 1) / threads.x);
+
+        cudaStream_t cuda_stream = resolve_stream(stream);
+
+        relocate_copies_kernel<<<grid, threads, 0, cuda_stream>>>(
+            src_indices,
+            copy_indices,
+            first_copy,
+            ratios,
+            min_opacity,
+            scaling_raw,
+            opacity_raw,
+            n,
             N);
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.relocation");
     }
@@ -674,24 +769,175 @@ namespace lfs::training::mcmc {
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
     }
 
+    // Weight a row contributes to the CDF: excluded rows contribute nothing.
+    // Row i's weight floored like Tensor::clamp_min (NaN stays NaN), or 0
+    // when the row is excluded.
+    struct SampleableWeight {
+        const float* weights;
+        float min_weight;
+        const uint8_t* excluded;
+        __host__ __device__ float operator()(const int64_t i) const {
+            if (excluded && excluded[i]) {
+                return 0.0f;
+            }
+            const float weight = weights[i];
+            return isnan(weight) ? weight : fmaxf(weight, min_weight);
+        }
+    };
+
+    // Multinomial sampling from all N weights, skipping rows that cannot be sampled
+    __global__ void multinomial_sample_rows_kernel(
+        const SampleableWeight weight_of,
+        const float* __restrict__ cumsum,
+        size_t N,
+        size_t n_samples,
+        uint64_t seed,
+        int64_t* __restrict__ sampled_indices) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= n_samples)
+            return;
+
+        const float prob_sum = cumsum[N - 1];
+        if (prob_sum <= 0.0f) {
+            sampled_indices[idx] = 0;
+            return;
+        }
+
+        curandStatePhilox4_32_10_t state;
+        curand_init(seed, idx, 0, &state);
+
+        // Rescale small CDFs by an exact power of two so a positive draw
+        // stays normal under fast math and cannot select a leading zero weight.
+        const float probability_scale = prob_sum < 1.0f ? 0x1p64f : 1.0f;
+        const float u = curand_uniform(&state) * (prob_sum * probability_scale);
+
+        int64_t left = 0;
+        int64_t right = static_cast<int64_t>(N) - 1;
+        int64_t selected_idx = static_cast<int64_t>(N) - 1;
+
+        while (left <= right) {
+            const int64_t mid = (left + right) / 2;
+            if (cumsum[mid] * probability_scale >= u) {
+                selected_idx = mid;
+                right = mid - 1;
+            } else {
+                left = mid + 1;
+            }
+        }
+
+        // Tiles of the float scan round differently, so the CDF can step up
+        // by an ulp at a zero-weight row. Never return a row that cannot be
+        // sampled; the nearest sampleable neighbour owns that step.
+        const auto sampleable = [&](const int64_t i) {
+            return weight_of(i) > 0.0f;
+        };
+        if (!sampleable(selected_idx)) {
+            constexpr int64_t kMaxWalk = 64;
+            int64_t found = -1;
+            for (int64_t i = selected_idx + 1; i < static_cast<int64_t>(N) && i <= selected_idx + kMaxWalk; ++i) {
+                if (sampleable(i)) {
+                    found = i;
+                    break;
+                }
+            }
+            for (int64_t i = selected_idx - 1; found < 0 && i >= 0 && i >= selected_idx - kMaxWalk; --i) {
+                if (sampleable(i)) {
+                    found = i;
+                }
+            }
+            if (found >= 0) {
+                selected_idx = found;
+            }
+        }
+
+        sampled_indices[idx] = selected_idx;
+    }
+
+    bool launch_multinomial_sample_all(
+        const float* sampling_weights,
+        const float min_weight,
+        const uint8_t* excluded,
+        size_t N,
+        size_t n_samples,
+        uint64_t seed,
+        int64_t* sampled_indices,
+        void* stream) {
+
+        if (n_samples == 0 || N == 0)
+            return false;
+
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MCMC multinomial input exceeds CUB's int item-count limit");
+
+        const cudaStream_t cuda_stream = resolve_stream(stream);
+        // Home the scan temporary on the launch stream so the stream-aware
+        // pool cannot recycle it before the sampling kernel completes.
+        const lfs::core::CUDAStreamGuard stream_guard(cuda_stream);
+
+        auto cumsum_buf = lfs::core::Tensor::empty({N}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+
+        const auto scan = [&](const auto input) {
+            const auto inclusive_sum = [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes, input, cumsum_buf.ptr<float>(), static_cast<int>(N), cuda_stream);
+            };
+            cuda_scratch::CubWorkspace cub_workspace("cub::DeviceScan::InclusiveSum", cuda_stream, inclusive_sum);
+            cub_workspace.run(inclusive_sum);
+        };
+        const SampleableWeight weight_of{sampling_weights, min_weight, excluded};
+        if (excluded || min_weight != -std::numeric_limits<float>::infinity()) {
+            scan(thrust::make_transform_iterator(thrust::counting_iterator<int64_t>(0), weight_of));
+        } else {
+            scan(sampling_weights);
+        }
+
+        // Weights are finite and non-negative, so the total is positive
+        // exactly when some row can be sampled.
+        float total = 0.0f;
+        LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(&total, cumsum_buf.ptr<float>() + (N - 1), sizeof(float),
+                                           cudaMemcpyDeviceToHost, cuda_stream),
+                           "MCMC multinomial total readback");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "MCMC multinomial total sync");
+        if (!(total > 0.0f)) {
+            return false;
+        }
+
+        const dim3 sample_threads(256);
+        const dim3 sample_grid((n_samples + sample_threads.x - 1) / sample_threads.x);
+
+        multinomial_sample_rows_kernel<<<sample_grid, sample_threads, 0, cuda_stream>>>(
+            weight_of,
+            cumsum_buf.ptr<float>(),
+            N,
+            n_samples,
+            seed,
+            sampled_indices);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
+        return true;
+    }
+
     __global__ void max_error_and_zero_densification_kernel(
         float* __restrict__ error_max,
-        float* __restrict__ densification_info,
+        float* __restrict__ error_row,
+        float* __restrict__ weight_row,
         size_t N) {
 
         size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx >= N)
             return;
 
-        const float err = densification_info[N + idx];
+        const float err = error_row[idx];
         error_max[idx] = fmaxf(error_max[idx], err);
-        densification_info[idx] = 0.f;
-        densification_info[N + idx] = 0.f;
+        error_row[idx] = 0.f;
+        if (weight_row != nullptr)
+            weight_row[idx] = 0.f;
     }
 
     void launch_max_error_and_zero_densification(
         float* error_max,
-        float* densification_info,
+        float* error_row,
+        float* weight_row,
         size_t N,
         void* stream) {
 
@@ -703,8 +949,17 @@ namespace lfs::training::mcmc {
         cudaStream_t cuda_stream = resolve_stream(stream);
 
         max_error_and_zero_densification_kernel<<<grid, threads, 0, cuda_stream>>>(
-            error_max, densification_info, N);
+            error_max, error_row, weight_row, N);
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.max_error_and_zero_densif");
+    }
+
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
+        size_t N,
+        void* stream) {
+        // [2, N]: the weight row, then the error row.
+        launch_max_error_and_zero_densification(error_max, densification_info + N, densification_info, N, stream);
     }
 
 } // namespace lfs::training::mcmc

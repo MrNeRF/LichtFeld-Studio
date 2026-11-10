@@ -28,5 +28,7 @@ bool exercise_image_codec_exports() {
     const bool image = !codec::write_image_u8("invalid.png", nullptr, 1, 1, 3, 95, std::nullopt, error);
     const lfs::core::AtomicFileOptions options{.overwrite = false, .durable = false, .create_directories = false};
     const auto atomic = codec::write_image_u8(path, nullptr, 1, 1, 3, 95, std::nullopt, options);
-    return !avif_memory && !avif_file && codec::avif_encoder_available() && !codec::avif_encoder_version().empty() && jxl && !jxl_memory && !jxl_file && codec::jxl_encoder_version() > 0 && !exr_memory && !memory && !png_memory && !tiff_memory && original_jpeg && full_chroma_jpeg && png && image && !atomic && !error.empty();
+    const std::vector<std::uint8_t> pixels{0, 255};
+    const bool memory_png = !codec::encode_png(pixels, 2, 1, 1).empty();
+    return !avif_memory && !avif_file && codec::avif_encoder_available() && !codec::avif_encoder_version().empty() && jxl && !jxl_memory && !jxl_file && codec::jxl_encoder_version() > 0 && !exr_memory && !memory && !png_memory && !tiff_memory && original_jpeg && full_chroma_jpeg && png && image && !atomic && memory_png && !error.empty();
 }

@@ -20,6 +20,7 @@
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "noise_infill.hpp"
 #include "strategy_utils.hpp"
 #include "training/dataset.hpp"
 #include <algorithm>
@@ -128,7 +129,7 @@ namespace lfs::training {
             for (std::size_t dim = 1; dim < tensor.ndim(); ++dim) {
                 row_elements *= tensor.shape()[dim];
             }
-            return tensor.capacity() * row_elements * lfs::core::dtype_size(tensor.dtype());
+            return tensor.committed_rows() * row_elements * lfs::core::dtype_size(tensor.dtype());
         }
 
         void publish_required_allocated_pair(
@@ -535,7 +536,7 @@ namespace lfs::training {
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
-            resolve_mrnf_params(optimParams));
+            with_noise_outside_cap(resolve_mrnf_params(optimParams), _splat_data));
         if (_params->refine_every != optimParams.refine_every)
             LOG_INFO("MRNF: refining every {} steps instead of {} on the shortened schedule",
                      _params->refine_every, optimParams.refine_every);
@@ -870,12 +871,10 @@ namespace lfs::training {
                 lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
             }
             _refine_weight_max = Tensor();
-            _gumbel_scratch.release();
             _densify_n_scratch.release();
             reset_exchange_state();
             _topology_frozen = true;
             assert(!_refine_weight_max.is_valid());
-            assert(_gumbel_scratch.resident_bytes() == 0);
             assert(_densify_n_scratch.resident_bytes() == 0);
             Tensor::trim_memory_pool();
             publish_vram_attribution();
@@ -925,20 +924,12 @@ namespace lfs::training {
         publish_vram_attribution();
     }
 
-    void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
-        morton::permute_row_tensor(_refine_weight_max, perm);
-        if (_rendered_count.is_valid())
-            morton::permute_row_tensor(_rendered_count, perm);
-        morton::permute_row_tensor(_precomputed_edge_scores, perm);
-        morton::permute_row_tensor(_edge_score_sum, perm);
-        morton::permute_row_tensor(_free_mask, perm);
-        morton::permute_row_tensor(_exchange_importance_sum, perm);
-        morton::permute_row_tensor(_exchange_importance_peak, perm);
-        morton::permute_row_tensor(_exchange_birth, perm);
-        morton::permute_row_tensor(_exchange_window_impact_sum, perm);
-        morton::permute_row_tensor(_exchange_window_impact_peak, perm);
-        morton::permute_row_tensor(_far_field_mask, perm);
-        publish_mean_step_far_mask();
+    void MRNF::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
+        for (auto* rows : {&_refine_weight_max, &_rendered_count, &_precomputed_edge_scores, &_edge_score_sum,
+                           &_free_mask, &_exchange_importance_sum, &_exchange_importance_peak, &_exchange_birth,
+                           &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_far_field_mask}) {
+            visit(*rows);
+        }
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -955,6 +946,7 @@ namespace lfs::training {
         lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         LFS_VRAM_SCOPE("MRNF::refine");
+        const RefineVramWindow vram_window(*_splat_data);
         using namespace lfs::core;
         // q16 stays authoritative for the refine window (gather/scatter/append
         // re-encode only touched 256-splat blocks). IEEE-f16 still expands.
@@ -1082,7 +1074,6 @@ namespace lfs::training {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
-        _gumbel_scratch.release();
         _densify_n_scratch.release();
         publish_vram_attribution();
 
@@ -1261,35 +1252,9 @@ namespace lfs::training {
         if (count == 0) {
             return {};
         }
-        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-                       "MRNF growth exchange exceeds int32 rank capacity");
-        const auto ineligible = eligible.logical_not();
-        const auto primary_order = _exchange_importance_sum
-                                       .masked_fill(ineligible, std::numeric_limits<float>::infinity())
-                                       .sort(0, /*descending=*/false)
-                                       .second;
-        Tensor secondary_order;
-        if (_exchange_importance_peak.is_valid()) {
-            secondary_order = _exchange_importance_peak
-                                  .masked_fill(ineligible, std::numeric_limits<float>::infinity())
-                                  .sort(0, /*descending=*/false)
-                                  .second;
-        }
-        // A row's rank is its later position in the two orders; ineligible rows sort last.
-        // Float ranks are exact up to 2^24 rows; beyond that only near-ties reorder.
-        const auto positions = Tensor::arange(0.0f, static_cast<float>(n), 1.0f, Device::GPU);
-        const auto inverse_order = [&](const Tensor& order) {
-            auto ranks = Tensor::zeros({n}, Device::GPU, DataType::Float32);
-            ranks.index_put_(order, positions);
-            return ranks;
-        };
-        Tensor ranks = inverse_order(primary_order);
-        if (secondary_order.is_valid())
-            ranks = ranks.maximum(inverse_order(secondary_order));
-        const auto ranked_rows = ranks.masked_fill(ineligible, std::numeric_limits<float>::infinity())
-                                     .sort(0, /*descending=*/false)
-                                     .second;
-        return ranked_rows.slice(0, 0, count).contiguous();
+        Tensor victims = Tensor::empty({count}, Device::GPU, DataType::Int64);
+        mrnf_ops().rank_exchange_rows(_exchange_importance_sum, _exchange_importance_peak, eligible, victims);
+        return victims;
     }
 
     void MRNF::record_exchange_births(const lfs::core::Tensor& split_parents) {
@@ -1448,35 +1413,33 @@ namespace lfs::training {
     lfs::core::Tensor MRNF::sample_gumbel_topk(
         const lfs::core::Tensor& weights,
         const int k,
-        const uint64_t seed,
-        const size_t known_nnz) {
+        const uint64_t seed) {
         using namespace lfs::core;
         if (_topology_frozen || k <= 0 || !weights.is_valid() || weights.numel() == 0) {
             return {};
         }
 
         auto indices = Tensor::empty({static_cast<size_t>(k)}, Device::GPU, DataType::Int64);
+        // No persistent scratch: the sort buffers live only for this call.
         mrnf_ops().gumbel(
-            &_gumbel_scratch, weights, indices,
-            {.seed = seed, .known_nnz = known_nnz, .compact_sparse = true});
+            nullptr, weights, indices,
+            {.seed = seed, .known_nnz = 0, .compact_sparse = true});
         return indices;
     }
 
     lfs::core::Tensor MRNF::sample_with_roi_share(
         const lfs::core::Tensor& weights,
         const int k,
-        const uint64_t seed,
-        const size_t known_nnz) {
+        const uint64_t seed) {
         const auto split = split_growth_by_roi(*_optimizer, weights, k);
         if (!split)
-            return sample_gumbel_topk(weights, k, seed, known_nnz);
+            return sample_gumbel_topk(weights, k, seed);
         std::vector<lfs::core::Tensor> parts;
         if (split->roi_count > 0)
-            parts.push_back(sample_gumbel_topk(split->roi_weights, static_cast<int>(split->roi_count), seed,
-                                               static_cast<size_t>(split->roi_nnz)));
+            parts.push_back(sample_gumbel_topk(split->roi_weights, static_cast<int>(split->roi_count), seed));
         if (split->rest_count > 0)
             parts.push_back(sample_gumbel_topk(split->rest_weights, static_cast<int>(split->rest_count),
-                                               seed ^ 0x9e3779b97f4a7c15ull, static_cast<size_t>(split->rest_nnz)));
+                                               seed ^ 0x9e3779b97f4a7c15ull));
         if (parts.empty())
             return {};
         return parts.size() == 1 ? parts[0] : lfs::core::Tensor::cat(parts, 0);
@@ -1515,9 +1478,14 @@ namespace lfs::training {
             refine_candidates = refine_candidates.logical_and(trainable_mask);
         }
 
-        const int physical_budget = (_params->max_cap > 0)
-                                        ? std::max(0, _params->max_cap - static_cast<int>(current_active))
-                                        : INT_MAX;
+        // Free slots are reused in place; only rows appended past N need VRAM.
+        const size_t vram_budget = std::min<size_t>(
+            INT_MAX, (n - current_active) +
+                         vram_growth_limit(*_splat_data, _optimizer.get()));
+        const int cap_budget = (_params->max_cap > 0)
+                                   ? std::max(0, _params->max_cap - static_cast<int>(current_active))
+                                   : INT_MAX;
+        const int physical_budget = std::min(cap_budget, static_cast<int>(vram_budget));
         const int exchange_extra = static_cast<int>(std::min(
             exchange_quota,
             static_cast<size_t>(INT_MAX - physical_budget)));
@@ -1558,8 +1526,7 @@ namespace lfs::training {
             if (actual_replace > 0) {
                 // grow-only index/mask scratch (no per-refine driver alloc).
                 _densify_n_scratch.ensure_n(n, Device::GPU);
-                replace_inds = sample_with_roi_share(replace_weights, actual_replace, seed,
-                                                     static_cast<size_t>(selectable_replace));
+                replace_inds = sample_with_roi_share(replace_weights, actual_replace, seed);
                 actual_replace = replace_inds.is_valid() ? static_cast<int>(replace_inds.numel()) : 0;
                 if (actual_replace > 0) {
                     replace_mask = _densify_n_scratch.bool_a_view(n);
@@ -1573,19 +1540,24 @@ namespace lfs::training {
         if (iter < static_cast<int>(_params->grow_until_iter)) {
             above_threshold = refine_candidates;
             n_grow = std::max(0, desired_total - actual_replace);
+            if (physical_budget < cap_budget && n_grow > budget - actual_replace) {
+                note_vram_growth_limit(*_splat_data, _optimizer.get(),
+                                       static_cast<size_t>(std::max(0, budget - actual_replace)),
+                                       static_cast<size_t>(n_grow));
+            }
             n_grow = std::min(n_grow, budget - actual_replace);
         }
 
         if (n_grow > 0) {
             Tensor growth_weights = above_threshold * _refine_weight_max;
             if (edge_guidance.is_valid()) {
-                growth_weights = growth_weights * edge_guidance;
+                growth_weights.mul_(edge_guidance);
             }
 
             if (replace_mask.is_valid()) {
                 // Keep replacement and growth disjoint on device instead of
                 // deduplicating sampled indices on the host.
-                growth_weights = growth_weights.masked_fill(replace_mask, 0.0f);
+                growth_weights.masked_fill_(replace_mask, 0.0f);
             }
 
             // Growth nnz is data-dependent on replace_mask — second packed slot.
@@ -1594,8 +1566,7 @@ namespace lfs::training {
             const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
                 const int growth_budget = std::min(n_grow, selectable_growth);
-                growth_inds = sample_with_roi_share(growth_weights, growth_budget, seed + 1,
-                                                    static_cast<size_t>(selectable_growth));
+                growth_inds = sample_with_roi_share(growth_weights, growth_budget, seed + 1);
             }
         }
 
@@ -1790,7 +1761,6 @@ namespace lfs::training {
         assert(visibility.ndim() == 1 && visibility.numel() == n);
         assert(!active_mask.is_valid() || (active_mask.ndim() == 1 && active_mask.numel() == n));
         assert(!trainable_mask.is_valid() || (trainable_mask.ndim() == 1 && trainable_mask.numel() == n));
-        assert(!edge_guidance.is_valid() || (edge_guidance.ndim() == 1 && edge_guidance.numel() == n));
         auto w_view = _densify_n_scratch.f32_a_view(n);
         training_ops(default_gpu_backend()).mrnf->replace_parent_weights(opacities, visibility, active_mask, trainable_mask, edge_guidance, w_view);
         return w_view;
@@ -1854,6 +1824,7 @@ namespace lfs::training {
                 training_sh_ops().gather_swizzled(t, idx_i32, fresh, rows);
             } else if (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool) {
                 if (uint8_fill >= 0 && cap_floats > 0) {
+                    fresh.commit_rows(cap_floats);
                     training_sh_ops().fill_bytes(
                         fresh, cap_floats * sizeof(std::uint8_t),
                         static_cast<std::uint8_t>(uint8_fill));
@@ -2173,7 +2144,7 @@ namespace lfs::training {
             const auto host_counts = _refine_counts_dev.to_vector_int64();
             auto keep_indices = Tensor::empty({keep_budget}, Device::GPU, DataType::Int64);
             mrnf_ops().gumbel(
-                &_gumbel_scratch, opacities, keep_indices,
+                nullptr, opacities, keep_indices,
                 {.seed = seed,
                  .known_nnz = static_cast<size_t>(host_counts[2]),
                  .compact_sparse = true});
@@ -2456,7 +2427,7 @@ namespace lfs::training {
                                   ? std::min(static_cast<size_t>(std::max<int64_t>(0, int64_t{_params->max_cap} - static_cast<int64_t>(active_count()))),
                                              static_cast<size_t>(kBlobSeedCapacityFraction * _params->max_cap))
                                   : seeds.size();
-        const size_t count = std::min(seeds.size(), budget);
+        const size_t count = clamp_growth_to_vram(std::min(seeds.size(), budget), *_splat_data, _optimizer.get());
         if (count == 0) {
             return;
         }
@@ -2903,7 +2874,8 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(resolve_mrnf_params(params));
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
+            with_noise_outside_cap(resolve_mrnf_params(params), _splat_data));
         if (renderer_changed)
             reset_exchange_state();
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
@@ -2936,6 +2908,14 @@ namespace lfs::training {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
         }
+    }
+
+    void MRNF::restart_mean_lr() {
+        if (!_params)
+            return;
+        _mean_lr_unscaled = _params->means_lr;
+        refresh_decay_schedule_from_current_state();
+        sync_mean_learning_rate();
     }
 
     void MRNF::refresh_decay_schedule_from_current_state() {

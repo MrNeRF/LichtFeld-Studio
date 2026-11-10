@@ -26,6 +26,7 @@
 namespace lfs::core {
 
     namespace {
+        std::atomic<size_t> g_measured_frame_headroom{0};
 
         std::string format_bytes(size_t bytes) {
             constexpr double mib = 1024.0 * 1024.0;
@@ -59,6 +60,14 @@ namespace lfs::core {
         size_t query_device_free_bytes(MemoryDomain domain) { return query_backend_memory(domain, true).free_bytes; }
         size_t query_device_total_bytes(MemoryDomain domain) { return query_backend_memory(domain, false).total_bytes; }
     } // namespace
+
+    void set_measured_frame_headroom_bytes(const size_t bytes) noexcept {
+        g_measured_frame_headroom.store(bytes, std::memory_order_relaxed);
+    }
+
+    size_t measured_frame_headroom_bytes() noexcept {
+        return g_measured_frame_headroom.load(std::memory_order_relaxed);
+    }
 
     MemoryAllocationError::MemoryAllocationError(const AllocationFailure& failure)
         : std::runtime_error(std::format(

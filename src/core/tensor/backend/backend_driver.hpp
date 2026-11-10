@@ -67,6 +67,8 @@ namespace lfs::core::internal {
         // thread-scoped activation may also establish native thread state.
         virtual BackendActivationScope activation_scope() const noexcept { return BackendActivationScope::Process; }
         virtual MemoryInfo memory_info(bool include_pool_stats);
+        // Restarts the allocator pool's high-water marks; false when it keeps none to restart.
+        virtual bool reset_pool_peaks(bool /*used*/, bool /*reserved*/) { return false; }
         virtual MemoryInfo pressure_memory_info(bool free_query);
         virtual bool pressure_recovery_blocked() const noexcept { return false; }
         virtual void register_pressure_clients(MemoryPressureCoordinator&) {}

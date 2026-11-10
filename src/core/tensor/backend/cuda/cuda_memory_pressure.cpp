@@ -5,6 +5,8 @@
 #include "core/alloc_counter.hpp"
 #include "core/cuda_error.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/cuda_allocation.hpp"
+#include "runtime/lazy_device_storage.hpp"
 #include "runtime/memory_pool.hpp"
 #include <cuda_runtime.h>
 #include <format>
@@ -178,6 +180,17 @@ namespace lfs::core::internal {
                 return ReclaimResult{};
             },
         });
+        // Pages lazy tensors mapped past their rows; growth maps them again.
+        coordinator.register_client(PressureClient{
+            .name = "lazy-commit-ahead",
+            .priority = 15,
+            .domain = MemoryDomain::CudaDevice,
+            .affinity = PressureAffinity::ImmediateThreadSafe,
+            .estimate = [](const PressureRequest&) -> size_t {
+                return LazyDeviceStorage::committed_ahead_bytes_total();
+            },
+            .shrink = [](const PressureRequest&) { return ReclaimResult{.logical_bytes_released = LazyDeviceStorage::release_ahead_total()}; },
+        });
         coordinator.register_client(PressureClient{
             .name = "pinned-host-cache",
             .priority = 10,
@@ -195,3 +208,42 @@ namespace lfs::core::internal {
     }
     void record_pressure_breadcrumb() { record_cuda_breadcrumb("memory-pressure.episode", __FILE__, __LINE__); }
 } // namespace lfs::core::internal
+namespace lfs::core {
+    void* allocate_device_scratch(const size_t bytes, const cudaStream_t stream, const bool stream_ordered,
+                                  const std::string_view label) {
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        const auto try_allocate = [&](void** const ptr) {
+            *ptr = nullptr;
+            if (bytes > 0 && coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                return cudaErrorMemoryAllocation;
+            }
+            return stream_ordered ? cudaMallocAsync(ptr, bytes, stream) : cudaMalloc(ptr, bytes);
+        };
+        void* ptr = nullptr;
+        cudaError_t status = try_allocate(&ptr);
+        if (status == cudaErrorMemoryAllocation) {
+            (void)cudaGetLastError();
+            int device = 0;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                (void)cudaGetLastError();
+            }
+            const AllocationFailure failure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .device = device,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = "cuda.scratch",
+                .operation = "cuda.scratch_allocate",
+                .native_error = cudaErrorMemoryAllocation,
+            };
+            (void)coordinator.relieve_and_should_retry(failure);
+            status = try_allocate(&ptr);
+            if (status == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+                throw MemoryAllocationError(failure);
+            }
+        }
+        LFS_CUDA_CHECK_MSG(status, "CUDA scratch allocation '{}' ({} bytes)", label, bytes);
+        return ptr;
+    }
+} // namespace lfs::core

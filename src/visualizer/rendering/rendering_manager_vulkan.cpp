@@ -1121,7 +1121,8 @@ namespace lfs::vis {
                     vulkanViewRenderState(*view).external_viewport_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
                     vulkanViewRenderState(*view).external_viewport_image_generation = 0;
                     view->vulkan_viewport_image_size_ = {};
-                    vulkanViewRenderState(*view).mesh_frame = {};
+                    // The mesh frame borrows a depth view from the same renderer output ring.
+                    clearVulkanMeshFrame(*view);
                     vulkanViewRenderState(*view).viewport_interop_.setSceneImage({}, {}, false, 0);
                     vulkanViewRenderState(*view).viewport_interop_.clearSplitRightImage();
                     vulkanViewRenderState(*view).viewport_interop_.clearDepthBlitImage();
@@ -1138,6 +1139,8 @@ namespace lfs::vis {
             }
             if (view_state.frame_lifecycle_service_.handleModelChange(model_ptr, view_state.viewport_artifact_service_, model_source).changed) {
                 clearViewportImageState(view_state);
+                // The mesh frame borrows a depth view from the renderer's output ring.
+                clearVulkanMeshFrame(view_state);
                 view_state.last_logged_vksplat_render_error_.clear();
                 view_state.viewport_artifact_service_.clearViewportOutput();
                 markViewDirty(context.view, DirtyFlag::ALL, lfs::vis::FrameReason::SceneChange);
@@ -3544,9 +3547,11 @@ namespace lfs::vis {
             clearVulkanMeshFrame(view_state);
         }
 
-        if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
+        const bool publish_gpu_pass =
+            (rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
-             pending_split_view.enabled)) {
+             pending_split_view.enabled);
+        if (publish_gpu_pass) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_split_mesh_panels(gpu_mesh_frame);
 
@@ -3594,15 +3599,8 @@ namespace lfs::vis {
         }
         render_lock.reset();
 
-        const bool has_gpu_only_pass =
-            !frame_ctx.scene_state.meshes.empty() ||
-            environmentBackgroundEnabled(frame_settings) ||
-            pending_split_view.enabled;
-
-        if (!rendered_image && has_gpu_only_pass) {
-            if (pending_split_view.enabled || render_error.empty()) {
-                view_state.vksplat_stale_frame_guard_.onSuccess();
-            }
+        if (!rendered_image && publish_gpu_pass) {
+            view_state.vksplat_stale_frame_guard_.onSuccess();
             clearViewportImageState(view_state, render_size, false);
             view_state.vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};

@@ -1936,14 +1936,19 @@ namespace lfs::io {
             return false;
         }
 
+        // Points2D lines (X Y POINT3D_ID ...) read as numbers too; a header has integer ids and an image name.
+        const auto is_id = [](const std::string& token) {
+            return !token.empty() && std::ranges::all_of(token, [](const unsigned char c) { return std::isdigit(c); });
+        };
         std::istringstream iss(line);
-        uint32_t image_id = 0;
+        std::string image_id;
         float qvec[4]{};
         float tvec[3]{};
-        uint32_t camera_id = 0;
+        std::string camera_id;
         std::string name;
         if (!(iss >> image_id >> qvec[0] >> qvec[1] >> qvec[2] >> qvec[3] >>
-              tvec[0] >> tvec[1] >> tvec[2] >> camera_id)) {
+              tvec[0] >> tvec[1] >> tvec[2] >> camera_id) ||
+            !is_id(image_id) || !is_id(camera_id)) {
             return false;
         }
         // Integer reads stop at a '.', so a POINTS2D line such as

@@ -23,11 +23,13 @@ namespace lfs::vis {
         VideoExport,
         Mesh2Splat,
         SplatSimplify,
+        CameraSelection,
         ProjectWrite,
         ProjectOpen,
         DatasetEmbed,
         Collision,
         AprilTagScan,
+        AssistedMask,
     };
 
     enum class JobStatus : std::uint8_t {

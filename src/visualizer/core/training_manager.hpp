@@ -12,6 +12,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "io/session_chapters.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include "training/training_cropbox_mask.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
@@ -146,9 +147,8 @@ namespace lfs::vis {
         // State machine access
         [[nodiscard]] const TrainingStateMachine& getStateMachine() const { return state_machine_; }
         [[nodiscard]] bool canPerform(TrainingAction action) const;
-        [[nodiscard]] std::string_view getActionBlockedReason(TrainingAction action) const {
-            return state_machine_.getActionBlockedReason(action);
-        }
+        [[nodiscard]] std::string_view getActionBlockedReason(TrainingAction action) const;
+        [[nodiscard]] std::string_view getResourceBlockedReason() const;
 
         // State queries (delegate to the state machine). getState() overlays
         // a stored, not-yet-hydrated project session as Paused or Finished.
@@ -187,6 +187,8 @@ namespace lfs::vis {
         int getTotalIterations() const;
         int getNumSplats() const;
         int getMaxGaussians() const;
+        // VRAM densification can still grow into, while a trainer runs.
+        std::optional<lfs::training::DensificationVramRoom> getDensificationVramRoom() const;
         std::vector<size_t> getSaveSteps() const;
         void setSaveSteps(std::vector<size_t> save_steps);
         const char* getStrategyType() const;
@@ -272,6 +274,8 @@ namespace lfs::vis {
     private:
         // Rejection message when the training model node streams its splats.
         [[nodiscard]] std::optional<std::string> streamedTrainingModelReason() const;
+
+        void notifyUnusedCameraMasks();
 
         struct TrainingCompletionData {
             int iteration = 0;

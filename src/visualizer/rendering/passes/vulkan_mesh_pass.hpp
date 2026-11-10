@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -51,7 +52,8 @@ namespace lfs::vis {
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
                                 VkFormat depth_stencil_format,
-                                std::shared_ptr<SharedViewportGpuAssets> shared_assets = {});
+                                std::shared_ptr<SharedViewportGpuAssets> shared_assets = {},
+                                std::function<void()> collision_wake = {});
 
         // Upload any new / changed mesh GPU buffers into the shared (or private)
         // asset cache. Idempotent — caches by (MeshData::id, generation). Per-view

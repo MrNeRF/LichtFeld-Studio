@@ -412,7 +412,9 @@ int main(int argc, char* argv[]) {
     const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
     // CLI modes return here without the viewer's explicit GPU teardown. Drain
-    // their backends before validation layers and driver libraries are unloaded.
+    // their backends before validation layers and driver libraries are unloaded:
+    // static destruction is too late (on Windows the CUDA runtime has unloaded by
+    // then, and each release it refuses is reported as a failure).
     // Licht embedding and its help path never initialize a GPU; teardown probes CUDA.
     if (!cpu_only_licht_mode)
         lfs::core::teardown_gpu_before_exit();

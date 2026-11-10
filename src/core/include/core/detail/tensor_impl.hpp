@@ -498,6 +498,27 @@ namespace lfs::core {
     static_assert(std::is_trivial_v<GpuStorageDescriptor>);
     static_assert(std::is_standard_layout_v<GpuStorageDescriptor>);
 
+    namespace internal {
+        // Device storage whose capacity is a reservation: only the prefix a
+        // tensor has grown into is backed (zeroed, ordered on `stream`), so a
+        // reserve for a large capacity costs nothing until the rows exist.
+        // Growth maps new pages behind the same address: no copy and no
+        // pointer change. A backend that backs every allocation in full
+        // returns no reservation (TensorAllocationRequest::committed_bytes).
+        class ReservedDeviceStorage {
+        public:
+            virtual ~ReservedDeviceStorage() = default;
+            [[nodiscard]] virtual void* data() const noexcept = 0;
+            // Backs [0, bytes). Throws MemoryAllocationError when the device
+            // is out of memory.
+            virtual void commit(std::size_t bytes, cudaStream_t stream) = 0;
+            [[nodiscard]] virtual std::size_t committed_bytes() const = 0;
+            // StorageRef allocation flags (accounting kind, label); the
+            // reservation records its committed bytes itself.
+            [[nodiscard]] virtual std::uint32_t storage_flags() const noexcept = 0;
+        };
+    } // namespace internal
+
     struct StorageMeta {
         GpuBackend backend = GpuBackend::CUDA;
         GpuStorageDescriptor gpu_descriptor{};
@@ -511,6 +532,9 @@ namespace lfs::core {
         std::shared_ptr<void> external_owner;
         mutable std::mutex vulkan_interop_mutex;
         mutable std::unordered_map<void*, std::shared_ptr<void>> vulkan_interop_owners;
+        // Physical backing of a reserved capacity larger than the rows (see
+        // Tensor::commit_rows); empty when the whole capacity is backed.
+        std::weak_ptr<internal::ReservedDeviceStorage> reserved_storage;
         // Exportable provenance lives on TensorState. Region views share this
         // descriptor (Vulkan buffer, timeline) and must not share that identity.
     };
@@ -570,9 +594,12 @@ namespace lfs::core {
     }
     LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
 
+    struct LazyDeviceStorage;
+
     class LFS_CORE_API Tensor {
     private:
         friend struct internal::LazyIrTensorAccess;
+        friend struct LazyDeviceStorage;
         friend class TensorLeaf;
         friend void pin_operands(std::initializer_list<const Tensor*> tensors);
         friend bool internal::shares_storage(const Tensor& left, const Tensor& right);
@@ -1392,6 +1419,16 @@ namespace lfs::core {
         static std::size_t cuda_direct_storage_live_bytes();
         static std::size_t vulkan_external_storage_live_bytes();
 
+        // Backs rows [0, rows) of the reserved capacity with zeroed device memory.
+        // zeros_direct and reserve commit only the logical rows when the backend
+        // can reserve without backing; every write past shape()[0] must commit
+        // first. append_zeros, append_gather and the in-place cat do so. The zero
+        // fill is ordered on stream(). Throws MemoryAllocationError when the
+        // device is out of memory.
+        void commit_rows(size_t rows) const;
+        // Rows backed by device memory: capacity() unless the storage is a reservation.
+        [[nodiscard]] size_t committed_rows() const;
+
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"
         void reserve(size_t new_capacity);
@@ -2009,6 +2046,10 @@ namespace lfs::core {
          * @return reference to this tensor (for chaining)
          */
         Tensor& append_zeros(size_t n_rows);
+
+        // Drops the rows past n_rows without freeing or moving them; append_zeros
+        // grows into them again. Undoes appends that a failed mutation left behind.
+        Tensor& truncate_rows(size_t n_rows);
 
         // Lazy indexing operations (returns expression template)
         auto gather_lazy(const Tensor& indices) const -> PermutationExpr<TensorLeaf, TensorLeaf>;

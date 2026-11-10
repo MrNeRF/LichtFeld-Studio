@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/transforms.hpp"

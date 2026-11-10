@@ -152,6 +152,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/node_canvas_layout.cpp
         gui/node_canvas_routing.cpp
         gui/async_task_manager.cpp
+        # SAM2.1 assisted masking runs on CUDA streams; other builds report it as unsupported.
+        $<$<BOOL:${LFS_HAS_CUDA}>:gui/assisted_masking.cpp>
+        $<$<NOT:$<BOOL:${LFS_HAS_CUDA}>>:gui/assisted_masking_unsupported.cpp>
         gui/gallery_scene_publication.cpp
         gui/bounds_gizmo.cpp
         gui/rotation_gizmo.cpp
@@ -332,12 +335,13 @@ if(LFS_OPENXR_BUILD)
 endif()
 
 target_link_libraries(lfs_visualizer
+        PUBLIC
+        lfs_preprocessing
         PRIVATE
         lfs_core
         lfs_diagnostics
         lfs_video
         lfs_geometry
-        lfs_preprocessing
         lfs_io
         lfs_rendering_tensor
         $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>

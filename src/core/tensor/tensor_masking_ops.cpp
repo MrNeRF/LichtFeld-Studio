@@ -1891,46 +1891,26 @@ namespace lfs::core {
 
         // Special case for 1D tensors
         if (n_dims == 1) {
-            // Allocate MAXIMUM size to prevent buffer overflow from Thrust/CUB mismatch
+            // count_nonzero and the selection use the same `!= 0` predicate, so
+            // the result holds exactly `count` indices. A numel()-sized buffer
+            // kept 8 bytes per input element alive for a sparse mask.
             auto temp = internal::allocate_like(
-                *this, TensorShape{numel()}, DataType::Int64);
-            size_t actual_count = count; // Start with Thrust's count
+                *this, TensorShape{count}, DataType::Int64);
 
             if (device_ == Device::GPU) {
-                const size_t selection_count = count;
-                if (is_bool_like(dtype_)) {
-                    actual_count = internal::backend_ops_for(*this).nonzero_bool(
-                        internal::storage_ref(*this), internal::storage_ref(temp),
-                        internal::MaskProgram{
-                            .count = numel(),
-                            .selected_count = selection_count,
-                        },
-                        internal::ExecContext{stream()});
-                } else {
-                    actual_count = internal::backend_ops_for(*this).nonzero(
-                        internal::storage_ref(*this), internal::storage_ref(temp),
-                        internal::MaskProgram{
-                            .count = numel(),
-                            .selected_count = selection_count,
-                        },
-                        internal::ExecContext{stream()});
-                }
-
-                // DEBUG: Check count mismatch
-                if (actual_count != count) {
-                    LOG_DEBUG("nonzero() count mismatch: Thrust={}, CUB={}, numel={}", count, actual_count, numel());
-                }
-
-                // Slice to actual size - slice is [start, end) exclusive on end
-                if (actual_count < numel()) {
-                    if (actual_count > 0) {
-                        temp = temp.slice(0, 0, actual_count);
-                    } else {
-                        temp = internal::allocate_like(
-                            *this, TensorShape{0}, DataType::Int64);
-                    }
-                }
-                // No sync - tensor operation
+                const internal::MaskProgram program{
+                    .count = numel(),
+                    .selected_count = count,
+                };
+                const size_t selected =
+                    is_bool_like(dtype_)
+                        ? internal::backend_ops_for(*this).nonzero_bool(
+                              internal::storage_ref(*this), internal::storage_ref(temp), program,
+                              internal::ExecContext{stream()})
+                        : internal::backend_ops_for(*this).nonzero(
+                              internal::storage_ref(*this), internal::storage_ref(temp), program,
+                              internal::ExecContext{stream()});
+                LFS_ASSERT_MSG(selected == count, "nonzero selected a different count than count_nonzero");
             } else {
                 int64_t* indices = reinterpret_cast<int64_t*>(temp.data_ptr());
                 size_t write_idx = 0;
@@ -1958,22 +1938,11 @@ namespace lfs::core {
                     }
                 }
 
-                // Update actual_count from write_idx (CPU path)
-                actual_count = write_idx;
+                LFS_ASSERT_MSG(write_idx == count, "nonzero selected a different count than count_nonzero");
             }
 
-            // Slice to actual size (same as CUDA path does at lines 948-954)
-            if (actual_count < numel()) {
-                if (actual_count > 0) {
-                    temp = temp.slice(0, 0, actual_count);
-                } else {
-                    temp = internal::allocate_like(
-                        *this, TensorShape{0}, DataType::Int64);
-                }
-            }
-
-            // Reshape to (actual_count, 1) to match PyTorch
-            return temp.reshape({static_cast<int>(actual_count), 1});
+            // Reshape to (count, 1) to match PyTorch
+            return temp.reshape({static_cast<int>(count), 1});
         }
 
         // Multi-dimensional case
@@ -2465,6 +2434,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(new_size <= state_->capacity,
                        std::format("append_gather needs capacity {}, but only {} is reserved",
                                    new_size, state_->capacity));
+        commit_rows(new_size);
 
         // Calculate row size (all elements in dims 1+)
         size_t row_size = 1;
@@ -2589,6 +2559,7 @@ namespace lfs::core {
                 "append_zeros() requires sufficient capacity: current={}, n_rows={}, new_size={}, capacity={}",
                 current_size, n_rows, new_size, state_->capacity));
         }
+        commit_rows(new_size);
 
         // Calculate row size in elements
         size_t row_size = 1;
@@ -2663,6 +2634,24 @@ namespace lfs::core {
         LOG_DEBUG("append_zeros: grew tensor from {} to {} rows (capacity: {})",
                   state_->logical_size - n_rows, state_->logical_size, state_->capacity);
 
+        return *this;
+    }
+
+    Tensor& Tensor::truncate_rows(const size_t n_rows) {
+        materialize_if_deferred();
+        LFS_ASSERT_MSG(is_valid() && shape_.rank() > 0 && n_rows <= shape_[0] && is_contiguous(),
+                       std::format("truncate_rows({}) needs a contiguous tensor with at least that many rows "
+                                   "(shape={})",
+                                   n_rows, shape_.str()));
+        if (n_rows == shape_[0]) {
+            return *this;
+        }
+        if (state_->logical_size > 0) {
+            state_->logical_size = n_rows;
+        }
+        auto new_shape = shape_.dims();
+        new_shape[0] = n_rows;
+        shape_ = TensorShape(new_shape);
         return *this;
     }
 

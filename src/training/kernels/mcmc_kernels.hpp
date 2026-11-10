@@ -43,6 +43,31 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
+     * Relocation - Equation (9) from "3D Gaussian Splatting as Markov Chain Monte Carlo"
+     *
+     * Each copy row holds a copy of its source row. Recomputes opacity and
+     * scale for the number of times the source was sampled and writes them,
+     * raw, to both the copy and the source. Requires init_relocation_coefficients().
+     *
+     * @param src_indices [n] - Source row of each copy
+     * @param copy_indices [n] - Copy rows; nullptr means first_copy + i
+     * @param ratios [n] - Times each copy's source was sampled (int32)
+     * @param scaling_raw [N, 3] - Raw scales (modified in-place)
+     * @param opacity_raw [N] or [N, 1] - Raw opacities (modified in-place)
+     */
+    void launch_relocate_copies(
+        const int64_t* src_indices,
+        const int64_t* copy_indices,
+        int64_t first_copy,
+        const int32_t* ratios,
+        float min_opacity,
+        float* scaling_raw,
+        float* opacity_raw,
+        size_t n,
+        size_t N,
+        void* stream = nullptr);
+
+    /**
      * Fused RNG, covariance transform, and means update.
      * Honors frozen_mask. The seed controls the curand sequence.
      */
@@ -188,6 +213,33 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
+     * Multinomial sampling of row indices from all sampling weights (no gather)
+     *
+     * Samples from all N weights. Relocation passes its dead rows as
+     * `excluded` instead of compacting the alive rows into an index list.
+     *
+     * @param sampling_weights [N] - Sampling probabilities (full array), finite and >= 0
+     * @param min_weight - Floor applied to each weight as it is read, like
+     *                     Tensor::clamp_min (-inf: weights are used as given)
+     * @param excluded [N] - Optional; nonzero rows are never sampled (nullptr: none)
+     * @param N - Number of Gaussians
+     * @param n_samples - Number of samples to draw
+     * @param seed - Random seed for sampling
+     * @param sampled_indices [n_samples] - Output: sampled indices
+     * @param stream - CUDA stream
+     * @return false, with nothing sampled, when no row has a positive weight
+     */
+    [[nodiscard]] bool launch_multinomial_sample_all(
+        const float* sampling_weights,
+        float min_weight,
+        const uint8_t* excluded,
+        size_t N,
+        size_t n_samples,
+        uint64_t seed,
+        int64_t* sampled_indices,
+        void* stream = nullptr);
+
+    /**
      * fold densification error row into running max and zero the
      * full [2,N] densification buffer in one pass (replaces max + zero_).
      *
@@ -196,6 +248,18 @@ namespace lfs::training::mcmc {
     void launch_max_error_and_zero_densification(
         float* error_max,
         float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
+    /**
+     * fold densification error row into running max and zero the
+     * densification rows in one pass (replaces max + zero_). Only the error
+     * row is maxed; the weight row, when kept, is only cleared.
+     */
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* error_row,
+        float* weight_row,
         size_t N,
         void* stream = nullptr);
 

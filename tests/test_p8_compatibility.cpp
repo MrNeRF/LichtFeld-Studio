@@ -205,10 +205,10 @@ namespace {
             ProjectReader::classify(supported, v1);
         EXPECT_EQ(classification.state, OpenState::Open);
 
-        // Bit 13 is the first bit this build does not implement, so the default
-        // reader refuses it; bits 10-12 are covered by their own feature tests.
-        for (const int capability_gate : {0, 9, 13}) {
-            const auto reader_options = capability_gate == 13 ? ReaderOptions{} : v1;
+        // Bit 14 is the first bit this build does not implement, so the default
+        // reader refuses it; bits 10-13 are covered by their own feature tests.
+        for (const int capability_gate : {0, 9, 14}) {
+            const auto reader_options = capability_gate == 14 ? ReaderOptions{} : v1;
             const auto newer = temporary.path / std::format("newer-{}.licht", capability_gate);
             CommitOptions options{
                 .kind = CommitKind::Explicit,

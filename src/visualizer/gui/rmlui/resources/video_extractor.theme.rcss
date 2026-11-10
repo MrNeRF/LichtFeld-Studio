@@ -23,3 +23,17 @@ body,
 .status-section--warning .status-text {
     color: @{warning};
 }
+
+.timeline-segment {
+    background-color: @{alpha(primary,0.15)};
+    border-color: @{alpha(primary,0.55)};
+}
+
+.timeline-segment-remove {
+    color: @{text};
+    background-color: @{alpha(surface,0.85)};
+}
+
+.timeline-segment-remove:hover {
+    color: @{error};
+}

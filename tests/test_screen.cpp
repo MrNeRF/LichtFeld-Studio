@@ -679,6 +679,7 @@ namespace lfs::vis::screen {
         s.show_center_markers = true;
         s.show_camera_frustums = true;
         s.camera_frustum_scale = 0.5f;
+        s.hide_disabled_camera_frustums = true;
         s.show_pivot = true;
         s.split_view_mode = SplitViewMode::GTComparison;
         s.gt_comparison_mode = GTComparisonMode::Depth;

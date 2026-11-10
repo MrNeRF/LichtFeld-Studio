@@ -10,6 +10,7 @@
 #include "core/provenance.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -482,6 +483,12 @@ namespace lfs::vis::gui {
                                   "Preparing scene for upload"))
                 throw std::runtime_error("Scene preparation canceled.");
             auto& published = request.nodes[i];
+            if (auto& live = published.snapshot; live.data && live.row_count == static_cast<size_t>(live.data->size())) {
+                if (auto without_noise = core::without_noise_infill(*live.data)) {
+                    live.row_count = without_noise->size();
+                    live.data = std::make_shared<core::SplatData>(std::move(*without_noise));
+                }
+            }
             // Metadata-only DSRC snapshots never need tensors. Decode one node
             // at a time when its metadata is absent or its encoding must change.
             std::shared_ptr<core::SplatData> loaded_payload;
@@ -491,10 +498,13 @@ namespace lfs::vis::gui {
                     if (const auto backend = core::gpu_backend_of(published.snapshot.data->means_raw()))
                         completion.include(*backend);
                 if (published.load_payload) {
-                    if (!loaded_payload)
+                    if (!loaded_payload) {
                         loaded_payload = published.load_payload(completion);
-                    if (!loaded_payload)
-                        throw std::runtime_error("Embedded asset is not splat data.");
+                        if (!loaded_payload)
+                            throw std::runtime_error("Embedded asset is not splat data.");
+                        if (auto without_noise = core::without_noise_infill(*loaded_payload))
+                            loaded_payload = std::make_shared<core::SplatData>(std::move(*without_noise));
+                    }
                     if (const auto backend = core::gpu_backend_of(loaded_payload->means_raw()))
                         completion.include(*backend);
                     published.snapshot.row_count = loaded_payload->size();

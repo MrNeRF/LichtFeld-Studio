@@ -14,6 +14,7 @@
 #include "visualizer/core/job_registry.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -33,7 +34,11 @@ namespace lfs::training {
 }
 
 namespace lfs::vis {
+    namespace op {
+        struct CameraMaskAssetSnapshot;
+    }
     class VisualizerImpl;
+    class CollisionProjectOpenTest;
     class PayloadRecaptureTest;
     class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
@@ -274,6 +279,9 @@ namespace lfs::vis::project {
         [[nodiscard]] std::uint64_t documentEpoch() const noexcept {
             return epoch_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] std::array<std::uint64_t, 2> documentSceneRevision() const noexcept {
+            return {documentEpoch(), scene_mutation_serial_.load(std::memory_order_acquire)};
+        }
         void recoverDeferredPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);
         [[nodiscard]] bool isScratchBoundSession() const;
@@ -294,6 +302,9 @@ namespace lfs::vis::project {
                    const std::filesystem::path& expected_path = {},
                    std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
+        [[nodiscard]] lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height);
+        [[nodiscard]] lfs::Result<lfs::io::project::ResolvedCameraMask> materializeCameraMask(const lfs::core::Uuid& asset_uuid) const;
+        [[nodiscard]] std::shared_ptr<op::CameraMaskAssetSnapshot> retainCameraMaskAsset(const lfs::core::Uuid& asset_uuid);
         [[nodiscard]] lfs::Result<ProjectTrainingSource> trainingSource();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
@@ -311,6 +322,9 @@ namespace lfs::vis::project {
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
+        [[nodiscard]] bool isOpenPending() const noexcept {
+            return pending_collision_open_ != nullptr;
+        }
         [[nodiscard]] lfs::Result<void>
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>
@@ -385,6 +399,7 @@ namespace lfs::vis::project {
             std::string* error_message = nullptr);
 
     private:
+        friend class lfs::vis::CollisionProjectOpenTest;
         friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
@@ -629,6 +644,19 @@ namespace lfs::vis::project {
             lfs::core::MoveOnlyFunction<lfs::Result<void>()> after_open = {});
         lfs::Result<void> finishScratchRecovery();
         struct PreparedOpen;
+        struct PendingCollisionOpen {
+            std::atomic<bool> done{false};
+            lfs::Result<void> result;
+            lfs::core::MoveOnlyFunction<lfs::Result<void>()> install;
+            JobHandle job;
+            std::uint64_t epoch = 0;
+            std::uint64_t scene_serial = 0;
+            std::uint64_t parameter_serial = 0;
+            std::array<std::uint64_t, 2> shader_token{};
+            std::jthread worker;
+        };
+        std::unique_ptr<PendingCollisionOpen> pending_collision_open_;
+        void settleCollisionOpen();
         lfs::Result<void> commitOpen(PreparedOpen&& prepared);
         lfs::Result<void> finishRecovered(
             const std::filesystem::path& master, const std::filesystem::path& sidecar,

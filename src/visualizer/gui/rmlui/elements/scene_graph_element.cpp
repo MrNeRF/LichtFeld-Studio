@@ -14,8 +14,10 @@
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "core/training_manager.hpp"
+#include "gui/async_task_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -54,6 +56,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -444,11 +447,13 @@ namespace lfs::vis::gui {
                     return;
                 result = io::save_ply(*node->point_cloud, options);
                 break;
-            case core::NodeType::SPLAT:
+            case core::NodeType::SPLAT: {
                 if (!node->model || node->model->size() == 0)
                     return;
-                result = io::save_ply(*node->model, options);
+                const auto without_noise = core::without_noise_infill(*node->model);
+                result = io::save_ply(without_noise ? *without_noise : *node->model, options);
                 break;
+            }
             default:
                 return;
             }
@@ -723,6 +728,7 @@ namespace lfs::vis::gui {
                 if (auto* mutex = scene.liveModelMutex())
                     lock.emplace(*mutex);
                 std::vector<SplatTransferSource> sources;
+                std::deque<core::SplatData> without_noise;
                 for (const auto& [id, uuid] : identity) {
                     const auto* node = scene.getNodeById(id);
                     if (!node || node->uuid != uuid || !node->model)
@@ -730,7 +736,10 @@ namespace lfs::vis::gui {
                     const auto axes = prefs.format != "ply"               ? SplatDragAxes{}
                                       : target == FileDragTarget::Blender ? SplatDragAxes::blender()
                                                                           : prefs.axes;
-                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
+                    const core::SplatData* model = node->model.get();
+                    if (auto kept = core::without_noise_infill(*model))
+                        model = &without_noise.emplace_back(std::move(*kept));
+                    sources.push_back({model, scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
                     // Read the iteration beside the paused model snapshot, not
                     // when the drag is armed or after the export has finished.
                     if (trainer && trainer->getState() == TrainingState::Paused &&
@@ -1246,6 +1255,7 @@ namespace lfs::vis::gui {
         }
 
         for (auto& [id, snapshot] : snapshots) {
+            const bool read_only = scene.getNodeById(id)->isExternalPreview();
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
@@ -1256,18 +1266,17 @@ namespace lfs::vis::gui {
                                       !snapshot.locked &&
                                       !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
-            snapshot.rename_enabled = snapshot.can_rename;
+            snapshot.rename_enabled = snapshot.can_rename && !read_only;
             snapshot.can_toggle_training =
-                snapshot.type == core::NodeType::CAMERA ||
-                snapshot.type == core::NodeType::CAMERA_GROUP;
-            snapshot.camera_frustum_container =
-                (snapshot.type == core::NodeType::GROUP &&
-                 std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
-                     const auto child_it = snapshots.find(child_id);
-                     return child_it != snapshots.end() &&
-                            child_it->second.type == core::NodeType::CAMERA_GROUP;
-                 })) ||
-                (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP));
+                !read_only && (snapshot.type == core::NodeType::CAMERA ||
+                               snapshot.type == core::NodeType::CAMERA_GROUP);
+            snapshot.camera_frustum_container = !read_only && ((snapshot.type == core::NodeType::GROUP &&
+                                                                std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
+                                                                    const auto child_it = snapshots.find(child_id);
+                                                                    return child_it != snapshots.end() &&
+                                                                           child_it->second.type == core::NodeType::CAMERA_GROUP;
+                                                                })) ||
+                                                               (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP)));
             if (snapshot.camera_frustum_container) {
                 if (const auto* rendering = services().renderingOrNull())
                     snapshot.visible = rendering->getSettings().show_camera_frustums;
@@ -3213,6 +3222,20 @@ namespace lfs::vis::gui {
                     items.push_back(makeAction(
                         tr(string_keys::Scene::DISABLE_ALL_TRAINING),
                         prefixedAction(std::format("disable_all_train:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.invert_camera_selection"),
+                                               prefixedAction(std::format("invert_group_train:{}", node_id)), true));
+                    items.push_back(makeAction(tr("scene.enable_all_cameras"),
+                                               prefixedAction(std::format("enable_group_train:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.disable_all_cameras"),
+                                               prefixedAction(std::format("disable_group_train:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_random_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:random:{}", node_id)), true));
+                    items.push_back(makeAction(tr("scene.select_every_n_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
                 }
                 break;
             case core::NodeType::DATASET:
@@ -3436,6 +3459,26 @@ namespace lfs::vis::gui {
             core::NodeId group_id = core::NULL_NODE;
             if (parseNodeId(parts[1], group_id))
                 toggleChildrenTraining(group_id, kind == "enable_all_train");
+        } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
+            core::NodeId group_id = core::NULL_NODE;
+            if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {
+                const auto operation = kind == "enable_group_train"    ? AsyncTaskManager::CameraSelectionOperation::EnableAll
+                                       : kind == "disable_group_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
+                                                                       : AsyncTaskManager::CameraSelectionOperation::Invert;
+                if (const auto result = gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}); !result)
+                    gui->enqueueToast({.title = tr("scene.camera_selection"), .message = std::string(result.error().user_message())});
+            }
+        } else if (kind == "camera_selection" && parts.size() >= 3) {
+            core::NodeId group_id = core::NULL_NODE;
+            if (!parseNodeId(parts[2], group_id))
+                return;
+            lfs::python::set_camera_selection_operation(parts[1]);
+            lfs::python::set_camera_selection_group_id(group_id);
+            auto& panels = PanelRegistry::instance();
+            if (const auto panel = panels.get_panel_instance("lfs.camera_selection"))
+                panel->on_content_changed();
+            panels.set_panel_enabled("lfs.camera_selection", true);
+            panels.bring_panel_to_front("lfs.camera_selection");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {

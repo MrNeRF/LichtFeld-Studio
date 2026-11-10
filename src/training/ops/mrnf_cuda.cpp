@@ -123,6 +123,18 @@ namespace lfs::training {
                                                          active.is_valid() ? active.ptr<bool>() : nullptr, trainable.is_valid() ? trainable.ptr<bool>() : nullptr,
                                                          edge.is_valid() ? edge.ptr<float>() : nullptr, weights.ptr<float>(), opacity.numel());
         }
+        float kth_largest(const Tensor& values, const Tensor& include, const size_t k) {
+            const auto mask = include.is_valid() && include.dtype() != core::DataType::Bool
+                                  ? include.to(core::DataType::Bool)
+                                  : include;
+            return mrnf_strategy::launch_kth_largest(values.ptr<float>(), mask.is_valid() ? mask.ptr<bool>() : nullptr,
+                                                     values.numel(), k, lfs::core::getCurrentCUDAStream());
+        }
+        void rank_exchange_rows(const Tensor& primary, const Tensor& secondary, const Tensor& eligible, Tensor& rows) {
+            mrnf_strategy::launch_rank_exchange_rows(
+                primary.ptr<float>(), secondary.is_valid() ? secondary.ptr<float>() : nullptr, eligible.ptr<bool>(),
+                primary.numel(), rows.numel(), rows.ptr<int64_t>(), lfs::core::getCurrentCUDAStream());
+        }
         const lfs::gpu_ops::MrnfOps kCudaMrnfOps{
             .noise = noise,
             .decay = decay,
@@ -132,6 +144,8 @@ namespace lfs::training {
             .compact_bool_indices = compact_bool_indices,
             .prune_bounds = prune_bounds,
             .replace_parent_weights = replace_parent_weights,
+            .kth_largest = kth_largest,
+            .rank_exchange_rows = rank_exchange_rows,
         };
 
     } // namespace

@@ -5,8 +5,11 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/memory_pressure.hpp"
+#include "core/raster_arena.hpp"
 #include "viewer_admission.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -32,6 +35,9 @@ namespace lfs::core {
 
     class RasterizerMemoryArena {
     public:
+        // Largest physical allocation behind one arena chunk.
+        static constexpr size_t kCommitPieceBytes = size_t{64} << 20;
+
         struct Config {
             size_t virtual_size = 32ULL << 30; // 32GB virtual address space (free!)
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
@@ -76,6 +82,8 @@ namespace lfs::core {
             size_t gpu_total = 0;
             size_t num_reallocations = 0;
             float utilization_percent = 0.0f;
+            // Released under VRAM pressure and owed back to later frames.
+            size_t recommit_bytes = 0;
         };
 
         struct ExternalBacking {
@@ -149,6 +157,9 @@ namespace lfs::core {
             std::chrono::steady_clock::time_point last_log_time;
             // B1 hysteresis: avoid immediately undoing a recent recommit.
             std::uint32_t boundaries_since_growth = 0;
+            // Committed size given back under VRAM pressure, owed until
+            // frames commit the arena back to it.
+            size_t pressure_need = 0;
         };
 
         std::unordered_map<int, std::unique_ptr<Arena>> device_arenas_;
@@ -345,6 +356,10 @@ namespace lfs::core {
         // holds topology locks; B3 waits for an already-active frame to finish.
         bool shrink_to_current_at_boundary();
         bool release_at_boundary();
+        // VRAM pressure reclaim: releases every committed piece when no frame
+        // is active and no viewer shares the backing, without waiting for a
+        // lock. Returns the bytes released; the next frame commits them again.
+        size_t release_idle_for_pressure();
         void full_reset();
         bool install_external_backing(ExternalBacking backing);
         // With a nonzero timeout, reserve the next idle window against new training
@@ -372,6 +387,12 @@ namespace lfs::core {
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
+        // Free VRAM the arena leaves untouched when it grows, for the work that
+        // allocates outside it during a frame: what training measured, else
+        // 1 GiB (at most a tenth of the device).
+        [[nodiscard]] static size_t growth_headroom_bytes(size_t total_memory) noexcept {
+            return raster_arena_growth_headroom_bytes(total_memory);
+        }
         void log_memory_status(uint64_t frame_id, bool force = false);
         [[nodiscard]] bool has_last_frame_event_for_testing() const;
 

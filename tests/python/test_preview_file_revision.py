@@ -9,6 +9,16 @@ import zlib
 from test_rmlui_image_sources import panel_modules
 
 
+def settle_metadata(panel):
+    panel._service_metadata()
+    for _ in range(8):
+        if panel._metadata._pending is None:
+            return
+        panel._metadata._pending[-1].result(timeout=5)
+        panel._service_metadata()
+    raise AssertionError("metadata worker did not settle")
+
+
 def png(path, width, height, color):
     def chunk(kind, data):
         return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
@@ -26,15 +36,18 @@ def test_reopen_changed_image_refreshes_dimensions_and_both_texture_sizes(panel_
     panel = module.ImagePreviewPanel()
     png(path, 320, 240, (220, 30, 30))
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (320, 240, 3)
     old_urls = [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]
     png(path, 160, 320, (30, 30, 220))
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (160, 320, 3)
     assert all(panel._make_preview_url(path, -1, thumb=size) != url
                for size, url in zip((0, 256), old_urls))
     new_urls = [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (160, 320, 3)
     assert new_urls == [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]
 
@@ -47,10 +60,12 @@ def test_unchanged_image_reuses_info_without_frame_stat(panel_modules, monkeypat
     monkeypatch.setattr(module.lf.ui, 'get_image_info', lambda _: calls.append(1) or (16, 12, 3), raising=False)
     panel = module.ImagePreviewPanel()
     panel.open([path], [], 0)
+    settle_metadata(panel)
     panel._get_image_info(path)
     panel.open([path], [], 0)
+    settle_metadata(panel)
     with monkeypatch.context() as patch:
-        patch.setattr(module.os, 'stat', lambda _: (_ for _ in ()).throw(AssertionError('unexpected stat')))
+        patch.setattr(os, 'stat', lambda _: (_ for _ in ()).throw(AssertionError('unexpected stat')))
         assert panel._get_image_info(path) == (16, 12, 3)
         panel._make_preview_url(path, -1)
     assert calls == [1]
@@ -72,6 +87,7 @@ def test_atomic_replacement_with_same_size_and_mtime_refreshes_cache(panel_modul
                         lambda source: info_calls.append(source) or (1, 1, 3), raising=False)
     panel = module.ImagePreviewPanel()
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (1, 1, 3)
     old_urls = [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]
 
@@ -80,6 +96,7 @@ def test_atomic_replacement_with_same_size_and_mtime_refreshes_cache(panel_modul
     assert path.stat().st_size == original_stat.st_size
     assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (1, 1, 3)
     assert info_calls == [str(path), str(path)]
     assert all(panel._make_preview_url(path, -1, thumb=size) != url
@@ -87,6 +104,7 @@ def test_atomic_replacement_with_same_size_and_mtime_refreshes_cache(panel_modul
 
     new_urls = [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]
     panel.open([path], [], 0)
+    settle_metadata(panel)
     assert panel._get_image_info(path) == (1, 1, 3)
     assert info_calls == [str(path), str(path)]
     assert new_urls == [panel._make_preview_url(path, -1, thumb=size) for size in (0, 256)]

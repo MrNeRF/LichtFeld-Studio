@@ -244,7 +244,9 @@ namespace lfs::training {
                                      .copy_rows = copy_rows,
                                      .update_rows = update_rows,
                                      .sample = sample,
-                                     .fold_error = fold_error};
+                                     .fold_error = fold_error,
+                                     .sample_rows = portable_mcmc_sample_rows,
+                                     .relocate_copies = relocate_copies_via<vulkan_mcmc_ops>};
     } // namespace
 
     const McmcOps& vulkan_mcmc_ops() { return kVulkanMcmcOps; }

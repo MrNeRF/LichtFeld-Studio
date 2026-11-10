@@ -101,6 +101,14 @@ endif()
 list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 unset(_lfs_vulkan_validation_feature)
 
+# Opt in to lower vcpkg disk usage at the cost of slower dependency rebuilds.
+# Set this before project() loads the toolchain; keep the appended flag out of
+# the cache so turning the option off restores the original install options.
+option(LFS_VCPKG_CLEAN_AFTER_BUILD "Clean vcpkg build artifacts after installation to save disk space (slower rebuilds)" OFF)
+if(LFS_VCPKG_CLEAN_AFTER_BUILD AND NOT "--clean-after-build" IN_LIST VCPKG_INSTALL_OPTIONS)
+    list(APPEND VCPKG_INSTALL_OPTIONS "--clean-after-build")
+endif()
+
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
 # the toolchain is loaded by project().
@@ -514,17 +522,32 @@ endif()
 if(NVIDIA_SMI)
     execute_process(
             COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
+            RESULT_VARIABLE NVIDIA_SMI_CAP_RESULT
             OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
+            ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
 
     execute_process(
             COMMAND ${NVIDIA_SMI} --query-gpu=driver_version --format=csv,noheader
+            RESULT_VARIABLE NVIDIA_SMI_DRIVER_RESULT
             OUTPUT_VARIABLE NVIDIA_DRIVER_VERSION
+            ERROR_QUIET
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" NVIDIA_DRIVER_VERSION "${NVIDIA_DRIVER_VERSION}")
+    # nvidia-smi fails, printing its error to stdout, when the loaded driver and its libraries differ
+    # (a driver update before a reboot) or no GPU answers. CUDA itself may still work: fall back as if
+    # nvidia-smi were missing instead of reading the error as a version.
+    if(NOT NVIDIA_SMI_CAP_RESULT EQUAL 0 OR NOT NVIDIA_SMI_DRIVER_RESULT EQUAL 0 OR
+       NOT DETECTED_COMPUTE_CAP MATCHES "^[0-9]+\\.[0-9]+$" OR NOT NVIDIA_DRIVER_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$")
+        message(WARNING "nvidia-smi could not query the GPU (${DETECTED_COMPUTE_CAP}); "
+            "skipping the driver check. Reboot after a driver update.")
+        set(NVIDIA_SMI_FAILED TRUE)
+    endif()
+endif()
+if(NVIDIA_SMI AND NOT NVIDIA_SMI_FAILED)
     message(STATUS "Detected NVIDIA driver: ${NVIDIA_DRIVER_VERSION}")
     if(NVIDIA_DRIVER_VERSION VERSION_LESS "570")
         message(FATAL_ERROR "NVIDIA driver ${NVIDIA_DRIVER_VERSION} is too old. "
@@ -539,7 +562,7 @@ if(NVIDIA_SMI)
         set(LichtFeld-Studio_CUDA_ARCH "native")
     endif()
 else()
-    message(STATUS "nvidia-smi not found; using CUDA architecture 8.6 for this build")
+    message(STATUS "No GPU found through nvidia-smi; using CUDA architecture 8.6 for this build")
     set(DETECTED_COMPUTE_CAP 8.6)
     set(LichtFeld-Studio_CUDA_ARCH "86")
 endif()
@@ -797,8 +820,7 @@ if(LFS_HIDDEN_SYMBOLS AND NOT WIN32)
         foreach(_lfs_export_consumer IN ITEMS lfs_logger lfs_error lfs_file_io lfs_image_codecs lfs_media lfs_core lfs_visualizer lfs_mcp lfs_py)
             target_link_options(${_lfs_export_consumer} PRIVATE "LINKER:--no-undefined")
         endforeach()
-        # FFmpeg assembly uses direct references to archive-local data in the shared visualizer.
-        # SPZ globals must stay local too: the Python module links another copy of its archive.
+        # SPZ globals must stay local: the Python module links another copy of its archive.
         target_link_options(lfs_visualizer PRIVATE
             "LINKER:--exclude-libs,libspz_lib.a")
     endif()

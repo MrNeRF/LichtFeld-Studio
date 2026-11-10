@@ -30,12 +30,18 @@ namespace lfs::training {
         }
     };
 
+    enum class TrainingOutcome { Unspecified,
+                                 Completed,
+                                 Stopped,
+                                 Failed };
+
     struct HookContext {
         int iteration = 0;
         float loss = 0.0f;
         std::size_t num_gaussians = 0;
         bool is_refining = false;
         Trainer* trainer = nullptr;
+        TrainingOutcome terminal_outcome = TrainingOutcome::Unspecified;
     };
 
     class LFS_BRIDGE_API ControlBoundary {

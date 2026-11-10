@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 #include <RmlUi/Core/Types.h>
 #include <RmlUi/Core/Vector2.h>
 #include <atomic>
@@ -14,8 +15,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -23,10 +26,13 @@ namespace lfs::vis::gui {
     // renderer draws a transparent placeholder until the pixels are uploaded.
     struct PreviewTextureRequest {
         std::filesystem::path path;
+        // `memory=` names encoded mask bytes held by the app instead of a file.
+        std::string memory_key;
         int max_size = 0;
         int width = 0;
         int height = 0;
         bool embedded_project_preview = false;
+        bool mask_overlay = false;
 
         // RmlUi builds and caches cover/contain geometry from the dimensions
         // LoadTexture reports, so report the decoded aspect up front.
@@ -39,12 +45,15 @@ namespace lfs::vis::gui {
         std::vector<Rml::byte> pixels; // premultiplied RGBA8
         int width = 0;
         int height = 0;
+        // The memory payload was revoked before decoding; not a decode error.
+        bool expired = false;
     };
 
     [[nodiscard]] LFS_VIS_API bool isPreviewTextureSource(std::string_view source);
     [[nodiscard]] LFS_VIS_API std::optional<PreviewTextureRequest> parsePreviewTextureRequest(std::string_view source);
-    [[nodiscard]] LFS_VIS_API PreviewTexturePixels decodePreviewTexture(std::filesystem::path path, int max_size,
-                                                                        bool embedded_project_preview);
+    [[nodiscard]] LFS_VIS_API PreviewTexturePixels decodePreviewTexture(
+        std::filesystem::path path, int max_size, bool embedded_project_preview, bool mask_overlay = false,
+        std::shared_ptr<const std::vector<std::byte>> encoded = {});
 
     // Decode workers and the decoded previews waiting for upload. Everything except
     // the workers runs on the render thread.
@@ -60,6 +69,10 @@ namespace lfs::vis::gui {
         void stop() noexcept;                    // join workers, drop pending; a later load() restarts them
         void uploadReady(const Upload& upload);  // at frame start
         [[nodiscard]] std::uint64_t generation() const;
+        // Render thread; resolves `memory=` sources when they are loaded.
+        void setMemoryProvider(PreviewMemoryProvider provider) { memory_provider_ = std::move(provider); }
+        // Render thread; the source identity is the complete revisioned preview URL.
+        [[nodiscard]] PreviewTextureStatus status(const Rml::String& source) const;
 
     private:
         struct State {
@@ -75,10 +88,20 @@ namespace lfs::vis::gui {
             std::filesystem::path path;
             int max_size = 0;
             bool embedded_project_preview = false;
+            bool mask_overlay = false;
+            // Workers lock these bytes only while decoding; a discarded proposal is not retained.
+            std::weak_ptr<const std::vector<std::byte>> encoded;
         };
+        struct SourceStatus {
+            Rml::TextureHandle texture = 0;
+            PreviewTextureStatus status = PreviewTextureStatus::Unknown;
+        };
+        void setStatus(Rml::TextureHandle texture, const Rml::String& source, PreviewTextureStatus status);
         void ensureWorkers();
         void enqueue(Work work);
         std::vector<std::shared_ptr<State>> pending_;
+        std::unordered_map<Rml::String, SourceStatus> statuses_;
+        PreviewMemoryProvider memory_provider_;
         std::mutex queue_mutex_;
         std::condition_variable queue_cv_;
         std::deque<Work> queue_;

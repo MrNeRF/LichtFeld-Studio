@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -30,6 +31,7 @@
 #include "lfs/training/ops/registry.hpp"
 #endif
 #include "core/user_paths.hpp"
+#include "core/utc_time.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
@@ -46,6 +48,7 @@
 #include "io/selection_chapter.hpp"
 #include "io/snapshot_path.hpp"
 #include "ipc/view_context.hpp"
+#include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
@@ -1576,6 +1579,13 @@ namespace lfs::vis::project {
         const bool then_start,
         const bool then_reset) {
 #if LFS_BUILD_TRAINER
+        if (!training_session_hydrated_.load(std::memory_order_acquire) && stored_training_kind_ != StoredTrainingKind::None) {
+            if (const auto* trainer = viewer_.getTrainerManager()) {
+                if (const auto blocked = trainer->getResourceBlockedReason(); !blocked.empty())
+                    return fail<void>(lfs::ErrorCode::FailedPrecondition, std::string(blocked),
+                                      "Stored trainer restoration refused before resource allocation", "training.restore");
+            }
+        }
         if (then_start) {
             restore_then_start_.store(
                 true, std::memory_order_release);
@@ -1844,6 +1854,24 @@ namespace lfs::vis::project {
                             minted.error()));
                 }
             }
+            decltype(lfs::training::ProjectSnapshotDocumentContext::camera_mask_sources) mask_sources;
+            std::unordered_set<lfs::core::Uuid> mask_assets;
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (!node || !node->camera || !node->camera->mask_asset_uuid())
+                    continue;
+                const auto asset = *node->camera->mask_asset_uuid();
+                if (!mask_assets.insert(asset).second)
+                    continue;
+                const auto* source = document.find_dataset_source(asset);
+                if (!source)
+                    return fail<lfs::training::ProjectSnapshotDocumentContext>(
+                        lfs::ErrorCode::DataLoss, "A saved camera mask is missing.",
+                        "Training snapshot camera mask has no DSRC payload", "camera.mask");
+                auto shared = source->share();
+                if (!shared)
+                    return std::move(shared).error();
+                mask_sources.emplace_back(asset, std::make_shared<const lfs::io::project::LazyChunkValue>(std::move(*shared)));
+            }
             return lfs::training::
                 ProjectSnapshotDocumentContext{
                     .project_uuid =
@@ -1881,6 +1909,7 @@ namespace lfs::vis::project {
                     .writer_lock_lease =
                         std::move(
                             writer_lock_lease),
+                    .camera_mask_sources = std::move(mask_sources),
                 };
         }
 
@@ -2071,6 +2100,14 @@ namespace lfs::vis::project {
             return summary;
         }
 
+        [[nodiscard]] bool hasPersistentSceneNodes(const core::Scene& scene) {
+            // A transient root and its descendants are omitted from project saves.
+            return std::ranges::any_of(scene.getRootNodes(), [&scene](const auto id) {
+                const auto* node = scene.getNodeById(id);
+                return node && !node->transient;
+            });
+        }
+
         [[nodiscard]] bool hasHardDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
@@ -2104,17 +2141,7 @@ namespace lfs::vis::project {
                     lfs::core::native_fs::last_write_time(
                         path, error);
                 if (!error) {
-#ifdef __APPLE__
-                    const auto system_time =
-                        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                            file_time - std::filesystem::file_time_type::clock::now() +
-                            std::chrono::system_clock::now());
-#else
-                    const auto system_time =
-                        std::chrono::clock_cast<
-                            std::chrono::system_clock>(
-                            file_time);
-#endif
+                    const auto system_time = core::file_time_to_system_clock(file_time);
                     unix_seconds =
                         std::chrono::system_clock::to_time_t(
                             system_time);
@@ -2776,6 +2803,10 @@ namespace lfs::vis::project {
     }
 
     ProjectLifecycle::~ProjectLifecycle() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            pending_collision_open_.reset(); // join before the viewer or candidate is destroyed
+        }
 #if LFS_BUILD_TRAINER
         cancelTrainingStartPreparation();
         if (auto* manager = viewer_.getTrainerManager()) {
@@ -2881,6 +2912,11 @@ namespace lfs::vis::project {
     ProjectLifecycle::preflightSwitch(
         const ProjectSwitchDisposition disposition,
         const bool allow_active_training) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "A project is still being opened.",
+                              "Wait for collision payload preparation or cancel opening", "project.open");
+        }
         if (pending_training_start_) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
                               "The training project is still being prepared.",
@@ -2935,7 +2971,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::collisionSwitchPending() const {
         auto* gui = viewer_.getGuiManager();
-        return gui && gui->asyncTasks().sceneReplacementPending();
+        return pending_collision_open_ || (gui && gui->asyncTasks().sceneReplacementPending());
     }
 
     bool ProjectLifecycle::deferCollisionSwitch(lfs::core::MoveOnlyFunction<lfs::Result<void>()>&& retry) {
@@ -3484,7 +3520,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::
         isBackgroundAutosaveSuppressed() const {
-        if (application_close_pending_) {
+        if (application_close_pending_ || pending_collision_open_) {
             return true;
         }
         if (close_save_state_.load(
@@ -3950,9 +3986,7 @@ namespace lfs::vis::project {
                         document
                             ->dirty_chapters(),
                     .hydration_state =
-                        hydrationName(
-                            hydration_.load(
-                                std::memory_order_acquire)),
+                        pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
                     .payloads = {},
                     .contains_embedded_secrets =
                         containsEmbeddedSecrets(),
@@ -4763,6 +4797,11 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProject(const bool wait_for_write) {
 #if LFS_BUILD_TRAINER
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (!pending_preview_png_.empty() ||
             project_write_purpose_ == ProjectWritePurpose::Thumbnail) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
@@ -4913,6 +4952,11 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProjectAsync(std::function<lfs::Result<void>()> on_ready) {
 #if LFS_BUILD_TRAINER
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (pending_training_start_) {
             return {};
         }
@@ -6281,6 +6325,7 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::updateMaintenance() {
+        settleCollisionOpen();
         applyStartupRecoveryScan();
         settleScratchLocationCheck();
         settleProjectWrite();
@@ -6476,6 +6521,154 @@ namespace lfs::vis::project {
                 0.0,
                 commit_to_present_ms - render_ms),
             render_ms, open_to_present_ms);
+    }
+
+    std::shared_ptr<op::CameraMaskAssetSnapshot> ProjectLifecycle::retainCameraMaskAsset(const core::Uuid& asset_uuid) {
+        const auto* payload = document_ ? document_->find_dataset_source(asset_uuid) : nullptr;
+        if (!payload)
+            throw std::runtime_error("Camera mask payload is missing from its project");
+        auto retained = payload->share();
+        if (!retained)
+            throw std::runtime_error(developerError(retained.error()));
+        auto owner = std::make_shared<io::project::LazyChunkValue>(std::move(*retained));
+        const auto document = document_;
+        auto snapshot = std::make_shared<op::CameraMaskAssetSnapshot>();
+        snapshot->bytes = owner->size();
+        snapshot->restore = [this, origin = document, asset_uuid, owner] {
+            const auto document = document_;
+            if (!document || (document != origin && document->project_uuid() != origin->project_uuid()))
+                throw op::HistoryStaleEntryError("Camera mask belongs to a replaced project");
+            auto shared = owner->share();
+            if (!shared)
+                throw std::runtime_error(developerError(shared.error()));
+            if (auto stored = document->set_dataset_source(asset_uuid, std::move(*shared)); !stored)
+                throw std::runtime_error(developerError(stored.error()));
+            if (auto file = document->resolve_camera_mask(asset_uuid); !file)
+                throw std::runtime_error(developerError(file.error()));
+        };
+        return snapshot;
+    }
+
+    lfs::Result<io::project::ResolvedCameraMask> ProjectLifecycle::materializeCameraMask(const core::Uuid& asset_uuid) const {
+        if (!document_)
+            return fail<io::project::ResolvedCameraMask>(lfs::ErrorCode::FailedPrecondition, LOC("image_preview.sam_apply_failed"), "No project document", "camera.mask");
+        return document_->resolve_camera_mask(asset_uuid);
+    }
+
+    lfs::Result<void> ProjectLifecycle::applyCameraMask(
+        const core::Uuid& uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) {
+        auto* manager = viewer_.getSceneManager();
+        auto* trainer = viewer_.getTrainerManager();
+        if (project_write_job_)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, LOC("project_cleanup.wait"), "Camera-mask edit requires an idle project writer", "camera.mask");
+        if (!document_ || !manager || project_open_job_ ||
+            viewer_.isTrainingStartPending() || (trainer && (!trainer->isDatasetEditable() || (trainer->getTrainer() && trainer->getTrainer()->isInitialized()))))
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The image mask cannot be changed now.", "Apply requires an editable dataset and an idle project", "camera.mask");
+        auto& scene = manager->getScene();
+        auto* node = scene.getNodeByUuid(uuid);
+        if (node && node->isExternalPreview())
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, LOC("external_training.read_only"), "External trainer cameras cannot own project masks", "camera.mask");
+        std::error_code ec;
+        if (!node || !node->camera || !core::native_fs::equivalent(node->camera->image_path(), image, ec) || ec)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The source camera has changed.", "Mask target no longer matches the source image", "camera.mask");
+        try {
+            const auto [width, height, channels] = core::probe_image_info(image);
+            if (!png || png->empty() || png->size() > 256ull * 1024 * 1024 || mask_width != width || mask_height != height)
+                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask has invalid dimensions or format.", "Expected an original-resolution encoded mask", "camera.mask");
+            const auto asset = core::generate_uuid_v4();
+            auto value = io::project::LazyChunkValue::from_owned(std::move(png), asset);
+            if (!value)
+                return lfs::Status::failure(std::move(value).error());
+            struct MaskState {
+                std::filesystem::path path;
+                std::optional<core::Uuid> asset;
+                std::shared_ptr<io::project::LazyChunkValue> payload;
+                core::Tensor raw;
+            };
+            auto& camera = *node->camera;
+            MaskState before{camera.mask_path(), camera.mask_asset_uuid(), {}, camera.raw_mask_tensor()};
+            // History owns a CPU snapshot; GPU memory must remain reclaimable before training.
+            if (before.raw.is_valid())
+                before.raw = before.raw.device() == core::Device::CUDA ? before.raw.cpu().contiguous() : before.raw.clone();
+            if (before.asset) {
+                const auto* old = document_->find_dataset_source(*before.asset);
+                if (!old)
+                    return fail<void>(lfs::ErrorCode::DataLoss, "The previous camera mask is missing.", "Cannot retain the previous DSRC mask for undo", "camera.mask");
+                auto shared = old->share();
+                if (!shared)
+                    return lfs::Status::failure(std::move(shared).error());
+                before.payload = std::make_shared<io::project::LazyChunkValue>(std::move(*shared));
+            }
+            MaskState after{{}, asset, std::make_shared<io::project::LazyChunkValue>(std::move(*value)), {}};
+            const auto document = document_;
+            const auto apply = [this, origin = document, uuid](const MaskState& state) {
+                auto* manager = viewer_.getSceneManager();
+                auto* trainer = viewer_.getTrainerManager();
+                if (project_write_job_)
+                    throw std::runtime_error(LOC("project_cleanup.wait"));
+                if (trainer && trainer->getTrainer() && trainer->getTrainer()->isInitialized())
+                    throw std::runtime_error(LOC("image_preview.sam_reset_training"));
+                if (project_open_job_ || viewer_.isTrainingStartPending() ||
+                    (trainer && !trainer->isDatasetEditable()))
+                    throw std::runtime_error(LOC("image_preview.sam_unavailable"));
+                const auto document = document_;
+                if (!document || !manager || (document != origin && document->project_uuid() != origin->project_uuid()))
+                    throw op::HistoryStaleEntryError("Camera-mask edit is no longer applicable");
+                auto& scene = manager->getScene();
+                auto* node = scene.getNodeByUuid(uuid);
+                if (!node || !node->camera)
+                    throw op::HistoryStaleEntryError("Camera-mask target is no longer available");
+                auto path = state.path;
+                std::shared_ptr<const void> owner;
+                if (state.asset) {
+                    auto payload = state.payload->share();
+                    if (!payload)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(payload.error()));
+                    auto stored = document->set_dataset_source(*state.asset, std::move(*payload));
+                    if (!stored)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(stored.error()));
+                    auto materialized = document->resolve_camera_mask(*state.asset);
+                    if (!materialized) {
+                        (void)document->remove_dataset_source(*state.asset);
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(materialized.error()));
+                    }
+                    path = std::move(materialized->path);
+                    owner = std::move(materialized->owner);
+                }
+                const auto old = node->camera->mask_asset_uuid();
+                node->camera->set_mask_path(path, state.asset, std::move(owner));
+                if (state.raw.is_valid())
+                    node->camera->set_mask_tensor(state.raw);
+                node->mask_path = core::path_to_utf8(path);
+                if (old && old != state.asset && std::ranges::none_of(scene.getNodes(), [&](const auto* n) {
+                        return n && n->camera && n->camera->mask_asset_uuid() == old;
+                    }))
+                    (void)document->remove_dataset_source(*old);
+                scene.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED);
+            };
+            class MaskUndo final : public op::UndoEntry {
+            public:
+                MaskUndo(std::function<void(bool)> apply, size_t bytes) : apply_(std::move(apply)), bytes_(bytes) {}
+                void undo() override { apply_(false); }
+                void redo() override { apply_(true); }
+                std::string name() const override { return LOC("image_preview.mask"); }
+                size_t estimatedBytes() const override { return bytes_; }
+                DirtyMask dirtyFlags() const override { return DirtyFlag::OVERLAY; }
+
+            private:
+                std::function<void(bool)> apply_;
+                size_t bytes_;
+            };
+            const size_t retained = after.payload->size() + (before.payload ? before.payload->size() : 0) +
+                                    (before.raw.is_valid() ? before.raw.bytes() : 0);
+            auto undo = std::make_unique<MaskUndo>([apply, before, after](bool redo) { apply(redo ? after : before); }, retained);
+            undo->redo();
+            op::undoHistory().push(std::move(undo));
+            return {};
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): convert legacy image I/O and undo exceptions at the project boundary.
+            return fail<void>(lfs::ErrorCode::Unavailable, "The image mask could not be applied.", error.what(), "camera.mask");
+        }
     }
 
     void ProjectLifecycle::markSceneMutation(
@@ -6960,8 +7153,12 @@ namespace lfs::vis::project {
         // Same bookkeeping as the trainer writer after a
         // wholesale SCNG install: drop SPLT/PCLD/MESH/COLV
         // payloads the captured scene no longer binds.
-        document_
-            ->remove_geometry_payloads_not_bound_by_scene();
+        std::vector<core::Uuid> previous_camera_masks;
+        for (const auto& node : *existing_nodes) {
+            if (node.camera && node.camera->mask_asset_uuid)
+                previous_camera_masks.push_back(*node.camera->mask_asset_uuid);
+        }
+        document_->remove_geometry_payloads_not_bound_by_scene(previous_camera_masks);
         for (const auto& [uuid, volume] : collisions) {
             if (auto stored = document_->set_collision(uuid, volume); !stored)
                 return stored;
@@ -8442,22 +8639,110 @@ namespace lfs::vis::project {
                 "The visualizer has not initialized its scene manager",
                 "project.open");
         }
-        auto shell =
-            candidate->stage_shell(
-                manager->getScene());
-        if (!shell) {
-            return lfs::Status::failure(
-                std::move(shell).error());
-        }
-        const auto shell_staged_at =
-            std::chrono::steady_clock::now();
+        const bool preload_collisions = candidate->has_deferred_collision_payloads();
+        auto worker_candidate = candidate;
+        lfs::core::MoveOnlyFunction<lfs::Result<void>()> install =
+            [this, candidate = std::move(candidate), session = std::move(*session),
+             parameters = std::move(*parameters), discard_master = std::move(discard_master),
+             disposition, after_open = std::move(after_open), started, normalized_at,
+             document_opened_at, session_prepared_at, parameters_ready_at]() mutable -> lfs::Result<void> {
+            auto* manager = viewer_.getSceneManager();
+            if (!manager)
+                return fail<void>(lfs::ErrorCode::Unavailable, "The scene manager is unavailable.",
+                                  "Cannot install prepared project", "project.open");
+            auto shell = candidate->stage_shell(manager->getScene());
+            if (!shell)
+                return lfs::Status::failure(std::move(shell).error());
+            const auto shell_staged_at = std::chrono::steady_clock::now();
+            lfs::core::MoveOnlyFunction<lfs::Result<void>()> commit =
+                [this, prepared = PreparedOpen{
+                           std::move(candidate), std::move(*shell), std::move(session),
+                           std::move(parameters), std::move(discard_master), disposition, std::move(after_open),
+                           std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
+            return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        };
+        if (!preload_collisions)
+            return install();
 
-        lfs::core::MoveOnlyFunction<lfs::Result<void>()> commit =
-            [this, prepared = PreparedOpen{
-                       std::move(candidate), std::move(*shell), std::move(*session),
-                       std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
-                       std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
-        return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        auto pending = std::make_unique<PendingCollisionOpen>();
+        auto job = viewer_.jobs().init(JobType::ProjectOpen, "Reading collision volumes...");
+        if (!job)
+            return fail<void>(lfs::ErrorCode::Unavailable, "Project opening could not be started.",
+                              "The project-open job registry has no available slot", "project.open.job");
+        pending->install = std::move(install);
+        pending->job = *job;
+        pending->epoch = epoch_.load(std::memory_order_acquire);
+        pending->scene_serial = scene_mutation_serial_.load(std::memory_order_acquire);
+        pending->parameter_serial = parameter_manager->dirtySerial();
+        if (const auto* shaders = viewer_.getShaderService())
+            pending->shader_token = shaders->projectToken();
+        auto* state = pending.get();
+        try {
+            pending->worker = std::jthread([this, state, candidate = std::move(worker_candidate)](std::stop_token stop) {
+                viewer_.jobs().work(state->job);
+                try {
+                    state->result = candidate->preload_collision_payloads([&] {
+                        return stop.stop_requested() || viewer_.jobs().cancelRequested(state->job);
+                    });
+                } catch (const std::bad_alloc& error) {
+                    state->result = fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening failed.", error.what(), "COLV");
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Collision payload preparation failed: {}", error.what());
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", error.what(), "COLV");
+                } catch (...) {
+                    LOG_ERROR("Collision payload preparation failed with an unknown exception");
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", "Unknown collision reader exception", "COLV");
+                }
+                state->done.store(true, std::memory_order_release);
+                viewer_.wakeMainLoop();
+            });
+        } catch (const std::exception& error) {
+            LOG_ERROR("Collision payload worker could not start: {}", error.what());
+            viewer_.jobs().failed(*job, error.what());
+            viewer_.jobs().free(*job);
+            return fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening could not be started.", error.what(), "COLV");
+        }
+        pending_collision_open_ = std::move(pending);
+        cached_project_info_.reset();
+        return {};
+    }
+
+    void ProjectLifecycle::settleCollisionOpen() {
+        if (!pending_collision_open_ || !pending_collision_open_->done.load(std::memory_order_acquire))
+            return;
+        auto pending = std::move(pending_collision_open_);
+        pending->worker.join();
+        cached_project_info_.reset();
+        if (viewer_.jobs().cancelRequested(pending->job)) {
+            viewer_.jobs().canceled(pending->job);
+            viewer_.jobs().free(pending->job);
+            if (application_close_pending_)
+                viewer_.requestApplicationClose();
+            return;
+        }
+        auto* parameters = viewer_.getParameterManager();
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
+        if (pending->result &&
+            (pending->epoch != epoch_.load(std::memory_order_acquire) ||
+             pending->scene_serial != scene_mutation_serial_.load(std::memory_order_acquire) ||
+             !parameters || pending->parameter_serial != parameters->dirtySerial() ||
+             pending->shader_token != shader_token)) {
+            pending->result = fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                         "The current project changed while opening. Open the project again.",
+                                         "Prepared collision open is stale; preserving the current scene", "project.open");
+        }
+        if (!pending->result) {
+            viewer_.jobs().failed(pending->job, developerError(pending->result.error()));
+            viewer_.jobs().free(pending->job);
+            publishProjectToast(std::move(pending->result).error(), gui::error_op::kOpenProject);
+            return;
+        }
+        viewer_.jobs().completed(pending->job);
+        viewer_.jobs().free(pending->job);
+        if (auto installed = pending->install(); !installed) {
+            publishProjectToast(std::move(installed).error(), gui::error_op::kOpenProject);
+        }
     }
 
     lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen&& prepared) {
@@ -9823,6 +10108,13 @@ namespace lfs::vis::project {
     ProjectLifecycle::beginOrPollCloseSave() {
         settleProjectWrite();
         markApplicationClosePending();
+        // Keep pumping the window while the reader finishes its current chunk.
+        // Joining it in the destructor would make a normal Close look hung.
+        if (pending_collision_open_) {
+            settleCollisionOpen();
+            if (pending_collision_open_)
+                return CloseSaveStatus::Saving;
+        }
         switch (close_save_state_.load(
             std::memory_order_acquire)) {
         case CloseSaveState::Saving:
@@ -10037,6 +10329,10 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::markApplicationClosePending() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            viewer_.jobs().requestCancel(pending_collision_open_->job);
+        }
         if (auto* gui = viewer_.getGuiManager())
             gui->asyncTasks().dropSceneReplacement();
         application_close_pending_ = true;
@@ -10335,9 +10631,7 @@ namespace lfs::vis::project {
             .session_dirty = session_dirty,
             .dirty_chapters = dirty_chapters,
             .hydration_state =
-                hydrationName(
-                    hydration_.load(
-                        std::memory_order_acquire)),
+                pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
             .payloads = {},
             .contains_embedded_secrets =
                 containsEmbeddedSecrets(),
@@ -11374,7 +11668,7 @@ namespace lfs::vis::project {
         const auto* manager =
             viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(
@@ -11396,7 +11690,7 @@ namespace lfs::vis::project {
         }
         const auto* manager = viewer_.getSceneManager();
         if (!manager ||
-            !manager->getScene().getNodes().empty()) {
+            hasPersistentSceneNodes(manager->getScene())) {
             return false;
         }
         return !scene_dirty_.load(

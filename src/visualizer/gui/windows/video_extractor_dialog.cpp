@@ -4,6 +4,7 @@
 
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
@@ -49,6 +50,8 @@ namespace lfs::gui {
 
         constexpr std::array<float, 4> SCALE_VALUES{0.25f, 0.5f, 0.75f, 1.0f};
         constexpr float MIN_TRIM_SECONDS = 0.1f;
+        // A dragged segment edge catches the playhead or a neighbouring edge this close.
+        constexpr float SNAP_PIXELS = 8.0f;
         constexpr int MAX_TIMELINE_MARKERS = 180;
 
         [[nodiscard]] std::string outputDirectoryKey(std::string name) {
@@ -430,6 +433,23 @@ namespace lfs::gui {
             host_->setFloating(floating_);
     }
 
+    void VideoExtractorDialog::prepareWindowPresentation(const lfs::vis::gui::PanelDirectRenderRequest& request,
+                                                         const lfs::vis::gui::PanelDrawContext& ctx) {
+        if (ensureInitialized(ctx.ui ? ctx.ui->rml_manager : nullptr))
+            host_->setWindowPresentation(request.floating_window_state);
+    }
+
+    bool VideoExtractorDialog::titleControlsBounds(float* bounds) const {
+        const auto box = host_ ? host_->titleControlsBounds() : std::nullopt;
+        if (!box)
+            return false;
+        bounds[0] = box->x;
+        bounds[1] = box->y;
+        bounds[2] = box->width;
+        bounds[3] = box->height;
+        return true;
+    }
+
     bool VideoExtractorDialog::wantsKeyboard() const {
         return host_ && host_->wantsKeyboard();
     }
@@ -448,6 +468,7 @@ namespace lfs::gui {
         document_ = nullptr;
         clearElementCache();
         host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(manager, "video_extractor", "rmlui/video_extractor.rml");
+        host_->setPanelId("native.video_extractor");
         host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
         host_->setForeground(true);
         host_->setFloating(floating_);
@@ -517,6 +538,14 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::startExtraction(const VideoExtractionParams& params) {
         joinExtractionThread();
+        {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+            review_weights_ = params.masking.masking.weights;
+            review_video_ = params.video_path;
+            review_output_ = params.output_dir;
+            review_run_ = core::generate_uuid_v4();
+        }
 
         extraction_thread_.emplace([this, params]() {
             if (params.masking.enabled) {
@@ -524,14 +553,17 @@ namespace lfs::gui {
                 // extractor's file path rather than the Media Ingest sink.
                 io::VideoFrameExtractor::Params extract_params;
                 extract_params.video_path = params.video_path;
+                extract_params.frame_written = [this](const io::VideoFrameExtractor::WrittenFrame& frame) {
+                    std::lock_guard lock(review_mutex_);
+                    review_frames_.push_back(frame);
+                };
                 extract_params.output_dir = params.output_dir;
                 extract_params.mode = params.mode;
                 extract_params.fps = params.fps;
                 extract_params.frame_interval = params.frame_interval;
                 extract_params.format = params.format;
                 extract_params.jpg_quality = params.jpg_quality;
-                extract_params.start_time = params.start_time;
-                extract_params.end_time = params.end_time;
+                extract_params.segments = params.segments;
                 extract_params.resolution_mode = params.resolution_mode;
                 extract_params.scale = params.scale;
                 extract_params.custom_width = params.custom_width;
@@ -583,8 +615,12 @@ namespace lfs::gui {
             request.selection.mode = params.mode == io::ExtractionMode::FPS ? media::SelectionMode::FPS : media::SelectionMode::Interval;
             request.selection.fps = params.fps;
             request.selection.interval = params.frame_interval;
-            request.start_seconds = params.start_time;
-            request.end_seconds = params.end_time;
+            for (const auto& segment : params.segments)
+                request.segments.push_back({segment.start, segment.end});
+            request.frame_written = [this](const core::ExtractedFrame& frame) {
+                std::lock_guard lock(review_mutex_);
+                review_frames_.push_back(frame);
+            };
             request.geometry.mode = params.resolution_mode == io::ResolutionMode::Original ? media::ResizeMode::Original
                                     : params.resolution_mode == io::ResolutionMode::Scale  ? media::ResizeMode::Scale
                                                                                            : media::ResizeMode::Custom;
@@ -633,6 +669,10 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::startBatchExtraction(std::vector<VideoExtractionParams> params) {
         joinExtractionThread();
+        {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
         const bool continue_on_failure = continue_batch_on_failure_;
         extraction_thread_.emplace([this, params = std::move(params), continue_on_failure]() {
             const auto make_extractor_params = [this](const VideoExtractionParams& item,
@@ -645,8 +685,7 @@ namespace lfs::gui {
                 extract_params.frame_interval = item.frame_interval;
                 extract_params.format = item.format;
                 extract_params.jpg_quality = item.jpg_quality;
-                extract_params.start_time = item.start_time;
-                extract_params.end_time = item.end_time;
+                extract_params.segments = item.segments;
                 extract_params.resolution_mode = item.resolution_mode;
                 extract_params.scale = item.scale;
                 extract_params.custom_width = item.custom_width;
@@ -849,6 +888,10 @@ namespace lfs::gui {
 
         // A finished worker must publish its status before the new source clears it.
         joinExtractionThread();
+        if (path != video_path_) {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
         if (!player_->open(path)) {
             video_path_.clear();
             output_dir_.clear();
@@ -871,9 +914,7 @@ namespace lfs::gui {
                 }
         } else
             source_probe_error_ = std::string(description.error().detail());
-        trim_start_ = 0.0f;
-        trim_end_ = player_->duration() > 0.0 ? static_cast<float>(player_->duration()) : -1.0f;
-        trim_end_is_auto_ = true;
+        resetSegments();
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
         rotation_deg_ = player_->rotation();
@@ -918,8 +959,7 @@ namespace lfs::gui {
         if (!selected_batch_item_ || *selected_batch_item_ >= batch_items_.size() || !player_->isOpen())
             return;
         auto& item = batch_items_[*selected_batch_item_];
-        item.start_time = trim_start_;
-        item.end_time = trim_end_;
+        item.segments = segments_;
         item.end_time_is_auto = trim_end_is_auto_;
         item.rotation = rotation_deg_;
         item.duration = player_->duration();
@@ -979,10 +1019,13 @@ namespace lfs::gui {
         item.source_fps = player_->fps();
         item.is_hdr = player_->isHdr();
         item.hdr_to_sdr_supported = item.is_hdr && player_->isHdrConversionSupported();
-        trim_start_ = static_cast<float>(item.start_time);
-        trim_end_ = item.end_time < 0.0 ? static_cast<float>(item.duration)
-                                        : static_cast<float>(item.end_time);
+        if (item.segments.empty())
+            resetSegments();
+        else
+            segments_ = item.segments;
         trim_end_is_auto_ = item.end_time_is_auto;
+        if (trim_end_is_auto_)
+            segments_.back().end = item.duration;
         rotation_deg_ = item.rotation;
         player_->setPreviewRotation(rotation_deg_);
         if (player_->currentFrameHasGpuRotation())
@@ -1178,6 +1221,10 @@ namespace lfs::gui {
         if (extracting_.load())
             return;
         {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
+        {
             std::lock_guard lock(batch_probe_mutex_);
             ++batch_probe_generation_;
             queued_batch_probes_.clear();
@@ -1259,8 +1306,6 @@ namespace lfs::gui {
                                     Rml::StringUtilities::EncodeRml(status));
             }
         }
-        if (rows.empty())
-            rows = std::format("<span class=\"inline-note\">{}</span>", LOC(VideoExtractor::NO_FILE));
         const bool changed = setCachedInnerRml(batch_video_list_el_, rows);
         const int total = static_cast<int>(batch_items_.size());
         const std::string summary = probing_count > 0
@@ -1276,18 +1321,18 @@ namespace lfs::gui {
         if (!player_ || !player_->isOpen())
             return 0;
 
-        const double duration = trimDuration();
-        if (duration <= 0.0)
-            return 0;
-
-        if (mode_selection_ == 0)
-            return static_cast<int>(std::min<std::size_t>(
-                io::calculateFpsSampleCount(trim_start_, trim_start_ + duration, fps_),
-                static_cast<std::size_t>(std::numeric_limits<int>::max())));
-
+        const double video_duration = std::max(player_->duration(), 0.0);
         const double video_fps = std::max(player_->fps(), 0.001);
-        return static_cast<int>(std::ceil((duration * video_fps) /
-                                          static_cast<double>(std::max(1, frame_interval_))));
+        std::size_t frames = 0;
+        for (const auto& segment : io::VideoFrameExtractor::joinTouching(segments_)) {
+            const double start = std::clamp(segment.start, 0.0, video_duration);
+            const double end = std::clamp(segment.end < 0.0 ? video_duration : segment.end, start, video_duration);
+            frames += mode_selection_ == 0
+                          ? io::calculateFpsSampleCount(start, end, fps_)
+                          : static_cast<std::size_t>(std::ceil(((end - start) * video_fps) /
+                                                               static_cast<double>(std::max(1, frame_interval_))));
+        }
+        return static_cast<int>(std::min<std::size_t>(frames, static_cast<std::size_t>(std::numeric_limits<int>::max())));
     }
 
     void VideoExtractorDialog::updatePreviewTexture() {
@@ -1355,6 +1400,7 @@ namespace lfs::gui {
         if (!host_) {
             host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(
                 manager, "video_extractor", "rmlui/video_extractor.rml");
+            host_->setPanelId("native.video_extractor");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
             host_->setForeground(true);
             host_->setFloating(floating_);
@@ -1388,11 +1434,9 @@ namespace lfs::gui {
         step_forward_btn_el_ = nullptr;
         time_label_el_ = nullptr;
         timeline_el_ = nullptr;
-        timeline_trim_el_ = nullptr;
+        timeline_segments_el_ = nullptr;
         timeline_progress_el_ = nullptr;
         timeline_playhead_el_ = nullptr;
-        timeline_start_el_ = nullptr;
-        timeline_end_el_ = nullptr;
         timeline_markers_el_ = nullptr;
         trim_start_input_el_ = nullptr;
         trim_end_input_el_ = nullptr;
@@ -1494,11 +1538,9 @@ namespace lfs::gui {
         step_forward_btn_el_ = document_->GetElementById("btn-step-forward");
         time_label_el_ = document_->GetElementById("time-label");
         timeline_el_ = document_->GetElementById("timeline");
-        timeline_trim_el_ = document_->GetElementById("timeline-trim");
+        timeline_segments_el_ = document_->GetElementById("timeline-segments");
         timeline_progress_el_ = document_->GetElementById("timeline-progress");
         timeline_playhead_el_ = document_->GetElementById("timeline-playhead");
-        timeline_start_el_ = document_->GetElementById("timeline-start");
-        timeline_end_el_ = document_->GetElementById("timeline-end");
         timeline_markers_el_ = document_->GetElementById("timeline-markers");
         trim_start_input_el_ = document_->GetElementById("trim-start-input");
         trim_end_input_el_ = document_->GetElementById("trim-end-input");
@@ -1600,9 +1642,8 @@ namespace lfs::gui {
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
             preview_empty_el_ && step_back_btn_el_ && play_btn_el_ && play_icon_el_ &&
-            step_forward_btn_el_ && time_label_el_ && timeline_el_ && timeline_trim_el_ &&
-            timeline_progress_el_ && timeline_playhead_el_ && timeline_start_el_ &&
-            timeline_end_el_ && timeline_markers_el_ && trim_start_input_el_ &&
+            step_forward_btn_el_ && time_label_el_ && timeline_el_ && timeline_segments_el_ &&
+            timeline_progress_el_ && timeline_playhead_el_ && timeline_markers_el_ && trim_start_input_el_ &&
             trim_end_input_el_ && trim_start_set_el_ && trim_end_set_el_ && trim_reset_el_ &&
             estimated_frames_el_ && video_value_el_ && batch_video_list_el_ && batch_summary_el_ &&
             remove_video_el_ && clear_videos_el_ && output_value_el_ && browse_video_el_ &&
@@ -1640,6 +1681,8 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::bindEventListeners() {
+        if (auto* review = document_->GetElementById("btn-review-frames"))
+            review->AddEventListener(Rml::EventId::Click, &listener_);
         const auto listen_click = [this](Rml::Element* const el) {
             if (el)
                 el->AddEventListener(Rml::EventId::Click, &listener_);
@@ -1715,6 +1758,7 @@ namespace lfs::gui {
         listen_click(rotation_ccw_btn_el_);
 
         timeline_el_->AddEventListener(Rml::EventId::Mousedown, &listener_);
+        timeline_el_->AddEventListener(Rml::EventId::Dblclick, &listener_);
         if (auto* const body = document_->GetElementById("body")) {
             body->AddEventListener(Rml::EventId::Mousemove, &listener_);
             body->AddEventListener(Rml::EventId::Mouseup, &listener_);
@@ -1756,6 +1800,7 @@ namespace lfs::gui {
         changed |= setCachedAttribute(step_forward_btn_el_, "title", LOC(VideoExtractor::STEP_FORWARD));
         changed |= setCachedAttribute(trim_start_set_el_, "title", LOC(VideoExtractor::SET_START));
         changed |= setCachedAttribute(trim_end_set_el_, "title", LOC(VideoExtractor::SET_END));
+        changed |= setCachedAttribute(timeline_el_, "title", LOC(VideoExtractor::TIMELINE_HINT));
         changed |= setCachedAttribute(browse_output_el_, "title", LOC(VideoExtractor::SELECT_FOLDER));
         changed |= setCachedText(browse_video_el_, LOC(VideoExtractor::ADD_VIDEOS));
         changed |= setCachedText(remove_video_el_, LOC(VideoExtractor::REMOVE_VIDEO));
@@ -1834,6 +1879,7 @@ namespace lfs::gui {
         if (player_->isOpen()) {
             if (player_->update(0.0))
                 texture_needs_update_ = true;
+            skipCutWhilePlaying();
             if (texture_needs_update_)
                 updatePreviewTexture();
         }
@@ -1948,11 +1994,13 @@ namespace lfs::gui {
         const bool has_video = player_->isOpen();
         const double duration = has_video ? std::max(player_->duration(), 0.001) : 1.0;
         const double current = has_video ? std::clamp(player_->currentTime(), 0.0, duration) : 0.0;
-        const float start = has_video ? std::clamp(trim_start_, 0.0f, static_cast<float>(duration)) : 0.0f;
-        const float end = has_video
-                              ? std::clamp(trim_end_ < 0.0f ? static_cast<float>(duration) : trim_end_,
-                                           start, static_cast<float>(duration))
-                              : 1.0f;
+        const auto segment_range = [&](const Segment& segment) {
+            const double from = std::clamp(segment.start, 0.0, duration);
+            return std::pair{from, std::clamp(segment.end < 0.0 ? duration : segment.end, from, duration)};
+        };
+        const auto [active_start, active_end] = segment_range(segments_[activeSegment()]);
+        const float start = has_video ? static_cast<float>(active_start) : 0.0f;
+        const float end = has_video ? static_cast<float>(active_end) : 1.0f;
 
         changed |= setCachedText(time_label_el_, has_video
                                                      ? std::format("{} / {}", formatTime(current), formatTime(duration))
@@ -1964,13 +2012,24 @@ namespace lfs::gui {
         const float trim_progress_pct = has_video
                                             ? std::clamp(current_pct, start_pct, end_pct)
                                             : 0.0f;
-        changed |= setCachedProperty(timeline_trim_el_, "left", std::format("{:.3f}%", start_pct));
-        changed |= setCachedProperty(timeline_trim_el_, "width", std::format("{:.3f}%", std::max(0.0f, end_pct - start_pct)));
         changed |= setCachedProperty(timeline_progress_el_, "left", std::format("{:.3f}%", start_pct));
         changed |= setCachedProperty(timeline_progress_el_, "width", std::format("{:.3f}%", std::max(0.0f, trim_progress_pct - start_pct)));
         changed |= setCachedProperty(timeline_playhead_el_, "left", std::format("{:.3f}%", current_pct));
-        changed |= setCachedProperty(timeline_start_el_, "left", std::format("{:.3f}%", start_pct));
-        changed |= setCachedProperty(timeline_end_el_, "left", std::format("{:.3f}%", end_pct));
+
+        std::string segments;
+        if (has_video)
+            for (std::size_t i = 0; i < segments_.size(); ++i) {
+                const auto [from, to] = segment_range(segments_[i]);
+                segments += std::format("<div class=\"timeline-segment\" style=\"left: {:.3f}%; width: {:.3f}%;\">"
+                                        "<div class=\"timeline-handle timeline-handle--start\"></div>"
+                                        "<div class=\"timeline-handle timeline-handle--end\"></div>",
+                                        from / duration * 100.0, (to - from) / duration * 100.0);
+                if (segments_.size() > 1)
+                    segments += std::format("<div class=\"timeline-segment-remove\" data-segment=\"{}\" title=\"{}\">&#215;</div>",
+                                            i, LOC(VideoExtractor::REMOVE_SEGMENT));
+                segments += "</div>";
+            }
+        changed |= setCachedInnerRml(timeline_segments_el_, segments);
 
         std::string markers;
         const int frame_count = calculateEstimatedFrames();
@@ -1981,17 +2040,19 @@ namespace lfs::gui {
                                         ? 1.0 / std::max(0.001, static_cast<double>(fps_))
                                         : static_cast<double>(std::max(1, frame_interval_)) /
                                               std::max(0.001, player_->fps());
-                for (int i = 0; i < frame_count; ++i) {
-                    const double time = static_cast<double>(start) + static_cast<double>(i) * step;
-                    if (time >= end)
-                        break;
-                    const double pct = (time / duration) * 100.0;
-                    markers += std::format("<span class=\"timeline-marker\" style=\"left: {:.3f}%;\"></span>", pct);
+                for (const auto& segment : io::VideoFrameExtractor::joinTouching(segments_)) {
+                    const auto [from, to] = segment_range(segment);
+                    for (int k = 0; from + k * step < to; ++k)
+                        markers += std::format("<span class=\"timeline-marker\" style=\"left: {:.3f}%;\"></span>",
+                                               (from + k * step) / duration * 100.0);
                 }
             } else {
-                markers = std::format(
-                    "<span class=\"timeline-marker-band\" style=\"left: {:.3f}%; width: {:.3f}%;\"></span>",
-                    start_pct, std::max(0.0f, end_pct - start_pct));
+                for (const auto& segment : io::VideoFrameExtractor::joinTouching(segments_)) {
+                    const auto [from, to] = segment_range(segment);
+                    markers += std::format(
+                        "<span class=\"timeline-marker-band\" style=\"left: {:.3f}%; width: {:.3f}%;\"></span>",
+                        from / duration * 100.0, (to - from) / duration * 100.0);
+                }
             }
         }
         changed |= setCachedInnerRml(timeline_markers_el_, markers);
@@ -2049,7 +2110,7 @@ namespace lfs::gui {
         changed |= setCachedDisabled(browse_video_el_, extracting || pending_params_set_);
         changed |= setCachedDisabled(remove_video_el_, extracting || pending_params_set_ || !selected_batch_item_);
         changed |= setCachedDisabled(clear_videos_el_, extracting || pending_params_set_ || probing_batch ||
-                                                           batch_items_.empty());
+                                                           (batch_items_.empty() && !has_video));
         changed |= setCachedDisabled(browse_output_el_, extracting || pending_params_set_);
 
         changed |= setCachedSelect(naming_select_el_, naming_selection_);
@@ -2080,6 +2141,8 @@ namespace lfs::gui {
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
         changed |= setCachedChecked(continue_batch_on_failure_el_, continue_batch_on_failure_);
         changed |= setCachedDisabled(continue_batch_on_failure_el_, extracting);
+        if (auto* row = document_->GetElementById("batch-failure-options"))
+            changed |= setCachedProperty(row, "display", batch_items_.size() > 1 ? "flex" : "none");
 
         const bool masking_on = masking_toggle_el_ && masking_toggle_el_->HasAttribute("checked");
         const bool circle_on = mask_circle_el_ && mask_circle_el_->HasAttribute("checked");
@@ -2171,6 +2234,8 @@ namespace lfs::gui {
                                                : lfs::core::path_to_utf8(output_dir_);
         changed |= setCachedText(video_value_el_, video_display);
         changed |= setCachedText(output_value_el_, output_display);
+        changed |= setCachedAttribute(video_value_el_, "title", lfs::core::path_to_utf8(video_path_));
+        changed |= setCachedAttribute(output_value_el_, "title", lfs::core::path_to_utf8(output_dir_));
         const bool inputs_missing = (batch_items_.empty() ? !player_->isOpen() : false) || output_dir_.empty();
         changed |= setCachedProperty(select_hint_el_, "display", inputs_missing || !preflight.empty() ? "inline-block" : "none");
         changed |= setCachedText(select_hint_el_, preflight.empty() ? LOC(VideoExtractor::SELECT_BOTH) : preflight);
@@ -2216,6 +2281,10 @@ namespace lfs::gui {
         }
 
         const auto snapshot = getExtractionStatusSnapshot();
+        if (auto* review = document_ ? document_->GetElementById("btn-review-frames") : nullptr) {
+            std::lock_guard lock(review_mutex_);
+            changed |= setCachedProperty(review, "display", review_frames_.empty() || extracting ? "none" : "inline-block");
+        }
         changed |= setCachedProperty(complete_section_el_, "display",
                                      snapshot.status_message == ExtractionStatusMessage::Complete && !extracting
                                          ? "flex"
@@ -2314,7 +2383,8 @@ namespace lfs::gui {
         const auto event_id = event.GetId();
         if (event_id == Rml::EventId::Mousedown ||
             event_id == Rml::EventId::Mousemove ||
-            event_id == Rml::EventId::Mouseup) {
+            event_id == Rml::EventId::Mouseup ||
+            event_id == Rml::EventId::Dblclick) {
             handleTimelineEvent(event);
             return;
         }
@@ -2374,28 +2444,21 @@ namespace lfs::gui {
             texture_needs_update_ = true;
             markContentDirty();
         } else if (id == "btn-play" && player_->isOpen()) {
+            if (!player_->isPlaying() && !trim_end_is_auto_ && player_->currentTime() >= segments_.back().end)
+                player_->seek(segments_.front().start);
             player_->togglePlayPause();
             markContentDirty();
         } else if (id == "btn-step-forward" && player_->isOpen()) {
             player_->stepForward();
             texture_needs_update_ = true;
             markContentDirty();
-        } else if (id == "btn-trim-start-set" && player_->isOpen()) {
-            trim_start_ = std::clamp(static_cast<float>(player_->currentTime()), 0.0f,
-                                     std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
-            controls_dirty_ = true;
-            markContentDirty();
-        } else if (id == "btn-trim-end-set" && player_->isOpen()) {
-            trim_end_is_auto_ = false;
-            trim_end_ = std::clamp(static_cast<float>(player_->currentTime()),
-                                   std::min(trim_start_ + MIN_TRIM_SECONDS, static_cast<float>(player_->duration())),
-                                   static_cast<float>(player_->duration()));
+        } else if ((id == "btn-trim-start-set" || id == "btn-trim-end-set") && player_->isOpen()) {
+            moveSegmentEdge(id == "btn-trim-start-set" ? TimelineDragTarget::TrimStart : TimelineDragTarget::TrimEnd,
+                            activeSegment(), player_->currentTime());
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-trim-reset" && player_->isOpen()) {
-            trim_end_is_auto_ = true;
-            trim_start_ = 0.0f;
-            trim_end_ = player_->duration() > 0.0 ? static_cast<float>(player_->duration()) : -1.0f;
+            resetSegments();
             controls_dirty_ = true;
             markContentDirty();
         } else if (id == "btn-start") {
@@ -2455,6 +2518,30 @@ namespace lfs::gui {
             pending_metadata_will_be_replaced_ = false;
             if (overwrite_overlay_el_)
                 overwrite_overlay_el_->SetClass("hidden", true);
+            controls_dirty_ = true;
+            markContentDirty();
+        } else if (id == "btn-review-frames") {
+            std::vector<std::filesystem::path> paths;
+            std::vector<io::VideoFrameExtractor::WrittenFrame> frames;
+            std::filesystem::path weights;
+            std::filesystem::path video, output;
+            core::Uuid run{};
+            {
+                std::lock_guard lock(review_mutex_);
+                frames = review_frames_;
+                weights = review_weights_;
+                video = review_video_;
+                output = review_output_;
+                run = review_run_;
+            }
+            std::ranges::stable_sort(frames, [](const auto& a, const auto& b) {
+                return a.timestamp != b.timestamp ? a.timestamp < b.timestamp : a.source_frame < b.source_frame;
+            });
+            for (const auto& frame : frames)
+                paths.push_back(frame.path);
+            if (!extracting_.load() && !paths.empty()) {
+                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights), .frames = std::move(frames), .video = std::move(video), .output = std::move(output), .run = run}.emit();
+            }
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);
@@ -2598,26 +2685,38 @@ namespace lfs::gui {
                 return;
 
             const float mouse_x = event.GetParameter<float>("mouse_x", 0.0f);
-            const float width = std::max(timeline_el_->GetBox().GetSize(Rml::BoxArea::Border).x, 1.0f);
-            const float local_pct =
-                std::clamp((mouse_x - timeline_el_->GetAbsoluteLeft()) / width, 0.0f, 1.0f);
-            const float duration = static_cast<float>(std::max(player_->duration(), 0.001));
-            const float time = local_pct * duration;
-            const float start_dist = std::abs(time - trim_start_);
-            const float end_dist = std::abs(time - trim_end_);
-            const float handle_threshold = std::max(0.35f, duration * 0.015f);
+            if (auto* const target = event.GetTargetElement(); target && target->IsClassSet("timeline-segment-remove")) {
+                removeSegment(static_cast<std::size_t>(target->GetAttribute<int>("data-segment", 0)));
+                event.StopPropagation();
+                return;
+            }
+            const double duration = std::max(player_->duration(), 0.001);
+            const double time = timelineTime(mouse_x);
+            const double handle_threshold = std::max(0.35, duration * 0.015);
 
-            if (start_dist <= handle_threshold && start_dist <= end_dist)
-                timeline_drag_target_ = TimelineDragTarget::TrimStart;
-            else if (end_dist <= handle_threshold)
-                timeline_drag_target_ = TimelineDragTarget::TrimEnd;
-            else
-                timeline_drag_target_ = TimelineDragTarget::Playhead;
+            // The nearest edge in reach; where two segments touch, the side of the seam the press is on.
+            timeline_drag_target_ = TimelineDragTarget::Playhead;
+            double nearest = handle_threshold;
+            for (std::size_t i = 0; i < segments_.size(); ++i)
+                for (const auto edge : {TimelineDragTarget::TrimStart, TimelineDragTarget::TrimEnd}) {
+                    const double at = edge == TimelineDragTarget::TrimStart ? segments_[i].start : segments_[i].end;
+                    const bool inside = edge == TimelineDragTarget::TrimStart ? time >= at : time <= at;
+                    const double distance = std::abs(time - at) - (inside ? 1e-4 : 0.0);
+                    if (distance <= nearest) {
+                        nearest = distance;
+                        timeline_drag_target_ = edge;
+                        timeline_drag_segment_ = i;
+                    }
+                }
 
+            // The press propagates: RmlUi pairs only propagated presses into a double click.
             if (timeline_drag_target_ == TimelineDragTarget::Playhead)
                 seekFromTimeline(mouse_x);
             else
                 setTrimFromTimeline(timeline_drag_target_, mouse_x);
+        } else if (type == Rml::EventId::Dblclick && event.GetCurrentElement() == timeline_el_) {
+            timeline_drag_target_ = TimelineDragTarget::None;
+            splitOrJoinSegments(timelineTime(event.GetParameter<float>("mouse_x", 0.0f)));
             event.StopPropagation();
         } else if (type == Rml::EventId::Mousemove &&
                    timeline_drag_target_ != TimelineDragTarget::None) {
@@ -2634,44 +2733,165 @@ namespace lfs::gui {
         }
     }
 
+    double VideoExtractorDialog::timelineTime(const float mouse_x) const {
+        const float width = std::max(timeline_el_->GetBox().GetSize(Rml::BoxArea::Border).x, 1.0f);
+        const float t = std::clamp((mouse_x - timeline_el_->GetAbsoluteLeft()) / width, 0.0f, 1.0f);
+        return t * std::max(player_->duration(), 0.001);
+    }
+
     void VideoExtractorDialog::seekFromTimeline(const float mouse_x) {
         if (!player_->isOpen() || !timeline_el_)
             return;
-        const float width = std::max(timeline_el_->GetBox().GetSize(Rml::BoxArea::Border).x, 1.0f);
-        const float t = std::clamp((mouse_x - timeline_el_->GetAbsoluteLeft()) / width, 0.0f, 1.0f);
-        player_->seek(t * player_->duration());
+        player_->seek(timelineTime(mouse_x));
         texture_needs_update_ = true;
         markContentDirty();
     }
 
     void VideoExtractorDialog::setTrimFromTimeline(const TimelineDragTarget target,
                                                    const float mouse_x) {
-        if (!player_->isOpen() || !timeline_el_)
+        if (!player_->isOpen() || !timeline_el_ || timeline_drag_segment_ >= segments_.size())
             return;
-        const float duration = static_cast<float>(std::max(player_->duration(), 0.001));
         const float width = std::max(timeline_el_->GetBox().GetSize(Rml::BoxArea::Border).x, 1.0f);
-        const float t = std::clamp((mouse_x - timeline_el_->GetAbsoluteLeft()) / width, 0.0f, 1.0f);
-        const float time = t * duration;
-
-        if (target == TimelineDragTarget::TrimStart)
-            trim_start_ = std::clamp(time, 0.0f, std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
-        else if (target == TimelineDragTarget::TrimEnd) {
-            trim_end_is_auto_ = false;
-            trim_end_ = std::clamp(time, std::min(trim_start_ + MIN_TRIM_SECONDS, duration), duration);
-        }
-
+        const std::size_t i = timeline_drag_segment_;
+        const double neighbour = target == TimelineDragTarget::TrimStart
+                                     ? (i > 0 ? segments_[i - 1].end : 0.0)
+                                     : (i + 1 < segments_.size() ? segments_[i + 1].start : player_->duration());
+        const double pressed = timelineTime(mouse_x);
+        double time = pressed, nearest = SNAP_PIXELS / width * std::max(player_->duration(), 0.001);
+        for (const double anchor : {player_->currentTime(), neighbour})
+            if (const double distance = std::abs(pressed - anchor); distance <= nearest) {
+                nearest = distance;
+                time = anchor;
+            }
+        moveSegmentEdge(target, i, time);
         controls_dirty_ = true;
         markContentDirty();
     }
 
+    // An edge stays between the neighbouring segments, so a trimmed segment grows back over a cut stretch up to the
+    // next segment or the video's ends, and each segment keeps MIN_TRIM_SECONDS.
+    void VideoExtractorDialog::moveSegmentEdge(const TimelineDragTarget target, const std::size_t segment,
+                                               const double time) {
+        if (segment >= segments_.size())
+            return;
+        auto& edited = segments_[segment];
+        if (target == TimelineDragTarget::TrimStart) {
+            const double lower = segment > 0 ? segments_[segment - 1].end : 0.0;
+            edited.start = std::clamp(time, lower, std::max(lower, edited.end - MIN_TRIM_SECONDS));
+        } else {
+            const double upper = segment + 1 < segments_.size() ? segments_[segment + 1].start : player_->duration();
+            edited.end = std::clamp(time, std::min(edited.start + MIN_TRIM_SECONDS, upper), upper);
+            if (segment + 1 == segments_.size())
+                trim_end_is_auto_ = false;
+        }
+    }
+
+    // Inside a segment a double click splits it there; on the seam of two touching segments it joins them again.
+    void VideoExtractorDialog::splitOrJoinSegments(const double time) {
+        if (!player_->isOpen())
+            return;
+        const double reach = std::max(0.35, std::max(player_->duration(), 0.001) * 0.015);
+        for (std::size_t i = 0; i + 1 < segments_.size(); ++i)
+            if (segments_[i].end == segments_[i + 1].start && std::abs(time - segments_[i].end) <= reach) {
+                segments_[i].end = segments_[i + 1].end;
+                segments_.erase(segments_.begin() + static_cast<std::ptrdiff_t>(i) + 1);
+                controls_dirty_ = true;
+                markContentDirty();
+                return;
+            }
+        for (std::size_t i = 0; i < segments_.size(); ++i)
+            if (time - segments_[i].start >= MIN_TRIM_SECONDS && segments_[i].end - time >= MIN_TRIM_SECONDS) {
+                segments_.insert(segments_.begin() + static_cast<std::ptrdiff_t>(i) + 1, Segment{time, segments_[i].end});
+                segments_[i].end = time;
+                controls_dirty_ = true;
+                markContentDirty();
+                return;
+            }
+    }
+
+    void VideoExtractorDialog::removeSegment(const std::size_t segment) {
+        if (segments_.size() < 2 || segment >= segments_.size())
+            return;
+        if (segment + 1 == segments_.size())
+            trim_end_is_auto_ = false;
+        segments_.erase(segments_.begin() + static_cast<std::ptrdiff_t>(segment));
+        controls_dirty_ = true;
+        markContentDirty();
+    }
+
+    void VideoExtractorDialog::resetSegments() {
+        const double duration = player_ && player_->isOpen() ? player_->duration() : 0.0;
+        segments_ = {Segment{0.0, duration > 0.0 ? duration : -1.0}};
+        trim_end_is_auto_ = true;
+    }
+
+    // Playback previews the kept stretches: past a cut it plays on from the next segment, and it stops at the end of
+    // the last one.
+    void VideoExtractorDialog::skipCutWhilePlaying() {
+        if (!player_->isPlaying())
+            return;
+        // A seek shows the first frame at its target, which can lie a rounding error before it.
+        const double time = player_->currentTime() + 0.5 / std::max(player_->fps(), 1.0);
+        for (const auto& segment : segments_) {
+            if (time < segment.start) {
+                player_->seek(segment.start);
+                player_->togglePlayPause();
+                texture_needs_update_ = true;
+                return;
+            }
+            if (time < segment.end)
+                return;
+        }
+        if (!trim_end_is_auto_) {
+            player_->seek(segments_.back().end);
+            texture_needs_update_ = true;
+        }
+    }
+
+    // The segment under the playhead, else the nearest one.
+    std::size_t VideoExtractorDialog::activeSegment() const {
+        const double time = player_ && player_->isOpen() ? player_->currentTime() : 0.0;
+        std::size_t nearest = 0;
+        double distance = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i < segments_.size(); ++i) {
+            const double away = std::max({segments_[i].start - time, time - segments_[i].end, 0.0});
+            if (away < distance) {
+                distance = away;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    // The last segment's end at the video's end follows the stream to its end when `allow_stream_end`; a batch video
+    // never opened in the preview keeps the whole video.
+    std::vector<VideoExtractorDialog::Segment> VideoExtractorDialog::extractionSegments(std::vector<Segment> segments,
+                                                                                        const double duration,
+                                                                                        const bool allow_stream_end) {
+        if (segments.empty())
+            segments.push_back({0.0, duration > 0.0 ? duration : -1.0});
+        // A clip that was never opened in the player keeps an unset end; substitute the probed duration so an FPS
+        // batch keeps a numeric end instead of the "not set" sentinel.
+        if (auto& end = segments.back().end; end < 0.0 && duration > 0.0)
+            end = duration;
+        if (auto& end = segments.back().end; duration > 0.0 && allow_stream_end && (end < 0.0 || end >= duration))
+            end = -1.0;
+        return segments;
+    }
+
     void VideoExtractorDialog::applyTextInput(const std::string& id) {
-        if (id == "trim-start-input" && player_->isOpen()) {
-            trim_start_ = std::clamp(readFloatValue(trim_start_input_el_, trim_start_), 0.0f,
-                                     std::max(0.0f, trim_end_ - MIN_TRIM_SECONDS));
-        } else if (id == "trim-end-input" && player_->isOpen()) {
-            trim_end_ = std::clamp(readFloatValue(trim_end_input_el_, trim_end_),
-                                   std::min(trim_start_ + MIN_TRIM_SECONDS, static_cast<float>(player_->duration())),
-                                   static_cast<float>(player_->duration()));
+        if ((id == "trim-start-input" || id == "trim-end-input") && player_->isOpen()) {
+            const std::size_t segment = activeSegment();
+            const bool end = id == "trim-end-input";
+            const double current = end ? segments_[segment].end : segments_[segment].start;
+            // The field shows the time at float precision: text left as it shows keeps the exact time.
+            const float typed = readFloatValue(end ? trim_end_input_el_ : trim_start_input_el_, static_cast<float>(current));
+            if (typed != static_cast<float>(current)) {
+                const bool last_auto = end && trim_end_is_auto_;
+                moveSegmentEdge(end ? TimelineDragTarget::TrimEnd : TimelineDragTarget::TrimStart, segment, typed);
+                if (last_auto)
+                    trim_end_is_auto_ = true;
+            }
         } else if (id == "custom-width-input") {
             custom_width_ = std::max(16, readIntValue(custom_width_input_el_, custom_width_));
         } else if (id == "custom-height-input") {
@@ -2853,18 +3073,10 @@ namespace lfs::gui {
             VideoExtractionParams item_params = shared;
             item_params.video_path = item.video_path;
             item_params.output_dir = item.output_dir;
-            item_params.start_time = item.start_time;
-            // The selected clip's editor already substitutes the probed duration for an
-            // untouched end. Do the same for clips that were never opened, so an FPS batch
-            // keeps a numeric end instead of the "not set" sentinel.
-            const double trim_end = item.end_time < 0.0 && item.duration > 0.0 ? item.duration : item.end_time;
             const bool allow_stream_end = item.end_time_is_auto &&
                                           item_params.mode == io::ExtractionMode::INTERVAL &&
                                           !(item_params.sharpness_enabled && item_params.sharpness_window_mode);
-            item_params.end_time = item.duration > 0.0
-                                       ? io::extractionEndTime(static_cast<float>(trim_end), item.duration,
-                                                               allow_stream_end)
-                                       : item.end_time;
+            item_params.segments = extractionSegments(item.segments, item.duration, allow_stream_end);
             item_params.rotation = item.rotation;
             item_params.convert_hdr_to_sdr =
                 hdr_to_sdr_ && item.is_hdr && item.hdr_to_sdr_supported;
@@ -3005,7 +3217,6 @@ namespace lfs::gui {
             params.input_color.primaries = media::outputOptionValues<media::ColorPrimaries>[std::clamp(exr_selections_[3], 0, 2)].value;
         }
         params.jpg_quality = jpg_quality_;
-        params.start_time = static_cast<double>(trim_start_);
         static constexpr std::array<io::ResolutionMode, 3> RES_MODES{
             io::ResolutionMode::Original,
             io::ResolutionMode::Scale,
@@ -3029,8 +3240,8 @@ namespace lfs::gui {
             params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
         }
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
-        params.end_time = io::extractionEndTime(
-            trim_end_, player_->duration(),
+        params.segments = extractionSegments(
+            segments_, player_->duration(),
             trim_end_is_auto_ && params.mode == io::ExtractionMode::INTERVAL &&
                 !(params.sharpness_enabled && params.sharpness_window_mode));
         params.window_candidates_target = window_candidates_target_;
@@ -3105,10 +3316,12 @@ namespace lfs::gui {
         if (!player_ || !player_->isOpen())
             return 0.0;
         const double duration = std::max(player_->duration(), 0.0);
-        const double start = std::clamp(static_cast<double>(trim_start_), 0.0, duration);
-        const double end = std::clamp(trim_end_ < 0.0f ? duration : static_cast<double>(trim_end_),
-                                      start, duration);
-        return std::max(0.0, end - start);
+        double kept = 0.0;
+        for (const auto& segment : segments_) {
+            const double start = std::clamp(segment.start, 0.0, duration);
+            kept += std::clamp(segment.end < 0.0 ? duration : segment.end, start, duration) - start;
+        }
+        return kept;
     }
 
 } // namespace lfs::gui

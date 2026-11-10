@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/export.hpp"
+#include "core/extracted_frame.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
 #include "media/srt_metadata.hpp"
 #include <functional>
 #include <string_view>
+#include <vector>
 
 namespace lfs::media {
     enum class SelectionMode { FPS,
@@ -57,6 +59,15 @@ namespace lfs::media {
         // Unspecified means use source metadata. Overrides are explicit assumptions.
         FrameColor input_color;
         FloatColorProfile float_color_profile = FloatColorProfile::Sdr;
+        // A kept stretch in seconds; an end of -1 runs to the end of the video.
+        struct Segment {
+            double start = 0;
+            double end = -1;
+        };
+        // Kept stretches in time order; when set they replace start/end_seconds.
+        std::vector<Segment> segments;
+        // Each image a file extraction publishes, in order.
+        std::function<void(const core::ExtractedFrame&)> frame_written;
     };
     struct FileExtraction {
         FileFrameSinkOptions files;

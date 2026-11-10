@@ -17,6 +17,7 @@
 #include "core/tensor.hpp"
 
 #include <cstddef>
+#include <functional>
 
 namespace lfs::training {
     class AdamOptimizer;
@@ -47,6 +48,11 @@ namespace lfs::training::morton {
     /// perm.n on dim 0 permute the live prefix and keep the tail.
     void permute_row_tensor(lfs::core::Tensor& tensor, const lfs::core::Tensor& perm);
 
+    /// Hands each extra row-indexed tensor (a strategy's per-Gaussian rows) to
+    /// the visitor; the reorder permutes them in place with the model.
+    using RowVisitor = std::function<void(lfs::core::Tensor&)>;
+    using RowSource = std::function<void(const RowVisitor&)>;
+
     /// dest[i] <- src[perm[i]] for shN. q16 gather-decodes each dest 256-block
     /// in one launch (no full fp32 expansion). fp32 / IEEE-f16 keep the
     /// swizzled gather path.
@@ -56,11 +62,12 @@ namespace lfs::training::morton {
         lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
 
     /// Apply Morton ordering to all per-Gaussian model parameters, optimizer
-    /// moments, and row-indexed aux tensors on `splat`. Skips (and logs at
-    /// debug) when FrozenRange spans are active.
+    /// moments, row-indexed aux tensors on `splat` and `extra_rows`. Skips
+    /// (and logs at debug) when FrozenRange spans are active.
     [[nodiscard]] ReorderResult apply_morton_reorder(
         lfs::core::SplatData& splat,
         AdamOptimizer* optimizer = nullptr,
-        lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
+        lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()),
+        const RowSource& extra_rows = {});
 
 } // namespace lfs::training::morton

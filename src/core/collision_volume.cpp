@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision_volume.hpp"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <format>
 
@@ -34,12 +35,18 @@ namespace lfs::core {
             glm::any(glm::lessThanEqual(dimensions, glm::ivec3(0))) || glm::any(glm::greaterThan(dimensions, glm::ivec3(edge))) ||
             !std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z))
             throw collisionError("collision.data_invalid", "Invalid collision volume bounds or storage", ErrorCode::InvalidArgument);
-        std::vector<bool> seen(words.size());
+        std::vector<uint64_t> seen((words.size() + 63) / 64);
+        size_t marked = 0;
         uint64_t count = 0;
         auto mark = [&](size_t i) {
-            if (i >= words.size() || seen[i])
+            if (i >= words.size())
                 throw collisionError("collision.data_invalid", "Invalid collision pointer or shared subtree", ErrorCode::InvalidArgument);
-            seen[i] = true;
+            auto& block = seen[i / 64];
+            const auto bit = uint64_t{1} << (i % 64);
+            if (block & bit)
+                throw collisionError("collision.data_invalid", "Invalid collision pointer or shared subtree", ErrorCode::InvalidArgument);
+            block |= bit;
+            ++marked;
         };
         auto visit = [&](auto&& self, uint32_t i, glm::ivec3 lo, int size) -> void {
             mark(i);
@@ -54,13 +61,17 @@ namespace lfs::core {
                 mark(base);
                 mark(base + 1);
                 const auto mask = uint64_t(words[base]) | (uint64_t(words[base + 1]) << 32);
-                for (int b = 0; b < 64; ++b)
-                    if (mask & (uint64_t(1) << b)) {
+                // Interior bricks have no padding to reject. At the boundary,
+                // visit every occupied bit; empty bits need no coordinate work.
+                if (glm::any(glm::greaterThan(lo + 4, dimensions))) {
+                    for (auto remaining = mask; remaining; remaining &= remaining - 1) {
+                        const auto b = std::countr_zero(remaining);
                         const auto p = lo + glm::ivec3(b & 3, (b >> 2) & 3, b >> 4);
                         if (glm::any(glm::greaterThanEqual(p, dimensions)))
                             throw collisionError("collision.data_invalid", "Collision brick contains occupied padding", ErrorCode::InvalidArgument);
-                        ++count;
                     }
+                }
+                count += std::popcount(mask);
             } else if (v > 1) {
                 if (size <= 4 || v - 2 <= i || uint64_t(v) + 6 > words.size())
                     throw collisionError("collision.data_invalid", "Invalid collision branch", ErrorCode::InvalidArgument);
@@ -69,7 +80,9 @@ namespace lfs::core {
             }
         };
         visit(visit, 0, {}, edge);
-        if (count != occupied_count || std::find(seen.begin(), seen.end(), false) != seen.end())
+        // Every mark is in range and unique, so equal cardinality proves there
+        // are no unreachable words without another full bitmap scan.
+        if (count != occupied_count || marked != words.size())
             throw collisionError("collision.data_invalid", "Collision occupancy count or topology is invalid", ErrorCode::InvalidArgument);
     }
     glm::mat4 collisionInverse(const glm::mat4& transform) {

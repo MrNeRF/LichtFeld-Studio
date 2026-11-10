@@ -9,6 +9,7 @@
 
 #include "core/camera_types.h"
 #include "core/path_utils.hpp"
+#include "core/utc_time.hpp"
 
 #include <xxhash.h>
 
@@ -612,12 +613,7 @@ namespace lfs::io::project {
         }
 
         std::int64_t file_time_ns(const std::filesystem::file_time_type value) {
-#if defined(_MSC_VER)
-            const auto system_time =
-                std::chrono::clock_cast<std::chrono::system_clock>(value);
-#else
-            const auto system_time = std::filesystem::file_time_type::clock::to_sys(value);
-#endif
+            const auto system_time = core::file_time_to_system_clock(value);
             constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
             constexpr auto MIN_NS = std::numeric_limits<std::int64_t>::min();
             constexpr auto MAX_NS = std::numeric_limits<std::int64_t>::max();
@@ -2737,6 +2733,7 @@ namespace lfs::io::project {
                 required<std::string>(value, "image_path", "SCNG", field);
             auto mask_path =
                 required<std::string>(value, "mask_path", "SCNG", field);
+            auto mask_asset_uuid = parse_optional_uuid(value, "mask_asset_uuid", "SCNG", field);
             auto depth_path =
                 required<std::string>(value, "depth_path", "SCNG", field);
             auto normal_path =
@@ -2771,7 +2768,7 @@ namespace lfs::io::project {
             if (auto error =
                     first_error(uid, camera_id, focal_x, focal_y, center_x, center_y,
                                 model, camera_width, camera_height, image_width,
-                                image_height, image_name, image_path, mask_path,
+                                image_height, image_name, image_path, mask_path, mask_asset_uuid,
                                 depth_path, normal_path, has_alpha, has_image,
                                 split, undistortion)) {
                 return std::move(*error);
@@ -2840,6 +2837,7 @@ namespace lfs::io::project {
                 .image_name = std::move(*image_name),
                 .image_path = std::move(*image_path),
                 .mask_path = std::move(*mask_path),
+                .mask_asset_uuid = *mask_asset_uuid,
                 .depth_path = std::move(*depth_path),
                 .normal_path = std::move(*normal_path),
                 .has_alpha = *has_alpha,
@@ -2888,6 +2886,8 @@ namespace lfs::io::project {
             }
             if (value.sfm_observation_count > 0)
                 result["sfm_observations"] = value.sfm_observation_count;
+            if (value.mask_asset_uuid)
+                result["mask_asset_uuid"] = value.mask_asset_uuid->to_string();
             return result;
         }
 

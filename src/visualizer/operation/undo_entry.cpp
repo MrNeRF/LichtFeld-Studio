@@ -690,6 +690,8 @@ namespace lfs::vis::op {
             total += tensorMemory(camera.T);
             total += tensorMemory(camera.radial_distortion);
             total += tensorMemory(camera.tangential_distortion);
+            if (camera.mask_asset)
+                total.cpu_bytes += camera.mask_asset->bytes;
             return total;
         }
 
@@ -772,6 +774,8 @@ namespace lfs::vis::op {
             snapshot.image_name = camera.image_name();
             snapshot.image_path = camera.image_path();
             snapshot.mask_path = camera.mask_path();
+            snapshot.mask_asset_uuid = camera.mask_asset_uuid();
+            snapshot.mask_asset_owner = camera.mask_asset_owner();
             snapshot.depth_path = camera.depth_path();
             snapshot.split = camera.split();
             snapshot.focal_x = camera.focal_x();
@@ -788,6 +792,8 @@ namespace lfs::vis::op {
         }
 
         std::shared_ptr<lfs::core::Camera> restoreCamera(const SceneGraphCameraSnapshot& snapshot) {
+            if (snapshot.mask_asset)
+                snapshot.mask_asset->restore();
             auto camera = std::make_shared<lfs::core::Camera>(
                 snapshot.R.clone(),
                 snapshot.T.clone(),
@@ -807,6 +813,7 @@ namespace lfs::vis::op {
                 snapshot.camera_id,
                 snapshot.depth_path);
             camera->set_split(snapshot.split);
+            camera->set_mask_path(snapshot.mask_path, snapshot.mask_asset_uuid, snapshot.mask_asset_owner);
             camera->set_image_dimensions(snapshot.image_width, snapshot.image_height);
             return camera;
         }
@@ -871,6 +878,45 @@ namespace lfs::vis::op {
                        const auto* child = scene.getNodeById(child_id);
                        return !child || isTransientOnly(scene, *child);
                    });
+        }
+
+        size_t documentSelectionSize(const lfs::core::Scene& scene) {
+            size_t count = 0;
+            for (const auto* node : scene.getNodes()) {
+                if (node->type == lfs::core::NodeType::SPLAT && !isTransientSubtree(scene, *node))
+                    count += node->gaussian_count.load(std::memory_order_acquire);
+            }
+            return count;
+        }
+
+        // Rendering uses scene-wide offsets. History stores only document rows,
+        // then restores their current offsets after transient nodes change.
+        std::shared_ptr<lfs::core::Tensor> mapDocumentSelection(
+            const lfs::core::Scene& scene,
+            const std::shared_ptr<lfs::core::Tensor>& mask,
+            const bool to_document) {
+            const auto document_size = documentSelectionSize(scene);
+            const auto scene_size = scene.getSelectionGaussianCount();
+            if (!mask || !mask->is_valid() || document_size == scene_size)
+                return mask;
+            if (mask->ndim() != 1 || mask->numel() != (to_document ? scene_size : document_size))
+                throw HistoryStaleEntryError("Cannot map selection history after scene topology changed");
+            auto result = lfs::core::Tensor::zeros(
+                {to_document ? document_size : scene_size}, mask->device(), mask->dtype());
+            size_t scene_offset = 0, document_offset = 0;
+            for (const auto* node : scene.getNodes()) {
+                if (node->type != lfs::core::NodeType::SPLAT)
+                    continue;
+                const auto count = node->gaussian_count.load(std::memory_order_acquire);
+                if (count && !isTransientSubtree(scene, *node)) {
+                    const auto source = to_document ? scene_offset : document_offset;
+                    const auto target = to_document ? document_offset : scene_offset;
+                    result.slice(0, target, target + count).copy_from(mask->slice(0, source, source + count));
+                    document_offset += count;
+                }
+                scene_offset += count;
+            }
+            return std::make_shared<lfs::core::Tensor>(std::move(result));
         }
 
         // The training model as the document knows it: none while a transient
@@ -960,6 +1006,8 @@ namespace lfs::vis::op {
             }
             if (capture_payload && node.camera) {
                 snapshot.camera = captureCameraSnapshot(*node.camera);
+                if (snapshot.camera->mask_asset_uuid)
+                    snapshot.camera->mask_asset = scene_manager.retainCameraMaskAsset(*snapshot.camera->mask_asset_uuid);
             }
 
             for (const auto child_id : node.children) {
@@ -1461,6 +1509,8 @@ namespace lfs::vis::op {
                 total += tensorBytes(snapshot.camera->T);
                 total += tensorBytes(snapshot.camera->radial_distortion);
                 total += tensorBytes(snapshot.camera->tangential_distortion);
+                if (snapshot.camera->mask_asset)
+                    total += snapshot.camera->mask_asset->bytes;
             }
             for (const auto& child : snapshot.children) {
                 total += estimateSnapshotBytes(child);
@@ -2406,6 +2456,7 @@ namespace lfs::vis::op {
 
     void SceneSnapshot::captureSelection() {
         selection_before_ = scene_.getScene().captureSelectionState();
+        selection_before_.mask = mapDocumentSelection(scene_.getScene(), selection_before_.mask, true);
         captured_ = captured_ | ModifiesFlag::SELECTION;
     }
 
@@ -2477,8 +2528,9 @@ namespace lfs::vis::op {
             selection_after_metadata_ = scene_.getScene().captureSelectionStateMetadata();
         }
 
-        const auto selection_after = after_mask ? after_mask : scene_.getScene().getSelectionMask();
-        const size_t total_size = std::max({scene_.getScene().getTotalGaussianCount(),
+        const auto selection_after = mapDocumentSelection(
+            scene_.getScene(), after_mask ? after_mask : scene_.getScene().getSelectionMask(), true);
+        const size_t total_size = std::max({documentSelectionSize(scene_.getScene()),
                                             tensorNumel(selection_before_.mask),
                                             tensorNumel(selection_after)});
         const auto fallback_device =
@@ -2646,8 +2698,8 @@ namespace lfs::vis::op {
                                            }
                                          : selection_after_metadata_;
 
-        auto current_selection = scene_.getScene().getSelectionMask();
-        const size_t current_total = scene_.getScene().getSelectionGaussianCount();
+        auto current_selection = mapDocumentSelection(scene_.getScene(), scene_.getScene().getSelectionMask(), true);
+        const size_t current_total = documentSelectionSize(scene_.getScene());
         if (selection_mask_storage_.hasChanges() &&
             current_total !=
                 selection_mask_storage_.total_size) {
@@ -2673,7 +2725,8 @@ namespace lfs::vis::op {
         snapshot.next_group_id = target_metadata.next_group_id;
         snapshot.has_selection = target_metadata.has_selection;
         if (target_metadata.has_selection) {
-            snapshot.mask = std::make_shared<lfs::core::Tensor>(std::move(working_mask));
+            snapshot.mask = mapDocumentSelection(
+                scene_.getScene(), std::make_shared<lfs::core::Tensor>(std::move(working_mask)), false);
         }
         scene_.getScene().restoreSelectionState(snapshot);
     }
@@ -2989,9 +3042,23 @@ namespace lfs::vis::op {
         }
 
         const int flat_size = static_cast<int>(element_count_);
-        auto flat = current->contiguous().reshape({flat_size}).clone();
-        applyTensorSwapStorage(flat, storage_);
-        *current = flat.reshape(tensor_shape_).contiguous();
+        if (current->is_view() || !current->is_contiguous()) {
+            // A view's storage belongs to someone else: rebind the target to a fresh tensor.
+            auto flat = current->contiguous().reshape({flat_size}).clone();
+            applyTensorSwapStorage(flat, storage_);
+            *current = flat.reshape(tensor_shape_).contiguous();
+        } else {
+            // Write into the tensor's own storage. Model tensors share it with the renderer, and a
+            // replacement tensor would make VkSplat refuse to draw the model.
+            auto flat = current->contiguous().reshape({flat_size});
+            if (storage_.mode == TensorSwapStorageMode::DENSE) {
+                auto swapped = flat.clone();
+                applyTensorSwapStorage(swapped, storage_);
+                flat.copy_from(swapped);
+            } else {
+                applyTensorSwapStorage(flat, storage_);
+            }
+        }
         if (scene_) {
             scene_->getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             expected_topology_ =

@@ -227,3 +227,27 @@ TEST(SelectionOpsBackends, WorldTransformsMatchExplicitWorldPositions) {
                   selection_shrink(mask, means, .2f).to_vector_uint8());
     }
 }
+
+// A radius far below the scene size must reach every point, without a grid
+// clamped at 1024 cells per axis that drops the points outside it.
+TEST_F(SelectionOpsCudaTest, GrowWithTinyRadiusReachesTheWholeScene) {
+    const auto means = make_means({
+        0.0f,
+        0.0f,
+        0.0f, // 0: seed near the origin
+        1000.0f,
+        0.0f,
+        0.0f, // 1: seed at the far end
+        1000.005f,
+        0.0f,
+        0.0f, // 2: within 0.01 of seed 1
+        1000.0f,
+        0.0f,
+        0.02f, // 3: outside 0.01 of seed 1
+    });
+    const auto mask = make_uint8_mask({1, 1, 0, 0});
+
+    const auto grown = lfs::core::selection_grow(mask, means, 0.01f, /*group_id=*/1).cpu().to_vector_uint8();
+
+    EXPECT_EQ(grown, (std::vector<uint8_t>{1, 1, 1, 0}));
+}

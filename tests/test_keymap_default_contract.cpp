@@ -130,6 +130,25 @@ namespace lfs::vis::input {
             }
         }
 
+        TEST_F(KeymapTest, ImagePreviewCommandsAreScopedRebindableAndCanBeUnbound) {
+            InputBindings bindings;
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::IMAGE_PREVIEW, KEY_DELETE, 0), Action::IMAGE_PREVIEW_DELETE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::IMAGE_PREVIEW, KEY_ENTER, 0), Action::IMAGE_PREVIEW_GENERATE);
+            EXPECT_EQ(bindings.getActionForMouseButton(ToolMode::IMAGE_PREVIEW, MouseButton::RIGHT, 0), Action::IMAGE_PREVIEW_REMOVE_POINT);
+            EXPECT_NE(bindings.getActionForKey(ToolMode::GLOBAL, KEY_DELETE, 0), Action::IMAGE_PREVIEW_DELETE);
+            bindings.setBinding(ToolMode::IMAGE_PREVIEW, Action::IMAGE_PREVIEW_DELETE, KeyTrigger{KEY_F8, MODIFIER_CTRL});
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::IMAGE_PREVIEW, KEY_DELETE, 0), Action::NONE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::IMAGE_PREVIEW, KEY_F8, MODIFIER_CTRL), Action::IMAGE_PREVIEW_DELETE);
+            bindings.setBinding(ToolMode::IMAGE_PREVIEW, Action::IMAGE_PREVIEW_REMOVE_POINT, MouseButtonTrigger{MouseButton::MIDDLE, MODIFIER_CTRL, true});
+            EXPECT_EQ(bindings.getActionForMouseButton(ToolMode::IMAGE_PREVIEW, MouseButton::MIDDLE, MODIFIER_CTRL), Action::NONE);
+            EXPECT_EQ(bindings.getActionForMouseButton(ToolMode::IMAGE_PREVIEW, MouseButton::MIDDLE, MODIFIER_CTRL, true), Action::IMAGE_PREVIEW_REMOVE_POINT);
+            bindings.clearBinding(ToolMode::IMAGE_PREVIEW, Action::IMAGE_PREVIEW_GENERATE);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::IMAGE_PREVIEW, KEY_ENTER, 0), Action::NONE);
+            bindings.setBinding(ToolMode::IMAGE_PREVIEW, Action::IMAGE_PREVIEW_REMOVE_POINT, MouseButtonTrigger{MouseButton::MIDDLE, MODIFIER_SHIFT});
+            EXPECT_EQ(bindings.getActionForMouseButton(ToolMode::IMAGE_PREVIEW, MouseButton::RIGHT, 0), Action::NONE);
+            EXPECT_EQ(bindings.getActionForMouseButton(ToolMode::IMAGE_PREVIEW, MouseButton::MIDDLE, MODIFIER_SHIFT), Action::IMAGE_PREVIEW_REMOVE_POINT);
+        }
+
         TEST_F(KeymapTest, EveryNamedActionHasALabelInEveryLocale) {
             const auto root = std::filesystem::path(PROJECT_ROOT_PATH) /
                               "src/visualizer/gui/resources/locales";
@@ -140,7 +159,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::EDITOR_STOP); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::IMAGE_PREVIEW_REMOVE_POINT); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())

@@ -52,6 +52,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/runtime/gpu_slab_allocator.cpp
         tensor/backend/cuda/runtime/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
+        tensor/backend/cuda/runtime/lazy_device_storage.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/expression_program.cpp

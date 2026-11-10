@@ -44,8 +44,13 @@ namespace lfs::vis::gui::native_panels {
         if (!widget_)
             return {};
         setPanelSpace(request.space);
+        widget_->prepareWindowPresentation(request, ctx);
+        float controls[4];
+        const auto bounds = request.input && request.input->mouse_clicked[0] && widget_->titleControlsBounds(controls)
+                                ? std::optional(PanelDrawBounds{controls[0], controls[1], controls[2], controls[3]})
+                                : std::nullopt;
         if (request.mode == PanelDirectRenderMode::Measure)
-            return {.handled = true, .height = getDirectDrawHeight()};
+            return {.handled = true, .height = getDirectDrawHeight(), .title_controls_bounds = bounds};
 
         setInputClipY(request.clip_y_min, request.clip_y_max);
         setInput(request.input);
@@ -79,7 +84,7 @@ namespace lfs::vis::gui::native_panels {
         setForcedHeight(0.0f);
         setInput(nullptr);
         setInputClipY(-1.0f, -1.0f);
-        return {.handled = handled, .height = height};
+        return {.handled = handled, .height = height, .title_controls_bounds = bounds};
     }
 
     void VideoExtractorPanel::preloadDirect(const float w, const float h,

@@ -22,7 +22,7 @@ namespace lfs::training {
                 row_elems *= tensor.shape()[dim];
             }
         }
-        return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+        return tensor.committed_rows() * row_elems * lfs::core::dtype_size(tensor.dtype());
     }
 
     void record_vram_current(std::string_view scope,

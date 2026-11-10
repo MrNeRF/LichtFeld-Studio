@@ -305,6 +305,7 @@ namespace lfs::vis {
         // Camera frustums
         bool show_camera_frustums = false; // Master toggle for camera frustum rendering
         float camera_frustum_scale = 0.25f;
+        bool hide_disabled_camera_frustums = false;
 
         // Pivot point visualization
         bool show_pivot = false;
@@ -351,6 +352,7 @@ namespace lfs::vis {
                    show_center_markers == other.show_center_markers &&
                    show_camera_frustums == other.show_camera_frustums &&
                    camera_frustum_scale == other.camera_frustum_scale &&
+                   hide_disabled_camera_frustums == other.hide_disabled_camera_frustums &&
                    show_pivot == other.show_pivot &&
                    split_view_mode == other.split_view_mode &&
                    gt_comparison_mode == other.gt_comparison_mode &&

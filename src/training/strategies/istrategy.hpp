@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "optimizer/render_output.hpp"
 #include <exception>
+#include <functional>
 #include <istream>
 #include <memory>
 #include <ostream>
@@ -41,8 +42,9 @@ namespace lfs::training {
 
         virtual void step(int iter) = 0;
 
-        /// Permute row-indexed strategy aux tensors (vis counts, error maxima, free masks).
-        virtual void permute_gaussian_rows(const lfs::core::Tensor&) {}
+        /// Visits row-indexed strategy aux tensors (vis counts, error maxima, free
+        /// masks) so a Morton reorder permutes them with the model.
+        virtual void for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>&) {}
 
         virtual bool is_refining(int iter) const = 0;
         [[nodiscard]] virtual lfs::core::Tensor rendered_support_counts() const { return {}; }
@@ -70,6 +72,9 @@ namespace lfs::training {
 
         // Update the strategy's cached optimization parameters after checkpoint params are resolved.
         virtual void set_optimization_params(const lfs::core::param::OptimizationParameters&) {}
+
+        // Restarts the decay of the means learning rate from its initial value, over the remaining steps.
+        virtual void restart_mean_lr() {}
 
         // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}

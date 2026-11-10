@@ -583,6 +583,8 @@ add_custom_target(lfs_python_support_copy ALL
         ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py
         ${CMAKE_CURRENT_SOURCE_DIR}/lfs_splat_lod_hierarchy.py
         $<TARGET_FILE_DIR:lfs_py>
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions $<TARGET_FILE_DIR:lfs_py>/lichtfeld_sessions
     COMMENT "Copying internal Python support modules"
 )
 
@@ -627,6 +629,7 @@ install(TARGETS lfs_python_runtime
 # Install lfs_plugins Python package to bin for portable builds
 if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )
@@ -636,6 +639,7 @@ if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
     )
 else()
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )

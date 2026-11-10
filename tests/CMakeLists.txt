@@ -118,6 +118,43 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_camera_selection_tests test_camera_selection_algorithms.cpp)
+target_compile_features(lichtfeld_camera_selection_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
+add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
+set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
+add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
+target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+target_link_libraries(lichtfeld_collision_preview_upload_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.collision_preview_upload COMMAND lichtfeld_collision_preview_upload_tests)
+set_tests_properties(lichtfeld.collision_preview_upload PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+
+if(TARGET lfs_core)
+    add_executable(lichtfeld_collision_volume_tests test_collision_volume_validation.cpp)
+    target_compile_features(lichtfeld_collision_volume_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_volume_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/io)
+    target_link_libraries(lichtfeld_collision_volume_tests PRIVATE lfs_core GTest::gtest_main)
+    if(TARGET CUDA::cuda_driver)
+        target_link_libraries(lichtfeld_collision_volume_tests PRIVATE CUDA::cuda_driver)
+    endif()
+    add_test(NAME lichtfeld.collision_volume COMMAND lichtfeld_collision_volume_tests)
+    set_tests_properties(lichtfeld.collision_volume PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(lichtfeld.collision_volume PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
+endif()
+
+if(TARGET Vulkan::Vulkan)
+    add_executable(lichtfeld_collision_preview_vulkan_tests test_collision_preview_vulkan.cpp)
+    target_compile_features(lichtfeld_collision_preview_vulkan_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_preview_vulkan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+    target_link_libraries(lichtfeld_collision_preview_vulkan_tests PRIVATE GTest::gtest Vulkan::Vulkan)
+    add_test(NAME lichtfeld.collision_preview_vulkan COMMAND lichtfeld_collision_preview_vulkan_tests)
+    set_tests_properties(lichtfeld.collision_preview_vulkan PROPERTIES LABELS "gpu;collision" TIMEOUT 30)
+endif()
 
 # Runtime shader effect compiler contracts; no GPU. Validation builds also run
 # spirv-val on every SPIR-V module the tests emit.
@@ -508,6 +545,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        test_camera_training_notice.cpp
         test_analog_navigation.cpp
         test_gamepad_service.cpp
         test_gamepad_navigation.cpp
@@ -516,6 +554,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
+        test_collision_project_open.cpp
         test_project_document.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
@@ -559,6 +598,10 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     if(LFS_GRAPHICS_VULKAN_BUILD)
         list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES test_viewport_grid.cpp)
     endif()
+    if(LFS_HAS_CUDA)
+        # Picks through the CUDA rendering engine.
+        list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES test_camera_frustum_pick.cpp)
+    endif()
     if(NOT LFS_HAS_CUDA)
         # CUDA builds run these in lichtfeld_tests.
         list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES
@@ -583,13 +626,19 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_sdl_rml_key_mapping.cpp
         test_rml_form_control_layout.cpp
         test_histogram_layout.cpp
+        test_image_preview_layout.cpp
+        test_preview_texture_status.cpp
     )
+    if(LFS_HAS_CUDA)
+        # Assisted masking runs SAM2 on CUDA only.
+        target_sources(lichtfeld_rmlui_tests PRIVATE test_assisted_masking.cpp)
+    endif()
     target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_rmlui_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
     target_compile_definitions(lichtfeld_rmlui_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
     target_link_libraries(lichtfeld_rmlui_tests PRIVATE
-        lfs_visualizer lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+        lfs_visualizer lfs_preprocessing lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
     if(MSVC)
         target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
@@ -601,9 +650,14 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
             "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE lfs_python_embed)
     endif()
-    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests)
+    add_test(NAME lichtfeld.rmlui COMMAND lichtfeld_rmlui_tests --gtest_filter=-AssistedMaskingGpu.*)
     set_tests_properties(lichtfeld.rmlui PROPERTIES LABELS "fast;cpu;ui" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    if(LFS_HAS_CUDA)
+        add_test(NAME lichtfeld.rmlui_gpu COMMAND lichtfeld_rmlui_tests --gtest_filter=AssistedMaskingGpu.*)
+        set_tests_properties(lichtfeld.rmlui_gpu PROPERTIES LABELS "gpu;ui" TIMEOUT 420
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endif()
     target_compile_features(lichtfeld_visualizer_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_visualizer_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
@@ -615,6 +669,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
         lfs_training
         lfs_io
+        lfs_rendering
         lfs_sequencer
         lfs_visualizer
         lfs_core
@@ -674,6 +729,9 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         test_panel_registry_default_closed.cpp
     )
     target_compile_features(panel_layout_tests PRIVATE cxx_std_23)
+    target_compile_definitions(panel_layout_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
     target_include_directories(panel_layout_tests PRIVATE
         $<TARGET_PROPERTY:${PROJECT_NAME},INCLUDE_DIRECTORIES>
     )
@@ -1246,6 +1304,8 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 # Regular test sources (unit tests, integration tests)
 
 set(TEST_FILES
+    test_splat_preview.cpp
+    test_training_hook_context.cpp
     licht_test_support.cpp
     test_nodes_core.cpp
     test_nodes_scene.cpp
@@ -1401,6 +1461,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
+    test_lazy_direct_storage.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
     test_ssog_tiles.cpp
@@ -1486,6 +1547,7 @@ set(TEST_FILES
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_collision_project_open.cpp
     test_file_association.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp
@@ -1530,6 +1592,7 @@ set(TEST_FILES
     test_fastgs_forward_mask.cpp
     test_raster_evaluation.cu
     test_raster_reduction.cu
+    test_tensor_warp_reduce_identity.cu
     test_raster_tile_keys.cu
     test_sh_swizzle_layout.cpp
     test_shn_bda_index_math.cpp
@@ -1668,6 +1731,7 @@ set(TEST_FILES
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
+    test_noise_infill.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
     test_scale_distance.cpp
@@ -2373,6 +2437,8 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_operations.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_sessions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_localization.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
@@ -2390,6 +2456,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_workflow.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scale_distance_contract.py
@@ -2563,6 +2630,18 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
         ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
     )
 
+    add_test(NAME lichtfeld.python.scene_splat_inputs
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_splat_inputs_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.scene_splat_inputs PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>"
+    )
+
     add_test(NAME lichtfeld.python.scene_export_path
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_export_path_runtime.py
@@ -2611,11 +2690,19 @@ add_test(NAME lichtfeld.python.gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_repeat_regression.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_nn_sam2.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_sessions.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_standalone_camera_load_image.py
 )
 set_tests_properties(lichtfeld.python.gpu PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast;gpu"
     TIMEOUT 60
+)
+set_tests_properties(
+    lichtfeld.python.fast lichtfeld.python.gpu lichtfeld.python.slow lichtfeld.python.nightly
+    PROPERTIES
+    ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
 )
 
 
@@ -3028,10 +3115,8 @@ if(TARGET lfs_vulkan_rasterizer)
         LFS_STOCHASTIC_TEST_SPIRV_DIR="${_stochastic_shader_dir}/generated")
     add_test(NAME lichtfeld.stochastic COMMAND stochastic_tests)
     set_tests_properties(lichtfeld.stochastic PROPERTIES LABELS "gpu" TIMEOUT 120)
-    # Test private history state without widening the Windows DLL exports.
-    add_executable(stochastic_viewport_tests
-        test_stochastic_viewport.cpp
-        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
+    # Exercise history state through the same DLL implementation as the viewer.
+    add_executable(stochastic_viewport_tests test_stochastic_viewport.cpp)
     target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
     target_include_directories(stochastic_viewport_tests PRIVATE
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
@@ -3086,7 +3171,8 @@ if(LFS_VKSPLAT_VIEWPORT_BUILD AND TARGET lfs_visualizer AND TARGET lfs_user_shad
             $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
         target_compile_definitions(${_target} PRIVATE LFS_SHADER_PACKAGE_DIR="${_custom_effect_package_dir}")
         target_link_libraries(${_target} PRIVATE
-            lfs_vulkan_rasterizer lfs_visualizer lfs_core SDL3::SDL3 GTest::gtest)
+            lfs_vulkan_rasterizer lfs_visualizer lfs_core lfs_io lfs_sequencer lfs_rendering
+            SDL3::SDL3 GTest::gtest)
         add_dependencies(${_target} lfs_user_shader_ir)
         if(MSVC)
             target_link_options(${_target} PRIVATE "/DELAYLOAD:nvcuda.dll")

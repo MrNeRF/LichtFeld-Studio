@@ -5,15 +5,75 @@
 </head>
 <body template="floating-window" data-model="image_preview">
 
+  <div id="preview-toolbar">
+    <div class="preview-tool-group">
+      <button type="button" class="btn" id="btn-fit"></button>
+      <button type="button" class="btn" id="btn-actual-size">100%</button>
+      <button type="button" class="view-btn" id="btn-zoom-out" title="@tr:image_preview.zoom">−</button>
+      <button type="button" class="view-btn" id="btn-zoom-in" title="@tr:image_preview.zoom">+</button>
+    </div>
+    <div id="view-controls">
+      <button type="button" class="view-btn" id="btn-rotate-left">&#x21BA;</button>
+      <button type="button" class="view-btn" id="btn-rotate-right">&#x21BB;</button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-go-to-camera">
+        <img src="../icon/scene/camera.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-gt-compare">
+        <img src="../icon/layout-columns.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-toggle-training">
+        <img id="btn-toggle-training-icon" src="../icon/scene/unlocked.png" />
+      </button>
+      <button type="button" class="view-btn view-btn--icon" id="btn-show-in-folder">
+        <img src="../icon/scene/dataset.png" />
+      </button>
+    </div>
+    <div class="preview-tool-group">
+      <button type="button" class="btn" id="btn-thumbnails"></button>
+      <button type="button" class="btn" id="btn-info"></button>
+      <button type="button" class="btn" id="btn-picker"></button>
+      <button type="button" class="btn" id="btn-sam"></button>
+      <button type="button" class="btn" id="btn-refresh"></button>
+      <button type="button" class="btn" id="btn-help"></button>
+    </div>
+  </div>
+  <div id="sampled-color-controls" class="hidden">
+    <span id="sampled-color-value"></span>
+    <button type="button" class="btn" id="btn-apply-render-color"></button>
+    <button type="button" class="btn" id="btn-apply-training-color"></button>
+  </div>
+  <div id="shortcut-help" class="hidden">
+    <div class="status-keys">
+      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
+      <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
+      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
+      <span class="hk"><span class="hk-key">@tr:image_preview.zoom_shortcut</span><span class="hk-label" id="hk-zoom"></span></span>
+      <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
+      <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
+      <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>
+      <span class="hk"><span class="hk-key">C</span><span class="hk-label" id="hk-color-picker"></span></span>
+      <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
+      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
+    </div>
+    <div id="sam-edit-hint" class="sam-note"></div>
+    <div id="sam-shortcuts" class="sam-note"></div>
+    <div id="sam-hint" class="sam-note"></div>
+  </div>
+  <div id="preview-message" role="status"></div>
+
   <div id="main-area">
     <div id="filmstrip">
       <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_top_spacer_height"></div>
-      <div class="thumb-item"
-           data-for="thumb : thumbs"
-           data-class-selected="thumb.selected"
-           data-attr-data-index="thumb.index"
-           data-style-decorator="thumb.decorator ? thumb.decorator : 'none'">
-        <span class="thumb-index">{{ thumb.label }}</span>
+      <div class="thumb-row" data-for="thumb : thumbs">
+        <button type="button" class="thumb-item"
+                data-class-selected="thumb.selected"
+                data-attr-aria-pressed="thumb.selected"
+                data-attr-title="thumb.name"
+                data-attr-data-index="thumb.index"
+                data-style-decorator="thumb.decorator">
+          <span class="thumb-mask" data-style-decorator="thumb.mask_decorator"></span>
+          <span class="thumb-index">{{ thumb.label }}</span>
+        </button>
       </div>
       <div class="filmstrip-virtual-spacer" data-style-height="filmstrip_bottom_spacer_height"></div>
     </div>
@@ -22,12 +82,76 @@
         <div id="main-image-a" class="image-layer"></div>
         <div id="main-image-b" class="image-layer hidden"></div>
         <div id="mask-overlay"></div>
-        <span id="no-image-text"></span>
+        <div id="sam-overlay" class="image-layer hidden"></div>
+        <div id="sam-markers"></div>
+        <div id="no-image-text"><span id="preview-state-text"></span></div>
       </div>
-      <div class="nav-arrow" id="nav-prev">&#x25C0;</div>
-      <div class="nav-arrow" id="nav-next">&#x25B6;</div>
+      <button type="button" class="nav-arrow" id="nav-prev" title="@tr:image_preview.previous">&#x25C0;</button>
+      <button type="button" class="nav-arrow" id="nav-next" title="@tr:image_preview.next">&#x25B6;</button>
     </div>
     <div id="sidebar">
+      <div id="sam-pages" class="hidden">
+        <button type="button" class="btn" id="sam-page-frame"></button>
+        <button type="button" class="btn" id="sam-page-sequence"></button>
+      </div>
+      <div id="sam-controls" class="hidden">
+        <div id="sam-frame-controls">
+        <span class="section-label-ip" id="sam-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-positive"></button>
+          <button type="button" class="btn" id="sam-negative"></button>
+          <button type="button" class="btn" id="sam-box"></button>
+          <button type="button" class="btn" id="sam-pan"></button>
+        </div>
+        <select id="sam-selection"></select>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-remove"></button>
+          <button type="button" class="btn" id="sam-flip"></button>
+          <button type="button" class="btn" id="sam-undo"></button>
+          <button type="button" class="btn" id="sam-clear"></button>
+        </div>
+        <span class="section-label-ip" id="sam-proposals-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-generate"></button>
+          <button type="button" class="btn" id="sam-refine"></button>
+          <button type="button" class="btn" id="sam-cancel"></button>
+        </div>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-candidate-0"></button>
+          <button type="button" class="btn" id="sam-candidate-1"></button>
+          <button type="button" class="btn" id="sam-candidate-2"></button>
+          <button type="button" class="btn" id="sam-show"></button>
+        </div>
+        <div id="sam-quality" class="sam-note"></div>
+        </div>
+        <div id="sam-tracking" class="hidden">
+          <span class="section-label-ip" id="sam-tracking-heading"></span>
+          <div class="sam-tool-row sam-range-row">
+            <div class="sam-range-field">
+              <label for="sam-track-first" id="sam-track-first-label"></label>
+              <input type="text" maxlength="10" id="sam-track-first"/>
+            </div>
+            <div class="sam-range-field">
+              <label for="sam-track-last" id="sam-track-last-label"></label>
+              <input type="text" maxlength="10" id="sam-track-last"/>
+            </div>
+          </div>
+          <label for="sam-track-direction" id="sam-track-direction-label"></label>
+          <select id="sam-track-direction"></select>
+          <div class="sam-tool-row">
+            <button type="button" class="btn" id="sam-track"></button>
+          </div>
+          <div class="sidebar-check-row">
+            <input type="checkbox" id="sam-approve"/>
+            <label for="sam-approve" id="sam-approve-label"></label>
+          </div>
+          <div class="sam-tool-row">
+            <button type="button" class="btn" id="sam-approve-range"></button>
+          </div>
+          <div id="sam-sequence-status" class="sam-note" role="status"></div>
+        </div>
+      </div>
+      <div id="metadata-info">
       <div class="sidebar-header-ip">
         <span class="sidebar-header-label-ip" id="sidebar-file-header"></span>
         <span id="sidebar-filename"></span>
@@ -76,16 +200,9 @@
         <div class="meta-full-ip">
           <div class="meta-path-row">
             <span class="meta-key" id="meta-path-label"></span>
-            <span class="btn-copy" id="btn-copy-path"><img class="btn-copy-icon" src="../icon/copy.png"/></span>
+            <button type="button" class="btn-copy" id="btn-copy-path" title="@tr:image_preview.copy_full_path"><img class="btn-copy-icon" src="../icon/copy.png"/></button>
           </div>
           <span class="meta-val-secondary" id="sidebar-filepath"></span>
-        </div>
-      </div>
-      <div class="sidebar-section-ip">
-        <span class="section-label-ip" id="sidebar-view-label"></span>
-        <div class="sidebar-check-row">
-          <input type="checkbox" id="cb-fit" checked/>
-          <label for="cb-fit" id="cb-fit-label"></label>
         </div>
       </div>
       <div class="sidebar-section-ip" id="sidebar-mask-section">
@@ -96,42 +213,25 @@
           <label for="cb-mask" id="cb-mask-label"></label>
         </div>
       </div>
+      </div>
+      <div id="sam-apply-controls" class="hidden">
+        <span class="section-label-ip" id="sam-apply-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-apply"></button>
+          <button type="button" class="btn" id="sam-exclude"></button>
+        </div>
+        <div class="sam-tool-row hidden" id="sam-save-controls">
+          <button type="button" class="btn btn--primary" id="sam-save"></button>
+          <button type="button" class="btn" id="sam-save-exclude"></button>
+        </div>
+        <div id="sam-status" role="status"></div>
+      </div>
     </div>
   </div>
 
   <div id="status-bar">
-    <span class="status-item" id="st-w"></span>
-    <span class="status-item" id="st-h"></span>
-    <span class="status-item" id="st-ch"></span>
     <span class="status-item" id="st-zoom"></span>
-    <div id="view-controls">
-      <button type="button" class="view-btn" id="btn-rotate-left">&#x21BA;</button>
-      <button type="button" class="view-btn" id="btn-rotate-right">&#x21BB;</button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-go-to-camera">
-        <img src="../icon/scene/camera.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-gt-compare">
-        <img src="../icon/layout-columns.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-toggle-training">
-        <img id="btn-toggle-training-icon" src="../icon/scene/visible.png" />
-      </button>
-      <button type="button" class="view-btn view-btn--icon" id="btn-show-in-folder">
-        <img src="../icon/scene/dataset.png" />
-      </button>
-    </div>
-    <span class="status-keys">
-      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
-      <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
-      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
-      <span class="hk"><span class="hk-key">@tr:image_preview.zoom_shortcut</span><span class="hk-label" id="hk-zoom"></span></span>
-      <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
-      <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
-      <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>
-      <span class="hk"><span class="hk-key">C</span><span class="hk-label" id="hk-color-picker"></span></span>
-      <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
-      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
-    </span>
+    <div id="mask-legend" class="sam-note hidden" role="status"></div>
     <span class="status-position" id="st-position"></span>
   </div>
 

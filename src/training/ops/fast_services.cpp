@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace lfs::training {
     namespace {
@@ -19,6 +20,10 @@ namespace lfs::training {
             return lfs::gpu_ops::ShStorage::Float32;
         }
 
+        // The blend reads the background with the strides of the rendered
+        // region, so any other size reads the wrong pixels.
+        constexpr std::string_view kBackgroundSizeMismatch =
+            "background image does not match the size of the rendered region";
     } // namespace
 
     lfs::Error fast_raster_error(const lfs::gpu_ops::RasterResult& result) {
@@ -29,6 +34,15 @@ namespace lfs::training {
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = "FastGS cannot render an empty Gaussian model.",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        if (detail == kBackgroundSizeMismatch) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = "The background image does not match the size of the rendered image.",
                 .detail = detail,
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
@@ -118,6 +132,14 @@ namespace lfs::training {
             .depth = output.depth,
             .normal = output.normal,
         };
+        if (bg_image.is_valid() && !bg_image.is_empty()) {
+            const auto width = static_cast<size_t>(tile_width > 0 ? tile_width : camera.image_width());
+            const auto height = static_cast<size_t>(tile_height > 0 ? tile_height : camera.image_height());
+            if (bg_image.ndim() != 3 || bg_image.shape()[0] != 3 || bg_image.shape()[1] != height ||
+                bg_image.shape()[2] != width) {
+                return {.code = lfs::gpu_ops::RasterResult::Code::Failed, .message = kBackgroundSizeMismatch};
+            }
+        }
         const auto result = ops.forward(
             saved, splats, camera.world_view_transform(), camera.cam_position(),
             bg_color, bg_image, params, rendered, update_screen_share ? model._max_screen_share : no_bounds);

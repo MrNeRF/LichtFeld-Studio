@@ -266,6 +266,7 @@ namespace lfs::training {
             std::move(state.sfm_observation_cameras);
         staged.collisions = std::move(collisions);
         staged.document_context = std::move(context);
+        staged.standalone = output.standalone;
         output = std::move(staged);
         return {};
     }

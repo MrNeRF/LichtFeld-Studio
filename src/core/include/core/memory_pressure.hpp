@@ -21,6 +21,11 @@ namespace lfs {
 
 namespace lfs::core {
 
+    // VRAM a training frame allocates outside the rasterizer arena, as training
+    // measured it; 0 until measured. Bounds the arena's growth headroom from above.
+    LFS_CORE_API void set_measured_frame_headroom_bytes(std::size_t bytes) noexcept;
+    [[nodiscard]] LFS_CORE_API std::size_t measured_frame_headroom_bytes() noexcept;
+
     // Typed allocation failure. Carries the structured cause across expected /
     // exception boundaries so callers can distinguish OOM from an invariant
     // failure and decide whether a retry is safe.

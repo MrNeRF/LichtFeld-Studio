@@ -206,6 +206,8 @@ namespace lfs::training {
             .update_rows = update_rows,
             .sample = sample,
             .fold_error = fold_error,
+            .sample_rows = portable_mcmc_sample_rows,
+            .relocate_copies = relocate_copies_via<metal_mcmc_ops>,
         };
         return ops;
     }

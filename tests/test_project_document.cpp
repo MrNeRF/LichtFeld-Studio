@@ -8,6 +8,8 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "cuda_backend_test.hpp"
+#include "core/utc_time.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loaders/loader_utils.hpp"
@@ -66,6 +68,18 @@
 #endif
 
 namespace {
+    TEST(ProjectDocumentTime, FileClockConversionPreservesUnixEpochAndSubseconds) {
+        for (const auto seconds : {-1LL, 0LL, 1'700'000'000LL}) {
+            const auto expected = std::chrono::sys_seconds{std::chrono::seconds{seconds}} +
+                                  std::chrono::microseconds{123456};
+#if defined(_MSC_VER)
+            const auto file_time = std::chrono::clock_cast<std::filesystem::file_time_type::clock>(expected);
+#else
+            const auto file_time = std::filesystem::file_time_type::clock::from_sys(expected);
+#endif
+            EXPECT_EQ(lfs::core::file_time_to_system_clock(file_time), expected);
+        }
+    }
 
     namespace fs = std::filesystem;
     using lfs::core::DataType;
@@ -173,6 +187,82 @@ namespace {
         ASSERT_TRUE(cleared.save(path, save_options(19'163, 400)));
         EXPECT_TRUE(stored());
         EXPECT_EQ(trees(), Json::array());
+    }
+
+    auto make_camera_mask_document() {
+        const auto asset = fixed_uuid(19501);
+        auto document = make_empty_document(fixed_uuid(19500), 100);
+        CameraRecord camera;
+        camera.mask_asset_uuid = asset;
+        camera.image_name = "frame.png";
+        camera.mask_path = "";
+        camera.rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        camera.focal_x = camera.focal_y = 1;
+        camera.camera_width = camera.camera_height = camera.image_width = camera.image_height = 1;
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = fixed_uuid(19502),
+            .type = "camera",
+            .name = "frame.png",
+            .camera = camera}));
+        require_status(document->set_dataset_source(asset, require_result(LazyChunkValue::from_owned(one_pixel_png(), asset))));
+        return document;
+    }
+
+    TEST(CameraMaskAssetTest, PngSurvivesSaveReopenAndCopyWithoutItsSource) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "mask.licht";
+        const auto asset = fixed_uuid(19501);
+        const auto png = one_pixel_png();
+        auto document = make_camera_mask_document();
+        ASSERT_TRUE(document->save(path, save_options(19503, 200)));
+        auto reader = require_result(ProjectReader::open(path));
+        EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(CAMERA_MASK_ASSETS_V1));
+        EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(CAMERA_MASK_ASSETS_V1));
+        ReaderOptions old;
+        old.reader_capabilities.set(CAMERA_MASK_ASSETS_V1, false);
+        EXPECT_FALSE(ProjectReader::open(path, old));
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        auto nodes = require_result(reopened->scene_graph().nodes());
+        ASSERT_EQ(nodes.size(), 1);
+        ASSERT_TRUE(nodes[0].camera);
+        EXPECT_EQ(nodes[0].camera->mask_asset_uuid, asset);
+        EXPECT_TRUE(nodes[0].camera->mask_path.empty());
+        auto materialized = require_result(reopened->materialize_embedded_asset(asset, "png"));
+        EXPECT_EQ(read_file_bytes(materialized), png);
+        const auto copy = temporary.path / "copy.licht";
+        ASSERT_TRUE(reopened->save_as(copy, save_options(19504, 300)));
+        reopened.reset();
+        EXPECT_FALSE(lfs::core::native_fs::exists(materialized));
+        auto copied = require_result_ptr(ProjectDocument::open(copy));
+        EXPECT_EQ(read_file_bytes(require_result(copied->materialize_embedded_asset(asset, "png"))), png);
+        ASSERT_TRUE(copied->remove_dataset_source(asset));
+        EXPECT_FALSE(copied->save(copy, save_options(19505, 400)));
+        EXPECT_TRUE(ProjectDocument::open(copy));
+    }
+
+    TEST(CameraMaskAssetTest, PruningRetainsUndoStorageAndUnrelatedDatasetSources) {
+        TemporaryDirectory temporary;
+        auto document = make_empty_document(fixed_uuid(19510), 100);
+        const auto mask = fixed_uuid(19511);
+        const auto other = fixed_uuid(19512);
+        const auto png = one_pixel_png();
+        ASSERT_TRUE(document->set_dataset_source(mask, require_result(LazyChunkValue::from_owned(png, mask))));
+        ASSERT_TRUE(document->set_dataset_source(other, require_result(LazyChunkValue::from_owned(png, other))));
+        // A snapshot shares payload ownership before the cache file exists.
+        std::optional<LazyChunkValue> retained;
+        retained.emplace(require_result(document->find_dataset_source(mask)->share()));
+        const auto cached = require_result(document->resolve_camera_mask(mask)).path;
+        document->remove_geometry_payloads_not_bound_by_scene();
+        EXPECT_EQ(document->find_dataset_source(mask), nullptr);
+        EXPECT_NE(document->find_dataset_source(other), nullptr);
+        EXPECT_TRUE(lfs::core::native_fs::exists(cached));
+        const auto path = temporary.path / "pruned-mask.licht";
+        ASSERT_TRUE(document->save(path, save_options(19513, 200)));
+        const auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_EQ(reopened->find_dataset_source(mask), nullptr);
+        EXPECT_NE(reopened->find_dataset_source(other), nullptr);
+        retained.reset();
+        EXPECT_FALSE(lfs::core::native_fs::exists(cached));
     }
 
     TEST(ProjectDocumentTest, ShaderCapabilitiesFollowEffectiveChaptersAcrossSaveAndCopy) {
@@ -1379,6 +1469,27 @@ namespace {
         void SetUp() override { LFS_CUDA_BACKEND_OR_RETURN(); }
     };
 
+    TEST_F(SceneChapterAdapterGpuTest, HydratedMaskCacheOutlivesItsDocumentUntilLastCameraRelease) {
+        TemporaryDirectory temporary;
+        auto document = make_camera_mask_document();
+        const auto path = temporary.path / "camera-lease.licht";
+        ASSERT_TRUE(document->save(path, save_options(19506, 200)));
+        std::filesystem::path leased;
+        {
+            Scene live;
+            auto staged = document->stage_hydration(live);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            static_cast<void>(ProjectDocument::commit_hydration(live, std::move(*staged)));
+            const auto cameras = live.getAllCameras();
+            ASSERT_EQ(cameras.size(), 1u);
+            leased = cameras.front()->mask_path();
+            EXPECT_TRUE(cameras.front()->mask_asset_owner());
+            document.reset();
+            EXPECT_EQ(read_file_bytes(leased), one_pixel_png());
+        }
+        EXPECT_FALSE(lfs::core::native_fs::exists(leased));
+    }
+
     std::shared_ptr<lfs::core::Camera> make_adapter_test_camera(
         const std::string& image_name, const int uid, const bool distorted = false) {
         const auto empty_distortion = Tensor::zeros(
@@ -1734,6 +1845,51 @@ namespace {
         EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
             return camera && camera->uid() == 3;
         }));
+    }
+
+    TEST_F(SceneChapterAdapterGpuTest, FileMaskReplacesMemoryMaskAndSurvivesTrainingDecodeAfterReopen) {
+        lfs::io::CacheLoader::getInstance(false);
+        lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+            return lfs::io::CacheLoader::getInstance().load_cached_image(p.path,
+                                                                         {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream, .output_uint8 = p.output_uint8, .skip_blob_cache = p.skip_blob_cache, .mask_grayscale = p.mask_grayscale});
+        });
+        TemporaryDirectory temporary;
+        const auto png_path = temporary.path / "source-mask.png";
+        std::vector<std::uint8_t> pixels(64 * 64);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = i % 64 < 32 ? 0 : 255;
+        ASSERT_TRUE(lfs::core::save_png(png_path, pixels.data(), 64, 64, 1, 8, 1));
+        Scene source;
+        const auto camera = make_adapter_test_camera("frame.png", 1);
+        camera->set_image_dimensions(64, 64);
+        camera->set_mask_tensor(Tensor::ones({64, 64}, Device::CPU));
+        const auto asset = fixed_uuid(19511);
+        camera->set_mask_path(png_path, asset);
+        EXPECT_FALSE(camera->has_in_memory_mask());
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        source.addCamera("frame.png", source.addGroup("Cameras"), camera);
+        auto document = make_empty_document(fixed_uuid(19510), 100);
+        auto png = LazyChunkValue::from_owned(read_file_bytes(png_path), asset);
+        ASSERT_TRUE(png);
+        ASSERT_TRUE(document->set_dataset_source(asset, std::move(*png)));
+        document->edit_scene_graph() = require_result(capture_scene_graph(source, {}));
+        const auto path = temporary.path / "mask.licht";
+        ASSERT_TRUE(document->save(path, save_options(19512, 200)));
+        ASSERT_TRUE(lfs::core::native_fs::remove(png_path));
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        Scene restored;
+        ASSERT_TRUE(reopened->hydrate(restored));
+        const auto& mask_camera = restored.getNode("frame.png")->camera;
+        ASSERT_TRUE(mask_camera->has_mask());
+        EXPECT_EQ(mask_camera->mask_asset_uuid(), asset);
+        EXPECT_NE(mask_camera->mask_path(), png_path);
+        const auto decoded = mask_camera->load_and_get_mask(-1, 0, false, 0.5f, true, false).cpu().to_vector_uint8();
+        ASSERT_EQ(decoded.size(), pixels.size());
+        for (size_t i = 0; i < pixels.size(); ++i)
+            ASSERT_EQ(decoded[i], pixels[i] ? 1 : 0) << i;
+        auto shell = reopened->stage_shell(restored);
+        ASSERT_TRUE(shell);
+        EXPECT_EQ((*shell)->getNode("frame.png")->camera->mask_asset_uuid(), asset);
     }
 
     TEST_F(SceneChapterAdapterGpuTest, PreparedCameraRoundTripPreservesSourceCalibration) {
@@ -3362,6 +3518,16 @@ namespace {
                 if (state.fourcc == FOURCC_COLV)
                     EXPECT_EQ(state.loaded, !deferred);
             document = require_result_ptr(ProjectDocument::open(destination, {.defer_geometry_payloads = deferred}));
+            EXPECT_EQ(document->has_deferred_collision_payloads(), deferred);
+            if (deferred) {
+                const auto canceled = document->preload_collision_payloads([] { return true; });
+                ASSERT_FALSE(canceled);
+                EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
+                EXPECT_TRUE(document->has_deferred_collision_payloads());
+            }
+            ASSERT_TRUE(document->preload_collision_payloads());
+            EXPECT_FALSE(document->has_deferred_collision_payloads());
+            EXPECT_FALSE(document->dirty());
             Scene target;
             auto shell = require_result(document->stage_shell(target));
             ASSERT_TRUE(document->hydrate(target));
@@ -6596,10 +6762,13 @@ namespace {
         EXPECT_THROW((void)scene.captureCollisionSource(model_id), lfs::Exception);
         lfs::training::ProjectSnapshotChapters
             chapters;
+        // The writer reads the request's standalone flag after materializing.
+        chapters.standalone = true;
         require_status(lfs::training::
                            materialize_project_snapshot_cpu_chapters(
                                std::move(cpu_state),
                                chapters));
+        EXPECT_TRUE(chapters.standalone);
         ASSERT_EQ(chapters.collisions.size(), 1);
         EXPECT_EQ(chapters.collisions.begin()->second, volume);
         const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);

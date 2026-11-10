@@ -42,6 +42,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.trainer_saving_model = lambda: False
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
+    lf_stub.trainer_densification_vram = lambda: None
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None
     lf_stub.detect_dataset_info = lambda _path: None
@@ -320,6 +321,7 @@ def test_sparsity_toggle_controls_popspa_rows_and_search(
         use_exposure_correction=False, ppisp_use_controller=False,
         use_bilateral_grid=False, strategy="mcmc", random=False,
         enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+        noise_infill_mesh="",
     )
     monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
     panel = module.TrainingPanel()
@@ -733,6 +735,28 @@ def test_igs_conflict_resolution_synchronizes_viewer(training_panel_module, monk
     assert updates == [("raster_backend", "3dgs")]
 
 
+@pytest.mark.parametrize(
+    ("enable_eval", "enabled", "noise_mesh", "eval_mask", "visible"),
+    [
+        (True, False, "scan.obj", "", True),
+        (True, False, "", "scan.obj", True),
+        (True, False, "", "cropbox", False),
+        (True, True, "", "cropbox", True),
+        (False, True, "scan.obj", "", False),
+    ],
+)
+def test_enabled_green_infill_stays_visible_once_its_mesh_is_gone(
+    training_panel_module, enable_eval, enabled, noise_mesh, eval_mask, visible
+):
+    params = SimpleNamespace(
+        enable_eval=enable_eval,
+        eval_green_infill=enabled,
+        noise_infill_mesh=noise_mesh,
+        eval_mask=eval_mask,
+    )
+    assert bool(training_panel_module._green_infill_option_visible(params)) is visible
+
+
 class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
@@ -924,6 +948,8 @@ class _ParamsStub:
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
         self.enable_eval = False
+        self.noise_infill_mesh = ""
+        self.eval_green_infill = False
         self.eval_mask = ""
         self.eval_mask_report = ""
         self.save_steps = [7000]
@@ -1258,6 +1284,46 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
     assert panel._update_progress() is True
     assert panel._progress_value == "0.25"
     assert panel._handle.dirty_fields == ["progress_value"]
+
+
+def test_densify_vram_bar_counts_down_the_room_until_vram_is_full(training_panel_module, monkeypatch):
+    module = training_panel_module
+    texts = {
+        "training_panel.densify_vram_left": "+%s Gaussians · %s GiB left",
+        "training_panel.densify_vram_full": "Full at %s Gaussians",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: texts.get(key, key))
+    runtime = SimpleNamespace(
+        trainer_state=_make_signal("running"),
+        iteration=_make_signal(1000),
+        num_gaussians=_make_signal(1_500_000),
+    )
+    monkeypatch.setattr(module, "RuntimeState", runtime)
+    room = None
+    monkeypatch.setattr(module.lf, "trainer_densification_vram", lambda: room)
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    model = _ModelStub()
+    panel._bind_status(model, None)
+
+    def value(name):
+        return model.bindings[name][0]()
+
+    # Hidden until a refine measured the room.
+    assert panel._update_densify_vram() is False
+    assert value("show_densify_vram") is False
+
+    room = {"capacity": 2_000_000, "bytes_per_gaussian": 1024}
+    runtime.iteration.value = 1100
+    assert panel._update_densify_vram() is True
+    assert value("show_densify_vram") is True
+    assert value("densify_vram_text") == "+500.0K Gaussians · 0.48 GiB left"
+    assert value("densify_vram_value") == "0.75"
+    assert value("densify_vram_class").endswith("densify-vram--level-2")
+
+    runtime.num_gaussians.value = 2_000_000
+    assert value("densify_vram_text") == "Full at 2,000,000 Gaussians"
+    assert value("densify_vram_class").endswith("densify-vram--level-4")
 
 
 def test_training_panel_uses_dirty_update_policy(training_panel_module):

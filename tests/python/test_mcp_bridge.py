@@ -80,6 +80,7 @@ def test_camera_runtime_isolates_inherited_application_root(monkeypatch, tmp_pat
         pick_launch_command=lambda: [],
         ensure_server_ready=start,
         cleanup_spawned_processes=Mock(),
+        _spawned_processes=[(Mock(), None)],
     )
     spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _module: None))
     monkeypatch.setattr(runtime, "importlib", SimpleNamespace(util=SimpleNamespace(
@@ -90,10 +91,12 @@ def test_camera_runtime_isolates_inherited_application_root(monkeypatch, tmp_pat
     monkeypatch.setattr(runtime, "_call", lambda _endpoint, method, *_args: {
         "tools": [{"name": name} for name in ("editor_run", "project_save_as", "project_open")]
     } if method == "tools/list" else {})
-    fixture = runtime.camera_runtime.__wrapped__(tmp_path, monkeypatch)
+    request = SimpleNamespace(node=SimpleNamespace())
+    fixture = runtime.camera_runtime.__wrapped__(tmp_path, monkeypatch, request)
     try:
         assert next(fixture).startswith("http://127.0.0.1:")
     finally:
         fixture.close()
     bridge.cleanup_spawned_processes.assert_called_once()
+    assert request.node.camera_process is bridge._spawned_processes[-1][0]
     assert not inherited.exists()

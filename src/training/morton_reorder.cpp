@@ -5,6 +5,7 @@
 
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -19,6 +20,7 @@
 #include "optimizer/adam_optimizer.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -307,10 +309,36 @@ namespace lfs::training::morton {
         permute_dim0_prefix(tensor, perm);
     }
 
+    namespace {
+        // Permutes the live rows and copies them back into the same storage,
+        // so views and published pointers to strategy rows stay valid.
+        void permute_rows_in_place(Tensor& tensor, const Tensor& perm) {
+            const std::size_t n = perm.numel();
+            if (!tensor.is_valid() || tensor.numel() == 0 || n == 0 || tensor.ndim() == 0) {
+                return;
+            }
+            if (tensor.ndim() == 2 && tensor.size(1) == n && tensor.size(0) != n) {
+                Tensor staged = Tensor::empty(tensor.shape(), tensor.device(), tensor.dtype());
+                tensor.index_select_into(staged, 1, perm, BoundaryMode::Assert);
+                tensor.copy_from(staged);
+                return;
+            }
+            if (tensor.size(0) < n) {
+                return;
+            }
+            Tensor live = tensor.size(0) == n ? tensor : tensor.slice(0, 0, n);
+            auto dims = live.shape().dims();
+            Tensor staged = Tensor::empty(TensorShape(dims), live.device(), live.dtype());
+            live.index_select_into(staged, 0, perm, BoundaryMode::Assert);
+            live.copy_from(staged);
+        }
+    } // namespace
+
     ReorderResult apply_morton_reorder(
         core::SplatData& splat,
         AdamOptimizer* optimizer,
-        lfs::core::TensorExecutionTarget stream) {
+        lfs::core::TensorExecutionTarget stream,
+        const RowSource& extra_rows) {
         ReorderResult result;
         if (splat.has_frozen_ranges()) {
             LOG_DEBUG("Skipping Morton reorder: {} frozen-range span(s) are active",
@@ -336,24 +364,33 @@ namespace lfs::training::morton {
             splat.means().set_stream(stream);
         }
 
-        {
-            const core::TensorExecutionTarget::Scope stream_guard(stream);
-            result.permutation = morton_ops->permutation(splat.means());
-        }
-        if (!result.permutation.is_valid() || result.permutation.numel() != n) {
-            LOG_ERROR("Morton reorder failed to produce a permutation of length {}", n);
+        // The reorder only improves locality: running out of VRAM before the
+        // first row moves skips it instead of failing the step.
+        std::optional<IdleArenaScratch> scratch;
+        try {
+            {
+                const core::TensorExecutionTarget::Scope stream_guard(stream);
+                result.permutation = morton_ops->permutation(splat.means());
+            }
+            if (!result.permutation.is_valid() || result.permutation.numel() != n) {
+                LOG_ERROR("Morton reorder failed to produce a permutation of length {}", n);
+                result.permutation = {};
+                return result;
+            }
+            const std::size_t scratch_bytes = morton_scratch_bytes(splat, optimizer);
+            scratch.emplace(scratch_bytes, std::min(scratch_bytes, MIN_MORTON_ARENA_BYTES), stream);
+        } catch (const core::MemoryAllocationError& e) {
+            LOG_INFO("Skipping Morton reorder at {} Gaussians: {}", n, e.what());
+            result.permutation = {};
             return result;
         }
-
-        const std::size_t scratch_bytes = morton_scratch_bytes(splat, optimizer);
-        const IdleArenaScratch scratch(scratch_bytes, std::min(scratch_bytes, MIN_MORTON_ARENA_BYTES), stream);
 
         permute_named_param(splat.means(), result.permutation);
         permute_named_param(splat.sh0(), result.permutation);
         permute_named_param(splat.scaling_raw(), result.permutation);
         permute_named_param(splat.rotation_raw(), result.permutation);
         permute_named_param(splat.opacity_raw(), result.permutation);
-        permute_shN_impl(splat, result.permutation, stream, scratch);
+        permute_shN_impl(splat, result.permutation, stream, *scratch);
 
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {
             permute_row_tensor(splat._densification_info, result.permutation);
@@ -372,7 +409,11 @@ namespace lfs::training::morton {
 
         if (optimizer != nullptr) {
             permute_optimizer(*optimizer, result.permutation, stream, *morton_ops);
-            permute_optimizer_shN(*optimizer, splat, result.permutation, stream, scratch, *morton_ops);
+            permute_optimizer_shN(*optimizer, splat, result.permutation, stream, *scratch, *morton_ops);
+        }
+
+        if (extra_rows) {
+            extra_rows([&](Tensor& rows) { permute_rows_in_place(rows, result.permutation); });
         }
 
         splat.note_param_layout_changed();

@@ -9,6 +9,7 @@
 
 #include "gui/gui_input.hpp"
 #include "gui/rmlui/element_observer.hpp"
+#include "gui/rmlui/preview_texture_status.hpp"
 #include "gui/ui_renderer.hpp"
 #include "window/graphics_context.hpp"
 #include "window/window_state_utils.hpp"
@@ -50,6 +51,12 @@ namespace lfs::vis::gui {
     class RmlTextInputHandler;
     class SceneGraphElement;
     enum class RmlCursorRequest : uint8_t;
+
+    // Rml::ReleaseFontResources frees every font face handle but refreshes only those of RmlUi elements. Release
+    // through this instead, so that code holding a raw handle sees fontResourceGeneration() change and looks it up
+    // again.
+    LFS_VIS_API void releaseFontResources();
+    LFS_VIS_API std::uint64_t fontResourceGeneration();
 
     struct CachedUiContextRender {
         UiRenderer* renderer = nullptr;
@@ -127,6 +134,8 @@ namespace lfs::vis::gui {
         SDL_Window* nativeWindow(const Rml::Context* context) const;
         GraphicsContext* nativeGraphics(const Rml::Context* context) const;
         void showNativeWindow(Rml::Context* context);
+        void minimizeNativeWindow(Rml::Context* context);
+        void toggleNativeWindowMaximized(Rml::Context* context);
         void renderNativeWindows();
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
@@ -144,8 +153,11 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
 
         void activateTheme(const std::string& theme_id);
+        void setPreviewMemoryProvider(PreviewMemoryProvider provider);
 
         UiRenderer* getUiRenderer() const { return ui_renderer_; }
+        // The renderer that draws `context`: its native window's, else the main one.
+        [[nodiscard]] LFS_VIS_API UiRenderer* getUiRenderer(Rml::Context* context) const;
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
         [[nodiscard]] bool isDispatchingInput() const { return dispatching_input_; }
         SDL_Window* getWindow() const { return window_; }
@@ -339,6 +351,7 @@ namespace lfs::vis::gui {
         std::unique_ptr<Rml::FileInterface> file_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         UiRenderer* ui_renderer_ = nullptr;
+        PreviewMemoryProvider preview_memory_provider_;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;

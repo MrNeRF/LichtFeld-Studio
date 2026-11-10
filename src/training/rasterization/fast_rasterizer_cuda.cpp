@@ -868,6 +868,8 @@ namespace lfs::training {
             densification.set_stream(stream);
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification ? densification.ptr<float>() : nullptr,
+            // Error row of the [2, N] densification statistics.
+            update_densification ? densification.ptr<float>() + densification.shape()[1] : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             background_grad,

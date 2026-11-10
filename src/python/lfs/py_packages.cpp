@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_packages.hpp"
+#include "py_operation_callbacks.hpp"
 
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -26,29 +27,38 @@ namespace lfs::python {
 
         pkg.def(
             "init",
-            []() {
+            [](nb::object cancel) {
+                PyCancelCallback cancellation{std::move(cancel)};
                 auto& pm = PackageManager::instance();
-                if (!pm.is_uv_available())
-                    throw std::runtime_error("uv not found");
-                if (!pm.ensure_venv())
-                    throw std::runtime_error("Failed to create venv");
+                {
+                    const nb::gil_scoped_release release;
+                    if (!pm.is_uv_available())
+                        throw std::runtime_error("uv not found");
+                    if (!pm.ensure_venv(cancellation.operation()))
+                        throw std::runtime_error("Failed to create venv");
+                }
                 update_python_path();
                 return lfs::core::path_to_utf8(pm.venv_dir());
             },
-            "Initialize the resolved per-user virtual environment");
+            nb::arg("cancel") = nb::none(), "Initialize the resolved per-user virtual environment; cancel is an optional worker-side predicate");
 
         pkg.def(
             "install",
-            [](const std::string& package) {
+            [](const std::string& package, nb::object cancel) {
+                PyCancelCallback cancellation{std::move(cancel)};
                 auto& pm = PackageManager::instance();
                 if (!pm.is_uv_available())
                     throw std::runtime_error("uv not found");
-                const auto result = pm.install(package);
+                InstallResult result;
+                {
+                    const nb::gil_scoped_release release;
+                    result = pm.install(package, cancellation.operation());
+                }
                 if (!result.success)
                     throw std::runtime_error(result.error);
                 return result.output;
             },
-            nb::arg("package"), "Install package from PyPI");
+            nb::arg("package"), nb::arg("cancel") = nb::none(), "Install package from PyPI; cancel is an optional worker-side predicate");
 
         pkg.def(
             "uninstall",
@@ -59,19 +69,19 @@ namespace lfs::python {
                     throw std::runtime_error(result.error);
                 return result.output;
             },
-            nb::arg("package"), "Uninstall package");
+            nb::arg("package"), nb::call_guard<nb::gil_scoped_release>(), "Uninstall package");
 
         pkg.def(
             "list",
             []() { return PackageManager::instance().list_installed(); },
-            "List installed packages");
+            nb::call_guard<nb::gil_scoped_release>(), "List installed packages");
 
         pkg.def(
             "is_installed",
             [](const std::string& package) {
                 return PackageManager::instance().is_installed(package);
             },
-            nb::arg("package"), "Check if package is installed");
+            nb::arg("package"), nb::call_guard<nb::gil_scoped_release>(), "Check if package is installed");
 
         pkg.def(
             "is_uv_available",
@@ -111,7 +121,7 @@ namespace lfs::python {
                     throw std::runtime_error(result.error);
                 return result.output;
             },
-            nb::arg("cuda") = "auto", nb::arg("version") = "",
+            nb::arg("cuda") = "auto", nb::arg("version") = "", nb::call_guard<nb::gil_scoped_release>(),
             "Install PyTorch with CUDA detection");
 
         pkg.def(
@@ -141,7 +151,7 @@ namespace lfs::python {
                         }
                     });
             },
-            nb::arg("package"), "Install package asynchronously (non-blocking)");
+            nb::arg("package"), nb::call_guard<nb::gil_scoped_release>(), "Install package asynchronously (non-blocking)");
 
         pkg.def(
             "install_torch_async",
@@ -165,7 +175,7 @@ namespace lfs::python {
                         }
                     });
             },
-            nb::arg("cuda") = "auto", nb::arg("version") = "",
+            nb::arg("cuda") = "auto", nb::arg("version") = "", nb::call_guard<nb::gil_scoped_release>(),
             "Install PyTorch asynchronously (non-blocking)");
 
         pkg.def(

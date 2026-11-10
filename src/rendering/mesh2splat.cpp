@@ -1253,10 +1253,11 @@ void main() {
     std::expected<std::unique_ptr<SplatData>, std::string>
     mesh_to_splat(const MeshData& mesh,
                   const Mesh2SplatOptions& options,
-                  Mesh2SplatProgressCallback progress) {
+                  Mesh2SplatProgressCallback progress,
+                  const uint64_t min_output_entries) {
         // The reusable context owns one queue and command pool. Public callers may
         // arrive from the converter, Python, or the GUI task system concurrently.
-        static std::mutex conversion_mutex;
+        static std::recursive_mutex conversion_mutex;
         std::lock_guard conversion_lock(conversion_mutex);
 
         auto report = [&](float pct, const std::string& stage) -> bool {
@@ -1272,7 +1273,8 @@ void main() {
         const float scene_scale = prepared->scene_scale;
         const int res = options.resolution_target;
         const uint64_t triangle_count = prepared->triangle_count;
-        const uint32_t ssbo_entries = prepared->output_capacity;
+        const uint32_t ssbo_entries = static_cast<uint32_t>(
+            std::max<uint64_t>(prepared->output_capacity, min_output_entries));
         const VkDeviceSize ssbo_size = static_cast<VkDeviceSize>(ssbo_entries) * sizeof(GaussianVertex);
 
         LOG_INFO("mesh2splat: Vulkan converter, {} submeshes, {} triangles, resolution={}",
@@ -1625,6 +1627,9 @@ void main() {
         if (num_gaussians == 0)
             return std::unexpected("Conversion produced zero gaussians");
         if (num_gaussians > ssbo_entries) {
+            // More surface than the estimate holds, which would leave holes: the atomic count gives the space it needs.
+            if (min_output_entries == 0)
+                return mesh_to_splat(mesh, options, std::move(progress), num_gaussians);
             LOG_WARN("mesh2splat: atomic counter ({}) exceeds SSBO capacity ({}), clamping", num_gaussians, ssbo_entries);
             num_gaussians = ssbo_entries;
         }

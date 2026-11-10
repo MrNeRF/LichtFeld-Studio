@@ -20,6 +20,7 @@
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -351,6 +352,38 @@ namespace lfs::core {
         return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
     }
 
+    void Tensor::commit_rows(const size_t rows) const {
+        const auto reserved = storage_meta_ ? storage_meta_->reserved_storage.lock() : nullptr;
+        if (!reserved || shape_.rank() == 0) {
+            return;
+        }
+        LFS_ASSERT_MSG(rows <= capacity(),
+                       std::format("commit_rows({}) exceeds the reserved capacity {}", rows, capacity()));
+        size_t row_elements = 1;
+        for (size_t i = 1; i < shape_.rank(); ++i) {
+            row_elements = checked_product(row_elements, shape_[i], "commit_rows row");
+        }
+        const size_t elements = checked_product(rows, row_elements, "commit_rows elements");
+        reserved->commit(checked_product(storage_offset_ + elements, dtype_size(dtype_), "commit_rows bytes"),
+                         stream());
+    }
+
+    size_t Tensor::committed_rows() const {
+        const auto reserved = storage_meta_ ? storage_meta_->reserved_storage.lock() : nullptr;
+        if (!reserved || shape_.rank() == 0) {
+            return capacity();
+        }
+        size_t row_bytes = dtype_size(dtype_);
+        for (size_t i = 1; i < shape_.rank(); ++i) {
+            row_bytes *= shape_[i];
+        }
+        const size_t offset_bytes = storage_offset_ * dtype_size(dtype_);
+        const size_t committed = reserved->committed_bytes();
+        if (row_bytes == 0 || committed <= offset_bytes) {
+            return row_bytes == 0 ? capacity() : 0;
+        }
+        return std::min(capacity(), (committed - offset_bytes) / row_bytes);
+    }
     // TensorLeaf implementation
     TensorLeaf::TensorLeaf(Tensor tensor)
         : tensor_ptr_(std::make_shared<Tensor>(std::move(tensor))) {}
@@ -3239,10 +3272,27 @@ namespace lfs::core {
             old_data = logical_source.data_ptr();
         }
 
-        // Allocate new buffer
+        // Allocate new buffer. On CUDA the rows past the current size are only
+        // a reservation, committed as the tensor grows into them (commit_rows).
         void* new_data = nullptr;
         internal::StorageRef new_gpu_storage{};
+        std::shared_ptr<internal::ReservedDeviceStorage> reserved;
         if (device_ == Device::GPU) {
+            // Rows past the current size may stay a reservation, committed as
+            // the tensor grows into them (commit_rows).
+            reserved = internal::backend_ops_for(*this).reserve_storage(
+                new_bytes, checked_product(numel(), element_size, "reserve live bytes"),
+                internal::ExecContext{.cuda_stream = stream()});
+        }
+        if (reserved) {
+            new_data = reserved->data();
+            new_gpu_storage.backend = internal::gpu_backend_tag(*this);
+            new_gpu_storage.data = new_data;
+            new_gpu_storage.byte_offset = 0;
+            new_gpu_storage.dtype = dtype_;
+            new_gpu_storage.meta = nullptr;
+            new_gpu_storage.flags = reserved->storage_flags();
+        } else if (device_ == Device::GPU) {
             new_gpu_storage = internal::backend_ops_for(*this).allocate(
                 new_bytes, alignof(std::max_align_t),
                 internal::ExecContext{
@@ -3268,7 +3318,10 @@ namespace lfs::core {
         }
 
         std::shared_ptr<void> new_owner;
-        if (device_ == Device::GPU) {
+        if (reserved) {
+            // The reservation records its committed bytes itself.
+            new_owner = std::shared_ptr<void>(reserved, new_data);
+        } else if (device_ == Device::GPU) {
             const auto accounting_kind = internal::allocation_accounting(new_gpu_storage);
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
@@ -3298,7 +3351,13 @@ namespace lfs::core {
             });
         }
         auto new_storage_meta = std::make_shared<StorageMeta>();
-        if (device_ == Device::GPU) {
+        if (reserved) {
+            new_storage_meta->backend = new_gpu_storage.backend;
+            new_storage_meta->gpu_descriptor.byte_size = new_bytes;
+            new_storage_meta->gpu_descriptor.accounting_kind = internal::allocation_accounting(new_gpu_storage);
+            new_storage_meta->external_kind = internal::allocation_label(new_gpu_storage);
+            new_storage_meta->reserved_storage = reserved;
+        } else if (device_ == Device::GPU) {
             new_storage_meta->backend = new_gpu_storage.backend;
             if (new_gpu_storage.meta != nullptr) {
                 new_storage_meta->gpu_descriptor =
@@ -3410,6 +3469,40 @@ namespace lfs::core {
         }
 
         auto& backend_ops = internal::backend_ops(backend);
+        // Rows past the logical size may stay a reservation: commit and zero the
+        // live rows now, the rest as the tensor grows into them (commit_rows).
+        if (capacity > current_size) {
+            const size_t live_bytes = checked_product(
+                checked_product(current_size, row_size, "zeros_direct live elements"),
+                dtype_size(dtype), "zeros_direct live bytes");
+            if (auto reserved = backend_ops.reserve_storage(total_bytes, live_bytes,
+                                                            internal::ExecContext{nullptr})) {
+                internal::StorageRef storage{};
+                storage.backend = backend;
+                storage.data = reserved->data();
+                storage.flags = reserved->storage_flags();
+                Tensor t;
+                t.data_ = storage.data;
+                t.data_owner_ = std::shared_ptr<void>(reserved, storage.data);
+                t.shape_ = shape;
+                t.strides_ = shape.strides();
+                t.storage_offset_ = 0;
+                t.device_ = device;
+                t.dtype_ = dtype;
+                t.ensure_state();
+                t.state_->capacity = capacity;
+                t.state_->logical_size = current_size;
+                t.id_ = next_id_++;
+                t.init_storage_meta();
+                t.storage_meta_->backend = backend;
+                t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
+                t.storage_meta_->gpu_descriptor.accounting_kind = internal::allocation_accounting(storage);
+                t.storage_meta_->external_kind = internal::allocation_label(storage);
+                t.storage_meta_->reserved_storage = reserved;
+                return t;
+            }
+        }
+
         auto allocation = backend_ops.allocate_tensor({.bytes = total_bytes, .alignment = alignof(std::max_align_t), .kind = internal::TensorAllocationKind::Direct, .label = "zeros_direct storage allocation", .operation = "tensor.zeros_direct"});
         auto storage = allocation.storage;
         const auto stream = static_cast<cudaStream_t>(allocation.target);

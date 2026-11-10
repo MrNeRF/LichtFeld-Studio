@@ -23,7 +23,7 @@ namespace lfs::preprocessing {
     }
 
     std::expected<VideoMaskReport, Error> mask_video_sequence(
-        std::span<const VideoMaskFrame>, const ImageCircle&, const VideoMaskOptions&, cudaStream_t) {
+        std::span<const VideoMaskFrame>, const ImageCircle&, const VideoMaskOptions&, cudaStream_t, core::nn::models::Sam2*) {
         return std::unexpected(unsupported());
     }
 

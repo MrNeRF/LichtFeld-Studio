@@ -52,6 +52,28 @@ namespace lfs::training {
             mcmc::launch_max_error_and_zero_densification(error_max.ptr<float>(), densification.ptr<float>(),
                                                           error_max.numel(), core::getCurrentCUDAStream());
         }
+        bool sample_rows(const Tensor& weights, const float min_weight, const Tensor& excluded, Tensor& indices,
+                         const uint64_t seed) {
+            // Bool and UInt8 masks share the one-byte layout the kernel reads.
+            Tensor mask;
+            if (excluded.is_valid()) {
+                mask = excluded.dtype() == lfs::core::DataType::Bool || excluded.dtype() == lfs::core::DataType::UInt8
+                           ? excluded.contiguous()
+                           : excluded.to(lfs::core::DataType::UInt8).contiguous();
+            }
+            return mcmc::launch_multinomial_sample_all(weights.ptr<float>(), min_weight,
+                                                       mask.is_valid() ? static_cast<const uint8_t*>(mask.data_ptr()) : nullptr,
+                                                       weights.numel(),
+                                                       indices.numel(), seed, indices.ptr<int64_t>(),
+                                                       core::getCurrentCUDAStream());
+        }
+        void relocate_copies(const Tensor& sources, const Tensor& copies, const int64_t first_copy, const Tensor& ratios,
+                             const float min_opacity, Tensor& raw_scales, Tensor& raw_opacity) {
+            mcmc::launch_relocate_copies(sources.ptr<int64_t>(), copies.is_valid() ? copies.ptr<int64_t>() : nullptr,
+                                         first_copy, ratios.ptr<int32_t>(), min_opacity, raw_scales.ptr<float>(),
+                                         raw_opacity.ptr<float>(), sources.numel(), raw_scales.shape()[0],
+                                         core::getCurrentCUDAStream());
+        }
         const lfs::gpu_ops::McmcOps kCudaMcmcOps{
             .initialize = mcmc::init_relocation_coefficients,
             .relocate = relocate,
@@ -60,6 +82,8 @@ namespace lfs::training {
             .update_rows = update_rows,
             .sample = sample,
             .fold_error = fold_error,
+            .sample_rows = sample_rows,
+            .relocate_copies = relocate_copies,
         };
     } // namespace
 

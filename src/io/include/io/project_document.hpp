@@ -67,6 +67,12 @@ namespace lfs::io::project {
         from_owned(std::shared_ptr<const void> owner,
                    std::span<const std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Compresses a CKPT payload once, consuming it: each segment is freed
+        // as soon as its records are compressed. The value then holds only
+        // the stored bytes; reads beyond the header decode them.
+        [[nodiscard]] static lfs::Result<LazyChunkValue>
+        from_owned_checkpoint(SegmentedPayload bytes,
+                              const lfs::core::Uuid& snapshot_uuid);
         // Independent owner of the same file-backed or owned bytes. Safe to
         // retain after the source ProjectDocument is closed or replaced.
         [[nodiscard]] lfs::Result<LazyChunkValue> share() const;
@@ -343,9 +349,14 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<void>
+        set_dataset_source(const lfs::core::Uuid& instance_uuid, LazyChunkValue payload);
+        [[nodiscard]] bool
+        remove_dataset_source(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
         [[nodiscard]] lfs::Result<std::filesystem::path>
         materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;
+        [[nodiscard]] lfs::Result<ResolvedCameraMask> resolve_camera_mask(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
@@ -395,8 +406,13 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_collision(const lfs::core::Uuid& instance_uuid,
                       std::shared_ptr<const lfs::core::CollisionVolume> volume);
+        [[nodiscard]] bool has_deferred_collision_payloads() const;
+        // May run on a worker only while this candidate document is exclusively
+        // owned by the opener. Publishes no live scene state.
+        [[nodiscard]] lfs::Result<void>
+        preload_collision_payloads(const std::function<bool()>& canceled = {});
         // Drop SPLT/PCLD/MESH/COLV payloads the current scene graph no longer binds.
-        void remove_geometry_payloads_not_bound_by_scene();
+        void remove_geometry_payloads_not_bound_by_scene(std::span<const lfs::core::Uuid> previous_camera_masks = {});
 
         [[nodiscard]] std::vector<lfs::core::Uuid> splat_uuids() const;
         [[nodiscard]] std::vector<lfs::core::Uuid> point_cloud_uuids() const;

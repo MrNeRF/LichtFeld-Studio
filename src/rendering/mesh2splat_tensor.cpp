@@ -17,6 +17,7 @@
 #include <array>
 #include <cstring>
 #include <format>
+#include <algorithm>
 #include <mutex>
 #include <span>
 #include <vector>
@@ -109,8 +110,9 @@ namespace lfs::rendering {
     mesh_to_splat_tensor(const MeshData& mesh,
                          const Mesh2SplatOptions& options,
                          const GpuBackend backend,
-                         Mesh2SplatProgressCallback progress) {
-        static std::mutex conversion_mutex;
+                         Mesh2SplatProgressCallback progress,
+                         const uint64_t min_output_entries) {
+        static std::recursive_mutex conversion_mutex;
         std::lock_guard conversion_lock(conversion_mutex);
         const core::GpuBackendScope backend_scope(backend);
 
@@ -123,6 +125,8 @@ namespace lfs::rendering {
             return std::move(prepared).error();
         const auto& submesh_geometries = prepared->submeshes;
         const int res = options.resolution_target;
+        const uint32_t output_capacity = static_cast<uint32_t>(
+            std::max<uint64_t>(prepared->output_capacity, min_output_entries));
 
         LOG_INFO("mesh2splat: {} tensor converter, {} submeshes, {} triangles, resolution={}",
                  core::gpu_backend_name(backend), submesh_geometries.size(), prepared->triangle_count, res);
@@ -143,7 +147,7 @@ namespace lfs::rendering {
         if (!material_textures)
             return std::move(material_textures).error();
 
-        Tensor output = Tensor::empty({size_t{prepared->output_capacity}, sizeof(GaussianVertex) / sizeof(float)}, Device::GPU);
+        Tensor output = Tensor::empty({size_t{output_capacity}, sizeof(GaussianVertex) / sizeof(float)}, Device::GPU);
         Tensor counter = Tensor::zeros({1}, Device::GPU, DataType::UInt32);
         // The fragments write splats, not pixels; like the Vulkan framebuffer the
         // attachment only defines the res x res raster grid.
@@ -183,7 +187,7 @@ namespace lfs::rendering {
                 pc.texture_sizes[1] = mt->normal.size;
                 pc.texture_sizes[2] = mt->metallic_roughness.size;
             }
-            pc.capacity = prepared->output_capacity;
+            pc.capacity = output_capacity;
 
             const auto texels = [](const Texture* texture) {
                 return texture && texture->texels.is_valid() ? &texture->texels : nullptr;
@@ -211,10 +215,13 @@ namespace lfs::rendering {
         uint32_t num_gaussians = counter.to(Device::CPU).ptr<uint32_t>()[0];
         if (num_gaussians == 0)
             return conversion_error(ErrorCode::Internal, "Conversion produced zero gaussians");
-        if (num_gaussians > prepared->output_capacity) {
+        if (num_gaussians > output_capacity) {
+            // More surface than the estimate holds, which would leave holes: the atomic count gives the space it needs.
+            if (min_output_entries == 0)
+                return mesh_to_splat_tensor(mesh, options, backend, std::move(progress), num_gaussians);
             LOG_WARN("mesh2splat: atomic counter ({}) exceeds output capacity ({}), clamping",
-                     num_gaussians, prepared->output_capacity);
-            num_gaussians = prepared->output_capacity;
+                     num_gaussians, output_capacity);
+            num_gaussians = output_capacity;
         }
 
         if (!report(0.85f, "Reading back data"))
@@ -242,8 +249,10 @@ namespace lfs::rendering {
     std::expected<std::unique_ptr<SplatData>, std::string>
     mesh_to_splat(const MeshData& mesh,
                   const Mesh2SplatOptions& options,
-                  Mesh2SplatProgressCallback progress) {
-        auto splat = mesh_to_splat_tensor(mesh, options, core::default_gpu_backend(), std::move(progress));
+                  Mesh2SplatProgressCallback progress,
+                  const uint64_t min_output_entries) {
+        auto splat = mesh_to_splat_tensor(mesh, options, core::default_gpu_backend(), std::move(progress),
+                                          min_output_entries);
         if (!splat)
             return std::unexpected(std::string(splat.error().detail()));
         return std::move(*splat);

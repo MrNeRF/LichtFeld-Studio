@@ -88,6 +88,7 @@ TEST_F(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
 
         mcmc::launch_max_error_and_zero_densification(
             err_max.ptr<float>(),
+            info.ptr<float>() + N,
             info.ptr<float>(),
             N);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -105,4 +106,21 @@ TEST_F(DensificationInfoZeroTest, McmcMaxMatchesMultiStepReference) {
     for (size_t i = 0; i < N; ++i) {
         EXPECT_FLOAT_EQ(a[i], err_ref[i]) << "error max i=" << i;
     }
+}
+
+TEST_F(DensificationInfoZeroTest, McmcMaxFoldsAnErrorRowWithoutWeights) {
+    constexpr size_t N = 5;
+    const std::vector<float> first = {0.5f, 0.f, 2.f, 1.f, 0.25f};
+    const std::vector<float> second = {0.1f, 3.f, 1.f, 1.5f, 0.f};
+    auto err_max = Tensor::zeros({N}, Device::CUDA);
+    for (const auto* row : {&first, &second}) {
+        auto error = Tensor::from_vector(*row, {N}, Device::CUDA);
+        mcmc::launch_max_error_and_zero_densification(err_max.ptr<float>(), error.ptr<float>(), nullptr, N);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        for (const float v : to_host(error))
+            EXPECT_FLOAT_EQ(v, 0.f);
+    }
+    const auto folded = to_host(err_max);
+    for (size_t i = 0; i < N; ++i)
+        EXPECT_FLOAT_EQ(folded[i], std::max(first[i], second[i])) << "i=" << i;
 }

@@ -2754,7 +2754,8 @@ namespace lfs::io::project {
                                ENCODED_SCENE_ASSETS,
                                TILESET_REFERENCES,
                                COLLISION_VOLUMES_V1,
-                               USER_SHADERS_V1}) {
+                               USER_SHADERS_V1,
+                               CAMERA_MASK_ASSETS_V1}) {
             result.set(bit);
         }
         return result;

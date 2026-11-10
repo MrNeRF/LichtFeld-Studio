@@ -16,6 +16,7 @@
 #include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "gui/assisted_masking.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/guide_segment_clipping.hpp"
@@ -131,6 +132,8 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -141,6 +144,11 @@
 #endif
 
 namespace lfs::vis::gui {
+
+    PreviewTextureStatus GuiManager::previewTextureStatus(const std::string& source, Rml::Context* context) const {
+        const auto* renderer = rmlui_manager_.getUiRenderer(context);
+        return renderer ? renderer->previewTextureStatus(source) : PreviewTextureStatus::Unknown;
+    }
     RmlUIManager::InputDispatchResult GuiManager::dispatchInputEvent(const SDL_Event& event) {
         if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
             screen_host_.cancelInput();
@@ -2526,6 +2534,12 @@ namespace lfs::vis::gui {
             return *cache;
         }
 
+        enum class FrustumEmit : std::uint8_t {
+            None,
+            Instance,
+            Equirectangular,
+        };
+
         struct CachedFrustumOverlay {
             FrustumOverlayInputKey key{};
             bool valid = false;
@@ -2557,6 +2571,7 @@ namespace lfs::vis::gui {
             std::vector<glm::vec4> camera_colors;
             std::vector<std::uint32_t> instance_camera_indices;
             std::vector<std::uint32_t> textured_camera_indices;
+            std::vector<FrustumEmit> emitted;
             bool has_equirectangular_lines = false;
             std::shared_ptr<ViewportFrustumOverlayData> data =
                 std::make_shared<ViewportFrustumOverlayData>();
@@ -2603,6 +2618,7 @@ namespace lfs::vis::gui {
             std::uint64_t hash = 0;
             hashCombine(hash, settings.show_camera_frustums);
             hashCombine(hash, hashFloat(settings.camera_frustum_scale));
+            hashCombine(hash, settings.hide_disabled_camera_frustums);
             hashCombine(hash, hashFloat(settings.focal_length_mm));
             hashCombine(hash, settings.orthographic);
             hashCombine(hash, settings.equirectangular);
@@ -2938,15 +2954,17 @@ namespace lfs::vis::gui {
                         guide_view.render_size, settings.focal_length_mm);
                     const std::uint32_t first_instance =
                         static_cast<std::uint32_t>(cache.data->frustum_instances.size());
-                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                    const auto project_camera = [&](const size_t camera_index) {
                         if (!cache.valid_cameras[camera_index])
-                            continue;
+                            return FrustumEmit::None;
                         const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        if (settings.hide_disabled_camera_frustums && disabled)
+                            return FrustumEmit::None;
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], translation,
                             settings.camera_frustum_scale, disabled);
                         if (alpha <= 0.01f)
-                            continue;
+                            return FrustumEmit::None;
                         const bool emphasized = cache.emphasized_cameras[camera_index] != 0;
                         const bool focused = cache.uids[camera_index] == hovered_camera_id;
                         const glm::vec4 color = cachedCameraFrustumColor(
@@ -2959,15 +2977,11 @@ namespace lfs::vis::gui {
                             disabled,
                             emphasized);
                         if (color.a <= 0.01f)
-                            continue;
+                            return FrustumEmit::None;
                         const size_t projected_index = view_index * camera_count + camera_index;
                         cache.camera_colors[projected_index] = color;
-                        if (cache.equirectangular_cameras[camera_index]) {
-                            appendEquirectangularCameraFrustum(
-                                line_params, guide_view, settings, cache.models[camera_index], color);
-                            cache.has_equirectangular_lines = true;
-                            continue;
-                        }
+                        if (cache.equirectangular_cameras[camera_index])
+                            return FrustumEmit::Equirectangular;
 
                         constexpr std::array image_corners{
                             glm::vec3(-0.5f, -0.5f, -1.0f),
@@ -2986,7 +3000,7 @@ namespace lfs::vis::gui {
                                                         glm::dot(glm::vec3(cache.models[camera_index][2]), glm::vec3(cache.models[camera_index][2])));
                         const glm::vec3 center_view = world_to_panel_rotation * (center - translation);
                         if (!settings.equirectangular && center_view.z - radius >= -1e-4f) {
-                            continue;
+                            return FrustumEmit::None;
                         }
                         if (!settings.equirectangular && center_view.z + radius < -1e-4f) {
                             if (settings.orthographic &&
@@ -2998,7 +3012,7 @@ namespace lfs::vis::gui {
                                     projected_x - projected_radius > width ||
                                     projected_y + projected_radius < 0.0f ||
                                     projected_y - projected_radius > height) {
-                                    continue;
+                                    return FrustumEmit::None;
                                 }
                             } else if (!settings.orthographic && fx > 0.0f && fy > 0.0f) {
                                 const float depth = -center_view.z;
@@ -3010,7 +3024,7 @@ namespace lfs::vis::gui {
                                 const float vertical_limit = std::atan2(cy, fy);
                                 if (std::abs(horizontal_angle) - angular_radius > horizontal_limit ||
                                     std::abs(vertical_angle) - angular_radius > vertical_limit) {
-                                    continue;
+                                    return FrustumEmit::None;
                                 }
                             }
                         }
@@ -3048,18 +3062,41 @@ namespace lfs::vis::gui {
                         cache.projected_points[projected_index] = screen_points;
                         cache.projected_depths[projected_index] = depths;
                         cache.projected_visible[projected_index] = quad_visible;
-                        if (quad_visible && cache.thumbnail_indices[camera_index] >= 0) {
+                        return FrustumEmit::Instance;
+                    };
+                    // Cameras are culled and projected in parallel, each into its own slots; appending runs in camera
+                    // order below, so the instances, thumbnails and lines are those of a sequential pass.
+                    cache.emitted.resize(camera_count);
+                    tbb::parallel_for(tbb::blocked_range<size_t>(0, camera_count, 512), [&](const tbb::blocked_range<size_t>& range) {
+                        for (size_t camera_index = range.begin(); camera_index != range.end(); ++camera_index)
+                            cache.emitted[camera_index] = project_camera(camera_index);
+                    });
+                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                        const size_t projected_index = view_index * camera_count + camera_index;
+                        const glm::vec4 color = cache.camera_colors[projected_index];
+                        if (cache.emitted[camera_index] == FrustumEmit::Equirectangular) {
+                            appendEquirectangularCameraFrustum(
+                                line_params, guide_view, settings, cache.models[camera_index], color);
+                            cache.has_equirectangular_lines = true;
+                            continue;
+                        }
+                        if (cache.emitted[camera_index] != FrustumEmit::Instance)
+                            continue;
+                        if (cache.projected_visible[projected_index] && cache.thumbnail_indices[camera_index] >= 0) {
                             const auto& placement = cache.thumbnail_placements[camera_index];
                             appendTexturedOverlayQuad(
                                 params,
                                 cache.data->textured_overlays,
                                 placement.texture_id,
-                                screen_points,
+                                cache.projected_points[projected_index],
                                 placement.uv_min,
                                 placement.uv_max,
                                 {color.r, color.g, color.b, std::clamp(color.a * 0.8f, 0.0f, 0.8f)},
-                                {emphasized ? 0.18f : 0.0f, disabled ? 0.5f : 0.0f, 0.0f, 0.0f},
-                                depths);
+                                {cache.emphasized_cameras[camera_index] != 0 ? 0.18f : 0.0f,
+                                 cache.disabled_cameras[camera_index] != 0 ? 0.5f : 0.0f,
+                                 0.0f,
+                                 0.0f},
+                                cache.projected_depths[projected_index]);
                             cache.textured_camera_indices.push_back(
                                 static_cast<std::uint32_t>(projected_index));
                         }
@@ -3099,6 +3136,10 @@ namespace lfs::vis::gui {
                         if (!cache.valid_cameras[camera_index])
                             continue;
                         const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        if (settings.hide_disabled_camera_frustums && disabled) {
+                            cache.camera_colors[view_index * camera_count + camera_index] = glm::vec4(0.0f);
+                            continue;
+                        }
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], view_position,
                             settings.camera_frustum_scale, disabled);
@@ -4796,6 +4837,9 @@ namespace lfs::vis::gui {
             }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
+        rmlui_manager_.setPreviewMemoryProvider([this](std::string_view key) {
+            return async_tasks_.assistedMasking().sequencePreview(key);
+        });
         initDevResourceHotReload();
 
         startup_overlay_.init(&rmlui_manager_);
@@ -4937,6 +4981,19 @@ namespace lfs::vis::gui {
         };
         ops.set_floating = [](void* host, bool floating) {
             static_cast<RmlPanelHost*>(host)->setFloating(floating);
+        };
+        ops.set_window_presentation = [](void* host, int state) {
+            static_cast<RmlPanelHost*>(host)->setWindowPresentation(state < 0 ? std::nullopt : std::optional(static_cast<FloatingWindowState>(state)));
+        };
+        ops.title_controls_bounds = [](void* host, float* bounds) {
+            const auto box = static_cast<RmlPanelHost*>(host)->titleControlsBounds();
+            if (!box)
+                return false;
+            bounds[0] = box->x;
+            bounds[1] = box->y;
+            bounds[2] = box->width;
+            bounds[3] = box->height;
+            return true;
         };
         ops.native_window = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->nativeWindow();
@@ -5295,6 +5352,7 @@ namespace lfs::vis::gui {
         if (video_widget_)
             video_widget_->shutdown();
 
+        rmlui_manager_.setPreviewMemoryProvider({});
         async_tasks_.shutdown();
 
         const bool need_gil = lfs::python::get_main_thread_state() != nullptr;
@@ -6219,6 +6277,7 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.async_poll", 0.25);
             async_tasks_.pollMesh2SplatCompletion();
             async_tasks_.pollSplatSimplifyCompletion();
+            async_tasks_.pollCameraSelectionCompletion();
         }
 
         // Poll UV package manager for async operations

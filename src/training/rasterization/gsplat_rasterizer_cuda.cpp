@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 
@@ -250,6 +251,14 @@ namespace lfs::training {
             // Background color and image pointers
             // bg_color and bg_image are mutually exclusive - use one or the other
             const bool use_bg_image = bg_image.is_valid() && !bg_image.is_empty();
+            // The kernels read the background with the strides of the rendered region.
+            if (use_bg_image &&
+                (bg_image.ndim() != 3 || bg_image.shape()[0] != 3 || bg_image.shape()[1] != image_height ||
+                 bg_image.shape()[2] != image_width)) {
+                throw std::runtime_error(std::format(
+                    "gsplat_rasterize_forward: background image {} does not match the {}x{} render",
+                    bg_image.shape().str(), image_width, image_height));
+            }
             const float* bg_color_ptr = nullptr;
             const float* bg_image_ptr = nullptr;
 
@@ -962,6 +971,8 @@ namespace lfs::training {
                 v_opacities_ptr,
                 v_sh_coeffs_ptr,
                 densification_info_ptr,
+                // Error row of the [2, N] densification statistics.
+                densification_info_ptr != nullptr ? densification_info_ptr + densification.shape()[1] : nullptr,
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,

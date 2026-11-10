@@ -25,6 +25,7 @@ def _install_lf_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.get_scene = lambda: None
+    lf_stub.optimization_params = lambda: None
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -34,7 +35,28 @@ def _install_lf_stub(monkeypatch):
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
         set_panel_enabled=lambda _panel_id, _enabled: None,
+        get_panel_object=lambda _panel_id: None,
+        get_image_info=lambda _path: (0, 0, 0),
+        preview_texture_status=lambda _source, _document=None: "ready",
+        request_redraw=lambda _delay=0.0: None,
+        sam_preview_poll=lambda: {"phase": "idle"},
+        sam_preview_close=lambda: None,
     )
+    actions = SimpleNamespace(NONE="none", IMAGE_PREVIEW_DELETE="delete",
+                              IMAGE_PREVIEW_GENERATE="generate", IMAGE_PREVIEW_REMOVE_POINT="remove")
+    keys = {(261, 0): actions.IMAGE_PREVIEW_DELETE, (257, 0): actions.IMAGE_PREVIEW_GENERATE}
+    mouse = {(1, 0): actions.IMAGE_PREVIEW_REMOVE_POINT}
+    lf_stub.keymap = SimpleNamespace(
+        Action=actions, ToolMode=SimpleNamespace(IMAGE_PREVIEW="image_preview"),
+        MouseButton=SimpleNamespace(LEFT=0, RIGHT=1, MIDDLE=2),
+        is_capturing=lambda: False,
+        bindings_revision=lambda: 0,
+        get_action_for_key=lambda scope, key, mods: keys.get((key, mods), actions.NONE),
+        get_action_for_mouse_button=lambda scope, button, mods, double=False: mouse.get((button, mods), actions.NONE) if not double else actions.NONE,
+        get_trigger_description=lambda action, scope: action,
+        get_action_name=lambda action: action,
+    )
+    lf_stub.undo = SimpleNamespace(push=lambda *a, **kw: None, undo=lambda: False, can_undo=lambda: False)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
 
@@ -147,6 +169,12 @@ class _ElementStub:
         self.client_height = 600
         self.offset_top = 0
         self.offset_height = 0
+        self.id = ""
+        self.tag_name = "div"
+        self.scroll_top = 0.0
+
+    def parent(self):
+        return None
 
     def set_property(self, name, value):
         self.properties[name] = value
@@ -160,6 +188,9 @@ class _ElementStub:
     def set_text(self, value):
         self.text = value
 
+    def set_inner_rml(self, value):
+        self.inner_rml = value
+
     def query_selector(self, selector):
         if selector == ".card-body":
             return getattr(self, "body", None)
@@ -168,7 +199,9 @@ class _ElementStub:
 
 class _DocumentStub:
     def __init__(self, elements):
-        self._elements = elements
+        self._elements = dict(elements)
+        if "main-image-a" in elements:
+            self._elements.setdefault("main-image-b", _ElementStub())
         self.removed_models = []
 
     def get_element_by_id(self, element_id):
@@ -222,7 +255,9 @@ def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
 
     expected_mask = quote(str(mask_path), safe=_RML_PATH_SAFE_CHARS)
     mask_img = panel._doc.get_element_by_id("mask-overlay")
-    assert mask_img.properties["decorator"] == f"image({expected_mask})"
+    assert mask_img.properties["decorator"].startswith("image(preview://")
+    assert mask_img.properties["decorator"].endswith(f"&path={expected_mask})")
+    assert "&rev=" in mask_img.properties["decorator"]
 
 
 def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
@@ -341,3 +376,22 @@ def test_getting_started_ignores_thumbnail_completion_after_unmount(panel_module
     assert panel._thumb_card_map == {}
     assert old_handle.request_update_count == 0
     assert new_handle.request_update_count == 0
+
+
+def test_getting_started_defaults_to_editing_and_switches_all_tabs(panel_modules):
+    _, getting_started = panel_modules
+    panel = getting_started.GettingStartedPanel()
+    views, events, dirty = {}, {}, []
+    model = SimpleNamespace(
+        bind_func=lambda name, getter: views.update({name: getter}),
+        bind_event=lambda name, callback: events.update({name: callback}),
+        get_handle=lambda: SimpleNamespace(dirty=dirty.append),
+    )
+    panel.on_bind_model(SimpleNamespace(create_data_model=lambda _name: model))
+    assert views["show_editing"]()
+    tab_fields = {name for name in views if name.startswith("show_")}
+    for selected in ("highlights", "training", "datasets", "editing"):
+        dirty.clear()
+        events[f"show_{selected}"]()
+        assert {name for name in tab_fields if views[name]()} == {f"show_{selected}"}
+        assert set(dirty) == tab_fields

@@ -17,7 +17,10 @@
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
+#include "gui/assisted_masking.hpp"
+#include "gui/async_task_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -73,6 +76,7 @@
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
 #include <nanobind/stl/array.h>
 #include <stdexcept>
 #include <typeinfo>
@@ -352,6 +356,10 @@ namespace lfs::python {
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
+        nb::object g_open_image_preview_callback;
+        bool g_open_image_preview_with_sequence = false;
+        lfs::event::HandlerId g_open_camera_preview_handler_id = 0;
+        lfs::event::HandlerId g_open_image_preview_handler_id = 0;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -4072,14 +4080,30 @@ namespace lfs::python {
             "on_open_camera_preview",
             [](nb::object callback) {
                 g_open_camera_preview_callback = callback;
-                lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
-                    if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                if (g_open_camera_preview_handler_id != 0) {
+                    lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                    g_open_camera_preview_handler_id = 0;
+                }
+                if (!callback || callback.is_none())
+                    return;
+                g_open_camera_preview_handler_id = lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
+                    const auto open = [cam_id = e.cam_id] {
+                        if (!lfs::python::can_acquire_gil())
+                            return;
                         nb::gil_scoped_acquire guard;
-                        try {
-                            g_open_camera_preview_callback(e.cam_id);
-                        } catch (const std::exception& ex) {
-                            LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                        if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                            try {
+                                g_open_camera_preview_callback(cam_id);
+                            } catch (const std::exception& ex) {
+                                LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                            }
                         }
+                    };
+                    if (lfs::python::on_graphics_thread()) {
+                        open();
+                    } else {
+                        lfs::python::schedule_graphics_callback(open);
+                        lfs::python::request_redraw();
                     }
                 });
             },
@@ -4902,7 +4926,8 @@ namespace lfs::python {
                         LOG_WARN("save_node_to_disk: splat '{}' has no data", node_name);
                         return;
                     }
-                    result = lfs::io::save_ply(*node->model, options);
+                    const auto without_noise = lfs::core::without_noise_infill(*node->model);
+                    result = lfs::io::save_ply(without_noise ? *without_noise : *node->model, options);
                     break;
                 }
                 default:
@@ -4976,10 +5001,210 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
+        m.def("on_open_image_preview", [](nb::object callback, bool include_sequence) {
+            g_open_image_preview_callback = callback;
+            g_open_image_preview_with_sequence = include_sequence;
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
+            if (!callback || callback.is_none())
+                return;
+            g_open_image_preview_handler_id = core::events::cmd::OpenImagePreview::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
+                    bool sequence_opened = false;
+                    try {
+                        std::vector<std::string> paths;
+                        for (const auto& path : event.paths)
+                            paths.push_back(core::path_to_utf8(path));
+                        if (g_open_image_preview_with_sequence) {
+                            nb::object sequence = nb::none();
+                            if (!event.run.is_nil() && !event.frames.empty()) {
+                                require_ui_texture_creation_thread();
+                                auto* gui = get_gui_manager();
+                                if (!gui || event.frames.size() != event.paths.size())
+                                    throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                for (size_t i = 0; i < event.frames.size(); ++i)
+                                    if (event.frames[i].path.lexically_normal() != event.paths[i].lexically_normal())
+                                        throw std::runtime_error(LOC("image_preview.sam_sequence_invalid"));
+                                auto& masking = gui->asyncTasks().assistedMasking();
+                                const bool new_sequence = masking.sequenceFrames(event.run, 0, 1).empty();
+                                masking.beginSequence(event.run, event.frames, event.output, event.weights);
+                                sequence_opened = new_sequence;
+                                nb::dict data;
+                                data["run"] = event.run.to_string();
+                                data["video"] = core::path_to_utf8(event.video);
+                                data["output"] = core::path_to_utf8(event.output);
+                                nb::list frames;
+                                for (const auto& frame : event.frames) {
+                                    nb::dict item;
+                                    item["time"] = frame.timestamp;
+                                    item["source_frame"] = frame.source_frame;
+                                    frames.append(std::move(item));
+                                }
+                                data["frames"] = std::move(frames);
+                                sequence = std::move(data);
+                            }
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights), sequence);
+                        } else {
+                            g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                        }
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("OpenImagePreview callback error: {}", error.what());
+                        if (auto* gui = get_gui_manager()) {
+                            if (sequence_opened)
+                                gui->asyncTasks().assistedMasking().endSequence(event.run);
+                            gui->enqueueToast({.title = LOC("image_preview.sam_title"), .message = error.what(),
+                                               .level = vis::gui::ErrorNoticeLevel::Error});
+                        }
+                    }
+                }
+            }); }, nb::arg("callback"), nb::arg("include_sequence") = false, "Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.");
+
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            if (!gui)
+                throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
+            vis::gui::AssistedMaskRequest input{.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
+                .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
+                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude};
+            if (!sequence.is_none()) {
+                const auto context = nb::cast<nb::dict>(sequence);
+                const auto run = core::Uuid::from_string(nb::cast<std::string>(context["run"]));
+                if (!run || run->is_nil())
+                    throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                input.run = *run;
+                if (context.contains("inspect"))
+                    input.review_frame = nb::cast<int>(context["inspect"]);
+                if (context.contains("retain"))
+                    input.retain_frame = nb::cast<bool>(context["retain"]);
+                if (context.contains("publish"))
+                    input.publish_approved = nb::cast<bool>(context["publish"]);
+                if (context.contains("first")) {
+                    const auto direction = nb::cast<std::string>(context["direction"]);
+                    if (direction != "both" && direction != "forward" && direction != "reverse")
+                        throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
+                    input.tracking = vis::gui::AssistedMaskTracking{
+                        .first = nb::cast<int>(context["first"]),
+                        .last = nb::cast<int>(context["last"]),
+                        .seed = nb::cast<int>(context["seed"]),
+                        .direction = direction == "both" ? preprocessing::VideoMaskDirection::Both : direction == "forward" ? preprocessing::VideoMaskDirection::Forward
+                                                                                                                            : preprocessing::VideoMaskDirection::Reverse,
+                    };
+                }
+            }
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), "UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.");
+        m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
+            require_ui_texture_creation_thread();
+            nb::list result;
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (gui && id) {
+                for (const auto& frame : gui->asyncTasks().assistedMasking().sequenceFrames(*id, first, count)) {
+                    nb::dict item;
+                    item["revision"] = frame.revision;
+                    item["score"] = frame.score;
+                    item["reliable"] = frame.reliable;
+                    item["approved"] = frame.approved;
+                    item["mask_path"] = core::path_to_utf8(frame.mask_path);
+                    item["keyframe"] = frame.keyframe;
+                    result.append(std::move(item));
+                }
+            }
+            return result; }, nb::arg("run"), nb::arg("first") = 0, nb::arg("count") = 64, "UI thread: read at most 256 current frame summaries from an extraction run.");
+        m.def("sam_preview_approve_frames", [](const std::string& run, const std::vector<std::tuple<size_t, uint64_t, bool>>& updates) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            const auto id = core::Uuid::from_string(run);
+            if (!gui || !id)
+                return false;
+            std::vector<vis::gui::AssistedMaskApproval> approvals;
+            approvals.reserve(updates.size());
+            for (const auto& [index, revision, approved] : updates)
+                approvals.push_back({index, revision, approved});
+            return gui->asyncTasks().assistedMasking().approveFrames(*id, approvals); }, nb::arg("run"), nb::arg("updates"), "UI thread: atomically approve/revoke a group of (index, revision, approved) updates. Missing, duplicate or stale frames reject the whole group.");
+        m.def("sam_preview_end_sequence", [](const std::string& run) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().endSequence(*id); }, nb::arg("run"), "UI thread: release an extraction review document; old run IDs cannot close a new document.");
+        m.def("sam_preview_invalidate_frame", [](const std::string& run, size_t index) {
+            require_ui_texture_creation_thread();
+            const auto id = core::Uuid::from_string(run);
+            if (auto* gui = get_gui_manager(); gui && id)
+                gui->asyncTasks().assistedMasking().invalidateFrame(*id, index); }, nb::arg("run"), nb::arg("index"), "UI thread: revoke a changed frame's proposal/approval while idle. Reject active work and preserve saved masks.");
+        m.def("sam_preview_poll", [] {
+            require_ui_texture_creation_thread();
+            nb::dict result;
+            auto* gui = get_gui_manager();
+            if (!gui)
+                return result;
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            result["request"] = state.request;
+            result["revision"] = state.revision;
+            result["phase"] = state.phase;
+            result["error"] = state.error;
+            result["scores"] = state.scores;
+            result["sequence_revision"] = state.sequence_revision;
+            result["completed"] = state.completed;
+            result["total"] = state.total;
+            result["approved"] = state.approved;
+            nb::list overlays;
+            for (const auto& mask : state.overlays)
+                overlays.append(nb::cast(PyTensor(mask)));
+            result["overlays"] = overlays;
+            return result; }, "UI thread: inspect the current disposable SAM proposal.");
+        m.def("sam_preview_close", [] {
+            require_ui_texture_creation_thread();
+            if (auto* gui = get_gui_manager())
+                gui->asyncTasks().assistedMasking().close(); }, "UI thread: cancel the SAM session and retire GPU resources asynchronously.");
+        m.def("sam_preview_apply", [](const std::string& uuid, uint64_t request) {
+            require_ui_texture_creation_thread();
+            auto* viewer = get_visualizer();
+            auto* gui = get_gui_manager();
+            auto id = core::Uuid::from_string(uuid);
+            if (!viewer || !gui || !id || id->is_nil())
+                throw std::runtime_error(LOC("image_preview.sam_unavailable"));
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            if (!request || state.request != request || state.phase != "mask_ready")
+                throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
+            std::error_code ec;
+            const auto stamp = core::native_fs::last_write_time(state.image, ec);
+            if (ec || stamp != state.source_time)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            const auto size = core::native_fs::file_size(state.image, ec);
+            if (ec || size != state.source_bytes)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            auto applied = viewer->applyCameraMask(*id, state.image, state.mask, state.width, state.height);
+            if (!applied)
+                throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message()));
+            gui->enqueueToast({.title = LOC("image_preview.sam_title"),
+                               .message = LOC("image_preview.sam_applied"),
+                               .level = vis::gui::ErrorNoticeLevel::Info}); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
+
+        m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
+            lfs::python::require_ui_texture_creation_thread();
+            const auto* gui = lfs::python::get_gui_manager();
+            auto* context = document && document->raw_doc() ? document->raw_doc()->GetContext() : nullptr;
+            using Status = lfs::vis::gui::PreviewTextureStatus;
+            switch (gui ? gui->previewTextureStatus(source, context) : Status::Unknown) {
+            case Status::Pending: return "pending";
+            case Status::Ready: return "ready";
+            case Status::Error: return "error";
+            case Status::Unknown: return "unknown";
+            }
+            return "unknown"; }, nb::arg("source"), nb::arg("document") = nb::none(), "UI thread: return unknown, pending, ready or error for a revisioned preview URL in the given document, or the main context when omitted.");
+
         m.def(
             "get_image_info",
             [](const std::string& path) -> nb::tuple {
-                auto [w, h, c] = lfs::core::get_image_info(lfs::core::utf8_to_path(path));
+                int w, h, c;
+                {
+                    nb::gil_scoped_release release;
+                    std::tie(w, h, c) = lfs::core::get_image_info(lfs::core::utf8_to_path(path));
+                }
                 return nb::make_tuple(w, h, c);
             },
             nb::arg("path"), "Get image dimensions without loading pixel data, returns (width, height, channels)");
@@ -4987,45 +5212,40 @@ namespace lfs::python {
         m.def(
             "sample_image_color",
             [](const std::string& path, int x, int y, int radius) -> nb::tuple {
-                try {
-                    auto [data, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, -1);
-                    if (!data)
-                        return nb::make_tuple(0.0f, 0.0f, 0.0f);
-
-                    const int x0 = std::max(0, x - radius);
-                    const int y0 = std::max(0, y - radius);
-                    const int x1 = std::min(w - 1, x + radius);
-                    const int y1 = std::min(h - 1, y + radius);
-
-                    double r_sum = 0.0, g_sum = 0.0, b_sum = 0.0;
-                    int count = 0;
-                    const int ch = std::min(channels, 3);
+                std::array<float, 3> color{};
+                {
+                    nb::gil_scoped_release release;
+                    auto [pixels, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, -1);
+                    const auto free_pixels = [](unsigned char* p) { lfs::core::free_image(p); };
+                    const std::unique_ptr<unsigned char, decltype(free_pixels)> data(pixels, free_pixels);
+                    if (!pixels || channels < 1)
+                        throw std::runtime_error("Unable to decode the image for color sampling");
+                    if (x < 0 || y < 0 || x >= w || y >= h || radius < 0)
+                        throw std::invalid_argument("Color sample is outside the image");
+                    std::array<double, 3> sum{};
+                    uint64_t count = 0;
+                    // Widen before adding radius to avoid overflowing a caller-provided integer.
+                    const int x0 = static_cast<int>(std::max<int64_t>(0, int64_t(x) - radius));
+                    const int y0 = static_cast<int>(std::max<int64_t>(0, int64_t(y) - radius));
+                    const int x1 = static_cast<int>(std::min<int64_t>(w - 1, int64_t(x) + radius));
+                    const int y1 = static_cast<int>(std::min<int64_t>(h - 1, int64_t(y) + radius));
                     for (int py = y0; py <= y1; ++py) {
                         for (int px = x0; px <= x1; ++px) {
-                            const unsigned char* pixel = data + (static_cast<size_t>(py) * w + px) * channels;
-                            r_sum += pixel[0];
-                            g_sum += (ch > 1) ? pixel[1] : pixel[0];
-                            b_sum += (ch > 2) ? pixel[2] : pixel[0];
+                            const auto* pixel = pixels + (static_cast<size_t>(py) * w + px) * channels;
+                            for (int c = 0; c < 3; ++c)
+                                sum[c] += pixel[channels >= 3 ? c : 0];
                             ++count;
                         }
                     }
-
-                    lfs::core::free_image(data);
-
-                    if (count == 0)
-                        return nb::make_tuple(0.0f, 0.0f, 0.0f);
-
-                    return nb::make_tuple(
-                        static_cast<float>(r_sum / (count * 255.0)),
-                        static_cast<float>(g_sum / (count * 255.0)),
-                        static_cast<float>(b_sum / (count * 255.0)));
-                } catch (const std::exception& e) {
-                    LOG_WARN("sample_image_color failed for {}: {}", path, e.what());
-                    return nb::make_tuple(0.0f, 0.0f, 0.0f);
+                    for (int c = 0; c < 3; ++c)
+                        color[c] = static_cast<float>(sum[c] / (double(count) * 255.0));
                 }
+                return nb::make_tuple(color[0], color[1], color[2]);
             },
             nb::arg("path"), nb::arg("x"), nb::arg("y"), nb::arg("radius") = 10,
-            "Sample average color around pixel (x, y) within given radius, returns (r, g, b) in 0..1");
+            "Sample source pixels as (r, g, b) in 0..1. Releases the GIL during image IO.\n"
+            "Raises RuntimeError on decode failure and ValueError on invalid coordinates or radius.\n"
+            "Unlike earlier versions, failures raise instead of returning (0, 0, 0); plugins must handle errors.");
 
         m.def(
             "preload_image_async",
@@ -5626,6 +5846,7 @@ namespace lfs::python {
                 nb::arg("tensor"), nb::arg("plugin_name") = "")
             .def("update", &PyDynamicTexture::update, nb::arg("tensor"))
             .def("destroy", &PyDynamicTexture::destroy)
+            .def("rml_src", &PyDynamicTexture::rml_src_url, nb::arg("width") = 0, nb::arg("height") = 0, "RmlUI image source owned by this texture; release it before destroying the texture")
             .def_prop_ro("id", &PyDynamicTexture::texture_id)
             .def_prop_ro("width", &PyDynamicTexture::width)
             .def_prop_ro("height", &PyDynamicTexture::height)
@@ -5768,6 +5989,8 @@ namespace lfs::python {
 
         m.def("get_camera_browse_repeat", [] { return vis::UserPreferences::instance().cameraBrowseRepeat(); }, "Get whether held camera shortcuts repeat through dataset images");
         m.def("set_camera_browse_repeat", [](bool enabled) { vis::UserPreferences::instance().setCameraBrowseRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts through dataset images");
+        m.def("get_camera_selection_operation", [] { return get_camera_selection_operation(); }, "Get the Scene Graph camera-selection dialog operation");
+        m.def("get_camera_selection_group_id", [] { return get_camera_selection_group_id(); }, "Get the Scene Graph camera-selection dialog target group id");
         m.def("get_camera_browse_repeat_rate", [] { return vis::UserPreferences::instance().cameraBrowseRepeatRate(); }, "Get camera image repeat rate in images per second");
         m.def("set_camera_browse_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setCameraBrowseRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set camera image repeat rate (1-20 images per second)");
 
@@ -6659,6 +6882,9 @@ namespace lfs::python {
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
+            auto observer = nb::module_::import_("sys").attr("modules").attr("get")("lfs_plugins.external_training");
+            if (!observer.is_none())
+                observer.attr("shutdown")();
             PyPanelRegistry::instance().unregister_all();
             PyUIHookRegistry::instance().clear_all();
             PyMenuRegistry::instance().unregister_all();
@@ -6688,6 +6914,16 @@ namespace lfs::python {
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
+            g_open_image_preview_callback = nb::object();
+            g_open_image_preview_with_sequence = false;
+            if (g_open_camera_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                g_open_camera_preview_handler_id = 0;
+            }
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
         };
         set_bridge(bridge);
 

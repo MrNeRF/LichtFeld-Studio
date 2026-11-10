@@ -5,6 +5,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
@@ -369,6 +370,48 @@ TEST_F(MortonReorderCudaTest, PreservesPerRowAttributesAndAdamMoments) {
     }
 
     ASSERT_TRUE(splat.shN_value_quantized());
+}
+
+// Three bound blocks leave the q16 SH bounds two floats past a float4
+// boundary; the Adam bounds the reorder takes after them must stay aligned.
+TEST_F(MortonReorderCudaTest, OddBoundBlockCountKeepsAdamMomentsAligned) {
+    const ShValueQuantGuard quant_guard{true};
+    constexpr size_t n = 3 * joint_adam::kBlockSize - 100;
+    auto splat = make_mixed_splat(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    AdamConfig cfg;
+    cfg.initial_capacity = n;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients(n);
+    auto* means_state = opt.get_state_mutable(ParamType::Means);
+    ASSERT_NE(means_state, nullptr);
+    fill_joint_contiguous(
+        *means_state, n, 3,
+        [](size_t i, int a) { return 0.01f * static_cast<float>(i + 1) * static_cast<float>(a + 1); },
+        [](size_t i, int a) { return 1.0e-4f * static_cast<float>(i + 1) * static_cast<float>(a + 1); });
+    std::vector<float> m_before;
+    std::vector<float> v_before;
+    decode_joint_contiguous_host(*means_state, n, 3, m_before, v_before);
+
+    const auto result = morton::apply_morton_reorder(splat, &opt);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_TRUE(result.applied);
+    const auto perm = result.permutation.cpu().contiguous();
+    const auto* ip = perm.ptr<std::int64_t>();
+
+    std::vector<float> m_after;
+    std::vector<float> v_after;
+    decode_joint_contiguous_host(*opt.get_state(ParamType::Means), n, 3, m_after, v_after);
+    for (size_t i = 0; i < n; ++i) {
+        const auto src = static_cast<size_t>(ip[i]);
+        for (int a = 0; a < 3; ++a) {
+            const size_t di = i * 3 + static_cast<size_t>(a);
+            const size_t si = src * 3 + static_cast<size_t>(a);
+            EXPECT_NEAR(m_after[di], m_before[si], std::max(0.02f, 2.0e-4f * std::abs(m_before[si]))) << i;
+            EXPECT_NEAR(v_after[di], v_before[si], std::max(0.01f, 2.0e-4f * std::abs(v_before[si]))) << i;
+        }
+    }
 }
 
 TEST_F(MortonReorderCudaTest, FrozenRangesSkipLeavesRowsUntouched) {
@@ -892,6 +935,7 @@ TEST_F(MortonReorderCudaTest, ArenaScratchMatchesAllocationFallbackBytewise) {
     EXPECT_EQ(device_bytes(arena_splat.shN()), device_bytes(fallback_splat.shN()));
     EXPECT_EQ(device_bytes(arena_splat.shN_value_bounds()), device_bytes(fallback_splat.shN_value_bounds()));
     EXPECT_EQ(device_bytes(arena_splat.means()), device_bytes(fallback_splat.means()));
+    EXPECT_EQ(device_bytes(arena_splat.rotation_raw()), device_bytes(fallback_splat.rotation_raw()));
     for (const auto type : AdamOptimizer::all_param_types()) {
         const auto* a = arena_opt.get_state(type);
         const auto* f = fallback_opt.get_state(type);

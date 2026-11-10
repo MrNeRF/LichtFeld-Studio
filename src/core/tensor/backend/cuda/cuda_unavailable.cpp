@@ -9,6 +9,7 @@
 #include "../reduction_tuning.hpp"
 #include "../target_lifetime.hpp"
 #include "core/cuda_vulkan_interop.hpp"
+#include "core/lazy_direct_storage.hpp"
 #include "core/pinned_allocator_stats.hpp"
 #include "core/tensor_backend.hpp"
 
@@ -58,6 +59,9 @@ namespace lfs::core {
     size_t cuda_bucket_cached_bytes() noexcept { return 0; }
     void safe_cuda_pool_deallocate(void*, cudaStream_t) noexcept {}
     bool tensor_uses_cuda_storage(const Tensor&) { return false; }
+    // No reserved device storage without the CUDA backend: nothing is committed ahead.
+    std::size_t lazy_direct_storage_ahead_bytes() noexcept { return 0; }
+    std::size_t release_lazy_direct_storage_ahead() { return 0; }
 
     TensorCudaStream::TensorCudaStream() { throw_cuda_unavailable(); }
     TensorCudaStream::~TensorCudaStream() = default;

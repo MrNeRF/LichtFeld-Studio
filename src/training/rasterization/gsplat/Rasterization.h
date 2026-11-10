@@ -99,7 +99,8 @@ namespace gsplat_lfs {
         float* v_scales,                      // [N, 3]
         float* v_colors,                      // [C, N, CDIM]
         float* v_opacities,                   // [C, N]
-        float* densification_info,            // [2, N] flattened or nullptr
+        float* densification_weight,          // [N] or nullptr
+        float* densification_error,           // [N] or nullptr
         const float* densification_error_map, // [H, W] or nullptr
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr

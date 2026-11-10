@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/stb_file.hpp"
 #include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
 #include <algorithm>
@@ -57,6 +58,20 @@ namespace lfs::vis::gui {
                 return 0;
             return std::max(parsed, 0);
         }
+
+        // Grayscale coverage becomes premultiplied white with that alpha, like ordinary mask textures.
+        void premultiplyImagePixels(unsigned char* pixels, const std::size_t count, const bool grayscale_coverage) {
+            for (std::size_t i = 0; i < count; ++i) {
+                auto* pixel = pixels + i * 4;
+                if (grayscale_coverage) {
+                    pixel[1] = pixel[2] = pixel[3] = pixel[0];
+                } else {
+                    const unsigned int alpha = pixel[3];
+                    for (int c = 0; c < 3; ++c)
+                        pixel[c] = static_cast<unsigned char>((pixel[c] * alpha + 127) / 255);
+                }
+            }
+        }
     } // namespace
 
     bool isPreviewTextureSource(std::string_view source) {
@@ -81,8 +96,12 @@ namespace lfs::vis::gui {
                 const std::string_view value = part.substr(eq + 1);
                 if (key == "path") {
                     request.path = lfs::core::utf8_to_path(percentDecode(value));
+                } else if (key == "memory") {
+                    request.memory_key = percentDecode(value);
                 } else if (key == "kind") {
                     request.embedded_project_preview = value == "licht";
+                } else if (key == "mode") {
+                    request.mask_overlay = value == "mask";
                 } else if (key == "thumb") {
                     thumb_size = parseIntParam(value);
                 } else if (key == "pmw") {
@@ -101,25 +120,43 @@ namespace lfs::vis::gui {
             source.remove_prefix(sep + 1);
         }
 
-        if (request.path.empty())
+        if (request.path.empty() == request.memory_key.empty())
             return std::nullopt;
 
         request.max_size = thumb_size > 0 ? thumb_size : (preview_size > 0 ? preview_size : dataset_size);
+        if (!request.memory_key.empty() && (!request.mask_overlay || request.embedded_project_preview || request.max_size <= 0))
+            return std::nullopt;
         return request;
     }
 
     PreviewTexturePixels decodePreviewTexture(
         std::filesystem::path path,
         const int max_size,
-        const bool embedded_project_preview) {
+        const bool embedded_project_preview,
+        const bool mask_overlay,
+        std::shared_ptr<const std::vector<std::byte>> encoded) {
         PreviewTexturePixels result;
+        // Memory-preview URLs have no file path. A revoked weak payload must not
+        // fall through to a file decode or become a persistent decode error.
+        if (path.empty() && mask_overlay && !encoded) {
+            result.expired = true;
+            return result;
+        }
         unsigned char* data = nullptr;
         try {
             int width = 0;
             int height = 0;
             int channels = 0;
+            bool premultiplied_alpha = false;
             unsigned char* pixels = nullptr;
-            if (embedded_project_preview) {
+            if (encoded) {
+                std::tie(pixels, width, height, channels) = lfs::core::load_image_from_memory(
+                    reinterpret_cast<const std::uint8_t*>(encoded->data()), encoded->size());
+                // The shared codec expands grayscale PNGs to RGB; their coverage becomes
+                // premultiplied RGBA below, with the same sampling as file masks.
+                if (pixels && mask_overlay)
+                    premultiplied_alpha = true;
+            } else if (embedded_project_preview) {
                 auto reader = lfs::io::project::ProjectReader::open(path);
                 if (!reader) {
                     // A catalog entry can outlive its file until the catalog marks it missing.
@@ -139,6 +176,15 @@ namespace lfs::vis::gui {
                 const auto* bytes = reinterpret_cast<const std::uint8_t*>(preview->data());
                 std::tie(pixels, width, height, channels) =
                     lfs::core::load_image_from_memory(bytes, preview->size());
+            } else if (mask_overlay) {
+                int source_channels = 0;
+                pixels = lfs::core::stb_file::stb_load(path, &width, &height, &source_channels, 4);
+                channels = 4;
+                if (pixels) {
+                    // Interpolate premultiplied colors so transparent pixels do not bleed when downscaled.
+                    premultiplyImagePixels(pixels, static_cast<std::size_t>(width) * height, source_channels == 1);
+                    premultiplied_alpha = true;
+                }
             } else {
                 std::tie(pixels, width, height, channels) =
                     lfs::core::load_image_thumbnail(path, max_size);
@@ -147,7 +193,7 @@ namespace lfs::vis::gui {
             if (pixels && width > 0 && height > 0 && channels > 0) {
                 int output_width = width;
                 int output_height = height;
-                if (embedded_project_preview && max_size > 0 &&
+                if ((embedded_project_preview || mask_overlay) && max_size > 0 &&
                     std::max(width, height) > max_size) {
                     const double scale = static_cast<double>(max_size) /
                                          static_cast<double>(std::max(width, height));
@@ -180,18 +226,20 @@ namespace lfs::vis::gui {
                         const unsigned char r = static_cast<unsigned char>(std::lround(sample(source_x, source_y, 0)));
                         const unsigned char g = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 1 ? 1 : 0)));
                         const unsigned char b = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 2 ? 2 : 0)));
-                        const unsigned char a = channels > 3 ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3))) : 255;
+                        const unsigned char a = encoded && mask_overlay ? r
+                                                : channels > 3  ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3)))
+                                                                : 255;
                         Rml::byte* dst = result.pixels.data() +
                                          (static_cast<std::size_t>(y) *
                                               static_cast<std::size_t>(output_width) +
                                           static_cast<std::size_t>(x)) *
                                              4u;
                         dst[0] = static_cast<Rml::byte>(
-                            (static_cast<unsigned int>(r) * a + 127u) / 255u);
+                            premultiplied_alpha ? r : (static_cast<unsigned int>(r) * a + 127u) / 255u);
                         dst[1] = static_cast<Rml::byte>(
-                            (static_cast<unsigned int>(g) * a + 127u) / 255u);
+                            premultiplied_alpha ? g : (static_cast<unsigned int>(g) * a + 127u) / 255u);
                         dst[2] = static_cast<Rml::byte>(
-                            (static_cast<unsigned int>(b) * a + 127u) / 255u);
+                            premultiplied_alpha ? b : (static_cast<unsigned int>(b) * a + 127u) / 255u);
                         dst[3] = static_cast<Rml::byte>(a);
                     }
                 }
@@ -214,16 +262,32 @@ namespace lfs::vis::gui {
         state->texture = texture;
         state->source = source;
         pending_.push_back(state);
+        setStatus(texture, source, PreviewTextureStatus::Pending);
 
         try {
+            const auto encoded = !request.memory_key.empty() && memory_provider_
+                                     ? memory_provider_(request.memory_key)
+                                     : std::weak_ptr<const std::vector<std::byte>>{};
             ensureWorkers();
             enqueue(Work{
-                state, request.path, request.max_size, request.embedded_project_preview});
+                state, request.path, request.max_size, request.embedded_project_preview, request.mask_overlay,
+                encoded});
         } catch (const std::exception& e) {
             LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
                      lfs::core::path_to_utf8(request.path), e.what());
             cancel(texture);
+            setStatus(texture, source, PreviewTextureStatus::Error);
         }
+    }
+
+    void PreviewTextureLoader::setStatus(const Rml::TextureHandle texture, const Rml::String& source,
+                                         const PreviewTextureStatus status) {
+        statuses_[source] = SourceStatus{texture, status};
+    }
+
+    PreviewTextureStatus PreviewTextureLoader::status(const Rml::String& source) const {
+        const auto it = statuses_.find(source);
+        return it == statuses_.end() ? PreviewTextureStatus::Unknown : it->second.status;
     }
 
     void PreviewTextureLoader::ensureWorkers() {
@@ -248,8 +312,9 @@ namespace lfs::vis::gui {
                     }
                     if (!work.state || work.state->cancelled.load(std::memory_order_acquire))
                         continue;
+                    const auto encoded = work.encoded.lock();
                     auto result = decodePreviewTexture(
-                        std::move(work.path), work.max_size, work.embedded_project_preview);
+                        std::move(work.path), work.max_size, work.embedded_project_preview, work.mask_overlay, encoded);
                     if (work.state->cancelled.load(std::memory_order_acquire))
                         continue;
                     {
@@ -286,11 +351,13 @@ namespace lfs::vis::gui {
         }
         workers_.clear();
         pending_.clear();
+        statuses_.clear();
     }
 
     void PreviewTextureLoader::cancel(Rml::TextureHandle texture) {
         if (!texture)
             return;
+        std::erase_if(statuses_, [texture](const auto& entry) { return entry.second.texture == texture; });
         pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
                                       [texture](const std::shared_ptr<State>& state) {
                                           if (state && state->texture == texture) {
@@ -333,11 +400,15 @@ namespace lfs::vis::gui {
                 result = std::move(state->result);
             }
 
-            if (!result.pixels.empty() && result.width > 0 && result.height > 0) {
-                if (upload(state->texture, state->source, result)) {
-                    --uploads_remaining;
-                    uploaded_any = true;
-                }
+            if (result.expired) {
+                setStatus(state->texture, state->source, PreviewTextureStatus::Unknown);
+            } else if (!result.pixels.empty() && result.width > 0 && result.height > 0 &&
+                       upload(state->texture, state->source, result)) {
+                setStatus(state->texture, state->source, PreviewTextureStatus::Ready);
+                --uploads_remaining;
+                uploaded_any = true;
+            } else {
+                setStatus(state->texture, state->source, PreviewTextureStatus::Error);
             }
 
             it = pending_.erase(it);

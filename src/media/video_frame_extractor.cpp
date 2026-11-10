@@ -170,6 +170,67 @@ namespace lfs::io {
             [[nodiscard]] const char* what() const noexcept override { return "Extraction stopped"; }
         };
 
+        // Adds the counts and timings of one extraction's `part` to `total`, field by field.
+        void addCounts(nlohmann::json& total, const nlohmann::json& part) {
+            for (const auto& [key, value] : part.items()) {
+                auto& sum = total[key];
+                if (value.is_object())
+                    addCounts(sum, value);
+                else if (value.is_number_integer() && sum.is_number_integer())
+                    sum = sum.get<std::int64_t>() + value.get<std::int64_t>();
+                else if (value.is_number() && sum.is_number())
+                    sum = sum.get<double>() + value.get<double>();
+            }
+        }
+
+        // Presents the kept segments of one extraction to a sink as one session:
+        // begin before the first segment, complete after the last.
+        class SegmentRunSink final : public media::FrameSink {
+        public:
+            explicit SegmentRunSink(media::FrameSink& target) : target_(target) {}
+            void setLast(const bool last) noexcept { last_ = last; }
+            media::SinkResult begin(const media::SinkSession& session) override {
+                if (open_)
+                    return {};
+                auto result = target_.begin(session);
+                open_ = static_cast<bool>(result);
+                return result;
+            }
+            media::SinkResult write(const media::FrameView& frame) override { return target_.write(frame); }
+            media::SinkResult prepareComplete(const media::SinkSummary& summary) override {
+                return last_ ? target_.prepareComplete(total(summary)) : media::SinkResult{};
+            }
+            std::string_view imageEncoderBackend() const noexcept override { return target_.imageEncoderBackend(); }
+            media::SinkResult complete(const media::SinkSummary& summary) override {
+                if (!last_) {
+                    accepted_ += summary.frames_accepted;
+                    return {};
+                }
+                auto result = target_.complete(total(summary));
+                open_ = false;
+                return result;
+            }
+            void abort(const media::SinkSummary& summary) noexcept override {
+                if (open_)
+                    target_.abort(total(summary));
+                open_ = false;
+            }
+            // Ends a session a later segment failed to resume before its own begin.
+            void abortOpen(const media::SinkOutcome outcome, const std::string& error) noexcept {
+                abort({outcome, 0, error});
+            }
+
+        private:
+            [[nodiscard]] media::SinkSummary total(media::SinkSummary summary) const {
+                summary.frames_accepted += accepted_;
+                return summary;
+            }
+            media::FrameSink& target_;
+            std::size_t accepted_ = 0;
+            bool last_ = false;
+            bool open_ = false;
+        };
+
         constexpr int MAX_FILENAME_FRAME_WIDTH = 64;
 
         void appendFrameNumber(std::string& out, const int frame_number, const int min_width) {
@@ -1018,7 +1079,109 @@ namespace lfs::io {
 
     class VideoFrameExtractor::Impl {
     public:
+        // Each kept segment is extracted on its own, so the decoder seeks to it and never decodes a cut stretch;
+        // progress, the sink session and one metadata file then cover them all.
         bool extract(const Params& params, std::string& error, media::FrameSink* provided_sink = nullptr, bool legacy_file_policy = false) {
+            if (params.segments.empty())
+                return extractRange(params, error, provided_sink, legacy_file_policy, nullptr);
+            outcome_ = ExtractionOutcome::Failed;
+            failure_.reset();
+            const auto segments = joinTouching(params.segments);
+            for (std::size_t i = 0; i < segments.size(); ++i) {
+                const auto& segment = segments[i];
+                const bool to_stream_end = segment.end == -1.0;
+                if (!std::isfinite(segment.start) || segment.start < 0.0 || !std::isfinite(segment.end) ||
+                    (to_stream_end ? i + 1 != segments.size() : segment.end <= segment.start) ||
+                    (i > 0 && segment.start < segments[i - 1].end)) {
+                    error = "Trim segments must be in time order without overlaps";
+                    failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = error, .detection = LFS_SOURCE_SITE_CURRENT()});
+                    return false;
+                }
+            }
+            const auto planned = [&](const std::size_t from) {
+                int frames = 0;
+                if (params.mode == ExtractionMode::FPS)
+                    for (std::size_t i = from; i < segments.size(); ++i)
+                        if (segments[i].end >= 0.0)
+                            frames += static_cast<int>(
+                                calculateFpsSampleCount(segments[i].start, segments[i].end, params.fps));
+                return frames;
+            };
+            const bool writes_metadata = params.generate_metadata && (!provided_sink || legacy_file_policy);
+            std::optional<SegmentRunSink> run_sink;
+            if (provided_sink)
+                run_sink.emplace(*provided_sink);
+            int done = 0, discarded = 0;
+            nlohmann::json metadata;
+            for (std::size_t i = 0; i < segments.size(); ++i) {
+                Params part = params;
+                part.segments.clear();
+                part.start_time = segments[i].start;
+                part.end_time = segments[i].end;
+                int finished = 0, skipped = 0;
+                const int later = planned(i + 1);
+                part.progress_callback = [&](const int current, const int total, const int dropped) {
+                    finished = current;
+                    skipped = dropped;
+                    if (params.progress_callback)
+                        params.progress_callback(done + current, done + total + later, discarded + dropped);
+                };
+                if (run_sink)
+                    run_sink->setLast(i + 1 == segments.size());
+                nlohmann::json part_metadata;
+                if (!extractRange(part, error, run_sink ? &*run_sink : nullptr, legacy_file_policy,
+                                  writes_metadata ? &part_metadata : nullptr)) {
+                    if (run_sink)
+                        run_sink->abortOpen(outcome_ == ExtractionOutcome::Cancelled ? media::SinkOutcome::Cancelled
+                                                                                     : media::SinkOutcome::Failed,
+                                            error);
+                    return false;
+                }
+                done += finished;
+                discarded += skipped;
+                if (metadata.is_null()) {
+                    metadata = std::move(part_metadata);
+                } else if (!part_metadata.is_null()) {
+                    for (auto& frame : part_metadata["frames"])
+                        metadata["frames"].push_back(std::move(frame));
+                    addCounts(metadata["performance"], part_metadata["performance"]);
+                    const auto add = [](nlohmann::json& total, const nlohmann::json& part, const char* key) {
+                        total[key] = total.value(key, std::int64_t{0}) + part.value(key, std::int64_t{0});
+                    };
+                    add(metadata, part_metadata, "trimmed_source_frames");
+                    for (const char* key : {"keyframe_seek_count", "estimated_targets", "estimated_source_frames"})
+                        add(metadata["processing"]["frame_selection"], part_metadata["processing"]["frame_selection"], key);
+                }
+            }
+            if (!metadata.is_null()) {
+                for (const auto& segment : segments)
+                    metadata["segments"].push_back({{"start", segment.start}, {"end", segment.end}});
+                const auto path = params.output_dir / "extraction_metadata.json";
+                const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
+                const auto text = params.preserve_source_metadata
+                                      ? metadata.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)
+                                      : metadata.dump(2);
+                const auto result = core::writeTextFileAtomically(path, text,
+                                                                  {.overwrite = !float_output || params.overwrite_metadata,
+                                                                   .durable = false,
+                                                                   .create_directories = false,
+                                                                   .cancelled = params.cancel_requested});
+                if (!result) {
+                    failure_ = result.error();
+                    outcome_ = failure_->code() == ErrorCode::Cancelled ? ExtractionOutcome::Cancelled
+                                                                        : ExtractionOutcome::Failed;
+                    error = "Failed to write extraction metadata " + lfs::core::path_to_utf8(path) + ": " +
+                            std::string(failure_->detail());
+                    return false;
+                }
+            }
+            outcome_ = ExtractionOutcome::Completed;
+            return true;
+        }
+
+        // `metadata`, when given, receives the extraction metadata instead of extraction_metadata.json.
+        bool extractRange(const Params& params, std::string& error, media::FrameSink* provided_sink,
+                          const bool legacy_file_policy, nlohmann::json* const metadata) {
             outcome_ = ExtractionOutcome::Failed;
             failure_.reset();
             error.clear();
@@ -2989,21 +3152,25 @@ namespace lfs::io {
                             for (auto& frame : frames)
                                 frame["sidecar"] = frame["file"].get<std::string>() + media::detail::sidecar_metadata_suffix;
 
-                        // SDR historically replaces its manifest; float output has
-                        // an explicit collision policy. Preserve both contracts.
-                        const auto text = params.preserve_source_metadata
-                                              ? root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)
-                                              : root.dump(2);
-                        const auto result = core::writeTextFileAtomically(meta_path, text,
-                                                                          {.overwrite = !float_output || params.overwrite_metadata,
-                                                                           .durable = false,
-                                                                           .create_directories = false,
-                                                                           .cancelled = params.cancel_requested});
-                        if (!result) {
-                            failure_ = result.error();
-                            if (failure_->code() == ErrorCode::Cancelled)
-                                throw ExtractionCancelled{};
-                            throw std::runtime_error(std::string(failure_->detail()));
+                        if (metadata) {
+                            *metadata = std::move(root);
+                        } else {
+                            // SDR historically replaces its manifest; float output has
+                            // an explicit collision policy. Preserve both contracts.
+                            const auto text = params.preserve_source_metadata
+                                                  ? root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)
+                                                  : root.dump(2);
+                            const auto result = core::writeTextFileAtomically(meta_path, text,
+                                                                              {.overwrite = !float_output || params.overwrite_metadata,
+                                                                               .durable = false,
+                                                                               .create_directories = false,
+                                                                               .cancelled = params.cancel_requested});
+                            if (!result) {
+                                failure_ = result.error();
+                                if (failure_->code() == ErrorCode::Cancelled)
+                                    throw ExtractionCancelled{};
+                                throw std::runtime_error(std::string(failure_->detail()));
+                            }
                         }
                     } catch (const ExtractionCancelled&) {
                         throw;
@@ -3078,6 +3245,17 @@ namespace lfs::io {
         ExtractionOutcome outcome_ = ExtractionOutcome::Failed;
         std::optional<Error> failure_;
     };
+
+    std::vector<VideoFrameExtractor::Segment> VideoFrameExtractor::joinTouching(std::vector<Segment> segments) {
+        std::size_t kept = 0;
+        for (const auto& segment : segments)
+            if (kept > 0 && segments[kept - 1].end == segment.start)
+                segments[kept - 1].end = segment.end;
+            else
+                segments[kept++] = segment;
+        segments.resize(kept);
+        return segments;
+    }
 
     VideoFrameExtractor::VideoFrameExtractor() : impl_(new Impl()) {}
     VideoFrameExtractor::~VideoFrameExtractor() { delete impl_; }

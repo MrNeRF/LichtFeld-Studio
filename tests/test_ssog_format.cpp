@@ -887,6 +887,7 @@ TEST(SsogFormat, BundleReadersAcceptSuffixCaseWithoutChangingRows) {
         ASSERT_TRUE(saved) << saved.error().format();
         auto reference = ssog ? load_ssog(lower) : load_sog(lower);
         ASSERT_TRUE(reference) << reference.error().format();
+        size_t copy_index = 0;
         for (const auto suffix : ssog ? std::vector<std::string>{".ssog", ".SSOG", ".SsOg"}
                                       : std::vector<std::string>{".sog", ".SOG", ".SoG"}) {
             SCOPED_TRACE(suffix);

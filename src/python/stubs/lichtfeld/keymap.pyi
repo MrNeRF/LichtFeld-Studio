@@ -11,6 +11,12 @@ class Action(enum.Enum):
 
     EDITOR_STOP = 119
 
+    IMAGE_PREVIEW_DELETE = 120
+
+    IMAGE_PREVIEW_GENERATE = 121
+
+    IMAGE_PREVIEW_REMOVE_POINT = 122
+
     NONE = 0
 
     CAMERA_ORBIT = 1
@@ -244,6 +250,8 @@ class Action(enum.Enum):
 class ToolMode(enum.Enum):
     EDITOR = 10
 
+    IMAGE_PREVIEW = 11
+
     GLOBAL = 0
 
     SELECTION = 1
@@ -330,6 +338,9 @@ class MouseButtonTrigger:
 
 def get_action_for_key(mode: ToolMode, key: int, modifiers: int = 0) -> Action:
     """Get action bound to a key in given mode"""
+
+def get_action_for_mouse_button(mode: ToolMode, button: MouseButton, modifiers: int = 0, is_double_click: bool = False) -> Action:
+    """Get action bound to a mouse button in given mode"""
 
 def get_action_for_scroll(mode: ToolMode, modifiers: int = 0, held_keys: Sequence[int] = []) -> Action:
     """Get action bound to a mouse scroll trigger in given mode"""

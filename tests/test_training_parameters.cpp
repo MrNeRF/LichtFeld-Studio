@@ -1188,16 +1188,16 @@ namespace {
     TEST_F(TrainingParametersTest, POPSpaSnapshotMayTargetPostprocessingIterations) {
         lfs::core::param::TrainingParameters params;
         params.optimization.enable_sparsity = true;
-        params.save_project_at_iteration = params.optimization.iterations + 1;
+        params.save_project_at_iteration = {params.optimization.iterations + 1};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
-        params.save_project_at_iteration = params.optimization.resolved_total_iterations();
+        params.save_project_at_iteration = {static_cast<size_t>(params.optimization.resolved_total_iterations())};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
-        params.save_project_at_iteration = params.optimization.resolved_total_iterations() + 1;
+        params.save_project_at_iteration = {static_cast<size_t>(params.optimization.resolved_total_iterations()) + 1};
         EXPECT_FALSE(params.validate().empty());
         params.optimization.enable_sparsity = false;
-        params.save_project_at_iteration = params.optimization.iterations + 1;
+        params.save_project_at_iteration = {params.optimization.iterations + 1};
         EXPECT_FALSE(params.validate().empty());
-        params.save_project_at_iteration = params.optimization.iterations;
+        params.save_project_at_iteration = {params.optimization.iterations};
         EXPECT_TRUE(params.validate().empty()) << params.validate();
     }
 
@@ -1276,4 +1276,16 @@ TEST_F(TrainingParametersTest, BuiltinCapacityResetDoesNotReuseEditedCapacity) {
     EXPECT_EQ(std::any_cast<int>(lfs::python::resolve_optimization_builtin_default(
                   optimization_meta("max_cap"), active)),
               original);
+}
+
+TEST_F(TrainingParametersTest, DatasetConfigFromJsonRejectsMissingRequiredKeys) {
+    const auto complete = lfs::core::param::DatasetConfig{}.to_json();
+    const auto restored = lfs::core::param::DatasetConfig::from_json(complete);
+    EXPECT_EQ(restored.to_json(), complete);
+
+    for (const auto* key : {"data_path", "images", "resize_factor", "max_width", "test_every", "output_folder"}) {
+        auto json = complete;
+        json.erase(key);
+        EXPECT_THROW((void)lfs::core::param::DatasetConfig::from_json(json), nlohmann::json::exception) << key;
+    }
 }

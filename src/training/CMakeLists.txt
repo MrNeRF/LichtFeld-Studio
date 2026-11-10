@@ -110,6 +110,8 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     ops/blob.cpp
+    ops/mcmc_portable.cpp
+    ops/mrnf_portable.cpp
     ops/structure.cpp
     ops/registry.cpp
     ops/table_hip.cpp
@@ -149,6 +151,7 @@ set(TRAINING_NEW_SOURCES
         training_cropbox_mask.cpp
         trainer.cpp
         trainer_popspa.cpp
+        noise_infill.cpp
         normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp

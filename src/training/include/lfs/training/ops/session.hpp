@@ -12,6 +12,8 @@
 namespace lfs::gpu_ops {
     struct ArenaMemoryInfo {
         size_t arena_capacity, required_bytes, current_usage, peak_usage;
+        // Released under VRAM pressure and owed back to later frames.
+        size_t recommit_bytes = 0;
     };
     struct IdleArenaBorrow {
         void* owner = nullptr;

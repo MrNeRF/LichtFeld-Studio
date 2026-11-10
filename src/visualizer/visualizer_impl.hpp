@@ -197,11 +197,13 @@ namespace lfs::vis {
             std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) override;
         lfs::Result<ProjectTrainingSource>
         projectTrainingSource() override;
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
+        [[nodiscard]] bool projectOpenPending() const override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -350,6 +352,7 @@ namespace lfs::vis {
         friend class DepthWindowPanelsInteractionTest;
         friend class DepthWindowGtHookTest;
         friend class P5SessionCaptureTestAccess;
+        friend class CollisionProjectOpenTest;
         friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;

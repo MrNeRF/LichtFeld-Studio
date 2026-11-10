@@ -20,7 +20,7 @@ def _confirm_reply(state, buttons):
 
 
 def _make_node(node_type, name, gaussian_count):
-    return SimpleNamespace(type=node_type, name=name, gaussian_count=gaussian_count)
+    return SimpleNamespace(type=node_type, name=name, gaussian_count=gaussian_count, read_only=False)
 
 
 def _install_lf_stub(monkeypatch):
@@ -225,6 +225,19 @@ def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
     assert panel._selection_seeded is True
     assert panel._export_sh_degree == 3
     assert panel._handle.dirty_fields == ["sh_degree"]
+
+
+def test_export_panel_excludes_external_preview_even_when_preselected(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    local = _make_node(module.lf.scene.NodeType.SPLAT, "Local", 128)
+    preview = _make_node(module.lf.scene.NodeType.SPLAT, "Preview", 64)
+    preview.read_only = True
+    state.nodes = [local, preview]
+    panel._selected_nodes = {"Local", "Preview"}
+    assert panel._get_selected_node_names() == ["Local"]
+    panel._sync_selection(panel._get_splat_nodes())
+    assert panel._selected_nodes == {"Local"}
 
 
 def test_export_panel_progress_updates_bound_value(export_panel_module):

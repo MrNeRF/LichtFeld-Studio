@@ -58,7 +58,8 @@ namespace lfs::core::sh_value_quant {
         std::size_t n_dst,
         std::size_t n_src_primitives,
         std::uint32_t coeffs_rest,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        bool match_cpu_rounding = false);
 
     /// Sequential decode of prims [src_offset, src_offset + n_dst) into a
     /// compact float4-swizzled buffer that treats those prims as 0..n_dst-1.
@@ -83,7 +84,15 @@ namespace lfs::core::sh_value_quant {
         std::size_t n_dst,
         std::size_t n_src_primitives,
         std::uint32_t coeffs_rest,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        std::uint32_t selected_rest = 0,
+        bool host_rounding = false);
+
+    /// Gather selected FP32/IEEE-f16 rows and bands from float4-swizzled storage.
+    void decode_shN_float_gathered_to_canonical(
+        const void* source, bool half, const std::int64_t* rows, float* output,
+        std::size_t count, std::size_t n_src, std::uint32_t layout_rest,
+        std::uint32_t selected_rest, cudaStream_t stream = nullptr);
 
     /// block_id[i] = dest_indices[i] / 256 as float32 (exact for training-scale N).
     void fill_quant_block_ids_f32(
