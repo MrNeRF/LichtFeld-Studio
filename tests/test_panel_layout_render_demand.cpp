@@ -283,11 +283,15 @@ namespace {
 
     class PanelLayoutRenderDemandTest : public ::testing::Test {
     protected:
+        float previous_dpi_ = 1.0f;
         void SetUp() override {
+            previous_dpi_ = lfs::python::get_shared_dpi_scale();
+            lfs::python::set_shared_dpi_scale(1.0f);
             lfs::vis::gui::PanelRegistry::instance().unregister_all_non_native();
         }
 
         void TearDown() override {
+            lfs::python::set_shared_dpi_scale(previous_dpi_);
             lfs::vis::gui::PanelRegistry::instance().unregister_all_non_native();
         }
 

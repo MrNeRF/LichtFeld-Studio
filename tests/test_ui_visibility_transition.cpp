@@ -5,6 +5,7 @@
 #include "gui/gui_manager.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include <algorithm>
@@ -20,7 +21,10 @@ namespace lfs::vis {
     void installSessionTestInputController(VisualizerImpl& viewer);
     class UiVisibilityTransitionTest : public ::testing::Test {
     protected:
+        float previous_dpi_ = 1.0f;
         void SetUp() override {
+            previous_dpi_ = lfs::python::get_shared_dpi_scale();
+            lfs::python::set_shared_dpi_scale(1.0f);
             if (const auto* previous = std::getenv("LFS_HOME"))
                 previous_home_ = previous;
 #ifdef _WIN32
@@ -32,6 +36,7 @@ namespace lfs::vis {
         }
 
         void TearDown() override {
+            lfs::python::set_shared_dpi_scale(previous_dpi_);
             lfs::event::EventBridge::instance().clear_all();
 #ifdef _WIN32
             (void)_putenv_s("LFS_HOME", previous_home_ ? previous_home_->c_str() : "");
