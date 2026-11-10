@@ -669,7 +669,12 @@ TEST(MetricsEvaluator, MaskReportSetsMatchSeparateEvaluations) {
             params.optimization.eval_mask_report = report;
             MetricsEvaluator evaluator(params);
             if (std::filesystem::is_regular_file(lpips_weights))
-                evaluator.set_lpips_weights_path(lpips_weights);
+                evaluator.set_lpips_weights_preparer([lpips_weights]() -> std::optional<lfs::core::nn::WeightFile> {
+                    auto file = lfs::core::nn::WeightFile::open(lpips_weights);
+                    if (!file)
+                        return std::nullopt;
+                    return std::move(*file);
+                });
             if (invert)
                 evaluator.set_eval_mesh(lfs::training::make_evaluation_box(box, *invert));
             auto metrics = evaluator.evaluate(1, splat, dataset, background);
@@ -1867,6 +1872,12 @@ TEST(MetricsEvaluatorControlTest, CallsControlBetweenViewsWithoutChangingScores)
     std::filesystem::create_directories(controlled_params.dataset.output_path);
     MetricsEvaluator plain(plain_params);
     MetricsEvaluator controlled(controlled_params);
+    std::size_t preparations = 0;
+    controlled.set_lpips_weights_preparer([&]() -> std::optional<lfs::core::nn::WeightFile> {
+        ++preparations;
+        return std::nullopt;
+    });
+    EXPECT_EQ(preparations, 0u);
     const auto reference = plain.evaluate(1, splat, dataset, background);
     std::size_t boundaries = 0;
     const auto actual = controlled.evaluate(
@@ -1881,6 +1892,7 @@ TEST(MetricsEvaluatorControlTest, CallsControlBetweenViewsWithoutChangingScores)
     ASSERT_EQ(reference.views.size(), 2u);
     ASSERT_EQ(actual.views.size(), reference.views.size());
     EXPECT_EQ(boundaries, 3u);
+    EXPECT_EQ(preparations, 1u); // Preparation is deferred and shared across the evaluated views.
     for (std::size_t i = 0; i < actual.views.size(); ++i) {
         ASSERT_TRUE(actual.views[i].psnr.has_value());
         ASSERT_TRUE(reference.views[i].psnr.has_value());

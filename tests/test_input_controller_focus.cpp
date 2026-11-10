@@ -2469,7 +2469,7 @@ namespace lfs::vis {
         RestorePythonConsoleCallback restore_console_callback;
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
-        const auto& bindings = controller.getBindings();
+        auto& bindings = controller.getBindings();
 
         struct MenuAccelerator {
             std::string source;
@@ -2537,6 +2537,9 @@ namespace lfs::vis {
         handlers.subscribe<core::events::cmd::DeselectAll>(record(Action::DESELECT_ALL));
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
         handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
+        handlers.subscribe<core::events::ui::ToggleSideDock>([&](const auto& event) {
+            ++dispatched[event.side == lfs::core::SideDock::Right ? Action::TOGGLE_RIGHT_DOCK : Action::TOGGLE_LEFT_DOCK];
+        });
         handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
         handlers.subscribe<core::events::cmd::SetVrActive>(record(Action::EXIT_VR));
         handlers.subscribe<core::events::cmd::RecenterVr>(record(Action::VR_RECENTER));
@@ -2565,9 +2568,18 @@ namespace lfs::vis {
                     return candidate.mode == accelerator.mode &&
                            candidate.action == accelerator.action;
                 });
-            ASSERT_NE(binding, default_profile.bindings.end())
-                << getActionName(accelerator.action);
-            const auto* trigger = std::get_if<KeyTrigger>(&binding->trigger);
+            KeyTrigger assigned_trigger{KEY_F11, MODIFIER_CTRL | MODIFIER_ALT | MODIFIER_SHIFT};
+            const KeyTrigger* trigger = nullptr;
+            if (accelerator.action == Action::TOGGLE_LEFT_DOCK || accelerator.action == Action::TOGGLE_RIGHT_DOCK) {
+                // These menu hints are empty by default, but follow user-assigned shortcuts.
+                ASSERT_EQ(binding, default_profile.bindings.end()) << getActionName(accelerator.action);
+                assigned_trigger.key = accelerator.action == Action::TOGGLE_LEFT_DOCK ? KEY_F11 : KEY_F12;
+                bindings.setBinding(accelerator.mode, accelerator.action, assigned_trigger);
+                trigger = &assigned_trigger;
+            } else {
+                ASSERT_NE(binding, default_profile.bindings.end()) << getActionName(accelerator.action);
+                trigger = std::get_if<KeyTrigger>(&binding->trigger);
+            }
             ASSERT_NE(trigger, nullptr) << getActionName(accelerator.action);
             const auto scancode = appKeyToSdlScancode(trigger->key);
             ASSERT_NE(scancode, SDL_SCANCODE_UNKNOWN)

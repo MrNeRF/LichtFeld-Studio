@@ -379,6 +379,15 @@ namespace {
         std::deque<WorkItem> queued_work;
     };
 
+    std::shared_ptr<lfs::core::Camera> make_test_camera(const std::string& image_name, const int uid) {
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(), lfs::core::CameraModelType::PINHOLE,
+            image_name, std::filesystem::path{}, std::filesystem::path{}, 64, 64, uid);
+    }
+
     std::unique_ptr<lfs::core::SplatData> makeSingleWhiteSplat(const float x, const float y, const float z) {
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -701,6 +710,52 @@ TEST_F(PythonIntegrationTest, PythonCameraTrainingSettersPostNotices) {
                   0);
     }
     EXPECT_EQ(posted, 2u);
+}
+
+TEST_F(PythonIntegrationTest, PythonRemoveDisabledCamerasReturnsDeletedCount) {
+    struct PythonSceneContextReset {
+        ~PythonSceneContextReset() {
+            lfs::vis::op::undoHistory().clear();
+            lfs::python::set_scene_manager(nullptr);
+            lfs::python::set_application_scene(nullptr);
+        }
+    } reset;
+    lfs::vis::op::undoHistory().clear();
+
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+    const auto group = scene.addCameraGroup("Training", lfs::core::NULL_NODE, 2);
+    const auto enabled = scene.addCamera("enabled.png", group, make_test_camera("enabled.png", 1));
+    const auto disabled = scene.addCamera("disabled.png", group, make_test_camera("disabled.png", 2));
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    ASSERT_NE(enabled, lfs::core::NULL_NODE);
+    ASSERT_NE(disabled, lfs::core::NULL_NODE);
+    scene.setCameraTrainingEnabled(disabled, false);
+
+    TestVisualizer viewer;
+    viewer.on_viewer_thread = true;
+    ScopedVisualizer scoped_viewer(&viewer);
+    lfs::python::set_application_scene(&scene);
+    lfs::python::set_scene_manager(&scene_manager);
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_EQ(PyRun_SimpleString(
+                      std::format(
+                          "import lichtfeld as lf\n"
+                          "assert lf.remove_disabled_cameras({}) == 1\n",
+                          group)
+                          .c_str()),
+                  0);
+    }
+    EXPECT_NE(scene.getNodeById(enabled), nullptr);
+    EXPECT_EQ(scene.getNodeById(disabled), nullptr);
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    const auto* restored = scene.getNode("disabled.png");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_FALSE(restored->training_enabled);
 }
 
 TEST_F(PythonIntegrationTest, PythonTransientSplatsLeaveNoUndoHistory) {

@@ -17,6 +17,21 @@ from . import (
 import lichtfeld
 
 
+def model_cache_snapshot() -> dict:
+    """
+    UI thread: inspect managed model files and the current Preferences operation; no hashing or downloads.
+    """
+
+def model_cache_start(model: int, action: str) -> bool:
+    """
+    UI thread: queue download, verification or removal through the shared model cache.
+    """
+
+def model_cache_cancel(job: int) -> None:
+    """
+    UI thread: cancel only the matching Preferences model operation; on-demand callers keep their own cancellation.
+    """
+
 class AppContext:
     def __init__(self) -> None: ...
 
