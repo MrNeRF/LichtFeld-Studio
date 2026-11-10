@@ -9,9 +9,11 @@
     <span class="et-readonly">@tr:external_training.read_only</span>
     <span>{{progress}}</span>
     <span>{{preview}}</span>
+    <span data-if="has_saved_result">{{saved_result}}</span>
     <label><input type="checkbox" data-checked="show_cameras"/><span>@tr:external_training.camera_overlay</span></label>
     <span class="text-disabled" data-if="!connected">@tr:external_training.disconnected</span>
     <button class="btn btn--secondary btn--full" data-attrif-disabled="!has_snapshot" data-event-click="frame">@tr:external_training.frame</button>
+    <button class="btn btn--primary btn--full" data-if="has_saved_result" data-attrif-disabled="!can_import_result" data-event-click="import_result" data-tooltip="external_training.import_hint">{{import_label}}</button>
     <button class="btn btn--secondary btn--full" data-if="connected" data-event-click="disconnect">@tr:external_training.disconnect</button>
     <button class="btn btn--secondary btn--full" data-event-click="remove">@tr:external_training.remove</button>
   </div>

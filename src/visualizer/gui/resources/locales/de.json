@@ -3957,5 +3957,13 @@
   "external_training.dataset_open": "Öffne eine neue Szene oder wechsle mit dem geladenen Datensatz in den Bearbeitungsmodus, bevor du einen externen Trainer anzeigst.",
   "external_training.dependencies": "NumPy wird vorbereitet und bei Bedarf installiert…",
   "external_training.camera_overlay": "Kamerafrusten (gesamte Szene)",
-  "external_training.export_unavailable": "Externe Vorschauen können nicht exportiert werden. Öffnen Sie zum Exportieren das vom Trainer gespeicherte Modell."
+  "external_training.export_unavailable": "Externe Vorschauen können nicht exportiert werden. Öffnen Sie zum Exportieren das vom Trainer gespeicherte Modell.",
+  "external_training.result_invalid": "Das gespeicherte Modell ist unvollständig, wurde geändert oder enthält nicht unterstützte Metadaten.",
+  "external_training.result_unreadable": "Das gespeicherte Modell ist nicht verfügbar oder nicht lesbar. Halten Sie den Ausgabeordner verfügbar und prüfen Sie die Dateiberechtigungen.",
+  "external_training.result_name": "{name} · gespeichertes Modell",
+  "external_training.import_result": "Gespeichertes Modell importieren",
+  "external_training.import_hint": "Nach Abschluss des Trainings verfügbar. Importiert das vollständig gespeicherte beste oder letzte gültige Modell als bearbeitbares lokales Modell. Vorschaugrenzen gelten nicht.",
+  "external_training.import_busy": "Ein anderer Import läuft bereits. Warten Sie, bis er abgeschlossen ist.",
+  "external_training.result_best": "Beste Bewertung: Schritt {step} · {count} Gaußfunktionen · SH{degree}",
+  "external_training.result_last": "Zuletzt gespeichert: Schritt {step} · {count} Gaußfunktionen · SH{degree}"
 }

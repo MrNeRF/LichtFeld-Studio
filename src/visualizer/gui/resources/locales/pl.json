@@ -3957,5 +3957,13 @@
   "external_training.dataset_open": "Otwórz nową scenę lub przełącz wczytany zestaw danych w tryb edycji przed wyświetleniem zewnętrznego treningu.",
   "external_training.dependencies": "Przygotowywanie NumPy; instalacja w razie potrzeby…",
   "external_training.camera_overlay": "Bryły widzenia kamer (cała scena)",
-  "external_training.export_unavailable": "Nie można eksportować zewnętrznych podglądów. Aby wyeksportować model, otwórz plik zapisany przez proces treningu."
+  "external_training.export_unavailable": "Nie można eksportować zewnętrznych podglądów. Aby wyeksportować model, otwórz plik zapisany przez proces treningu.",
+  "external_training.result_invalid": "Zapisany model jest niekompletny, został zmieniony lub zawiera nieobsługiwane metadane.",
+  "external_training.result_unreadable": "Zapisany model jest niedostępny lub nie można go odczytać. Zachowaj dostęp do folderu wyjściowego i sprawdź uprawnienia pliku.",
+  "external_training.result_name": "{name} · zapisany model",
+  "external_training.import_result": "Importuj zapisany model",
+  "external_training.import_hint": "Dostępne po zakończeniu treningu. Importuje pełny zapisany model z najlepszą oceną lub ostatni poprawny model jako edytowalny model lokalny. Limity podglądu nie obowiązują.",
+  "external_training.import_busy": "Trwa już inny import. Poczekaj na jego zakończenie.",
+  "external_training.result_best": "Najlepsza ocena: krok {step} · {count} funkcji Gaussa · SH{degree}",
+  "external_training.result_last": "Ostatni zapis: krok {step} · {count} funkcji Gaussa · SH{degree}"
 }
