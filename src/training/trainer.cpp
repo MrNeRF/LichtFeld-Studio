@@ -3253,8 +3253,8 @@ namespace lfs::training {
             if (params_.optimization.eval_green_infill && !lfs::core::param::eval_green_infill_mesh(params_.optimization))
                 return std::unexpected(std::string(lfs::core::param::kEvalGreenInfillNeedsMesh));
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
-            if (lpips_weights_path_)
-                evaluator_->set_lpips_weights_path(*lpips_weights_path_);
+            if (lpips_weights_preparer_)
+                evaluator_->set_lpips_weights_preparer(lpips_weights_preparer_);
             const glm::vec3 origin = scene_ ? scene_->getTrainingDataOrigin() : glm::vec3{0.0f};
             evaluator_->set_training_origin({origin.x, origin.y, origin.z});
             if (!params_.optimization.eval_mask.empty()) {
@@ -3872,10 +3872,10 @@ namespace lfs::training {
         apply_param_side_effects(accepted, bg_image_path_changed);
     }
 
-    void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
-        lpips_weights_path_ = std::move(path);
+    void Trainer::set_lpips_weights_preparer(std::function<std::optional<core::nn::WeightFile>()> preparer) {
+        lpips_weights_preparer_ = std::move(preparer);
         if (evaluator_)
-            evaluator_->set_lpips_weights_path(lpips_weights_path_);
+            evaluator_->set_lpips_weights_preparer(lpips_weights_preparer_);
     }
 
     void Trainer::apply_pending_params_at_safe_point() {

@@ -4451,7 +4451,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::set_evaluation_weights_preparer(
-        std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) {
+        std::function<std::optional<core::nn::WeightFile>(bool allow_download)> preparer) {
         trainer_manager_->set_evaluation_weights_preparer(std::move(preparer));
     }
 

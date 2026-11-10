@@ -7,6 +7,7 @@
 #include "../dataset.hpp"
 #include "core/error.hpp"
 #include "core/nn/models/lpips.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -421,8 +422,8 @@ namespace lfs::training {
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
-        void set_lpips_weights_path(std::optional<std::filesystem::path> path) {
-            _lpips_weights_path = std::move(path);
+        void set_lpips_weights_preparer(std::function<std::optional<core::nn::WeightFile>()> preparer) {
+            _lpips_weights_preparer = std::move(preparer);
             _lpips_metric.reset();
             _lpips_load_attempted = false;
         }
@@ -504,7 +505,7 @@ namespace lfs::training {
         std::unique_ptr<PSNR> _psnr_metric;
         std::unique_ptr<SSIM> _ssim_metric;
         std::optional<lfs::core::nn::models::Lpips> _lpips_metric;
-        std::optional<std::filesystem::path> _lpips_weights_path;
+        std::function<std::optional<core::nn::WeightFile>()> _lpips_weights_preparer;
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;

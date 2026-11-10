@@ -212,3 +212,13 @@ def test_selection_submode_follows_native_mode(lf):
     if lf.get_scene() is None:
         pytest.skip("requires a native viewer (also run by SelectionSubmodeTest)")
     check_selection_submode_follows_native_mode(lf)
+
+
+def test_side_dock_toggle_uses_explicit_side_names(lf):
+    assert lf.toggle_side_dock("left") is None
+    assert lf.toggle_side_dock("right") is None
+    for side in ("", "top", "LEFT"):
+        with pytest.raises(ValueError, match="left.*right"):
+            lf.toggle_side_dock(side)
+    with pytest.raises(TypeError):
+        lf.toggle_side_dock(False)

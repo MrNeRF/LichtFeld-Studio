@@ -88,20 +88,26 @@ namespace lfs::core::nn::models {
     lfs::Result<Lpips> Lpips::load(const std::filesystem::path& weights, Device device,
                                    std::optional<DataType> compute, InputScaling scaling,
                                    const std::size_t activation_budget_bytes) {
+        auto file = WeightFile::open(weights);
+        if (!file)
+            return std::move(file.error());
+        return load(*file, device, compute, scaling, activation_budget_bytes);
+    }
+
+    lfs::Result<Lpips> Lpips::load(const WeightFile& file, Device device,
+                                   std::optional<DataType> compute, InputScaling scaling,
+                                   const std::size_t activation_budget_bytes) {
         if (device != Device::CUDA) {
             return lpips_error(lfs::ErrorCode::InvalidArgument,
                                "LPIPS requires a CUDA device");
         }
-        auto file = WeightFile::open(weights);
-        if (!file)
-            return std::move(file.error());
 
         const DataType dtype = compute.value_or(DataType::Float32);
         if (dtype != DataType::Float16 && dtype != DataType::Float32) {
             return lpips_error(lfs::ErrorCode::InvalidArgument,
                                "LPIPS compute dtype must be float16 or float32");
         }
-        auto loaded = file->load_all(device, dtype);
+        auto loaded = file.load_all(device, dtype);
         if (!loaded)
             return std::move(loaded.error());
 

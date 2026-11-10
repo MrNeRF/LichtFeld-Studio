@@ -1177,12 +1177,13 @@ namespace lfs::preprocessing {
             }
             std::optional<Sam2> owned_model;
             auto* model = borrowed_model;
+            std::optional<core::nn::WeightFile> prepared_weights;
             std::filesystem::path model_path = options.weights;
             if (!sequence.empty() && !model && model_path.empty()) {
                 auto ensured = ensure_sam2_weights(options.allow_download, options.cancel_requested);
                 if (!ensured)
                     return std::unexpected(ensured.error());
-                model_path = std::move(*ensured);
+                prepared_weights = std::move(*ensured);
             }
             MaskDecodeSettings decode;
             Tensor seed_mask;
@@ -1196,10 +1197,12 @@ namespace lfs::preprocessing {
                     return std::unexpected(plan.error());
                 decode = decode_settings(plan->budget_bytes);
                 if (!model) {
-                    auto loaded = Sam2::load(model_path, Device::CUDA, DataType::Float32);
+                    auto loaded = prepared_weights ? Sam2::load(*prepared_weights, Device::CUDA, DataType::Float32)
+                                                   : Sam2::load(model_path, Device::CUDA, DataType::Float32);
                     if (!loaded)
                         return std::unexpected(loaded.error());
                     owned_model.emplace(std::move(*loaded));
+                    prepared_weights.reset();
                     model = &*owned_model;
                 }
                 model->set_encoder_dtype(DataType::Float16);

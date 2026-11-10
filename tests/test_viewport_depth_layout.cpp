@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
@@ -34,6 +36,13 @@ namespace lfs::vis::gui {
             overlay.rml_context_ = document->GetContext();
             overlay.vp_size_ = {920, 840};
             overlay.toolbar_position_preference_dirty_ = false;
+        }
+        static void bindDockControls(RmlViewportOverlay& overlay) {
+            for (const char* id : {"left-side-dock-toggle", "right-side-dock-toggle"}) {
+                auto* element = overlay.document_->GetElementById(id);
+                element->AddEventListener("keydown", &overlay.side_dock_listener_);
+                element->AddEventListener("click", &overlay.side_dock_listener_);
+            }
         }
         static bool update(RmlViewportOverlay& overlay) { return overlay.updateToolbarRoots(); }
         static void bindStore(RmlViewportOverlay& overlay) { overlay.bindReactiveStore(); }
@@ -299,6 +308,80 @@ namespace {
                 EXPECT_NEAR(1240 * scale - position.x - size.x, 12 * scale, 0.1f);
                 layout(false, scale, 0.5f, 1240);
                 EXPECT_NEAR(1240 * scale - bar->GetAbsoluteOffset(Rml::BoxArea::Border).x - bar->GetBox().GetSize(Rml::BoxArea::Border).x, 121 * scale, 0.1f);
+            }
+        }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/viewport_overlay.rml";
+        std::ifstream input(path);
+        std::string markup((std::istreambuf_iterator<char>(input)), {});
+        markup.replace(markup.find("<head>"), 6, "<head><link type=\"text/rcss\" href=\"components.rcss\"/>");
+        real_context_ = Rml::CreateContext("viewport_depth_layout_real", {720, 400}, &renderer_);
+        ASSERT_NE(real_context_, nullptr);
+        auto* doc = real_context_->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
+        ASSERT_NE(doc, nullptr);
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::attach(overlay_, doc);
+        doc->Show();
+        lfs::vis::gui::ViewportDepthLayoutTestAccess::bindDockControls(overlay_);
+        int toggles = 0;
+        lfs::event::ScopedHandler subscription;
+        subscription.subscribe<lfs::core::events::ui::ToggleSideDock>([&](const auto&) { ++toggles; });
+        for (float scale : {1.0f, 1.5f, 2.0f}) {
+            real_context_->SetDensityIndependentPixelRatio(scale);
+            for (int width : {360, 720}) {
+                real_context_->SetDimensions({int(width * scale), int(400 * scale)});
+                overlay_.setToolbarPanels(0.0f, width * scale, 22.0f * scale);
+                for (bool collapsed : {false, true}) {
+                    overlay_.setSideDocks(true, collapsed, true, !collapsed);
+                    real_context_->Update();
+                    for (const char* id : {"left-side-dock-toggle", "right-side-dock-toggle"}) {
+                        auto* button = doc->GetElementById(id);
+                        ASSERT_NE(button, nullptr);
+                        ASSERT_TRUE(button->IsVisible());
+                        const auto pos = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+                        const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
+                        EXPECT_GT(size.x, 0.0f);
+                        EXPECT_GT(pos.x, 4.0f * scale);
+                        EXPECT_LT(pos.x + size.x, (width - 4.0f) * scale);
+                        if (std::string_view(id) == "left-side-dock-toggle") {
+                            auto* tools = doc->GetElementById("primary-utility-toolbar");
+                            ASSERT_NE(tools, nullptr);
+                            EXPECT_LE(pos.x + size.x, tools->GetAbsoluteOffset(Rml::BoxArea::Border).x);
+                        }
+                        auto* grip = button->QuerySelector(".side-dock-grip");
+                        ASSERT_NE(grip, nullptr);
+                        const bool is_collapsed = button->IsClassSet("collapsed");
+                        EXPECT_EQ(grip->GetDisplay() == Rml::Style::Display::None, is_collapsed);
+                        if (!is_collapsed) {
+                            auto* arrow = button->QuerySelector(".dock-collapse-arrow");
+                            ASSERT_NE(arrow, nullptr);
+                            // Pointer focus persists after clicking; only keyboard focus reveals the arrow.
+                            button->SetPseudoClass("focus", true);
+                            real_context_->Update();
+                            EXPECT_NE(grip->GetDisplay(), Rml::Style::Display::None);
+                            EXPECT_EQ(arrow->GetDisplay(), Rml::Style::Display::None);
+                            Rml::Dictionary key;
+                            key["key_identifier"] = int(Rml::Input::KI_SPACE);
+                            const int before = toggles;
+                            button->DispatchEvent("keydown", key);
+                            EXPECT_EQ(toggles, before);
+                            button->SetPseudoClass("focus-visible", true);
+                            real_context_->Update();
+                            EXPECT_EQ(grip->GetDisplay(), Rml::Style::Display::None);
+                            EXPECT_NE(arrow->GetDisplay(), Rml::Style::Display::None);
+                            button->DispatchEvent("keydown", key);
+                            EXPECT_EQ(toggles, before + 1);
+                            button->SetPseudoClass("focus-visible", false);
+                            button->SetPseudoClass("focus", false);
+                            real_context_->Update();
+                        }
+                        auto* hit = real_context_->GetElementAtPoint(pos + size * 0.5f);
+                        while (hit && hit != button)
+                            hit = hit->GetParentNode();
+                        EXPECT_EQ(hit, button) << id << " scale=" << scale << " width=" << width;
+                    }
+                }
             }
         }
     }
