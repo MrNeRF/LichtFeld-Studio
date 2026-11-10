@@ -955,7 +955,7 @@ namespace lfs::training {
         Tensor error_row;
         if (info.is_valid() && info.dtype() == lfs::core::DataType::Float32 && n > 0) {
             if (info.ndim() == 2 && info.shape()[0] >= 2 && info.shape()[1] == n)
-                error_row = info.slice(0, 1, 2).reshape({n});
+                error_row = info.slice(0, 1, 2).reshape(TensorShape({n}));
             else if (info.ndim() == 1 && info.shape()[0] == n)
                 error_row = info;
         }
@@ -963,7 +963,7 @@ namespace lfs::training {
         info = Tensor();
         Tensor resized = error_row_only ? Tensor::zeros({n}, device) : Tensor::zeros({rows, n}, device);
         if (error_row.is_valid()) {
-            Tensor destination = error_row_only ? resized : resized.slice(0, 1, 2).reshape({n});
+            Tensor destination = error_row_only ? resized : resized.slice(0, 1, 2).reshape(TensorShape({n}));
             destination.copy_(error_row);
         }
         info = std::move(resized);
