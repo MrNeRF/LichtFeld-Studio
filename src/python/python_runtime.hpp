@@ -730,6 +730,7 @@ namespace lfs::python {
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);
+        void (*suspend_input)(void* host);
         void (*set_forced_height)(void* host, float h);
         bool (*needs_animation)(void* host);
         bool (*needs_immediate_animation)(void* host);

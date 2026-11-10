@@ -32,6 +32,7 @@
 #include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -2810,6 +2811,77 @@ namespace lfs::python {
 
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
+        m.def("model_cache_snapshot", [] {
+            require_ui_texture_creation_thread();
+            nb::dict result;
+            nb::list models;
+            auto* gui = get_gui_manager();
+            if (gui)
+                for (const auto& entry : gui->asyncTasks().modelCacheEntries()) {
+                    const auto& descriptor = entry.descriptor;
+                    nb::dict row;
+                    row["id"] = static_cast<int>(descriptor.id);
+                    row["name"] = std::string(descriptor.name);
+                    row["category_key"] = std::string(descriptor.category_key);
+                    row["source"] = std::string(descriptor.url);
+                    row["sha256"] = std::string(descriptor.sha256);
+                    row["path"] = core::path_to_utf8(entry.cache.path);
+                    row["bytes"] = entry.cache.bytes;
+                    row["present"] = entry.cache.present;
+                    row["busy"] = entry.cache.busy;
+                    row["status"] = entry.status;
+                    row["message"] = entry.message;
+                    row["error"] = entry.error;
+                    row["error_code"] = entry.error_code;
+                    row["running"] = entry.running;
+                    row["canceling"] = entry.canceling;
+                    row["show_progress"] = entry.show_progress;
+                    row["progress"] = entry.progress;
+                    row["can_download"] = entry.can_download;
+                    row["can_verify"] = entry.can_verify;
+                    row["can_remove"] = entry.can_remove;
+                    models.append(row);
+                }
+            result["models"] = models;
+            nb::dict job;
+            if (auto* gui = get_gui_manager()) {
+                auto& tasks = gui->asyncTasks();
+                if (const auto state = tasks.modelCacheJob()) {
+                    job["id"] = state->handle.id;
+                    job["model"] = static_cast<int>(tasks.modelCacheModel());
+                    job["action"] = std::string(tasks.modelCacheActionName());
+                    job["stage"] = state->stage;
+                    job["progress"] = state->progress;
+                    job["running"] = state->running();
+                    job["cancel_requested"] = state->cancel_requested;
+                    job["canceled"] = state->status == vis::JobStatus::Canceled;
+                    job["completed"] = state->status == vis::JobStatus::Completed;
+                    job["error"] = state->error;
+                    job["error_code"] = state->error_code ? lfs::to_string(*state->error_code) : "";
+                }
+            }
+            result["job"] = job;
+            return result; }, "UI thread: inspect managed model files and the current Preferences operation; no hashing or downloads.");
+        m.def("model_cache_start", [](const int model, const std::string& action) {
+            require_ui_texture_creation_thread();
+            if (model < 0 || static_cast<size_t>(model) >= preprocessing::model_catalog().size())
+                throw nb::value_error("Unknown cached model");
+            using Action = vis::gui::AsyncTaskManager::ModelCacheAction;
+            Action operation;
+            if (action == "download")
+                operation = Action::Download;
+            else if (action == "verify")
+                operation = Action::Verify;
+            else if (action == "remove")
+                operation = Action::Remove;
+            else
+                throw nb::value_error("Unknown model cache action");
+            auto* gui = get_gui_manager();
+            return gui && gui->asyncTasks().startModelCache(static_cast<preprocessing::CachedModel>(model), operation); }, nb::arg("model"), nb::arg("action"), "UI thread: queue download, verification or removal through the shared model cache.");
+        m.def("model_cache_cancel", [](const uint64_t job) {
+            require_ui_texture_creation_thread();
+            if (auto* gui = get_gui_manager())
+                gui->asyncTasks().cancelModelCache(job); }, nb::arg("job"), "UI thread: cancel only the matching Preferences model operation; on-demand callers keep their own cancellation.");
         lfs::python::set_graphics_thread_id(std::this_thread::get_id());
         g_texture_service_alive = true;
 
@@ -3669,7 +3741,8 @@ namespace lfs::python {
             "open_url",
             [](const std::string& url) {
 #ifdef _WIN32
-                ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                const auto wide_url = core::utf8_to_wstring(url);
+                ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
                 std::thread([url] {
                     pid_t child = -1;

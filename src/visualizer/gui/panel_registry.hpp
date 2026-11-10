@@ -194,6 +194,7 @@ namespace lfs::vis::gui {
         virtual void setPollVisibility(bool visible) { (void)visible; }
         virtual bool isVisibleForAnimation() const { return true; }
         virtual void on_visibility_changed(bool visible) { (void)visible; }
+        virtual void suspendInput() {}
         // GUI-thread notifications. Retained panels schedule work only when
         // their host geometry or an external data producer changes.
         virtual void on_layout_changed() {}
@@ -436,6 +437,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] uint64_t visibility_revision() const;
         [[nodiscard]] bool has_active_floating_drag() const;
         void cancel_floating_interactions();
+        void suspend_input(PanelSpace space);
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);

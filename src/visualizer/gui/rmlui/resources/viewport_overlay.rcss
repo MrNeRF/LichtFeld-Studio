@@ -2313,3 +2313,35 @@ body {
 .gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
 
 .gamepad-navigation-indicator.hidden { display: none; }
+
+/* Compact edge targets keep the tool rail clear; shared button focus remains. */
+.side-dock-toggle {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    top: 50%;
+    margin-top: -16dp;
+    width: 14dp;
+    height: 32dp;
+    min-width: 0;
+    padding: 0;
+    font-size: 12dp;
+    border-radius: 3dp;
+    z-index: 15;
+}
+.side-dock-toggle.hidden { display: none; }
+/* Keep targets beyond the 4 dp dock resize bands. */
+.side-dock-toggle.left { left: 6dp; }
+.side-dock-toggle.right { right: 6dp; }
+.side-dock-grip { width: 2dp; height: 16dp; border-radius: 1dp; }
+.side-dock-toggle .dock-collapse-arrow,
+.side-dock-toggle .dock-expand-arrow { display: none; }
+.side-dock-toggle:hover .side-dock-grip,
+.side-dock-toggle:focus-visible .side-dock-grip,
+.side-dock-toggle.collapsed .side-dock-grip { display: none; }
+.side-dock-toggle:hover .dock-collapse-arrow,
+.side-dock-toggle:focus-visible .dock-collapse-arrow,
+.side-dock-toggle.collapsed .dock-expand-arrow { display: inline; }
+.side-dock-toggle.collapsed .dock-collapse-arrow { display: none; }

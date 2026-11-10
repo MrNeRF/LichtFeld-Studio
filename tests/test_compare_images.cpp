@@ -195,7 +195,7 @@ TEST(CompareImages, ColmapNamesWithFoldersPairCameraSubFolders) {
 
     auto params = compare(reference, test, fresh_directory("lfs_compare_camera_folders_output"));
     params.colmap_path = model;
-    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto result = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(result) << result.error().detail();
     ASSERT_EQ(result->metrics.views.size(), 2u);
     EXPECT_TRUE(result->unmatched.empty());
@@ -266,7 +266,7 @@ TEST(CompareImages, DownscaledReferencePreservesExplicitPinholeGrid) {
     write_dataset(test, "PINHOLE 320 240 250 250 160 120");
     auto params = compare(reference, test, root / "output");
     params.evaluation.eval_space = EvalSpace::Undistorted;
-    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto result = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(result) << result.error().detail();
     ASSERT_EQ(result->metrics.views.size(), 1u);
     EXPECT_EQ(result->metrics.views[0].width, 320);
@@ -287,13 +287,13 @@ TEST(CompareImages, ScoresRealImagesAndResizesTheTestSet) {
 
     const auto full_resolution = BICYCLE / "images" / (NAMES[0] + ".JPG");
     const auto native = lfs::training::compare_image_sets(compare(full_resolution, full_resolution, output / "native"),
-                                                          std::nullopt);
+                                                          {});
     ASSERT_TRUE(native) << native.error().detail();
     const auto [native_width, native_height, native_channels] = lfs::core::get_image_info(full_resolution);
     ASSERT_GT(native_width, 3840);
     EXPECT_EQ(native->metrics.views[0].width, native_width);
 
-    const auto same = lfs::training::compare_image_sets(compare(reference, reference, output / "same"), std::nullopt);
+    const auto same = lfs::training::compare_image_sets(compare(reference, reference, output / "same"), {});
     ASSERT_TRUE(same) << same.error().detail();
     ASSERT_EQ(same->metrics.views.size(), 2u);
     EXPECT_FLOAT_EQ(same->metrics.psnr, 100.0f);
@@ -303,7 +303,7 @@ TEST(CompareImages, ScoresRealImagesAndResizesTheTestSet) {
     auto params = compare(reference, larger, output / "larger");
     params.evaluation.eval_flip = true;
     params.evaluation.enable_save_eval_images = true;
-    const auto resized = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto resized = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(resized) << resized.error().detail();
     ASSERT_TRUE(resized->metrics.valid);
     for (const auto& view : resized->metrics.views) {
@@ -318,10 +318,10 @@ TEST(CompareImages, ScoresRealImagesAndResizesTheTestSet) {
     EXPECT_TRUE(fs::exists(output / "larger" / "compare_images" / "flip" / (NAMES[0] + ".png")));
 
     params.evaluation.enable_save_eval_images = false;
-    ASSERT_TRUE(lfs::training::compare_image_sets(params, std::nullopt));
+    ASSERT_TRUE(lfs::training::compare_image_sets(params, {}));
     EXPECT_FALSE(fs::exists(output / "larger" / "compare_images"));
 
-    const auto smaller = lfs::training::compare_image_sets(compare(larger, reference, output / "smaller"), std::nullopt);
+    const auto smaller = lfs::training::compare_image_sets(compare(larger, reference, output / "smaller"), {});
     ASSERT_TRUE(smaller) << smaller.error().detail();
     ASSERT_TRUE(smaller->metrics.valid);
     const auto [small_width, small_height, small_channels] = lfs::core::get_image_info(reference / (NAMES[0] + ".JPG"));
@@ -361,7 +361,7 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
     write_model(same, opencv);
 
     auto params = compare(reference, same, output / "same_distorted");
-    const auto distorted = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto distorted = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(distorted) << distorted.error().detail();
     EXPECT_FLOAT_EQ(distorted->metrics.psnr, 100.0f);
     EXPECT_EQ(distorted->metrics.views[0].width, width);
@@ -372,7 +372,7 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
     ASSERT_NE(undistort.dst_width, width);
     params = compare(reference, same, output / "same_undistorted");
     params.evaluation.eval_space = EvalSpace::Undistorted;
-    const auto undistorted = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto undistorted = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(undistorted) << undistorted.error().detail();
     EXPECT_FLOAT_EQ(undistorted->metrics.psnr, 100.0f);
     EXPECT_EQ(undistorted->metrics.views[0].width, undistort.dst_width);
@@ -389,13 +389,13 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
 
     params = compare(reference, pinhole, output / "pinhole_undistorted");
     params.evaluation.eval_space = EvalSpace::Undistorted;
-    const auto pinhole_undistorted = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto pinhole_undistorted = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(pinhole_undistorted) << pinhole_undistorted.error().detail();
     EXPECT_GT(pinhole_undistorted->metrics.psnr, 50.0f);
     EXPECT_EQ(pinhole_undistorted->metrics.views[0].width, custom.dst_width);
 
     params = compare(reference, pinhole, output / "pinhole_distorted");
-    const auto pinhole_distorted = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto pinhole_distorted = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(pinhole_distorted) << pinhole_distorted.error().detail();
     EXPECT_GT(pinhole_distorted->metrics.psnr, 28.0f);
     EXPECT_EQ(pinhole_distorted->metrics.views[0].width, width);
@@ -404,21 +404,21 @@ TEST(CompareImages, DistortedReferencesCompareInEitherSpace) {
     const auto default_grid = root / "default_grid";
     write_pinhole_renders(reference, default_grid, undistort);
     const auto dataset = lfs::training::compare_image_sets(compare(reference, default_grid, output / "dataset"),
-                                                           std::nullopt);
+                                                           {});
     ASSERT_TRUE(dataset) << dataset.error().detail();
     params = compare(reference, default_grid / "images", output / "flag_distorted");
     params.evaluation.undistort = true;
-    const auto flag = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto flag = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(flag) << flag.error().detail();
     EXPECT_NEAR(flag->metrics.psnr, dataset->metrics.psnr, 1e-4f);
 
     params = compare(reference, reference, output / "flag_with_cameras");
     params.evaluation.undistort = true;
-    EXPECT_FALSE(lfs::training::compare_image_sets(params, std::nullopt));
+    EXPECT_FALSE(lfs::training::compare_image_sets(params, {}));
 
     write_model(pinhole, std::format("OPENCV {} {} {} {} {} {} -0.3 0 0 0", width, height, focal, focal,
                                      0.5f * width, 0.5f * height));
-    EXPECT_FALSE(lfs::training::compare_image_sets(compare(reference, pinhole, output / "other"), std::nullopt));
+    EXPECT_FALSE(lfs::training::compare_image_sets(compare(reference, pinhole, output / "other"), {}));
 }
 
 // Catches renders made at one --max-width compared at full size because the undistorted grids of their references
@@ -476,7 +476,7 @@ TEST(CompareImages, PinholeRendersAtOneMaxWidthCapEveryReference) {
     auto params = compare(reference, renders, root / "output");
     params.evaluation.undistort = true;
     params.evaluation.eval_space = EvalSpace::Undistorted;
-    const auto result = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto result = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(result) << result.error().detail();
     ASSERT_EQ(result->metrics.views.size(), 2u);
     for (const auto& view : result->metrics.views) {
@@ -506,16 +506,16 @@ TEST(CompareImages, MasksAndShapeMismatch) {
 
     auto params = compare(reference, test, output / "folder");
     params.evaluation.eval_mask = "masks:" + masks.string();
-    const auto folder = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto folder = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(folder) << folder.error().detail();
     for (const auto& view : folder->metrics.views)
         EXPECT_NEAR(view.evaluated_pixel_fraction, 0.5f, 0.01f) << view.image_name;
 
     params = compare(reference, test, output / "box");
     params.evaluation.eval_mask = "bbox:-2.4,-0.5,-1.3,3.3,1.75,4.1";
-    EXPECT_FALSE(lfs::training::compare_image_sets(params, std::nullopt));
+    EXPECT_FALSE(lfs::training::compare_image_sets(params, {}));
     params.colmap_path = BICYCLE / "sparse" / "0";
-    const auto box = lfs::training::compare_image_sets(params, std::nullopt);
+    const auto box = lfs::training::compare_image_sets(params, {});
     ASSERT_TRUE(box) << box.error().detail();
     ASSERT_EQ(box->metrics.views.size(), 2u);
     for (const auto& view : box->metrics.views) {
@@ -529,7 +529,7 @@ TEST(CompareImages, MasksAndShapeMismatch) {
         ASSERT_TRUE(lfs::core::save_png(cropped / (stem + ".png"), data, width, height / 2, channels, 8, 1));
         lfs::core::free_image(data);
     }
-    const auto mismatch = lfs::training::compare_image_sets(compare(reference, cropped, output / "crop"), std::nullopt);
+    const auto mismatch = lfs::training::compare_image_sets(compare(reference, cropped, output / "crop"), {});
     ASSERT_TRUE(mismatch) << mismatch.error().detail();
     EXPECT_FALSE(mismatch->metrics.valid);
     for (const auto& view : mismatch->metrics.views)

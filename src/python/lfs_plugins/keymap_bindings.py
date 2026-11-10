@@ -133,6 +133,8 @@ class KeymapBindingsSection:
             lf.keymap.Action.NEXT_SIDEBAR_CATEGORY,
             lf.keymap.Action.PREVIOUS_SIDEBAR_CATEGORY,
             lf.keymap.Action.TOGGLE_UI,
+            lf.keymap.Action.TOGGLE_LEFT_DOCK,
+            lf.keymap.Action.TOGGLE_RIGHT_DOCK,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.OPEN_PREFERENCES,
             lf.keymap.Action.SELECT_ALL_SCENE_NODES,

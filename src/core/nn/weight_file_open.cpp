@@ -7,6 +7,8 @@
 
 #include <exception>
 #include <format>
+#include <map>
+#include <mutex>
 #include <utility>
 
 namespace lfs::core::nn {
@@ -64,6 +66,20 @@ namespace lfs::core::nn {
         }
 
     } // namespace
+
+    std::shared_ptr<std::timed_mutex> WeightFile::source_operation(const std::filesystem::path& path) {
+        static std::mutex mutex;
+        static std::map<std::filesystem::path, std::weak_ptr<std::timed_mutex>> operations;
+        std::lock_guard lock(mutex);
+        std::erase_if(operations, [](const auto& entry) { return entry.second.expired(); });
+        auto& entry = operations[path.lexically_normal()];
+        auto operation = entry.lock();
+        if (!operation) {
+            operation = std::make_shared<std::timed_mutex>();
+            entry = operation;
+        }
+        return operation;
+    }
 
     lfs::Result<WeightFile> WeightFile::open(const std::filesystem::path& path) {
         WeightFile file;
