@@ -1,4 +1,6 @@
-add_library(lfs_training_vulkan STATIC
+# Keep Vulkan operations in the owning training archive: their tables reference
+# the portable MCMC/MRNF operations compiled by lfs_training.
+add_library(lfs_training_vulkan OBJECT
     ../ops/fast_backward_vulkan.cpp
     ../ops/fast_vulkan.cpp
     ../ops/gsplat_vulkan.cpp
