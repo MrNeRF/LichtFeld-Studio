@@ -586,6 +586,9 @@ button.window-control .window-restore-box {
 #pin-btn.pinned {
     background-color: @{alpha(primary,0.16)};
 }
+#pin-btn.pinned:hover {
+    background-color: @{alpha(primary,0.28)};
+}
 #pin-btn.pinned .window-pin-head {
     border-color: @{primary};
 }

@@ -6,8 +6,10 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -350,6 +352,19 @@ namespace {
                 right = pos.x + size.x;
             }
         }
+        lfs::vis::gui::rml_theme::applyTheme(
+            doc, {}, lfs::vis::gui::rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
+        pin->SetClass("pinned", true);
+        lfs::vis::visitThemePresets([&](const std::string_view theme_id, const lfs::vis::Theme&) {
+            real_context_->ActivateTheme(std::string(theme_id), true);
+            pin->SetPseudoClass("hover", false);
+            real_context_->Update();
+            const auto normal = pin->GetProperty("background-color")->Get<Rml::Colourb>();
+            pin->SetPseudoClass("hover", true);
+            real_context_->Update();
+            EXPECT_NE(normal, pin->GetProperty("background-color")->Get<Rml::Colourb>()) << theme_id;
+            real_context_->ActivateTheme(std::string(theme_id), false);
+        });
     }
 
     TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {

@@ -414,6 +414,11 @@ namespace lfs::gui {
             host_->setInputClipY(y_min, y_max);
     }
 
+    void VideoExtractorDialog::suspendInput() {
+        if (host_)
+            host_->suspendInput();
+    }
+
     void VideoExtractorDialog::setInput(const lfs::vis::gui::PanelInputState* input) {
         if (host_)
             host_->setInput(input);

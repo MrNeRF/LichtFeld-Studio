@@ -247,7 +247,20 @@ namespace lfs::vis::gui {
         LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
     private:
-        struct NativeWindow;
+        struct NativeWindow {
+            SDL_Window* window = nullptr;
+            std::unique_ptr<VulkanContext> graphics;
+            std::unique_ptr<RenderInterface_VK> renderer;
+            std::string name;
+            bool drawn = false;
+            bool visible = false;
+            bool failed = false;
+            bool geometry_dirty = false;
+            WindowRectangle rectangle;
+            bool rectangle_initialized = false;
+            std::function<void(lfs::Result<VulkanContext::WindowCapture>)> capture_callback;
+            LFS_VIS_API ~NativeWindow();
+        };
         std::unordered_map<const Rml::Context*, std::unique_ptr<NativeWindow>> native_windows_;
         std::unordered_map<const Rml::Context*, SDL_Window*> context_windows_;
         SDL_Window* render_window_ = nullptr;
@@ -255,6 +268,7 @@ namespace lfs::vis::gui {
         bool native_pins_suspended_ = false;
         LFS_VIS_API static bool applyNativeWindowPin(SDL_Window* window, bool pinned);
         void syncNativeWindowPins();
+        void focusApplicationModal();
         bool launch_safe_mode_ = false;
         std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
         std::function<std::unique_ptr<VulkanContext>()> create_native_graphics_ = [] { return std::make_unique<VulkanContext>(); };

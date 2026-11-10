@@ -12,7 +12,9 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "input/input_controller.hpp"
+#include "python/python_runtime.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -98,6 +100,12 @@ namespace lfs::vis {
         }
         void TearDown() override {
             manager().vulkan_render_interface_ = nullptr;
+            // These entries exercise desktop input/stacking with real SDL windows,
+            // without a GPU renderer. Remove them before normal context teardown.
+            for (auto* context : desktop_contexts_) {
+                manager().context_windows_.erase(context);
+                manager().native_windows_.erase(context);
+            }
             gui::PanelRegistry::instance().unregister_panel("test.input_float");
             revert_.clear();
             gui_->startup_overlay_.shutdown();
@@ -120,6 +128,27 @@ namespace lfs::vis {
         }
         bool applyPin(SDL_Window* window, bool pinned) {
             return manager().applyNativeWindowPin(window, pinned);
+        }
+        std::pair<Rml::Context*, SDL_Window*> attachDesktopContext(const char* name, const char* panel_id) {
+            auto* context = manager().createContext(name, 200, 100);
+            if (!context)
+                return {nullptr, nullptr};
+            auto* window = SDL_CreateWindow("Desktop pin regression", 200, 100, SDL_WINDOW_HIDDEN);
+            if (!window)
+                return {context, nullptr};
+            auto native = std::make_unique<gui::RmlUIManager::NativeWindow>();
+            native->window = window;
+            native->name = name;
+            native->graphics = std::make_unique<VulkanContext>();
+            native->graphics->setSceneRuntimeOwnership(false);
+            manager().native_windows_[context] = std::move(native);
+            mapContextWindow(context, window);
+            SDL_SetStringProperty(SDL_GetWindowProperties(window), "lfs.panel_id", panel_id);
+            desktop_contexts_.push_back(context);
+            return {context, window};
+        }
+        VulkanContext* desktopGraphics(Rml::Context* context) {
+            return manager().native_windows_.at(context)->graphics.get();
         }
         void attachInputHost(gui::RmlPanelHost& host, int width, int height, const char* markup) {
             // Input uses the real host and null geometry renderer, without a GPU frame.
@@ -192,16 +221,26 @@ namespace lfs::vis {
             return manager().dispatchInputEvent(event);
         }
         std::vector<std::string> sidebar_picks_;
-        void registerInputFloat(float x = 100.f) {
+        std::vector<Rml::Context*> desktop_contexts_;
+        void registerInputFloat(float x = 100.f, std::function<void()> suspend = {}) {
             class Panel final : public gui::IPanel {
+            public:
+                explicit Panel(std::function<void()> suspend) : suspend_(std::move(suspend)) {}
+                void suspendInput() override {
+                    if (suspend_)
+                        suspend_();
+                }
                 void draw(const gui::PanelDrawContext&) override {}
                 gui::PanelRenderCapabilities renderCapabilities() const override { return {.direct = true}; }
+
+            private:
+                std::function<void()> suspend_;
             };
             gui::PanelInfo info;
             info.id = "test.input_float";
             info.label = "Input float";
             info.space = gui::PanelSpace::Floating;
-            info.panel = std::make_shared<Panel>();
+            info.panel = std::make_shared<Panel>(std::move(suspend));
             ASSERT_TRUE(gui::PanelRegistry::instance().register_panel(std::move(info)));
             gui::PanelRegistry::instance().apply_project_state({{
                 .id = "test.input_float",
@@ -249,18 +288,15 @@ namespace lfs::vis {
 } // namespace lfs::vis
 namespace lfs::vis {
     TEST_F(SidebarInputDispatchTest, DesktopPinChangesOnlyTopmostState) {
-        const std::string_view driver = SDL_GetCurrentVideoDriver();
-        if (driver == "dummy" || driver == "offscreen")
-            GTEST_SKIP() << "Desktop window stacking requires a window-system video driver";
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Pin state regression", 200, 100, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE),
             SDL_DestroyWindow);
         ASSERT_NE(window, nullptr);
         const auto flags = SDL_GetWindowFlags(window.get());
-        ASSERT_TRUE(applyPin(window.get(), true));
-        EXPECT_NE(SDL_GetWindowFlags(window.get()) & SDL_WINDOW_ALWAYS_ON_TOP, 0);
+        const bool pinned = applyPin(window.get(), true);
+        EXPECT_EQ(pinned, bool(SDL_GetWindowFlags(window.get()) & SDL_WINDOW_ALWAYS_ON_TOP));
         EXPECT_EQ(SDL_GetWindowFlags(window.get()) & ~SDL_WINDOW_ALWAYS_ON_TOP, flags);
-        ASSERT_TRUE(applyPin(window.get(), true));
+        EXPECT_EQ(applyPin(window.get(), true), pinned);
         ASSERT_TRUE(applyPin(window.get(), false));
         EXPECT_EQ(SDL_GetWindowFlags(window.get()), flags);
         int width = 0, height = 0;
@@ -275,33 +311,131 @@ namespace lfs::vis {
         auto* external_context = manager().createContext("external-modal-input", 200, 100);
         ASSERT_NE(external_context, nullptr);
         mapContextWindow(external_context, external_window);
-        int external_keys = 0;
-        manager().activateInput(external_context, [&external_keys](const gui::PanelInputState& input) { external_keys += static_cast<int>(input.input_events.size()); }, false);
+        auto* document = external_context->LoadDocumentFromMemory(
+            "<rml><head><style>body {width:200px;height:100px;} input {width:180px;height:80px;}</style></head>"
+            "<body><input id='external-field' type='text'/></body></rml>");
+        ASSERT_NE(document, nullptr);
+        document->Show();
+        external_context->Update();
+        auto* field = document->GetElementById("external-field");
+        ASSERT_NE(field, nullptr);
+        int external_events = 0;
+        int passive_updates = 0;
+        const auto handler = [&](const gui::PanelInputState& input) {
+            external_events += static_cast<int>(input.input_events.size()) + (input.mouse_wheel != 0.0f ? 1 : 0);
+            ++passive_updates;
+        };
+        manager().activateInput(external_context, handler, false);
+        manager().trackContextFrame(external_context, 0, 0);
+        const auto send = [&](Uint32 type) {
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_KEY_DOWN) {
+                event.key.windowID = SDL_GetWindowID(external_window);
+                event.key.scancode = SDL_SCANCODE_A;
+            } else if (type == SDL_EVENT_MOUSE_WHEEL) {
+                event.wheel.windowID = SDL_GetWindowID(external_window);
+                event.wheel.y = 1;
+                event.wheel.mouse_x = 20;
+                event.wheel.mouse_y = 20;
+            } else {
+                event.button.windowID = SDL_GetWindowID(external_window);
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.x = 20;
+                event.button.y = 20;
+            }
+            manager().dispatchInputEvent(event);
+        };
+        const auto send_all = [&] {
+            send(SDL_EVENT_MOUSE_BUTTON_DOWN);
+            send(SDL_EVENT_MOUSE_BUTTON_UP);
+            send(SDL_EVENT_MOUSE_WHEEL);
+            send(SDL_EVENT_KEY_DOWN);
+        };
+        EXPECT_TRUE(field->Focus());
         setKeyboardContext(external_context, true);
-        SDL_Event event{};
-        event.type = SDL_EVENT_KEY_DOWN;
-        event.key.windowID = SDL_GetWindowID(external_window);
-        event.key.scancode = SDL_SCANCODE_A;
-        manager().dispatchInputEvent(event);
-        EXPECT_GT(external_keys, 0);
+        send_all();
+        EXPECT_GE(external_events, 4);
         manager().activateInput(context_, [](const gui::PanelInputState&) {});
+        EXPECT_TRUE(field->Focus());
         setKeyboardContext(external_context, true);
-        const int before_popup = external_keys;
-        manager().dispatchInputEvent(event);
-        EXPECT_GT(external_keys, before_popup);
+        const int before_popup = external_events;
+        send_all();
+        EXPECT_GE(external_events - before_popup, 4);
         manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
-        const int before = external_keys;
-        EXPECT_TRUE(manager().dispatchInputEvent(event).consumed);
-        EXPECT_EQ(external_keys, before);
+        const int before_modal = external_events;
+        const int before_passive = passive_updates;
+        send_all();
+        manager().routeInput(external_context, {}, handler);
+        EXPECT_EQ(external_events, before_modal);
+        EXPECT_EQ(passive_updates, before_passive);
         manager().deactivateInput(context_);
+        manager().routeInput(external_context, {}, handler);
+        EXPECT_TRUE(field->Focus());
         setKeyboardContext(external_context, true);
-        manager().dispatchInputEvent(event);
-        EXPECT_GT(external_keys, before);
+        send_all();
+        EXPECT_GE(external_events - before_modal, 4);
         manager().destroyContext("external-modal-input");
         SDL_DestroyWindow(external_window);
     }
 
+    TEST_F(SidebarInputDispatchTest, DesktopPinSuspensionRestoresChoiceAndRejectsUnsupportedBackends) {
+        VulkanContext main_textures;
+        main_textures.setSceneRuntimeOwnership(false);
+        const gui::ScopedVulkanUiTextureContext main_texture_scope(&main_textures);
+        auto suspensions = std::make_shared<int>(0);
+        registerInputFloat(100.f, [this, suspensions] {
+            ++*suspensions;
+            auto* context = manager().getContext("pin-state");
+            ASSERT_NE(context, nullptr);
+            EXPECT_EQ(gui::getVulkanUiTextureContext(), desktopGraphics(context));
+            manager().deactivateInput(context);
+        });
+        const auto [context, window] = attachDesktopContext("pin-state", "test.input_float");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
+        const auto topmost = [&] { return bool(SDL_GetWindowFlags(window) & SDL_WINDOW_ALWAYS_ON_TOP); };
+        manager().activateInput(context, [](const gui::PanelInputState&) {}, false);
+        const auto generation = lfs::python::redraw_request_generation();
+        const bool supported = manager().setNativeWindowPinned("test.input_float", true);
+        EXPECT_EQ(supported, topmost());
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), supported);
+        EXPECT_EQ(lfs::python::redraw_request_generation() > generation, supported);
+        const auto unchanged = lfs::python::redraw_request_generation();
+        EXPECT_EQ(manager().setNativeWindowPinned("test.input_float", true), supported);
+        EXPECT_EQ(lfs::python::redraw_request_generation(), unchanged);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_FALSE(topmost());
+        EXPECT_EQ(*suspensions, 1);
+        ASSERT_TRUE(manager().setNativeWindowPinned("test.input_float", false));
+        ASSERT_TRUE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), true);
+        EXPECT_FALSE(topmost());
+        auto* second_modal = manager().createContext("second-pin-modal", 200, 100);
+        ASSERT_NE(second_modal, nullptr);
+        manager().activateInput(second_modal, [](const gui::PanelInputState&) {}, true, {}, true);
+        manager().deactivateInput(context_);
+        EXPECT_FALSE(topmost());
+        manager().destroyContext("second-pin-modal");
+        EXPECT_EQ(topmost(), supported);
+        EXPECT_EQ(*suspensions, 1);
+        EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), supported);
+        manager().deactivateInput(context);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_EQ(*suspensions, 2);
+        EXPECT_EQ(gui::getVulkanUiTextureContext(), &main_textures);
+        manager().deactivateInput(context_);
+        EXPECT_EQ(topmost(), supported);
+        EXPECT_TRUE(manager().setNativeWindowPinned("test.input_float", false));
+        EXPECT_FALSE(topmost());
+    }
+
     TEST_F(SidebarInputDispatchTest, InternalPanelsCannotBePinned) {
+        registerInputFloat();
+        ASSERT_TRUE(gui::PanelRegistry::instance().get_panel("test.input_float").has_value());
+        const auto [context, window] = attachDesktopContext("other-desktop", "test.other_desktop");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
         EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
         EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
         EXPECT_FALSE(manager().nativeWindowPinned("unknown").has_value());

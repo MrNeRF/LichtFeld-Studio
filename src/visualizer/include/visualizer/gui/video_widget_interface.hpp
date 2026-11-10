@@ -28,6 +28,7 @@ namespace lfs::gui {
         virtual bool detachToDesktop(float, float, float, float) { return false; }
         virtual bool restoreDesktopWindow() { return false; }
         virtual void releaseDesktopWindow() {}
+        virtual void suspendInput() {}
         virtual void resetDesktopRestoreState() {}
         [[nodiscard]] virtual bool isVideoPlaying() const = 0;
         [[nodiscard]] virtual bool openVideoPath(const std::filesystem::path& path) {
