@@ -101,7 +101,11 @@ namespace lfs::python {
         nb::class_<ColorDescription>(m, "ColorDescription").def_ro("primaries", &ColorDescription::primaries).def_ro("transfer", &ColorDescription::transfer).def_ro("matrix", &ColorDescription::matrix).def_ro("range", &ColorDescription::range).def_ro("component_depth", &ColorDescription::component_depth);
         nb::class_<Orientation>(m, "Orientation").def_ro("source", &Orientation::source).def_ro("rotate_tag", &Orientation::rotate_tag).def_ro("rotate_tag_limited", &Orientation::rotate_tag_limited).def_ro("display_matrix", &Orientation::display_matrix).def_ro("clockwise_degrees", &Orientation::clockwise_degrees).def_ro("reflected", &Orientation::reflected);
         nb::class_<StreamDescription>(m, "StreamDescription").def_ro("index", &StreamDescription::index).def_ro("kind", &StreamDescription::kind).def_ro("codec", &StreamDescription::codec).def_ro("width", &StreamDescription::width).def_ro("height", &StreamDescription::height).def_ro("pixel_format", &StreamDescription::pixel_format).def_ro("time_base", &StreamDescription::time_base).def_ro("nominal_frame_rate", &StreamDescription::nominal_frame_rate).def_ro("average_frame_rate", &StreamDescription::average_frame_rate).def_ro("sample_aspect_ratio", &StreamDescription::sample_aspect_ratio).def_ro("start", &StreamDescription::start).def_ro("duration", &StreamDescription::duration).def_ro("declared_frame_count", &StreamDescription::declared_frame_count).def_ro("attached_picture", &StreamDescription::attached_picture).def_ro("default_disposition", &StreamDescription::default_disposition).def_ro("color", &StreamDescription::color).def_ro("orientation", &StreamDescription::orientation);
-        nb::class_<MediaDescription>(m, "MediaDescription").def_ro("container", &MediaDescription::container).def_ro("stream_info_probed", &MediaDescription::stream_info_probed).def_ro("start", &MediaDescription::start).def_ro("duration", &MediaDescription::duration).def_ro("streams", &MediaDescription::streams).def_ro("selected_video_stream", &MediaDescription::selected_video_stream);
+        nb::class_<TimedMetadataLimits>(m, "TimedMetadataLimits").def(nb::init<>()).def_rw("bytes", &TimedMetadataLimits::bytes).def_rw("records", &TimedMetadataLimits::records);
+        nb::class_<MediaDescription>(m, "MediaDescription").def_ro("container", &MediaDescription::container).def_ro("stream_info_probed", &MediaDescription::stream_info_probed).def_ro("start", &MediaDescription::start).def_ro("duration", &MediaDescription::duration).def_ro("streams", &MediaDescription::streams).def_ro("selected_video_stream", &MediaDescription::selected_video_stream).def("to_json", [](const MediaDescription& value) {
+                nb::gil_scoped_release release;
+                try { return json_detail::dump(json_detail::description(value)); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Probe JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.");
         nb::class_<FrameLayout>(m, "FrameLayout").def_ro("width", &FrameLayout::width).def_ro("height", &FrameLayout::height).def_ro("row_stride", &FrameLayout::row_stride).def_ro("format", &FrameLayout::format).def_ro("color", &FrameLayout::color);
         nb::class_<FrameInfo>(m, "FrameInfo").def(nb::init<>()).def_rw("source_timestamp", &FrameInfo::source_timestamp).def_rw("timestamp_origin", &FrameInfo::timestamp_origin).def_rw("decode_index", &FrameInfo::decode_index).def_rw("delivery_index", &FrameInfo::delivery_index).def_rw("relative_seconds", &FrameInfo::relative_seconds).def_rw("legacy_source_frame", &FrameInfo::legacy_source_frame).def_rw("sharpness_score", &FrameInfo::sharpness_score).def_rw("origin", &FrameInfo::origin).def_rw("output_timestamp", &FrameInfo::output_timestamp).def_rw("source_component_depth", &FrameInfo::source_component_depth);
         nb::class_<IngestProgress>(m, "IngestProgress").def_ro("processed", &IngestProgress::processed).def_ro("estimated", &IngestProgress::estimated).def_ro("discarded", &IngestProgress::discarded);
@@ -189,14 +193,17 @@ namespace lfs::python {
                 if (!result) throw Exception(result.error());
                 return json_detail::dump(json_detail::sourceExif(*result)); }, nb::arg("path"), "Read JPEG/PNG EXIF envelopes, primary HEIF or JPEG XL provider-decoded EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.")
             .def_static("codec_build_info", &MediaIngest::codecBuildInfo)
-            .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms) {
+            .def_static("probe", [](const std::filesystem::path& path, bool headers_only, std::int64_t timeout_ms, std::optional<int> timed_stream, const TimedMetadataLimits& timed_limits) {
                 ProbeOptions options;
                 options.depth = headers_only ? ProbeDepth::Headers : ProbeDepth::StreamInfo;
                 options.timeout = std::chrono::milliseconds(timeout_ms);
+                options.timed_metadata_stream = timed_stream;
+                options.timed_metadata_limits = timed_limits;
+                if (timed_stream) options.depth = ProbeDepth::Headers;
                 std::optional<Result<MediaDescription>> result;
                 { nb::gil_scoped_release release; result.emplace(MediaIngest::probe(path, options)); }
                 if (!*result) throw Exception(result->error());
-                return std::move(**result); }, nb::arg("path"), nb::arg("headers_only") = false, nb::arg("timeout_ms") = 10000)
+                return std::move(**result); }, nb::arg("path"), nb::arg("headers_only") = false, nb::arg("timeout_ms") = 10000, nb::arg("timed_metadata_stream") = nb::none(), nb::arg("timed_metadata_limits") = TimedMetadataLimits{}, "Inspect headers or stream information. Selecting a timed metadata stream performs a bounded raw packet scan in Headers mode without interpreting telemetry or decoding pixels.")
             .def_static("extract_files", [](const IngestRequest& request, const FileExtraction& files, nb::object progress, nb::object cancelled) {
                 const auto callbacks = std::make_shared<Callbacks>(std::move(progress), std::move(cancelled));
                 const auto copy = withCallbacks(request, callbacks);

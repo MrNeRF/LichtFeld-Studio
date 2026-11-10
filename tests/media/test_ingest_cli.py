@@ -2019,6 +2019,126 @@ class IngestCLI(unittest.TestCase):
         node = ET.fromstring((output / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
         self.assertEqual(json.loads(node.text)["match"]["cue"], 0)
 
+    def test_timed_metadata_probe_matches_demuxed_packets_and_explicit_track(self):
+        path = srt_metadata_fixture.embedded(self.root, FFMPEG)
+        original, modified = path.read_bytes(), path.stat().st_mtime_ns
+        ordinary, _ = self.invoke("probe", path, "--headers-only")
+        self.assertNotIn("timed_metadata", ordinary["media"])
+        observations = []
+        for stream in (1, 2):
+            result, _ = self.invoke("probe", path, "--timed-stream", stream)
+            self.assertFalse(result["media"]["stream_info_probed"])
+            timed = result["media"]["timed_metadata"]
+            self.assertEqual(timed["scope"], "demuxed_timed_packets")
+            self.assertEqual(timed["interpretation"], "not_performed")
+            reference = json.loads(subprocess.check_output([str(FFPROBE), "-v", "error", "-select_streams", str(stream),
+                "-show_packets", "-show_streams", "-show_data_hash", "sha256", "-of", "json", str(path)]))
+            self.assertEqual(len(timed["packets"]), len(reference["packets"]))
+            self.assertEqual(timed["stream_index"], stream)
+            self.assertEqual(hashlib.sha256(bytes.fromhex(timed["extradata"])).hexdigest(), reference["streams"][0]["extradata_hash"].split(":")[1])
+            for packet, expected in zip(timed["packets"], reference["packets"]):
+                self.assertEqual(hashlib.sha256(bytes.fromhex(packet["bytes"])).hexdigest(), expected["data_hash"].split(":")[1])
+                self.assertEqual(len(bytes.fromhex(packet["bytes"])), int(expected["size"]))
+                for name in ("pts", "dts", "duration"):
+                    if name in expected:
+                        self.assertEqual(packet[name]["ticks"], int(expected[name]))
+                        self.assertEqual(packet[name]["time_base"], list(map(int, reference["streams"][0]["time_base"].split("/"))))
+                    else:
+                        self.assertIsNone(packet[name])
+                if "pos" in expected and int(expected["pos"]) >= 0:
+                    self.assertEqual(packet["source_offset"], int(expected["pos"]))
+            observations.append(timed)
+        self.assertNotEqual([p["bytes"] for p in observations[0]["packets"]], [p["bytes"] for p in observations[1]["packets"]])
+        for flags in (("--timed-stream", "0"), ("--timed-stream", "99"), ("--timed-stream", "-1"),
+                      ("--timed-stream", "1", "--timed-stream", "2"), ("--timed-stream",),
+                      ("--timed-max-bytes", "100"), ("--timed-stream", "1", "--timed-max-bytes", "0"),
+                      ("--timed-stream", "1", "--timed-max-bytes", "1", "--timed-max-bytes", "2"),
+                      ("--timed-stream", "1", "--timed-max-records", "1", "--timed-max-records", "2")):
+            with self.subTest(flags=flags):
+                refused, _ = self.invoke("probe", path, *flags, code=2)
+                if flags == ("--timed-stream", "99"):
+                    self.assertIn("index=99", refused["error"]["message"])
+                    self.assertIn("nb_streams=3", refused["error"]["message"])
+                elif flags == ("--timed-stream", "0"):
+                    self.assertIn("codec_type=0", refused["error"]["message"])
+        for flag in ("--timed-max-bytes", "--timed-max-records"):
+            limited, _ = self.invoke("probe", path, flag, "1", "--timed-stream", "1", code=4)
+            self.assertEqual(limited["error"]["code"], "ResourceExhausted")
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
+
+    def test_timed_metadata_probe_missing_payload_and_empty_track(self):
+        import struct
+        path = srt_metadata_fixture.embedded(self.root, FFMPEG)
+        original = path.read_bytes()
+        boxes = srt_metadata_fixture.mp4_boxes(original)
+        chunks = [offset for offset, kind in boxes if kind == b"stco"][1]
+        count = struct.unpack_from(">I", original, chunks + 12)[0]
+        self.assertGreaterEqual(count, 3)
+        other_chunks = [offset for offset, kind in boxes if kind == b"stco"][2]
+        reference, _ = self.invoke("probe", path, "--timed-stream", "1")
+        for name, table, indices in (("missing", chunks, range(count)), ("partial", chunks, [count - 2]),
+                                     ("other-track", other_chunks, [0])):
+            with self.subTest(case=name):
+                data = bytearray(original)
+                for index in indices:
+                    struct.pack_into(">I", data, table + 16 + index * 4, len(data) + 4096)
+                broken = self.root / (name + ".mp4")
+                broken.write_bytes(data)
+                if name == "other-track":
+                    result, _ = self.invoke("probe", broken, "--timed-stream", "1")
+                    self.assertEqual(result["media"]["timed_metadata"], reference["media"]["timed_metadata"])
+                    self.assertEqual(len(result["media"]["timed_metadata"]["packets"]), 3)
+                else:
+                    result, _ = self.invoke("probe", broken, "--timed-stream", "1", code=3)
+                    self.assertEqual(result["error"]["code"], "DataLoss")
+                    self.assertNotIn("media", result)
+                self.assertEqual(broken.read_bytes(), data)
+        # Keep a declared track whose tables genuinely contain no samples.
+        data = bytearray(original)
+        for kind in (b"stco", b"stts", b"stsc"):
+            offset = [offset for offset, tag in boxes if tag == kind][1]
+            struct.pack_into(">I", data, offset + 12, 0)
+        size = [offset for offset, kind in boxes if kind == b"stsz"][1]
+        struct.pack_into(">I", data, size + 16, 0)
+        empty = self.root / "empty-track.mp4"
+        empty.write_bytes(data)
+        result, _ = self.invoke("probe", empty, "--timed-stream", "1")
+        self.assertEqual(result["media"]["timed_metadata"]["packets"], [])
+
+    def test_timed_metadata_probe_unknown_duration_remains_unknown(self):
+        import struct
+        path = srt_metadata_fixture.embedded(self.root, FFMPEG)
+        data = bytearray(path.read_bytes())
+        table = [offset for offset, kind in srt_metadata_fixture.mp4_boxes(data) if kind == b"stts"][1]
+        count = struct.unpack_from(">I", data, table + 12)[0]
+        for index in range(count):
+            struct.pack_into(">I", data, table + 20 + index * 8, 0)
+        path.write_bytes(data)
+        result, _ = self.invoke("probe", path, "--timed-stream", "1")
+        packets = result["media"]["timed_metadata"]["packets"]
+        self.assertGreater(len(packets), 1)
+        self.assertIsNone(packets[0]["duration"])
+        self.assertEqual(packets[0]["pts"]["ticks"], 0)
+
+    def test_timed_metadata_probe_fragmented_and_edit_list_tracks(self):
+        path = srt_metadata_fixture.embedded(self.root, FFMPEG)
+        for name, before, after in (("fragmented", [], ["-movflags", "empty_moov+frag_keyframe+default_base_moof"]),
+                                    ("edit-list", ["-itsoffset", "0.2"], ["-use_editlist", "1"])):
+            with self.subTest(case=name):
+                output = self.root / (name + ".mp4")
+                subprocess.run([str(FFMPEG), "-v", "error", "-y", *before, "-i", str(path),
+                                "-map", "0", "-c", "copy", *after, str(output)], check=True, capture_output=True, timeout=30)
+                result, _ = self.invoke("probe", output, "--timed-stream", "1")
+                actual = result["media"]["timed_metadata"]["packets"]
+                reference = json.loads(subprocess.check_output([str(FFPROBE), "-v", "error", "-select_streams", "1",
+                    "-show_packets", "-show_data_hash", "sha256", "-of", "json", str(output)]))["packets"]
+                self.assertTrue(actual)
+                self.assertEqual(len(actual), len(reference))
+                for packet, expected in zip(actual, reference):
+                    self.assertEqual(packet["pts"]["ticks"], int(expected["pts"]))
+                    self.assertEqual(packet["dts"]["ticks"], int(expected["dts"]))
+                    self.assertEqual(hashlib.sha256(bytes.fromhex(packet["bytes"])).hexdigest(), expected["data_hash"].split(":")[1])
+
     def test_source_srt_metadata_raw_and_explicit_clock_lookup(self):
         path = self.root / "DJI telemetry é 日本語.srt"
         packet = srt_metadata_fixture.packet(offset_ms=1000)

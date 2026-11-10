@@ -131,6 +131,9 @@ namespace lfs::media::json_detail {
         return result;
     }
     inline json description(const MediaDescription& media);
+    inline json metadataProvider(const std::optional<MetadataProviderInfo>& provider) {
+        return provider ? json{{"name", provider->name}, {"version", provider->version}, {"codec_api_version", provider->codec_api_version}} : json(nullptr);
+    }
     inline json metadataText(const MetadataTextEntry& entry) {
         // Text presentation follows the existing UTF-8 replacement policy;
         // the hex fields retain the exact demuxer-exposed key/value bytes.
@@ -206,7 +209,7 @@ namespace lfs::media::json_detail {
             if (catalog.container()->source_metadata) {
                 const auto& metadata = *catalog.container()->source_metadata;
                 json source{{"limited", metadata.limited}, {"binary_encoding", "hex"}, {"tags", json::array()}, {"streams", json::array()}};
-                source["provider"] = metadata.provider ? json{{"name", metadata.provider->name}, {"version", metadata.provider->version}, {"codec_api_version", metadata.provider->codec_api_version}} : json(nullptr);
+                source["provider"] = metadataProvider(metadata.provider);
                 for (const auto& tag : metadata.tags)
                     source["tags"].push_back(metadataText(tag));
                 for (const auto& stream : metadata.streams) {
@@ -343,6 +346,16 @@ namespace lfs::media::json_detail {
         default: return "none";
         }
     }
+    inline json timedMetadata(const TimedMetadataObservation& observation) {
+        json result{{"scope", "demuxed_timed_packets"}, {"interpretation", "not_performed"}, {"provider", metadataProvider(observation.provider)}, {"stream_index", observation.stream_index}, {"codec_tag", observation.codec_tag}, {"extradata", hexBytes(observation.extradata)}, {"packets", json::array()}};
+        for (const auto& packet : observation.packets) {
+            json side = json::array();
+            for (const auto& block : packet.side_data)
+                side.push_back({{"ffmpeg_type", block.type}, {"bytes", hexBytes(block.bytes)}});
+            result["packets"].push_back({{"pts", timestamp(packet.pts)}, {"dts", timestamp(packet.dts)}, {"duration", timestamp(packet.duration)}, {"source_offset", optional(packet.source_offset)}, {"ffmpeg_flags", packet.flags}, {"bytes", hexBytes(packet.bytes)}, {"side_data", std::move(side)}});
+        }
+        return result;
+    }
     inline json description(const MediaDescription& media) {
         json result{{"container", media.container}, {"stream_info_probed", media.stream_info_probed}, {"start", timestamp(media.start)}, {"duration", timestamp(media.duration)}, {"selected_video_stream", optional(media.selected_video_stream)}, {"streams", json::array()}};
         for (const auto& s : media.streams) {
@@ -350,6 +363,8 @@ namespace lfs::media::json_detail {
             if (s.orientation.rotate_tag_limited)
                 result["streams"].back()["orientation"]["rotate_tag_limited"] = true;
         }
+        if (media.timed_metadata)
+            result["timed_metadata"] = timedMetadata(*media.timed_metadata);
         return result;
     }
     inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {

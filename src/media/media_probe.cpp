@@ -23,14 +23,8 @@ namespace lfs::media {
                 return std::nullopt;
             return Rational{value.num, value.den};
         }
-        std::optional<Timestamp> timestamp(int64_t value, AVRational base) {
-            const auto rational = positiveRational(base);
-            if (value == AV_NOPTS_VALUE || !rational)
-                return std::nullopt;
-            return Timestamp{value, *rational};
-        }
         std::optional<Timestamp> duration(int64_t value, AVRational base) {
-            return value >= 0 ? timestamp(value, base) : std::nullopt;
+            return value >= 0 ? detail::probeTimestamp(value, base) : std::nullopt;
         }
         std::optional<std::string> named(bool available, const char* name) {
             return available && name ? std::optional<std::string>(name) : std::nullopt;
@@ -58,27 +52,6 @@ namespace lfs::media {
                 return state.expired ? 1 : 0;
             }
         };
-        Error invalidOptions(const char* message) {
-            return make_error({.code = ErrorCode::InvalidArgument,
-                               .domain = ErrorDomain::IO,
-                               .detail = message,
-                               .detection = LFS_SOURCE_SITE_CURRENT()});
-        }
-        Error failure(int error, const char* operation, bool expired) {
-            char text[AV_ERROR_MAX_STRING_SIZE]{};
-            av_strerror(error, text, sizeof(text));
-            const auto code = expired ? ErrorCode::DeadlineExceeded : error == AVERROR(ENOMEM)   ? ErrorCode::ResourceExhausted
-                                                                  : error == AVERROR(ENOENT)     ? ErrorCode::NotFound
-                                                                  : error == AVERROR(EACCES)     ? ErrorCode::PermissionDenied
-                                                                  : error == AVERROR_INVALIDDATA ? ErrorCode::DataLoss
-                                                                                                 : ErrorCode::Unavailable;
-            return make_error({.code = code,
-                               .domain = ErrorDomain::IO,
-                               .detail = std::string(operation) + ": " + text,
-                               .detection = LFS_SOURCE_SITE_CURRENT(),
-                               .fields = SmallFields{}.add("operation", std::string_view(operation)),
-                               .native = NativeError{ErrorDomain::IO, error, text}});
-        }
     } // namespace
 
     int legacyQuarterTurn(const Orientation& orientation) {
@@ -93,6 +66,33 @@ namespace lfs::media {
     }
 
     namespace detail {
+        Error probeInvalidOptions(std::string message) {
+            return make_error({.code = ErrorCode::InvalidArgument,
+                               .domain = ErrorDomain::IO,
+                               .detail = std::move(message),
+                               .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+        std::optional<Timestamp> probeTimestamp(int64_t value, AVRational base) {
+            const auto rational = positiveRational(base);
+            if (value == AV_NOPTS_VALUE || !rational)
+                return std::nullopt;
+            return Timestamp{value, *rational};
+        }
+        Error probeFailure(int error, const char* operation, bool expired) {
+            char text[AV_ERROR_MAX_STRING_SIZE]{};
+            av_strerror(error, text, sizeof(text));
+            const auto code = expired ? ErrorCode::DeadlineExceeded : error == AVERROR(ENOMEM)   ? ErrorCode::ResourceExhausted
+                                                                  : error == AVERROR(ENOENT)     ? ErrorCode::NotFound
+                                                                  : error == AVERROR(EACCES)     ? ErrorCode::PermissionDenied
+                                                                  : error == AVERROR_INVALIDDATA ? ErrorCode::DataLoss
+                                                                                                 : ErrorCode::Unavailable;
+            return make_error({.code = code,
+                               .domain = ErrorDomain::IO,
+                               .detail = std::string(operation) + ": " + text,
+                               .detection = LFS_SOURCE_SITE_CURRENT(),
+                               .fields = SmallFields{}.add("operation", std::string_view(operation)),
+                               .native = NativeError{ErrorDomain::IO, error, text}});
+        }
         Orientation describeDisplayMatrix(const unsigned char* data, std::size_t size) {
             Orientation result;
             result.source = OrientationSource::DisplayMatrix;
@@ -120,7 +120,7 @@ namespace lfs::media {
             result.kind = kind(p.codec_type);
             result.codec = avcodec_get_name(p.codec_id);
             result.time_base = positiveRational(stream->time_base);
-            result.start = timestamp(stream->start_time, stream->time_base);
+            result.start = detail::probeTimestamp(stream->start_time, stream->time_base);
             result.duration = duration(stream->duration, stream->time_base);
             result.attached_picture = (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0;
             result.default_disposition = (stream->disposition & AV_DISPOSITION_DEFAULT) != 0;
@@ -233,7 +233,7 @@ namespace lfs::media {
                 return result;
             if (context->iformat && context->iformat->name)
                 result.container = context->iformat->name;
-            result.start = timestamp(context->start_time, {1, AV_TIME_BASE});
+            result.start = detail::probeTimestamp(context->start_time, {1, AV_TIME_BASE});
             result.duration = duration(context->duration, {1, AV_TIME_BASE});
             const int selected = findUsableHeaderVideoStream(context);
             if (selected >= 0)
@@ -248,38 +248,56 @@ namespace lfs::media {
     Result<MediaDescription> MediaProbe::inspect(const std::filesystem::path& path, const ProbeOptions& options) {
         if (path.empty() || path.native().find(std::filesystem::path::value_type{}) != std::string::npos || options.timeout.count() <= 0 ||
             (options.depth != ProbeDepth::Headers && options.depth != ProbeDepth::StreamInfo))
-            return invalidOptions("Probe requires a valid path, depth and positive timeout");
+            return detail::probeInvalidOptions("Probe requires a valid path, depth and positive timeout");
         // Complete allocating path conversions before creating the FFmpeg context.
         // The native-path NUL check above also covers the display representation.
         std::string native;
         try {
+            if (options.timed_metadata_stream) {
+                const auto& limits = options.timed_metadata_limits;
+                if (*options.timed_metadata_stream < 0 || options.depth != ProbeDepth::Headers ||
+                    !limits.bytes || limits.bytes > timed_metadata_maxima.bytes ||
+                    !limits.records || limits.records > timed_metadata_maxima.records)
+                    return detail::probeInvalidOptions("Timed metadata requires Headers depth, a nonnegative stream index and positive limits within maxima (stream=" + std::to_string(*options.timed_metadata_stream) + ", bytes=" + std::to_string(limits.bytes) + "/" + std::to_string(timed_metadata_maxima.bytes) + ", records=" + std::to_string(limits.records) + "/" + std::to_string(timed_metadata_maxima.records) + ")");
+            }
             native = core::path_to_native_utf8(path);
         } catch (const std::bad_alloc&) {
-            return failure(AVERROR(ENOMEM), "Prepare input path", false);
+            return detail::probeFailure(AVERROR(ENOMEM), "Prepare input path", false);
         }
+        // Timed collection is scoped to embedded MOV/MP4 tracks. Forcing this
+        // demuxer also keeps standalone subtitles on the canonical SRT reader.
+        const auto* input_format = options.timed_metadata_stream ? av_find_input_format("mov") : nullptr;
+        if (options.timed_metadata_stream && !input_format)
+            return detail::probeFailure(AVERROR_DEMUXER_NOT_FOUND, "Locate timed metadata demuxer", false);
         Deadline deadline{std::chrono::steady_clock::now(), options.timeout};
         AVFormatContext* raw = avformat_alloc_context();
         if (!raw)
-            return failure(AVERROR(ENOMEM), "Allocate input", false);
+            return detail::probeFailure(AVERROR(ENOMEM), "Allocate input", false);
         auto close = [](AVFormatContext* context) { avformat_close_input(&context); };
         raw->interrupt_callback = {Deadline::interrupt, &deadline};
-        const int opened = avformat_open_input(&raw, native.c_str(), nullptr, nullptr);
+        const int opened = avformat_open_input(&raw, native.c_str(), input_format, nullptr);
         std::unique_ptr<AVFormatContext, decltype(close)> context(raw, close);
         if (opened < 0)
-            return failure(opened, "Open input", deadline.expired);
+            return detail::probeFailure(opened, "Open input", deadline.expired);
         if (options.depth == ProbeDepth::StreamInfo) {
             const int probed = avformat_find_stream_info(context.get(), nullptr);
             if (probed < 0)
-                return failure(probed, "Read stream info", deadline.expired);
+                return detail::probeFailure(probed, "Read stream info", deadline.expired);
         }
         try {
             auto description = detail::describeContext(context.get());
             description.stream_info_probed = options.depth == ProbeDepth::StreamInfo;
             if (options.collect_source_metadata)
                 detail::collectContextMetadata(context.get(), description, options.metadata_limits);
+            if (options.timed_metadata_stream) {
+                auto observed = detail::collectTimedMetadata(context.get(), *options.timed_metadata_stream, options.timed_metadata_limits);
+                if (!observed)
+                    return observed.error();
+                description.timed_metadata = std::move(*observed);
+            }
             return description;
         } catch (const std::bad_alloc&) {
-            return failure(AVERROR(ENOMEM), "Describe input metadata", false);
+            return detail::probeFailure(AVERROR(ENOMEM), "Describe input metadata", false);
         }
     }
 } // namespace lfs::media

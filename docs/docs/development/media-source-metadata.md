@@ -1156,3 +1156,29 @@ media-ingest extract flight.mp4 --output frames --interval 10 \
 `--srt-point-tolerance-ms N` additionally enables the catalog's nearest-point
 fallback. Missing path/offset/output policy, duplicate SRT options and negative
 tolerance are refused. Adjacent subtitle filenames are not searched automatically.
+
+
+### Explicit embedded packet observations
+
+Select one MOV/MP4 data or subtitle track to retain its demuxed packets, without
+video decoding. The probe keeps that track and discards the others before reading.
+Native callers set `ProbeOptions::timed_metadata_stream` with Headers depth.
+
+```sh
+media-ingest probe flight.mp4 --timed-stream 2 --timeout-ms 30000
+```
+```python
+observation = lf.media.MediaIngest.probe("flight.mp4", timed_metadata_stream=2)
+packets_json = observation.to_json()
+```
+
+The JSON `timed_metadata` object contains stream index, codec tag, provider,
+extradata and packets in demux order. Packets own PTS/DTS with rational time bases,
+positive duration (unknown is null), provider position/flags, payload and side data;
+binary values are hexadecimal. The view is raw (`demuxed_timed_packets`,
+`not_performed`). At EOF the selected stream's sample index is checked against
+input size; an empty track is valid. Defaults are 32 MiB retained bytes including
+extradata and 100,000 records (packets plus side-data blocks). Lower these with
+`TimedMetadataLimits` or `--timed-max-bytes` / `--timed-max-records`. Exhaustion,
+corrupt selected packets and read failures return errors, not partial success.
+The probe's cooperative timeout applies to collection.

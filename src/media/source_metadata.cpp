@@ -173,6 +173,8 @@ namespace lfs::media {
     }
 
     Result<SourceMetadataCatalog> catalogContainerMetadata(MediaDescription description, const SourceMetadataIndexLimits& limits, std::optional<MetadataSourceLocator> locator) {
+        if (description.timed_metadata)
+            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Static metadata catalogs cannot adopt timed packet observations", .detection = LFS_SOURCE_SITE_CURRENT()});
         if (!validLocator(locator))
             return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Metadata source locator has an invalid native encoding or filename", .detection = LFS_SOURCE_SITE_CURRENT()});
         if (!description.source_metadata)
@@ -298,6 +300,8 @@ namespace lfs::media {
         }
     }
     Result<SourceMetadataCatalog> MediaIngest::sourceContainerMetadata(const std::filesystem::path& path, const ProbeOptions& options, const SourceMetadataIndexLimits& limits) {
+        if (options.timed_metadata_stream)
+            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Use the explicit probe packet collection for timed metadata", .detection = LFS_SOURCE_SITE_CURRENT()});
         try {
             auto requested = options;
             requested.collect_source_metadata = true;

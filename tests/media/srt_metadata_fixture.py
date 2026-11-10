@@ -18,3 +18,33 @@ def packet(offset_ms=0, points=False):
                   f'<font size="28">FrameCnt: {ordinal}, DiffTime: 33ms\r\n'
                   f'é 日 [latitude: {lat}] [longtitude: -73.25] [rel_alt: 12.5 abs_alt: -2] [unknown: kept]</font>')
                  for ordinal, start, end, lat in ((1, 0, 150, 0), (2, 400, 1000, 45.5))])
+
+
+def embedded(directory, ffmpeg):
+    """Synthetic MP4 with a video and two independently timed subtitle tracks."""
+    import subprocess
+    first = directory / "embedded-a.srt"
+    second = directory / "embedded-b.srt"
+    first.write_bytes(packet())
+    second.write_bytes(cues([(100, 350, "ordinary subtitle"), (900, 1000, "FrameCnt: 2 [latitude: 37]")]))
+    output = directory / "embedded é 日本語.mp4"
+    subprocess.run([str(ffmpeg), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=size=16x16:rate=10:duration=1.2", "-i", str(first), "-i", str(second),
+                    "-map", "0:v:0", "-map", "1:0", "-map", "2:0", "-c:v", "mpeg4",
+                    "-c:s", "mov_text", str(output)], check=True, capture_output=True, timeout=30)
+    return output
+
+
+def mp4_boxes(data):
+    """Independent atom offsets for mutating our small synthetic MP4 fixtures."""
+    import struct
+    def walk(start, end):
+        while start + 8 <= end:
+            size, kind = struct.unpack_from(">I4s", data, start)
+            if size < 8 or start + size > end:
+                raise ValueError("invalid synthetic MP4 box")
+            yield start, kind
+            if kind in (b"moov", b"trak", b"mdia", b"minf", b"stbl"):
+                yield from walk(start + 8, start + size)
+            start += size
+    return list(walk(0, len(data)))
