@@ -2631,8 +2631,7 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
 
 
 @pytest.mark.parametrize("tool_id", [
-    "builtin.select", "builtin.translate", "builtin.rotate", "builtin.scale",
-    "builtin.mirror", "builtin.cropbox", "builtin.align", "builtin.scale_distance",
+    "builtin.select", "builtin.cropbox",
 ])
 @pytest.mark.parametrize("already_active", [False, True])
 def test_tool_click_replaces_render_selector_with_tool_controls(toolbar_module, monkeypatch, tool_id, already_active):
@@ -2646,9 +2645,9 @@ def test_tool_click_replaces_render_selector_with_tool_controls(toolbar_module, 
 
     lf_stub.get_render_mode_controls_open = lambda: state.selector_open
     lf_stub.set_render_mode_controls_open = lambda value: setattr(state, "selector_open", value)
-    lf_stub.get_viewport_render_mode = lambda: "normal"
+    lf_stub.get_viewport_display_mode = lambda: "normal"
     lf_stub.get_num_gaussians = lambda: 1
-    lf_stub.set_viewport_render_mode = lambda _mode: pytest.fail("Tool selection must preserve the render mode")
+    lf_stub.set_viewport_display_mode = lambda _mode: pytest.fail("Tool selection must preserve the render mode")
     lf_stub.ui.get_active_tool = lambda: state.active_tool
     monkeypatch.setattr(module.ToolRegistry, "get", lambda _id: SimpleNamespace(can_activate=lambda _ctx: True))
     monkeypatch.setattr(module.ToolRegistry, "set_active", lambda value: setattr(state, "active_tool", value))

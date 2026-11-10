@@ -3359,20 +3359,26 @@ NB_MODULE(lichtfeld, m) {
         "Check if orthographic projection is active");
 
     m.def(
-        "get_viewport_render_mode", []() -> std::string {
+        "get_viewport_display_mode", []() -> std::string {
             const auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return "rgb";
             const auto settings = rm->getSettings();
-            if (settings.depth_view)
+            switch (lfs::vis::viewportDisplayMode(settings)) {
+            case lfs::vis::ViewportDisplayMode::Depth:
                 return "depth";
-            return settings.normal_view ? "normal" : "rgb";
+            case lfs::vis::ViewportDisplayMode::Normal:
+                return "normal";
+            case lfs::vis::ViewportDisplayMode::RGB:
+                return "rgb";
+            }
+            return "rgb";
         },
         "Get viewport display mode: rgb, depth, or normal");
     m.def(
-        "set_viewport_render_mode", [](const std::string& mode) {
+        "set_viewport_display_mode", [](const std::string& mode) {
             if (mode != "rgb" && mode != "depth" && mode != "normal")
-                throw nb::value_error("Viewport render mode must be 'rgb', 'depth', or 'normal'");
+                throw nb::value_error("Viewport display mode must be 'rgb', 'depth', or 'normal'");
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
@@ -3392,7 +3398,8 @@ NB_MODULE(lichtfeld, m) {
         "get_render_mode_controls_open", [] {
             const auto* rm = lfs::python::get_rendering_manager();
             return rm && rm->getSettings().render_mode_controls_open;
-        });
+        },
+        "Return whether the viewport render-mode selector is open.");
     m.def(
         "set_render_mode_controls_open", [](bool open) {
             if (auto* rm = lfs::python::get_rendering_manager()) {

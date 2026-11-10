@@ -1848,7 +1848,7 @@ namespace lfs::vis {
         // Normals sample adjacent pixels. Keep the halo tile-aligned so raster
         // grouping stays stable, then read back only each band's interior rows.
         const auto settings = getSettings();
-        const int halo = settings.normal_view && !settings.depth_view ? kPreviewTileHeightAlignment : 0;
+        const int halo = viewportDisplayMode(settings) == ViewportDisplayMode::Normal ? kPreviewTileHeightAlignment : 0;
         int band_height_limit = std::max(kPreviewTileHeightAlignment, tile_height_limit - 2 * halo);
         // #1574 1-deep export pipelining: submit ticket for band N, render band N+1,
         // then wait ticket N (memcpy on deliver), submit N+1, ... At most one outstanding

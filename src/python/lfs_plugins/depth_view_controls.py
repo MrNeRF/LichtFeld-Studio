@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Render-mode selector and depth controls for the viewport overlay."""
+"""Viewport display-mode selector and depth controls for the viewport overlay."""
 
 import math
 import lichtfeld as lf
@@ -59,10 +59,10 @@ def _normalize_mode(value):
 
 class DepthViewControlsController:
     _DIRTY_FIELDS = (
-        "viewport_render_mode",
+        "viewport_display_mode",
         "viewport_show_depth",
         "viewport_has_gaussians",
-        "depth_view_tool_label",
+        "render_modes_label",
         "ui_color_label",
         "ui_gray_label",
         "ui_near_label",
@@ -75,7 +75,7 @@ class DepthViewControlsController:
         "depth_view_far_value",
         "depth_view_far_slider_min",
         "depth_view_far_slider_max",
-        "depth_view_disable_label",
+        "render_modes_close_label",
     )
 
     def __init__(self):
@@ -102,17 +102,17 @@ class DepthViewControlsController:
         return self._visible
 
     def bind_model(self, model):
-        model.bind("viewport_render_mode", lambda: self._render_mode, self._set_render_mode)
+        model.bind("viewport_display_mode", lambda: self._render_mode, self._set_render_mode)
         model.bind_func("viewport_show_depth", lambda: self._render_mode == "depth")
         model.bind_func("viewport_has_gaussians", lambda: self._has_gaussians)
-        model.bind_func("depth_view_tool_label", lambda: _ui_label("toolbar.render_modes", "Render Modes"))
+        model.bind_func("render_modes_label", lambda: _ui_label("toolbar.render_modes", "Render Modes"))
         model.bind_func("ui_color_label", lambda: _ui_label("ui.color", "Color"))
         model.bind_func("ui_gray_label", lambda: _ui_label("ui.gray", "Gray"))
         model.bind_func("ui_near_label", lambda: _ui_label("ui.near", "Near"))
         model.bind_func("ui_far_label", lambda: _ui_label("ui.far", "Far"))
         model.bind_func("depth_view_has_scene", lambda: self._has_scene)
         model.bind_func(
-            "depth_view_disable_label",
+            "render_modes_close_label",
             lambda: _ui_label("common.close", "Close"),
         )
         model.bind(
@@ -197,7 +197,7 @@ class DepthViewControlsController:
 
     def _refresh_state(self):
         self._has_scene = self._scene_available()
-        self._render_mode = lf.get_viewport_render_mode()
+        self._render_mode = lf.get_viewport_display_mode()
         self._has_gaussians = lf.get_num_gaussians() > 0
         try:
             near, far = lf.get_depth_view_range()
@@ -273,7 +273,7 @@ class DepthViewControlsController:
         mode = str(value).lower()
         if mode not in ("rgb", "depth", "normal"):
             return
-        lf.set_viewport_render_mode(mode)
+        lf.set_viewport_display_mode(mode)
         self._render_mode = mode
         self._dirty_all()
 
@@ -374,15 +374,15 @@ class DepthViewControlsController:
 
         field_map = {
             "language_generation": (
-                "depth_view_tool_label",
+                "render_modes_label",
                 "ui_color_label",
                 "ui_gray_label",
                 "ui_near_label",
                 "ui_far_label",
-                "depth_view_disable_label",
+                "render_modes_close_label",
             ),
             "has_scene": ("depth_view_has_scene",),
-            "render_mode": ("viewport_render_mode", "viewport_show_depth"),
+            "render_mode": ("viewport_display_mode", "viewport_show_depth"),
             "has_gaussians": ("viewport_has_gaussians",),
             "depth_near": (
                 "depth_view_near_value",

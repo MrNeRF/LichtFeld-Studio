@@ -41,7 +41,7 @@ settings = lf.get_render_settings()
 settings.show_grid = settings.show_coord_axes = settings.show_camera_frustums = False
 settings.background_color = (0, 0, 0)
 lf.set_camera((0,0,3), (0,0,0))
-lf.set_viewport_render_mode('normal')
+lf.set_viewport_display_mode('normal')
 """)
         yield endpoint
 
@@ -67,7 +67,7 @@ def test_large_normal_export_has_no_band_seams(normal_endpoint, tmp_path):
 
     _editor(normal_endpoint, """
 lf.get_render_settings().equirectangular = False
-lf.set_viewport_render_mode('normal')
+lf.set_viewport_display_mode('normal')
 lf.set_camera((0,0,1), (0,0,0))
 """)
     path = tmp_path / "normal-bands.png"
@@ -82,11 +82,11 @@ lf.set_camera((0,0,1), (0,0,0))
 def test_legacy_depth_api_opens_and_closes_controls(normal_endpoint):
     _editor(normal_endpoint, """
 for mode in ('rgb', 'depth', 'normal'):
-    lf.set_viewport_render_mode(mode)
+    lf.set_viewport_display_mode(mode)
     lf.set_render_mode_controls_open(True)
     lf.set_depth_view(False)
     assert not lf.get_render_mode_controls_open()
-    assert lf.get_viewport_render_mode() == ('normal' if mode == 'normal' else 'rgb')
+    assert lf.get_viewport_display_mode() == ('normal' if mode == 'normal' else 'rgb')
     lf.set_depth_view(True)
     assert lf.get_render_mode_controls_open() and lf.get_depth_view()
 """)

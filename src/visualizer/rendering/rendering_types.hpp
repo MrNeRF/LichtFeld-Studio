@@ -490,8 +490,21 @@ namespace lfs::vis {
         settings.gut = true;
     }
 
+    enum class ViewportDisplayMode {
+        RGB,
+        Depth,
+        Normal,
+    };
+
+    // Keep the legacy stored flags, resolving conflicting values in one place.
+    [[nodiscard]] inline ViewportDisplayMode viewportDisplayMode(const RenderSettings& settings) {
+        if (settings.depth_view)
+            return ViewportDisplayMode::Depth;
+        return settings.normal_view ? ViewportDisplayMode::Normal : ViewportDisplayMode::RGB;
+    }
+
     [[nodiscard]] inline bool normalViewEnabled(const RenderSettings& settings) {
-        return settings.normal_view && !settings.depth_view &&
+        return viewportDisplayMode(settings) == ViewportDisplayMode::Normal &&
                !splitViewUsesGTComparison(settings.split_view_mode);
     }
 

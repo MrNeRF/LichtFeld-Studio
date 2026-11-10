@@ -20160,6 +20160,19 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_EQ(after_save.second, before.second);
     }
 
+    TEST(ViewportRenderModes, ResolvesLegacyFlagsWithDepthPrecedence) {
+        RenderSettings settings;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::RGB);
+        settings.normal_view = true;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Normal);
+        settings.depth_view = true;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Depth);
+        settings.normal_view = false;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Depth);
+        settings.depth_view = false;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::RGB);
+    }
+
     TEST(ViewportRenderModes, PersistsModeButNotSelectorVisibilityAndLoadsOlderProjects) {
         RenderSettings settings;
         settings.normal_view = true;
