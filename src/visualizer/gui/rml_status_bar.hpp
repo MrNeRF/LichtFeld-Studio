@@ -137,7 +137,7 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
-        void updatePortalStatus();
+        LFS_VIS_API void updatePortalStatus();
         LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
