@@ -152,24 +152,24 @@ body.window-controls #pin-btn.available {
 .window-pin-head {
     position: absolute;
     left: 4dp;
-    top: 2dp;
-    width: 6dp;
-    height: 6dp;
-    border-width: 1dp;
+    top: 1dp;
+    width: 5dp;
+    height: 5dp;
+    border-width: 1dp 1dp 0;
 }
 .window-pin-stem {
     position: absolute;
     left: 3dp;
-    top: 8dp;
-    width: 8dp;
+    top: 7dp;
+    width: 9dp;
     height: 1dp;
 }
 .window-pin-tip {
     position: absolute;
     left: 7dp;
-    top: 9dp;
+    top: 8dp;
     width: 1dp;
-    height: 4dp;
+    height: 5dp;
 }
 button.window-control.maximized .window-icon-maximize {
     display: none;
