@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/side_dock.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/resize_geometry.hpp"
@@ -84,6 +85,8 @@ namespace lfs::vis::gui {
         float python_console_width = -1.0f;
         float bottom_dock_height = 320.0f;
         float left_dock_width = 320.0f;
+        bool left_dock_collapsed = false;
+        bool right_dock_collapsed = false;
         bool show_sequencer = false;
         std::string active_tab_id;
         std::string bottom_dock_active_tab_id;
@@ -150,11 +153,16 @@ namespace lfs::vis::gui {
         void enforceWidthConstraints(bool show_main_panel, bool ui_hidden,
                                      const ScreenState& screen);
 
-        float getRightPanelWidth() const { return right_panel_width_; }
+        float getRightPanelWidth() const { return right_dock_collapsed_ ? 0.0f : right_panel_width_; }
+        bool isLeftDockCollapsed() const { return left_dock_collapsed_; }
+        bool isRightDockCollapsed() const { return right_dock_collapsed_; }
+        void setSideDockCollapsed(lfs::core::SideDock side, bool collapsed);
         float getScenePanelRatio() const { return scene_panel_ratio_; }
         [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
         void setScenePanelHeight(float height, float panel_height);
         float getPythonConsoleWidth() const { return python_console_width_; }
+        float resolvePythonConsoleWidth(const ScreenState& screen) const;
+        void setPythonConsoleWidth(float width) { python_console_width_ = width; }
         float getBottomDockHeight() const { return bottom_dock_height_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
@@ -169,6 +177,8 @@ namespace lfs::vis::gui {
         float getLeftDockPreferredWidth() const { return left_dock_preferred_width_; }
         void setLeftDockWidth(float width);
         bool isLeftDockVisible() const { return left_dock_visible_; }
+        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
+                                              const ScreenState& screen) const;
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v);
 
@@ -201,8 +211,6 @@ namespace lfs::vis::gui {
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
                                            const ScreenState& screen) const;
         [[nodiscard]] bool shouldReserveLeftDockWidth() const;
-        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
-                                              const ScreenState& screen) const;
         [[nodiscard]] float maxLeftDockPanelWidth(bool show_main_panel, bool ui_hidden,
                                                   const ScreenState& screen) const;
         [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,
@@ -210,6 +218,8 @@ namespace lfs::vis::gui {
 
         // Effective widths are clamped to the window every frame; preferred widths
         // hold the user's choice so the panels grow back when the window does.
+        bool left_dock_collapsed_ = false;
+        bool right_dock_collapsed_ = false;
         float right_panel_width_ = 360.0f;
         float right_panel_preferred_width_ = 360.0f;
         float scene_panel_ratio_ = 0.4f;

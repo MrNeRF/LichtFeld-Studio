@@ -1949,6 +1949,8 @@
     "action.node_pick": "Pick Node",
     "action.node_rect_select": "Rectangle Select Nodes",
     "action.toggle_ui": "Toggle UI",
+    "action.toggle_left_dock": "Toggle Left Dock",
+    "action.toggle_right_dock": "Toggle Right Dock",
     "action.toggle_fullscreen": "Toggle Fullscreen",
     "action.open_preferences": "Open Preferences",
     "action.toggle_mcp_server": "Toggle MCP Server",

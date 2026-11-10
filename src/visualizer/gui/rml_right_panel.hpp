@@ -60,6 +60,7 @@ namespace lfs::vis::gui {
                     float screen_x, float screen_y,
                     int screen_w, int screen_h);
         void blurFocus();
+        void suspendInput();
 
         bool wantsInput() const { return wants_input_; }
         bool isResizeInteractionActive() const { return resize_dragging_ || splitter_dragging_ || tab_scroll_dragging_; }

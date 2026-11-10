@@ -1938,6 +1938,8 @@
     "action.node_pick": "Knoten auswählen",
     "action.node_rect_select": "Knoten mit Rechteck auswählen",
     "action.toggle_ui": "UI umschalten",
+    "action.toggle_left_dock": "Linken Dockbereich ein-/ausklappen",
+    "action.toggle_right_dock": "Rechten Dockbereich ein-/ausklappen",
     "action.toggle_fullscreen": "Vollbild umschalten",
     "action.open_preferences": "Einstellungen öffnen",
     "action.toggle_mcp_server": "MCP-Server ein-/ausschalten",
