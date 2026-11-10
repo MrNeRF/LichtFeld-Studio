@@ -1536,24 +1536,6 @@ namespace lfs::python {
         return scene_->mergeGroup(group_name);
     }
 
-    bool PyScene::import_splat_file(const std::string& path, const std::string& name,
-                                    nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform) {
-        if (!is_valid() || !on_graphics_thread())
-            throw std::runtime_error("Splat import requires the current scene on the UI thread");
-        auto* manager = get_scene_manager();
-        if (!manager || manager->hasDataset())
-            throw std::runtime_error(LOC("external_training.dataset_open"));
-        if (!manager->canClearScene())
-            throw std::runtime_error(LOC("file_drop.blocked_during_training"));
-        const auto matrix = ndarray_to_mat4(transform);
-        validate_preview_transform(matrix);
-        auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
-        const bool started = viewer && viewer->getGuiManager() && viewer->getGuiManager()->asyncTasks().startSplatLoad({core::utf8_to_path(path)}, false, {name}, {}, std::nullopt, true, matrix);
-        if (started)
-            ensure_scene_manager_content_type(*manager, vis::SceneManager::ContentType::SplatFiles);
-        return started;
-    }
-
     std::string PyScene::create_external_preview(const std::string& name, const std::string& model_name) {
         if (!is_valid() || !on_graphics_thread())
             throw std::runtime_error("External previews require the current scene on the UI thread");
@@ -1976,8 +1958,6 @@ namespace lfs::python {
 
         // Scene class
         nb::class_<PyScene>(m, "Scene")
-            .def("import_splat_file", &PyScene::import_splat_file, nb::arg("path"), nb::arg("name"), nb::arg("transform"),
-                 "Start an additive full-fidelity import with a row-major 4x4 initial transform on the UI thread. Uses the normal async loader; False while another import is running.")
             .def("create_external_preview", &PyScene::create_external_preview, nb::arg("name"), nb::arg("model_name"),
                  "Create a protected transient group and model on the UI thread; returns its UUID")
             .def("upload_external_preview", &PyScene::upload_external_preview, nb::arg("update"),

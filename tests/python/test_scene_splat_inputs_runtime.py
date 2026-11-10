@@ -27,45 +27,6 @@ def editor_wait(camera_runtime):
     _editor(camera_runtime, "import time\n" + inspect.getsource(wait_until))
 
 
-def test_invalid_saved_result_retains_preview_and_releases_lease(camera_runtime_with_numpy, tmp_path, monkeypatch):
-    endpoint = camera_runtime_with_numpy
-    from lichtfeld_sessions import transport
-    from test_training_sessions import arrays
-
-    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
-    producer = transport.SessionPublisher({"label": "Invalid result", "state": "training"})
-    try:
-        first = producer.publish(arrays(8), 1)
-        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
-        _ui_editor(endpoint, '''
-import lfs_plugins.external_training_panel as panel
-panel._current = panel.ExternalTraining(RECORD)
-controls = panel.ExternalTrainingPanel()
-'''.replace("RECORD", repr(record)))
-        _editor(endpoint, '''
-import time
-assert wait_until(lambda: panel._current.generation == FIRST, 10), panel._current.error
-'''.replace("FIRST", repr(first["id"])))
-        producer.finish("completed", result={"root": str(tmp_path), "iteration": "broken"})
-        _editor(endpoint, '''
-assert wait_until(panel._current.stop.is_set, 10), panel._current.connection_error
-assert panel._current.status["state"] == "completed"
-assert not panel._current.connection_error
-''')
-        _ui_editor(endpoint, '''
-controls.on_update(None)
-assert controls._saved_result() == lf.ui.tr("external_training.result_invalid")
-assert not controls._can_import_result()
-assert panel._current.shown["count"] == 8
-assert lf.get_scene().get_node_by_uuid(panel._current.uuid)
-controls._remove()
-''')
-        assert wait_until(lambda: not list((producer.root / "clients").glob("*.json")))
-    finally:
-        producer.finish()
-        producer.pool.close()
-
-
 def test_completed_training_imports_full_model_with_result_coordinates(camera_runtime_with_numpy, tmp_path, monkeypatch):
     camera_runtime = camera_runtime_with_numpy
     import hashlib
@@ -118,6 +79,16 @@ assert wait_until(lambda: panel._current.shown, 10)
 assert wait_until(panel._current.stop.is_set, 10)
 assert panel._current.status["result"]["count"] == 8
 ''')
+        _ui_editor(camera_runtime, '''
+valid_status = panel._current.status
+panel._current.status = {**valid_status, "result": {**valid_status["result"], "count": "invalid"}}
+controls.on_update(None)
+assert controls._saved_result() == lf.ui.tr("external_training.result_invalid")
+assert not controls._can_import_result()
+panel._current.status = valid_status
+controls.on_update(None)
+assert controls._can_import_result()
+''')
         # Integrity failure must not modify the preview or any existing model.
         content = artifact.read_bytes()
         artifact.write_bytes(content[:-1] + bytes([content[-1] ^ 1]))
@@ -136,11 +107,7 @@ assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
         _editor(camera_runtime, '''
 assert wait_until(controls._result_future.done, 10)
 ''')
-        # Replace the producer's path after verification, before native loading.
-        # Only the private, checksum-covered copy may reach the native parser.
-        artifact.write_bytes(b"replacement is not a Gaussian PLY")
         _ui_editor(camera_runtime, '''
-staged_result_path = str(controls._result_future.result()[1])
 controls.on_update(None)
 assert not controls._message(), controls._message()
 from types import SimpleNamespace
@@ -150,9 +117,6 @@ controls.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
 assert wait_until(lambda: lf.ui.get_import_state().get("success") or lf.ui.get_import_state().get("error"), 20)
 assert lf.ui.get_import_state()["success"], lf.ui.get_import_state()
 assert lf.ui.get_import_state()["path"] == "saved-full.ply"
-assert lf.ui.get_import_state()["source_path"].endswith("saved-full.ply")
-from pathlib import Path
-assert wait_until(lambda: not Path(staged_result_path).exists(), 10), "Verified copy was not released"
 ''')
         _ui_editor(camera_runtime, '''
 controls.on_update(None)
@@ -165,12 +129,19 @@ assert local.splat_data().active_sh_degree == 3
 np.testing.assert_allclose(local.splat_data().sh0_raw.cpu().numpy(), saved_sh0, rtol=1e-6)
 np.testing.assert_allclose(local.splat_data().shN_raw.cpu().numpy(), saved_shN, rtol=1e-6, atol=1e-7)
 np.testing.assert_allclose(local.local_transform, [[2,0,0,3],[0,0,4,5],[0,-3,0,-4],[0,0,0,1]], atol=1e-6)
-edited_transform = np.asarray(local.local_transform, dtype=np.float32).copy()
-edited_transform[0, 3] += 1
-local.set_local_transform(edited_transform)
-np.testing.assert_allclose(lf.get_scene().get_node(local.name).local_transform, edited_transform)
 assert scene.get_node("Existing local model").gaussian_count == 8
 imported_name = local.name
+''')
+        # Reimporting one iteration must add a different group, not replace it.
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, 'assert wait_until(controls._result_future.done, 10)')
+        _ui_editor(camera_runtime, 'controls.on_update(None)')
+        _editor(camera_runtime, 'assert wait_until(lambda: not lf.ui.get_import_state()["active"], 20)')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+copies = [node for node in scene.nodes if node.name.startswith("Result trainer") and node.type == lf.scene.NodeType.SPLAT and not node.read_only]
+assert len(copies) == 2
+assert len({node.parent_id for node in copies}) == 2
 ''')
         artifact.unlink()
         _ui_editor(camera_runtime, 'controls._import_result()')
@@ -185,13 +156,6 @@ controls._remove()
 assert not controls._message()
 assert not any(node.read_only for node in lf.get_scene().nodes)
 assert lf.get_scene().get_node(imported_name).gaussian_count == 8
-''')
-        project = tmp_path / "imported-result.licht"
-        _tool(camera_runtime, "project_save_as", {"path": str(project)})
-        _tool(camera_runtime, "project_open", {"path": str(project), "discard_changes": True})
-        _editor(camera_runtime, '''
-assert wait_until(lambda: lf.get_scene().get_node(imported_name) and lf.get_scene().get_node(imported_name).gaussian_count == 8, 10)
-np.testing.assert_allclose(lf.get_scene().get_node(imported_name).local_transform, edited_transform)
 ''')
     finally:
         producer.finish()

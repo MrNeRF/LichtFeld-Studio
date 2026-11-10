@@ -436,7 +436,6 @@ namespace lfs::python {
         std::string stage;
         std::string dataset_type;
         std::string path;
-        std::string source_path;
         bool success = false;
         std::string error;
         size_t num_images = 0;

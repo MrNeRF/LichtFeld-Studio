@@ -27,6 +27,8 @@ After a compatible trainer finishes saving, **Import saved model** loads its ful
 
 File integrity checking, loading and renderer preparation run on workers through the normal import system. The result retains its declared coordinate presentation and SH coefficients. It becomes an independent, editable local model that can be saved and exported normally. Once import succeeds, the transient preview is hidden to avoid overlapping models. A failed import leaves the preview and existing local models available.
 
+The trainer's saved PLY is verified in place and loaded into a new group. Importing the same result again creates a separate group; it does not replace an earlier import.
+
 The action becomes available only after the producer publishes a completed saved artifact. Older or preview-only publishers remain observable without offering result import. The import requires the original result file to remain in its output folder; it does not resume or change training.
 
 ## Explicit publisher

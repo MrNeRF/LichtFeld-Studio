@@ -5133,7 +5133,6 @@ namespace lfs::python {
                 state["stage"] = import_state.stage;
                 state["dataset_type"] = import_state.dataset_type;
                 state["path"] = import_state.path;
-                state["source_path"] = import_state.source_path;
                 state["success"] = import_state.success;
                 state["error"] = import_state.error;
                 state["num_images"] = import_state.num_images;

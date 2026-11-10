@@ -31,31 +31,22 @@ def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
               "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "iteration": 10,
               "count": 1234, "sh_degree": 3, "presentation": presentation}
     record = {"state": "completed", "result": result}
-    with transport.resolve_result(record) as (loaded, coordinates):
-        assert loaded != path.resolve()
-        assert loaded.read_bytes() == b"saved full model"
-        assert coordinates == presentation
-        path.write_bytes(b"replaced model!!")
-        assert loaded.read_bytes() == b"saved full model"
-    assert not loaded.exists()
-    assert not loaded.parent.exists()
-    path.write_bytes(b"saved full model")
+    loaded, coordinates = transport.resolve_result(record)
+    assert loaded == path.resolve()
+    assert loaded.read_bytes() == b"saved full model"
+    assert coordinates == presentation
     with pytest.raises(InterruptedError):
-        with transport.resolve_result(record, lambda: True):
-            pytest.fail("Cancelled preparation yielded a result")
+        transport.resolve_result(record, lambda: True)
     with pytest.raises(ValueError, match="finished"):
-        with transport.resolve_result({**record, "state": "training"}):
-            pytest.fail("An active trainer yielded a result")
+        transport.resolve_result({**record, "state": "training"})
     path.write_bytes(b"modified model!!")
     with pytest.raises(ValueError, match="integrity"):
-        with transport.resolve_result(record):
-            pytest.fail("A corrupt artifact yielded a result")
+        transport.resolve_result(record)
     for field, value in (("path", "../outside.ply"), ("root", "relative"), ("bytes", True),
                          ("count", -1), ("sh_degree", 4), ("sha256", "no checksum"),
                          ("presentation", {"schema": 99})):
         with pytest.raises(ValueError):
-            with transport.resolve_result({**record, "result": {**result, field: value}}):
-                pytest.fail("Invalid metadata yielded a result")
+            transport.resolve_result({**record, "result": {**result, field: value}})
     legacy = {"protocol": 1, "id": "legacy", "pid": os.getpid(), "state": "completed",
               "result": {"path": "artifacts/best.ply"}}
     assert transport.validate_session(legacy) is legacy
@@ -63,12 +54,10 @@ def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
     # A malformed optional artifact cannot hide a valid terminal session.
     assert transport.validate_session(invalid_result) is invalid_result
     with pytest.raises(ValueError, match="count"):
-        with transport.resolve_result(invalid_result):
-            pytest.fail("Invalid metadata yielded a result")
+        transport.resolve_result(invalid_result)
     path.unlink()
     with pytest.raises(FileNotFoundError):
-        with transport.resolve_result(record):
-            pytest.fail("A missing artifact yielded a result")
+        transport.resolve_result(record)
 
 
 @pytest.mark.parametrize("kind", ["directory", "fifo"])
@@ -88,31 +77,28 @@ def test_saved_result_rejects_non_regular_files(tmp_path, kind):
               "presentation": {"schema": 1}}
     try:
         with pytest.raises(ValueError, match="regular file"):
-            with transport.resolve_result({"state": "completed", "result": result}):
-                pytest.fail("A non-regular artifact yielded a result")
+            transport.resolve_result({"state": "completed", "result": result})
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
-def test_saved_result_cancellation_removes_partial_copy(tmp_path, monkeypatch):
+def test_saved_result_cancellation_leaves_source_intact(tmp_path):
     path = tmp_path / "result.ply"
     payload = b"x" * (4 * 1024 * 1024 + 1)
     path.write_bytes(payload)
     result = {"kind": "last", "root": str(tmp_path), "path": path.name, "bytes": len(payload),
               "sha256": hashlib.sha256(payload).hexdigest(), "iteration": 1, "count": 1, "sh_degree": 0,
               "presentation": {"schema": 1}}
-    temporary_directory = transport.TemporaryDirectory
-    monkeypatch.setattr(transport, "TemporaryDirectory", lambda **kwargs: temporary_directory(dir=tmp_path, **kwargs))
     checks = 0
 
     def cancel():
         nonlocal checks
         checks += 1
-        return checks == 3  # After the first copied block, not before opening.
+        return checks == 3  # After the first hashed block, not before opening.
 
-    with pytest.raises(InterruptedError), transport.resolve_result({"state": "completed", "result": result}, cancel):
-        pass
+    with pytest.raises(InterruptedError):
+        transport.resolve_result({"state": "completed", "result": result}, cancel)
     assert list(tmp_path.iterdir()) == [path]
     assert path.read_bytes() == payload
 

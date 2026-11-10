@@ -513,8 +513,6 @@ namespace lfs::python {
         uint64_t render_generation() const;
 
         // Node CRUD
-        bool import_splat_file(const std::string& path, const std::string& name,
-                               nb::ndarray<float, nb::device::cpu, nb::shape<4, 4>> transform);
         int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);
         std::string create_external_preview(const std::string& name, const std::string& model_name);
         bool upload_external_preview(std::shared_ptr<vis::ExternalPreviewUpdate> update);
