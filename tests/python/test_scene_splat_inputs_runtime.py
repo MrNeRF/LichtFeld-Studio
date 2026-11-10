@@ -103,6 +103,16 @@ assert lf.get_scene().get_node("Existing local model").gaussian_count == 8
 assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
 ''')
         artifact.write_bytes(content)
+        # Scene/import failures must not be reported as a corrupt saved file.
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, 'assert wait_until(controls._result_future.done, 10)')
+        _ui_editor(camera_runtime, '''
+from unittest.mock import patch
+with patch.object(panel.lf, "load_gallery_scene", side_effect=ValueError("Scene changed")):
+    controls.on_update(None)
+assert controls._message() == lf.ui.tr("progress.import_failed_title"), controls._message()
+assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
+''')
         _ui_editor(camera_runtime, 'controls._import_result()')
         _editor(camera_runtime, '''
 assert wait_until(controls._result_future.done, 10)

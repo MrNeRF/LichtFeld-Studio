@@ -223,6 +223,10 @@ def validate_result(result):
     for key in ("root", "path"):
         if not isinstance(result.get(key), str) or not 0 < len(result[key]) <= 32768:
             raise ValueError("Invalid saved model path")
+    if not Path(result["root"]).is_absolute() or Path(result["path"]).is_absolute():
+        raise ValueError("Saved model paths require an absolute root and relative artifact")
+    if Path(result["path"]).suffix.lower() != ".ply":
+        raise ValueError("Unsupported saved model format")
     for key, minimum, maximum in (("bytes", 1, 2**63 - 1), ("count", 1, 2**31 - 1),
                                   ("iteration", 0, 2**63 - 1), ("sh_degree", 0, 3)):
         if type(result.get(key)) is not int or not minimum <= result[key] <= maximum:
@@ -278,11 +282,7 @@ def resolve_result(record, should_cancel=lambda: False):
         raise ValueError("The trainer has not finished saving its result")
     result = validate_result(record.get("result"))
     root, relative = Path(result["root"]), Path(result["path"])
-    if not root.is_absolute() or relative.is_absolute():
-        raise ValueError("Saved model paths require an absolute root and relative artifact")
     path = artifact_path(root, relative)
-    if path.suffix.lower() != ".ply":
-        raise ValueError("Unsupported saved model format")
     from . import geometry
     presentation = geometry.validate(result.get("presentation"))
     with verified_artifact(path, result, should_cancel):

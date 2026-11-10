@@ -64,7 +64,7 @@ class ExternalTrainingPanel(Panel):
         model.bind_func("saved_result", self._saved_result)
         model.bind_func("has_saved_result", lambda: bool(self._saved_result()))
         model.bind_func("can_import_result", self._can_import_result)
-        model.bind_func("import_label", lambda: lf.ui.tr("status.loading") if self._result_future else lf.ui.tr("external_training.import_result"))
+        model.bind_func("import_label", lambda: lf.ui.tr("status.loading") if self._result_future or self._result_load else lf.ui.tr("external_training.import_result"))
         model.bind("show_cameras", self._cameras_shown, self._show_cameras)
         for name, callback in (("refresh", self._refresh), ("connect", self._connect),
                                ("disconnect", self._disconnect), ("remove", self._remove), ("frame", self._frame),
@@ -89,7 +89,7 @@ class ExternalTrainingPanel(Panel):
         if self._scan:
             return
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trainer-discovery")
+            self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="trainer-discovery")
         self._scan = self._executor.submit(discover)
 
     def on_update(self, doc):
@@ -97,17 +97,6 @@ class ExternalTrainingPanel(Panel):
         if self._result_future and self._result_future.done():
             try:
                 path, transform, degree, iteration = self._result_future.result()
-                if (not self._result_cancel.is_set() and _current is self._result_target
-                        and _current.scene.get_node_by_uuid(_current.uuid)):
-                    name = lf.ui.tr("external_training.result_name").format(name=_current.record.get("label") or _current.record["id"])
-                    base = f"{name[:40]} · {iteration}"
-                    group, counter = base, 1
-                    while _current.scene.get_node(group):
-                        group = f"{base} ({counter})"
-                        counter += 1
-                    lf.load_gallery_scene([{"path": str(path), "name": name[:512],
-                                            "transform": transform.tolist(), "shDegree": degree}], group)
-                    self._result_load = (_current, group)
             except Exception as error:
                 if not self._result_cancel.is_set():
                     _log.warning("Saved model import failed: %s", error)
@@ -117,6 +106,26 @@ class ExternalTrainingPanel(Panel):
                         self._result_error = lf.ui.tr("external_training.result_unreadable")
                     else:
                         self._result_error = str(error)
+            else:
+                if (not self._result_cancel.is_set() and _current is self._result_target
+                        and _current.scene.get_node_by_uuid(_current.uuid)):
+                    try:
+                        if lf.ui.get_import_state().get("active"):
+                            self._result_error = lf.ui.tr("external_training.import_busy")
+                        else:
+                            name = lf.ui.tr("external_training.result_name").format(name=_current.record.get("label") or _current.record["id"])
+                            base = f"{name[:40]} · {iteration}"
+                            group, counter = base, 1
+                            while _current.scene.get_node(group):
+                                group = f"{base} ({counter})"
+                                counter += 1
+                            lf.load_gallery_scene([{"path": str(path), "name": name[:512],
+                                                    "transform": transform.tolist(), "shDegree": degree}], group)
+                            self._result_load = (_current, group)
+                    except Exception as error:
+                        _log.warning("Saved model could not be added to the scene: %s", error)
+                        self._result_error = lf.ui.tr("external_training.import_busy" if lf.ui.get_import_state().get("active")
+                                                      else "progress.import_failed_title")
             finally:
                 self._result_future = self._result_target = None
         if self._result_load:
@@ -129,6 +138,9 @@ class ExternalTrainingPanel(Panel):
                     node = target.scene.get_node_by_uuid(target.uuid)
                     if node:
                         node.set("visible", False)
+                elif state.get("error"):
+                    _log.warning("Saved model import failed: %s", state["error"])
+                    self._result_error = lf.ui.tr("progress.import_failed_title")
                 self._result_load = None
         if self._scan and self._scan.done():
             try:
@@ -278,5 +290,5 @@ class ExternalTrainingPanel(Panel):
             return path, np.asarray(transform, dtype=np.float32), result["sh_degree"], result["iteration"]
 
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trainer-discovery")
+            self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="trainer-discovery")
         self._result_future = self._executor.submit(prepare)
