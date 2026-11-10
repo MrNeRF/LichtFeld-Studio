@@ -27,6 +27,6 @@ namespace lfs::media::detail {
     };
     // Probes at most once: a fallback full probe already supplies video metadata.
     [[nodiscard]] LFS_MEDIA_API VideoStreamProbe probeVideoStream(AVFormatContext* context);
-    LFS_MEDIA_API void discardNonVideoStreams(AVFormatContext* context, int video_stream_index);
+    LFS_MEDIA_API void keepOnlyStream(AVFormatContext* context, int stream_index);
     [[nodiscard]] LFS_MEDIA_API Orientation describeDisplayMatrix(const unsigned char* data, std::size_t size);
 } // namespace lfs::media::detail

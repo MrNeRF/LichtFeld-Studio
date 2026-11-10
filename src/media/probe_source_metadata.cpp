@@ -120,7 +120,7 @@ namespace lfs::media::detail {
             return probeInvalidOptions("Timed metadata collection requires a data or subtitle stream (codec_type=" + std::to_string(parameters->codec_type) + ")");
         if (stream->time_base.num <= 0 || stream->time_base.den <= 0)
             return make_error({.code = ErrorCode::DataLoss, .domain = ErrorDomain::IO, .detail = "Timed metadata stream has no valid time base (time_base=" + std::to_string(stream->time_base.num) + "/" + std::to_string(stream->time_base.den) + ")", .detection = LFS_SOURCE_SITE_CURRENT()});
-        discardNonVideoStreams(context, index);
+        keepOnlyStream(context, index);
         const auto interrupted = [&] {
             return context->interrupt_callback.callback && context->interrupt_callback.callback(context->interrupt_callback.opaque);
         };

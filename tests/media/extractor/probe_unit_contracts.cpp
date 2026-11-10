@@ -819,10 +819,10 @@ int runProbeUnitContracts() {
     require(stream.orientation.rotate_tag_limited && !stream.orientation.clockwise_degrees &&
                 legacyQuarterTurn(stream.orientation) == 0,
             "oversized malformed rotation stays unknown without matrix fallback");
-    detail::discardNonVideoStreams(context.get(), 0);
+    detail::keepOnlyStream(context.get(), 0);
     require(audio->discard == AVDISCARD_DEFAULT && video->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL,
             "existing discard helper keeps an explicitly selected non-video stream");
-    detail::discardNonVideoStreams(context.get(), 1);
+    detail::keepOnlyStream(context.get(), 1);
     require(audio->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL && video->discard == AVDISCARD_DEFAULT, "legacy discard policy");
     require(detail::findUsableHeaderVideoStream(nullptr) == -1, "null context");
     require(detail::describeContext(nullptr).streams.empty(), "null description");
