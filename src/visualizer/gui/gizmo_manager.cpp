@@ -1513,7 +1513,7 @@ namespace lfs::vis::gui {
             return;
         if (auto result = cap::fitRoiToParent(*sm, viewer_->getRenderingManager(), *target_id, use_percentile);
             !result) {
-            LOG_WARN("Failed to fit ROI: {}", result.error());
+            LOG_WARN("Failed to fit ROI: {}", result.error().user_message());
             return;
         }
         if (ensureCropToolState())
@@ -1528,7 +1528,7 @@ namespace lfs::vis::gui {
         if (!target_id)
             return;
         if (auto result = cap::resetRoi(*sm, viewer_->getRenderingManager(), *target_id); !result) {
-            LOG_WARN("Failed to reset ROI: {}", result.error());
+            LOG_WARN("Failed to reset ROI: {}", result.error().user_message());
             return;
         }
         if (ensureCropToolState())

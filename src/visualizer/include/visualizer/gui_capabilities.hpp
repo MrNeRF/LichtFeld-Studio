@@ -253,12 +253,12 @@ namespace lfs::vis::cap {
         core::CropPolygonData data,
         const glm::mat4& local_transform);
 
-    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> fitRoiToParent(
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> fitRoiToParent(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId target_id,
         bool use_percentile);
-    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> resetRoi(
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> resetRoi(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId target_id);

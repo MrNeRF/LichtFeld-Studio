@@ -2370,17 +2370,17 @@ namespace lfs::vis::cap {
         return {};
     }
 
-    std::expected<void, std::string> fitRoiToParent(SceneManager& scene_manager,
-                                                    RenderingManager* rendering_manager,
-                                                    const core::NodeId target_id,
-                                                    const bool use_percentile) {
+    lfs::Result<void> fitRoiToParent(SceneManager& scene_manager,
+                                     RenderingManager* rendering_manager,
+                                     const core::NodeId target_id,
+                                     const bool use_percentile) {
         constexpr float CIRCUMSCRIBE_FACTOR = 1.732050808f; // sqrt(3)
 
         auto& scene = scene_manager.getScene();
         const auto* const target = scene.getNodeById(target_id);
         const auto* const roi = scene.getRegionOfInterestData(target_id);
         if (!target || !roi)
-            return std::unexpected("Invalid ROI target");
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI target");
 
         glm::vec3 min_bounds, max_bounds;
         bool bounds_valid = false;
@@ -2390,7 +2390,7 @@ namespace lfs::vis::cap {
             bounds_valid = core::compute_bounds(*target->point_cloud, min_bounds, max_bounds, 0.0f, use_percentile);
         }
         if (!bounds_valid)
-            return std::unexpected("Cannot compute bounds for node: " + target->name);
+            return crop_polygon_failure(lfs::ErrorCode::FailedPrecondition, "Cannot compute bounds for node: " + target->name);
 
         auto updated = *roi;
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
@@ -2406,7 +2406,7 @@ namespace lfs::vis::cap {
         } else {
             const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
             if (!frame)
-                return std::unexpected("The ROI polygon transform is singular");
+                return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The ROI polygon transform is singular");
 
             const glm::mat4 frame_from_parent = glm::inverse(*frame);
             glm::vec3 lo(std::numeric_limits<float>::max());
@@ -2447,7 +2447,7 @@ namespace lfs::vis::cap {
         auto history_before =
             vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
-            return std::unexpected("Invalid ROI geometry");
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI geometry");
         if (updated.enabled && updated.select_relevant_cameras)
             (void)lfs::training::select_relevant_roi_cameras(scene);
         if (rendering_manager)
@@ -2461,14 +2461,14 @@ namespace lfs::vis::cap {
         return {};
     }
 
-    std::expected<void, std::string> resetRoi(SceneManager& scene_manager,
-                                              RenderingManager* rendering_manager,
-                                              const core::NodeId target_id) {
+    lfs::Result<void> resetRoi(SceneManager& scene_manager,
+                               RenderingManager* rendering_manager,
+                               const core::NodeId target_id) {
         auto& scene = scene_manager.getScene();
         const auto* const target = scene.getNodeById(target_id);
         const auto* const roi = scene.getRegionOfInterestData(target_id);
         if (!target || !roi)
-            return std::unexpected("Invalid ROI target");
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI target");
 
         auto updated = *roi;
         updated.inverse = false;
@@ -2482,7 +2482,7 @@ namespace lfs::vis::cap {
         } else {
             const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
             if (!frame)
-                return std::unexpected("The ROI polygon transform is singular");
+                return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The ROI polygon transform is singular");
             updated.local_transform = *frame;
         }
 
@@ -2502,7 +2502,7 @@ namespace lfs::vis::cap {
         auto history_before =
             vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
-            return std::unexpected("Invalid ROI geometry");
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI geometry");
         if (updated.enabled && updated.select_relevant_cameras)
             (void)lfs::training::select_relevant_roi_cameras(scene);
         if (rendering_manager)
