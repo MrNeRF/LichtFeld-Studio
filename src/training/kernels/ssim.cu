@@ -48,6 +48,10 @@ namespace {
 #define CONV_X BLOCK_X
 #define CONV_Y SHARED_Y
 
+    // The fused backward benefits from taller tiles without changing the
+    // forward or decoupled kernels' shared-memory requirements.
+    constexpr int kFusedL1SsimBackwardBlockY = 32;
+
     constexpr float UINT8_TO_FLOAT = 1.0f / 255.0f;
 
     template <typename T>
@@ -672,7 +676,7 @@ namespace {
     // Fused L1+SSIM Backward Kernel.
     // HasSigmaPartials=false: sigma partials are identically zero (decoupled
     // appearance branch). Avoids a full-image zero_terms buffer.
-    template <typename TargetT, bool HasSigmaPartials = true, bool Accumulate = false>
+    template <typename TargetT, bool HasSigmaPartials = true, bool Accumulate = false, int BlockY = BLOCK_Y>
     __global__ void fusedL1SSIMBackwardCUDA(
         float ssim_weight,
         int H,
@@ -689,8 +693,9 @@ namespace {
         const __half* __restrict__ dm_dsigma1_sq,
         const __half* __restrict__ dm_dsigma12) {
 
+        constexpr int shared_y = BlockY + 2 * HALO;
         auto block = cg::this_thread_block();
-        const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+        const int pix_y = block.group_index().y * BlockY + block.thread_index().y;
         const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
         const int pix_id = pix_y * W + pix_x;
         const int num_pix = H * W;
@@ -698,8 +703,8 @@ namespace {
 
         const float l1_weight = 1.0f - ssim_weight;
 
-        __shared__ float sData[SHARED_Y][SHARED_X][3];
-        __shared__ float sScratch[CONV_Y][CONV_X][3];
+        __shared__ float sData[shared_y][SHARED_X][3];
+        __shared__ float sScratch[shared_y][CONV_X][3];
 
         for (int c = 0; c < CH; ++c) {
             float p1 = 0.f, p2 = 0.f;
@@ -710,16 +715,16 @@ namespace {
 
             // 1) Load + fuse multiplication
             {
-                const int start_y = block.group_index().y * BLOCK_Y;
+                const int start_y = block.group_index().y * BlockY;
                 const int start_x = block.group_index().x * BLOCK_X;
 
                 int tid = threadIdx.y * blockDim.x + threadIdx.x;
                 int warp_id = tid / 32;
                 int lane_id = tid % 32;
-                int totalThreads = BLOCK_X * BLOCK_Y;
+                int totalThreads = BLOCK_X * BlockY;
                 int num_warps = (totalThreads + 31) / 32;
 
-                for (int row = warp_id; row < SHARED_Y; row += num_warps) {
+                for (int row = warp_id; row < shared_y; row += num_warps) {
                     int gy = start_y + row - HALO;
                     for (int col = lane_id; col < SHARED_X; col += 32) {
                         int gx = start_x + col - HALO;
@@ -756,8 +761,8 @@ namespace {
                 int lx = threadIdx.x + HALO;
 
                 for (int pass = 0; pass < 2; ++pass) {
-                    int yy = ly + pass * BLOCK_Y;
-                    if (yy < CONV_Y) {
+                    int yy = ly + pass * BlockY;
+                    if (yy < shared_y) {
                         float accum0 = 0.f, accum1 = 0.f, accum2 = 0.f;
 
 #pragma unroll
@@ -2585,12 +2590,12 @@ namespace lfs::training::kernels {
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
 
-        const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
-        const dim3 block(BLOCK_X, BLOCK_Y);
+        const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + kFusedL1SsimBackwardBlockY - 1) / kFusedL1SsimBackwardBlockY, N);
+        const dim3 block(BLOCK_X, kFusedL1SsimBackwardBlockY);
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
+            fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/true, /*Accumulate=*/false, kFusedL1SsimBackwardBlockY><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.img1.ptr<float>(), img2_ptr,

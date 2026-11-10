@@ -178,6 +178,35 @@ TEST_F(FusedL1SSIMTest, BackwardMatchesReference) {
     EXPECT_LT(mean_diff, 1e-5f) << "Mean gradient difference: " << mean_diff;
 }
 
+TEST_F(FusedL1SSIMTest, BackwardMatchesReferenceAcrossTileBoundaries) {
+    for (const int height : {17, 31, 32, 33, 65}) {
+        constexpr int batch = 2, channels = 3, width = 19;
+        const TensorShape shape{batch, channels, static_cast<size_t>(height), width};
+        const auto count = batch * channels * height * width;
+        auto prediction = Tensor::linspace(0.2f, 0.7f, count, Device::CUDA).reshape(shape);
+        auto target_float = Tensor::linspace(0.8f, 0.1f, count, Device::CUDA).reshape(shape);
+        for (const bool byte_target : {false, true}) {
+            auto target = byte_target ? (target_float * 255.0f).to(DataType::UInt8) : target_float;
+            auto reference_target = byte_target ? target.to(DataType::Float32) / 255.0f : target_float;
+            for (const bool valid_padding : {false, true}) {
+                SCOPED_TRACE(::testing::Message() << "height=" << height
+                                                  << " byte_target=" << byte_target
+                                                  << " valid_padding=" << valid_padding);
+                FusedL1SSIMWorkspace workspace;
+                auto [loss, context] = fused_l1_ssim_forward(
+                    prediction, target, 0.2f, workspace, valid_padding);
+                const auto gradient = fused_l1_ssim_backward(context, workspace);
+                const auto [reference_loss, reference_gradient] = compute_reference_loss_and_grad(
+                    prediction, reference_target, 0.2f, valid_padding);
+                EXPECT_NEAR(loss.item<float>(), reference_loss, 1e-4f);
+                const auto difference = (gradient - reference_gradient).abs();
+                EXPECT_LT(difference.max().item<float>(), 1e-3f);
+                EXPECT_LT(difference.mean().item<float>(), 1e-5f);
+            }
+        }
+    }
+}
+
 // Test various SSIM weights
 TEST_F(FusedL1SSIMTest, VariousSSIMWeights) {
     const int N = 1, C = 3, H = 64, W = 64;
