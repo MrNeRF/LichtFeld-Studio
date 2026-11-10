@@ -2144,7 +2144,7 @@ namespace lfs::vis::project {
                     const auto system_time = core::file_time_to_system_clock(file_time);
                     unix_seconds =
                         std::chrono::system_clock::to_time_t(
-                            system_time);
+                            std::chrono::time_point_cast<std::chrono::system_clock::duration>(system_time));
                 }
             }
             if (unix_seconds == 0) {
