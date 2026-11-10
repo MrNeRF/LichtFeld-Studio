@@ -525,6 +525,9 @@ def set_node_visibility(name: str, visible: bool) -> None:
 def set_camera_training_enabled(name: str, enabled: bool) -> None:
     """Enable or disable a camera for training by name"""
 
+def remove_disabled_cameras(camera_group_id: int) -> int:
+    """Remove disabled direct camera children and return their count"""
+
 def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
     """
     Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
