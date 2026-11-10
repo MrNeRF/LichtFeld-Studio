@@ -2526,6 +2526,41 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
 
     m.def(
+        "remove_disabled_cameras", [](const int camera_group_id) -> size_t {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer)
+                throw std::runtime_error("Viewer not available");
+            const auto remove = [camera_group_id]() -> lfs::Result<size_t> {
+                auto* const scene_manager = lfs::python::get_scene_manager();
+                if (!scene_manager)
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Unavailable,
+                        .domain = lfs::ErrorDomain::Python,
+                        .user_message = "Scene manager not available",
+                        .detection = LFS_SOURCE_SITE_CURRENT()});
+                return scene_manager->removeDisabledCamerasWithResult(
+                    static_cast<lfs::core::NodeId>(camera_group_id));
+            };
+
+            std::optional<lfs::Result<size_t>> removal;
+            if (viewer->isOnViewerThread()) {
+                removal.emplace(remove());
+            } else {
+                nb::gil_scoped_release release;
+                const lfs::core::TaskContext context{.name = "python.remove_disabled_cameras", .domain = lfs::ErrorDomain::Python, .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
+                const auto posted = lfs::vis::post_guarded_and_wait<lfs::Result<size_t>>(
+                    *viewer, context, remove, python_viewer_shutdown_error());
+                if (!posted)
+                    throw std::runtime_error(lfs::format_for_developer(posted.error()));
+                removal.emplace(std::move(*posted));
+            }
+            if (!*removal)
+                throw std::runtime_error(lfs::format_for_developer(removal->error()));
+            return **removal;
+        },
+        nb::arg("camera_group_id"), "Remove disabled direct camera children and return their count");
+
+    m.def(
         "camera_selection_start", [](const std::string& operation, const int camera_group_id, const double percentage, const int every_n, const double overlap, const double coverage, const int cropbox_id) -> nb::dict {
             using Task = lfs::vis::gui::AsyncTaskManager;
             const auto type = [&]() -> Task::CameraSelectionOperation {
@@ -3287,6 +3322,11 @@ NB_MODULE(lichtfeld, m) {
             return capabilities;
         },
         "Return Vulkan device capabilities used to gate rendering controls");
+    m.def("toggle_side_dock", [](const std::string& side) {
+        if (side != "left" && side != "right")
+            throw nb::value_error("side must be 'left' or 'right'");
+        lfs::core::events::ui::ToggleSideDock{.side = side == "left" ? lfs::core::SideDock::Left : lfs::core::SideDock::Right}.emit(); }, nb::arg("side"), "Toggle the left or right side dock.");
+
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");

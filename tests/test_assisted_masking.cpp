@@ -71,13 +71,14 @@ namespace {
         const auto weights = lfs::preprocessing::ensure_sam2_weights(false);
         if (!weights)
             GTEST_SKIP() << "Verified SAM2.1 model is not cached";
-        const auto stamp = lfs::core::native_fs::last_write_time(*weights);
+        const auto stamp = lfs::core::native_fs::last_write_time(lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::Sam2)->path);
         int polls = 0;
-        const auto cancelled = lfs::preprocessing::ensure_sam2_weights(false, [&] { return ++polls > 2; });
+        // Pass the preparation gates, then interrupt the streamed hash.
+        const auto cancelled = lfs::preprocessing::ensure_sam2_weights(false, [&] { return ++polls > 4; });
         ASSERT_FALSE(cancelled);
         EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
-        EXPECT_GT(polls, 2);
-        EXPECT_EQ(lfs::core::native_fs::last_write_time(*weights), stamp);
+        EXPECT_GT(polls, 4);
+        EXPECT_EQ(lfs::core::native_fs::last_write_time(lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::Sam2)->path), stamp);
         EXPECT_TRUE(lfs::preprocessing::ensure_sam2_weights(false));
     }
 
@@ -227,7 +228,7 @@ namespace {
         JobRegistry jobs;
         uint64_t document_revision = 1;
         AssistedMasking service(jobs, [] { return true; }, [&] { return std::optional{std::array<uint64_t, 2>{1, document_revision}}; });
-        service.beginSequence(run, frames, directory.path, *weights);
+        service.beginSequence(run, frames, directory.path, lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::Sam2)->path);
         AssistedMaskRequest input{};
         input.run = run;
         input.image = frames[1].path;
@@ -259,7 +260,7 @@ namespace {
         ASSERT_EQ(state.phase, "ready") << state.error;
         const auto revision = service.sequenceFrames(run)[1].revision;
         ASSERT_TRUE(service.approveFrames(run, std::array{AssistedMaskApproval{1, revision, true}}));
-        service.beginSequence(run, frames, directory.path, *weights);
+        service.beginSequence(run, frames, directory.path, lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::Sam2)->path);
         EXPECT_TRUE(service.sequenceFrames(run)[1].approved);
         input.refine_request = state.request;
         input.refine_candidate = 0;
@@ -416,7 +417,7 @@ namespace {
         int devices = 0;
         if (cudaGetDeviceCount(&devices) != cudaSuccess || !devices)
             GTEST_SKIP() << "CUDA device unavailable";
-        const auto weights = lfs::preprocessing::ensure_sam2_weights(false);
+        auto weights = lfs::preprocessing::ensure_sam2_weights(false);
         if (!weights)
             GTEST_SKIP() << "SAM2.1 weights are not cached; this regression never downloads models";
         {
@@ -424,6 +425,7 @@ namespace {
             // decoder's logits or scores. Existing callers keep their full masks.
             auto model = lfs::core::nn::models::Sam2::load(*weights, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
             ASSERT_TRUE(model);
+            *weights = {}; // Loaded tensors remain owned after the archive mapping closes.
             ASSERT_TRUE(model->set_image(lfs::core::Tensor::zeros({1, 3, 64, 96}, lfs::core::Device::CUDA)));
             const std::vector<lfs::core::nn::models::Sam2PointPrompt> points{{48, 32, 1}};
             const auto full = model->predict(points, std::nullopt);
@@ -462,7 +464,7 @@ namespace {
             });
             ASSERT_TRUE(lfs::core::save_png(input.image, pixels.data(), 1792, 1664, channels, 8, 1));
         }
-        input.weights = *weights;
+        input.weights = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::Sam2)->path;
         input.revision = "repeat";
         const auto stamp = lfs::core::native_fs::last_write_time(input.image);
 #if defined(_MSC_VER)

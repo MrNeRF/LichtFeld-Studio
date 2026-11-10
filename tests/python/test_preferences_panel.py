@@ -359,6 +359,8 @@ def preferences_panel_module(monkeypatch):
             TOOL_SCALE_DISTANCE=SimpleNamespace(name="TOOL_SCALE_DISTANCE", value=94),
             PIE_MENU=SimpleNamespace(name="PIE_MENU", value=62),
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
+            TOGGLE_LEFT_DOCK=SimpleNamespace(name="TOGGLE_LEFT_DOCK", value=110),
+            TOGGLE_RIGHT_DOCK=SimpleNamespace(name="TOGGLE_RIGHT_DOCK", value=111),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
             OPEN_PREFERENCES=SimpleNamespace(name="OPEN_PREFERENCES", value=65),
             TOGGLE_MCP_SERVER=SimpleNamespace(name="TOGGLE_MCP_SERVER", value=66),
@@ -1943,3 +1945,109 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+
+
+def test_model_preferences_preserves_metadata_and_renders_native_state(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    records = {}
+    section.handle = SimpleNamespace(update_record_list=lambda key, rows: records.update({key: rows}), dirty=lambda key: None)
+    native = {"id": 0, "name": "SAM 2.1", "category_key": "masking", "path": "/cache/sam.lfw",
+              "bytes": 4096, "present": True, "busy": False, "status": "installed", "message": "verified",
+              "can_download": True, "can_verify": True, "can_remove": True}
+    snapshot = {"models": [native], "job": {"model": 0, "action": "verify"}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == module.lf.ui.tr("preferences.models.verified")
+    native.update(busy=True, present=False, bytes=0, status="in_use", message="in_use",
+                  can_download=False, can_verify=False, can_remove=False)
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert row["path"] == "/cache/sam.lfw" and row["size"]
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "verify"])
+    section._action(None, None, ["0", "remove"])
+    assert not starts
+    native.update(busy=False, status="missing", message="missing", can_download=True)
+    section.sync(force=True)
+    row = records["managed_models"][0]
+    assert not row["path"] and not row["can_open"] and not row["available"]
+    native.update(status="failed", message="failed", error="bad checksum")
+    section.sync(force=True)
+    assert records["managed_models"][0]["failed"]
+    assert records["managed_models"][0]["detail"] == "bad checksum"
+    native.update(status="working", message="downloading", error="", running=True, show_progress=True, progress=.42)
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{stage} {percent}%" if key == "gallery.status.progress" else key)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.downloading 42%"
+    native.update(message="verifying", progress=.8)
+    section.sync(force=True)
+    assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_model_preferences_closed_confirmation_does_not_remove(preferences_panel_module, monkeypatch, retained):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = object()
+    section.rows = [{"id": 0, "name": "SAM 2.1"}]
+    section._records = [{"id": "0", "can_remove": True}]
+    dialogs = []
+    starts = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: dialogs.append(args), raising=False)
+    monkeypatch.setattr(module.lf.ui, "model_cache_start", lambda *args: starts.append(args), raising=False)
+    section._action(None, None, ["0", "remove"])
+    if retained:
+        section.cancel_pending_confirmation()
+    else:
+        section.handle = None
+    title, _message, _buttons, callback = dialogs[0]
+    callback(title)
+    assert starts == []
+
+
+def test_model_preferences_recovery_clears_failure_and_cancel_matches_job(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    section.handle = SimpleNamespace(update_record_list=lambda *args: None, dirty=lambda key: None)
+    snapshot = {"models": [], "job": {"id": 7, "running": False, "error": "disk full"}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    assert section.error == "disk full"
+    assert "disk full" not in section.message
+    snapshot["job"]["error"] = "SHA-256 mismatch: " + "0123456789abcdef" * 20
+    section.sync(force=True)
+    assert section.error == snapshot["job"]["error"]
+    assert "0123456789abcdef" not in section.message
+    snapshot["job"].update(error="/cache/sam.lfw", error_code="FailedPrecondition")
+    section.sync(force=True)
+    assert section.error == module.lf.ui.tr("preferences.models.locked")
+    snapshot["job"] = {"id": 8, "running": True, "error": ""}
+    section.sync(force=True)
+    assert not section.error
+    canceled = []
+    monkeypatch.setattr(module.lf.ui, "model_cache_cancel", lambda job: canceled.append(job), raising=False)
+    section._cancel()
+    assert canceled == [8]
+
+
+def test_model_preferences_unchanged_poll_preserves_rows_and_focus(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    section = module.ModelPreferencesSection()
+    updates = []
+    dirty = []
+    section.handle = SimpleNamespace(
+        update_record_list=lambda *args: updates.append(args), dirty=dirty.append,
+    )
+    snapshot = {"models": [{"id": 0, "name": "SAM 2.1", "category_key": "masking",
+                            "path": "/cache/sam.lfw", "bytes": 4096, "present": True,
+                            "status": "installed", "message": "installed", "can_download": True,
+                            "can_verify": True, "can_remove": True, "busy": False, "error": ""}], "job": {}}
+    monkeypatch.setattr(module.lf.ui, "model_cache_snapshot", lambda: snapshot, raising=False)
+    section.sync(force=True)
+    changes = list(dirty)
+    section.sync(force=True)
+    assert len(updates) == 1
+    assert dirty == changes

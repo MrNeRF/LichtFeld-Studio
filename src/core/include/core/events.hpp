@@ -6,6 +6,7 @@
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/extracted_frame.hpp"
+#include "core/side_dock.hpp"
 #include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -346,6 +347,8 @@ namespace lfs::core {
             EVENT(SplitPositionChanged, float position;);
             EVENT(FocusTrainingPanel, );
             EVENT(ToggleUI, );
+            EVENT(ToggleSideDock, SideDock side;);
+            EVENT(RevealPanel, std::string id;);
             EVENT(ToggleFullscreen, );
             EVENT(ToggleVramHud, );
             EVENT(TogglePerfHudExpanded, );

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "core/error.hpp"
 #include "core/native_fs.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
@@ -473,7 +474,8 @@ namespace lfs::vis::gui {
                                    std::string action,
                                    const bool separator_before = false,
                                    const bool submenu = false,
-                                   const bool active = false) {
+                                   const bool active = false,
+                                   const bool disabled = false) {
             return ContextMenuItem{
                 .label = std::move(label),
                 .action = std::move(action),
@@ -481,6 +483,7 @@ namespace lfs::vis::gui {
                 .is_label = false,
                 .is_submenu_item = submenu,
                 .is_active = active,
+                .is_disabled = disabled,
             };
         }
 
@@ -3253,6 +3256,11 @@ namespace lfs::vis::gui {
                                                prefixedAction(std::format("enable_group_train:{}", node_id))));
                     items.push_back(makeAction(tr("scene.disable_all_cameras"),
                                                prefixedAction(std::format("disable_group_train:{}", node_id))));
+                    const auto counts = scene->getCameraTrainingCounts(node_id);
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::REMOVE_DISABLED_CAMERAS),
+                        prefixedAction(std::format("remove_disabled_cameras:{}", node_id)),
+                        true, false, false, counts.enabled == counts.total));
                     items.push_back(makeAction(tr("scene.select_random_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:random:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.select_every_n_cameras") + "...",
@@ -3493,6 +3501,13 @@ namespace lfs::vis::gui {
                 if (const auto result = gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}); !result)
                     gui->enqueueToast({.title = tr("scene.camera_selection"), .message = std::string(result.error().user_message())});
             }
+        } else if (kind == "remove_disabled_cameras" && parts.size() >= 2) {
+            core::NodeId group_id = core::NULL_NODE;
+            auto* removal_manager = services().sceneOrNull();
+            if (!removal_manager || !parseNodeId(parts[1], group_id))
+                return;
+            if (const auto result = removal_manager->removeDisabledCamerasWithResult(group_id); !result)
+                LOG_WARN("Failed to remove disabled cameras: {}", lfs::format_for_developer(result.error()));
         } else if (kind == "camera_selection" && parts.size() >= 3) {
             core::NodeId group_id = core::NULL_NODE;
             if (!parseNodeId(parts[2], group_id))

@@ -22,6 +22,7 @@
       </div>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
+      <button class="btn preferences-nav-item" data-class-active="show_models" data-event-click="show_models">@tr:preferences.models.title</button>
       <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
       <button class="btn preferences-nav-item" data-class-active="show_mcp" data-event-click="show_mcp">@tr:preferences.mcp</button>
       <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
@@ -34,6 +35,30 @@
         <button class="btn btn--secondary" data-if="show_gamepad_test" data-event-click="gamepad_page('controls')">@tr:preferences.back_to_gamepad</button>
       </div>
     <div class="preferences-content">
+      <div class="preferences-section" data-if="show_models">
+        <span class="preferences-page-title">@tr:preferences.models.title</span>
+        <p class="preferences-description">@tr:preferences.models.description</p>
+        <span class="preferences-description preferences-error" data-if="model_operation_error" data-attr-title="model_operation_detail">{{ model_operation_message }}</span>
+        <div class="preferences-model-card" data-for="entry : managed_models">
+          <div class="preferences-model-heading">
+            <span class="text-accent">{{ entry.name }}</span>
+            <span class="preferences-description">{{ entry.category }}</span>
+          </div>
+          <div class="preferences-model-heading">
+            <div class="preferences-model-status" data-attr-title="entry.detail"><span class="preferences-model-dot" data-class-is-available="entry.available" data-class-is-working="entry.working"></span><span data-class-preferences-error="entry.failed">{{ entry.status }}</span></div>
+            <span class="preferences-description">{{ entry.size }}</span>
+          </div>
+          <div class="preferences-model-actions">
+            <button class="btn btn--secondary" data-if="!entry.running" data-attrif-disabled="!entry.can_download" data-event-click="model_action(entry.id, 'download')">@tr:preferences.models.prepare</button>
+            <button class="btn btn--secondary" data-if="entry.running" data-attrif-disabled="entry.canceling" data-event-click="model_cancel">@tr:common.cancel</button>
+            <button class="btn btn--secondary" data-attrif-disabled="!entry.can_verify" data-event-click="model_action(entry.id, 'verify')">@tr:preferences.models.verify</button>
+            <button class="btn btn--secondary" data-attrif-disabled="!entry.can_open" data-event-click="model_action(entry.id, 'open')">@tr:preferences.models.open_folder</button>
+            <button class="btn btn--secondary" data-attrif-disabled="!entry.can_remove" data-event-click="model_action(entry.id, 'remove')">@tr:preferences.models.remove</button>
+          </div>
+          <span class="preferences-description preferences-model-path" data-if="entry.has_path">{{ entry.path }}</span>
+        </div>
+      </div>
+
       <div class="preferences-section" data-if="show_general">
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
           <span class="section-arrow text-accent" data-class-is-expanded="language_expanded">&#x25B6;</span>
