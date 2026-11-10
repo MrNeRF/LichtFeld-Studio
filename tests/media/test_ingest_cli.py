@@ -2051,10 +2051,17 @@ class IngestCLI(unittest.TestCase):
         self.assertNotEqual([p["bytes"] for p in observations[0]["packets"]], [p["bytes"] for p in observations[1]["packets"]])
         for flags in (("--timed-stream", "0"), ("--timed-stream", "99"), ("--timed-stream", "-1"),
                       ("--timed-stream", "1", "--timed-stream", "2"), ("--timed-stream",),
-                      ("--timed-max-bytes", "100"), ("--timed-stream", "1", "--timed-max-bytes", "0")):
+                      ("--timed-max-bytes", "100"), ("--timed-stream", "1", "--timed-max-bytes", "0"),
+                      ("--timed-stream", "1", "--timed-max-bytes", "1", "--timed-max-bytes", "2"),
+                      ("--timed-stream", "1", "--timed-max-records", "1", "--timed-max-records", "2")):
             with self.subTest(flags=flags):
-                self.invoke("probe", path, *flags, code=2)
-        for flag in ("--timed-max-bytes", "--timed-max-records", "--timed-max-scan-packets"):
+                refused, _ = self.invoke("probe", path, *flags, code=2)
+                if flags == ("--timed-stream", "99"):
+                    self.assertIn("index=99", refused["error"]["message"])
+                    self.assertIn("nb_streams=3", refused["error"]["message"])
+                elif flags == ("--timed-stream", "0"):
+                    self.assertIn("codec_type=0", refused["error"]["message"])
+        for flag in ("--timed-max-bytes", "--timed-max-records"):
             limited, _ = self.invoke("probe", path, flag, "1", "--timed-stream", "1", code=4)
             self.assertEqual(limited["error"]["code"], "ResourceExhausted")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
@@ -2068,6 +2075,7 @@ class IngestCLI(unittest.TestCase):
         count = struct.unpack_from(">I", original, chunks + 12)[0]
         self.assertGreaterEqual(count, 3)
         other_chunks = [offset for offset, kind in boxes if kind == b"stco"][2]
+        reference, _ = self.invoke("probe", path, "--timed-stream", "1")
         for name, table, indices in (("missing", chunks, range(count)), ("partial", chunks, [count - 2]),
                                      ("other-track", other_chunks, [0])):
             with self.subTest(case=name):
@@ -2076,9 +2084,14 @@ class IngestCLI(unittest.TestCase):
                     struct.pack_into(">I", data, table + 16 + index * 4, len(data) + 4096)
                 broken = self.root / (name + ".mp4")
                 broken.write_bytes(data)
-                result, _ = self.invoke("probe", broken, "--timed-stream", "1", code=3)
-                self.assertEqual(result["error"]["code"], "DataLoss")
-                self.assertNotIn("media", result)
+                if name == "other-track":
+                    result, _ = self.invoke("probe", broken, "--timed-stream", "1")
+                    self.assertEqual(result["media"]["timed_metadata"], reference["media"]["timed_metadata"])
+                    self.assertEqual(len(result["media"]["timed_metadata"]["packets"]), 3)
+                else:
+                    result, _ = self.invoke("probe", broken, "--timed-stream", "1", code=3)
+                    self.assertEqual(result["error"]["code"], "DataLoss")
+                    self.assertNotIn("media", result)
                 self.assertEqual(broken.read_bytes(), data)
         # Keep a declared track whose tables genuinely contain no samples.
         data = bytearray(original)

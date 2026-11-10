@@ -1160,68 +1160,25 @@ tolerance are refused. Adjacent subtitle filenames are not searched automaticall
 
 ### Explicit embedded packet observations
 
-`MediaProbe::inspect` and `MediaIngest::probe` can collect the demuxed packets of
-one explicitly selected data or subtitle track in MOV/MP4. Set
-`ProbeOptions::timed_metadata_stream` and use `ProbeDepth::Headers`. Collection
-uses the same probe input and cooperative timeout, reads to demux EOF and never
-opens a second input or feeds a video decoder. Ordinary probe, extraction and
-training do not enable this scan.
+Select one MOV/MP4 data or subtitle track to retain its demuxed packets, without
+video decoding. The probe keeps that track and discards the others before reading.
+Native callers set `ProbeOptions::timed_metadata_stream` with Headers depth.
 
 ```sh
 media-ingest probe flight.mp4 --timed-stream 2 --timeout-ms 30000
 ```
-
-The CLI selects Headers mode when `--timed-stream` is present. Native callers
-must select that depth explicitly. Video/audio tracks and nonexistent indices
-are refused; another track is never substituted. The timed mode forces the MOV
-demuxer so it cannot invoke a separate standalone subtitle parser. External SRT
-files remain the responsibility of `sourceSrtMetadata`.
-
-Python exposes the same result and shared JSON representation:
-
 ```python
-observation = lf.media.MediaIngest.probe(
-    "flight.mp4", timed_metadata_stream=2, timeout_ms=30000)
+observation = lf.media.MediaIngest.probe("flight.mp4", timed_metadata_stream=2)
 packets_json = observation.to_json()
 ```
 
-An enabled scan adds `timed_metadata` to the probe JSON. Its scope is
-`demuxed_timed_packets` and its interpretation is `not_performed`. It reports the
-stream index, codec tag, provider version, codec extradata, examined packet count
-and owned packet observations. Each packet retains PTS/DTS and time bases when
-available, known positive duration, provider position/flags, payload bytes and
-packet side data. Binary values are hexadecimal. A zero FFmpeg packet duration
-means unknown and is reported as null, not as an exact point sample. Negative
-PTS/DTS remain negative; no timestamp origin, sample rate, gap coverage or
-synchronization is inferred.
-
-These bytes are demuxer-exposed payload/configuration, not an archive of original
-MP4 boxes. Packet positions are provider-reported and are not guaranteed to be
-an original-file range for that payload. Packets remain in demux order. A corrupt
-selected packet or read error fails collection; successful EOF does not certify
-the entire container or interpret the vendor schema. Before accepting EOF, the
-probe checks FFmpeg's sample indices against the size of the same opened input,
-including indices discovered in fragments. A missing sample in another read
-track can also stop demuxing before the selected track is complete. Out-of-file sample
-ranges fail with DataLoss; a genuinely empty track remains valid. This requires
-an input with a known size. No separate MP4 box parser or declared-frame-count
-comparison is used. The returned observation
-owns its bytes and remains usable after the source file is removed.
-
-`TimedMetadataLimits` defaults to 32 MiB retained bytes, 100,000 records (selected
-packets plus their side-data blocks) and 1,000,000 packets examined across all
-tracks. Codec configuration shares the retained-byte budget. Native and Python
-callers can lower these values; the CLI exposes `--timed-max-bytes`,
-`--timed-max-records` and `--timed-max-scan-packets`. Exceeding a limit returns an
-error rather than a truncated successful observation. Provider allocations,
-unselected packet I/O and JSON expansion are not bounded by retained bytes;
-record/work quotas and the cooperative timeout are separate controls. The timeout
-is not a hard wall-clock or process-memory ceiling.
-
-The existing static source catalog deliberately refuses timed observations and
-options. This first packet consumer enables inspection of subtitle/data tracks
-without identifying unknown payloads as DJI GPS/IMU or applying them to exported
-images, training, poses or georeferencing. Schema interpretation and temporal
-association require separately verified profiles and original device samples.
-Synthetic MOV/MP4 fixtures qualify packet retention and stream selection; they
-do not qualify a DJI or GoPro device or firmware.
+The JSON `timed_metadata` object contains stream index, codec tag, provider,
+extradata and packets in demux order. Packets own PTS/DTS with rational time bases,
+positive duration (unknown is null), provider position/flags, payload and side data;
+binary values are hexadecimal. The view is raw (`demuxed_timed_packets`,
+`not_performed`). At EOF the selected stream's sample index is checked against
+input size; an empty track is valid. Defaults are 32 MiB retained bytes including
+extradata and 100,000 records (packets plus side-data blocks). Lower these with
+`TimedMetadataLimits` or `--timed-max-bytes` / `--timed-max-records`. Exhaustion,
+corrupt selected packets and read failures return errors, not partial success.
+The probe's cooperative timeout applies to collection.

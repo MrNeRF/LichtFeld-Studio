@@ -5,10 +5,17 @@
 #include <cstddef>
 struct AVFormatContext;
 struct AVStream;
+struct AVRational;
 namespace lfs::media::detail {
     // Non-owning descriptions: no reads, seeks or changes to the supplied context.
     [[nodiscard]] LFS_MEDIA_API MediaDescription describeContext(const AVFormatContext* context);
     [[nodiscard]] MetadataProviderInfo metadataProviderInfo();
+    [[nodiscard]] std::optional<Timestamp> probeTimestamp(std::int64_t, AVRational);
+    [[nodiscard]] Error probeInvalidOptions(std::string);
+    [[nodiscard]] Error probeFailure(int, const char*, bool);
+    // Reads only the chosen data/subtitle stream using the existing context.
+    [[nodiscard]] Result<TimedMetadataObservation> collectTimedMetadata(AVFormatContext*, int, const TimedMetadataLimits&);
+
     // Copies only demuxer-exposed static metadata, without reads or mutations.
     LFS_MEDIA_API void collectContextMetadata(const AVFormatContext*, MediaDescription&, const ContainerMetadataLimits& = {});
     [[nodiscard]] LFS_MEDIA_API StreamDescription describeStream(const AVStream* stream);

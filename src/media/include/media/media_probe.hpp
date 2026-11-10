@@ -118,8 +118,6 @@ namespace lfs::media {
         std::size_t bytes = 32u * 1024 * 1024;
         // Selected packets plus packet side-data blocks.
         std::size_t records = 100000;
-        // All packets examined, including unselected streams.
-        std::size_t scan_packets = 1000000;
     };
     inline constexpr TimedMetadataLimits timed_metadata_maxima{};
     struct TimedMetadataObservation {
@@ -128,7 +126,6 @@ namespace lfs::media {
         std::uint32_t codec_tag = 0;
         std::vector<std::uint8_t> extradata;
         std::vector<TimedMetadataPacket> packets;
-        std::size_t packets_examined = 0;
     };
     struct MediaDescription {
         std::string container;

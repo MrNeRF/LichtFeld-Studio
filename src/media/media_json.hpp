@@ -347,7 +347,7 @@ namespace lfs::media::json_detail {
         }
     }
     inline json timedMetadata(const TimedMetadataObservation& observation) {
-        json result{{"scope", "demuxed_timed_packets"}, {"interpretation", "not_performed"}, {"provider", metadataProvider(observation.provider)}, {"stream_index", observation.stream_index}, {"codec_tag", observation.codec_tag}, {"extradata", hexBytes(observation.extradata)}, {"packets_examined", observation.packets_examined}, {"packets", json::array()}};
+        json result{{"scope", "demuxed_timed_packets"}, {"interpretation", "not_performed"}, {"provider", metadataProvider(observation.provider)}, {"stream_index", observation.stream_index}, {"codec_tag", observation.codec_tag}, {"extradata", hexBytes(observation.extradata)}, {"packets", json::array()}};
         for (const auto& packet : observation.packets) {
             json side = json::array();
             for (const auto& block : packet.side_data)

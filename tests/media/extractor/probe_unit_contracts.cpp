@@ -493,7 +493,7 @@ namespace {
         const auto observed = MediaProbe::inspect(path, options);
         require(observed && observed->timed_metadata && observed->timed_metadata->packets.size() == 2, "explicit stream selection retains only its packets");
         const auto& timed = *observed->timed_metadata;
-        require(timed.packets_examined == 4 && timed.provider && timed.provider->name == "ffmpeg", "packet scan counts all streams and identifies its provider");
+        require(timed.provider && timed.provider->name == "ffmpeg", "packet observation identifies its provider");
         for (const auto& packet : timed.packets)
             require(packet.bytes == std::vector<std::uint8_t>(payload.begin(), payload.end()) && packet.pts && packet.dts, "raw subtitle bytes retain NUL/nonUTF8 and original clocks");
         require(timed.packets[0].pts->ticks == 0 && timed.packets[1].pts->ticks * timed.packets[1].pts->time_base.numerator * 1000 / timed.packets[1].pts->time_base.denominator == 500, "packet clocks are not replaced by a frame-rate estimate");
@@ -525,18 +525,15 @@ namespace {
         }
         require(side_blocks > 0, "fixture must actually exercise packet side data");
         options.timed_metadata_limits.records = records;
-        options.timed_metadata_limits.scan_packets = 4;
         options.timed_metadata_limits.bytes = retained;
-        require(MediaProbe::inspect(path, options).has_value(), "exact byte, record and scan limits accept the complete observation");
+        require(MediaProbe::inspect(path, options).has_value(), "exact byte and record limits accept the complete observation");
         --options.timed_metadata_limits.bytes;
         require(!MediaProbe::inspect(path, options), "one byte below aggregate metadata retention is refused");
         options.timed_metadata_limits.bytes = retained;
         --options.timed_metadata_limits.records;
         require(!MediaProbe::inspect(path, options), "side data shares the selected packet record budget");
         options.timed_metadata_limits = {};
-        options.timed_metadata_limits.scan_packets = 2;
-        require(!MediaProbe::inspect(path, options), "unselected packets count toward the scan work limit");
-        for (auto limits : {TimedMetadataLimits{.bytes = 0}, TimedMetadataLimits{.records = timed_metadata_maxima.records + 1}, TimedMetadataLimits{.scan_packets = 0}}) {
+        for (auto limits : {TimedMetadataLimits{.bytes = 0}, TimedMetadataLimits{.records = timed_metadata_maxima.records + 1}, TimedMetadataLimits{.records = 0}}) {
             options.timed_metadata_limits = limits;
             require(!MediaProbe::inspect(path, options), "invalid timed packet limits are refused");
         }
@@ -684,6 +681,9 @@ int runProbeUnitContracts() {
     require(stream.orientation.rotate_tag_limited && !stream.orientation.clockwise_degrees &&
                 legacyQuarterTurn(stream.orientation) == 0,
             "oversized malformed rotation stays unknown without matrix fallback");
+    detail::discardNonVideoStreams(context.get(), 0);
+    require(audio->discard == AVDISCARD_DEFAULT && video->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL,
+            "existing discard helper keeps an explicitly selected non-video stream");
     detail::discardNonVideoStreams(context.get(), 1);
     require(audio->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL && video->discard == AVDISCARD_DEFAULT, "legacy discard policy");
     require(detail::findUsableHeaderVideoStream(nullptr) == -1, "null context");
