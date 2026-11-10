@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "media/dji_timed_metadata.hpp"
 #include "media/media_probe.hpp"
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
@@ -345,6 +346,28 @@ namespace lfs::media::json_detail {
         case OrientationSource::DisplayMatrix: return "display_matrix";
         default: return "none";
         }
+    }
+    inline json djiAc204Metadata(const DjiAc204Metadata& metadata) {
+        json result{{"profile", "dvtm_ac204.proto"}, {"version", "2.0.1"}, {"camera_timestamp_clock", "device_raw"}, {"coordinates", "device_raw"}, {"device_units", "unspecified"}, {"samples", json::array()}};
+        const auto components = [](const auto& values) -> json {
+            if (!values)
+                return nullptr;
+            auto array = json::array();
+            for (const auto& value : *values)
+                array.push_back(optional(value));
+            return array;
+        };
+        for (const auto& sample : metadata.samples)
+            result["samples"].push_back({{"packet_index", sample.packet_index},
+                                         {"sequence", optional(sample.sequence)},
+                                         {"camera_timestamp", optional(sample.camera_timestamp)},
+                                         {"iso", optional(sample.iso)},
+                                         {"exposure_time_ratio", optional(sample.exposure_time_ratio)},
+                                         {"white_balance_cct", optional(sample.white_balance_cct)},
+                                         {"quaternion_wxyz", components(sample.quaternion_wxyz)},
+                                         {"accelerometer_xyz", components(sample.accelerometer_xyz)},
+                                         {"gps_status", optional(sample.gps_status)}});
+        return result;
     }
     inline json timedMetadata(const TimedMetadataObservation& observation) {
         json result{{"scope", "demuxed_timed_packets"}, {"interpretation", "not_performed"}, {"provider", metadataProvider(observation.provider)}, {"stream_index", observation.stream_index}, {"codec_tag", observation.codec_tag}, {"extradata", hexBytes(observation.extradata)}, {"packets", json::array()}};

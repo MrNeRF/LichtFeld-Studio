@@ -2019,6 +2019,27 @@ class IngestCLI(unittest.TestCase):
         node = ET.fromstring((output / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
         self.assertEqual(json.loads(node.text)["match"]["cue"], 0)
 
+    def test_dji_ac204_metadata_profile_and_raw_packet_preservation(self):
+        path = fixtures.dji_ac204(self.root)
+        original, modified = path.read_bytes(), path.stat().st_mtime_ns
+        raw, _ = self.invoke("probe", path, "--timed-stream", "0")
+        interpreted, _ = self.invoke("probe", path, "--timed-stream", "0", "--dji-ac204")
+        self.assertEqual(raw["media"]["timed_metadata"], interpreted["media"]["timed_metadata"])
+        samples = interpreted["media"]["dji_ac204"]["samples"]
+        self.assertEqual(len(samples), 300)
+        self.assertEqual(samples[0]["camera_timestamp"], 2000746133)
+        self.assertIsNone(samples[0]["sequence"])
+        self.assertEqual(samples[0]["iso"], 252)
+        self.assertEqual(samples[0]["exposure_time_ratio"], [1, 3111])
+        self.assertTrue(all(sample["gps_status"] == 1 for sample in samples))
+        self.assertEqual(raw["media"]["timed_metadata"]["packets"][0]["pts"]["ticks"], 0)
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, modified))
+        for flags in (("--dji-ac204",), ("--timed-stream", "0", "--dji-ac204", "--dji-ac204")):
+            self.invoke("probe", path, *flags, code=2)
+        path.write_bytes(original.replace(b"dvtm_ac204.proto", b"dvtm_XXXXX.proto"))
+        rejected, _ = self.invoke("probe", path, "--timed-stream", "0", "--dji-ac204", code=3)
+        self.assertEqual(rejected["error"]["code"], "Unsupported")
+
     def test_timed_metadata_probe_matches_demuxed_packets_and_explicit_track(self):
         path = srt_metadata_fixture.embedded(self.root, FFMPEG)
         original, modified = path.read_bytes(), path.stat().st_mtime_ns

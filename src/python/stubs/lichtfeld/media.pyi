@@ -716,6 +716,11 @@ class MediaDescription:
         Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.
         """
 
+    def dji_ac204_metadata_json(self) -> str:
+        """
+        Interpret already collected djmd packets for dvtm_ac204.proto 2.0.1. Returns device values and packet indices without inferring units, GPS fixes or clock alignment.
+        """
+
 class FrameLayout:
     @property
     def width(self) -> int: ...

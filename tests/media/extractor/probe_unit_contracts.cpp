@@ -4,10 +4,12 @@
 #include "core/path_utils.hpp"
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
+#include "media/dji_timed_metadata.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/video_player.hpp"
+#include <cmath>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
@@ -429,6 +431,103 @@ namespace {
         require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.empty(),
                 "ancillary recovery never searches past invalid next-chunk framing");
     }
+    lfs::media::TimedMetadataObservation djiPackets() {
+        lfs::media::TimedMetadataObservation observation;
+        observation.codec_tag = MKTAG('d', 'j', 'm', 'd');
+        const auto path = lfs::core::utf8_to_path(__FILE__).parent_path().parent_path() / "fixtures/dji-ac204/ac204_djmd_first300.bin";
+        std::ifstream input(path, std::ios::binary);
+        require(bool(input), "open pinned original DJI packet corpus");
+        std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+        for (std::size_t offset = 0; offset < bytes.size();) {
+            require(bytes.size() - offset >= 4, "DJI corpus length prefix");
+            const auto size = std::size_t(bytes[offset]) << 24 | std::size_t(bytes[offset + 1]) << 16 |
+                              std::size_t(bytes[offset + 2]) << 8 | bytes[offset + 3];
+            offset += 4;
+            require(size <= bytes.size() - offset, "DJI corpus packet bounds");
+            lfs::media::TimedMetadataPacket packet;
+            packet.bytes.assign(bytes.begin() + offset, bytes.begin() + offset + size);
+            observation.packets.push_back(std::move(packet));
+            offset += size;
+        }
+        return observation;
+    }
+    void djiProfileContracts() {
+        using namespace lfs::media;
+        auto observation = djiPackets();
+        require(observation.packets.size() == 300, "complete real DJI corpus");
+        const auto result = interpretDjiAc204Metadata(observation);
+        require(bool(result), result ? "" : result.error().detail());
+        require(result->samples.size() == 300, "one observation per original DJI packet");
+        const auto& first = result->samples.front();
+        require(first.packet_index == 0 && !first.sequence && first.camera_timestamp == 2000746133 && first.iso == 252.0f &&
+                    first.exposure_time_ratio == std::array<std::uint64_t, 2>{1, 3111} && first.white_balance_cct == 5219,
+                "real camera values, absent wire zero and raw clock match the independent corpus expectations");
+        require(first.quaternion_wxyz && std::abs(*(*first.quaternion_wxyz)[0] - 0.80715305f) < 1e-6f &&
+                    first.accelerometer_xyz && std::abs(*(*first.accelerometer_xyz)[0] + 1.011326f) < 1e-5f,
+                "real orientation and acceleration stay in device representation");
+        for (std::size_t i = 0; i < result->samples.size(); ++i)
+            require(result->samples[i].packet_index == i && result->samples[i].gps_status == 1,
+                    "invalid GPS status remains observed, never fabricated as coordinates");
+        const auto serialized = json_detail::djiAc204Metadata(*result);
+        require(serialized["samples"][0]["sequence"].is_null() && serialized["samples"][0]["camera_timestamp"] == 2000746133,
+                "shared interpreter JSON preserves absent values and raw timestamps");
+        auto unsupported = observation;
+        unsupported.codec_tag = MKTAG('g', 'p', 'm', 'd');
+        require(!interpretDjiAc204Metadata(unsupported), "tag alone is not guessed from payload");
+        unsupported = observation;
+        auto& declaration = unsupported.packets.front().bytes;
+        const std::string name = "dvtm_ac204.proto";
+        const auto at = std::search(declaration.begin(), declaration.end(), name.begin(), name.end());
+        require(at != declaration.end(), "editable corpus profile declaration");
+        *at = 'x';
+        require(!interpretDjiAc204Metadata(unsupported), "unsupported schema is not interpreted as AC204");
+        // Every cut is evaluated under the same bounded parser. Whole-message
+        // boundaries may remain valid, but partial length-delimited fields cannot.
+        auto broken = observation;
+        broken.packets.resize(1);
+        const auto complete = broken.packets[0].bytes;
+        for (std::size_t size = 0; size < complete.size(); ++size) {
+            broken.packets[0].bytes.assign(complete.begin(), complete.begin() + size);
+            const auto cut = interpretDjiAc204Metadata(broken);
+            if (cut)
+                require(cut->samples.size() == 1, "valid prefix remains a single bounded observation");
+        }
+        for (const auto& bytes : std::vector<std::vector<std::uint8_t>>{
+                 {0},
+                 {8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2},
+                 {10, 255, 255, 255, 255, 127},
+                 {10, 0, 10, 0},
+                 {0x1a, 2, 0x12, 4}}) {
+            broken.packets[0].bytes = bytes;
+            require(!interpretDjiAc204Metadata(broken), "malformed, duplicate and overflowing DJI messages are refused");
+        }
+        // Later packets inherit the qualified declaration, not fabricated field
+        // defaults. These hand-encoded messages exercise the wire boundary.
+        broken = observation;
+        broken.packets.resize(2);
+        for (const auto& bytes : std::vector<std::vector<std::uint8_t>>{
+                 {},
+                 {0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f},
+                 {0x1a, 6, 0x0a, 4, 0x10, 1, 0x10, 2},
+                 {0x1a, 8, 0x12, 6, 0x22, 4, 0x0a, 2, 1, 0}}) {
+            broken.packets[1].bytes = bytes;
+            require(!interpretDjiAc204Metadata(broken), "empty packets, nonfinite known scalars, duplicate clocks and zero denominators are refused");
+        }
+        broken.packets[1].bytes = {0x1a, 4, 0x12, 2, 0x4a, 0, 0x7a, 3, 0xff, 0xff, 0xff};
+        const auto unknown = interpretDjiAc204Metadata(broken);
+        require(unknown && unknown->samples[1].quaternion_wxyz && !(*unknown->samples[1].quaternion_wxyz)[0],
+                "unknown byte fields are skipped without guessing nested messages; omitted components remain absent");
+        broken = observation;
+        broken.packets.resize(timed_metadata_maxima.records + 1);
+        require(!interpretDjiAc204Metadata(broken), "caller-created observations obey packet maxima");
+        broken.packets.clear();
+        broken.packets.emplace_back().bytes.resize(timed_metadata_maxima.bytes + 1);
+        const auto over_budget = interpretDjiAc204Metadata(broken);
+        require(!over_budget && over_budget.error().code() == lfs::ErrorCode::ResourceExhausted,
+                "caller-created payloads exceeding the byte ceiling are refused before interpretation");
+        observation.packets.clear();
+        require(result->samples.front().iso == 252.0f, "interpretation owns its values after raw observation release");
+    }
     void timedPacketContracts() {
         using namespace lfs::media;
         const auto path = std::filesystem::temp_directory_path() / ("lfs-timed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
@@ -549,6 +648,22 @@ namespace {
         require(MediaIngest::sourceSrtMetadata(sidecar).has_value(), "standalone subtitles remain supported by their single existing parser");
         const auto serialized = json_detail::dump(json_detail::description(*observed));
         require(nlohmann::json::parse(serialized)["timed_metadata"]["packets"][0]["bytes"] == "0005686500ff6f", "shared JSON retains opaque binary payload exactly");
+        // Exercise DJI's meta handler and djmd sample-entry tag.
+        // Patch only this synthetic carrier; production continues through FFmpeg.
+        std::ifstream carrier_input(path, std::ios::binary);
+        std::string carrier((std::istreambuf_iterator<char>(carrier_input)), {});
+        carrier_input.close();
+        const auto tag = carrier.find("gpmd");
+        const auto entry = tag == std::string::npos ? tag : carrier.find("gpmd", tag + 4);
+        require(entry != std::string::npos && carrier.find("gpmd", entry + 4) == std::string::npos, "fixture has a handler and sample entry tag");
+        carrier.replace(tag, 4, "meta");
+        carrier.replace(entry, 4, "djmd");
+        std::ofstream(path, std::ios::binary).write(carrier.data(), static_cast<std::streamsize>(carrier.size()));
+        options.timed_metadata_stream = 2;
+        const auto dji = MediaProbe::inspect(path, options);
+        require(dji && dji->timed_metadata && dji->timed_metadata->codec_tag == MKTAG('d', 'j', 'm', 'd') &&
+                    dji->timed_metadata->packets.size() == 1 && dji->timed_metadata->packets[0].bytes == binary->timed_metadata->packets[0].bytes,
+                "DJI sample entry preserves packets through the canonical demuxer without another container reader");
         // A truncated container must not be reported as an empty successful scan.
         std::filesystem::resize_file(path, 16);
         const auto truncated = MediaProbe::inspect(path, options);
@@ -561,6 +676,7 @@ namespace {
 int runProbeUnitContracts() {
     sourceExifContracts();
     timedPacketContracts();
+    djiProfileContracts();
     using namespace lfs::media;
     const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
     require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==

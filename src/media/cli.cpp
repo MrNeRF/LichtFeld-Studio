@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--timed-max-bytes N] [--timed-max-records N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--dji-ac204] [--timed-max-bytes N] [--timed-max-records N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -197,6 +197,7 @@ namespace {
             std::filesystem::path srt_path;
             std::optional<std::int64_t> srt_offset, srt_tolerance;
             ProbeOptions probe;
+            bool dji_ac204 = false;
             std::optional<std::size_t> timed_bytes, timed_records;
             bool avif_options = false;
             bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false, exr_codec_options = false, tiff_options = false, jxl_options = false;
@@ -204,7 +205,9 @@ namespace {
                 const auto& flag = args[i];
                 auto value = [&]() -> const std::string& { if(i+1>=args.size()) throw std::invalid_argument("Missing value for "+flag); return args[++i]; };
                 if (args[1] == "probe") {
-                    if (flag == "--headers-only")
+                    if (flag == "--dji-ac204" && !dji_ac204)
+                        dji_ac204 = true;
+                    else if (flag == "--headers-only")
                         probe.depth = ProbeDepth::Headers;
                     else if (flag == "--timeout-ms")
                         probe.timeout = std::chrono::milliseconds(number<int64_t>(value()));
@@ -359,8 +362,8 @@ namespace {
                     throw std::invalid_argument("Unknown extract option: " + flag);
             }
             if (args[1] == "probe") {
-                if ((timed_bytes || timed_records) && !probe.timed_metadata_stream)
-                    throw std::invalid_argument("Timed metadata limits require --timed-stream");
+                if ((dji_ac204 || timed_bytes || timed_records) && !probe.timed_metadata_stream)
+                    throw std::invalid_argument("Timed metadata interpretation and limits require --timed-stream");
                 if (timed_bytes)
                     probe.timed_metadata_limits.bytes = *timed_bytes;
                 if (timed_records)
@@ -368,7 +371,14 @@ namespace {
                 const auto result = MediaIngest::probe(request.input, probe);
                 if (!result)
                     return failed(result.error());
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"media", json_detail::description(*result)}}.dump() << '\n';
+                auto media = json_detail::description(*result);
+                if (dji_ac204) {
+                    const auto interpreted = interpretDjiAc204Metadata(*result->timed_metadata);
+                    if (!interpreted)
+                        return failed(interpreted.error());
+                    media["dji_ac204"] = json_detail::djiAc204Metadata(*interpreted);
+                }
+                std::cout << json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}}.dump() << '\n';
                 return 0;
             }
             if (tiff_options && output.files.format != FrameFileFormat::TIFF16)

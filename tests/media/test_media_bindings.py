@@ -956,6 +956,20 @@ class MediaBindings(unittest.TestCase):
                     shutil.rmtree(normalized)
             cls.temp.cleanup()
 
+    def test_dji_ac204_metadata_owned_result_and_cli_parity(self):
+        path = fixtures.dji_ac204(self.root)
+        observed = media.MediaIngest.probe(path, timed_metadata_stream=0)
+        actual = observed.dji_ac204_metadata_json()
+        reference = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--dji-ac204"],
+                                   check=True, capture_output=True, timeout=30)
+        self.assertEqual(json.loads(actual), json.loads(reference.stdout)["media"]["dji_ac204"])
+        self.assertEqual(len(json.loads(actual)["samples"]), 300)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.probe(path, headers_only=True).dji_ac204_metadata_json()
+        path.unlink()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            self.assertTrue(all(value == actual for value in executor.map(lambda _: observed.dji_ac204_metadata_json(), range(6))))
+
     def test_timed_metadata_probe_cli_parity_and_owned_result(self):
         path = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
         self.assertNotIn("timed_metadata", json.loads(media.MediaIngest.probe(path, headers_only=True).to_json()))

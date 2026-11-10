@@ -1182,3 +1182,52 @@ extradata and 100,000 records (packets plus side-data blocks). Lower these with
 `TimedMetadataLimits` or `--timed-max-bytes` / `--timed-max-records`. Exhaustion,
 corrupt selected packets and read failures return errors, not partial success.
 The probe's cooperative timeout applies to collection.
+
+### Explicit DJI AC204 packet interpretation
+
+For `djmd` tracks declaring `dvtm_ac204.proto` version `2.0.1`, the native
+`interpretDjiAc204Metadata(const TimedMetadataObservation&)` function in
+`media/dji_timed_metadata.hpp` interprets packets already collected by the probe.
+It performs no additional file access or container parsing. Callers keep the raw
+observation, including unknown fields, provider identity and original PTS/DTS.
+
+```sh
+media-ingest probe action.mp4 --timed-stream 0 --dji-ac204
+```
+
+The selected index must identify the actual metadata track. The optional flag
+adds `media.dji_ac204` to the shared probe JSON. Without the flag, the probe
+continues to report raw packets only. Python uses the same native interpreter
+and serializer on an existing description:
+
+```python
+observed = lfs.media.MediaIngest.probe("action.mp4", timed_metadata_stream=0)
+print(observed.dji_ac204_metadata_json())
+```
+
+Each interpreted sample contains its original packet index and the present
+sequence, raw camera timestamp, ISO, exposure ratio, white-balance CCT,
+quaternion components in w/x/y/z order, accelerometer components in x/y/z order,
+and raw GPS status. Missing fields and omitted proto3 components remain null;
+no zero, identity rotation or valid GPS fix is manufactured. Coordinates, device
+units and the relation between camera ticks and packet timestamps remain
+unspecified. These observations do not establish UTC, a geographic position,
+an application coordinate transform or association to extracted frames.
+
+The profile is exercised against 300 original Osmo Action 5 Pro packet payloads
+from the pinned MIT-licensed corpus in `tests/media/fixtures/dji-ac204`. The
+fixture README records provenance and limitations. The carrier used by the
+integration tests has synthetic timing; it is not the original camera MP4.
+This corpus identifies the profile and selected wire fields, rather than
+qualifying every DJI model or the older DJI whitepaper schema. All its recorded
+GPS statuses are 1, so it supplies no positive GPS-fix qualification.
+
+Interpretation requires the profile declaration in the first packet and
+consistent subsequent declarations. Wrong wire types, duplicate supported
+singular fields, truncation, overflowing varints, nonfinite supported scalars,
+empty packets and invalid exposure ratios fail without a partial result.
+Unknown fields are skipped by their wire lengths, not guessed as nested
+messages. Protobuf groups and other profile versions are unsupported. The same
+100,000-packet and 32 MiB payload maxima bound caller-constructed observations;
+collection retains its own limits and timeout. No new dependency or codec is
+needed for this in-memory interpretation.
