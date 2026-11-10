@@ -312,6 +312,46 @@ namespace {
         }
     }
 
+    TEST_F(ViewportDepthLayoutTest, DesktopPinFitsNarrowTitleAndStaysHiddenForInternalPanels) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/floating_window.rml";
+        std::ifstream input(path);
+        ASSERT_TRUE(input.is_open());
+        std::string markup((std::istreambuf_iterator<char>(input)), {});
+        markup.replace(0, markup.find('>') + 1, "<rml>");
+        markup.replace(markup.find("</template>"), 11, "</rml>");
+        markup.replace(markup.find("{{panel_label}}"), 15, "A very long translated title for a narrow desktop window");
+        real_context_ = Rml::CreateContext("viewport_depth_layout_real", {320, 200}, &renderer_);
+        ASSERT_NE(real_context_, nullptr);
+        auto* doc = real_context_->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
+        ASSERT_NE(doc, nullptr);
+        doc->SetClass("window-controls", true);
+        doc->Show();
+        auto* pin = doc->GetElementById("pin-btn");
+        ASSERT_NE(pin, nullptr);
+        for (float scale : {1.0f, 1.5f, 2.0f}) {
+            real_context_->SetDensityIndependentPixelRatio(scale);
+            real_context_->SetDimensions({int(320 * scale), int(200 * scale)});
+            pin->SetClass("available", false);
+            real_context_->Update();
+            EXPECT_EQ(pin->GetDisplay(), Rml::Style::Display::None);
+            pin->SetClass("available", true);
+            real_context_->Update();
+            auto* title = doc->GetElementById("title-text");
+            float right = title->GetAbsoluteOffset(Rml::BoxArea::Border).x + title->GetBox().GetSize(Rml::BoxArea::Border).x;
+            for (const char* id : {"pin-btn", "minimize-btn", "maximize-btn", "close-btn"}) {
+                auto* control = doc->GetElementById(id);
+                ASSERT_NE(control, nullptr);
+                EXPECT_TRUE(control->IsVisible());
+                const auto pos = control->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(pos.x, right);
+                EXPECT_LE(pos.x + size.x, 320 * scale);
+                EXPECT_GT(size.x, 0);
+                right = pos.x + size.x;
+            }
+        }
+    }
+
     TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {
         const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/viewport_overlay.rml";
         std::ifstream input(path);

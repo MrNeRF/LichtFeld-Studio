@@ -2986,6 +2986,7 @@
     "hide_ui": "Oberfläche ausblenden",
     "minimize": "Minimieren",
     "restore_window": "Fenster wiederherstellen",
+    "always_on_top": "Immer im Vordergrund",
     "maximize_window": "Fenster maximieren",
     "rad_lod": "RAD LOD",
     "status": "Status",

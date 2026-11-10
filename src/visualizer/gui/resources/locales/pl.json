@@ -2986,6 +2986,7 @@
     "hide_ui": "Ukryj interfejs",
     "minimize": "Minimalizuj",
     "restore_window": "Przywróć okno",
+    "always_on_top": "Zawsze na wierzchu",
     "maximize_window": "Maksymalizuj okno",
     "rad_lod": "RAD LOD",
     "status": "Stan",

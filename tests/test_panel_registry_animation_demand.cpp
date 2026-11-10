@@ -1428,3 +1428,19 @@ TEST_F(PanelRegistryAnimationDemandTest, ParentingAMinimizedWindowRestoresItsCon
     ASSERT_TRUE(registry.set_panel_parent("test.child_window", ""));
     EXPECT_EQ(registry.floating_window_state("test.child_window"), FloatingWindowState::Normal);
 }
+
+TEST_F(PanelRegistryAnimationDemandTest, DesktopPinChoiceSurvivesClosingButNotUnregisteringPanel) {
+    using namespace lfs::vis::gui;
+    auto& registry = PanelRegistry::instance();
+    registerRecordingPanel("test.pinned");
+    EXPECT_FALSE(registry.native_window_pinned("test.pinned"));
+    ASSERT_TRUE(registry.set_native_window_pinned("test.pinned", true));
+    registry.set_panel_enabled("test.pinned", false);
+    EXPECT_TRUE(registry.native_window_pinned("test.pinned"));
+    registry.set_panel_enabled("test.pinned", true);
+    EXPECT_TRUE(registry.native_window_pinned("test.pinned"));
+    registry.unregister_panel("test.pinned");
+    EXPECT_FALSE(registry.set_native_window_pinned("test.pinned", true));
+    registerRecordingPanel("test.pinned");
+    EXPECT_FALSE(registry.native_window_pinned("test.pinned"));
+}

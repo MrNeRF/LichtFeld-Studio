@@ -318,6 +318,37 @@ namespace lfs::vis::gui {
         return it == native_windows_.end() ? nullptr : it->second->graphics.get();
     }
 
+    bool RmlUIManager::applyNativeWindowPin(SDL_Window* window, const bool pinned) {
+        if (bool(SDL_GetWindowFlags(window) & SDL_WINDOW_ALWAYS_ON_TOP) == pinned)
+            return true;
+        if (SDL_SetWindowAlwaysOnTop(window, pinned))
+            return true;
+        LOG_WARN("Failed to change external panel pin state: {}", SDL_GetError());
+        return false;
+    }
+
+    std::optional<bool> RmlUIManager::nativeWindowPinned(const std::string_view panel_id) const {
+        for (const auto& [context, native] : native_windows_) {
+            const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
+            if (panel_id == id && !panel_id.empty())
+                return PanelRegistry::instance().native_window_pinned(panel_id);
+        }
+        return std::nullopt;
+    }
+
+    bool RmlUIManager::setNativeWindowPinned(const std::string_view panel_id, const bool pinned) {
+        for (const auto& [context, native] : native_windows_) {
+            const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
+            if (panel_id != id || panel_id.empty())
+                continue;
+            const bool effective = pinned && !native_pins_suspended_;
+            if (!applyNativeWindowPin(native->window, effective))
+                return false;
+            return PanelRegistry::instance().set_native_window_pinned(panel_id, pinned);
+        }
+        return false;
+    }
+
     void RmlUIManager::minimizeNativeWindow(Rml::Context* context) {
         if (const auto it = native_windows_.find(context); it != native_windows_.end()) {
             auto* window = it->second->window;
@@ -358,7 +389,8 @@ namespace lfs::vis::gui {
             if (SDL_GetWindowFlags(native.window) & SDL_WINDOW_MINIMIZED)
                 SDL_RestoreWindow(native.window);
             SDL_ShowWindow(native.window);
-            SDL_RaiseWindow(native.window);
+            syncNativeWindowPins();
+            SDL_RaiseWindow(native_pins_suspended_ ? window_ : native.window);
             native.visible = true;
         }
     }
@@ -1152,6 +1184,7 @@ namespace lfs::vis::gui {
         }
         context_windows_.erase(context);
         native_windows_.erase(context);
+        syncNativeWindowPins();
     }
 
     void RmlUIManager::activateTheme(const std::string& theme_id) {
@@ -1531,8 +1564,31 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlUIManager::syncNativeWindowPins() {
+        InputCallbackScope callback_scope(dispatching_input_);
+        const bool suspended = std::ranges::any_of(input_handlers_, [this](const auto& entry) {
+            const auto& [context, handler] = entry;
+            return handler.enabled && handler.application_modal && handler.exclusive && (handler.persistent || handler.frame == input_frame_) &&
+                   contextWindow(context) == window_;
+        });
+        const bool entering_modal = suspended && !native_pins_suspended_;
+        native_pins_suspended_ = suspended;
+        for (const auto& [context, native] : native_windows_) {
+            const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
+            const bool effective = !suspended && PanelRegistry::instance().native_window_pinned(id);
+            applyNativeWindowPin(native->window, effective);
+            if (entering_modal)
+                cancelPointerInput(const_cast<Rml::Context*>(context));
+        }
+        if (entering_modal && !native_windows_.empty() && window_) {
+            if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED)
+                SDL_RestoreWindow(window_);
+            SDL_RaiseWindow(window_);
+        }
+    }
+
     void RmlUIManager::activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
-                                     const bool exclusive, std::vector<SDL_Scancode> shortcuts) {
+                                     const bool exclusive, std::vector<SDL_Scancode> shortcuts, const bool application_modal) {
         if (!context_ids_.contains(context))
             context_ids_[context] = next_context_id_++;
         if (!input_handlers_.contains(context))
@@ -1544,11 +1600,13 @@ namespace lfs::vis::gui {
         registered.callback = std::make_shared<std::function<void(const PanelInputState&)>>(std::move(handler));
         registered.frame = input_frame_;
         registered.exclusive = exclusive;
+        registered.application_modal = application_modal && exclusive;
         registered.shortcuts = std::move(shortcuts);
         registered.persistent = true;
         registered.enabled = true;
         if (exclusive)
             focusContext(context, true);
+        syncNativeWindowPins();
         syncTextInput();
         popup_state_dirty_ = true;
     }
@@ -1564,6 +1622,7 @@ namespace lfs::vis::gui {
             it->second.enabled = keep_pointer_input;
             it->second.persistent = false;
             it->second.exclusive = false;
+            it->second.application_modal = false;
             it->second.shortcuts.clear();
         }
         if (auto* live = contextById(id))
@@ -1572,6 +1631,7 @@ namespace lfs::vis::gui {
         context = contextById(id);
         if (context && keyboard_context_ == context)
             keyboard_context_ = nullptr;
+        syncNativeWindowPins();
         syncTextInput();
         popup_state_dirty_ = true;
     }
@@ -1644,6 +1704,10 @@ namespace lfs::vis::gui {
         const bool text = event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_TEXT_EDITING;
         const bool pointer = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
                              event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_WHEEL;
+        if (native_pins_suspended_ && dispatch_window != window_ && (key || text || pointer)) {
+            result.consumed = true;
+            return result;
+        }
         const bool popup_state_may_change =
             key || text || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
             event.type == SDL_EVENT_MOUSE_WHEEL;

@@ -2986,6 +2986,7 @@
     "hide_ui": "Interface verbergen",
     "minimize": "Minimaliseren",
     "restore_window": "Venster herstellen",
+    "always_on_top": "Altijd op voorgrond",
     "maximize_window": "Venster maximaliseren",
     "rad_lod": "RAD LOD",
     "status": "Status",

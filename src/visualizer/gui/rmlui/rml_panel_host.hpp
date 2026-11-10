@@ -131,6 +131,7 @@ namespace lfs::vis::gui {
         };
         WindowControlListener window_control_listener_{this};
         Rml::Element* minimize_button_ = nullptr;
+        Rml::Element* pin_button_ = nullptr;
         Rml::Element* maximize_button_ = nullptr;
         // Last render request, not an independent window-state owner.
         std::optional<FloatingWindowState> presentation_;

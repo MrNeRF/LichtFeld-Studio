@@ -2463,6 +2463,21 @@ apply_registered_chrome:
         return min_delay;
     }
 
+    bool PanelRegistry::native_window_pinned(const std::string_view id) const {
+        std::lock_guard lock(mutex_);
+        const auto panel = std::ranges::find(panels_, id, &PanelInfo::id);
+        return panel != panels_.end() && panel->native_window_pinned;
+    }
+
+    bool PanelRegistry::set_native_window_pinned(const std::string_view id, const bool pinned) {
+        std::lock_guard lock(mutex_);
+        const auto panel = std::ranges::find(panels_, id, &PanelInfo::id);
+        if (panel == panels_.end())
+            return false;
+        panel->native_window_pinned = pinned;
+        return true;
+    }
+
     bool PanelRegistry::set_panel_label(const std::string& id, const std::string& new_label) {
         std::lock_guard lock(mutex_);
         for (auto& p : panels_) {

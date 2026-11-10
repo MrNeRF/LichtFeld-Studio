@@ -115,6 +115,12 @@ namespace lfs::vis {
             manager().keyboard_context_ = context;
             manager().native_windows_enabled_ = external_enabled;
         }
+        void mapContextWindow(Rml::Context* context, SDL_Window* window) {
+            manager().context_windows_[context] = window;
+        }
+        bool applyPin(SDL_Window* window, bool pinned) {
+            return manager().applyNativeWindowPin(window, pinned);
+        }
         void attachInputHost(gui::RmlPanelHost& host, int width, int height, const char* markup) {
             // Input uses the real host and null geometry renderer, without a GPU frame.
             manager().vulkan_render_interface_ = &input_renderer_;
@@ -242,6 +248,66 @@ namespace lfs::vis {
     };
 } // namespace lfs::vis
 namespace lfs::vis {
+    TEST_F(SidebarInputDispatchTest, DesktopPinChangesOnlyTopmostState) {
+        const std::string_view driver = SDL_GetCurrentVideoDriver();
+        if (driver == "dummy" || driver == "offscreen")
+            GTEST_SKIP() << "Desktop window stacking requires a window-system video driver";
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+            SDL_CreateWindow("Pin state regression", 200, 100, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE),
+            SDL_DestroyWindow);
+        ASSERT_NE(window, nullptr);
+        const auto flags = SDL_GetWindowFlags(window.get());
+        ASSERT_TRUE(applyPin(window.get(), true));
+        EXPECT_NE(SDL_GetWindowFlags(window.get()) & SDL_WINDOW_ALWAYS_ON_TOP, 0);
+        EXPECT_EQ(SDL_GetWindowFlags(window.get()) & ~SDL_WINDOW_ALWAYS_ON_TOP, flags);
+        ASSERT_TRUE(applyPin(window.get(), true));
+        ASSERT_TRUE(applyPin(window.get(), false));
+        EXPECT_EQ(SDL_GetWindowFlags(window.get()), flags);
+        int width = 0, height = 0;
+        ASSERT_TRUE(SDL_GetWindowSize(window.get(), &width, &height));
+        EXPECT_EQ(width, 200);
+        EXPECT_EQ(height, 100);
+    }
+
+    TEST_F(SidebarInputDispatchTest, MainExclusiveInputBlocksDesktopPanelUntilDismissed) {
+        auto* external_window = SDL_CreateWindow("Modal input regression", 200, 100, SDL_WINDOW_HIDDEN);
+        ASSERT_NE(external_window, nullptr);
+        auto* external_context = manager().createContext("external-modal-input", 200, 100);
+        ASSERT_NE(external_context, nullptr);
+        mapContextWindow(external_context, external_window);
+        int external_keys = 0;
+        manager().activateInput(external_context, [&external_keys](const gui::PanelInputState& input) { external_keys += static_cast<int>(input.input_events.size()); }, false);
+        setKeyboardContext(external_context, true);
+        SDL_Event event{};
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.windowID = SDL_GetWindowID(external_window);
+        event.key.scancode = SDL_SCANCODE_A;
+        manager().dispatchInputEvent(event);
+        EXPECT_GT(external_keys, 0);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {});
+        setKeyboardContext(external_context, true);
+        const int before_popup = external_keys;
+        manager().dispatchInputEvent(event);
+        EXPECT_GT(external_keys, before_popup);
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        const int before = external_keys;
+        EXPECT_TRUE(manager().dispatchInputEvent(event).consumed);
+        EXPECT_EQ(external_keys, before);
+        manager().deactivateInput(context_);
+        setKeyboardContext(external_context, true);
+        manager().dispatchInputEvent(event);
+        EXPECT_GT(external_keys, before);
+        manager().destroyContext("external-modal-input");
+        SDL_DestroyWindow(external_window);
+    }
+
+    TEST_F(SidebarInputDispatchTest, InternalPanelsCannotBePinned) {
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(manager().nativeWindowPinned("unknown").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("unknown", true));
+    }
+
     TEST_F(SidebarInputDispatchTest, GamepadDiscoveryLifetimeFollowsVisibleDiagnostics) {
         window_->setInputController(nullptr);
         EXPECT_FALSE(window_->gamepads().snapshot().available);

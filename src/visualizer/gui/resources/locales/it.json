@@ -2999,6 +2999,7 @@
     "hide_ui": "Nascondi interfaccia",
     "minimize": "Riduci a icona",
     "restore_window": "Ripristina finestra",
+    "always_on_top": "Sempre in primo piano",
     "maximize_window": "Massimizza finestra",
     "rad_lod": "RAD LOD",
     "status": "Stato",

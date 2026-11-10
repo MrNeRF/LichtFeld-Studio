@@ -136,6 +136,8 @@ namespace lfs::vis::gui {
         void showNativeWindow(Rml::Context* context);
         void minimizeNativeWindow(Rml::Context* context);
         void toggleNativeWindowMaximized(Rml::Context* context);
+        [[nodiscard]] LFS_VIS_API std::optional<bool> nativeWindowPinned(std::string_view panel_id) const;
+        LFS_VIS_API bool setNativeWindowPinned(std::string_view panel_id, bool pinned);
         void renderNativeWindows();
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
@@ -171,8 +173,9 @@ namespace lfs::vis::gui {
                 return false;
             return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker), std::move(interceptor));
         }
+        // Application modals also block desktop panels and suspend their pins until deactivation.
         LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
-                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {});
+                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {}, bool application_modal = false);
         LFS_VIS_API void deactivateInput(Rml::Context* context, bool keep_pointer_input = false);
         struct InputDispatchResult {
             bool consumed = false;
@@ -249,6 +252,9 @@ namespace lfs::vis::gui {
         std::unordered_map<const Rml::Context*, SDL_Window*> context_windows_;
         SDL_Window* render_window_ = nullptr;
         bool native_windows_enabled_ = false;
+        bool native_pins_suspended_ = false;
+        LFS_VIS_API static bool applyNativeWindowPin(SDL_Window* window, bool pinned);
+        void syncNativeWindowPins();
         bool launch_safe_mode_ = false;
         std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
         std::function<std::unique_ptr<VulkanContext>()> create_native_graphics_ = [] { return std::make_unique<VulkanContext>(); };
@@ -312,6 +318,7 @@ namespace lfs::vis::gui {
             std::vector<SDL_Scancode> shortcuts;
             uint64_t frame = 0;
             bool exclusive = false;
+            bool application_modal = false;
             bool enabled = true;
             bool persistent = false;
         };

@@ -426,6 +426,16 @@ def get_panel_names(space: PanelSpace = PanelSpace.FLOATING) -> list[str]:
 def set_panel_enabled(panel_id: str, enabled: bool) -> None:
     """Enable or disable a panel by id"""
 
+def get_panel_always_on_top(panel_id: str) -> bool | None:
+    """
+    Get the session pin choice, or None if the panel has no desktop window.
+    """
+
+def set_panel_always_on_top(panel_id: str, enabled: bool) -> bool:
+    """
+    Pin a desktop panel above other windows for this session. Return whether the change succeeded.
+    """
+
 def save_startup_sidebar() -> bool:
     """
     Save the right sidebar as a startup default; saved .licht workspaces take precedence.

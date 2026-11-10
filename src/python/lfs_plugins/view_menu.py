@@ -133,6 +133,19 @@ class ViewMenu:
                 )
             )
 
+        pinned_windows = []
+        for panel_id in lf.ui.get_panel_names():
+            pinned = lf.ui.get_panel_always_on_top(panel_id)
+            if pinned is None:
+                continue
+            panel = lf.ui.get_panel(panel_id)
+            if panel is not None:
+                pinned_windows.append(menu_toggle(
+                    panel.label,
+                    lambda panel_id=panel_id, pinned=pinned: lf.ui.set_panel_always_on_top(panel_id, not pinned),
+                    pinned,
+                ))
+
         vr = lf.ui.get_vr_state()
         return [
             menu_action(tr("menu.view.home_view"), lf.go_home,
@@ -173,6 +186,7 @@ class ViewMenu:
                 lf.ui.is_panel_enabled("lfs.logging"),
             ),
             menu_separator(),
+            *([menu_submenu(tr("ui.always_on_top"), pinned_windows)] if pinned_windows else []),
             menu_submenu(tr("preferences.appearance"), [
                 menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
                 menu_submenu(tr("menu.view.ui_scale"), scale_items),
