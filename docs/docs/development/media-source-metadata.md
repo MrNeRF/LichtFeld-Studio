@@ -1201,7 +1201,9 @@ continues to report raw packets only. Python uses the same native interpreter
 and serializer on an existing description:
 
 ```python
-observed = lfs.media.MediaIngest.probe("action.mp4", timed_metadata_stream=0)
+import lichtfeld as lf
+
+observed = lf.media.MediaIngest.probe("action.mp4", timed_metadata_stream=0)
 print(observed.dji_ac204_metadata_json())
 ```
 

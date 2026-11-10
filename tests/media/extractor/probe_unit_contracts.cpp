@@ -18,6 +18,7 @@ extern "C" {
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
@@ -487,37 +488,48 @@ namespace {
         require(at != declaration.end(), "editable corpus profile declaration");
         *at = 'x';
         require(!interpretDjiAc204Metadata(unsupported), "unsupported schema is not interpreted as AC204");
-        // Every cut is evaluated under the same bounded parser. Whole-message
-        // boundaries may remain valid, but partial length-delimited fields cannot.
         auto broken = observation;
-        broken.packets.resize(1);
-        const auto complete = broken.packets[0].bytes;
-        for (std::size_t size = 0; size < complete.size(); ++size) {
-            broken.packets[0].bytes.assign(complete.begin(), complete.begin() + size);
-            const auto cut = interpretDjiAc204Metadata(broken);
-            if (cut)
-                require(cut->samples.size() == 1, "valid prefix remains a single bounded observation");
-        }
-        for (const auto& bytes : std::vector<std::vector<std::uint8_t>>{
-                 {0},
-                 {8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2},
-                 {10, 255, 255, 255, 255, 127},
-                 {10, 0, 10, 0},
-                 {0x1a, 2, 0x12, 4}}) {
-            broken.packets[0].bytes = bytes;
-            require(!interpretDjiAc204Metadata(broken), "malformed, duplicate and overflowing DJI messages are refused");
-        }
-        // Later packets inherit the qualified declaration, not fabricated field
-        // defaults. These hand-encoded messages exercise the wire boundary.
-        broken = observation;
         broken.packets.resize(2);
-        for (const auto& bytes : std::vector<std::vector<std::uint8_t>>{
-                 {},
-                 {0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f},
-                 {0x1a, 6, 0x0a, 4, 0x10, 1, 0x10, 2},
-                 {0x1a, 8, 0x12, 6, 0x22, 4, 0x0a, 2, 1, 0}}) {
+        const auto reject = [&](const std::vector<std::uint8_t>& bytes, lfs::ErrorCode code, std::string_view detail) {
             broken.packets[1].bytes = bytes;
-            require(!interpretDjiAc204Metadata(broken), "empty packets, nonfinite known scalars, duplicate clocks and zero denominators are refused");
+            const auto refused = interpretDjiAc204Metadata(broken);
+            require(!refused && refused.error().code() == code && refused.error().detail().find(detail) != std::string_view::npos,
+                    "malformed packet reaches the intended diagnostic after a qualified first packet");
+        };
+        // A complete nested timestamp is valid. Every nonempty proper prefix
+        // cuts a tag, length or payload inside its enclosing length-delimited field.
+        const std::vector<std::uint8_t> timestamp{0x1a, 4, 0x0a, 2, 0x10, 1};
+        broken.packets[1].bytes = timestamp;
+        const auto complete = interpretDjiAc204Metadata(broken);
+        require(complete && complete->samples[1].camera_timestamp == 1, "complete timestamp control is accepted");
+        reject({}, lfs::ErrorCode::DataLoss, "Empty DJI packet");
+        for (std::size_t size = 1; size < timestamp.size(); ++size)
+            reject(std::vector<std::uint8_t>(timestamp.begin(), timestamp.begin() + size), lfs::ErrorCode::DataLoss, "Truncated");
+        reject({0}, lfs::ErrorCode::DataLoss, "Invalid DJI protobuf field number");
+        reject({0x1a, 13, 0x0a, 11, 0x10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2},
+               lfs::ErrorCode::DataLoss, "Overflowing DJI protobuf varint");
+        reject({10, 255, 255, 255, 255, 127}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
+        reject({10, 0, 10, 0}, lfs::ErrorCode::DataLoss, "Duplicate supported DJI field");
+        reject({10, 4, 10, 0, 10, 0}, lfs::ErrorCode::DataLoss, "Duplicate supported DJI field");
+        reject({0x1a, 2, 0x12, 4}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
+        reject({0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f}, lfs::ErrorCode::DataLoss, "Nonfinite DJI scalar");
+        reject({0x1a, 6, 0x0a, 4, 0x10, 1, 0x10, 2}, lfs::ErrorCode::DataLoss, "Duplicate supported DJI field");
+        reject({0x1a, 8, 0x12, 6, 0x22, 4, 0x0a, 2, 1, 0}, lfs::ErrorCode::DataLoss, "nonzero denominator");
+        reject({0x1a, 9, 0x12, 7, 0x22, 5, 0x0a, 3, 1, 2, 3}, lfs::ErrorCode::DataLoss, "Too many DJI exposure operands");
+        reject({0x1a, 6, 0x12, 4, 0x1a, 2, 8, 1}, lfs::ErrorCode::DataLoss, "Wrong wire type");
+        reject({0x0b}, lfs::ErrorCode::Unsupported, "groups are unsupported");
+        broken.packets[1].bytes = {0x1a, 13, 0x0a, 11, 0x10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1};
+        const auto maximum = interpretDjiAc204Metadata(broken);
+        require(maximum && maximum->samples[1].camera_timestamp == std::numeric_limits<std::uint64_t>::max(),
+                "ten-byte uint64 maximum is accepted without losing bits");
+        broken.packets[1].bytes = observation.packets[0].bytes;
+        require(bool(interpretDjiAc204Metadata(broken)), "consistent later declaration is accepted");
+        for (const std::string_view text : {"dvtm_ac204.proto", "2.0.1"}) {
+            auto changed = observation.packets[0].bytes;
+            const auto declaration_at = std::search(changed.begin(), changed.end(), text.begin(), text.end());
+            require(declaration_at != changed.end(), "editable subsequent declaration");
+            *declaration_at = 'x';
+            reject(changed, lfs::ErrorCode::Unsupported, "consistent subsequent declarations");
         }
         broken.packets[1].bytes = {0x1a, 4, 0x12, 2, 0x4a, 0, 0x7a, 3, 0xff, 0xff, 0xff};
         const auto unknown = interpretDjiAc204Metadata(broken);

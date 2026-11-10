@@ -963,7 +963,11 @@ class MediaBindings(unittest.TestCase):
         reference = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--dji-ac204"],
                                    check=True, capture_output=True, timeout=30)
         self.assertEqual(json.loads(actual), json.loads(reference.stdout)["media"]["dji_ac204"])
-        self.assertEqual(len(json.loads(actual)["samples"]), 300)
+        samples = json.loads(actual)["samples"]
+        self.assertEqual(len(samples), 300)
+        for key, bits in (("quaternion_wxyz", (0x3f4ea195, 0xbbee4b74, 0xbf1668d2, 0x3d699071)),
+                          ("accelerometer_xyz", (0xbf817321, 0x3d3de3ce, 0xbe5b6470))):
+            self.assertEqual(tuple(struct.unpack("<I", struct.pack("<f", value))[0] for value in samples[0][key]), bits)
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.probe(path, headers_only=True).dji_ac204_metadata_json()
         path.unlink()
