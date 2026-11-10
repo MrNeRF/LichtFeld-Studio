@@ -3088,7 +3088,8 @@
     "viewer_work_failed": "Viewer work failed",
     "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
     "no_splat_node_named": "No splat node named '{}'",
-    "training_session_not_ready": "The training session is not ready to resume."
+    "training_session_not_ready": "The training session is not ready to resume.",
+    "restart_seed_unavailable": "This training session cannot restart because no restart seed is available. Use Reload Dataset instead."
   },
   "align": {
     "preview": "Preview alignment",

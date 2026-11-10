@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "查看器操作失败",
     "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
     "no_splat_node_named": "没有名为 '{}' 的 splat 节点",
-    "training_session_not_ready": "训练会话尚未准备好恢复。"
+    "training_session_not_ready": "训练会话尚未准备好恢复。",
+    "restart_seed_unavailable": "由于没有可用的重启种子，此训练会话无法重新开始。请改用重新加载数据集。"
   },
   "align": {
     "preview": "预览对齐",

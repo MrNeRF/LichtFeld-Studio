@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "Zadanie przeglądarki nie powiodło się",
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'",
-    "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia."
+    "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia.",
+    "restart_seed_unavailable": "Tej sesji treningowej nie można uruchomić ponownie, ponieważ nie ma dostępnego stanu początkowego. Zamiast tego użyj Wczytaj ponownie zbiór danych."
   },
   "align": {
     "preview": "Podgląd wyrównania",

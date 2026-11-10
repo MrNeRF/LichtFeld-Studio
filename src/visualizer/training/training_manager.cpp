@@ -955,7 +955,7 @@ namespace lfs::vis {
         if (!isFinished())
             return std::unexpected("Training must finish before it can restart");
         if (!scene_ || !trainer_ || !restart_seed_)
-            return std::unexpected("This training session has no restart seed; use Reset Training instead");
+            return std::unexpected(LOC("runtime.restart_seed_unavailable"));
         const auto params = trainer_->getParams();
         if (restart_seed_->size() == 0)
             return std::unexpected("The restart seed is empty");

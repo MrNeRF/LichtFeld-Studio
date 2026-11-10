@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "Viewer-Aufgabe fehlgeschlagen",
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'",
-    "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden."
+    "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden.",
+    "restart_seed_unavailable": "Diese Trainingssitzung kann nicht neu gestartet werden, weil kein Neustart-Ausgangszustand verfügbar ist. Verwenden Sie stattdessen Datensatz neu laden."
   },
   "align": {
     "preview": "Ausrichtung vorschauen",

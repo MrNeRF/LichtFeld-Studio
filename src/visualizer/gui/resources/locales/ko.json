@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "뷰어 작업에 실패했습니다",
     "colmap_min_track_length": "min-track-length는 --init과 함께 사용할 수 없습니다. 초기화에서 '{}'를 사용하므로 COLMAP 희소 점 필터링이 적용되지 않습니다",
     "no_splat_node_named": "'{}'이라는 이름의 스플랫 노드가 없습니다",
-    "training_session_not_ready": "학습 세션을 아직 재개할 수 없습니다."
+    "training_session_not_ready": "학습 세션을 아직 재개할 수 없습니다.",
+    "restart_seed_unavailable": "재시작 시드가 없어 이 학습 세션을 다시 시작할 수 없습니다. 대신 데이터 세트 다시 불러오기를 사용하세요."
   },
   "align": {
     "preview": "정렬 미리보기",

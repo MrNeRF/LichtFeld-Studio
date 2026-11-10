@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "Viewer-taak mislukt",
     "colmap_min_track_length": "min-track-length kan niet met --init worden gebruikt; COLMAP-sparsepuntfiltering wordt niet toegepast omdat de initialisatie '{}' gebruikt",
     "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'",
-    "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
+    "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten.",
+    "restart_seed_unavailable": "Deze trainingssessie kan niet opnieuw worden gestart omdat er geen herstartpunt beschikbaar is. Gebruik in plaats daarvan Dataset opnieuw laden."
   },
   "align": {
     "preview": "Uitlijning vooraf bekijken",

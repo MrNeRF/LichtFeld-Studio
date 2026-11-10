@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "El trabajo del visor falló",
     "colmap_min_track_length": "min-track-length no se puede usar con --init; no se aplicará el filtrado de puntos dispersos de COLMAP porque la inicialización usa '{}'",
     "no_splat_node_named": "No hay ningún nodo splat llamado '{}'",
-    "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse."
+    "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse.",
+    "restart_seed_unavailable": "Esta sesión de entrenamiento no puede reiniciarse porque no hay una semilla de reinicio disponible. Use Recargar conjunto de datos en su lugar."
   },
   "align": {
     "preview": "Vista previa de alineación",

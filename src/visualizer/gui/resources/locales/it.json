@@ -3089,7 +3089,8 @@
     "viewer_work_failed": "Operazione del visualizzatore non riuscita",
     "colmap_min_track_length": "min-track-length non può essere usato con --init; il filtraggio dei punti sparsi COLMAP non verrà applicato perché l’inizializzazione usa '{}'",
     "no_splat_node_named": "Nessun nodo splat denominato '{}'",
-    "training_session_not_ready": "La sessione di training non è pronta per essere ripresa."
+    "training_session_not_ready": "La sessione di training non è pronta per essere ripresa.",
+    "restart_seed_unavailable": "Questa sessione di training non può riavviarsi perché non è disponibile un punto di partenza per il riavvio. Usa invece Ricarica set di dati."
   },
   "align": {
     "preview": "Anteprima allineamento",

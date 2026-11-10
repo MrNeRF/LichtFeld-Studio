@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "ビューアーの処理に失敗しました",
     "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
     "no_splat_node_named": "'{}' という名前のスプラットノードがありません",
-    "training_session_not_ready": "トレーニングセッションはまだ再開できません。"
+    "training_session_not_ready": "トレーニングセッションはまだ再開できません。",
+    "restart_seed_unavailable": "再スタート用の初期状態がないため、このトレーニングセッションは再スタートできません。代わりに「データセットを再読み込み」を使用してください。"
   },
   "align": {
     "preview": "位置合わせをプレビュー",

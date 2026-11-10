@@ -3076,7 +3076,8 @@
     "viewer_work_failed": "Échec d’une opération du visualiseur",
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
     "no_splat_node_named": "Aucun nœud splat nommé '{}'",
-    "training_session_not_ready": "La session d’entraînement n’est pas prête à reprendre."
+    "training_session_not_ready": "La session d’entraînement n’est pas prête à reprendre.",
+    "restart_seed_unavailable": "Cette session d’entraînement ne peut pas redémarrer car aucune graine de redémarrage n’est disponible. Utilisez plutôt Recharger le jeu de données."
   },
   "align": {
     "preview": "Aperçu de l’alignement",

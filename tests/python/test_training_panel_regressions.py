@@ -1834,6 +1834,9 @@ def test_reload_dataset_control_is_ready_only(training_panel_module):
     runtime = training_panel_module.RuntimeState
 
     panel._bind_visibility(model, lambda: _ParamsStub(), lambda: _DatasetStub())
+    previous_has_trainer = runtime.has_trainer.value
+    previous_trainer_state = runtime.trainer_state.value
+    previous_iteration = runtime.iteration.value
     try:
         runtime.has_trainer.value = True
         runtime.trainer_state.value = "ready"
@@ -1844,9 +1847,9 @@ def test_reload_dataset_control_is_ready_only(training_panel_module):
         runtime.trainer_state.value = "paused"
         assert model.bindings["show_reload_dataset"][0]() is False
     finally:
-        runtime.has_trainer._fallback = False
-        runtime.training_state._fallback = "idle"
-        runtime.iteration._fallback = 0
+        runtime.has_trainer.value = previous_has_trainer
+        runtime.trainer_state.value = previous_trainer_state
+        runtime.iteration.value = previous_iteration
 
 
 def test_reload_dataset_controls_exclude_paused_state():
