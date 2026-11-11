@@ -309,19 +309,10 @@ namespace lfs::io {
             }
         }
 
-        __global__ void prepare_half_sh_kernel(const float4* sh, const float* centroids, half* points, half* palette, int n, int k) {
-            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-            const int row = static_cast<int>(i / 48), d = static_cast<int>(i % 48);
-            const int np = (n + 127) / 128 * 128, kp = (k + 31) / 32 * 32;
-            if (row < np) {
-                float v = 0;
-                if (row < n && d < 45) {
-                    const auto slot = sh[shAt_device(row, d / 4, 12)];
-                    v = reinterpret_cast<const float*>(&slot)[d % 4];
-                }
-                points[i] = __float2half_rn(v);
-            }
-            if (row < kp)
+        __global__ void prepare_half_palette_kernel(const float* centroids, half* palette, int k) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            const int row = i / 48, d = i % 48;
+            if (row < (k + 31) / 32 * 32)
                 palette[i] = __float2half_rn(row < k && d < 45 ? centroids[row * 45 + d] : 0);
         }
 
@@ -330,7 +321,7 @@ namespace lfs::io {
         __global__ void assign_sh3_screened_kernel(
             const float4* __restrict__ shN, const float* __restrict__ centroids,
             const float* __restrict__ centroid_norms, int* __restrict__ labels,
-            const int n, const int k, const half* half_points, const half* half_centroids, bool have_labels) {
+            const int n, const int k, const half* half_centroids, bool have_labels) {
             constexpr int P = 128, C = 32, D = 48;
             __shared__ float points[P][49];
             // Four lanes consume each row; padding avoids eight-way bank
@@ -380,10 +371,16 @@ namespace lfs::io {
             }
             __syncthreads();
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+            // The point tile is staged as half in the score buffer, which is free until the first store.
+            half* half_points = reinterpret_cast<half*>(&approx[0][0]);
+            for (int i = tid; i < P * D; i += 512)
+                half_points[i] = __float2half_rn(points[i / D][i % D]);
+            __syncthreads();
             const int warp = tid / 32;
             nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> a[3];
             for (int d = 0; d < D; d += 16)
-                nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + static_cast<size_t>(start + (warp / 2) * 16) * D + d, D);
+                nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + (warp / 2) * 16 * D + d, D);
+            __syncthreads();
 #endif
             for (int base = 0; base < k; base += C) {
                 if (tid < C)
@@ -934,14 +931,13 @@ namespace lfs::io {
         if (fast) {
             // Half products screen distant candidates only. Possible winners
             // retain the ordinary FP32 dot-product order and lowest-index tie.
-            const size_t np = (n + 127) / 128 * 128, kp = (k + 31) / 32 * 32;
-            auto half_storage = Tensor::empty({(np + kp) * 24}, Device::CUDA, DataType::Float32);
-            auto* half_points = reinterpret_cast<half*>(half_storage.ptr<float>());
-            auto* half_centroids = half_points + np * 48;
-            prepare_half_sh_kernel<<<(std::max(np, kp) * 48 + 255) / 256, 256>>>(sh, centroids.ptr<float>(), half_points, half_centroids, n, k);
-            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.prepare_half_sh");
+            const int kp = (k + 31) / 32 * 32;
+            auto half_storage = Tensor::empty({static_cast<size_t>(kp) * 24}, Device::CUDA, DataType::Float32);
+            auto* half_centroids = reinterpret_cast<half*>(half_storage.ptr<float>());
+            prepare_half_palette_kernel<<<(kp * 48 + 255) / 256, 256>>>(centroids.ptr<float>(), half_centroids, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.prepare_half_palette");
             assign_sh3_screened_kernel<<<(n + 127) / 128, 512>>>(
-                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k, half_points, half_centroids, have_labels);
+                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k, half_centroids, have_labels);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_sh3_labels");
         } else {
             assign_nearest_swizzled_bruteforce_kernel<45><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
