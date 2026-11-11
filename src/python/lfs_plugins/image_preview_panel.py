@@ -116,6 +116,7 @@ class ImagePreviewPanel(Panel):
         self._sam_worker_busy = False
         self._sam_markers_rml = None
         self._sam_selection_options = None
+        self._sam_direction_options = None
         self._sam_syncing_selection = False
         self._mask_inverted = False
         self._metadata = PreviewMetadata()
@@ -250,6 +251,7 @@ class ImagePreviewPanel(Panel):
         self._default_reset.mount(doc)
         self._sam_markers_rml = None
         self._sam_selection_options = None
+        self._sam_direction_options = None
         self._sam_semantic_ui_state = None
         self._layout_show_info = None
         self._layout_show_filmstrip = None
@@ -2599,8 +2601,11 @@ class ImagePreviewPanel(Panel):
             direction = doc.get_element_by_id("sam-track-direction")
             options = "".join(f'<option value="{value}">{escape(lf.ui.tr(_sam_key(value)))}</option>'
                               for value in ("both", "forward", "reverse"))
-            if direction.get_inner_rml() != options:
+            # RmlUI select options are not exposed by get_inner_rml(). Rebuilding
+            # them on every refresh emits change events and keeps the UI awake.
+            if self._sam_direction_options != options:
                 direction.set_inner_rml(options)
+                self._sam_direction_options = options
             if direction.get_attribute("value", "") != self._sam_track_direction:
                 direction.set_attribute("value", self._sam_track_direction)
             self._set_disabled(direction, busy)

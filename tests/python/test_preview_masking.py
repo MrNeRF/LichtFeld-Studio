@@ -665,11 +665,17 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._sam_progress = (0, 0, 1)
 
     class Control(Element):
+        option_updates = 0
+
         def get_attribute(self, name, default):
             return self.attributes.get(name, default)
 
         def get_inner_rml(self):
-            return getattr(self, "inner_rml", "")
+            return ""  # RmlUI selects store their options outside inner RML.
+
+        def set_inner_rml(self, value):
+            self.option_updates += 1
+            super().set_inner_rml(value)
 
         def set_class(self, name, enabled):
             self.attributes[name] = enabled
@@ -682,6 +688,11 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._show_help = True
     controls["sam-hint"].set_text("image_preview.sam_tracking_hint")
     panel._update_sam_sequence(doc, False)
+    direction = controls["sam-track-direction"]
+    panel._sam_track_direction = "reverse"
+    panel._update_sam_sequence(doc, False)
+    assert direction.option_updates == 1
+    assert direction.get_attribute("value", "") == "reverse"
     assert controls["sam-hint"].text == "image_preview.sam_tracking_hint"
     last = controls["sam-track-last"]
     assert last.get_attribute("value", "") == "7"
@@ -740,6 +751,12 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._update_sam_sequence(doc, False)
     assert panel._sam_track_last == 5
     assert last.get_attribute("value", "") == "6"
+    assert direction.option_updates == 1
+    translate = module.lf.ui.tr
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translate(key) + " translated")
+    panel._update_sam_sequence(doc, False)
+    assert direction.option_updates == 2
+    assert direction.get_attribute("value", "") == "reverse"
 
 
 def test_retaining_another_candidate_preserves_its_native_refinement_identity(tracked_sequence, monkeypatch):
