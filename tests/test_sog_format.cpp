@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -919,6 +920,12 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
             }
         const double mse = squared_error / static_cast<double>(n * dims);
         EXPECT_LE(mse, double(sigma) * sigma) << "e-means left a mode unresolved";
+
+        // Fixed seed and order-independent accumulation: a rerun is bit-identical.
+        const auto [centroids_again, labels_again] = emeans_sh_swizzled(points, int(n), sh_coeffs, k, 10);
+        const auto centroids_again_cpu = centroids_again.cpu(), labels_again_cpu = labels_again.cpu();
+        EXPECT_EQ(std::memcmp(centroids_cpu.ptr<float>(), centroids_again_cpu.ptr<float>(), palette * dims * sizeof(float)), 0);
+        EXPECT_TRUE(std::equal(label, label + n, labels_again_cpu.ptr<int>()));
     }
 }
 

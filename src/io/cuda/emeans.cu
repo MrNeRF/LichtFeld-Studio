@@ -85,6 +85,27 @@ namespace lfs::io {
             return float4_component(point_slots[dim / 4u], dim % 4u);
         }
 
+        // Centroid sums are 64-bit fixed point: integer atomics are order-independent,
+        // so a fixed seed reproduces the palette bit for bit. The clamp keeps up to
+        // INT_MAX terms below 2^63.
+        using FixedSum = unsigned long long;
+        constexpr float FIXED_SUM_SCALE = 1048576.0f;
+        constexpr float FIXED_SUM_INV_SCALE = 1.0f / FIXED_SUM_SCALE;
+        constexpr float FIXED_SUM_LIMIT = 2048.0f;
+
+        __device__ __forceinline__ void fixed_sum_add(FixedSum* sum, const float v) {
+            const float clamped = fminf(fmaxf(v, -FIXED_SUM_LIMIT), FIXED_SUM_LIMIT);
+            atomicAdd(sum, static_cast<FixedSum>(__float2ll_rn(clamped * FIXED_SUM_SCALE)));
+        }
+
+        __device__ __forceinline__ float fixed_sum_value(const FixedSum sum) {
+            return __ll2float_rn(static_cast<long long>(sum)) * FIXED_SUM_INV_SCALE;
+        }
+
+        FixedSum* fixed_sums(Tensor& sums) {
+            return reinterpret_cast<FixedSum*>(sums.ptr<int64_t>());
+        }
+
         template <int N_DIMS>
         __global__ void gather_centroids_kernel(
             const float* __restrict__ data,
@@ -547,7 +568,7 @@ namespace lfs::io {
         __global__ void accumulate_centroids_kernel(
             const float* __restrict__ data,
             const int* __restrict__ labels,
-            float* __restrict__ centroid_sums,
+            FixedSum* __restrict__ centroid_sums,
             int* __restrict__ counts,
             const int n_points) {
             const int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -557,7 +578,7 @@ namespace lfs::io {
             const int label = labels[tid];
 
             for (int d = 0; d < N_DIMS; ++d) {
-                atomicAdd(&centroid_sums[label * N_DIMS + d], data[tid * N_DIMS + d]);
+                fixed_sum_add(&centroid_sums[label * N_DIMS + d], data[tid * N_DIMS + d]);
             }
             atomicAdd(&counts[label], 1);
         }
@@ -566,7 +587,7 @@ namespace lfs::io {
         __global__ void accumulate_swizzled_centroids_kernel(
             const float4* __restrict__ shN,
             const int* __restrict__ labels,
-            float* __restrict__ centroid_sums,
+            FixedSum* __restrict__ centroid_sums,
             int* __restrict__ counts,
             const int n_points) {
             const int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -583,8 +604,8 @@ namespace lfs::io {
             }
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
-                atomicAdd(&centroid_sums[label * N_DIMS + d],
-                          read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
+                fixed_sum_add(&centroid_sums[label * N_DIMS + d],
+                              read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
             }
             atomicAdd(&counts[label], 1);
         }
@@ -592,7 +613,7 @@ namespace lfs::io {
         template <int N_DIMS>
         __global__ void finalize_centroids_kernel(
             float* __restrict__ centroids,
-            const float* __restrict__ centroid_sums,
+            const FixedSum* __restrict__ centroid_sums,
             const int* __restrict__ counts,
             const float* __restrict__ data,
             const int k,
@@ -606,7 +627,7 @@ namespace lfs::io {
 
             if (count > 0) {
                 for (int d = 0; d < N_DIMS; ++d) {
-                    centroids[cid * N_DIMS + d] = centroid_sums[cid * N_DIMS + d] / count;
+                    centroids[cid * N_DIMS + d] = fixed_sum_value(centroid_sums[cid * N_DIMS + d]) / count;
                 }
             } else {
                 unsigned int rng = seed ^ (cid * 1664525u + 1013904223u);
@@ -950,6 +971,7 @@ namespace lfs::io {
         constexpr float EMEANS_INITIAL_COUNT = 1e-10f;
         constexpr unsigned long long EMEANS_EMPTY_KEY = ~0ull;
         constexpr int EMEANS_IVF_MIN_K = 4096;
+        constexpr std::uint32_t EMEANS_SEED = 2611; // fixed so identical inputs export the same palette
 
         struct EMeansSchedule {
             int batch_size = 0;
@@ -1190,7 +1212,7 @@ namespace lfs::io {
             const int* __restrict__ batch_labels,
             const int* __restrict__ batch_order,
             int* __restrict__ source_labels,
-            float* __restrict__ sums,
+            FixedSum* __restrict__ sums,
             int* __restrict__ counts,
             const int n_points,
             const int k) {
@@ -1218,8 +1240,8 @@ namespace lfs::io {
             }
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
-                atomicAdd(&sums[static_cast<long long>(label) * N_DIMS + d],
-                          read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
+                fixed_sum_add(&sums[static_cast<long long>(label) * N_DIMS + d],
+                              read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
             }
             atomicAdd(&counts[label], 1);
         }
@@ -1237,9 +1259,9 @@ namespace lfs::io {
             float* __restrict__ centroids,
             float* __restrict__ norms,
             float* __restrict__ ema_counts,
-            float* __restrict__ sums,
+            FixedSum* __restrict__ sums,
             int* __restrict__ counts,
-            float* __restrict__ epoch_sums,
+            FixedSum* __restrict__ epoch_sums,
             int* __restrict__ epoch_counts,
             const int k,
             const float alpha) {
@@ -1265,13 +1287,13 @@ namespace lfs::io {
 #pragma unroll
             for (int d = lane; d < N_DIMS; d += G) {
                 const long long idx = static_cast<long long>(c) * N_DIMS + d;
-                const float s = sums[idx];
-                const float v = fmaf(decayed, centroids[idx], alpha * s) * inv_updated;
+                const FixedSum raw = sums[idx];
+                const float v = fmaf(decayed, centroids[idx], alpha * fixed_sum_value(raw)) * inv_updated;
                 centroids[idx] = v;
                 norm = fmaf(v, v, norm);
                 if (epoch_sums)
-                    epoch_sums[idx] += s;
-                sums[idx] = 0.0f;
+                    epoch_sums[idx] += raw;
+                sums[idx] = 0;
             }
 #pragma unroll
             for (int offset = G / 2; offset > 0; offset >>= 1)
@@ -1323,7 +1345,7 @@ namespace lfs::io {
         template <int N_DIMS>
         __global__ void emeans_mean_kernel(
             float* __restrict__ centroids,
-            const float* __restrict__ sums,
+            const FixedSum* __restrict__ sums,
             const int* __restrict__ counts,
             const int k) {
             const int c = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1492,7 +1514,7 @@ namespace lfs::io {
                 super_centroids = Tensor::zeros({S, static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Float32);
                 super_norms = Tensor::zeros({S}, Device::CUDA, DataType::Float32);
                 super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-                super_sums = Tensor::zeros({S, static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Float32);
+                super_sums = Tensor::zeros({S, static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Int64);
                 super_counts = Tensor::zeros({S}, Device::CUDA, DataType::Int32);
                 super_offsets = Tensor::zeros({S + 1}, Device::CUDA, DataType::Int32);
                 super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
@@ -1526,10 +1548,10 @@ namespace lfs::io {
                     super_sums.zero_();
                     super_counts.zero_();
                     accumulate_centroids_kernel<N_DIMS><<<(k + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
-                        d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                        d_centroids, super_membership.ptr<int>(), fixed_sums(super_sums), super_counts.ptr<int>(), k);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.accumulate_supers");
                     finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
-                        super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
+                        super_centroids.ptr<float>(), fixed_sums(super_sums), super_counts.ptr<int>(),
                         d_centroids, NUM_SUPER_CLUSTERS, k, seed + static_cast<unsigned int>(iter) * 12345u);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.finalize_supers");
                 }
@@ -1645,9 +1667,9 @@ namespace lfs::io {
                                            Device::CUDA, DataType::Float32);
             auto norms = Tensor::empty({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
             auto ema_counts = Tensor::empty({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
-            auto sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Float32);
+            auto sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Int64);
             auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            auto epoch_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Float32);
+            auto epoch_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)}, Device::CUDA, DataType::Int64);
             auto epoch_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             auto labels = Tensor::empty({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             LFS_CUDA_CHECK(cudaMemset(labels.ptr<int>(), 0xff, static_cast<size_t>(n) * sizeof(int)));
@@ -1658,8 +1680,7 @@ namespace lfs::io {
             auto* d_ema_counts = ema_counts.ptr<float>();
             auto* d_best_keys = reinterpret_cast<unsigned long long*>(best_keys.ptr<int64_t>());
 
-            std::random_device rd;
-            std::mt19937 rng(rd());
+            std::mt19937 rng(EMEANS_SEED);
             const std::uint32_t shuffle_seed = rng();
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -1765,7 +1786,7 @@ namespace lfs::io {
                         ivf->assign(d_batch, d_centroids, d_norms, batch_labels.ptr<int>(), B, k);
                         emeans_accumulate_kernel<N_DIMS, false><<<grid_b, BLOCK_SIZE>>>(
                             d_batch, nullptr, batch_labels.ptr<int>(), d_batch_order, d_source_labels,
-                            sums.ptr<float>(), counts.ptr<int>(), B, k);
+                            fixed_sums(sums), counts.ptr<int>(), B, k);
                     } else {
                         LFS_CUDA_CHECK(cudaMemsetAsync(d_best_keys, 0xff, static_cast<size_t>(B) * sizeof(unsigned long long)));
                         emeans_assign_split_kernel<N_DIMS><<<dim3(point_blocks, splits), BLOCK_SIZE>>>(
@@ -1773,13 +1794,13 @@ namespace lfs::io {
                         LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_split");
                         emeans_accumulate_kernel<N_DIMS, true><<<grid_b, BLOCK_SIZE>>>(
                             d_batch, d_best_keys, nullptr, d_batch_order, d_source_labels,
-                            sums.ptr<float>(), counts.ptr<int>(), B, k);
+                            fixed_sums(sums), counts.ptr<int>(), B, k);
                     }
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.accumulate");
 
                     emeans_update_kernel<N_DIMS><<<update_blocks, BLOCK_SIZE>>>(
-                        d_centroids, d_norms, d_ema_counts, sums.ptr<float>(), counts.ptr<int>(),
-                        last_epoch ? epoch_sums.ptr<float>() : nullptr,
+                        d_centroids, d_norms, d_ema_counts, fixed_sums(sums), counts.ptr<int>(),
+                        last_epoch ? fixed_sums(epoch_sums) : nullptr,
                         last_epoch ? epoch_counts.ptr<int>() : nullptr, k, alpha);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.update");
 
@@ -1791,7 +1812,7 @@ namespace lfs::io {
             // Last-epoch-mean finalization, then one exact full assignment and
             // refit, so the palette is the mean of each label's members.
             emeans_mean_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                d_centroids, epoch_sums.ptr<float>(), epoch_counts.ptr<int>(), k);
+                d_centroids, fixed_sums(epoch_sums), epoch_counts.ptr<int>(), k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.last_epoch_mean");
             compute_centroid_norms_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(d_centroids, d_norms, k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.compute_centroid_norms");
@@ -1806,9 +1827,9 @@ namespace lfs::io {
             sums.zero_();
             counts.zero_();
             accumulate_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                d_shN, labels.ptr<int>(), sums.ptr<float>(), counts.ptr<int>(), n);
+                d_shN, labels.ptr<int>(), fixed_sums(sums), counts.ptr<int>(), n);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.final_accumulate");
-            emeans_mean_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(d_centroids, sums.ptr<float>(), counts.ptr<int>(), k);
+            emeans_mean_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(d_centroids, fixed_sums(sums), counts.ptr<int>(), k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.final_refit");
             LFS_CUDA_AWAIT(ticket, cudaDeviceSynchronize(), "io.emeans.train_sync");
 
