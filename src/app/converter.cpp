@@ -137,6 +137,7 @@ namespace lfs::app {
             case param::OutputFormat::SSOG:
                 ssog.output_path = output;
                 ssog.kmeans_iterations = sog_iterations;
+                ssog.emeans_epochs = sog_emeans_epochs;
                 ssog.provenance = provenance;
                 ssog.progress_callback = progress;
                 return lfs::io::save_ssog(splat, ssog);
@@ -147,7 +148,7 @@ namespace lfs::app {
             case param::OutputFormat::GLB:
                 return lfs::io::save_spz(splat, {.output_path = output, .progress_callback = progress, .provenance = provenance, .glb = true});
             case param::OutputFormat::HTML:
-                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
+                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance, .emeans_epochs = sog_emeans_epochs});
             case param::OutputFormat::USD:
             case param::OutputFormat::USDA:
             case param::OutputFormat::USDC:

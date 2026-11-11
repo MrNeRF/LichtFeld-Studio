@@ -1383,10 +1383,13 @@ namespace lfs::python {
         m.def(
             "save_sog",
             [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, bool use_gpu,
-               nb::object progress, bool include_provenance) {
+               nb::object progress, bool include_provenance, int emeans_epochs) {
+                if (emeans_epochs < 1)
+                    throw nb::value_error("emeans_epochs must be at least 1");
                 io::SogSaveOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
+                options.emeans_epochs = emeans_epochs;
                 options.use_gpu = use_gpu;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
@@ -1407,15 +1410,18 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
-            nb::arg("include_provenance") = true,
+            nb::arg("include_provenance") = true, nb::arg("emeans_epochs") = 10,
             "Save splat data as SOG compressed file. "
+            "kmeans_iterations sets the 1D codebook quantization passes; emeans_epochs sets the SH palette e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
             "save_ssog",
             [](const PySplatData& data, const LogicalPath& path, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent,
                int chunk_min_k, int kmeans_iterations, bool use_gpu,
-               nb::object progress, bool include_provenance) {
+               nb::object progress, bool include_provenance, int emeans_epochs) {
+                if (emeans_epochs < 1)
+                    throw nb::value_error("emeans_epochs must be at least 1");
                 io::SsogSaveOptions options;
                 options.output_path = path;
                 options.lod_levels = lod_levels;
@@ -1424,6 +1430,7 @@ namespace lfs::python {
                 options.chunk_extent = chunk_extent;
                 options.chunk_min_k = chunk_min_k;
                 options.kmeans_iterations = kmeans_iterations;
+                options.emeans_epochs = emeans_epochs;
                 options.use_gpu = use_gpu;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
@@ -1445,8 +1452,9 @@ namespace lfs::python {
             nb::arg("splat"), nb::arg("path"), nb::arg("lod_levels") = 4, nb::arg("lod_ratio") = 0.5f,
             nb::arg("chunk_count_k") = 512, nb::arg("chunk_extent") = 16.0f, nb::arg("chunk_min_k") = 8, nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
-            nb::arg("include_provenance") = true,
+            nb::arg("include_provenance") = true, nb::arg("emeans_epochs") = 10,
             "Save splat data as a PlayCanvas multi-LOD SSOG (.ssog, lod-meta.json). "
+            "kmeans_iterations sets the 1D codebook quantization passes; emeans_epochs sets the SH palette e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
@@ -1514,10 +1522,13 @@ namespace lfs::python {
         m.def(
             "export_html",
             [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, nb::object progress,
-               bool include_provenance, nb::object background_color) {
+               bool include_provenance, nb::object background_color, int emeans_epochs) {
+                if (emeans_epochs < 1)
+                    throw nb::value_error("emeans_epochs must be at least 1");
                 io::HtmlExportOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
+                options.emeans_epochs = emeans_epochs;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
                 if (background_color && !background_color.is_none()) {
@@ -1560,7 +1571,9 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
             nb::arg("include_provenance") = true, nb::arg("background_color") = nb::none(),
+            nb::arg("emeans_epochs") = 10,
             "Export splat data as self-contained HTML viewer. "
+            "kmeans_iterations sets the 1D codebook quantization passes; emeans_epochs sets the SH palette e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def("is_ssog_path", &io::is_ssog_path, nb::arg("path"),

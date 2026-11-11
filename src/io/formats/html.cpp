@@ -313,7 +313,8 @@ namespace lfs::io {
             .progress_callback = [&](float p, const std::string& stage) {
                 return report_export_progress(options.progress_callback, p * 0.5f, stage);
             },
-            .provenance = options.provenance};
+            .provenance = options.provenance,
+            .emeans_epochs = options.emeans_epochs};
 
         if (auto result = save_sog(splat_data, sog_options); !result) {
             // Propagate the SOG error with context

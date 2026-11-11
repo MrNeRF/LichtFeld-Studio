@@ -1644,6 +1644,11 @@ namespace lfs::io {
             }
         }
 
+        if (options_in.emeans_epochs < 1) {
+            return make_error(ErrorCode::INVALID_DATASET, "SOG e-means epochs must be at least 1",
+                              options_in.output_path);
+        }
+
         SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
