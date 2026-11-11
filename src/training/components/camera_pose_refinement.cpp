@@ -224,8 +224,8 @@ namespace lfs::training {
 
     lfs::Status CameraPoseRefinement::write_table(const std::filesystem::path& path) const {
         const auto state = offsets_.download();
-        std::ofstream out(path, std::ios::binary);
-        if (!out)
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(path, std::ios::out | std::ios::binary, out))
             return lfs::Status::failure(pose_error(lfs::ErrorCode::PermissionDenied,
                                                    std::format("cannot write '{}'", lfs::core::path_to_utf8(path)),
                                                    LFS_SOURCE_SITE_CURRENT()));
