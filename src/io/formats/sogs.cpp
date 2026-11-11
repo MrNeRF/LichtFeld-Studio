@@ -1829,7 +1829,7 @@ namespace lfs::io {
                             use_emeans
                                 ? lfs::io::emeans_sh_swizzled(
                                       shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                                      palette_size, emeans_epochs, fast)
+                                      palette_size, emeans_epochs)
                                 : lfs::io::kmeans_sh_swizzled(
                                       shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
                                       palette_size, iterations, fast);

@@ -2319,8 +2319,7 @@ namespace lfs::io {
             const Tensor& shN_swizzled,
             const int n,
             const int k,
-            const int epochs,
-            const bool fast_assignment) {
+            const int epochs) {
             auto shN_gpu = as_cuda_contiguous(shN_swizzled);
             const auto* d_shN = reinterpret_cast<const float4*>(shN_gpu.ptr<float>());
             constexpr int SLOTS = (N_DIMS + 3) / 4;
@@ -2511,7 +2510,8 @@ namespace lfs::io {
             compute_centroid_norms_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(d_centroids, d_norms, k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.compute_centroid_norms");
             if constexpr (N_DIMS == 45) {
-                assign_sh3_labels(shN_gpu, centroids, norms, labels, fast_assignment, true);
+                // Screened half-precision search with FP32 verification: exact labels.
+                assign_sh3_labels(shN_gpu, centroids, norms, labels, true, true);
             } else {
                 assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
                     d_shN, d_centroids, d_norms, labels.ptr<int>(), n, k);
@@ -2558,8 +2558,7 @@ namespace lfs::io {
         const int n_points,
         const int sh_coeffs,
         const int k,
-        const int epochs,
-        const bool fast_assignment) {
+        const int epochs) {
         if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 ||
             shN_swizzled.dtype() != DataType::Float32) {
             LOG_ERROR("emeans_sh_swizzled expects a 1D float32 swizzled shN tensor");
@@ -2580,11 +2579,11 @@ namespace lfs::io {
 
         switch (sh_coeffs * 3) {
         case 9:
-            return emeans_swizzled_impl<9>(shN_swizzled, n_points, k, epochs, fast_assignment);
+            return emeans_swizzled_impl<9>(shN_swizzled, n_points, k, epochs);
         case 24:
-            return emeans_swizzled_impl<24>(shN_swizzled, n_points, k, epochs, fast_assignment);
+            return emeans_swizzled_impl<24>(shN_swizzled, n_points, k, epochs);
         case 45:
-            return emeans_swizzled_impl<45>(shN_swizzled, n_points, k, epochs, fast_assignment);
+            return emeans_swizzled_impl<45>(shN_swizzled, n_points, k, epochs);
         default:
             LOG_ERROR("emeans_sh_swizzled unsupported SH coefficient count %d. Supported: 3, 8, 15", sh_coeffs);
             return {Tensor(), Tensor()};

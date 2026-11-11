@@ -34,11 +34,10 @@ namespace lfs::io {
      * @brief e-means (EMA mini-batch k-means, arXiv:2611.09501) over resident swizzled shN.
      *
      * Batch size and decay schedule follow the paper's scaling laws for (n, k, epochs).
-     * Ends with the same exact full assignment as kmeans_sh_swizzled followed by a
-     * centroid refit, so the palette is the mean of each label's members.
+     * Ends with an exact full assignment (screened at SH3) followed by a centroid
+     * refit, so the palette is the mean of each label's members.
      *
      * @param epochs Number of passes over the shuffled data
-     * @param fast_assignment Use exact screened SH3 assignment for the final pass
      * @return Tuple of (centroids [k, sh_coeffs * 3], labels [n_points])
      */
     std::tuple<Tensor, Tensor> emeans_sh_swizzled(
@@ -46,8 +45,7 @@ namespace lfs::io {
         int n_points,
         int sh_coeffs,
         int k,
-        int epochs = 10,
-        bool fast_assignment = false);
+        int epochs = 10);
 
     // Mean squared quantization error per SH dimension of a swizzled shN palette assignment.
     double sh_palette_mse(const Tensor& shN_swizzled, int n_points, int sh_coeffs,
