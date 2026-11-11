@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
     "no_splat_node_named": "'{}' という名前のスプラットノードがありません",
     "training_session_not_ready": "トレーニングセッションはまだ再開できません。",
-    "restart_seed_unavailable": "再スタート用の初期状態がないため、このトレーニングセッションは再スタートできません。代わりに「データセットを再読み込み」を使用してください。"
+    "restart_seed_unavailable": "再スタート用の初期状態がないため、このトレーニングセッションは再スタートできません。代わりに「データセットを再読み込み」を使用してください。",
+    "restart_not_finished": "トレーニングを再スタートするには、完了している必要があります。",
+    "restart_seed_empty": "再スタート用の初期状態が空です。",
+    "restart_model_unavailable": "完了したトレーニングモデルは利用できません。",
+    "restart_seed_no_visible_points": "再スタート用の初期状態に表示可能なポイントがありません。",
+    "restart_preview_install_failed": "再スタート用ポイントクラウドのプレビューを設定できませんでした。",
+    "restart_worker_stopping": "完了したトレーニングワーカーはまだ停止中です。",
+    "restart_manager_unavailable": "トレーナーマネージャーは利用できません。",
+    "restart_preparation_pending": "トレーニングの準備はまだ進行中です。",
+    "restart_not_supported": "このビジュアライザーはトレーニングの再スタートをサポートしていません。"
   },
   "align": {
     "preview": "位置合わせをプレビュー",

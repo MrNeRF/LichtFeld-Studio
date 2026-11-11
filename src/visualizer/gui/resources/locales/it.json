@@ -3090,7 +3090,16 @@
     "colmap_min_track_length": "min-track-length non può essere usato con --init; il filtraggio dei punti sparsi COLMAP non verrà applicato perché l’inizializzazione usa '{}'",
     "no_splat_node_named": "Nessun nodo splat denominato '{}'",
     "training_session_not_ready": "La sessione di training non è pronta per essere ripresa.",
-    "restart_seed_unavailable": "Questa sessione di training non può riavviarsi perché non è disponibile un punto di partenza per il riavvio. Usa invece Ricarica set di dati."
+    "restart_seed_unavailable": "Questa sessione di training non può riavviarsi perché non è disponibile un punto di partenza per il riavvio. Usa invece Ricarica set di dati.",
+    "restart_not_finished": "Il training deve terminare prima di poter essere riavviato.",
+    "restart_seed_empty": "Il punto di partenza per il riavvio è vuoto.",
+    "restart_model_unavailable": "Il modello di training completato non è disponibile.",
+    "restart_seed_no_visible_points": "Il punto di partenza per il riavvio non contiene punti visibili.",
+    "restart_preview_install_failed": "Impossibile installare l’anteprima della nuvola di punti per il riavvio.",
+    "restart_worker_stopping": "Il worker di training completato si sta ancora arrestando.",
+    "restart_manager_unavailable": "Il gestore del training non è disponibile.",
+    "restart_preparation_pending": "La preparazione del training è ancora in corso.",
+    "restart_not_supported": "Riavvia training non è supportato da questo visualizzatore."
   },
   "align": {
     "preview": "Anteprima allineamento",

@@ -3028,7 +3028,7 @@ namespace lfs::app {
                     return viewer_impl->restartTraining();
                 });
                 if (!result)
-                    return json{{"error", result.error()}};
+                    return json{{"error", std::string(result.error().user_message())}};
                 return json{{"success", true}, {"operation", "training.restart"}, {"iteration", 0}};
             });
 

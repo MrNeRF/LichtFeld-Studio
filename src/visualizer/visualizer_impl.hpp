@@ -115,7 +115,7 @@ namespace lfs::vis {
         void set_evaluation_weights_preparer(
             std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) override;
         std::expected<void, std::string> startTraining() override;
-        std::expected<void, std::string> restartTraining() override;
+        lfs::Result<void> restartTraining() override;
         [[nodiscard]] bool isTrainingStartPending() const {
             return project_lifecycle_ && project_lifecycle_->isTrainingStartPending();
         }

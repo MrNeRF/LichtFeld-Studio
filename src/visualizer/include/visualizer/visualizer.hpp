@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/export.hpp"
 #include "io/project_chapters.hpp"
 
@@ -233,8 +234,14 @@ namespace lfs::vis {
             static_cast<void>(preparer);
         }
         virtual std::expected<void, std::string> startTraining() = 0;
-        virtual std::expected<void, std::string> restartTraining() {
-            return std::unexpected("Restart Training is not supported by this visualizer");
+        virtual lfs::Result<void> restartTraining() {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unsupported,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = LOC("runtime.restart_not_supported"),
+                .detail = "Restart Training is not supported by this visualizer",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         [[nodiscard]] virtual std::optional<int>
         trainingStartOverwriteConflict() {

@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length는 --init과 함께 사용할 수 없습니다. 초기화에서 '{}'를 사용하므로 COLMAP 희소 점 필터링이 적용되지 않습니다",
     "no_splat_node_named": "'{}'이라는 이름의 스플랫 노드가 없습니다",
     "training_session_not_ready": "학습 세션을 아직 재개할 수 없습니다.",
-    "restart_seed_unavailable": "재시작 시드가 없어 이 학습 세션을 다시 시작할 수 없습니다. 대신 데이터 세트 다시 불러오기를 사용하세요."
+    "restart_seed_unavailable": "재시작 시드가 없어 이 학습 세션을 다시 시작할 수 없습니다. 대신 데이터 세트 다시 불러오기를 사용하세요.",
+    "restart_not_finished": "학습이 완료된 후에만 다시 시작할 수 있습니다.",
+    "restart_seed_empty": "재시작 시드가 비어 있습니다.",
+    "restart_model_unavailable": "완료된 학습 모델을 사용할 수 없습니다.",
+    "restart_seed_no_visible_points": "재시작 시드에 보이는 점이 없습니다.",
+    "restart_preview_install_failed": "재시작 점 구름 미리보기를 설치하지 못했습니다.",
+    "restart_worker_stopping": "완료된 학습 작업자가 아직 중지 중입니다.",
+    "restart_manager_unavailable": "트레이너 관리자를 사용할 수 없습니다.",
+    "restart_preparation_pending": "학습 준비가 아직 진행 중입니다.",
+    "restart_not_supported": "이 시각화 도구는 학습 다시 시작을 지원하지 않습니다."
   },
   "align": {
     "preview": "정렬 미리보기",

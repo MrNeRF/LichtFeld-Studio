@@ -1566,7 +1566,7 @@ namespace lfs::vis {
 
         cmd::RestartTraining::when([this](const auto&) {
             if (auto result = restartTraining(); !result) {
-                LOG_WARN("Cannot restart training: {}", result.error());
+                LOG_WARN("Cannot restart training: {}", lfs::format_for_developer(result.error()));
             }
         });
 
@@ -4585,11 +4585,17 @@ namespace lfs::vis {
         return {};
     }
 
-    std::expected<void, std::string> VisualizerImpl::restartTraining() {
+    lfs::Result<void> VisualizerImpl::restartTraining() {
         if (!trainer_manager_)
-            return std::unexpected("Trainer manager not initialized");
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                LOC("runtime.restart_manager_unavailable"),
+                "Trainer manager not initialized", "training.restart");
         if (isTrainingStartPending())
-            return std::unexpected("Training preparation is still pending");
+            return visualizerFailure<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_preparation_pending"),
+                "Training preparation is still pending", "training.restart");
         return trainer_manager_->restartTraining();
     }
 

@@ -80,7 +80,7 @@ namespace lfs::vis {
         void setTrainer(std::unique_ptr<lfs::training::Trainer> trainer);
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
-        [[nodiscard]] std::expected<void, std::string> restartTraining();
+        [[nodiscard]] lfs::Result<void> restartTraining();
         [[nodiscard]] bool canRestart() const;
         bool hasTrainer() const;
         [[nodiscard]] std::uint64_t trainerGeneration() const {

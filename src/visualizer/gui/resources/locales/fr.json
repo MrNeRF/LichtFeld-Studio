@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
     "no_splat_node_named": "Aucun nœud splat nommé '{}'",
     "training_session_not_ready": "La session d’entraînement n’est pas prête à reprendre.",
-    "restart_seed_unavailable": "Cette session d’entraînement ne peut pas redémarrer car aucune graine de redémarrage n’est disponible. Utilisez plutôt Recharger le jeu de données."
+    "restart_seed_unavailable": "Cette session d’entraînement ne peut pas redémarrer car aucune graine de redémarrage n’est disponible. Utilisez plutôt Recharger le jeu de données.",
+    "restart_not_finished": "L’entraînement doit être terminé avant de pouvoir redémarrer.",
+    "restart_seed_empty": "La graine de redémarrage est vide.",
+    "restart_model_unavailable": "Le modèle d’entraînement terminé n’est pas disponible.",
+    "restart_seed_no_visible_points": "La graine de redémarrage ne contient aucun point visible.",
+    "restart_preview_install_failed": "Impossible d’installer l’aperçu du nuage de points de redémarrage.",
+    "restart_worker_stopping": "Le worker d’entraînement terminé est encore en cours d’arrêt.",
+    "restart_manager_unavailable": "Le gestionnaire d’entraînement n’est pas disponible.",
+    "restart_preparation_pending": "La préparation de l’entraînement est encore en attente.",
+    "restart_not_supported": "Redémarrer l’entraînement n’est pas pris en charge par ce visualiseur."
   },
   "align": {
     "preview": "Aperçu de l’alignement",

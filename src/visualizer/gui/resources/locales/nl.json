@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length kan niet met --init worden gebruikt; COLMAP-sparsepuntfiltering wordt niet toegepast omdat de initialisatie '{}' gebruikt",
     "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'",
     "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten.",
-    "restart_seed_unavailable": "Deze trainingssessie kan niet opnieuw worden gestart omdat er geen herstartpunt beschikbaar is. Gebruik in plaats daarvan Dataset opnieuw laden."
+    "restart_seed_unavailable": "Deze trainingssessie kan niet opnieuw worden gestart omdat er geen herstartpunt beschikbaar is. Gebruik in plaats daarvan Dataset opnieuw laden.",
+    "restart_not_finished": "De training moet zijn voltooid voordat deze opnieuw kan worden gestart.",
+    "restart_seed_empty": "Het herstartpunt is leeg.",
+    "restart_model_unavailable": "Het voltooide trainingsmodel is niet beschikbaar.",
+    "restart_seed_no_visible_points": "Het herstartpunt bevat geen zichtbare punten.",
+    "restart_preview_install_failed": "Het puntwolkvoorbeeld voor opnieuw starten kon niet worden geïnstalleerd.",
+    "restart_worker_stopping": "De voltooide trainingstaak wordt nog gestopt.",
+    "restart_manager_unavailable": "De trainermanager is niet beschikbaar.",
+    "restart_preparation_pending": "De trainingsvoorbereiding loopt nog.",
+    "restart_not_supported": "Training opnieuw starten wordt niet ondersteund door deze visualizer."
   },
   "align": {
     "preview": "Uitlijning vooraf bekijken",

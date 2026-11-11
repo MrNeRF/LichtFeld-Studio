@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
     "no_splat_node_named": "Brak węzła splat o nazwie '{}'",
     "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia.",
-    "restart_seed_unavailable": "Tej sesji treningowej nie można uruchomić ponownie, ponieważ nie ma dostępnego stanu początkowego. Zamiast tego użyj Wczytaj ponownie zbiór danych."
+    "restart_seed_unavailable": "Tej sesji treningowej nie można uruchomić ponownie, ponieważ nie ma dostępnego stanu początkowego. Zamiast tego użyj Wczytaj ponownie zbiór danych.",
+    "restart_not_finished": "Trening musi zostać zakończony, zanim będzie można uruchomić go ponownie.",
+    "restart_seed_empty": "Stan początkowy ponownego uruchomienia jest pusty.",
+    "restart_model_unavailable": "Zakończony model treningowy jest niedostępny.",
+    "restart_seed_no_visible_points": "Stan początkowy ponownego uruchomienia nie zawiera widocznych punktów.",
+    "restart_preview_install_failed": "Nie udało się zainstalować podglądu chmury punktów dla ponownego uruchomienia.",
+    "restart_worker_stopping": "Zakończony proces treningowy jest nadal zatrzymywany.",
+    "restart_manager_unavailable": "Menedżer trenera jest niedostępny.",
+    "restart_preparation_pending": "Przygotowanie treningu nadal trwa.",
+    "restart_not_supported": "Ten wizualizator nie obsługuje ponownego uruchamiania treningu."
   },
   "align": {
     "preview": "Podgląd wyrównania",

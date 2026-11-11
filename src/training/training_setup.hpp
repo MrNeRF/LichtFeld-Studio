@@ -81,7 +81,7 @@ namespace lfs::training {
 
     /// Recreate a point-cloud preview from the completed training model while
     /// preserving the attached crop helpers and scene-node presentation state.
-    [[nodiscard]] std::expected<void, std::string> restoreTrainingPointCloudPreview(
+    [[nodiscard]] lfs::Result<void> restoreTrainingPointCloudPreview(
         lfs::core::Scene& scene,
         const lfs::core::SplatData& seed);
 

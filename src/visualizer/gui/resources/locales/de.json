@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
     "no_splat_node_named": "Kein Splat-Knoten namens '{}'",
     "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden.",
-    "restart_seed_unavailable": "Diese Trainingssitzung kann nicht neu gestartet werden, weil kein Neustart-Ausgangszustand verfügbar ist. Verwenden Sie stattdessen Datensatz neu laden."
+    "restart_seed_unavailable": "Diese Trainingssitzung kann nicht neu gestartet werden, weil kein Neustart-Ausgangszustand verfügbar ist. Verwenden Sie stattdessen Datensatz neu laden.",
+    "restart_not_finished": "Das Training muss beendet sein, bevor es neu gestartet werden kann.",
+    "restart_seed_empty": "Der Neustart-Ausgangszustand ist leer.",
+    "restart_model_unavailable": "Das abgeschlossene Trainingsmodell ist nicht verfügbar.",
+    "restart_seed_no_visible_points": "Der Neustart-Ausgangszustand enthält keine sichtbaren Punkte.",
+    "restart_preview_install_failed": "Die Neustart-Punktwolkenvorschau konnte nicht installiert werden.",
+    "restart_worker_stopping": "Der abgeschlossene Trainings-Worker wird noch angehalten.",
+    "restart_manager_unavailable": "Der Trainingsmanager ist nicht verfügbar.",
+    "restart_preparation_pending": "Die Trainingsvorbereitung läuft noch.",
+    "restart_not_supported": "Training neu starten wird von diesem Visualizer nicht unterstützt."
   },
   "align": {
     "preview": "Ausrichtung vorschauen",

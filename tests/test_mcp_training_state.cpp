@@ -9,15 +9,36 @@
 #include "core/tensor.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "training/control/command_api.hpp"
+#include "training/training_setup.hpp"
 #include "training/trainer.hpp"
+#include "training/training_manager.hpp"
+#include "visualizer/visualizer.hpp"
+#include "visualizer/visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <concepts>
 #include <filesystem>
 #include <memory>
+#include <utility>
 
 namespace {
+
+    static_assert(std::same_as<
+                  decltype(lfs::training::restoreTrainingPointCloudPreview(
+                      std::declval<lfs::core::Scene&>(),
+                      std::declval<const lfs::core::SplatData&>())),
+                  lfs::Result<void>>);
+    static_assert(std::same_as<
+                  decltype(std::declval<lfs::vis::TrainerManager&>().restartTraining()),
+                  lfs::Result<void>>);
+    static_assert(std::same_as<
+                  decltype(std::declval<lfs::vis::Visualizer&>().restartTraining()),
+                  lfs::Result<void>>);
+    static_assert(std::same_as<
+                  decltype(std::declval<lfs::vis::VisualizerImpl&>().restartTraining()),
+                  lfs::Result<void>>);
 
     [[nodiscard]] std::shared_ptr<lfs::core::Camera> make_command_camera() {
         return std::make_shared<lfs::core::Camera>(

@@ -3089,7 +3089,16 @@
     "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
     "no_splat_node_named": "No splat node named '{}'",
     "training_session_not_ready": "The training session is not ready to resume.",
-    "restart_seed_unavailable": "This training session cannot restart because no restart seed is available. Use Reload Dataset instead."
+    "restart_seed_unavailable": "This training session cannot restart because no restart seed is available. Use Reload Dataset instead.",
+    "restart_not_finished": "Training must finish before it can restart.",
+    "restart_seed_empty": "The restart seed is empty.",
+    "restart_model_unavailable": "The completed training model is unavailable.",
+    "restart_seed_no_visible_points": "The restart seed has no visible points.",
+    "restart_preview_install_failed": "Failed to install the restart point-cloud preview.",
+    "restart_worker_stopping": "The completed training worker is still stopping.",
+    "restart_manager_unavailable": "The trainer manager is unavailable.",
+    "restart_preparation_pending": "Training preparation is still pending.",
+    "restart_not_supported": "Restart Training is not supported by this visualizer."
   },
   "align": {
     "preview": "Preview alignment",

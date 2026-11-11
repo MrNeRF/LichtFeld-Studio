@@ -7,6 +7,7 @@
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -181,6 +182,19 @@ namespace lfs::training {
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Training,
                 .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        lfs::Error restartPreviewError(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::move(user_message),
+                .detail = std::move(detail),
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             });
         }
@@ -1220,18 +1234,24 @@ namespace lfs::training {
         return makeGraphInstall(context, std::move(model));
     }
 
-    std::expected<void, std::string> restoreTrainingPointCloudPreview(
+    lfs::Result<void> restoreTrainingPointCloudPreview(
         lfs::core::Scene& scene,
         const lfs::core::SplatData& seed) {
         const auto model_id = scene.getTrainingModelNodeId();
         const auto* model_node = scene.getNodeById(model_id);
         if (!model_node || !model_node->model) {
-            return std::unexpected("The completed training model is unavailable");
+            return lfs::Status::failure(restartPreviewError(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_model_unavailable"),
+                "The completed training model is unavailable"));
         }
 
         const auto preview = pointCloudPreviewFromSplat(seed);
         if (!preview || preview->size() <= 0) {
-            return std::unexpected("The restart seed has no visible points");
+            return lfs::Status::failure(restartPreviewError(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_seed_no_visible_points"),
+                "The restart seed has no visible points"));
         }
 
         const auto preserve_node = [](const lfs::core::SceneNode& node) {
@@ -1279,7 +1299,10 @@ namespace lfs::training {
         scene.removeNode(model_name, false);
         const auto point_cloud_id = scene.addPointCloud(model_name, preview, parent_id);
         if (point_cloud_id == lfs::core::NULL_NODE) {
-            return std::unexpected("Failed to install the restart point-cloud preview");
+            return lfs::Status::failure(restartPreviewError(
+                lfs::ErrorCode::Internal,
+                LOC("runtime.restart_preview_install_failed"),
+                "Failed to install the restart point-cloud preview"));
         }
         scene.setInitialPointCloud(preview);
         scene.setNodeTransform(point_cloud_id, model_transform);

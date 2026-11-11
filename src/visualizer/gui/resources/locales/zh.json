@@ -3077,7 +3077,16 @@
     "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
     "no_splat_node_named": "没有名为 '{}' 的 splat 节点",
     "training_session_not_ready": "训练会话尚未准备好恢复。",
-    "restart_seed_unavailable": "由于没有可用的重启种子，此训练会话无法重新开始。请改用重新加载数据集。"
+    "restart_seed_unavailable": "由于没有可用的重启种子，此训练会话无法重新开始。请改用重新加载数据集。",
+    "restart_not_finished": "训练必须完成后才能重新开始。",
+    "restart_seed_empty": "重启种子为空。",
+    "restart_model_unavailable": "已完成的训练模型不可用。",
+    "restart_seed_no_visible_points": "重启种子中没有可见点。",
+    "restart_preview_install_failed": "无法安装重启点云预览。",
+    "restart_worker_stopping": "已完成的训练工作线程仍在停止。",
+    "restart_manager_unavailable": "训练器管理器不可用。",
+    "restart_preparation_pending": "训练准备仍在进行中。",
+    "restart_not_supported": "此可视化工具不支持重新开始训练。"
   },
   "align": {
     "preview": "预览对齐",

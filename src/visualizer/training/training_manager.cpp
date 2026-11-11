@@ -204,6 +204,20 @@ namespace lfs::vis {
                                                               });
         }
 
+        [[nodiscard]] lfs::Error restart_training_error(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Training,
+                .operation_id = lfs::OperationId::generate(),
+                .user_message = std::move(user_message),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }).with_context("training.restart", LFS_SOURCE_SITE_CURRENT());
+        }
+
         void refreshCameraEvaluationSplit(
             lfs::core::Scene& scene,
             const bool hold_out,
@@ -951,24 +965,36 @@ namespace lfs::vis {
         }
     }
 
-    std::expected<void, std::string> TrainerManager::restartTraining() {
+    lfs::Result<void> TrainerManager::restartTraining() {
         if (!isFinished())
-            return std::unexpected("Training must finish before it can restart");
+            return lfs::Status::failure(restart_training_error(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_not_finished"),
+                "Training must finish before it can restart"));
         if (!scene_ || !trainer_ || !restart_seed_)
-            return std::unexpected(LOC("runtime.restart_seed_unavailable"));
+            return lfs::Status::failure(restart_training_error(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_seed_unavailable"),
+                "The training session has no restart seed"));
         const auto params = trainer_->getParams();
         if (restart_seed_->size() == 0)
-            return std::unexpected("The restart seed is empty");
+            return lfs::Status::failure(restart_training_error(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_seed_empty"),
+                "The restart seed is empty"));
         if (auto restored = lfs::training::restoreTrainingPointCloudPreview(
                 *scene_, *restart_seed_);
             !restored) {
-            return std::unexpected(restored.error());
+            return lfs::Status::failure(std::move(restored).error());
         }
 
         auto replacement_trainer = std::make_unique<lfs::training::Trainer>(*scene_);
         replacement_trainer->setParams(params);
         if (!clearTrainer())
-            return std::unexpected("The completed training worker is still stopping");
+            return lfs::Status::failure(restart_training_error(
+                lfs::ErrorCode::FailedPrecondition,
+                LOC("runtime.restart_worker_stopping"),
+                "The completed training worker is still stopping"));
 
         restart_seed_pending_ = true;
         preserve_restart_seed_on_next_trainer_install_ = true;

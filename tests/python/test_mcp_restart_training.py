@@ -59,3 +59,11 @@ def test_terminal_run_restarts_from_the_loaded_scene(endpoint, restart_dataset, 
     ]
     restarted_point_cloud = next(node for node in after if node["type"] == "POINTCLOUD")
     assert restarted_point_cloud["gaussian_count"] == started_model["gaussian_count"]
+
+    rejected = _call(endpoint, "tools/call", {"name": "training_restart", "arguments": {}})
+    assert rejected.get("isError"), rejected
+    assert isinstance(rejected["structuredContent"]["error"], str)
+    assert tool("training_get_state")["iteration"] == 0
+    assert [(node["name"], node["type"]) for node in tool("scene_list_nodes")["nodes"]] == [
+        (node["name"], node["type"]) for node in after
+    ]
