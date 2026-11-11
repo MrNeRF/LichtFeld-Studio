@@ -310,8 +310,8 @@ namespace lfs::io {
         }
 
         __global__ void prepare_half_sh_kernel(const float4* sh, const float* centroids, half* points, half* palette, int n, int k) {
-            const int i = blockIdx.x * blockDim.x + threadIdx.x;
-            const int row = i / 48, d = i % 48;
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const int row = static_cast<int>(i / 48), d = static_cast<int>(i % 48);
             const int np = (n + 127) / 128 * 128, kp = (k + 31) / 32 * 32;
             if (row < np) {
                 float v = 0;
@@ -383,7 +383,7 @@ namespace lfs::io {
             const int warp = tid / 32;
             nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> a[3];
             for (int d = 0; d < D; d += 16)
-                nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + (start + (warp / 2) * 16) * D + d, D);
+                nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + static_cast<size_t>(start + (warp / 2) * 16) * D + d, D);
 #endif
             for (int base = 0; base < k; base += C) {
                 if (tid < C)
@@ -1028,13 +1028,13 @@ namespace lfs::io {
                                                       const int* __restrict__ order,
                                                       float4* __restrict__ dst,
                                                       const int n,
-                                                      const int padded_n) {
-            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+                                                      const size_t total) {
+            const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
             constexpr int R = static_cast<int>(lfs::core::kShReorderSize);
-            if (i >= padded_n * SLOTS)
+            if (i >= total)
                 return;
-            const int block = i / (SLOTS * R);
-            const int rem = i - block * (SLOTS * R);
+            const int block = static_cast<int>(i / (SLOTS * R));
+            const int rem = static_cast<int>(i % (SLOTS * R));
             const int slot = rem / R;
             const int row = block * R + (rem - slot * R);
             dst[i] = row < n ? src[shAt_device(static_cast<std::uint32_t>(order[row]),
@@ -1696,9 +1696,9 @@ namespace lfs::io {
                 LFS_CUDA_CHECK(cub::DeviceRadixSort::SortPairs(
                     sort_temp.ptr<std::uint8_t>(), sort_temp_bytes, shuffle_keys.ptr<std::uint32_t>(),
                     sorted_keys.ptr<std::uint32_t>(), identity.ptr<int>(), order.ptr<int>(), n));
-                const int total = static_cast<int>(padded_n) * SLOTS;
-                emeans_gather_permuted_kernel<SLOTS><<<(total + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
-                    d_shN, order.ptr<int>(), d_shuffled, n, static_cast<int>(padded_n));
+                const size_t total = padded_n * SLOTS;
+                emeans_gather_permuted_kernel<SLOTS><<<static_cast<unsigned>((total + BLOCK_SIZE - 1) / BLOCK_SIZE), BLOCK_SIZE>>>(
+                    d_shN, order.ptr<int>(), d_shuffled, n, total);
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.gather_permuted");
             };
 
