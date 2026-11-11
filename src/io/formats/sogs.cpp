@@ -20,7 +20,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "cuda/kmeans.hpp"
+#include "cuda/emeans.hpp"
 #include "cuda/morton_encoding.hpp"
 #include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
@@ -1686,14 +1686,14 @@ namespace lfs::io {
                     options.output_path);
             }
 
-            struct ShKmeansResult {
+            struct ShPaletteResult {
                 Tensor centroids;
                 Tensor labels;
                 double milliseconds = 0.0;
                 double done_ms = 0.0;
             };
-            std::future<ShKmeansResult> sh_kmeans_future;
-            std::optional<ShKmeansResult> sh_kmeans_result;
+            std::future<ShPaletteResult> sh_palette_future;
+            std::optional<ShPaletteResult> sh_palette_result;
             int sh_coeffs = 0;
             int sh_dims = 0;
             int palette_size = 0;
@@ -1701,17 +1701,17 @@ namespace lfs::io {
             Tensor sh_palette_centroids;
             Tensor sh_palette_labels;
             double sh_palette_clustering_ms = 0.0;
-            double t_kmeans_launch_ms = 0.0;
-            double t_kmeans_done_ms = 0.0;
+            double t_sh_palette_launch_ms = 0.0;
+            double t_sh_palette_done_ms = 0.0;
             double t_join_ms = 0.0;
             double t_labels_encoded_ms = 0.0;
             double t_webp5_archived_ms = 0.0;
             double t_archive_done_ms = 0.0;
 
-            const auto join_sh_kmeans_if_started = [&]() {
-                // The k-means kernel has no cancellation token, so cancellation checkpoints must join it.
-                if (sh_kmeans_future.valid() && !sh_kmeans_result) {
-                    sh_kmeans_result.emplace(sh_kmeans_future.get());
+            const auto join_sh_palette_if_started = [&]() {
+                // The e-means kernel has no cancellation token, so cancellation checkpoints must join it.
+                if (sh_palette_future.valid() && !sh_palette_result) {
+                    sh_palette_result.emplace(sh_palette_future.get());
                 }
             };
 
@@ -1748,7 +1748,7 @@ namespace lfs::io {
                                1024;
                 palette_size = std::clamp(palette_size, 1, num_rows_int);
 
-                // k-means expects 1D float32 swizzled layout. Resident shN may be:
+                // e-means expects 1D float32 swizzled layout. Resident shN may be:
                 //  - Float32 swizzled (training default / legacy)
                 //  - Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
@@ -1818,21 +1818,14 @@ namespace lfs::io {
                         n, k, k);
                 }
 
-                sh_kmeans_future = std::async(
+                sh_palette_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
-                     iterations = options.kmeans_iterations, fast = options.fast_webp, export_started,
-                     use_emeans = options.sh_clustering == SogShClustering::EMeans,
-                     emeans_epochs = options.emeans_epochs]() mutable {
+                     epochs = options.emeans_epochs, fast = options.fast_webp, export_started]() mutable {
                         const auto started = std::chrono::steady_clock::now();
-                        auto [centroids, labels] =
-                            use_emeans
-                                ? lfs::io::emeans_sh_swizzled(
-                                      shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                                      palette_size, emeans_epochs)
-                                : lfs::io::kmeans_sh_swizzled(
-                                      shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                                      palette_size, iterations, fast);
+                        auto [centroids, labels] = lfs::io::emeans_sh_swizzled(
+                            shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                            palette_size, epochs);
                         if (fast) {
                             // Deliver CPU inputs with the future so packing can
                             // proceed without a later default-stream readback.
@@ -1840,20 +1833,20 @@ namespace lfs::io {
                             labels = labels.to_pageable_host();
                         }
                         const auto finished = std::chrono::steady_clock::now();
-                        return ShKmeansResult{
+                        return ShPaletteResult{
                             std::move(centroids),
                             std::move(labels),
                             std::chrono::duration<double, std::milli>(finished - started).count(),
                             std::chrono::duration<double, std::milli>(finished - export_started).count()};
                     });
-                t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
+                t_sh_palette_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
             }
 
             const auto morton_started = std::chrono::steady_clock::now();
             auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
             auto sort_indices_tensor = options.presorted ? Tensor{} : morton_sort_indices_for_positions(means_cuda);
             if (!options.presorted && !sort_indices_tensor.is_valid()) {
-                join_sh_kmeans_if_started();
+                join_sh_palette_if_started();
                 return make_error(ErrorCode::ENCODING_FAILED,
                                   "Failed to compute Morton order for SOG export",
                                   options.output_path);
@@ -1869,7 +1862,7 @@ namespace lfs::io {
             };
 
             if (auto result = archive.open(); !result) {
-                join_sh_kmeans_if_started();
+                join_sh_palette_if_started();
                 return result;
             }
 
@@ -1992,21 +1985,21 @@ namespace lfs::io {
             const auto* opacity_ptr = opacity.ptr<float>();
 
             if (!report_progress(0.10f, "Positions")) {
-                join_sh_kmeans_if_started();
+                join_sh_palette_if_started();
                 wait_for_webp_encodes();
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
-            const auto join_sh_kmeans = [&]() -> ShKmeansResult& {
-                if (!sh_kmeans_result) {
-                    sh_kmeans_result.emplace(sh_kmeans_future.get());
+            const auto join_sh_palette = [&]() -> ShPaletteResult& {
+                if (!sh_palette_result) {
+                    sh_palette_result.emplace(sh_palette_future.get());
                 }
-                return *sh_kmeans_result;
+                return *sh_palette_result;
             };
-            const auto join_sh_kmeans_and_wait_for_webp_encodes = [&]() {
+            const auto join_sh_palette_and_wait_for_webp_encodes = [&]() {
                 if (sh_degree > 0) {
                     try {
-                        (void)join_sh_kmeans();
+                        (void)join_sh_palette();
                     } catch (...) {
                         wait_for_webp_encodes();
                         throw;
@@ -2028,11 +2021,11 @@ namespace lfs::io {
                     try {
                         encoded = future.get();
                     } catch (...) {
-                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        join_sh_palette_and_wait_for_webp_encodes();
                         throw;
                     }
                     if (!encoded) {
-                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        join_sh_palette_and_wait_for_webp_encodes();
                         return std::unexpected(encoded.error());
                     }
                     if (debug_logging_enabled) {
@@ -2045,7 +2038,7 @@ namespace lfs::io {
                         pending_webps[archived_webps].filename,
                         encoded->bytes.data(), encoded->bytes.size());
                     if (!result) {
-                        join_sh_kmeans_and_wait_for_webp_encodes();
+                        join_sh_palette_and_wait_for_webp_encodes();
                         return std::unexpected(result.error());
                     }
                     ++archived_webps;
@@ -2059,8 +2052,8 @@ namespace lfs::io {
             double pack_ms = 0.0;
             double cluster_scales_ms = 0.0;
             double cluster_sh0_ms = 0.0;
-            double kmeans_sh_ms = 0.0;
-            double kmeans_sh_wait_ms = 0.0;
+            double sh_palette_ms = 0.0;
+            double sh_palette_wait_ms = 0.0;
 
             std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
                                                                    {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
@@ -2149,7 +2142,7 @@ namespace lfs::io {
                        MEANS_U_WEBP_METHOD, MEANS_U_WEBP_QUALITY);
 
             if (!report_progress(0.20f, "Rotations")) {
-                join_sh_kmeans_and_wait_for_webp_encodes();
+                join_sh_palette_and_wait_for_webp_encodes();
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
@@ -2196,7 +2189,7 @@ namespace lfs::io {
                        QUATS_WEBP_METHOD, QUATS_WEBP_QUALITY);
 
             if (!report_progress(0.30f, "Scales k-means")) {
-                join_sh_kmeans_and_wait_for_webp_encodes();
+                join_sh_palette_and_wait_for_webp_encodes();
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
@@ -2222,7 +2215,7 @@ namespace lfs::io {
                        SCALES_WEBP_METHOD, SCALES_WEBP_QUALITY);
 
             if (!report_progress(0.45f, "Colors k-means")) {
-                join_sh_kmeans_and_wait_for_webp_encodes();
+                join_sh_palette_and_wait_for_webp_encodes();
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
@@ -2258,13 +2251,13 @@ namespace lfs::io {
             std::vector<uint8_t> sh_labels_buf;
 
             if (sh_degree > 0) {
-                if (!report_progress(0.60f, "SH k-means")) {
-                    join_sh_kmeans_and_wait_for_webp_encodes();
+                if (!report_progress(0.60f, "SH e-means")) {
+                    join_sh_palette_and_wait_for_webp_encodes();
                     return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
                 }
 
-                const auto kmeans_sh_join_started = std::chrono::steady_clock::now();
-                while (sh_kmeans_future.wait_for(std::chrono::milliseconds(5)) !=
+                const auto sh_palette_join_started = std::chrono::steady_clock::now();
+                while (sh_palette_future.wait_for(std::chrono::milliseconds(5)) !=
                        std::future_status::ready) {
                     if (auto result = archive_ready_webps(); !result) {
                         return std::unexpected(result.error());
@@ -2273,16 +2266,16 @@ namespace lfs::io {
                 if (auto result = archive_ready_webps(); !result) {
                     return std::unexpected(result.error());
                 }
-                auto& sh_kmeans_data = join_sh_kmeans();
-                kmeans_sh_wait_ms = milliseconds(
-                    kmeans_sh_join_started, std::chrono::steady_clock::now());
+                auto& sh_palette_data = join_sh_palette();
+                sh_palette_wait_ms = milliseconds(
+                    sh_palette_join_started, std::chrono::steady_clock::now());
                 t_join_ms = milliseconds(export_started, std::chrono::steady_clock::now());
-                t_kmeans_done_ms = sh_kmeans_data.done_ms;
-                auto sh_centroids = std::move(sh_kmeans_data.centroids);
-                auto sh_labels = std::move(sh_kmeans_data.labels);
+                t_sh_palette_done_ms = sh_palette_data.done_ms;
+                auto sh_centroids = std::move(sh_palette_data.centroids);
+                auto sh_labels = std::move(sh_palette_data.labels);
                 sh_palette_centroids = sh_centroids;
                 sh_palette_labels = sh_labels;
-                sh_palette_clustering_ms = sh_kmeans_data.milliseconds;
+                sh_palette_clustering_ms = sh_palette_data.milliseconds;
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
                     wait_for_webp_encodes();
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -2294,7 +2287,7 @@ namespace lfs::io {
                 const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
                 const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
-                // Keep the full SH tensor in source layout for k-means, then regroup only
+                // Keep the full SH tensor in source layout for e-means, then regroup only
                 // the much smaller centroid table into the SOG texture/codebook layout.
                 std::vector<float> sh_centroids_grouped(actual_palette_size * sh_dims);
                 for (int i = 0; i < actual_palette_size; ++i) {
@@ -2308,8 +2301,8 @@ namespace lfs::io {
 
                 const auto codebook_started = std::chrono::steady_clock::now();
                 auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
-                kmeans_sh_ms = sh_kmeans_data.milliseconds +
-                               milliseconds(codebook_started, std::chrono::steady_clock::now());
+                sh_palette_ms = sh_palette_data.milliseconds +
+                                milliseconds(codebook_started, std::chrono::steady_clock::now());
 
                 const int centroids_width = 64 * sh_coeffs;
                 const int centroids_height = (actual_palette_size + 63) / 64;
@@ -2450,8 +2443,8 @@ namespace lfs::io {
                 }
                 LOG_DEBUG(
                     "SOG export stages: path={} rows={} presorted={} fast_webp={} webp_threads=1 prepare_ms={:.3f} morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
-                    "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} "
-                    "t_kmeans_launch_ms={:.3f} t_join_ms={:.3f} t_kmeans_done_ms={:.3f} "
+                    "cluster_sh0_ms={:.3f} sh_palette_ms={:.3f} sh_palette_wait_ms={:.3f} "
+                    "t_sh_palette_launch_ms={:.3f} t_join_ms={:.3f} t_sh_palette_done_ms={:.3f} "
                     "t_labels_encoded_ms={:.3f} t_webp5_archived_ms={:.3f} "
                     "t_archive_done_ms={:.3f} webp_total_ms={:.3f} "
                     "{} archive_ms={:.3f} total_ms={:.3f}",
@@ -2461,11 +2454,11 @@ namespace lfs::io {
                     pack_ms,
                     cluster_scales_ms,
                     cluster_sh0_ms,
-                    kmeans_sh_ms,
-                    kmeans_sh_wait_ms,
-                    t_kmeans_launch_ms,
+                    sh_palette_ms,
+                    sh_palette_wait_ms,
+                    t_sh_palette_launch_ms,
                     t_join_ms,
-                    t_kmeans_done_ms,
+                    t_sh_palette_done_ms,
                     t_labels_encoded_ms,
                     t_webp5_archived_ms,
                     t_archive_done_ms,
@@ -2476,10 +2469,8 @@ namespace lfs::io {
             }
             if (sh_palette_centroids.is_valid() && sh_palette_labels.is_valid()) {
                 // Measured after total_ms so the quality metric does not affect export timing.
-                const bool emeans = options.sh_clustering == SogShClustering::EMeans;
-                LOG_INFO("SOG SH palette: method={} k={} dims={} iterations={} clustering_ms={:.3f} mse={:.9g}",
-                         emeans ? "emeans" : "kmeans", sh_palette_centroids.size(0), sh_dims,
-                         emeans ? options.emeans_epochs : options.kmeans_iterations, sh_palette_clustering_ms,
+                LOG_INFO("SOG SH palette: method=emeans k={} dims={} epochs={} clustering_ms={:.3f} mse={:.9g}",
+                         sh_palette_centroids.size(0), sh_dims, options.emeans_epochs, sh_palette_clustering_ms,
                          sh_palette_mse(shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
                                         sh_palette_centroids, sh_palette_labels));
             }

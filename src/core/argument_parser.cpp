@@ -2304,7 +2304,7 @@ namespace {
         "  LichtFeld-Studio convert input.ply output.spz --spz-version 3\n"
         "  LichtFeld-Studio convert input.ply -f html\n"
         "  LichtFeld-Studio convert ./splats/ -f sog --sh-degree 2\n"
-        "  LichtFeld-Studio convert input.ply output.sog --sog-clustering emeans --sog-emeans-epochs 5\n"
+        "  LichtFeld-Studio convert input.ply output.sog --sog-emeans-epochs 5\n"
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
@@ -2368,8 +2368,7 @@ namespace {
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         SogFlags sog_flags(parser);
-        ::args::ValueFlag<std::string> sog_clustering(parser, "method", "SOG SH palette clustering: kmeans (default) or emeans", {"sog-clustering"});
-        ::args::ValueFlag<int> sog_emeans_epochs(parser, "epochs", "SOG e-means epochs (default: 10)", {"sog-emeans-epochs"});
+        ::args::ValueFlag<int> sog_emeans_epochs(parser, "epochs", "SOG SH palette e-means epochs (default: 10)", {"sog-emeans-epochs"});
         LogLevelFlag log_level(parser);
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
@@ -2423,14 +2422,6 @@ namespace {
             params.output_path = lfs::core::utf8_to_path(::args::get(output));
         if (!sog_flags.read(params))
             return std::unexpected("Invalid SSOG LOD options");
-        if (sog_clustering) {
-            const auto& method = ::args::get(sog_clustering);
-            if (method == "emeans") {
-                params.sog_emeans = true;
-            } else if (method != "kmeans") {
-                return std::unexpected(std::format("Invalid --sog-clustering '{}'. Use: kmeans, emeans", method));
-            }
-        }
         if (sog_emeans_epochs) {
             params.sog_emeans_epochs = ::args::get(sog_emeans_epochs);
             if (params.sog_emeans_epochs < 1)
