@@ -66,12 +66,20 @@ namespace lfs::io {
     // SOG Export (SuperSplat format)
     // ============================================================================
 
+    // Clustering used for the SOG higher-order SH palette.
+    enum class SogShClustering : uint8_t {
+        KMeans, // Lloyd k-means, kmeans_iterations passes
+        EMeans  // EMA mini-batch k-means (arXiv:2611.09501), emeans_epochs passes
+    };
+
     struct SogSaveOptions {
         std::filesystem::path output_path;
         int kmeans_iterations = 10;
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        SogShClustering sh_clustering = SogShClustering::KMeans;
+        int emeans_epochs = 10;
     };
 
     struct SsogSaveOptions {

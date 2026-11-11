@@ -129,6 +129,7 @@ namespace lfs::app {
             const int spz_version,
             const core::ProvenanceStamp& provenance,
             lfs::io::SsogSaveOptions ssog,
+            lfs::io::SogSaveOptions sog,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
@@ -140,7 +141,11 @@ namespace lfs::app {
                 ssog.progress_callback = progress;
                 return lfs::io::save_ssog(splat, ssog);
             case param::OutputFormat::SOG:
-                return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
+                sog.output_path = output;
+                sog.kmeans_iterations = sog_iterations;
+                sog.progress_callback = progress;
+                sog.provenance = provenance;
+                return lfs::io::save_sog(splat, sog);
             case param::OutputFormat::SPZ:
                 return lfs::io::save_spz(splat, {.output_path = output, .version = spz_version, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::GLB:
@@ -502,6 +507,10 @@ namespace lfs::app {
                 *splat, output, params.format, params.sog_iterations,
                 params.rad_export_mode, params.spz_version,
                 make_convert_provenance(params.include_provenance, input), ssogOptions(params),
+                lfs::io::SogSaveOptions{
+                    .sh_clustering = params.sog_emeans ? lfs::io::SogShClustering::EMeans
+                                                       : lfs::io::SogShClustering::KMeans,
+                    .emeans_epochs = params.sog_emeans_epochs},
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
                 });
@@ -563,7 +572,8 @@ namespace lfs::app {
                 std::println("  Saving: {}", path_to_utf8(output.path));
                 const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
                                               param::RadExportMode::Stream, params.spz_version,
-                                              make_convert_provenance(params.include_provenance), ssogOptions(params));
+                                              make_convert_provenance(params.include_provenance), ssogOptions(params),
+                                              lfs::io::SogSaveOptions{});
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());
                     std::println(stderr, "  Error: {}", result.error().message);

@@ -1698,6 +1698,9 @@ namespace lfs::io {
             int sh_dims = 0;
             int palette_size = 0;
             Tensor shN_float_swizzled;
+            Tensor sh_palette_centroids;
+            Tensor sh_palette_labels;
+            double sh_palette_clustering_ms = 0.0;
             double t_kmeans_launch_ms = 0.0;
             double t_kmeans_done_ms = 0.0;
             double t_join_ms = 0.0;
@@ -1818,11 +1821,18 @@ namespace lfs::io {
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
-                     iterations = options.kmeans_iterations, fast = options.fast_webp, export_started]() mutable {
+                     iterations = options.kmeans_iterations, fast = options.fast_webp, export_started,
+                     use_emeans = options.sh_clustering == SogShClustering::EMeans,
+                     emeans_epochs = options.emeans_epochs]() mutable {
                         const auto started = std::chrono::steady_clock::now();
-                        auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
-                            shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                            palette_size, iterations, fast);
+                        auto [centroids, labels] =
+                            use_emeans
+                                ? lfs::io::emeans_sh_swizzled(
+                                      shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                                      palette_size, emeans_epochs, fast)
+                                : lfs::io::kmeans_sh_swizzled(
+                                      shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                                      palette_size, iterations, fast);
                         if (fast) {
                             // Deliver CPU inputs with the future so packing can
                             // proceed without a later default-stream readback.
@@ -2270,6 +2280,9 @@ namespace lfs::io {
                 t_kmeans_done_ms = sh_kmeans_data.done_ms;
                 auto sh_centroids = std::move(sh_kmeans_data.centroids);
                 auto sh_labels = std::move(sh_kmeans_data.labels);
+                sh_palette_centroids = sh_centroids;
+                sh_palette_labels = sh_labels;
+                sh_palette_clustering_ms = sh_kmeans_data.milliseconds;
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
                     wait_for_webp_encodes();
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -2461,7 +2474,17 @@ namespace lfs::io {
                     milliseconds(archive_started, archive_finished),
                     milliseconds(export_started, export_finished));
             }
-            LOG_INFO("SOG export complete: {} splats", num_rows);
+            if (sh_palette_centroids.is_valid() && sh_palette_labels.is_valid()) {
+                // Measured after total_ms so the quality metric does not affect export timing.
+                const bool emeans = options.sh_clustering == SogShClustering::EMeans;
+                LOG_INFO("SOG SH palette: method={} k={} dims={} iterations={} clustering_ms={:.3f} mse={:.9g}",
+                         emeans ? "emeans" : "kmeans", sh_palette_centroids.size(0), sh_dims,
+                         emeans ? options.emeans_epochs : options.kmeans_iterations, sh_palette_clustering_ms,
+                         sh_palette_mse(shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                                        sh_palette_centroids, sh_palette_labels));
+            }
+            LOG_INFO("SOG export complete: {} splats, total_ms={:.3f}", num_rows,
+                     milliseconds(export_started, export_finished));
             return {};
         } catch (const lfs::Exception& e) {
             lfs::Error error = lfs::Error(e.error())
