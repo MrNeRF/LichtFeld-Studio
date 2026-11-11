@@ -956,23 +956,24 @@ class MediaBindings(unittest.TestCase):
                     shutil.rmtree(normalized)
             cls.temp.cleanup()
 
-    def test_dji_ac204_metadata_owned_result_and_cli_parity(self):
+    def test_dji_metadata_owned_result_and_cli_parity(self):
         path = fixtures.dji_ac204(self.root)
         observed = media.MediaIngest.probe(path, timed_metadata_stream=0)
-        actual = observed.dji_ac204_metadata_json()
-        reference = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--dji-ac204"],
+        actual = observed.dji_metadata_json()
+        reference = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--dji-metadata"],
                                    check=True, capture_output=True, timeout=30)
-        self.assertEqual(json.loads(actual), json.loads(reference.stdout)["media"]["dji_ac204"])
+        self.assertEqual(json.loads(actual), json.loads(reference.stdout)["media"]["dji_metadata"])
         samples = json.loads(actual)["samples"]
         self.assertEqual(len(samples), 300)
+        self.assertEqual(samples[0]["sequence"], 0)
         for key, bits in (("quaternion_wxyz", (0x3f4ea195, 0xbbee4b74, 0xbf1668d2, 0x3d699071)),
                           ("accelerometer_xyz", (0xbf817321, 0x3d3de3ce, 0xbe5b6470))):
             self.assertEqual(tuple(struct.unpack("<I", struct.pack("<f", value))[0] for value in samples[0][key]), bits)
         with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.probe(path, headers_only=True).dji_ac204_metadata_json()
+            media.MediaIngest.probe(path, headers_only=True).dji_metadata_json()
         path.unlink()
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            self.assertTrue(all(value == actual for value in executor.map(lambda _: observed.dji_ac204_metadata_json(), range(6))))
+            self.assertTrue(all(value == actual for value in executor.map(lambda _: observed.dji_metadata_json(), range(6))))
 
     def test_timed_metadata_probe_cli_parity_and_owned_result(self):
         path = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))

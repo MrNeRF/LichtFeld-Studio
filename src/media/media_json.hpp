@@ -347,25 +347,16 @@ namespace lfs::media::json_detail {
         default: return "none";
         }
     }
-    inline json djiAc204Metadata(const DjiAc204Metadata& metadata) {
-        json result{{"profile", "dvtm_ac204.proto"}, {"version", "2.0.1"}, {"camera_timestamp_clock", "device_raw"}, {"coordinates", "device_raw"}, {"device_units", "unspecified"}, {"samples", json::array()}};
-        const auto components = [](const auto& values) -> json {
-            if (!values)
-                return nullptr;
-            auto array = json::array();
-            for (const auto& value : *values)
-                array.push_back(optional(value));
-            return array;
-        };
-        for (const auto& sample : metadata.samples)
-            result["samples"].push_back({{"packet_index", sample.packet_index},
-                                         {"sequence", optional(sample.sequence)},
-                                         {"camera_timestamp", optional(sample.camera_timestamp)},
+    inline json djiMetadata(const std::vector<DjiSample>& samples) {
+        json result{{"samples", json::array()}};
+        for (const auto& sample : samples)
+            result["samples"].push_back({{"sequence", sample.sequence},
+                                         {"camera_timestamp", sample.camera_timestamp},
                                          {"iso", optional(sample.iso)},
                                          {"exposure_time_ratio", optional(sample.exposure_time_ratio)},
                                          {"white_balance_cct", optional(sample.white_balance_cct)},
-                                         {"quaternion_wxyz", components(sample.quaternion_wxyz)},
-                                         {"accelerometer_xyz", components(sample.accelerometer_xyz)},
+                                         {"quaternion_wxyz", optional(sample.quaternion_wxyz)},
+                                         {"accelerometer_xyz", optional(sample.accelerometer_xyz)},
                                          {"gps_status", optional(sample.gps_status)}});
         return result;
     }

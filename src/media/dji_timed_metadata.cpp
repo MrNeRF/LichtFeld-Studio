@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <initializer_list>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -85,189 +86,92 @@ namespace lfs::media {
             bytes = bytes.subspan(static_cast<std::size_t>(size));
             return field;
         }
-        enum class Message { Product,
-                             Clip,
-                             Header,
-                             Frame,
-                             FrameHeader,
-                             Camera,
-                             Iso,
-                             Exposure,
-                             Cct,
-                             Quaternion,
-                             Accelerometer,
-                             Gimbal,
-                             Gps };
-        struct PacketParser {
-            DjiAc204Sample sample;
-            bool protocol = false, version = false, declaration = false;
-            // The graph below has fixed depth, follows only qualified message
-            // fields and skips unknown payloads without recursively guessing them.
-            void message(Bytes bytes, Message type) {
-                if (type == Message::Header)
-                    declaration = true;
-                std::uint64_t seen = 0;
-                std::array<std::uint64_t, 2> ratio{};
-                std::size_t ratio_size = 0;
-                while (!bytes.empty()) {
-                    const auto field = next(bytes);
-                    const auto n = field.number;
-                    bool known = true;
-                    const auto child = [&](Message nested) {
-                        field.expect(2);
-                        message(field.bytes, nested);
-                    };
-                    // Supported singular fields are never silently merged or
-                    // overwritten. Repeated exposure operands are handled below.
-                    if (n < 64 && (seen & (std::uint64_t{1} << n)))
-                        malformed("Duplicate supported DJI field");
-                    switch (type) {
-                    case Message::Product:
-                        if (n == 1)
-                            child(Message::Clip);
-                        else if (n == 3)
-                            child(Message::Frame);
-                        else
-                            known = false;
-                        break;
-                    case Message::Clip:
-                        if (n == 1)
-                            child(Message::Header);
-                        else
-                            known = false;
-                        break;
-                    case Message::Header:
-                        if (n == 1)
-                            protocol = field.text("dvtm_ac204.proto");
-                        else if (n == 3)
-                            version = field.text("2.0.1");
-                        else
-                            known = false;
-                        break;
-                    case Message::Frame:
-                        if (n == 1)
-                            child(Message::FrameHeader);
-                        else if (n == 2)
-                            child(Message::Camera);
-                        else if (n == 4)
-                            child(Message::Gimbal);
-                        else
-                            known = false;
-                        break;
-                    case Message::FrameHeader:
-                        if (n == 1)
-                            sample.sequence = field.uint();
-                        else if (n == 2)
-                            sample.camera_timestamp = field.uint();
-                        else
-                            known = false;
-                        break;
-                    case Message::Camera:
-                        if (n == 3)
-                            child(Message::Iso);
-                        else if (n == 4)
-                            child(Message::Exposure);
-                        else if (n == 6)
-                            child(Message::Cct);
-                        else if (n == 9) {
-                            sample.quaternion_wxyz.emplace();
-                            child(Message::Quaternion);
-                        } else if (n == 10) {
-                            sample.accelerometer_xyz.emplace();
-                            child(Message::Accelerometer);
-                        } else
-                            known = false;
-                        break;
-                    case Message::Iso:
-                        if (n == 1)
-                            sample.iso = field.real();
-                        else
-                            known = false;
-                        break;
-                    case Message::Cct:
-                        if (n == 1)
-                            sample.white_balance_cct = field.uint();
-                        else
-                            known = false;
-                        break;
-                    case Message::Exposure:
-                        if (n == 1) {
-                            const auto append = [&](std::uint64_t value) {
-                                if (ratio_size == ratio.size())
-                                    malformed("Too many DJI exposure operands");
-                                ratio[ratio_size++] = value;
-                            };
-                            if (field.wire == 0)
-                                append(field.integer);
-                            else {
-                                field.expect(2);
-                                auto packed = field.bytes;
-                                while (!packed.empty())
-                                    append(varint(packed));
-                            }
-                            known = false; // repeated packed/unpacked uint64
-                        } else
-                            known = false;
-                        break;
-                    case Message::Quaternion:
-                        if (n >= 1 && n <= 4)
-                            (*sample.quaternion_wxyz)[n - 1] = field.real();
-                        else
-                            known = false;
-                        break;
-                    case Message::Accelerometer:
-                        if (n >= 2 && n <= 4)
-                            (*sample.accelerometer_xyz)[n - 2] = field.real();
-                        else
-                            known = false;
-                        break;
-                    case Message::Gimbal:
-                        if (n == 2)
-                            child(Message::Gps);
-                        else
-                            known = false;
-                        break;
-                    case Message::Gps:
-                        if (n == 3)
-                            sample.gps_status = field.uint();
-                        else
-                            known = false;
-                        break;
-                    }
-                    if (known)
-                        seen |= std::uint64_t{1} << n;
-                }
-                if (type == Message::Exposure) {
-                    if (ratio_size != 2 || !ratio[1])
-                        malformed("DJI exposure requires two operands and a nonzero denominator");
-                    sample.exposure_time_ratio = ratio;
+        std::optional<Field> last(Bytes bytes, std::uint32_t number) {
+            std::optional<Field> result;
+            while (!bytes.empty()) {
+                auto field = next(bytes);
+                if (field.number == number)
+                    result = field;
+            }
+            return result;
+        }
+        std::optional<Bytes> sub(Bytes bytes, std::initializer_list<std::uint32_t> path) {
+            for (const auto number : path) {
+                const auto field = last(bytes, number);
+                if (!field)
+                    return std::nullopt;
+                field->expect(2);
+                bytes = field->bytes;
+            }
+            return bytes;
+        }
+        std::uint64_t uint(Bytes bytes, std::uint32_t number) {
+            const auto field = last(bytes, number);
+            return field ? field->uint() : 0;
+        }
+        float real(Bytes bytes, std::uint32_t number) {
+            const auto field = last(bytes, number);
+            return field ? field->real() : 0.0f;
+        }
+        std::array<std::uint64_t, 2> exposure(Bytes bytes) {
+            std::array<std::uint64_t, 2> ratio{};
+            std::size_t count = 0;
+            const auto append = [&](std::uint64_t value) {
+                if (count == ratio.size())
+                    malformed("Too many DJI exposure operands");
+                ratio[count++] = value;
+            };
+            while (!bytes.empty()) {
+                const auto field = next(bytes);
+                if (field.number != 1)
+                    continue;
+                if (field.wire == 0)
+                    append(field.integer);
+                else {
+                    field.expect(2);
+                    auto packed = field.bytes;
+                    while (!packed.empty())
+                        append(varint(packed));
                 }
             }
-        };
+            if (count != 2 || !ratio[1])
+                malformed("DJI exposure requires two operands and a nonzero denominator");
+            return ratio;
+        }
     } // namespace
-    Result<DjiAc204Metadata> interpretDjiAc204Metadata(const TimedMetadataObservation& observation) {
+    Result<std::vector<DjiSample>> interpretDjiMetadata(const TimedMetadataObservation& observation) {
         try {
             constexpr std::uint32_t djmd = 'd' | std::uint32_t('j') << 8 | std::uint32_t('m') << 16 | std::uint32_t('d') << 24;
             if (observation.codec_tag != djmd || observation.packets.empty())
-                throw Failure{ErrorCode::Unsupported, "DJI AC204 interpretation requires a nonempty djmd observation"};
-            if (observation.packets.size() > timed_metadata_maxima.records)
-                throw Failure{ErrorCode::ResourceExhausted, "DJI packet count exceeds collection maximum (packets=" + std::to_string(observation.packets.size()) + "/" + std::to_string(timed_metadata_maxima.records) + ")"};
-            std::size_t bytes = 0;
-            DjiAc204Metadata result;
-            result.samples.reserve(observation.packets.size());
-            for (std::size_t i = 0; i < observation.packets.size(); ++i) {
-                const auto& packet = observation.packets[i];
+                throw Failure{ErrorCode::Unsupported, "DJI interpretation requires a nonempty djmd observation"};
+            const auto header = sub(observation.packets.front().bytes, {1, 1});
+            const auto name = header ? last(*header, 1) : std::nullopt;
+            const auto version = header ? last(*header, 3) : std::nullopt;
+            if (!name || (!name->text("dvtm_ac203.proto") && !name->text("dvtm_ac204.proto")) || !version || !version->text("2.0.1"))
+                throw Failure{ErrorCode::Unsupported, "DJI interpretation requires dvtm_ac203.proto or dvtm_ac204.proto version 2.0.1 in the first packet"};
+            std::vector<DjiSample> result;
+            result.reserve(observation.packets.size());
+            for (const auto& packet : observation.packets) {
                 if (packet.bytes.empty())
                     malformed("Empty DJI packet");
-                if (packet.bytes.size() > timed_metadata_maxima.bytes - bytes)
-                    throw Failure{ErrorCode::ResourceExhausted, "DJI payload bytes exceed collection maximum (retained=" + std::to_string(bytes) + ", packet=" + std::to_string(packet.bytes.size()) + ", maximum=" + std::to_string(timed_metadata_maxima.bytes) + ")"};
-                bytes += packet.bytes.size();
-                PacketParser parser;
-                parser.sample.packet_index = i;
-                parser.message(packet.bytes, Message::Product);
-                if ((i == 0 || parser.declaration) && (!parser.protocol || !parser.version))
-                    throw Failure{ErrorCode::Unsupported, "DJI profile requires dvtm_ac204.proto version 2.0.1 in the first packet and consistent subsequent declarations"};
-                result.samples.push_back(std::move(parser.sample));
+                DjiSample sample;
+                if (const auto value = sub(packet.bytes, {3, 1})) {
+                    sample.sequence = uint(*value, 1);
+                    sample.camera_timestamp = uint(*value, 2);
+                }
+                if (const auto value = sub(packet.bytes, {3, 2, 3}))
+                    sample.iso = real(*value, 1);
+                if (const auto value = sub(packet.bytes, {3, 2, 4}))
+                    sample.exposure_time_ratio = exposure(*value);
+                if (const auto value = sub(packet.bytes, {3, 2, 6}))
+                    sample.white_balance_cct = uint(*value, 1);
+                if (const auto value = sub(packet.bytes, {3, 2, 9}))
+                    sample.quaternion_wxyz = std::array{real(*value, 1), real(*value, 2), real(*value, 3), real(*value, 4)};
+                if (const auto value = sub(packet.bytes, {3, 2, 10}))
+                    sample.accelerometer_xyz = std::array{real(*value, 2), real(*value, 3), real(*value, 4)};
+                if (const auto value = sub(packet.bytes, {3, 4, 2}))
+                    sample.gps_status = uint(*value, 3);
+                result.push_back(std::move(sample));
             }
             return result;
         } catch (Failure& error) {
