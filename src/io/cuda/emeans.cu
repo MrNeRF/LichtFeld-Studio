@@ -893,11 +893,13 @@ namespace lfs::io {
                     shN, centroids, centroid_norms, sorted_point_idx, group_offsets, group_task_offsets,
                     group_candidate_offsets, group_candidate_supers, super_offsets, super_indices,
                     labels, n_points, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_grouped_candidates");
             } else {
                 assign_grouped_swizzled_kernel<N_DIMS><<<num_tasks, BLOCK_SIZE>>>(
                     shN, centroids, centroid_norms, sorted_point_idx, group_offsets, group_task_offsets,
                     group_candidate_offsets, group_candidate_supers, super_offsets, super_indices,
                     labels, n_points, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_grouped_candidates");
             }
         }
 
@@ -1598,7 +1600,6 @@ namespace lfs::io {
                     group_offsets.ptr<int>(), group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
                     group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(), super_indices.ptr<int>(),
                     d_labels, batch_size, k);
-                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_grouped_candidates");
             }
 
         private:
