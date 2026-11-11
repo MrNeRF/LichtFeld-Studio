@@ -1043,7 +1043,8 @@ namespace lfs::io {
         }
 
         template <int N_DIMS>
-        __global__ void emeans_init_centroids_kernel(const float4* __restrict__ shuffled,
+        __global__ void emeans_init_centroids_kernel(const float4* __restrict__ shN,
+                                                     const int* __restrict__ order,
                                                      float* __restrict__ centroids,
                                                      float* __restrict__ norms,
                                                      float* __restrict__ ema_counts,
@@ -1054,7 +1055,7 @@ namespace lfs::io {
             float norm = 0.0f;
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
-                const float v = read_swizzled_sh_dim<N_DIMS>(shuffled, static_cast<std::uint32_t>(c),
+                const float v = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(order[c]),
                                                              static_cast<std::uint32_t>(d));
                 centroids[static_cast<long long>(c) * N_DIMS + d] = v;
                 norm = fmaf(v, v, norm);
@@ -1661,9 +1662,12 @@ namespace lfs::io {
             // final labels always come from an exact assignment.
             const bool use_ivf = k >= EMEANS_IVF_MIN_K;
 
-            const size_t padded_n = lfs::core::sh_swizzled_padded_n(static_cast<size_t>(n));
-            auto shuffled = Tensor::empty({padded_n * SLOTS * 4}, Device::CUDA, DataType::Float32);
-            auto* d_shuffled = reinterpret_cast<float4*>(shuffled.ptr<float>());
+            // Each batch is gathered through the permutation into a batch-sized
+            // swizzled buffer, so training never holds a second copy of the input.
+            const size_t batch_slots = lfs::core::sh_swizzled_padded_n(static_cast<size_t>(B)) * SLOTS;
+            auto batch_points = Tensor::empty({batch_slots * 4}, Device::CUDA, DataType::Float32);
+            auto* d_batch = reinterpret_cast<float4*>(batch_points.ptr<float>());
+            const auto gather_blocks = static_cast<unsigned>((batch_slots + BLOCK_SIZE - 1) / BLOCK_SIZE);
             auto shuffle_keys = Tensor::empty({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             auto sorted_keys = Tensor::empty({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             auto identity = Tensor::empty({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
@@ -1707,17 +1711,13 @@ namespace lfs::io {
                 LFS_CUDA_CHECK(cub::DeviceRadixSort::SortPairs(
                     sort_temp.ptr<std::uint8_t>(), sort_temp_bytes, shuffle_keys.ptr<std::uint32_t>(),
                     sorted_keys.ptr<std::uint32_t>(), identity.ptr<int>(), order.ptr<int>(), n));
-                const size_t total = padded_n * SLOTS;
-                emeans_gather_permuted_kernel<SLOTS><<<static_cast<unsigned>((total + BLOCK_SIZE - 1) / BLOCK_SIZE), BLOCK_SIZE>>>(
-                    d_shN, order.ptr<int>(), d_shuffled, n, total);
-                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.gather_permuted");
             };
 
             const auto ticket = ::lfs::core::cuda_record_range(nullptr, "io.emeans.train");
             shuffle(0);
             // RandomChoice initialization: the first k rows of a uniform permutation.
             emeans_init_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                d_shuffled, d_centroids, d_norms, d_ema_counts, k);
+                d_shN, order.ptr<int>(), d_centroids, d_norms, d_ema_counts, k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.init_centroids");
 
             std::optional<EMeansIvfIndex<N_DIMS>> ivf;
@@ -1789,9 +1789,11 @@ namespace lfs::io {
                         schedule.alpha0 * (EMEANS_SCHEDULE_FLOOR + (1.0 - EMEANS_SCHEDULE_FLOOR) * 0.5 *
                                                                        (1.0 + std::cos(EMEANS_PI * progress))));
                     const size_t batch_offset = static_cast<size_t>(batch) * static_cast<size_t>(B);
-                    const float4* d_batch = d_shuffled + batch_offset * SLOTS;
                     const int* d_batch_order = order.ptr<int>() + batch_offset;
                     int* d_source_labels = last_epoch ? labels.ptr<int>() : nullptr;
+                    emeans_gather_permuted_kernel<SLOTS><<<gather_blocks, BLOCK_SIZE>>>(
+                        d_shN, d_batch_order, d_batch, B, batch_slots);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.gather_batch");
 
                     if (ivf) {
                         ivf->rebuild_palette_buckets(d_centroids, k);
@@ -1824,7 +1826,7 @@ namespace lfs::io {
             // Frees are stream-ordered, so queued training kernels keep their inputs
             // while the final pass reuses the memory.
             ivf.reset();
-            shuffled = Tensor();
+            batch_points = Tensor();
             shuffle_keys = Tensor();
             sorted_keys = Tensor();
             identity = Tensor();
