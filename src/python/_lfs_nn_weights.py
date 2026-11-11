@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Shared writer for native neural-network weight archives."""
+from _lfs_path_io import Path
+import json
+import hashlib
+from dataclasses import dataclass
+from math import prod
+
+
+@dataclass(frozen=True)
+class FloatTensor:
+    shape: tuple[int, ...]
+    data: bytes | memoryview
+
+
+def check_cancelled(cancel_requested):
+    if cancel_requested():
+        raise InterruptedError("Model preparation cancelled")
+
+
+def sha256_file(stream, cancel_requested=lambda: False):
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        check_cancelled(cancel_requested)
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_lfw(path: Path, tensors: dict, meta: dict[str, object], *, check_cancelled=lambda: None) -> None:
+    blobs: list[tuple[int, memoryview]] = []
+    blob = None
+    try:
+        payload_offset = 0
+        entries: dict[str, dict[str, object]] = {}
+        for name, value in tensors.items():
+            check_cancelled()
+            if isinstance(value, FloatTensor):
+                shape = value.shape
+                blob = memoryview(value.data)
+                if any(dimension < 0 for dimension in shape) or len(blob) != prod(shape) * 4:
+                    raise ValueError(f"Invalid float32 tensor extent: {name}")
+            else:
+                # Developer exporters may supply NumPy arrays. Runtime conversion
+                # supplies verified float32 bytes and never imports NumPy.
+                array = value.astype("<f4", order="C", copy=False)
+                shape = array.shape
+                blob = memoryview(array).cast("B")
+            payload_offset = (payload_offset + 63) & ~63
+            entries[name] = {
+                "dtype": "float32",
+                "shape": [int(dimension) for dimension in shape],
+                "offset": payload_offset,
+                "length": len(blob),
+            }
+            blobs.append((payload_offset, blob))
+            payload_offset += len(blob)
+
+        header = json.dumps(
+            {"format": "lfw", "version": 1, "meta": meta, "tensors": entries},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        file_payload_offset = (8 + len(header) + 63) & ~63
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as stream:
+            stream.write(b"LFW1")
+            stream.write(len(header).to_bytes(4, "little"))
+            stream.write(header)
+            stream.write(bytes(file_payload_offset - stream.tell()))
+            for offset, blob in blobs:
+                check_cancelled()
+                stream.write(bytes(file_payload_offset + offset - stream.tell()))
+                for begin in range(0, len(blob), 1024 * 1024):
+                    check_cancelled()
+                    stream.write(blob[begin:begin + 1024 * 1024])
+            check_cancelled()
+    finally:
+        # In particular, cancellation must release mmap-backed inputs before
+        # their owner closes the mapping, even while an exception holds frames.
+        for _, view in blobs:
+            view.release()
+        if blob is not None:
+            blob.release()

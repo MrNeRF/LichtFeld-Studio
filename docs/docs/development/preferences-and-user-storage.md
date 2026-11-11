@@ -201,13 +201,21 @@ backend, preset, lazy-loading, and fallback contracts.
 
 ## Downloaded models
 
-Preferences > Models shows the managed SAM 2.1, MoGe-2 and LPIPS weight files.
+Preferences > Models shows the managed SAM 2.1, MoGe-2, LPIPS and LLMDet Tiny weight files.
 Download / repair prepares a missing model or verifies an existing file
 and downloads a replacement if its pinned SHA-256 does not match. Verify integrity
 checks the local file without downloading, migration or replacement. Downloaded
 means the file is present;
 verification runs explicitly or when the feature acquires its weights, not during
 UI refreshes.
+
+LLMDet preparation downloads the pinned official safetensors checkpoint and converts it
+locally through the same converter used on first search. Its retained source is
+included in the reported disk usage and confirmed removal. A source-only cache
+is not a ready model and cannot pass Verify integrity.
+
+The model-cache snapshot distinguishes `source_sha256` (the downloaded file)
+from `sha256` (the ready native archive). They are equal for models that need no conversion.
 
 The on-demand download remains available from each feature. Preferences uses the
 same acquisition, hashing and atomic publication code. Concurrent acquisitions

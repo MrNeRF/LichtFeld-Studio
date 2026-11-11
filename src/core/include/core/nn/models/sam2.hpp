@@ -21,12 +21,13 @@
 namespace lfs::core::nn::models {
 
     enum class Sam2MaskOutput { OriginalResolution,
-                                LowResolutionOnly };
+                                LowResolutionOnly,
+                                RawLowResolution };
 
     struct Sam2Prediction {
         Tensor masks;          // [num_masks, H, W] fp32 logits; absent for LowResolutionOnly
         Tensor iou;            // [num_masks] fp32 predicted mask quality
-        Tensor low_res_logits; // [num_masks, 256, 256] fp32
+        Tensor low_res_logits; // [num_masks, 256, 256] fp32; unclamped for RawLowResolution
         Tensor object_pointer;
         Tensor object_score_logits;
     };
@@ -58,6 +59,10 @@ namespace lfs::core::nn::models {
                                             const std::optional<std::array<float, 4>>& box,
                                             bool multimask = true, const Tensor* mask_logits = nullptr,
                                             Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
+
+        // Upsample unclamped [num_masks, 256, 256] logits for the current image.
+        // Compare low-resolution proposals first, then upsample only the selected one.
+        lfs::Result<Tensor> postprocess_masks(const Tensor& logits) const;
 
         // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
         lfs::Result<void> set_video_image(const Tensor& image);

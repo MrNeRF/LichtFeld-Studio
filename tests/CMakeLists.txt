@@ -1032,6 +1032,7 @@ set(TEST_FILES
     test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
+    test_llmdet_backbones.cpp
     test_weight_file_paths.cpp
     test_model_cache.cpp
     test_moge2.cpp
