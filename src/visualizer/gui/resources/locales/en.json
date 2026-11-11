@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Lower error",
+    "loss_higher_error": "Higher error",
+    "unavailable": "Unavailable"
+  },
   "preferences.models.downloading": "Downloading…",
   "preferences.models.prepare": "Download / repair",
   "preferences.models.verifying": "Verifying integrity…",
@@ -1582,7 +1587,7 @@
     "selection_select_all": "Select all Gaussians",
     "selection_unselect": "Clear the Gaussian selection",
     "depth_view_mode": "Choose depth-map color mode",
-    "gt_compare_mode": "Choose RGB, normal, or depth ground-truth comparison",
+    "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",
     "depth_view_far": "Far edge of the depth-map range",
@@ -3949,5 +3954,13 @@
   "external_training.dataset_open": "Open a new scene or switch the loaded dataset to Edit Mode before viewing an external trainer.",
   "external_training.dependencies": "Preparing NumPy; installing it if needed…",
   "external_training.camera_overlay": "Camera frustums (whole scene)",
-  "external_training.export_unavailable": "External previews cannot be exported. Open the model saved by the trainer to export it."
+  "external_training.export_unavailable": "External previews cannot be exported. Open the model saved by the trainer to export it.",
+  "external_training.result_invalid": "The saved model is incomplete, has changed, or has unsupported metadata.",
+  "external_training.result_unreadable": "The saved model is unavailable or unreadable. Keep its output folder available and check file permissions.",
+  "external_training.result_name": "{name} · saved model",
+  "external_training.import_result": "Import saved model",
+  "external_training.import_hint": "Available when the trainer has finished. Import the full saved best model, or last valid model, as an editable local model. Preview limits do not apply.",
+  "external_training.import_busy": "Another import is in progress. Wait for it to finish.",
+  "external_training.result_best": "Best evaluated: step {step} · {count} Gaussians · SH{degree}",
+  "external_training.result_last": "Last saved: step {step} · {count} Gaussians · SH{degree}"
 }

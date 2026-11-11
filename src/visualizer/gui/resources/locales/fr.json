@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Erreur plus faible",
+    "loss_higher_error": "Erreur plus élevée",
+    "unavailable": "Indisponible"
+  },
   "preferences.models.downloading": "Téléchargement…",
   "preferences.models.prepare": "Télécharger / réparer",
   "preferences.models.verifying": "Vérification de l’intégrité…",
@@ -1571,7 +1576,7 @@
     "selection_select_all": "Sélectionner toutes les gaussiennes",
     "selection_unselect": "Effacer la sélection de gaussiennes",
     "depth_view_mode": "Choisir le mode couleur de profondeur",
-    "gt_compare_mode": "Choisir la comparaison de référence RGB, normales ou profondeur",
+    "gt_compare_mode": "Choisir la visualisation de référence RGB, normales, profondeur ou perte",
     "depth_view_range": "Plage de visualisation de profondeur",
     "depth_view_near": "Limite proche de la plage de profondeur",
     "depth_view_far": "Limite éloignée de la plage de profondeur",
@@ -3949,5 +3954,13 @@
   "external_training.dataset_open": "Ouvrez une nouvelle scène ou passez le jeu de données chargé en mode édition avant d’afficher un entraîneur externe.",
   "external_training.dependencies": "Préparation de NumPy ; installation si nécessaire…",
   "external_training.camera_overlay": "Frustums des caméras (scène entière)",
-  "external_training.export_unavailable": "Les aperçus externes ne peuvent pas être exportés. Ouvrez le modèle enregistré par le processus d’entraînement pour l’exporter."
+  "external_training.export_unavailable": "Les aperçus externes ne peuvent pas être exportés. Ouvrez le modèle enregistré par le processus d’entraînement pour l’exporter.",
+  "external_training.result_invalid": "Le modèle enregistré est incomplet, a été modifié ou contient des métadonnées non prises en charge.",
+  "external_training.result_unreadable": "Le modèle enregistré est indisponible ou illisible. Conservez le dossier de sortie accessible et vérifiez les autorisations du fichier.",
+  "external_training.result_name": "{name} · modèle enregistré",
+  "external_training.import_result": "Importer le modèle enregistré",
+  "external_training.import_hint": "Disponible à la fin de l’entraînement. Importe le meilleur modèle complet enregistré, ou le dernier modèle valide, comme modèle local modifiable. Les limites de l’aperçu ne s’appliquent pas.",
+  "external_training.import_busy": "Une autre importation est en cours. Attendez sa fin.",
+  "external_training.result_best": "Meilleure évaluation : étape {step} · {count} gaussiennes · SH{degree}",
+  "external_training.result_last": "Dernier enregistrement : étape {step} · {count} gaussiennes · SH{degree}"
 }

@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Errore minore",
+    "loss_higher_error": "Errore maggiore",
+    "unavailable": "Non disponibile"
+  },
   "preferences.models.downloading": "Download in corso…",
   "preferences.models.prepare": "Scarica / ripara",
   "preferences.models.verifying": "Verifica dell’integrità…",
@@ -1584,7 +1589,7 @@
     "selection_select_all": "Seleziona tutte le gaussiane",
     "selection_unselect": "Cancella la selezione di gaussiane",
     "depth_view_mode": "Scegli il modo colore della profondità",
-    "gt_compare_mode": "Scegli il confronto con la ground truth RGB, delle normali o della profondità",
+    "gt_compare_mode": "Scegli la visualizzazione della ground truth RGB, delle normali, della profondità o della perdita",
     "depth_view_range": "Intervallo di visualizzazione della profondità",
     "depth_view_near": "Limite vicino dell'intervallo di profondità",
     "depth_view_far": "Limite lontano dell'intervallo di profondità",
@@ -3949,5 +3954,13 @@
   "external_training.dataset_open": "Apri una nuova scena o passa il dataset caricato alla modalità di modifica prima di visualizzare un trainer esterno.",
   "external_training.dependencies": "Preparazione di NumPy; installazione se necessaria…",
   "external_training.camera_overlay": "Frustum delle camere (intera scena)",
-  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo."
+  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo.",
+  "external_training.result_invalid": "Il modello salvato è incompleto, è stato modificato o contiene metadati non supportati.",
+  "external_training.result_unreadable": "Il modello salvato non è disponibile o non è leggibile. Mantieni disponibile la cartella di output e controlla i permessi del file.",
+  "external_training.result_name": "{name} · modello salvato",
+  "external_training.import_result": "Importa modello salvato",
+  "external_training.import_hint": "Disponibile al termine del training. Importa il miglior modello completo salvato, o l’ultimo modello valido, come modello locale modificabile. I limiti dell’anteprima non si applicano.",
+  "external_training.import_busy": "È già in corso un’importazione. Attendi che termini.",
+  "external_training.result_best": "Miglior valutato: passo {step} · {count} gaussiane · SH{degree}",
+  "external_training.result_last": "Ultimo salvato: passo {step} · {count} gaussiane · SH{degree}"
 }

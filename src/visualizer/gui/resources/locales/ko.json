@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "낮은 오차",
+    "loss_higher_error": "높은 오차",
+    "unavailable": "사용할 수 없음"
+  },
   "preferences.models.downloading": "다운로드 중…",
   "preferences.models.prepare": "다운로드 / 복구",
   "preferences.models.verifying": "무결성 확인 중…",
@@ -1571,7 +1576,7 @@
     "selection_select_all": "모든 가우시안 선택",
     "selection_unselect": "가우시안 선택 지우기",
     "depth_view_mode": "깊이 맵 색상 모드 선택",
-    "gt_compare_mode": "RGB, 법선 또는 깊이 정답 비교 선택",
+    "gt_compare_mode": "RGB, 법선, 깊이 또는 손실 정답 시각화 선택",
     "depth_view_range": "깊이 맵 시각화 범위",
     "depth_view_near": "깊이 범위의 가까운 경계",
     "depth_view_far": "깊이 범위의 먼 경계",
@@ -3949,5 +3954,13 @@
   "external_training.dataset_open": "외부 트레이너를 보려면 새 장면을 열거나 불러온 데이터셋을 편집 모드로 전환하세요.",
   "external_training.dependencies": "NumPy 준비 중; 필요한 경우 설치합니다…",
   "external_training.camera_overlay": "카메라 절두체 (전체 장면)",
-  "external_training.export_unavailable": "외부 미리보기는 내보낼 수 없습니다. 학습 프로세스가 저장한 모델을 열어 내보내세요."
+  "external_training.export_unavailable": "외부 미리보기는 내보낼 수 없습니다. 학습 프로세스가 저장한 모델을 열어 내보내세요.",
+  "external_training.result_invalid": "저장된 모델이 불완전하거나 변경되었거나 지원되지 않는 메타데이터를 포함하고 있습니다.",
+  "external_training.result_unreadable": "저장된 모델을 찾거나 읽을 수 없습니다. 출력 폴더에 접근할 수 있는지 확인하고 파일 권한을 점검하세요.",
+  "external_training.result_name": "{name} · 저장된 모델",
+  "external_training.import_result": "저장된 모델 가져오기",
+  "external_training.import_hint": "훈련이 끝난 후 사용할 수 있습니다. 저장된 최상의 전체 모델 또는 마지막 유효 모델을 편집 가능한 로컬 모델로 가져옵니다. 미리보기 제한은 적용되지 않습니다.",
+  "external_training.import_busy": "다른 가져오기가 진행 중입니다. 완료될 때까지 기다려 주세요.",
+  "external_training.result_best": "최고 평가: 단계 {step} · 가우시안 {count}개 · SH{degree}",
+  "external_training.result_last": "마지막 저장: 단계 {step} · 가우시안 {count}개 · SH{degree}"
 }

@@ -6,6 +6,7 @@
 
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/frame_contract.hpp"
+#include "rendering/rasterizer/vulkan/src/gt_loss_heatmap.h"
 #include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <array>
@@ -45,7 +46,25 @@ namespace lfs::vis {
         RGB = 0,
         Normal = 1,
         Depth = 2,
+        Loss = 3,
     };
+
+    [[nodiscard]] inline bool gtComparisonUsesRGBReference(
+        const GTComparisonMode mode) noexcept {
+        return mode == GTComparisonMode::RGB ||
+               mode == GTComparisonMode::Loss;
+    }
+
+    [[nodiscard]] inline bool gtComparisonShowsLoss(
+        const GTComparisonMode mode) noexcept {
+        return mode == GTComparisonMode::Loss;
+    }
+
+    [[nodiscard]] inline glm::vec3 gtLossHeatmapColor(
+        const glm::vec3& ground_truth,
+        const glm::vec3& rendered) noexcept {
+        return lfs::rendering::lfsGtLossHeatmapColor(ground_truth, rendered);
+    }
 
     enum class SplitViewPanelId : uint8_t {
         Left = 0,
@@ -459,6 +478,7 @@ namespace lfs::vis {
         case GTComparisonMode::RGB:
         case GTComparisonMode::Normal:
         case GTComparisonMode::Depth:
+        case GTComparisonMode::Loss:
             break;
         default:
             settings.gt_comparison_mode = GTComparisonMode::RGB;
