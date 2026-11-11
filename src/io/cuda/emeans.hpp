@@ -28,10 +28,6 @@ namespace lfs::io {
         int k,
         int epochs = 10);
 
-    // Mean squared quantization error per SH dimension of a swizzled shN palette assignment.
-    double sh_palette_mse(const Tensor& shN_swizzled, int n_points, int sh_coeffs,
-                          const Tensor& centroids, const Tensor& labels);
-
     // Internal CUDA launcher: SH3 swizzled rows, float32 centroids/norms and
     // preallocated int32 labels. Norms must be FP32 squared centroid norms.
     // fast screens candidates in FP16 and preserves FP32 winners; otherwise a

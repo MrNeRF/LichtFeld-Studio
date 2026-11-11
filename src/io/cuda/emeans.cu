@@ -1336,44 +1336,7 @@ namespace lfs::io {
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
                 centroids[static_cast<long long>(c) * N_DIMS + d] =
-                    sums[static_cast<long long>(c) * N_DIMS + d] * inv;
-            }
-        }
-
-        template <int N_DIMS>
-        __global__ void palette_squared_error_kernel(
-            const float4* __restrict__ shN,
-            const float* __restrict__ centroids,
-            const int* __restrict__ labels,
-            const int n_points,
-            const int k,
-            double* __restrict__ total) {
-            const int i = blockIdx.x * blockDim.x + threadIdx.x;
-            float err = 0.0f;
-            if (i < n_points) {
-                const int label = labels[i];
-                if (label >= 0 && label < k) {
-#pragma unroll
-                    for (int d = 0; d < N_DIMS; ++d) {
-                        const float diff = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(i),
-                                                                        static_cast<std::uint32_t>(d)) -
-                                           centroids[static_cast<long long>(label) * N_DIMS + d];
-                        err = fmaf(diff, diff, err);
-                    }
-                }
-            }
-            for (int offset = 16; offset > 0; offset >>= 1)
-                err += __shfl_down_sync(0xffffffffu, err, offset);
-            __shared__ float warp_sums[BLOCK_SIZE / 32];
-            if ((threadIdx.x & 31) == 0)
-                warp_sums[threadIdx.x / 32] = err;
-            __syncthreads();
-            if (threadIdx.x < 32) {
-                float block_sum = threadIdx.x < BLOCK_SIZE / 32 ? warp_sums[threadIdx.x] : 0.0f;
-                for (int offset = 16; offset > 0; offset >>= 1)
-                    block_sum += __shfl_down_sync(0xffffffffu, block_sum, offset);
-                if (threadIdx.x == 0)
-                    atomicAdd(total, static_cast<double>(block_sum));
+                    fixed_sum_value(sums[static_cast<long long>(c) * N_DIMS + d]) * inv;
             }
         }
 
@@ -1856,24 +1819,6 @@ namespace lfs::io {
             return {centroids, labels};
         }
 
-        template <int N_DIMS>
-        double palette_mse_impl(const Tensor& shN_swizzled, const int n, const Tensor& centroids, const Tensor& labels) {
-            auto shN_gpu = as_cuda_contiguous(shN_swizzled);
-            auto centroids_gpu = as_cuda_contiguous(centroids);
-            auto labels_gpu = as_cuda_contiguous(labels);
-            double* d_total = nullptr;
-            LFS_CUDA_CHECK(cudaMalloc(&d_total, sizeof(double)));
-            LFS_CUDA_CHECK(cudaMemset(d_total, 0, sizeof(double)));
-            palette_squared_error_kernel<N_DIMS><<<(n + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
-                reinterpret_cast<const float4*>(shN_gpu.ptr<float>()), centroids_gpu.ptr<float>(),
-                labels_gpu.ptr<int>(), n, static_cast<int>(centroids_gpu.size(0)), d_total);
-            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.palette_squared_error");
-            double total = 0.0;
-            LFS_CUDA_CHECK(cudaMemcpy(&total, d_total, sizeof(double), cudaMemcpyDeviceToHost));
-            LFS_CUDA_CHECK(cudaFree(d_total));
-            return total / (static_cast<double>(n) * N_DIMS);
-        }
-
     } // anonymous namespace
 
     std::tuple<Tensor, Tensor> emeans_sh_swizzled(
@@ -1910,25 +1855,6 @@ namespace lfs::io {
         default:
             LOG_ERROR("emeans_sh_swizzled unsupported SH coefficient count %d. Supported: 3, 8, 15", sh_coeffs);
             return {Tensor(), Tensor()};
-        }
-    }
-
-    double sh_palette_mse(const Tensor& shN_swizzled, const int n_points, const int sh_coeffs,
-                          const Tensor& centroids, const Tensor& labels) {
-        if (!shN_swizzled.is_valid() || !centroids.is_valid() || !labels.is_valid() || n_points <= 0 ||
-            centroids.ndim() != 2 || centroids.size(1) != static_cast<size_t>(sh_coeffs * 3) ||
-            labels.numel() < static_cast<size_t>(n_points)) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        switch (sh_coeffs * 3) {
-        case 9:
-            return palette_mse_impl<9>(shN_swizzled, n_points, centroids, labels);
-        case 24:
-            return palette_mse_impl<24>(shN_swizzled, n_points, centroids, labels);
-        case 45:
-            return palette_mse_impl<45>(shN_swizzled, n_points, centroids, labels);
-        default:
-            return std::numeric_limits<double>::quiet_NaN();
         }
     }
 

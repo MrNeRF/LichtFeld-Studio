@@ -1698,9 +1698,6 @@ namespace lfs::io {
             int sh_dims = 0;
             int palette_size = 0;
             Tensor shN_float_swizzled;
-            Tensor sh_palette_centroids;
-            Tensor sh_palette_labels;
-            double sh_palette_clustering_ms = 0.0;
             double t_sh_palette_launch_ms = 0.0;
             double t_sh_palette_done_ms = 0.0;
             double t_join_ms = 0.0;
@@ -2273,9 +2270,6 @@ namespace lfs::io {
                 t_sh_palette_done_ms = sh_palette_data.done_ms;
                 auto sh_centroids = std::move(sh_palette_data.centroids);
                 auto sh_labels = std::move(sh_palette_data.labels);
-                sh_palette_centroids = sh_centroids;
-                sh_palette_labels = sh_labels;
-                sh_palette_clustering_ms = sh_palette_data.milliseconds;
                 if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
                     wait_for_webp_encodes();
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -2467,15 +2461,7 @@ namespace lfs::io {
                     milliseconds(archive_started, archive_finished),
                     milliseconds(export_started, export_finished));
             }
-            if (sh_palette_centroids.is_valid() && sh_palette_labels.is_valid()) {
-                // Measured after total_ms so the quality metric does not affect export timing.
-                LOG_INFO("SOG SH palette: method=emeans k={} dims={} epochs={} clustering_ms={:.3f} mse={:.9g}",
-                         sh_palette_centroids.size(0), sh_dims, options.emeans_epochs, sh_palette_clustering_ms,
-                         sh_palette_mse(shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                                        sh_palette_centroids, sh_palette_labels));
-            }
-            LOG_INFO("SOG export complete: {} splats, total_ms={:.3f}", num_rows,
-                     milliseconds(export_started, export_finished));
+            LOG_INFO("SOG export complete: {} splats", num_rows);
             return {};
         } catch (const lfs::Exception& e) {
             lfs::Error error = lfs::Error(e.error())

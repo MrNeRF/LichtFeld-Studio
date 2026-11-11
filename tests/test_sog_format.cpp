@@ -911,8 +911,13 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
                 ASSERT_NEAR(centroids_cpu.ptr<float>()[c * dims + d], sums[c * dims + d] / counts[c], 1e-4)
                     << "centroid " << c << " dim " << d;
 
-        const double mse = sh_palette_mse(points, int(n), sh_coeffs, centroids, labels);
-        EXPECT_TRUE(std::isfinite(mse));
+        double squared_error = 0.0;
+        for (size_t i = 0; i < n; ++i)
+            for (size_t d = 0; d < dims; ++d) {
+                const double diff = host[i * dims + d] - centroids_cpu.ptr<float>()[label[i] * dims + d];
+                squared_error += diff * diff;
+            }
+        const double mse = squared_error / static_cast<double>(n * dims);
         EXPECT_LE(mse, double(sigma) * sigma) << "e-means left a mode unresolved";
     }
 }
