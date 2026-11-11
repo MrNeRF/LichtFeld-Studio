@@ -7,6 +7,9 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_backend.hpp"
 #include "tensor_backend_trace_listener.hpp"
+#ifdef LFS_TEST_FINALIZE_PYTHON
+#include "python/runner.hpp"
+#endif
 #include <gtest/gtest.h>
 #include <iostream>
 #include <optional>
@@ -87,6 +90,11 @@ int main(int argc, char** argv) {
 #endif
 
     const int result = RUN_ALL_TESTS();
+
+#ifdef LFS_TEST_FINALIZE_PYTHON
+    // Windows unloads DLL statics at process exit; release Python owners with the GIL held.
+    lfs::python::finalize();
+#endif
 
     // ordered GPU release (TLS caches, PPISP statics, mirror mults, …)
     // then pool/arena/pinned shutdown while CUDA is still healthy. After that,
