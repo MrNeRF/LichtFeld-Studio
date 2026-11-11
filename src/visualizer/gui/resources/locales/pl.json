@@ -1374,10 +1374,8 @@
     "orthographic": "Ortograficzna",
     "sequencer": "Sekwencer",
     "histogram": "Histogram",
-    "depth_map": "Mapa głębokości",
     "viewport_export": "Eksport widoku",
     "depth_mode_disable": "Wyłącz tryb głębi",
-    "depth_map_disable": "Wyłącz mapę głębi",
     "depth_mode_enable": "Włącz tryb głębi",
     "delete_selection": "Usuń zaznaczenie",
     "undo": "Cofnij",
@@ -1400,7 +1398,8 @@
     "scale_distance_measured": "Zmierzono:",
     "scale_distance_set": "Ustaw odległość:",
     "scale_distance_apply": "Zatwierdź skalę",
-    "scale_distance_reset": "Zresetuj punkty"
+    "scale_distance_reset": "Zresetuj punkty",
+    "render_modes": "Tryby renderowania"
   },
   "transform": {
     "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
@@ -1576,14 +1575,11 @@
     "selection_invert": "Odwróć zaznaczenie gaussianów",
     "selection_select_all": "Zaznacz wszystkie gaussiany",
     "selection_unselect": "Wyczyść zaznaczenie gaussianów",
-    "depth_view_panel": "Sterowanie mapą głębi",
-    "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
     "gt_compare_mode": "Wybierz wizualizację referencji RGB, normalnych, głębi lub straty",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",
     "depth_view_far": "Daleka granica zakresu głębi",
-    "depth_view_close": "Wyłącz widok głębi",
     "viewport_export_panel": "Elementy eksportu widoku",
     "viewport_export_tool": "Eksportuj obraz widoku",
     "viewport_export_format": "Wybierz PNG lub JPEG",
@@ -1668,7 +1664,8 @@
     "seq_preview_options": "Rozmiar podglądu",
     "seq_path_menu": "Pliki ścieżki kamery",
     "seq_ply_menu": "Pliki sekwencji PLY",
-    "seq_projection": "Projekcja"
+    "seq_projection": "Projekcja",
+    "render_modes": "Wybierz RGB, głębię lub normalne powierzchni w przestrzeni kamery. Normalne wymagają modelu splatów."
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",

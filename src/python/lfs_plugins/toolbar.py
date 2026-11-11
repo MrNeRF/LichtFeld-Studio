@@ -1107,6 +1107,7 @@ class _GizmoToolbarController:
             tool_def = ToolRegistry.get("builtin.select")
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
+            lf.set_render_mode_controls_open(False)
             if lf.ui.get_active_tool() != "builtin.select":
                 ToolRegistry.set_active("builtin.select")
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
@@ -1118,8 +1119,11 @@ class _GizmoToolbarController:
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
+            selector_was_open = lf.get_render_mode_controls_open()
+            lf.set_render_mode_controls_open(False)
             if lf.ui.get_active_tool() == value:
-                ToolRegistry.clear_active()
+                if not selector_was_open:
+                    ToolRegistry.clear_active()
             else:
                 if value == self._CROP_TOOL_ID:
                     self._activate_crop_tool("translate")
@@ -1678,11 +1682,12 @@ class _ViewportToolbarController:
                 self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
-            elif self._gt_compare_controls.visible:
-                self._hide_tool_overlay(doc, "depth-view-block")
+            elif self._depth_view_controls.visible:
+                self._hide_tool_overlay(doc, "gt-compare-mode-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
-            elif self._depth_view_controls.visible:
+            elif self._gt_compare_controls.visible:
+                self._hide_tool_overlay(doc, "depth-view-block")
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
             else:
@@ -1712,13 +1717,17 @@ class _ViewportToolbarController:
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
+        elif self._depth_view_controls.visible:
+            self._hide_tool_overlay(doc, "gt-compare-mode-block")
+            self._hide_tool_overlay(doc, "selection-block")
+            self._hide_tool_overlay(doc, "transform-block")
         elif self._gt_compare_controls.visible:
             self._hide_tool_overlay(doc, "depth-view-block")
             self._hide_tool_overlay(doc, "selection-block")
             self._hide_tool_overlay(doc, "transform-block")
-        elif self._depth_view_controls.visible:
-            self._hide_tool_overlay(doc, "selection-block")
-            self._hide_tool_overlay(doc, "transform-block")
+        else:
+            self._selection_controls.update(doc)
+            self._transform_controls.update(doc)
 
         try:
             import lichtfeld as lf
@@ -1764,7 +1773,7 @@ class _ViewportToolbarController:
             numeric_overlay_available=not (
                 self._viewport_export_controls.visible
                 or self._gt_compare_controls._gt_compare_active()
-                or self._depth_view_controls._depth_view_active()
+                or self._depth_view_controls._render_mode_selector_open()
             ),
         )
 
@@ -2180,7 +2189,7 @@ class _ViewportToolbarController:
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             self._viewport_export_controls.visible,
             self._gt_compare_controls._gt_compare_active(),
-            self._depth_view_controls._depth_view_active(),
+            self._depth_view_controls._render_mode_selector_open(),
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             _bottom_dock_panel_space(_SEQUENCER_PANEL_ID),
             call("", getattr(lf.ui, "get_bottom_dock_active_tab", None)),

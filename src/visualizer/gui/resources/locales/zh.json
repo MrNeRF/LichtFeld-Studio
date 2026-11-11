@@ -1374,10 +1374,8 @@
     "orthographic": "正交",
     "sequencer": "序列器",
     "histogram": "直方图",
-    "depth_map": "深度图",
     "viewport_export": "视口导出",
     "depth_mode_disable": "禁用深度模式",
-    "depth_map_disable": "禁用深度图",
     "depth_mode_enable": "启用深度模式",
     "delete_selection": "删除选择",
     "undo": "撤销",
@@ -1400,7 +1398,8 @@
     "scale_distance_measured": "测量值:",
     "scale_distance_set": "设置距离:",
     "scale_distance_apply": "确认缩放",
-    "scale_distance_reset": "重置点"
+    "scale_distance_reset": "重置点",
+    "render_modes": "渲染模式"
   },
   "transform": {
     "scale_apriltag": "使用 AprilTag 缩放场景",
@@ -1576,14 +1575,11 @@
     "selection_invert": "反转高斯选择",
     "selection_select_all": "选择所有高斯",
     "selection_unselect": "清除高斯选择",
-    "depth_view_panel": "深度图控件",
-    "depth_view_tool": "活动深度图视图",
     "depth_view_mode": "选择深度图颜色模式",
     "gt_compare_mode": "选择 RGB、法线、深度或损失真值可视化",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
     "depth_view_far": "深度范围远端",
-    "depth_view_close": "禁用深度图视图",
     "viewport_export_panel": "视口导出控件",
     "viewport_export_tool": "导出视口图像",
     "viewport_export_format": "选择 PNG 或 JPEG",
@@ -1668,7 +1664,8 @@
     "seq_preview_options": "预览尺寸",
     "seq_path_menu": "相机路径文件",
     "seq_ply_menu": "PLY 序列文件",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "选择 RGB、深度或相机空间的表面法线。法线需要泼溅模型。"
   },
   "exit_popup": {
     "title": "退出应用程序？",

@@ -537,7 +537,7 @@ namespace lfs::vis {
             selection_overlay_enabled && panelMatches(ctx.cursor_preview.panel, render_panel);
         const bool ring_selection_mode = ctx.cursor_preview.selection_mode == SelectionPreviewMode::Rings;
         const bool outline = selection_overlay_enabled && ctx.settings.selection_outline &&
-                             !ctx.settings.point_cloud_mode && !ctx.settings.depth_view &&
+                             !ctx.settings.point_cloud_mode && !ctx.settings.depth_view && !normalViewEnabled(ctx.settings) &&
                              std::any_of(ctx.scene_state.selected_node_mask.begin(), ctx.scene_state.selected_node_mask.end(),
                                          [](bool selected) { return selected; });
 
@@ -606,7 +606,8 @@ namespace lfs::vis {
             .depth_view = ctx.settings.depth_view &&
                           !(splitViewUsesGTComparison(ctx.settings.split_view_mode) &&
                             gtComparisonShowsLoss(ctx.settings.gt_comparison_mode)),
-            .require_exact_depth = ctx.exact_surface_picking || ctx.settings.show_camera_frustums ||
+            .normal_view = normalViewEnabled(ctx.settings),
+            .require_exact_depth = normalViewEnabled(ctx.settings) || ctx.exact_surface_picking || ctx.settings.show_camera_frustums ||
                                    std::any_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),
                                                [](const auto& mesh) { return mesh.mesh != nullptr; }),
             .depth_view_min = ctx.settings.depth_view_min,
@@ -626,7 +627,7 @@ namespace lfs::vis {
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
         // Align can sample anywhere, including away from camera overlays.
-        if (!ctx.exact_surface_picking && ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view &&
+        if (!ctx.exact_surface_picking && ctx.settings.show_camera_frustums && !ctx.training_active && !request.gut && !request.depth_view && !request.normal_view &&
             ctx.settings.split_view_mode == SplitViewMode::Disabled &&
             !render_panel && (!source_viewport || source_viewport == &ctx.viewport) &&
             std::none_of(ctx.scene_state.meshes.begin(), ctx.scene_state.meshes.end(),

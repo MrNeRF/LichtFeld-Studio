@@ -817,6 +817,7 @@ namespace lfs::vis::project {
                 required_field("orthographic", &RenderSettings::orthographic),
                 required_field("ortho_scale", &RenderSettings::ortho_scale),
                 required_field("depth_view", &RenderSettings::depth_view),
+                optional_field("normal_view", &RenderSettings::normal_view),
                 required_field("depth_view_min", &RenderSettings::depth_view_min),
                 required_field("depth_view_max", &RenderSettings::depth_view_max),
                 enum_field("depth_visualization_mode", &RenderSettings::depth_visualization_mode,

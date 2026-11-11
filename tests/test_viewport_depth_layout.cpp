@@ -399,7 +399,7 @@ namespace {
             std::string markup = original;
             markup.replace(markup.find("<head>"), 6, "<head><link type=\"text/rcss\" href=\"components.rcss\"/>");
             for (const auto& [binding, key] : std::array{
-                     std::pair{"depth_view_tool_label", "toolbar.depth_map"},
+                     std::pair{"render_modes_label", "toolbar.render_modes"},
                      std::pair{"ui_color_label", "ui.color"}, std::pair{"ui_gray_label", "ui.gray"},
                      std::pair{"ui_near_label", "ui.near"}, std::pair{"ui_far_label", "ui.far"}}) {
                 const std::string full_key(key);

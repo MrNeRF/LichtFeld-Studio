@@ -1374,10 +1374,8 @@
     "orthographic": "Orthographique",
     "sequencer": "Séquenceur",
     "histogram": "Histogramme",
-    "depth_map": "Carte de profondeur",
     "viewport_export": "Exporter la vue",
     "depth_mode_disable": "Désactiver le mode profondeur",
-    "depth_map_disable": "Désactiver la carte de profondeur",
     "depth_mode_enable": "Activer le mode profondeur",
     "delete_selection": "Supprimer la sélection",
     "undo": "Annuler",
@@ -1400,7 +1398,8 @@
     "scale_distance_measured": "Mesuré :",
     "scale_distance_set": "Définir la distance :",
     "scale_distance_apply": "Confirmer l’échelle",
-    "scale_distance_reset": "Réinitialiser les points"
+    "scale_distance_reset": "Réinitialiser les points",
+    "render_modes": "Modes de rendu"
   },
   "transform": {
     "scale_apriltag": "Mettre la scène à l’échelle avec AprilTags",
@@ -1576,14 +1575,11 @@
     "selection_invert": "Inverser la sélection de gaussiennes",
     "selection_select_all": "Sélectionner toutes les gaussiennes",
     "selection_unselect": "Effacer la sélection de gaussiennes",
-    "depth_view_panel": "Contrôles de la carte de profondeur",
-    "depth_view_tool": "Vue de carte de profondeur active",
     "depth_view_mode": "Choisir le mode couleur de profondeur",
     "gt_compare_mode": "Choisir la visualisation de référence RGB, normales, profondeur ou perte",
     "depth_view_range": "Plage de visualisation de profondeur",
     "depth_view_near": "Limite proche de la plage de profondeur",
     "depth_view_far": "Limite éloignée de la plage de profondeur",
-    "depth_view_close": "Désactiver la vue de profondeur",
     "viewport_export_panel": "Commandes d'export du viewport",
     "viewport_export_tool": "Exporter l'image du viewport",
     "viewport_export_format": "Choisir PNG ou JPEG",
@@ -1668,7 +1664,8 @@
     "seq_preview_options": "Taille de l’aperçu",
     "seq_path_menu": "Fichiers du parcours caméra",
     "seq_ply_menu": "Fichiers de séquence PLY",
-    "seq_projection": "Projection"
+    "seq_projection": "Projection",
+    "render_modes": "Choisir RGB, profondeur ou normales de surface dans l’espace caméra. Les normales nécessitent un modèle de splats."
   },
   "exit_popup": {
     "title": "Quitter l'Application ?",
