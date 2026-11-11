@@ -639,6 +639,9 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     target_compile_definitions(lichtfeld_rmlui_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
     target_link_libraries(lichtfeld_rmlui_tests PRIVATE
         lfs_visualizer lfs_preprocessing lfs_core lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(LFS_BUILD_TRAINER)
+        target_link_libraries(lichtfeld_rmlui_tests PRIVATE lfs_training)
+    endif()
     if(MSVC)
         target_link_options(lichtfeld_rmlui_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
         target_link_libraries(lichtfeld_rmlui_tests PRIVATE delayimp)
@@ -702,7 +705,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     endif()
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CameraMaskApplyTest.UnsavedMaskSurvivesTrainingCompletionAndReopen:CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -712,6 +715,12 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         # individual contracts or disabling coverage.
         TIMEOUT 300
     )
+    if(LFS_HAS_CUDA)
+        # This training/reopen path needs a real Vulkan window and CUDA interop.
+        add_test(NAME lichtfeld.camera_mask_training_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CameraMaskApplyTest.UnsavedMaskSurvivesTrainingCompletionAndReopen)
+        set_tests_properties(lichtfeld.camera_mask_training_gpu PROPERTIES
+            LABELS "gpu;interop;camera;training" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endif()
     add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*:VisualizerImplResetTest.StartupRecoveryScansRootAndProjectLocationScratch)
     add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings:VisualizerImplResetTest.ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable)
     set_tests_properties(lichtfeld.collision_archive PROPERTIES LABELS "cpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
