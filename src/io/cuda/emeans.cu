@@ -1821,6 +1821,18 @@ namespace lfs::io {
                 }
             }
 
+            // Frees are stream-ordered, so queued training kernels keep their inputs
+            // while the final pass reuses the memory.
+            ivf.reset();
+            shuffled = Tensor();
+            shuffle_keys = Tensor();
+            sorted_keys = Tensor();
+            identity = Tensor();
+            order = Tensor();
+            sort_temp = Tensor();
+            best_keys = Tensor();
+            batch_labels = Tensor();
+
             // Last-epoch-mean finalization, then one exact full assignment and
             // refit, so the palette is the mean of each label's members.
             emeans_mean_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
