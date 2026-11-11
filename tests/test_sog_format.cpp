@@ -869,8 +869,10 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
         size_t n;
         int k;
     };
-    // Exact candidate search, the inverted-file search (k >= 4096) and the n <= k shortcut.
-    for (const auto [sh_coeffs, n, k] : {Case{15, 20000, 256}, Case{3, 60000, 4096}, Case{8, 100, 256}}) {
+    // Exact candidate search, the inverted-file search (k >= 4096) and the n <= k shortcut
+    // across SH1-SH3; SH3 final labels come from the screened half-precision search.
+    for (const auto [sh_coeffs, n, k] : {Case{15, 20000, 256}, Case{8, 20000, 256}, Case{3, 60000, 4096},
+                                         Case{15, 60000, 4096}, Case{8, 100, 256}}) {
         SCOPED_TRACE(std::format("sh_coeffs={} n={} k={}", sh_coeffs, n, k));
         const size_t dims = static_cast<size_t>(sh_coeffs) * 3;
         // Several centroids per well-separated mode: missing any mode costs far more than sigma^2.
@@ -926,6 +928,27 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
         const auto centroids_again_cpu = centroids_again.cpu(), labels_again_cpu = labels_again.cpu();
         EXPECT_EQ(std::memcmp(centroids_cpu.ptr<float>(), centroids_again_cpu.ptr<float>(), palette * dims * sizeof(float)), 0);
         EXPECT_TRUE(std::equal(label, label + n, labels_again_cpu.ptr<int>()));
+    }
+}
+
+TEST_F(SogFormatTest, EMeansPaletteKeepsLargeCoefficients) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    constexpr int sh_coeffs = 3;
+    constexpr size_t n = 64, dims = 9;
+    for (const float scale : {4096.0f, 1.0e12f}) {
+        SCOPED_TRACE(scale);
+        auto points = Tensor::zeros({sh_swizzled_float_count(n, sh_coeffs)}, Device::CPU);
+        for (size_t i = 0; i < n; ++i)
+            for (size_t d = 0; d < dims; ++d)
+                points.ptr<float>()[sh_swizzled_index(i, d / 4, sh_coeffs) * 4 + d % 4] =
+                    (d % 2 ? -scale : scale) * (1.0f + static_cast<float>(i % 4) / 8.0f);
+        points = points.cuda();
+
+        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, 1, 10);
+        const auto centroids_cpu = centroids.cpu();
+        for (size_t d = 0; d < dims; ++d)
+            EXPECT_FLOAT_EQ(centroids_cpu.ptr<float>()[d], (d % 2 ? -scale : scale) * 1.1875f) << "dim " << d;
     }
 }
 
