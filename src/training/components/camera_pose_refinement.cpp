@@ -57,6 +57,16 @@ namespace lfs::training {
             return std::sqrt(double(v[0]) * v[0] + double(v[1]) * v[1] + double(v[2]) * v[2]);
         }
 
+        lfs::Error pose_error(const lfs::ErrorCode code, std::string message, const lfs::core::SourceSite site) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = site,
+            });
+        }
+
         // Moves the camera to the row-major 4x4 world-to-camera pose w2c.
         void set_camera_pose(lfs::core::Camera& camera, const float* w2c, cudaStream_t stream) {
             camera.set_pose(
@@ -147,14 +157,17 @@ namespace lfs::training {
             set_camera_pose(*cameras_[row], start_pose(static_cast<int>(row)), stream_);
     }
 
-    std::expected<std::unique_ptr<CameraPoseRefinement>, std::string> CameraPoseRefinement::create(
+    lfs::Result<std::unique_ptr<CameraPoseRefinement>> CameraPoseRefinement::create(
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras, const int iterations) {
         if (cameras.empty())
-            return std::unexpected("--pose-opt: there are no training cameras");
+            return pose_error(lfs::ErrorCode::FailedPrecondition, "--pose-opt: there are no training cameras",
+                              LFS_SOURCE_SITE_CURRENT());
         for (const auto& camera : cameras) {
             if (camera->camera_model_type() != lfs::core::CameraModelType::PINHOLE && !camera->is_undistort_prepared())
-                return std::unexpected(std::format(
-                    "--pose-opt needs pinhole cameras or --undistort ('{}' is not a pinhole camera)", camera->image_name()));
+                return pose_error(lfs::ErrorCode::Unsupported,
+                                  std::format("--pose-opt needs pinhole cameras or --undistort ('{}' is not a pinhole camera)",
+                                              camera->image_name()),
+                                  LFS_SOURCE_SITE_CURRENT());
         }
         return std::make_unique<CameraPoseRefinement>(std::move(cameras), iterations);
     }
@@ -209,11 +222,13 @@ namespace lfs::training {
                            move.max, turn.median, turn.p90, turn.max);
     }
 
-    std::expected<void, std::string> CameraPoseRefinement::write_table(const std::filesystem::path& path) const {
+    lfs::Status CameraPoseRefinement::write_table(const std::filesystem::path& path) const {
         const auto state = offsets_.download();
-        std::ofstream out(path);
+        std::ofstream out(path, std::ios::binary);
         if (!out)
-            return std::unexpected(std::format("cannot write '{}'", lfs::core::path_to_utf8(path)));
+            return lfs::Status::failure(pose_error(lfs::ErrorCode::PermissionDenied,
+                                                   std::format("cannot write '{}'", lfs::core::path_to_utf8(path)),
+                                                   LFS_SOURCE_SITE_CURRENT()));
         out << "name\tupdates\tmove_units\tturn_deg\tmove_x\tmove_y\tmove_z\tturn_x_deg\tturn_y_deg\tturn_z_deg\n";
         for (size_t row = 0; row < offsets_.cameras().size(); ++row) {
             const float* off = state.offsets.data() + 6 * row;
@@ -226,7 +241,9 @@ namespace lfs::training {
                                turn[1] * kRadToDeg, turn[2] * kRadToDeg);
         }
         if (!out)
-            return std::unexpected(std::format("cannot write '{}'", lfs::core::path_to_utf8(path)));
+            return lfs::Status::failure(pose_error(lfs::ErrorCode::DataLoss,
+                                                   std::format("writing '{}' failed", lfs::core::path_to_utf8(path)),
+                                                   LFS_SOURCE_SITE_CURRENT()));
         return {};
     }
 
@@ -280,9 +297,9 @@ namespace lfs::training {
         }
     }
 
-    std::expected<void, std::string> write_scene_cameras_colmap(const lfs::core::Scene& scene,
-                                                                const std::filesystem::path& dataset_path,
-                                                                const std::filesystem::path& output_sparse_path) {
+    lfs::Status write_scene_cameras_colmap(const lfs::core::Scene& scene,
+                                           const std::filesystem::path& dataset_path,
+                                           const std::filesystem::path& output_sparse_path) {
         std::vector<lfs::io::ColmapCameraWriteData> cameras;
         for (const auto& camera : scene.getAllCameras()) {
             if (camera)
@@ -300,7 +317,7 @@ namespace lfs::training {
         auto written = lfs::io::write_colmap_reconstruction(dataset_path, output_sparse_path, cameras, nullptr,
                                                             points_transform);
         if (!written)
-            return std::unexpected(written.error().format());
+            return lfs::Status::failure(lfs::io::to_lfs_error(written.error(), LFS_SOURCE_SITE_CURRENT()));
         return {};
     }
 

@@ -4,9 +4,9 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
-#include <expected>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -71,7 +71,7 @@ namespace lfs::training {
     class CameraPoseRefinement {
     public:
         // Fails unless every camera is drawn with the pinhole projection (pinhole, or undistorted).
-        static std::expected<std::unique_ptr<CameraPoseRefinement>, std::string> create(
+        static lfs::Result<std::unique_ptr<CameraPoseRefinement>> create(
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras, int iterations);
         CameraPoseRefinement(std::vector<std::shared_ptr<lfs::core::Camera>> cameras, int iterations);
 
@@ -84,7 +84,7 @@ namespace lfs::training {
         [[nodiscard]] bool reports_at(int iteration) const;
         [[nodiscard]] std::string summary(int iteration) const;
         // One row per camera: updates, move and turn, with their world-axis components.
-        [[nodiscard]] std::expected<void, std::string> write_table(const std::filesystem::path& path) const;
+        [[nodiscard]] lfs::Status write_table(const std::filesystem::path& path) const;
 
     private:
         [[nodiscard]] float rate(int iteration) const;
@@ -120,7 +120,7 @@ namespace lfs::training {
     };
 
     // The scene's cameras as COLMAP sparse files in output_sparse_path, written over the dataset's model.
-    [[nodiscard]] std::expected<void, std::string> write_scene_cameras_colmap(
+    [[nodiscard]] lfs::Status write_scene_cameras_colmap(
         const lfs::core::Scene& scene,
         const std::filesystem::path& dataset_path,
         const std::filesystem::path& output_sparse_path);

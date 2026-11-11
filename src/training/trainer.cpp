@@ -3194,8 +3194,8 @@ namespace lfs::training {
                 auto refinement = CameraPoseRefinement::create(train_dataset_->get_cameras(),
                                                                static_cast<int>(params.optimization.iterations));
                 if (!refinement)
-                    return std::unexpected(refinement.error());
-                pose_refinement_ = std::move(*refinement);
+                    return std::unexpected(std::string(refinement.error().user_message()));
+                pose_refinement_ = std::move(refinement).value();
             }
 
             // Initialize background color tensor from params
@@ -9975,12 +9975,13 @@ namespace lfs::training {
                 }
                 const auto& output = params_.dataset.output_path;
                 if (auto written = pose_refinement_->write_table(output / "pose_refinement.tsv"); !written)
-                    LOG_ERROR("Pose refinement table: {}", written.error());
+                    LOG_ERROR("Pose refinement table: {}", lfs::format_for_developer(written.error()));
                 if (scene_) {
                     if (auto written = write_scene_cameras_colmap(*scene_, params_.dataset.data_path,
                                                                   output / "cameras_refined");
                         !written)
-                        LOG_WARN("Refined cameras not written as COLMAP files: {}", written.error());
+                        LOG_WARN("Refined cameras not written as COLMAP files: {}",
+                                 lfs::format_for_developer(written.error()));
                 }
             }
             if (progress_ && strategy_) {
