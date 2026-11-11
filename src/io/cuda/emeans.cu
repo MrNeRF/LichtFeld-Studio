@@ -1313,12 +1313,23 @@ namespace lfs::io {
             const int pair_count,
             float* __restrict__ centroids,
             float* __restrict__ norms,
-            float* __restrict__ ema_counts) {
+            float* __restrict__ ema_counts,
+            FixedSum* __restrict__ epoch_sums,
+            int* __restrict__ epoch_counts) {
             const int i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i >= pair_count)
                 return;
             const int dead = pairs[i].x;
             const int donor = pairs[i].y;
+            // Pre-split last-epoch statistics would restore the old centers in the final mean.
+            if (epoch_sums) {
+                for (int d = 0; d < N_DIMS; ++d) {
+                    epoch_sums[static_cast<long long>(dead) * N_DIMS + d] = 0;
+                    epoch_sums[static_cast<long long>(donor) * N_DIMS + d] = 0;
+                }
+                epoch_counts[dead] = 0;
+                epoch_counts[donor] = 0;
+            }
             float* dead_centroid = centroids + static_cast<long long>(dead) * N_DIMS;
             float* donor_centroid = centroids + static_cast<long long>(donor) * N_DIMS;
             float dead_norm = 0.0f;
@@ -1729,7 +1740,7 @@ namespace lfs::io {
             std::uniform_real_distribution<float> uniform(std::numeric_limits<float>::min(), 1.0f);
             long long revived_total = 0;
 
-            auto revive = [&]() {
+            auto revive = [&](const bool last_epoch) {
                 LFS_CUDA_CHECK(cudaMemcpy(host_counts.data(), d_ema_counts,
                                           static_cast<size_t>(k) * sizeof(float), cudaMemcpyDeviceToHost));
                 double total = 0.0;
@@ -1761,7 +1772,8 @@ namespace lfs::io {
                                           cudaMemcpyHostToDevice));
                 emeans_split_kernel<N_DIMS><<<(static_cast<int>(pair_count) + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
                     reinterpret_cast<const int2*>(revival_pairs.ptr<int>()), static_cast<int>(pair_count),
-                    d_centroids, d_norms, d_ema_counts);
+                    d_centroids, d_norms, d_ema_counts, last_epoch ? fixed_sums(epoch_sums) : nullptr,
+                    last_epoch ? epoch_counts.ptr<int>() : nullptr);
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.split_donors");
                 revived_total += static_cast<long long>(pair_count);
             };
@@ -1805,7 +1817,7 @@ namespace lfs::io {
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.update");
 
                     if ((step + 1) % EMEANS_REVIVAL_PERIOD == 0)
-                        revive();
+                        revive(last_epoch);
                 }
             }
 
