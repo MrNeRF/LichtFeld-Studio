@@ -16,6 +16,7 @@
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <numbers>
 #include <random>
 #include <vector>
 
@@ -82,12 +83,16 @@ namespace {
                       "pose_gradient", "", std::filesystem::path{}, kWidth, kHeight, 0);
     }
 
-    std::vector<float> weights(const unsigned seed) {
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+    // Low-frequency loss weights [3, H, W]. With per-pixel random weights the finite difference is dominated by
+    // pixels crossing the 1/255 alpha cutoff, which the rasterizer's gradient leaves out by design.
+    std::vector<float> weights() {
         std::vector<float> w(3 * kWidth * kHeight);
-        for (auto& x : w)
-            x = u(rng);
+        for (int c = 0; c < 3; ++c)
+            for (int y = 0; y < kHeight; ++y)
+                for (int x = 0; x < kWidth; ++x)
+                    w[(c * kHeight + y) * kWidth + x] =
+                        static_cast<float>(std::sin(2.0 * std::numbers::pi * (x + 0.5) / kWidth + 1.3 * c) *
+                                           std::cos(2.0 * std::numbers::pi * (y + 0.5) / kHeight - 0.7 * c));
         return w;
     }
 
@@ -150,7 +155,7 @@ namespace {
 TEST(CameraPoseGradientTest, FrozenImageGradientMatchesFiniteDifferences) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
-    const auto image_w = weights(11);
+    const auto image_w = weights();
     auto model = make_scene();
     const auto means_before = model.means().cpu().to_vector();
     const auto opacity_before = model.opacity_raw().cpu().to_vector();
@@ -174,7 +179,7 @@ TEST(CameraPoseGradientTest, FrozenImageGradientMatchesFiniteDifferences) {
 TEST(CameraPoseGradientTest, TrainingBackwardNormalGradientMatchesFiniteDifferences) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
-    const auto normal_w = weights(23);
+    const auto normal_w = weights();
     auto model = make_scene();
     auto camera = make_camera(start_pose());
     auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
