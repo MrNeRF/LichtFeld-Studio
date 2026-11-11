@@ -4,12 +4,12 @@
 #include "core/camera.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
+#include "core/tensor_backend.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "operation/undo_entry.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/camera_training_notice.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -42,9 +42,8 @@ namespace {
     class CameraTrainingNoticeGpuTest : public ::testing::Test {
     protected:
         void SetUp() override {
-            int devices = 0;
-            if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
-                GTEST_SKIP() << "Camera construction requires CUDA";
+            if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend()))
+                GTEST_SKIP() << "Selected GPU backend unavailable";
         }
     };
 
