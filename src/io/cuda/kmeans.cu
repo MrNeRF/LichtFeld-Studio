@@ -1120,6 +1120,29 @@ namespace lfs::io {
             }
         }
 
+        // Both tilings compute identical FP32 distances and labels. 4 points x 8 centroids
+        // per thread needs fewer shared-memory reads per FMA, which wins at 45 dims; at
+        // 9/24 dims the 128-thread blocks lose more to lower occupancy than they gain.
+        template <int N_DIMS>
+        void launch_assign_grouped(const int num_tasks, const float4* shN, const float* centroids,
+                                   const float* centroid_norms, const int* sorted_point_idx,
+                                   const int* group_offsets, const int* group_task_offsets,
+                                   const int* group_candidate_offsets, const int* group_candidate_supers,
+                                   const int* super_offsets, const int* super_indices, int* labels,
+                                   const int n_points, const int k) {
+            if constexpr (N_DIMS >= 45) {
+                assign_grouped_swizzled_kernel<N_DIMS, 4, 128><<<num_tasks, 128>>>(
+                    shN, centroids, centroid_norms, sorted_point_idx, group_offsets, group_task_offsets,
+                    group_candidate_offsets, group_candidate_supers, super_offsets, super_indices,
+                    labels, n_points, k);
+            } else {
+                assign_grouped_swizzled_kernel<N_DIMS><<<num_tasks, BLOCK_SIZE>>>(
+                    shN, centroids, centroid_norms, sorted_point_idx, group_offsets, group_task_offsets,
+                    group_candidate_offsets, group_candidate_supers, super_offsets, super_indices,
+                    labels, n_points, k);
+            }
+        }
+
         __global__ void build_group_tile_counts_kernel(
             const int* __restrict__ group_offsets,
             int* __restrict__ group_tile_counts) {
@@ -1439,23 +1462,13 @@ namespace lfs::io {
                         // Refinement is approximate: each point is searched only in the
                         // union of the four supers nearest to its assigned super. The
                         // final iteration below remains an exact argmin over all k.
-                        if (fast_assignment) {
-                            assign_grouped_swizzled_kernel<N_DIMS, 4, 128><<<num_group_tasks, 128>>>(
-                                d_shN, d_centroids, centroid_norms.ptr<float>(),
-                                sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
-                                group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
-                                group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
-                                super_indices.ptr<int>(), labels.ptr<int>(), n, k);
-                            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_grouped_candidates");
-                        } else {
-                            assign_grouped_swizzled_kernel<N_DIMS><<<num_group_tasks, BLOCK_SIZE>>>(
-                                d_shN, d_centroids, centroid_norms.ptr<float>(),
-                                sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
-                                group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
-                                group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
-                                super_indices.ptr<int>(), labels.ptr<int>(), n, k);
-                            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_grouped_candidates");
-                        }
+                        launch_assign_grouped<N_DIMS>(
+                            num_group_tasks, d_shN, d_centroids, centroid_norms.ptr<float>(),
+                            sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
+                            group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
+                            group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
+                            super_indices.ptr<int>(), labels.ptr<int>(), n, k);
+                        LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_grouped_candidates");
                     }
                 }
                 assign_timers[static_cast<size_t>(iter)].record_stop();
@@ -2248,7 +2261,7 @@ namespace lfs::io {
             }
 
             void assign(const float4* d_batch, const float* d_centroids, const float* d_norms,
-                        int* d_labels, const int batch_size, const int k, const bool fast) {
+                        int* d_labels, const int batch_size, const int k) {
                 assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<(batch_size + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
                     d_batch, super_centroids.ptr<float>(), super_norms.ptr<float>(),
                     point_super_membership.ptr<int>(), batch_size, NUM_SUPER_CLUSTERS);
@@ -2258,19 +2271,11 @@ namespace lfs::io {
 
                 // Upper bound on tile tasks; surplus blocks find an empty tile and exit.
                 const int max_tasks = (batch_size + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE + NUM_SUPER_CLUSTERS;
-                if (fast) {
-                    assign_grouped_swizzled_kernel<N_DIMS, 4, 128><<<max_tasks, 128>>>(
-                        d_batch, d_centroids, d_norms, sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
-                        group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
-                        group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
-                        super_indices.ptr<int>(), d_labels, batch_size, k);
-                } else {
-                    assign_grouped_swizzled_kernel<N_DIMS><<<max_tasks, BLOCK_SIZE>>>(
-                        d_batch, d_centroids, d_norms, sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
-                        group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
-                        group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
-                        super_indices.ptr<int>(), d_labels, batch_size, k);
-                }
+                launch_assign_grouped<N_DIMS>(
+                    max_tasks, d_batch, d_centroids, d_norms, sorted_point_idx.ptr<int>(),
+                    group_offsets.ptr<int>(), group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
+                    group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(), super_indices.ptr<int>(),
+                    d_labels, batch_size, k);
                 LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_grouped_candidates");
             }
 
@@ -2472,7 +2477,7 @@ namespace lfs::io {
 
                     if (ivf) {
                         ivf->rebuild_palette_buckets(d_centroids, k);
-                        ivf->assign(d_batch, d_centroids, d_norms, batch_labels.ptr<int>(), B, k, fast_assignment);
+                        ivf->assign(d_batch, d_centroids, d_norms, batch_labels.ptr<int>(), B, k);
                         emeans_accumulate_kernel<N_DIMS, false><<<grid_b, BLOCK_SIZE>>>(
                             d_batch, nullptr, batch_labels.ptr<int>(), d_batch_order, d_source_labels,
                             sums.ptr<float>(), counts.ptr<int>(), B, k);
