@@ -1150,6 +1150,31 @@ TEST_F(NnOpsTest, ResizeMatchesNumpyFixture) {
     }
 }
 
+// The source pixel of a nearest resize is the floor of a ratio of whole numbers. Taken through a float scale, the
+// doubling of 33, 37, 41, 47, 55 and other widths repeated the wrong pixel at every second place.
+TEST_F(NnOpsTest, NearestResizeTakesTheExactSourcePixelAtEverySize) {
+    using lfs::core::nn::CoordTransform;
+    const auto sources = [](const int from, const int to, const CoordTransform coord) {
+        std::vector<float> ramp(static_cast<std::size_t>(from));
+        std::iota(ramp.begin(), ramp.end(), 0.0f);
+        const auto row = upload(ramp, {1, 1, 1, static_cast<std::size_t>(from)}, lfs::core::DataType::Float32);
+        return host_f32(lfs::core::nn::resize2d(row, 1, to, lfs::core::nn::ResizeMode::Nearest, coord));
+    };
+    for (int from = 1; from <= 160; ++from) {
+        for (const int to : {2 * from, 3 * from, from + 7, (from + 1) / 2}) {
+            const auto asymmetric = sources(from, to, CoordTransform::Asymmetric);
+            const auto half_pixel = sources(from, to, CoordTransform::HalfPixel);
+            for (int i = 0; i < to; ++i) {
+                ASSERT_EQ(asymmetric[static_cast<std::size_t>(i)], static_cast<float>(to > 1 ? i * from / to : 0))
+                    << from << " to " << to << " at " << i;
+                const int centred = to > 1 ? std::clamp(((2 * i + 1) * from - to + 2 * to) / (2 * to) - 1, 0, from - 1) : 0;
+                ASSERT_EQ(half_pixel[static_cast<std::size_t>(i)], static_cast<float>(centred))
+                    << from << " to " << to << " at " << i;
+            }
+        }
+    }
+}
+
 TEST_F(NnOpsTest, GeluSiluReluAndCast) {
     std::vector<float> x = {-2.0f, -0.5f, 0.0f, 0.5f, 2.0f, 3.0f};
     auto X = upload(x, {6}, lfs::core::DataType::Float32);
