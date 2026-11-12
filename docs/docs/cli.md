@@ -70,3 +70,10 @@ settings it cannot be combined with.
 `--cropbox` limits training to a box, `--cropbox-rotation` turns it, and `--crop` removes everything outside it when
 training completes and from exports. [Train a region of interest](features/region-of-interest.md) describes the box and
 its rotation, the ROI training options and tiled training.
+
+## Refine camera poses
+
+`--pose-opt` refines the training cameras' poses with the model; it needs pinhole cameras or `--undistort` and cannot be
+combined with `--gut`. At the end of training `pose_refinement.tsv` lists each camera's move and turn, and
+`cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
+describes how evaluation scores the held-out cameras.

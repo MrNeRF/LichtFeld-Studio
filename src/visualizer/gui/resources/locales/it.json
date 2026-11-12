@@ -847,6 +847,7 @@
       "exposure_correction_grid_start": "Controlla quando il grid residuo locale di Exposure Correction inizia ad apprendere. Un avvio più tardivo lascia stabilizzare prima esposizione globale e bilanciamento del bianco. Abbassalo solo quando differenze locali di luce o colore vanno corrette prima. Si applica a Exposure Correction, non al Bilateral Grid standalone.",
       "bilateral_grid": "Una griglia per foto che compensa differenze locali di esposizione/colore durante il training. Usala solo se vuoi il vecchio percorso autonomo invece di Exposure Correction.",
       "ppisp": "Un modello di aspetto fisicamente basato per camera/foto per esposizione, vignettatura, bilanciamento del bianco e curva tonale. Usalo per correzione camera dettagliata senza Exposure Correction.",
+      "pose_opt": "Affina posizione e orientamento di ogni camera di addestramento insieme al modello. Le pose affinate sostituiscono quelle originali, quindi visualizzatore, salvataggi ed esportazioni le usano. Da usare quando la calibrazione delle camere è leggermente imprecisa; la valutazione riadatta le camere escluse prima di assegnare il punteggio.",
       "ppisp_warmup": "Controlla quanto tempo PPISP impiega a raggiungere piena velocità di apprendimento. Usa più warmup perché geometria e colore base si stabilizzino prima di una forte correzione appearance; usa meno se PPISP deve reagire prima. Ha effetto sul training solo quando PPISP o Exposure Correction è attivo.",
       "ppisp_reg": "Impedisce alle correzioni PPISP standalone di allontanarsi troppo dal comportamento camera neutro. Aumenta se PPISP assorbe colore scena o nasconde problemi di ricostruzione; riduci se PPISP non corregge reali differenze di appearance della camera. Ha effetto sul training solo con PPISP standalone, non su Exposure Correction.",
       "ppisp_holdout_appearance": "Usato solo per la valutazione con correzione dell'aspetto (correzione dell'esposizione o PPISP). Le foto escluse per la valutazione non sono mai state addestrate, quindi la loro esposizione e il loro bilanciamento del bianco sono sconosciuti. Più vicino li prende dalle foto di addestramento scattate subito prima e subito dopo e li mescola. Media usa un'impostazione media della fotocamera. Più vicino è il valore predefinito e valuta in modo equo quando la luce cambia durante la ripresa.",
@@ -1393,10 +1394,8 @@
     "orthographic": "Ortografica",
     "sequencer": "Sequencer",
     "histogram": "Istogramma",
-    "depth_map": "Mappa di profondità",
     "viewport_export": "Esporta viewport",
     "depth_mode_disable": "Disattiva modalità profondità",
-    "depth_map_disable": "Disattiva mappa di profondità",
     "depth_mode_enable": "Attiva modalità profondità",
     "delete_selection": "Elimina selezione",
     "undo": "Annulla",
@@ -1419,7 +1418,8 @@
     "scale_distance_measured": "Misurato:",
     "scale_distance_set": "Imposta distanza:",
     "scale_distance_apply": "Conferma scala",
-    "scale_distance_reset": "Reimposta punti"
+    "scale_distance_reset": "Reimposta punti",
+    "render_modes": "Modalità di rendering"
   },
   "transform": {
     "scale_apriltag": "Ridimensiona la scena con AprilTags",
@@ -1595,14 +1595,11 @@
     "selection_invert": "Inverti la selezione di gaussiane",
     "selection_select_all": "Seleziona tutte le gaussiane",
     "selection_unselect": "Cancella la selezione di gaussiane",
-    "depth_view_panel": "Controlli della mappa di profondità",
-    "depth_view_tool": "Vista mappa di profondità attiva",
     "depth_view_mode": "Scegli il modo colore della profondità",
     "gt_compare_mode": "Scegli la visualizzazione della ground truth RGB, delle normali, della profondità o della perdita",
     "depth_view_range": "Intervallo di visualizzazione della profondità",
     "depth_view_near": "Limite vicino dell'intervallo di profondità",
     "depth_view_far": "Limite lontano dell'intervallo di profondità",
-    "depth_view_close": "Disattiva la vista profondità",
     "viewport_export_panel": "Controlli esportazione viewport",
     "viewport_export_tool": "Esporta immagine viewport",
     "viewport_export_format": "Scegli PNG o JPEG",
@@ -1687,7 +1684,8 @@
     "seq_preview_options": "Dimensione anteprima",
     "seq_path_menu": "File del percorso camera",
     "seq_ply_menu": "File della sequenza PLY",
-    "seq_projection": "Proiezione"
+    "seq_projection": "Proiezione",
+    "render_modes": "Scegli RGB, profondità o normali di superficie nello spazio della fotocamera. Le normali richiedono un modello di splat."
   },
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",
@@ -2054,6 +2052,7 @@
     "bg_image_browse": "Sfoglia...",
     "bg_image_clear": "Cancella",
     "ppisp": "PPISP:",
+    "pose_opt": "Affinamento pose:",
     "ppisp_exposure_from_exif": "Esposizione EXIF:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Tasso di apprendimento:",

@@ -834,6 +834,7 @@
       "exposure_correction_grid_start": "控制 Exposure Correction 的 local residual grid 何时开始学习。较晚开始可让全局曝光和白平衡先稳定。只有局部光照或颜色差异需要更早校正时才降低。仅适用于 Exposure Correction，不适用于 standalone Bilateral Grid。",
       "bilateral_grid": "按照片使用的网格，在训练中补偿局部曝光/颜色差异。仅在明确需要旧的独立校正路径，而不是 Exposure Correction 时使用。",
       "ppisp": "按相机/照片使用的物理外观模型，用于曝光、暗角、白平衡和 tone curve。不使用 Exposure Correction 且需要详细相机外观校正时使用。",
+      "pose_opt": "在训练模型的同时优化每个训练相机的位置和朝向。优化后的位姿会替换相机原有的位姿，查看器、保存和导出都会使用它们。适用于相机标定略有偏差的情况；评估时会先重新拟合测试相机，再计算分数。",
       "ppisp_warmup": "控制 PPISP 达到完整学习速度所需时间。使用更多 warmup 可让几何和基础颜色在强 appearance correction 前先稳定；如果 PPISP 应更早响应则减少。只有 PPISP 或 Exposure Correction 启用时才影响训练。",
       "ppisp_reg": "防止 standalone PPISP 校正偏离中性相机行为太远。如果 PPISP 开始吸收场景颜色或掩盖重建问题则提高；如果 PPISP 无法校正真实相机 appearance 差异则降低。只影响 standalone PPISP 训练，不影响 Exposure Correction。",
       "ppisp_holdout_appearance": "仅在使用外观校正（曝光校正或 PPISP）进行评估时使用。为评估而保留的照片从未参与训练，因此它们的曝光和白平衡未知。“最近”会从紧挨其前后拍摄的训练照片中取得这些设置并加以混合。“平均”使用相机的一个平均设置。默认为“最近”，在拍摄过程中光线变化时也能公平评估。",
@@ -1380,10 +1381,8 @@
     "orthographic": "正交",
     "sequencer": "序列器",
     "histogram": "直方图",
-    "depth_map": "深度图",
     "viewport_export": "视口导出",
     "depth_mode_disable": "禁用深度模式",
-    "depth_map_disable": "禁用深度图",
     "depth_mode_enable": "启用深度模式",
     "delete_selection": "删除选择",
     "undo": "撤销",
@@ -1406,7 +1405,8 @@
     "scale_distance_measured": "测量值:",
     "scale_distance_set": "设置距离:",
     "scale_distance_apply": "确认缩放",
-    "scale_distance_reset": "重置点"
+    "scale_distance_reset": "重置点",
+    "render_modes": "渲染模式"
   },
   "transform": {
     "scale_apriltag": "使用 AprilTag 缩放场景",
@@ -1582,14 +1582,11 @@
     "selection_invert": "反转高斯选择",
     "selection_select_all": "选择所有高斯",
     "selection_unselect": "清除高斯选择",
-    "depth_view_panel": "深度图控件",
-    "depth_view_tool": "活动深度图视图",
     "depth_view_mode": "选择深度图颜色模式",
     "gt_compare_mode": "选择 RGB、法线、深度或损失真值可视化",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
     "depth_view_far": "深度范围远端",
-    "depth_view_close": "禁用深度图视图",
     "viewport_export_panel": "视口导出控件",
     "viewport_export_tool": "导出视口图像",
     "viewport_export_format": "选择 PNG 或 JPEG",
@@ -1674,7 +1671,8 @@
     "seq_preview_options": "预览尺寸",
     "seq_path_menu": "相机路径文件",
     "seq_ply_menu": "PLY 序列文件",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "选择 RGB、深度或相机空间的表面法线。法线需要泼溅模型。"
   },
   "exit_popup": {
     "title": "退出应用程序？",
@@ -2041,6 +2039,7 @@
     "bg_image_browse": "浏览...",
     "bg_image_clear": "清除",
     "ppisp": "PPISP:",
+    "pose_opt": "位姿优化:",
     "ppisp_exposure_from_exif": "EXIF 曝光：",
     "ppisp_controller": "  控制器:",
     "ppisp_lr": "学习率:",

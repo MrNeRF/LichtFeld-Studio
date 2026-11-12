@@ -843,6 +843,7 @@
       "exposure_correction_grid_start": "Controls when Exposure Correction’s local residual grid starts learning. A later start lets global exposure and white balance settle first. Lower it only when local lighting or color differences need correction earlier. Only applies to Exposure Correction, not standalone Bilateral Grid.",
       "bilateral_grid": "A per-photo grid that compensates for local exposure/color differences during training. Use only when you specifically want the older standalone correction path instead of Exposure Correction.",
       "ppisp": "A physically based per-camera/per-photo appearance model for exposure, vignetting, white balance, and tone curve. Use when you need detailed camera appearance correction and are not using Exposure Correction.",
+      "pose_opt": "Refines every training camera's position and orientation together with the model. The refined poses replace the cameras' own, so the viewer, saves and exports use them. Use when the camera calibration is slightly off; evaluation then refits the held-out cameras before scoring them.",
       "ppisp_warmup": "Controls how long PPISP takes to reach full learning speed. Use more warmup so geometry and base color stabilize before strong appearance correction; use less if PPISP should respond earlier. Only affects training when PPISP or Exposure Correction is enabled.",
       "ppisp_reg": "Keeps standalone PPISP corrections from drifting too far away from neutral camera behavior. Increase it if PPISP starts absorbing scene color or hiding reconstruction issues; lower it if PPISP cannot correct real camera appearance differences. Only affects training with standalone PPISP, not Exposure Correction.",
       "ppisp_holdout_appearance": "Used only when evaluating with appearance correction (exposure correction or PPISP). Photos held out for evaluation were never trained, so their exposure and white balance are unknown. Nearest takes them from the training photos shot just before and after and blends the two. Mean uses one average setting for the camera. Nearest is the default and judges fairly when the light changes during the capture.",
@@ -1391,10 +1392,8 @@
     "orthographic": "Orthographic",
     "sequencer": "Sequencer",
     "histogram": "Histogram",
-    "depth_map": "Depth Map",
     "viewport_export": "Viewport Export",
     "depth_mode_disable": "Disable Depth Mode",
-    "depth_map_disable": "Disable Depth Map",
     "depth_mode_enable": "Enable Depth Mode",
     "delete_selection": "Delete Selection",
     "undo": "Undo",
@@ -1417,7 +1416,8 @@
     "scale_distance_measured": "Measured:",
     "scale_distance_set": "Set Distance:",
     "scale_distance_apply": "Confirm scale",
-    "scale_distance_reset": "Reset points"
+    "scale_distance_reset": "Reset points",
+    "render_modes": "Render modes"
   },
   "transform": {
     "scale_apriltag": "Scale scene with AprilTags",
@@ -1593,14 +1593,11 @@
     "selection_invert": "Invert the Gaussian selection",
     "selection_select_all": "Select all Gaussians",
     "selection_unselect": "Clear the Gaussian selection",
-    "depth_view_panel": "Depth-map controls",
-    "depth_view_tool": "Active depth-map view",
     "depth_view_mode": "Choose depth-map color mode",
     "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",
     "depth_view_far": "Far edge of the depth-map range",
-    "depth_view_close": "Disable depth-map view",
     "viewport_export_panel": "Viewport export controls",
     "viewport_export_tool": "Viewport image export",
     "viewport_export_format": "Choose PNG or JPEG",
@@ -1685,7 +1682,8 @@
     "seq_preview_options": "Preview size",
     "seq_path_menu": "Camera path files",
     "seq_ply_menu": "PLY sequence files",
-    "seq_projection": "Projection"
+    "seq_projection": "Projection",
+    "render_modes": "Choose RGB, depth, or camera-space surface normals. Normals require a splat model."
   },
   "exit_popup": {
     "title": "Exit Application?",
@@ -2052,6 +2050,7 @@
     "bg_image_browse": "Browse...",
     "bg_image_clear": "Clear",
     "ppisp": "PPISP:",
+    "pose_opt": "Pose Refinement:",
     "ppisp_exposure_from_exif": "EXIF Exposure:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Learning Rate:",

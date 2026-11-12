@@ -25,6 +25,10 @@ namespace lfs::training {
             trainer.params_.optimization.undistort = undistort;
             return trainer.train_step(1, &camera, {});
         }
+
+        static core::Tensor random_background(Trainer& trainer, int width, int height, int iteration) {
+            return trainer.get_random_background_for_camera(width, height, iteration);
+        }
     };
 } // namespace lfs::training
 
@@ -107,5 +111,17 @@ namespace {
     TEST_F(TrainingCameraErrors, GutOrthoRejectionIsUnchanged) {
         check(false, false, false, CameraModelType::ORTHO,
               "Training on cameras with ortho model is not supported yet.", {}, true);
+    }
+
+    TEST_F(TrainingCameraErrors, RandomBackgroundFollowsCameraShapeAtEqualPixelCount) {
+        scene.addCamera("camera.png", scene.addGroup("Cameras"),
+                        std::make_shared<Camera>(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                                                 100.0f, 100.0f, 4.0f, 3.0f, Tensor{}, Tensor{},
+                                                 CameraModelType::PINHOLE, "camera.png", std::filesystem::path{},
+                                                 std::filesystem::path{}, 8, 6, 0));
+        lfs::training::Trainer trainer(scene);
+        using Access = lfs::training::TrainerCameraErrorTestAccess;
+        EXPECT_EQ(Access::random_background(trainer, 8, 6, 1).shape(), TensorShape({3, 6, 8}));
+        EXPECT_EQ(Access::random_background(trainer, 6, 8, 2).shape(), TensorShape({3, 8, 6}));
     }
 } // namespace

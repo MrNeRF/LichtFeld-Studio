@@ -2392,6 +2392,10 @@ body {
 
 .gamepad-navigation-indicator.hidden { display: none; }
 
+.viewport-render-mode-select { min-width: 86dp; }
+
+#depth-view-block .viewport-depth-header { flex-wrap: wrap; gap: 6dp; }
+
 /* Compact edge targets keep the tool rail clear; shared button focus remains. */
 .side-dock-toggle {
     position: absolute;

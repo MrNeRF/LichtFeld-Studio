@@ -834,6 +834,7 @@
       "exposure_correction_grid_start": "Steuert, wann das lokale Residual-Grid von Exposure Correction zu lernen beginnt. Ein späterer Start lässt globale Belichtung und Weißabgleich zuerst stabilisieren. Senke ihn nur, wenn lokale Licht- oder Farbunterschiede früher korrigiert werden müssen. Gilt nur für Exposure Correction, nicht für eigenständiges Bilateral Grid.",
       "bilateral_grid": "Ein bildbezogenes Gitter, das lokale Belichtungs- und Farbunterschiede während des Trainings ausgleicht. Nutze es nur, wenn du den älteren eigenständigen Pfad statt Exposure Correction willst.",
       "ppisp": "Ein physikalisch basiertes Appearance-Modell pro Kamera/Foto für Belichtung, Vignettierung, Weißabgleich und Tonkurve. Nutze es für detaillierte Kamera-Appearance-Korrektur, wenn Exposure Correction aus ist.",
+      "pose_opt": "Verfeinert Position und Ausrichtung jeder Trainingskamera zusammen mit dem Modell. Die verfeinerten Posen ersetzen die ursprünglichen, sodass Viewer, Speichern und Exporte sie verwenden. Sinnvoll, wenn die Kamerakalibrierung leicht ungenau ist; die Auswertung passt die zurückgehaltenen Kameras vor der Bewertung neu an.",
       "ppisp_warmup": "Steuert, wie lange PPISP braucht, um die volle Lerngeschwindigkeit zu erreichen. Nutze längeres Warmup, damit Geometrie und Grundfarbe vor starker Appearance-Korrektur stabilisieren; nutze weniger, wenn PPISP früher reagieren soll. Wirkt nur auf das Training, wenn PPISP oder Exposure Correction aktiviert ist.",
       "ppisp_reg": "Hält eigenständige PPISP-Korrekturen davon ab, zu weit vom neutralen Kameraverhalten wegzudriften. Erhöhe den Wert, wenn PPISP Szenenfarbe aufnimmt oder Rekonstruktionsprobleme kaschiert; senke ihn, wenn PPISP echte Kamera-Appearance-Unterschiede nicht korrigieren kann. Wirkt nur auf das Training mit eigenständigem PPISP, nicht auf Exposure Correction.",
       "ppisp_holdout_appearance": "Wird nur bei der Auswertung mit Erscheinungskorrektur (Belichtungskorrektur oder PPISP) verwendet. Für die Auswertung zurückgehaltene Fotos wurden nie trainiert, daher sind ihre Belichtung und ihr Weißabgleich unbekannt. Nächstes übernimmt sie von den Trainingsfotos, die direkt davor und danach aufgenommen wurden, und mischt beide. Mittelwert verwendet eine durchschnittliche Einstellung der Kamera. Nächstes ist der Standard und bewertet fair, wenn sich das Licht während der Aufnahme ändert.",
@@ -1380,10 +1381,8 @@
     "orthographic": "Orthografisch",
     "sequencer": "Sequenzer",
     "histogram": "Histogramm",
-    "depth_map": "Tiefenkarte",
     "viewport_export": "Viewport-Export",
     "depth_mode_disable": "Tiefenmodus deaktivieren",
-    "depth_map_disable": "Tiefenkarte deaktivieren",
     "depth_mode_enable": "Tiefenmodus aktivieren",
     "delete_selection": "Auswahl löschen",
     "undo": "Rückgängig",
@@ -1406,7 +1405,8 @@
     "scale_distance_measured": "Gemessen:",
     "scale_distance_set": "Abstand festlegen:",
     "scale_distance_apply": "Skalierung bestätigen",
-    "scale_distance_reset": "Punkte zurücksetzen"
+    "scale_distance_reset": "Punkte zurücksetzen",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Szene mit AprilTags skalieren",
@@ -1582,14 +1582,11 @@
     "selection_invert": "Gaussian-Auswahl invertieren",
     "selection_select_all": "Alle Gaussians auswählen",
     "selection_unselect": "Auswahl aufheben",
-    "depth_view_panel": "Tiefenkarten-Steuerung",
-    "depth_view_tool": "Aktive Tiefenkartenansicht",
     "depth_view_mode": "Farbmodus der Tiefenkarte wählen",
     "gt_compare_mode": "RGB-, Normalen-, Tiefen- oder Verlustvisualisierung auswählen",
     "depth_view_range": "Visualisierungsbereich der Tiefenkarte",
     "depth_view_near": "Nahe Grenze des Tiefenkartenbereichs",
     "depth_view_far": "Ferne Grenze des Tiefenkartenbereichs",
-    "depth_view_close": "Tiefenkartenansicht deaktivieren",
     "viewport_export_panel": "Viewport-Export-Steuerung",
     "viewport_export_tool": "Viewport-Bild exportieren",
     "viewport_export_format": "PNG oder JPEG wählen",
@@ -1674,7 +1671,8 @@
     "seq_preview_options": "Vorschaugröße",
     "seq_path_menu": "Kamerapfad-Dateien",
     "seq_ply_menu": "PLY-Sequenzdateien",
-    "seq_projection": "Projektion"
+    "seq_projection": "Projektion",
+    "render_modes": "RGB, Tiefe oder Oberflächennormalen im Kameraraum wählen. Normalen benötigen ein Splat-Modell."
   },
   "exit_popup": {
     "title": "Anwendung beenden?",
@@ -2041,6 +2039,7 @@
     "bg_image_browse": "Durchsuchen...",
     "bg_image_clear": "Löschen",
     "ppisp": "PPISP:",
+    "pose_opt": "Posenverfeinerung:",
     "ppisp_exposure_from_exif": "EXIF-Belichtung:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Lernrate:",

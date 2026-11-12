@@ -2060,7 +2060,7 @@ namespace lfs::vis::gui {
                                               ortho ? "toolbar.orthographic" : "toolbar.perspective",
                                               ortho ? "Orthographic" : "Perspective", ortho));
             projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
-                                              "toolbar.depth_map", "Depth Map", settings.depth_view));
+                                              "toolbar.render_modes", "Render Modes", settings.render_mode_controls_open));
 
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
@@ -2214,10 +2214,8 @@ namespace lfs::vis::gui {
             if (!rm)
                 return;
             auto settings = rm->getSettings();
-            settings.depth_view = !settings.depth_view;
-            rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
-            if (auto* const viewer = lfs::python::get_visualizer())
-                viewer->projectMarkSessionChapterCommitted("VIEW");
+            settings.render_mode_controls_open = !settings.render_mode_controls_open;
+            rm->updateSettings(settings, lfs::vis::DirtyFlag::OVERLAY);
         } else if (action == "toggle_camera_view_snap") {
             if (auto* ic = lfs::vis::InputController::instance()) {
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());

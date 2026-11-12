@@ -82,6 +82,15 @@ namespace lfs::core {
         std::string_view message,
         SourceSite location) noexcept;
 
+    // Completion step for a call that destroyed `state.stream`: the dead handle is never
+    // synchronized or queried again. In cuda-sync mode the device is synchronized instead,
+    // so an asynchronous fault is still attributed to the teardown.
+    [[nodiscard]] inline CudaCheckCompletion complete_cuda_stream_destroy(
+        const cudaError_t result, CudaCheckState state) noexcept {
+        state.stream = 0;
+        return complete_cuda_check(result, state);
+    }
+
 } // namespace lfs::core
 
 // Mirrors LFS_CUDA_DETAIL_CHECK_IMPL's capture shape (cuda_error.hpp:141-161):
@@ -89,8 +98,8 @@ namespace lfs::core {
 // then dispatch on the frozen policy. `stream` is a cudaStream_t (may be nullptr
 // for the legacy/default stream) used only for breadcrumb/state attribution — it
 // is NOT re-synchronized or re-queried beyond what prepare_cuda_check/
-// complete_cuda_check already do.
-#define LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, dispatch)                      \
+// `complete` (complete_cuda_check or complete_cuda_stream_destroy) already do.
+#define LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, dispatch, complete)            \
     do {                                                                                 \
         const auto _lfs_cuda_typed_site = LFS_SOURCE_SITE_CURRENT();                     \
         const cudaStream_t _lfs_cuda_typed_stream = (stream);                            \
@@ -103,7 +112,7 @@ namespace lfs::core {
                                      cudaError_t>,                                       \
                       "LFS_CUDA_TRY/LFS_CUDA_LOG_TEARDOWN require an expression "        \
                       "returning cudaError_t");                                          \
-        const auto _lfs_cuda_typed_completion = ::lfs::core::complete_cuda_check(        \
+        const auto _lfs_cuda_typed_completion = ::lfs::core::complete(                   \
             _lfs_cuda_typed_result, _lfs_cuda_typed_state);                              \
         if (_lfs_cuda_typed_completion.effective_error != cudaSuccess) [[unlikely]] {    \
             dispatch(_lfs_cuda_typed_result, _lfs_cuda_typed_state,                      \
@@ -123,11 +132,17 @@ namespace lfs::core {
 // std::string_view (use lfs::core::detail::format_cuda_safe(...) for formatted
 // context, matching LFS_CUDA_CHECK_MSG's existing convention).
 #define LFS_CUDA_TRY(call, stream, message) \
-    LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, LFS_CUDA_TRY_DISPATCH)
+    LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, LFS_CUDA_TRY_DISPATCH, complete_cuda_check)
 
 // Teardown/reset-for-reuse LOG: same shape, never throws. Use at any destructor,
 // shutdown(), cleanup()-for-reuse, or "log and fall back to a safe default"
 // construction site (Section 5.1 rule 7's log-and-continue policy cell) — the
 // macro name documents *why* the status is discarded, not merely that it is.
 #define LFS_CUDA_LOG_TEARDOWN(call, stream, message) \
-    LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, LFS_CUDA_LOG_TEARDOWN_DISPATCH)
+    LFS_CUDA_DETAIL_TYPED_IMPL(call, stream, message, LFS_CUDA_LOG_TEARDOWN_DISPATCH, complete_cuda_check)
+
+// cudaStreamDestroy(stream) under the LOG_TEARDOWN policy. The report still names `stream`,
+// but after the call the destroyed handle is never touched again, also in cuda-sync mode.
+#define LFS_CUDA_LOG_STREAM_DESTROY(stream, message)                       \
+    LFS_CUDA_DETAIL_TYPED_IMPL(cudaStreamDestroy(stream), stream, message, \
+                               LFS_CUDA_LOG_TEARDOWN_DISPATCH, complete_cuda_stream_destroy)

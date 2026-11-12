@@ -804,6 +804,7 @@ namespace lfs::vis {
         settings.depth_clip_enabled = false;
         settings.orthographic = false;
         settings.depth_view = false;
+        settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_rings = false;
         settings.show_center_markers = false;
@@ -1503,7 +1504,7 @@ namespace lfs::vis {
 
     RenderSettings RenderingManager::vrRenderSettings(RenderSettings settings) {
         settings.split_view_mode = SplitViewMode::Disabled;
-        settings.orthographic = settings.equirectangular = settings.depth_view = false;
+        settings.orthographic = settings.equirectangular = settings.depth_view = settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_grid = settings.show_coord_axes = settings.show_pivot = false;
         settings.show_camera_frustums = settings.show_rings = settings.show_center_markers = false;
@@ -1844,7 +1845,11 @@ namespace lfs::vis {
             return {};
         }
 
-        int band_height_limit = tile_height_limit;
+        // Normals sample adjacent pixels. Keep the halo tile-aligned so raster
+        // grouping stays stable, then read back only each band's interior rows.
+        const auto settings = getSettings();
+        const int halo = viewportDisplayMode(settings) == ViewportDisplayMode::Normal ? kPreviewTileHeightAlignment : 0;
+        int band_height_limit = std::max(kPreviewTileHeightAlignment, tile_height_limit - 2 * halo);
         // #1574 1-deep export pipelining: submit ticket for band N, render band N+1,
         // then wait ticket N (memcpy on deliver), submit N+1, ... At most one outstanding
         // export ticket. With the 3-deep OutputSlotRing + cell pin, Preview reuse of the
@@ -1853,8 +1858,10 @@ namespace lfs::vis {
         std::optional<std::uint64_t> outstanding_export_ticket;
         for (int tile_y = 0; tile_y < height;) {
             int tile_height = std::min(band_height_limit, height - tile_y);
+            const int render_y = std::max(tile_y - halo, 0);
             const auto intrinsics = equirectangular ? std::nullopt : std::optional{previewTileIntrinsics(width, height, focal_length_mm)};
             while (true) {
+                const int render_height = std::min(tile_y + tile_height + halo, height) - render_y;
                 auto rendered = renderPreviewImageToPreviewSlotWithState(
                     scene_manager,
                     model,
@@ -1863,10 +1870,10 @@ namespace lfs::vis {
                     position,
                     focal_length_mm,
                     tile_width,
-                    tile_height,
+                    render_height,
                     render_lock_held,
                     intrinsics,
-                    {0, tile_y},
+                    {0, render_y},
                     {width, height},
                     orthographic_override,
                     ortho_scale_override,
@@ -1911,7 +1918,9 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Preview,
                 output,
                 0,
-                tile_y);
+                tile_y,
+                tile_y - render_y,
+                tile_height);
             if (!ticket) {
                 LOG_TRACE("Gaussian preview tiled readback submit failed at tile y={} height={}: {}",
                           tile_y,

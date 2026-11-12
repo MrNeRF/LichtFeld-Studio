@@ -216,6 +216,12 @@ With `--undistort`, training uses undistorted images. `--eval-space` chooses wha
 
 Without `--undistort` the images are evaluated as they are; with `--gut` a distorted camera is rendered in its own lens.
 
+## Refined camera poses
+
+`--pose-opt` refines the training cameras' poses with the model, and the cameras keep the refined poses. The held-out cameras are not trained, so before scoring, each one is fitted to the frozen model for the same fixed number of steps; it returns to its own pose afterwards. With `--eval-all` the evaluated cameras are the training cameras and are scored as they are.
+
+At the end of training `pose_refinement.tsv` lists each training camera's move and turn, and `cameras_refined/` holds the scene's cameras written over the dataset's COLMAP model.
+
 ## Bit depth
 
 Renders are rounded to the precision of the reference before scoring, so a perfect reconstruction scores perfectly. `--eval-bit-depth` chooses that precision:

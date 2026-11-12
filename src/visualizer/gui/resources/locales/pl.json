@@ -834,6 +834,7 @@
       "exposure_correction_grid_start": "Kontroluje, kiedy lokalny residual grid Exposure Correction zaczyna się uczyć. Późniejszy start pozwala najpierw ustabilizować globalną ekspozycję i balans bieli. Zmniejsz tylko, gdy lokalne różnice światła lub koloru muszą być korygowane wcześniej. Działa tylko dla Exposure Correction, nie dla standalone Bilateral Grid.",
       "bilateral_grid": "Siatka dla kazdego zdjecia kompensujaca lokalne różnice ekspozycji/koloru podczas treningu. Używaj tylko, gdy chcesz starsza samodzielna sciezke zamiast Exposure Correction.",
       "ppisp": "Fizycznie inspirowany model appearance per kamera/zdjecie dla ekspozycji, winietowania, balansu bieli i krzywej tonalnej. Używaj do szczegolowej korekcji camera appearance bez Exposure Correction.",
+      "pose_opt": "Koryguje położenie i orientację każdej kamery treningowej razem z modelem. Skorygowane pozycje zastępują pierwotne, więc korzysta z nich podgląd, zapis i eksport. Użyj, gdy kalibracja kamer jest nieco niedokładna; ewaluacja przed oceną ponownie dopasowuje kamery testowe.",
       "ppisp_warmup": "Kontroluje, jak długo PPISP dochodzi do pełnej szybkości uczenia. Użyj dłuższego warmup, aby geometria i bazowy kolor ustabilizowały się przed silną korekcją appearance; krótszego, jeśli PPISP ma reagować wcześniej. Wpływa na trening tylko, gdy PPISP lub Exposure Correction jest włączone.",
       "ppisp_reg": "Powstrzymuje standalone PPISP przed zbyt dużym odejściem od neutralnego zachowania kamery. Zwiększ, jeśli PPISP przejmuje kolor sceny lub ukrywa problemy rekonstrukcji; zmniejsz, jeśli PPISP nie potrafi skorygować realnych różnic appearance kamery. Wpływa tylko na trening ze standalone PPISP, nie na Exposure Correction.",
       "ppisp_holdout_appearance": "Używane tylko przy ewaluacji z korekcją wyglądu (korekcja ekspozycji lub PPISP). Zdjęcia wstrzymane do ewaluacji nigdy nie były trenowane, więc ich ekspozycja i balans bieli są nieznane. Najbliższy przejmuje je ze zdjęć treningowych zrobionych tuż przed i tuż po, mieszając oba. Średnia używa jednego uśrednionego ustawienia kamery. Najbliższy jest domyślny i ocenia uczciwie, gdy światło zmienia się w trakcie nagrania.",
@@ -1380,10 +1381,8 @@
     "orthographic": "Ortograficzna",
     "sequencer": "Sekwencer",
     "histogram": "Histogram",
-    "depth_map": "Mapa głębokości",
     "viewport_export": "Eksport widoku",
     "depth_mode_disable": "Wyłącz tryb głębi",
-    "depth_map_disable": "Wyłącz mapę głębi",
     "depth_mode_enable": "Włącz tryb głębi",
     "delete_selection": "Usuń zaznaczenie",
     "undo": "Cofnij",
@@ -1406,7 +1405,8 @@
     "scale_distance_measured": "Zmierzono:",
     "scale_distance_set": "Ustaw odległość:",
     "scale_distance_apply": "Zatwierdź skalę",
-    "scale_distance_reset": "Zresetuj punkty"
+    "scale_distance_reset": "Zresetuj punkty",
+    "render_modes": "Tryby renderowania"
   },
   "transform": {
     "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
@@ -1582,14 +1582,11 @@
     "selection_invert": "Odwróć zaznaczenie gaussianów",
     "selection_select_all": "Zaznacz wszystkie gaussiany",
     "selection_unselect": "Wyczyść zaznaczenie gaussianów",
-    "depth_view_panel": "Sterowanie mapą głębi",
-    "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
     "gt_compare_mode": "Wybierz wizualizację referencji RGB, normalnych, głębi lub straty",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",
     "depth_view_far": "Daleka granica zakresu głębi",
-    "depth_view_close": "Wyłącz widok głębi",
     "viewport_export_panel": "Elementy eksportu widoku",
     "viewport_export_tool": "Eksportuj obraz widoku",
     "viewport_export_format": "Wybierz PNG lub JPEG",
@@ -1674,7 +1671,8 @@
     "seq_preview_options": "Rozmiar podglądu",
     "seq_path_menu": "Pliki ścieżki kamery",
     "seq_ply_menu": "Pliki sekwencji PLY",
-    "seq_projection": "Projekcja"
+    "seq_projection": "Projekcja",
+    "render_modes": "Wybierz RGB, głębię lub normalne powierzchni w przestrzeni kamery. Normalne wymagają modelu splatów."
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",
@@ -2041,6 +2039,7 @@
     "bg_image_browse": "Przeglądaj...",
     "bg_image_clear": "Wyczyść",
     "ppisp": "PPISP:",
+    "pose_opt": "Korekta pozycji kamer:",
     "ppisp_exposure_from_exif": "Ekspozycja EXIF:",
     "ppisp_controller": "  Kontroler:",
     "ppisp_lr": "Tempo uczenia:",

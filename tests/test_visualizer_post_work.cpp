@@ -45,6 +45,7 @@
 #include "io/project_recovery.hpp"
 #include "io/session_chapters.hpp"
 #include "io/splat_chapter.hpp"
+#include "ipc/render_settings_convert.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
@@ -55,6 +56,7 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/viewport_appearance_correction.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -20156,6 +20158,92 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             checkpoint_identity(project_path);
         EXPECT_EQ(after_save.first, before.first);
         EXPECT_EQ(after_save.second, before.second);
+    }
+
+    TEST(ViewportRenderModes, ResolvesLegacyFlagsWithDepthPrecedence) {
+        RenderSettings settings;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::RGB);
+        settings.normal_view = true;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Normal);
+        settings.depth_view = true;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Depth);
+        settings.normal_view = false;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::Depth);
+        settings.depth_view = false;
+        EXPECT_EQ(viewportDisplayMode(settings), ViewportDisplayMode::RGB);
+    }
+
+    TEST(ViewportRenderModes, PersistsModeButNotSelectorVisibilityAndLoadsOlderProjects) {
+        RenderSettings settings;
+        settings.normal_view = true;
+        settings.render_mode_controls_open = true;
+        RenderSettings copy;
+        apply_proxy(copy, to_proxy(settings));
+        EXPECT_TRUE(copy.normal_view);
+        auto json = project::renderSettingsToProjectJson(settings);
+        EXPECT_FALSE(json.contains("render_mode_controls_open"));
+        auto restored = project::renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(restored->normal_view);
+        EXPECT_FALSE(restored->render_mode_controls_open);
+        json.erase("normal_view");
+        restored = project::renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_FALSE(restored->normal_view);
+    }
+
+    TEST(ViewportRenderModes, NormalsRequireWholeFrameExactDepthAndSkipColorCompositing) {
+        struct EventGuard {
+            ~EventGuard() { lfs::event::EventBridge::instance().clear_all(); }
+        } guard;
+        Viewport viewport(640, 480);
+        SceneManager manager;
+        const ViewportRegion region{0, 0, 640, 480};
+        FrameContext frame{.viewport = viewport, .viewport_region = &region, .scene_manager = &manager, .settings = {}, .render_size = {640, 480}};
+        frame.settings.normal_view = true;
+        frame.settings.show_camera_frustums = true;
+        frame.settings.environment_mode = EnvironmentBackgroundMode::Equirectangular;
+        frame.settings.environment_map_path = "test.hdr";
+        const auto request = buildViewportRenderRequest(frame, {640, 480});
+        EXPECT_TRUE(request.normal_view);
+        EXPECT_TRUE(request.require_exact_depth);
+        EXPECT_TRUE(request.exact_depth_sample_mask.empty());
+        EXPECT_FALSE(request.transparent_background);
+        EXPECT_FALSE(RenderingManager::vrRenderSettings(frame.settings).normal_view);
+        frame.settings.depth_view = true;
+        EXPECT_FALSE(normalViewEnabled(frame.settings));
+        frame.settings.depth_view = false;
+        frame.settings.split_view_mode = SplitViewMode::GTComparison;
+        EXPECT_FALSE(normalViewEnabled(frame.settings));
+    }
+    TEST(ViewportAppearanceCorrectionTest, NormalExportsPreserveColorAndAlpha) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        SceneManager scene;
+        auto appearance = std::make_unique<lfs::training::PPISP>(100);
+        appearance->register_frame(0, 0);
+        appearance->finalize();
+        scene.setAppearanceModel(std::move(appearance));
+        RenderSettings settings;
+        settings.normal_view = true;
+        settings.apply_appearance_correction = true;
+        settings.ppisp_mode = RenderSettings::PPISPMode::MANUAL;
+        settings.ppisp_overrides.exposure_offset = 1.0f;
+        settings.environment_map_path = "missing-normal-export.hdr";
+        for (const auto split : {SplitViewMode::Disabled, SplitViewMode::GTComparison}) {
+            settings.split_view_mode = split;
+            for (const auto mode : {ExportPostProcessMode::Opaque, ExportPostProcessMode::Transparent,
+                                    ExportPostProcessMode::EnvironmentComposite}) {
+                const std::size_t channels = mode == ExportPostProcessMode::Opaque ? 3 : 4;
+                auto image = core::Tensor::zeros({16, 16, channels}, core::Device::CPU, core::DataType::UInt8);
+                std::memset(image.ptr<std::uint8_t>(), 127, image.numel());
+                auto result = applyExportPostProcess(image.clone(), &scene, settings, -1, mode, {});
+                ASSERT_TRUE(result) << result.error();
+                EXPECT_EQ(result->size(2), mode == ExportPostProcessMode::EnvironmentComposite ? 3 : channels);
+                const auto* pixels = result->ptr<std::uint8_t>();
+                EXPECT_TRUE(std::all_of(pixels, pixels + result->numel(), [](const auto value) { return value == 127; }));
+            }
+        }
     }
 
     TEST(ViewportAppearanceCorrectionTest, StandaloneModesPreservePixelsAndUpdateCost) {

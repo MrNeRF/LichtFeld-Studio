@@ -863,12 +863,18 @@
     </div>
 
     <div id="depth-view-block" class="viewport-depth-overlay hidden">
-        <div class="viewport-transform-panel viewport-depth-panel" data-tooltip="tooltip.depth_view_panel">
+        <div class="viewport-transform-panel viewport-depth-panel" data-tooltip="tooltip.render_modes">
             <div class="viewport-transform-header viewport-depth-header">
                 <div class="viewport-transform-meta viewport-depth-meta">
-                    <span class="viewport-transform-meta__tool" data-tooltip="tooltip.depth_view_tool">{{depth_view_tool_label}}</span>
+                    <span class="viewport-transform-meta__tool" data-tooltip="tooltip.render_modes">{{render_modes_label}}</span>
+                    <select class="viewport-depth-mode-select viewport-render-mode-select"
+                            data-value="viewport_display_mode" data-tooltip="tooltip.render_modes">
+                        <option value="rgb">RGB</option>
+                        <option value="depth">@tr:ui.depth</option>
+                        <option value="normal" data-attrif-disabled="!viewport_has_gaussians">@tr:ui.normal</option>
+                    </select>
                     <select class="viewport-depth-mode-select"
-                            data-value="depth_view_mode_value"
+                            data-value="depth_view_mode_value" data-if="viewport_show_depth"
                             data-tooltip="tooltip.depth_view_mode"
                             data-attrif-disabled="!depth_view_has_scene">
                         <option value="palette">{{ui_color_label}}</option>
@@ -876,7 +882,7 @@
                     </select>
                 </div>
 
-                <div class="viewport-selection-depth-fields viewport-depth-fields" data-tooltip="tooltip.depth_view_range">
+                <div class="viewport-selection-depth-fields viewport-depth-fields" data-if="viewport_show_depth" data-tooltip="tooltip.depth_view_range">
                     <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_near">
                         <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                         <input type="range"
@@ -917,9 +923,9 @@
 
                 <div class="viewport-transform-actions viewport-depth-actions">
                     <button class="icon-btn viewport-transform-action"
-                            data-tooltip="tooltip.depth_view_close"
+                            data-tooltip="common.close"
                             data-action="toggle_depth_view"
-                            data-attr-title="depth_view_disable_label"
+                            data-attr-title="render_modes_close_label"
                             data-event-click="depth_view_action('disable')">
                         <img src="../icon/scene/x.png" />
                     </button>

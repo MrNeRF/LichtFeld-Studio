@@ -834,6 +834,7 @@
       "exposure_correction_grid_start": "Bepaalt wanneer het lokale residual grid van Exposure Correction begint te leren. Een latere start laat globale belichting en witbalans eerst stabiliseren. Verlaag alleen wanneer lokale licht- of kleurverschillen eerder gecorrigeerd moeten worden. Geldt alleen voor Exposure Correction, niet voor standalone Bilateral Grid.",
       "bilateral_grid": "Een per-foto grid dat lokale belichtings-/kleurverschillen tijdens training compenseert. Gebruik het alleen als je specifiek het oudere zelfstandige correctiepad wilt in plaats van Exposure Correction.",
       "ppisp": "Een fysisch gebaseerd appearance-model per camera/foto voor belichting, vignettering, witbalans en tooncurve. Gebruik dit voor gedetailleerde camera-appearance-correctie zonder Exposure Correction.",
+      "pose_opt": "Verfijnt de positie en oriëntatie van elke trainingscamera samen met het model. De verfijnde poses vervangen de oorspronkelijke, zodat de viewer, opslaan en exports ze gebruiken. Gebruik dit wanneer de camerakalibratie iets afwijkt; de evaluatie past de testcamera's opnieuw aan voordat ze worden gescoord.",
       "ppisp_warmup": "Bepaalt hoe lang PPISP nodig heeft om volledige leersnelheid te bereiken. Gebruik meer warmup zodat geometrie en basiskleur stabiliseren vóór sterke appearance-correctie; gebruik minder als PPISP eerder moet reageren. Heeft alleen effect op training wanneer PPISP of Exposure Correction actief is.",
       "ppisp_reg": "Houdt standalone PPISP-correcties dichter bij neutraal cameragedrag. Verhoog als PPISP scènekleur overneemt of reconstructieproblemen verbergt; verlaag als PPISP echte camera-appearance-verschillen niet kan corrigeren. Heeft alleen effect op training met standalone PPISP, niet op Exposure Correction.",
       "ppisp_holdout_appearance": "Wordt alleen gebruikt bij evaluatie met uiterlijkcorrectie (belichtingscorrectie of PPISP). Foto's die voor de evaluatie zijn achtergehouden, zijn nooit getraind, dus hun belichting en witbalans zijn onbekend. Dichtstbijzijnde neemt ze over van de trainingsfoto's die vlak ervoor en erna zijn gemaakt en mengt die. Gemiddelde gebruikt één gemiddelde camera-instelling. Dichtstbijzijnde is de standaard en beoordeelt eerlijk als het licht tijdens de opname verandert.",
@@ -1380,10 +1381,8 @@
     "orthographic": "Orthografisch",
     "sequencer": "Sequentie-editor",
     "histogram": "Histogram",
-    "depth_map": "Dieptekaart",
     "viewport_export": "Viewport exporteren",
     "depth_mode_disable": "Dieptemodus uitschakelen",
-    "depth_map_disable": "Dieptekaart uitschakelen",
     "depth_mode_enable": "Dieptemodus inschakelen",
     "delete_selection": "Selectie verwijderen",
     "undo": "Ongedaan maken",
@@ -1406,7 +1405,8 @@
     "scale_distance_measured": "Gemeten:",
     "scale_distance_set": "Afstand instellen:",
     "scale_distance_apply": "Schaling bevestigen",
-    "scale_distance_reset": "Punten resetten"
+    "scale_distance_reset": "Punten resetten",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Scène schalen met AprilTags",
@@ -1582,14 +1582,11 @@
     "selection_invert": "Gaussian-selectie omkeren",
     "selection_select_all": "Alle Gaussianen selecteren",
     "selection_unselect": "Gaussian-selectie wissen",
-    "depth_view_panel": "Bediening voor dieptekaart",
-    "depth_view_tool": "Actieve dieptekaartweergave",
     "depth_view_mode": "Kleurmodus voor dieptekaart kiezen",
     "gt_compare_mode": "Kies RGB-, normaal-, diepte- of verliesvisualisatie voor ground truth",
     "depth_view_range": "Visualisatiebereik van dieptekaart",
     "depth_view_near": "Dichtbijgrens van het dieptebereik",
     "depth_view_far": "Verre grens van het dieptebereik",
-    "depth_view_close": "Dieptekaartweergave uitschakelen",
     "viewport_export_panel": "Viewport-exportbesturing",
     "viewport_export_tool": "Viewportafbeelding exporteren",
     "viewport_export_format": "PNG of JPEG kiezen",
@@ -1674,7 +1671,8 @@
     "seq_preview_options": "Voorbeeldgrootte",
     "seq_path_menu": "Camerapadbestanden",
     "seq_ply_menu": "PLY-reeksbestanden",
-    "seq_projection": "Projectie"
+    "seq_projection": "Projectie",
+    "render_modes": "Kies RGB, diepte of oppervlaktenormalen in cameraruimte. Normalen vereisen een splatmodel."
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",
@@ -2041,6 +2039,7 @@
     "bg_image_browse": "Bladeren...",
     "bg_image_clear": "Wissen",
     "ppisp": "PPISP:",
+    "pose_opt": "Poseverfijning:",
     "ppisp_exposure_from_exif": "EXIF-belichting:",
     "ppisp_controller": "  Controller:",
     "ppisp_lr": "Leersnelheid:",
