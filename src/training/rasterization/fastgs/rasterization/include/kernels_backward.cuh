@@ -386,6 +386,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
                 // The forward's factor: it keeps every splat with det >= min_cov2d_determinant.
+                // It scales the opacity gradient only and stays detached from the covariance: feeding this
+                // determinant ratio into the scale and rotation gradients creates long splats.
                 opacity_compensation = sqrtf(fmaxf(raw_a * raw_c - raw_b * raw_b, 0.0f) * determinant_rcp);
             }
 
