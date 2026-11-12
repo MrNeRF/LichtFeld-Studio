@@ -197,12 +197,12 @@ namespace lfs::media {
             }
             return -1;
         }
-        void discardNonVideoStreams(AVFormatContext* context, int video_stream_index) {
+        void keepOnlyStream(AVFormatContext* context, int stream_index) {
             if (!context)
                 return;
             for (unsigned int i = 0; i < context->nb_streams; ++i)
                 if (context->streams[i])
-                    context->streams[i]->discard = static_cast<int>(i) == video_stream_index ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
+                    context->streams[i]->discard = static_cast<int>(i) == stream_index ? AVDISCARD_DEFAULT : AVDISCARD_ALL;
         }
         VideoStreamProbe probeVideoStream(AVFormatContext* context) {
             VideoStreamProbe result;
@@ -219,7 +219,7 @@ namespace lfs::media {
             }
             if (result.stream_index < 0)
                 return result;
-            discardNonVideoStreams(context, result.stream_index);
+            keepOnlyStream(context, result.stream_index);
             if (!result.metadata_complete) {
                 result.ffmpeg_error = avformat_find_stream_info(context, nullptr);
                 result.metadata_complete = result.ffmpeg_error >= 0;

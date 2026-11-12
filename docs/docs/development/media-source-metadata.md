@@ -1182,3 +1182,23 @@ extradata and 100,000 records (packets plus side-data blocks). Lower these with
 `TimedMetadataLimits` or `--timed-max-bytes` / `--timed-max-records`. Exhaustion,
 corrupt selected packets and read failures return errors, not partial success.
 The probe's cooperative timeout applies to collection.
+
+### DJI camera telemetry
+
+`interpretDjiMetadata(observation)` reads collected `djmd` packets declaring
+`dvtm_ac203.proto` or `dvtm_ac204.proto` version `2.0.1` (Osmo Action 4/5).
+It returns one `DjiSample` per packet: sequence, camera timestamp in microseconds
+since power-up, ISO, exposure ratio, white balance, quaternion, acceleration and
+GPS status. Scalars default to zero; optional values indicate message presence.
+
+```sh
+media-ingest probe action.mp4 --timed-stream 0 --dji-metadata
+```
+
+```python
+observed = lf.media.MediaIngest.probe(path, timed_metadata_stream=0)
+values = json.loads(observed.dji_metadata_json())["samples"]
+```
+
+The interpreter leaves the collected bytes untouched. Unsupported declarations,
+malformed wire data, nonfinite floats and invalid exposure ratios are refused.

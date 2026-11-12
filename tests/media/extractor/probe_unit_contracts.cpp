@@ -4,6 +4,7 @@
 #include "core/path_utils.hpp"
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
+#include "media/dji_timed_metadata.hpp"
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
@@ -16,6 +17,7 @@ extern "C" {
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
@@ -429,6 +431,49 @@ namespace {
         require(read_source_exif(path).status == MetadataStatus::Malformed && read_source_exif(path).blocks.empty(),
                 "ancillary recovery never searches past invalid next-chunk framing");
     }
+    void djiProfileContracts() {
+        using namespace lfs::media;
+        TimedMetadataObservation broken;
+        broken.codec_tag = MKTAG('d', 'j', 'm', 'd');
+        broken.packets.resize(2);
+        broken.packets[0].bytes = {10, 27, 10, 25, 10, 16, 'd', 'v', 't', 'm', '_', 'a', 'c', '2', '0', '4', '.', 'p', 'r', 'o', 't', 'o', 26, 5, '2', '.', '0', '.', '1'};
+        const auto reject = [&](const std::vector<std::uint8_t>& bytes, lfs::ErrorCode code, std::string_view detail) {
+            broken.packets[1].bytes = bytes;
+            const auto refused = interpretDjiMetadata(broken);
+            require(!refused && refused.error().code() == code && refused.error().detail().find(detail) != std::string_view::npos,
+                    "malformed packet reaches the intended diagnostic after a qualified first packet");
+        };
+        // A complete nested timestamp is valid. Every nonempty proper prefix
+        // cuts a tag, length or payload inside its enclosing length-delimited field.
+        const std::vector<std::uint8_t> timestamp{0x1a, 4, 0x0a, 2, 0x10, 1};
+        broken.packets[1].bytes = timestamp;
+        const auto complete = interpretDjiMetadata(broken);
+        require(complete && (*complete)[1].camera_timestamp == 1, "complete timestamp control is accepted");
+        reject({}, lfs::ErrorCode::DataLoss, "Empty DJI packet");
+        for (std::size_t size = 1; size < timestamp.size(); ++size)
+            reject(std::vector<std::uint8_t>(timestamp.begin(), timestamp.begin() + size), lfs::ErrorCode::DataLoss, "Truncated");
+        reject({0}, lfs::ErrorCode::DataLoss, "Invalid DJI protobuf field number");
+        reject({0x1a, 13, 0x0a, 11, 0x10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 2},
+               lfs::ErrorCode::DataLoss, "Overflowing DJI protobuf varint");
+        reject({10, 255, 255, 255, 255, 127}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
+        reject({0x1a, 2, 0x12, 4}, lfs::ErrorCode::DataLoss, "Truncated DJI protobuf field");
+        reject({0x1a, 9, 0x12, 7, 0x1a, 5, 0x0d, 0, 0, 0x80, 0x7f}, lfs::ErrorCode::DataLoss, "Nonfinite DJI scalar");
+        reject({0x1a, 8, 0x12, 6, 0x22, 4, 0x0a, 2, 1, 0}, lfs::ErrorCode::DataLoss, "nonzero denominator");
+        reject({0x1a, 9, 0x12, 7, 0x22, 5, 0x0a, 3, 1, 2, 3}, lfs::ErrorCode::DataLoss, "Too many DJI exposure operands");
+        reject({0x1a, 6, 0x12, 4, 0x1a, 2, 8, 1}, lfs::ErrorCode::DataLoss, "Wrong wire type");
+        reject({0x0b}, lfs::ErrorCode::Unsupported, "groups are unsupported");
+        broken.packets[1].bytes = {0x1a, 13, 0x0a, 11, 0x10, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1};
+        const auto maximum = interpretDjiMetadata(broken);
+        require(maximum && (*maximum)[1].camera_timestamp == std::numeric_limits<std::uint64_t>::max(),
+                "ten-byte uint64 maximum is accepted without losing bits");
+        broken.packets[1].bytes = {0x1a, 6, 0x0a, 4, 0x10, 1, 0x10, 2};
+        const auto repeated = interpretDjiMetadata(broken);
+        require(repeated && (*repeated)[1].camera_timestamp == 2, "last singular scalar wins");
+        broken.packets[1].bytes = {0x1a, 4, 0x12, 2, 0x4a, 0, 0x7a, 3, 0xff, 0xff, 0xff};
+        const auto unknown = interpretDjiMetadata(broken);
+        require(unknown && (*unknown)[1].quaternion_wxyz == std::array<float, 4>{} && !(*unknown)[1].iso,
+                "present messages use proto3 zero defaults while absent messages stay absent");
+    }
     void timedPacketContracts() {
         using namespace lfs::media;
         const auto path = std::filesystem::temp_directory_path() / ("lfs-timed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".mp4");
@@ -561,6 +606,7 @@ namespace {
 int runProbeUnitContracts() {
     sourceExifContracts();
     timedPacketContracts();
+    djiProfileContracts();
     using namespace lfs::media;
     const auto* dav1d = avcodec_find_decoder_by_name("libdav1d");
     require(detail::softwareVideoDecoder(AV_CODEC_ID_AV1) ==
@@ -681,10 +727,10 @@ int runProbeUnitContracts() {
     require(stream.orientation.rotate_tag_limited && !stream.orientation.clockwise_degrees &&
                 legacyQuarterTurn(stream.orientation) == 0,
             "oversized malformed rotation stays unknown without matrix fallback");
-    detail::discardNonVideoStreams(context.get(), 0);
+    detail::keepOnlyStream(context.get(), 0);
     require(audio->discard == AVDISCARD_DEFAULT && video->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL,
             "existing discard helper keeps an explicitly selected non-video stream");
-    detail::discardNonVideoStreams(context.get(), 1);
+    detail::keepOnlyStream(context.get(), 1);
     require(audio->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL && video->discard == AVDISCARD_DEFAULT, "legacy discard policy");
     require(detail::findUsableHeaderVideoStream(nullptr) == -1, "null context");
     require(detail::describeContext(nullptr).streams.empty(), "null description");

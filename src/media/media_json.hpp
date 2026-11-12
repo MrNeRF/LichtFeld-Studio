@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "media/dji_timed_metadata.hpp"
 #include "media/media_probe.hpp"
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
@@ -345,6 +346,19 @@ namespace lfs::media::json_detail {
         case OrientationSource::DisplayMatrix: return "display_matrix";
         default: return "none";
         }
+    }
+    inline json djiMetadata(const std::vector<DjiSample>& samples) {
+        json result{{"samples", json::array()}};
+        for (const auto& sample : samples)
+            result["samples"].push_back({{"sequence", sample.sequence},
+                                         {"camera_timestamp", sample.camera_timestamp},
+                                         {"iso", optional(sample.iso)},
+                                         {"exposure_time_ratio", optional(sample.exposure_time_ratio)},
+                                         {"white_balance_cct", optional(sample.white_balance_cct)},
+                                         {"quaternion_wxyz", optional(sample.quaternion_wxyz)},
+                                         {"accelerometer_xyz", optional(sample.accelerometer_xyz)},
+                                         {"gps_status", optional(sample.gps_status)}});
+        return result;
     }
     inline json timedMetadata(const TimedMetadataObservation& observation) {
         json result{{"scope", "demuxed_timed_packets"}, {"interpretation", "not_performed"}, {"provider", metadataProvider(observation.provider)}, {"stream_index", observation.stream_index}, {"codec_tag", observation.codec_tag}, {"extradata", hexBytes(observation.extradata)}, {"packets", json::array()}};

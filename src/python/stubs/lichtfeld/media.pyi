@@ -716,6 +716,11 @@ class MediaDescription:
         Return the shared probe JSON, including explicitly collected timed packet bytes and clocks when present.
         """
 
+    def dji_metadata_json(self) -> str:
+        """
+        Interpret collected DJI Action 4/5 djmd packets. Returns one sample per packet, with camera timestamps in microseconds since power-up.
+        """
+
 class FrameLayout:
     @property
     def width(self) -> int: ...

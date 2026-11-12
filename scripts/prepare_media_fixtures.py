@@ -26,6 +26,51 @@ SPECS = (
 )
 
 
+def dji_ac204(directory):
+    """Original packet payloads in an independent, synthetic single-track MP4.
+
+    The 30,000/1,001 clock is a test input, not original device timing.
+    No video codec, decoder or network is involved.
+    """
+    import struct
+    corpus = Path(__file__).resolve().parents[1] / "tests/media/fixtures/dji-ac204/ac204_djmd_first300.bin"
+    data = corpus.read_bytes()
+    samples, offset = [], 0
+    while offset < len(data):
+        size, = struct.unpack_from(">I", data, offset)
+        offset += 4
+        if size > len(data) - offset:
+            raise ValueError("truncated DJI packet fixture")
+        samples.append(data[offset:offset + size])
+        offset += size
+    def u32(*values):
+        return struct.pack(">" + "I" * len(values), *values)
+    def box(kind, payload):
+        return u32(8 + len(payload)) + kind + payload
+    def full(kind, payload, flags=0):
+        return box(kind, u32(flags) + payload)
+    identity = u32(0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000)
+    duration = 1001 * len(samples)
+    ftyp = box(b"ftyp", b"isom" + u32(0) + b"isommp42")
+    mdat = box(b"mdat", b"".join(samples))
+    mvhd = full(b"mvhd", u32(0, 0, 30000, duration, 0x10000) + b"\x01\x00" + bytes(10) + identity + bytes(24) + u32(2))
+    tkhd = full(b"tkhd", u32(0, 0, 1, 0, duration) + bytes(16) + identity + bytes(8), flags=3)
+    mdhd = full(b"mdhd", u32(0, 0, 30000, duration) + bytes(4))
+    hdlr = full(b"hdlr", u32(0) + b"meta" + bytes(12) + b"DJI fixture\0")
+    dref = full(b"dref", u32(1) + full(b"url ", b"", flags=1))
+    stsd = full(b"stsd", u32(1) + box(b"djmd", bytes(6) + b"\x00\x01"))
+    stts = full(b"stts", u32(1, len(samples), 1001))
+    stsc = full(b"stsc", u32(1, 1, len(samples), 1))
+    stsz = full(b"stsz", u32(0, len(samples), *map(len, samples)))
+    stco = full(b"stco", u32(1, len(ftyp) + 8))
+    stbl = box(b"stbl", stsd + stts + stsc + stsz + stco)
+    minf = box(b"minf", full(b"nmhd", b"") + box(b"dinf", dref) + stbl)
+    trak = box(b"trak", tkhd + box(b"mdia", mdhd + hdlr + minf))
+    output = directory / "dji-ac204 é 日本語.mp4"
+    output.write_bytes(ftyp + mdat + box(b"moov", mvhd + trak))
+    return output
+
+
 def source_pixels(spec):
     """Asymmetric corner colors plus a unique center patch for every frame.
 
