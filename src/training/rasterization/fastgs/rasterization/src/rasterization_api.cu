@@ -479,6 +479,7 @@ namespace fast_lfs::rasterization {
         const float* cam_position_ptr,
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr,
+        float* grad_cam_position_ptr,
         int n_primitives,
         int n_visible,
         int active_sh_bases,
@@ -567,6 +568,9 @@ namespace fast_lfs::rasterization {
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_ptr, "densification_error_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_cam_position_ptr, "grad_cam_position_ptr");
+            if ((grad_w2c_ptr == nullptr) != (grad_cam_position_ptr == nullptr))
+                throw std::runtime_error("grad_w2c_ptr and grad_cam_position_ptr must be given together");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_score_out, "edge_score_out");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(impact_sum_out, "impact_sum_out");
@@ -651,6 +655,8 @@ namespace fast_lfs::rasterization {
             if (grad_w2c_ptr) {
                 LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_w2c_ptr, 0, 4 * 4 * sizeof(float), stream),
                                      "cudaMemsetAsync(grad_w2c)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_cam_position_ptr, 0, 3 * sizeof(float), stream),
+                                     "cudaMemsetAsync(grad_cam_position)");
             }
 
             // Call the actual backward implementation
@@ -683,7 +689,8 @@ namespace fast_lfs::rasterization {
                 grad_conic_helper,
                 grad_depth_helper,
                 grad_normal_helper,
-                grad_w2c_ptr ? reinterpret_cast<float4*>(grad_w2c_ptr) : nullptr,
+                reinterpret_cast<float4*>(grad_w2c_ptr),
+                reinterpret_cast<float3*>(grad_cam_position_ptr),
                 densification_weight_ptr,
                 densification_error_ptr,
                 n_primitives,
@@ -831,7 +838,7 @@ namespace fast_lfs::rasterization {
             backward_raw(
                 nullptr, nullptr, nullptr, grad_image, BackgroundAlphaGradient{.grad_alpha_map = grad_alpha}, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
-                nullptr,
+                nullptr, nullptr,
                 NUM_GAUSSIANS, NUM_GAUSSIANS, 1, 1,
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);

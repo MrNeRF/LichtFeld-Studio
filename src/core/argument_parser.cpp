@@ -99,6 +99,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
             OptimizationCliBinding{"--no-exposure-correction", "use_exposure_correction", Bool, true},
+            OptimizationCliBinding{"--pose-opt", "pose_opt", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
             OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
@@ -826,6 +827,7 @@ namespace {
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::core::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::core::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
+            ::args::Flag pose_opt(training_group, "pose_opt", lfs::core::args::optimization_cli_help("--pose-opt"), {"pose-opt"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::MapFlag<std::string, lfs::core::param::DensifyErrorMap> densify_error_map(
                 training_group, "densify_error_map",
@@ -1688,6 +1690,7 @@ namespace {
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
                                         crop_flag = bool(crop),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
+                                        pose_opt_flag = bool(pose_opt),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
@@ -1866,6 +1869,7 @@ namespace {
                 setFlag(use_exposure_correction_flag, opt.use_exposure_correction);
                 if (no_exposure_correction_flag)
                     opt.use_exposure_correction = false;
+                setFlag(pose_opt_flag, opt.pose_opt);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 if (no_ppisp_exif_exposure_flag)
                     opt.ppisp_exposure_from_exif = false;
@@ -2010,6 +2014,7 @@ namespace {
                 note_opt("use_bilateral_grid", use_bilateral_grid_flag);
                 note_opt("use_exposure_correction",
                          use_exposure_correction_flag || no_exposure_correction_flag);
+                note_opt("pose_opt", pose_opt_flag);
                 note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
                                           ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_use_controller", ppisp_controller_flag);

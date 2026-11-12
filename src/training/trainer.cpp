@@ -1137,6 +1137,7 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        pose_refinement_.reset();
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
@@ -3188,6 +3189,15 @@ namespace lfs::training {
                 }
             }
 
+            pose_refinement_.reset();
+            if (params.optimization.pose_opt) {
+                auto refinement = CameraPoseRefinement::create(train_dataset_->get_cameras(),
+                                                               static_cast<int>(params.optimization.iterations));
+                if (!refinement)
+                    return std::unexpected(std::string(refinement.error().user_message()));
+                pose_refinement_ = std::move(refinement).value();
+            }
+
             // Initialize background color tensor from params
             {
                 const auto& bg_color = params.optimization.bg_color;
@@ -3779,6 +3789,7 @@ namespace lfs::training {
         bilateral_grid_.reset();
         ppisp_.reset();
         ppisp_controller_pool_.reset();
+        pose_refinement_.reset();
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
@@ -4826,6 +4837,9 @@ namespace lfs::training {
         std::unique_lock model_lock(
             model_access_mutex_);
         waitForModelReaders();
+        // The saved cameras are the ones the splats are fitted to.
+        if (pose_refinement_)
+            pose_refinement_->commit();
         auto prepared =
             std::move(*prepared_project_snapshot_);
         prepared_project_snapshot_.reset();
@@ -6673,6 +6687,8 @@ namespace lfs::training {
                     assert(support.ndim() == 1 && support.numel() == strategy_->get_model().size());
                     fused_extra_gradients.rendered_count = support.ptr<float>();
                 }
+                if (pose_refinement_ && run_fastgs_gaussian_backward)
+                    pose_refinement_->bind_gradients(fused_extra_gradients, iter);
                 lfs::core::Tensor edge_score_scratch;
                 lfs::core::Tensor edge_weight_map;
                 lfs::core::Tensor impact_sum_scratch;
@@ -8234,6 +8250,7 @@ namespace lfs::training {
                                     std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_, std::defer_lock);
                                     if (strategy_->is_refining(iter))
                                         model_write_lock.lock();
+                                    const cudaStream_t backward_stream = fast_ctx->forward_ctx.stream;
                                     fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                             gaussian_optimizer, tile_grad_alpha,
                                                             use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
@@ -8242,6 +8259,8 @@ namespace lfs::training {
                                                             fused_extra_gradients,
                                                             tile_grad_depth,
                                                             tile_grad_normal, in_popspa, color_variance);
+                                    if (pose_refinement_)
+                                        pose_refinement_->step(*cam, iter, backward_stream);
                                     if (fused_extra_gradients.edge_score_out != nullptr) {
                                         strategy_->on_edge_score_accumulated(iter);
                                     }
@@ -8355,6 +8374,12 @@ namespace lfs::training {
                             loss_tensor_gpu = loss_tensor_gpu + *opacity_loss_result;
                         }
                         nvtxRangePop();
+                    }
+
+                    if (pose_refinement_ && pose_refinement_->reports_at(iter)) {
+                        std::unique_lock render_lock(render_mutex_);
+                        pose_refinement_->commit();
+                        LOG_INFO("{}", pose_refinement_->summary(iter));
                     }
 
                     if (!in_popspa && bilateral_grid_ && step_params.bilateral_grid_active()) {
@@ -8662,14 +8687,11 @@ namespace lfs::training {
                         auto evaluation_guard = makeScopeGuard([this] {
                             evaluation_active_.store(false, std::memory_order_release);
                         });
-                        auto metrics = evaluator_->evaluate(iter,
-                                                            strategy_->get_model(),
-                                                            val_dataset_,
-                                                            background_,
-                                                            evaluation_image_loader.get(),
-                                                            [this, iter, stop_token] {
-                                                                return service_evaluation_controls(iter, stop_token);
-                                                            });
+                        auto metrics = evaluate_model(iter,
+                                                      evaluation_image_loader.get(),
+                                                      [this, iter, stop_token] {
+                                                          return service_evaluation_controls(iter, stop_token);
+                                                      });
                         service_evaluation_controls(iter, stop_token);
                         if (metrics.cancelled) {
                             LOG_INFO("Final evaluation stopped at iteration {}", iter);
@@ -8949,6 +8971,32 @@ namespace lfs::training {
         return result;
     }
 
+    EvalMetrics Trainer::evaluate_model(const int iteration, lfs::io::PipelinedImageLoader* image_loader,
+                                        std::function<bool()> on_view_boundary) {
+        // The training cameras moved with the model; score the held-out views from where they fit it best.
+        std::optional<RefittedCameraPoses> refit;
+        if (pose_refinement_ && val_dataset_ && !params_.optimization.eval_all) {
+            refit.emplace(val_dataset_->get_cameras(), strategy_->get_model(), background_,
+                          RefittedCameraPoses::Settings{
+                              .resize_factor = params_.dataset.resize_factor,
+                              .max_width = params_.dataset.max_width,
+                              .lambda_dssim = params_.optimization.lambda_dssim,
+                              .mip_filter = params_.optimization.mip_filter,
+                          });
+            std::unique_lock render_lock(render_mutex_);
+            refit->apply();
+            LOG_INFO("Refitted {} held-out cameras to the model before scoring them", val_dataset_->get_cameras().size());
+        }
+        auto restore_poses = makeScopeGuard([this, &refit] {
+            if (refit) {
+                std::unique_lock render_lock(render_mutex_);
+                refit->restore();
+            }
+        });
+        return evaluator_->evaluate(iteration, strategy_->get_model(), val_dataset_, background_, image_loader,
+                                    std::move(on_view_boundary));
+    }
+
     void Trainer::evaluate_at(const int iteration, std::stop_token stop_token) {
         evaluator_->print_evaluation_header(iteration);
         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
@@ -8960,14 +9008,11 @@ namespace lfs::training {
         auto evaluation_guard = makeScopeGuard([this] {
             evaluation_active_.store(false, std::memory_order_release);
         });
-        auto metrics = evaluator_->evaluate(iteration,
-                                            strategy_->get_model(),
-                                            val_dataset_,
-                                            background_,
-                                            evaluation_image_loader.get(),
-                                            [this, iteration, stop_token] {
-                                                return service_evaluation_controls(iteration, stop_token);
-                                            });
+        auto metrics = evaluate_model(iteration,
+                                      evaluation_image_loader.get(),
+                                      [this, iteration, stop_token] {
+                                          return service_evaluation_controls(iteration, stop_token);
+                                      });
         service_evaluation_controls(iteration, stop_token);
         if (metrics.cancelled) {
             LOG_INFO("Evaluation stopped at iteration {}", iteration);
@@ -9922,6 +9967,22 @@ namespace lfs::training {
             }
             if (evaluator_) {
                 evaluator_->save_report();
+            }
+            if (pose_refinement_) {
+                {
+                    std::unique_lock render_lock(render_mutex_);
+                    pose_refinement_->commit();
+                }
+                const auto& output = params_.dataset.output_path;
+                if (auto written = pose_refinement_->write_table(output / "pose_refinement.tsv"); !written)
+                    LOG_ERROR("Pose refinement table: {}", lfs::format_for_developer(written.error()));
+                if (scene_) {
+                    if (auto written = write_scene_cameras_colmap(*scene_, params_.dataset.data_path,
+                                                                  output / "cameras_refined");
+                        !written)
+                        LOG_WARN("Refined cameras not written as COLMAP files: {}",
+                                 lfs::format_for_developer(written.error()));
+                }
             }
             if (progress_ && strategy_) {
                 progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()),

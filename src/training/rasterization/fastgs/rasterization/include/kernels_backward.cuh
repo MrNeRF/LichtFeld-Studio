@@ -37,7 +37,8 @@ namespace fast_lfs::rasterization::kernels::backward {
 
     // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
-    template <bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES = false>
+    // CAMERA_GRAD: adds the camera gradient to grad_w2c and grad_cam_position (FastGSFusedExtraGradients).
+    template <bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES = false, bool CAMERA_GRAD = false>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
         // These four alias fused_adam.{means,scaling,rotation,opacity}.param (Adam writes).
         const float3* means,
@@ -57,6 +58,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* __restrict__ grad_opacity_helper,
         float3* __restrict__ grad_color_helper,
         float4* __restrict__ grad_w2c,
+        float3* __restrict__ grad_cam_position,
         float* __restrict__ densification_weight,
         float* __restrict__ densification_error,
         const uint n_primitives,
@@ -285,6 +287,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         }
         // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
+        // dL/d(w2c rows 0-2) then dL/d(cam_position), summed over the block after the geometry.
+        [[maybe_unused]] float camera_grad[15] = {};
+
         // Re-enter the contribution path for covariance, EWA, and geometry gradients.
         if (contributed) {
             const float3 mean3d = means[primitive_idx];
@@ -434,21 +439,6 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float factor_y = 1.0f + static_cast<float>(valid_y);
             dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
 
-            if (grad_w2c != nullptr) {
-                atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
-                atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y);
-                atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z);
-                atomicAdd(&grad_w2c[0].x, dL_dmean3d_cam.x * mean3d.x);
-                atomicAdd(&grad_w2c[0].y, dL_dmean3d_cam.x * mean3d.y);
-                atomicAdd(&grad_w2c[0].z, dL_dmean3d_cam.x * mean3d.z);
-                atomicAdd(&grad_w2c[1].x, dL_dmean3d_cam.y * mean3d.x);
-                atomicAdd(&grad_w2c[1].y, dL_dmean3d_cam.y * mean3d.y);
-                atomicAdd(&grad_w2c[1].z, dL_dmean3d_cam.y * mean3d.z);
-                atomicAdd(&grad_w2c[2].x, dL_dmean3d_cam.z * mean3d.x);
-                atomicAdd(&grad_w2c[2].y, dL_dmean3d_cam.z * mean3d.y);
-                atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
-            }
-
             // Combine the splatting gradient with the saved SH color gradient.
             const float3 dL_dmean3d_from_splatting = make_float3(
                 w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
@@ -492,32 +482,54 @@ namespace fast_lfs::rasterization::kernels::backward {
                 2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
                 2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33)};
 
+            // Camera-space normal W n: n is the axis of least variance, turned to face the camera.
+            float3 dL_dnormal_cam = make_float3(0.0f);
+            float3 normal_world = make_float3(0.0f);
             if (grad_normal != nullptr) {
-                const float3 g_cam = grad_normal[work_idx];
+                dL_dnormal_cam = grad_normal[work_idx];
                 const float3 g_world = make_float3(
-                    w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
-                    w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
-                    w2c_r1.z * g_cam.x + w2c_r2.z * g_cam.y + w2c_r3.z * g_cam.z);
-                const float3 view_dir = mean3d - cam_position[0];
-                if (variance.x <= variance.y && variance.x <= variance.z) {
-                    const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m11 += sign * g_world.x;
-                    dL_drotation.m21 += sign * g_world.y;
-                    dL_drotation.m31 += sign * g_world.z;
-                } else if (variance.y <= variance.z) {
-                    const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m12 += sign * g_world.x;
-                    dL_drotation.m22 += sign * g_world.y;
-                    dL_drotation.m32 += sign * g_world.z;
+                    w2c_r1.x * dL_dnormal_cam.x + w2c_r2.x * dL_dnormal_cam.y + w2c_r3.x * dL_dnormal_cam.z,
+                    w2c_r1.y * dL_dnormal_cam.x + w2c_r2.y * dL_dnormal_cam.y + w2c_r3.y * dL_dnormal_cam.z,
+                    w2c_r1.z * dL_dnormal_cam.x + w2c_r2.z * dL_dnormal_cam.y + w2c_r3.z * dL_dnormal_cam.z);
+                const int axis = (variance.x <= variance.y && variance.x <= variance.z) ? 0
+                                 : (variance.y <= variance.z)                           ? 1
+                                                                                        : 2;
+                const float3 axis_dir = axis == 0   ? make_float3(rotation.m11, rotation.m21, rotation.m31)
+                                        : axis == 1 ? make_float3(rotation.m12, rotation.m22, rotation.m32)
+                                                    : make_float3(rotation.m13, rotation.m23, rotation.m33);
+                const float sign = dot(axis_dir, mean3d - cam_position[0]) > 0.0f ? -1.0f : 1.0f;
+                normal_world = sign * axis_dir;
+                const float3 dL_daxis = sign * g_world;
+                if (axis == 0) {
+                    dL_drotation.m11 += dL_daxis.x;
+                    dL_drotation.m21 += dL_daxis.y;
+                    dL_drotation.m31 += dL_daxis.z;
+                } else if (axis == 1) {
+                    dL_drotation.m12 += dL_daxis.x;
+                    dL_drotation.m22 += dL_daxis.y;
+                    dL_drotation.m32 += dL_daxis.z;
                 } else {
-                    const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m13 += sign * g_world.x;
-                    dL_drotation.m23 += sign * g_world.y;
-                    dL_drotation.m33 += sign * g_world.z;
+                    dL_drotation.m13 += dL_daxis.x;
+                    dL_drotation.m23 += dL_daxis.y;
+                    dL_drotation.m33 += dL_daxis.z;
                 }
+            }
+
+            if constexpr (CAMERA_GRAD) {
+                // Through the camera-space centre W x + b, the covariance (J W) Sigma (J W)^T with J held (its
+                // dependence on the centre is in dL_dmean3d_cam) and the normal; the position only enters the colour.
+                const float3 dL_dW0 = dL_dmean3d_cam.x * mean3d + j11 * dL_djw_r1 + dL_dnormal_cam.x * normal_world;
+                const float3 dL_dW1 = dL_dmean3d_cam.y * mean3d + j22 * dL_djw_r2 + dL_dnormal_cam.y * normal_world;
+                const float3 dL_dW2 = dL_dmean3d_cam.z * mean3d + j13 * dL_djw_r1 + j23 * dL_djw_r2 +
+                                      dL_dnormal_cam.z * normal_world;
+                const float values[15] = {
+                    dL_dW0.x, dL_dW0.y, dL_dW0.z, dL_dmean3d_cam.x,
+                    dL_dW1.x, dL_dW1.y, dL_dW1.z, dL_dmean3d_cam.y,
+                    dL_dW2.x, dL_dW2.y, dL_dW2.z, dL_dmean3d_cam.z,
+                    -dL_dmean3d_from_color.x, -dL_dmean3d_from_color.y, -dL_dmean3d_from_color.z};
+#pragma unroll
+                for (int i = 0; i < 15; ++i)
+                    camera_grad[i] = values[i];
             }
 
             const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
@@ -538,6 +550,19 @@ namespace fast_lfs::rasterization::kernels::backward {
             rotation_grads[3] = clamped_rotation.w;
 
         } // contribution geometry
+
+        if constexpr (CAMERA_GRAD) {
+            lfs::core::warp_ops::block_reduce_sum_n(camera_grad);
+            if (threadIdx.x == 0) {
+                float* w2c_out = reinterpret_cast<float*>(grad_w2c);
+#pragma unroll
+                for (int i = 0; i < 12; ++i)
+                    atomicAdd(w2c_out + i, camera_grad[i]);
+                atomicAdd(&grad_cam_position->x, camera_grad[12]);
+                atomicAdd(&grad_cam_position->y, camera_grad[13]);
+                atomicAdd(&grad_cam_position->z, camera_grad[14]);
+            }
+        }
 
         if (visible && densification_error != nullptr) {
             if (densification_weight != nullptr)
