@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Menor error",
+    "loss_higher_error": "Mayor error",
+    "unavailable": "No disponible"
+  },
   "preferences.models.downloading": "Descargando…",
   "preferences.models.prepare": "Descargar / reparar",
   "preferences.models.verifying": "Verificando integridad…",
@@ -1373,10 +1378,8 @@
     "orthographic": "Ortográfica",
     "sequencer": "Secuenciador",
     "histogram": "Histograma",
-    "depth_map": "Mapa de Profundidad",
     "viewport_export": "Exportar vista",
     "depth_mode_disable": "Desactivar modo de profundidad",
-    "depth_map_disable": "Desactivar mapa de profundidad",
     "depth_mode_enable": "Activar modo de profundidad",
     "delete_selection": "Eliminar selección",
     "undo": "Deshacer",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "Usar cámaras relevantes",
     "roi_relevant_cameras_tooltip": "Usar solo cámaras relevantes para el entrenamiento ROI",
     "roi_camera_coverage": "Cobertura de cámara (%)",
-    "roi_camera_coverage_tooltip": "Cobertura mínima del fotograma para el entrenamiento ROI"
+    "roi_camera_coverage_tooltip": "Cobertura mínima del fotograma para el entrenamiento ROI",
+    "render_modes": "Modos de renderizado"
   },
   "transform": {
     "scale_apriltag": "Escalar escena con AprilTags",
@@ -1585,14 +1589,11 @@
     "selection_invert": "Invertir la selección de gaussianas",
     "selection_select_all": "Seleccionar todas las gaussianas",
     "selection_unselect": "Borrar la selección de gaussianas",
-    "depth_view_panel": "Controles del mapa de profundidad",
-    "depth_view_tool": "Vista de mapa de profundidad activa",
     "depth_view_mode": "Elegir el modo de color de profundidad",
-    "gt_compare_mode": "Elige la comparación con datos de referencia RGB, normales o profundidad",
+    "gt_compare_mode": "Elige la visualización de referencia RGB, normales, profundidad o pérdida",
     "depth_view_range": "Rango de visualización de profundidad",
     "depth_view_near": "Límite cercano del rango de profundidad",
     "depth_view_far": "Límite lejano del rango de profundidad",
-    "depth_view_close": "Desactivar la vista de profundidad",
     "viewport_export_panel": "Controles de exportación de la vista",
     "viewport_export_tool": "Exportar imagen de la vista",
     "viewport_export_format": "Elegir PNG o JPEG",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "Tamaño de vista previa",
     "seq_path_menu": "Archivos de ruta de cámara",
     "seq_ply_menu": "Archivos de secuencia PLY",
-    "seq_projection": "Proyección"
+    "seq_projection": "Proyección",
+    "render_modes": "Elige RGB, profundidad o normales de superficie en el espacio de cámara. Las normales requieren un modelo de splats."
   },
   "exit_popup": {
     "title": "¿Salir de la Aplicación?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Abre una escena nueva o cambia el conjunto de datos cargado al modo de edición antes de ver un entrenador externo.",
   "external_training.dependencies": "Preparando NumPy; se instalará si es necesario…",
   "external_training.camera_overlay": "Frústums de cámara (toda la escena)",
-  "external_training.export_unavailable": "Las vistas previas externas no se pueden exportar. Abre el modelo guardado por el entrenador para exportarlo."
+  "external_training.export_unavailable": "Las vistas previas externas no se pueden exportar. Abre el modelo guardado por el entrenador para exportarlo.",
+  "external_training.result_invalid": "El modelo guardado está incompleto, ha cambiado o contiene metadatos no compatibles.",
+  "external_training.result_unreadable": "El modelo guardado no está disponible o no se puede leer. Mantén disponible la carpeta de salida y comprueba los permisos del archivo.",
+  "external_training.result_name": "{name} · modelo guardado",
+  "external_training.import_result": "Importar modelo guardado",
+  "external_training.import_hint": "Disponible al finalizar el entrenamiento. Importa el mejor modelo completo guardado, o el último modelo válido, como modelo local editable. No se aplican los límites de la vista previa.",
+  "external_training.import_busy": "Ya hay otra importación en curso. Espera a que termine.",
+  "external_training.result_best": "Mejor evaluado: paso {step} · {count} gaussianas · SH{degree}",
+  "external_training.result_last": "Último guardado: paso {step} · {count} gaussianas · SH{degree}"
 }

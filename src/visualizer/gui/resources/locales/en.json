@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Lower error",
+    "loss_higher_error": "Higher error",
+    "unavailable": "Unavailable"
+  },
   "preferences.models.downloading": "Downloading…",
   "preferences.models.prepare": "Download / repair",
   "preferences.models.verifying": "Verifying integrity…",
@@ -1386,10 +1391,8 @@
     "orthographic": "Orthographic",
     "sequencer": "Sequencer",
     "histogram": "Histogram",
-    "depth_map": "Depth Map",
     "viewport_export": "Viewport Export",
     "depth_mode_disable": "Disable Depth Mode",
-    "depth_map_disable": "Disable Depth Map",
     "depth_mode_enable": "Enable Depth Mode",
     "delete_selection": "Delete Selection",
     "undo": "Undo",
@@ -1420,7 +1423,8 @@
     "roi_relevant_cameras": "Use relevant cameras",
     "roi_relevant_cameras_tooltip": "Only Use Cameras Relevant to ROI Training",
     "roi_camera_coverage": "Camera coverage (%)",
-    "roi_camera_coverage_tooltip": "Minimum camera-frame coverage for ROI training"
+    "roi_camera_coverage_tooltip": "Minimum camera-frame coverage for ROI training",
+    "render_modes": "Render modes"
   },
   "transform": {
     "scale_apriltag": "Scale scene with AprilTags",
@@ -1596,14 +1600,11 @@
     "selection_invert": "Invert the Gaussian selection",
     "selection_select_all": "Select all Gaussians",
     "selection_unselect": "Clear the Gaussian selection",
-    "depth_view_panel": "Depth-map controls",
-    "depth_view_tool": "Active depth-map view",
     "depth_view_mode": "Choose depth-map color mode",
-    "gt_compare_mode": "Choose RGB, normal, or depth ground-truth comparison",
+    "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",
     "depth_view_far": "Far edge of the depth-map range",
-    "depth_view_close": "Disable depth-map view",
     "viewport_export_panel": "Viewport export controls",
     "viewport_export_tool": "Viewport image export",
     "viewport_export_format": "Choose PNG or JPEG",
@@ -1691,7 +1692,8 @@
     "seq_preview_options": "Preview size",
     "seq_path_menu": "Camera path files",
     "seq_ply_menu": "PLY sequence files",
-    "seq_projection": "Projection"
+    "seq_projection": "Projection",
+    "render_modes": "Choose RGB, depth, or camera-space surface normals. Normals require a splat model."
   },
   "exit_popup": {
     "title": "Exit Application?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Open a new scene or switch the loaded dataset to Edit Mode before viewing an external trainer.",
   "external_training.dependencies": "Preparing NumPy; installing it if needed…",
   "external_training.camera_overlay": "Camera frustums (whole scene)",
-  "external_training.export_unavailable": "External previews cannot be exported. Open the model saved by the trainer to export it."
+  "external_training.export_unavailable": "External previews cannot be exported. Open the model saved by the trainer to export it.",
+  "external_training.result_invalid": "The saved model is incomplete, has changed, or has unsupported metadata.",
+  "external_training.result_unreadable": "The saved model is unavailable or unreadable. Keep its output folder available and check file permissions.",
+  "external_training.result_name": "{name} · saved model",
+  "external_training.import_result": "Import saved model",
+  "external_training.import_hint": "Available when the trainer has finished. Import the full saved best model, or last valid model, as an editable local model. Preview limits do not apply.",
+  "external_training.import_busy": "Another import is in progress. Wait for it to finish.",
+  "external_training.result_best": "Best evaluated: step {step} · {count} Gaussians · SH{degree}",
+  "external_training.result_last": "Last saved: step {step} · {count} Gaussians · SH{degree}"
 }

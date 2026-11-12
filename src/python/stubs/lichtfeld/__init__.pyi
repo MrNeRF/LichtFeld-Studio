@@ -757,6 +757,18 @@ def set_render_mode(mode: RenderMode) -> None:
 def is_orthographic() -> bool:
     """Check if orthographic projection is active"""
 
+def get_viewport_display_mode() -> str:
+    """Get viewport display mode: rgb, depth, or normal"""
+
+def set_viewport_display_mode(mode: str) -> None:
+    """Set viewport display mode independently of the selector visibility"""
+
+def get_render_mode_controls_open() -> bool:
+    """Return whether the viewport render-mode selector is open."""
+
+def set_render_mode_controls_open(open: bool) -> None:
+    """Open or close the render-mode selector without changing the view"""
+
 def get_depth_view() -> bool:
     """Check if depth-map view is active"""
 

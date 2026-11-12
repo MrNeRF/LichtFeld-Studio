@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Erreur plus faible",
+    "loss_higher_error": "Erreur plus élevée",
+    "unavailable": "Indisponible"
+  },
   "preferences.models.downloading": "Téléchargement…",
   "preferences.models.prepare": "Télécharger / réparer",
   "preferences.models.verifying": "Vérification de l’intégrité…",
@@ -1373,10 +1378,8 @@
     "orthographic": "Orthographique",
     "sequencer": "Séquenceur",
     "histogram": "Histogramme",
-    "depth_map": "Carte de profondeur",
     "viewport_export": "Exporter la vue",
     "depth_mode_disable": "Désactiver le mode profondeur",
-    "depth_map_disable": "Désactiver la carte de profondeur",
     "depth_mode_enable": "Activer le mode profondeur",
     "delete_selection": "Supprimer la sélection",
     "undo": "Annuler",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "Utiliser les caméras pertinentes",
     "roi_relevant_cameras_tooltip": "Utiliser uniquement les caméras pertinentes pour l'entraînement ROI",
     "roi_camera_coverage": "Couverture caméra (%)",
-    "roi_camera_coverage_tooltip": "Couverture minimale du cadre pour l'entraînement ROI"
+    "roi_camera_coverage_tooltip": "Couverture minimale du cadre pour l'entraînement ROI",
+    "render_modes": "Modes de rendu"
   },
   "transform": {
     "scale_apriltag": "Mettre la scène à l’échelle avec AprilTags",
@@ -1585,14 +1589,11 @@
     "selection_invert": "Inverser la sélection de gaussiennes",
     "selection_select_all": "Sélectionner toutes les gaussiennes",
     "selection_unselect": "Effacer la sélection de gaussiennes",
-    "depth_view_panel": "Contrôles de la carte de profondeur",
-    "depth_view_tool": "Vue de carte de profondeur active",
     "depth_view_mode": "Choisir le mode couleur de profondeur",
-    "gt_compare_mode": "Choisir la comparaison de référence RGB, normales ou profondeur",
+    "gt_compare_mode": "Choisir la visualisation de référence RGB, normales, profondeur ou perte",
     "depth_view_range": "Plage de visualisation de profondeur",
     "depth_view_near": "Limite proche de la plage de profondeur",
     "depth_view_far": "Limite éloignée de la plage de profondeur",
-    "depth_view_close": "Désactiver la vue de profondeur",
     "viewport_export_panel": "Commandes d'export du viewport",
     "viewport_export_tool": "Exporter l'image du viewport",
     "viewport_export_format": "Choisir PNG ou JPEG",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "Taille de l’aperçu",
     "seq_path_menu": "Fichiers du parcours caméra",
     "seq_ply_menu": "Fichiers de séquence PLY",
-    "seq_projection": "Projection"
+    "seq_projection": "Projection",
+    "render_modes": "Choisir RGB, profondeur ou normales de surface dans l’espace caméra. Les normales nécessitent un modèle de splats."
   },
   "exit_popup": {
     "title": "Quitter l'Application ?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Ouvrez une nouvelle scène ou passez le jeu de données chargé en mode édition avant d’afficher un entraîneur externe.",
   "external_training.dependencies": "Préparation de NumPy ; installation si nécessaire…",
   "external_training.camera_overlay": "Frustums des caméras (scène entière)",
-  "external_training.export_unavailable": "Les aperçus externes ne peuvent pas être exportés. Ouvrez le modèle enregistré par le processus d’entraînement pour l’exporter."
+  "external_training.export_unavailable": "Les aperçus externes ne peuvent pas être exportés. Ouvrez le modèle enregistré par le processus d’entraînement pour l’exporter.",
+  "external_training.result_invalid": "Le modèle enregistré est incomplet, a été modifié ou contient des métadonnées non prises en charge.",
+  "external_training.result_unreadable": "Le modèle enregistré est indisponible ou illisible. Conservez le dossier de sortie accessible et vérifiez les autorisations du fichier.",
+  "external_training.result_name": "{name} · modèle enregistré",
+  "external_training.import_result": "Importer le modèle enregistré",
+  "external_training.import_hint": "Disponible à la fin de l’entraînement. Importe le meilleur modèle complet enregistré, ou le dernier modèle valide, comme modèle local modifiable. Les limites de l’aperçu ne s’appliquent pas.",
+  "external_training.import_busy": "Une autre importation est en cours. Attendez sa fin.",
+  "external_training.result_best": "Meilleure évaluation : étape {step} · {count} gaussiennes · SH{degree}",
+  "external_training.result_last": "Dernier enregistrement : étape {step} · {count} gaussiennes · SH{degree}"
 }

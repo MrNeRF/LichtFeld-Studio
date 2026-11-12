@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "更低误差",
+    "loss_higher_error": "更高误差",
+    "unavailable": "不可用"
+  },
   "preferences.models.downloading": "正在下载…",
   "preferences.models.prepare": "下载／修复",
   "preferences.models.verifying": "正在验证完整性…",
@@ -1373,10 +1378,8 @@
     "orthographic": "正交",
     "sequencer": "序列器",
     "histogram": "直方图",
-    "depth_map": "深度图",
     "viewport_export": "视口导出",
     "depth_mode_disable": "禁用深度模式",
-    "depth_map_disable": "禁用深度图",
     "depth_mode_enable": "启用深度模式",
     "delete_selection": "删除选择",
     "undo": "撤销",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "使用相关相机",
     "roi_relevant_cameras_tooltip": "仅使用与 ROI 训练相关的相机",
     "roi_camera_coverage": "相机覆盖率 (%)",
-    "roi_camera_coverage_tooltip": "ROI 训练所需的最小相机画面覆盖率"
+    "roi_camera_coverage_tooltip": "ROI 训练所需的最小相机画面覆盖率",
+    "render_modes": "渲染模式"
   },
   "transform": {
     "scale_apriltag": "使用 AprilTag 缩放场景",
@@ -1585,14 +1589,11 @@
     "selection_invert": "反转高斯选择",
     "selection_select_all": "选择所有高斯",
     "selection_unselect": "清除高斯选择",
-    "depth_view_panel": "深度图控件",
-    "depth_view_tool": "活动深度图视图",
     "depth_view_mode": "选择深度图颜色模式",
-    "gt_compare_mode": "选择 RGB、法线或深度真值比较",
+    "gt_compare_mode": "选择 RGB、法线、深度或损失真值可视化",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
     "depth_view_far": "深度范围远端",
-    "depth_view_close": "禁用深度图视图",
     "viewport_export_panel": "视口导出控件",
     "viewport_export_tool": "导出视口图像",
     "viewport_export_format": "选择 PNG 或 JPEG",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "预览尺寸",
     "seq_path_menu": "相机路径文件",
     "seq_ply_menu": "PLY 序列文件",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "选择 RGB、深度或相机空间的表面法线。法线需要泼溅模型。"
   },
   "exit_popup": {
     "title": "退出应用程序？",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "查看外部训练进程前，请打开新场景或将已加载的数据集切换到编辑模式。",
   "external_training.dependencies": "正在准备 NumPy；如有需要将进行安装…",
   "external_training.camera_overlay": "相机视锥体（整个场景）",
-  "external_training.export_unavailable": "无法导出外部预览。请打开训练器保存的模型后再导出。"
+  "external_training.export_unavailable": "无法导出外部预览。请打开训练器保存的模型后再导出。",
+  "external_training.result_invalid": "已保存的模型不完整、已被更改或包含不受支持的元数据。",
+  "external_training.result_unreadable": "已保存的模型不可用或无法读取。请保持输出文件夹可访问，并检查文件权限。",
+  "external_training.result_name": "{name} · 已保存的模型",
+  "external_training.import_result": "导入已保存的模型",
+  "external_training.import_hint": "训练结束后可用。将已保存的最佳完整模型或最后一个有效模型导入为可编辑的本地模型。预览限制不适用。",
+  "external_training.import_busy": "另一个导入正在进行。请等待其完成。",
+  "external_training.result_best": "最佳评估：步数 {step} · {count} 个高斯 · SH{degree}",
+  "external_training.result_last": "最后保存：步数 {step} · {count} 个高斯 · SH{degree}"
 }

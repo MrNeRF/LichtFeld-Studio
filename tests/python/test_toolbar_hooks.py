@@ -19,6 +19,8 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.get_collision_state = lambda: {"has_collision": False}
+    lf_stub.get_render_mode_controls_open = lambda: False
+    lf_stub.set_render_mode_controls_open = lambda _open: None
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
@@ -190,6 +192,7 @@ class _DocumentStub:
                 "overlay-body",
                 "dm-root",
                 "depth-view-block",
+                "gt-compare-mode-block",
                 "viewport-export-block",
                 "viewport-export-status",
                 "selection-block",
@@ -239,6 +242,7 @@ def toolbar_module(monkeypatch):
 
     sys.modules.pop("lfs_plugins", None)
     sys.modules.pop("lfs_plugins.toolbar", None)
+    sys.modules.pop("lfs_plugins.depth_view_controls", None)
     sys.modules.pop("lfs_plugins.selection_controls", None)
     sys.modules.pop("lfs_plugins.transform_controls", None)
     sys.modules.pop("lfs_plugins.viewport_export_controls", None)
@@ -311,6 +315,8 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "selection_depth_far_slider_min" in model.bound_funcs
     assert "selection_depth_far_slider_max" in model.bound_funcs
     assert "selection_action" in model.bound_events
+    assert "gt_compare_mode_value" in model.bound_binds
+    assert "gt_compare_depth_mode_value" in model.bound_funcs
     assert "transform_show_translate" in model.bound_funcs
     assert "transform_show_rotate" in model.bound_funcs
     assert "transform_show_scale" in model.bound_funcs
@@ -384,6 +390,48 @@ def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
     module.attach_overlay_model_handle(handle)
 
     assert handle.dirty_all_calls == 1
+
+
+def test_gt_compare_controls_track_depth_visualization_mode(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gt_comparison_mode", lambda: "depth", raising=False)
+    monkeypatch.setattr(lf_stub, "get_depth_view_mode", lambda: "gray", raising=False)
+
+    model = _DataModelStub()
+    doc = _DocumentStub()
+    controller = module.GTCompareControlsController()
+    controller.bind_model(model)
+    controller.mount(doc)
+
+    assert controller.update(doc) == "visibility,mode"
+    assert model.bound_funcs["gt_compare_depth_mode_value"]() == "gray"
+    assert "gt_compare_depth_mode_value" in model.handle.dirty_calls
+    assert "hidden" not in doc.elements["gt-compare-mode-block"].classes
+
+
+def test_gt_compare_controls_select_loss_and_follow_external_mode_changes(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = {"mode": "rgb", "depth": "palette"}
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gt_comparison_mode", lambda: state["mode"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_gt_comparison_mode", lambda mode: state.update(mode=mode), raising=False)
+    monkeypatch.setattr(lf_stub, "get_depth_view_mode", lambda: state["depth"], raising=False)
+    model = _DataModelStub()
+    doc = _DocumentStub()
+    controller = module.GTCompareControlsController()
+    controller.bind_model(model)
+    controller.mount(doc)
+    controller.update(doc)
+    controller._set_mode(" LOSS ")
+    assert state["mode"] == "loss"
+    assert controller._mode == "loss"
+    state.update(mode="depth", depth="gray")
+    assert controller.update(doc) == "mode"
+    assert model.bound_funcs["gt_compare_depth_mode_value"]() == "gray"
+    assert controller.update(doc) is None
 
 
 def test_button_record_resolves_toolbar_tooltip(toolbar_module, monkeypatch):
@@ -2284,7 +2332,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2414,9 +2462,9 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
 
     # Overlay availability changes must invalidate cached crop toolbar records.
     normal_signature = controller._toolbar_signature(None)
-    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
+    monkeypatch.setattr(lf_stub, "get_render_mode_controls_open", lambda: True)
     assert controller._toolbar_signature(None) != normal_signature
-    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: False)
+    monkeypatch.setattr(lf_stub, "get_render_mode_controls_open", lambda: False)
     monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison")
     assert controller._toolbar_signature(None) != normal_signature
 
@@ -2439,7 +2487,7 @@ def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(has_scene=True), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2485,7 +2533,7 @@ def test_viewport_export_close_action_hides_overlay_immediately(toolbar_module, 
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(has_scene=True), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
@@ -2614,7 +2662,7 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
     lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
     lf_stub.is_fullscreen = lambda: False
     lf_stub.is_orthographic = lambda: False
-    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_render_mode_controls_open = lambda: False
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
@@ -2673,6 +2721,61 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
         if button["value"] == "builtin.rotate"
     )
     assert rotate_button["selected"] is True
+
+
+@pytest.mark.parametrize("tool_id", [
+    "builtin.select", "builtin.cropbox",
+])
+@pytest.mark.parametrize("already_active", [False, True])
+def test_tool_click_replaces_render_selector_with_tool_controls(toolbar_module, monkeypatch, tool_id, already_active):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(active_tool=tool_id if already_active else "", selector_open=True)
+    controller = module._ViewportToolbarController()
+    doc = _DocumentStub()
+    controller._current_doc = doc
+    doc.elements["depth-view-block"].set_class("hidden", False)
+
+    lf_stub.get_render_mode_controls_open = lambda: state.selector_open
+    lf_stub.set_render_mode_controls_open = lambda value: setattr(state, "selector_open", value)
+    lf_stub.get_viewport_display_mode = lambda: "normal"
+    lf_stub.get_num_gaussians = lambda: 1
+    lf_stub.set_viewport_display_mode = lambda _mode: pytest.fail("Tool selection must preserve the render mode")
+    lf_stub.ui.get_active_tool = lambda: state.active_tool
+    monkeypatch.setattr(module.ToolRegistry, "get", lambda _id: SimpleNamespace(can_activate=lambda _ctx: True))
+    monkeypatch.setattr(module.ToolRegistry, "set_active", lambda value: setattr(state, "active_tool", value))
+    monkeypatch.setattr(module.ToolRegistry, "clear_active", lambda: setattr(state, "active_tool", ""))
+    monkeypatch.setattr(controller._gizmo, "_activate_crop_tool", lambda _operation: setattr(state, "active_tool", tool_id))
+    monkeypatch.setattr(controller, "_sync_toolbar_state", lambda: None)
+    monkeypatch.setattr(controller._gt_compare_controls, "update", lambda _doc: None)
+    monkeypatch.setattr(controller._viewport_export_controls, "update", lambda _doc: None)
+    selection_update = MagicMock()
+    transform_update = MagicMock()
+    monkeypatch.setattr(controller._selection_controls, "update", selection_update)
+    monkeypatch.setattr(controller._transform_controls, "update", transform_update)
+
+    controller._on_toolbar_action(None, None, ["tool", tool_id])
+
+    assert state.selector_open is False
+    assert state.active_tool == tool_id
+    assert "hidden" in doc.elements["depth-view-block"].classes
+    selection_update.assert_called_once_with(doc)
+    transform_update.assert_called_once_with(doc)
+
+
+def test_selection_mode_click_closes_render_selector(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(selector_open=True, submode="centers")
+    lf_stub.ui.get_active_tool = lambda: "builtin.select"
+    lf_stub.ui.set_selection_mode = lambda value: setattr(state, "submode", value)
+    lf_stub.set_render_mode_controls_open = lambda value: setattr(state, "selector_open", value)
+    monkeypatch.setattr(module.ToolRegistry, "get", lambda _id: SimpleNamespace(can_activate=lambda _ctx: True))
+
+    module._GizmoToolbarController().dispatch("selection_mode", "lasso")
+
+    assert state.selector_open is False
+    assert state.submode == "lasso"
 
 
 def test_align_toolbar_signature_tracks_can_apply(toolbar_module):

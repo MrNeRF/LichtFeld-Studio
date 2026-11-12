@@ -154,7 +154,7 @@ namespace lfs::vis {
         SceneManager* const scene_manager,
         const RenderSettings& settings,
         const int camera_uid) {
-        if (!image || !scene_manager || !settings.apply_appearance_correction) {
+        if (!image || !scene_manager || !settings.apply_appearance_correction || normalViewEnabled(settings)) {
             return image;
         }
 
@@ -316,6 +316,10 @@ namespace lfs::vis {
             !image_u8_hwc_cpu.is_contiguous()) {
             return std::unexpected(std::format(
                 "export post-process expects a contiguous CPU u8 HWC image with {} channels", expected_channels));
+        }
+        // Preview exports disable GT comparison before rendering the selected mode.
+        if (viewportDisplayMode(settings) == ViewportDisplayMode::Normal) {
+            return needs_env ? image_u8_hwc_cpu.slice(2, 0, 3).contiguous() : image_u8_hwc_cpu;
         }
         const int height = static_cast<int>(image_u8_hwc_cpu.size(0));
         const int width = static_cast<int>(image_u8_hwc_cpu.size(1));

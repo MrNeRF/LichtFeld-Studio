@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Mniejszy błąd",
+    "loss_higher_error": "Większy błąd",
+    "unavailable": "Niedostępne"
+  },
   "preferences.models.downloading": "Pobieranie…",
   "preferences.models.prepare": "Pobierz / napraw",
   "preferences.models.verifying": "Sprawdzanie integralności…",
@@ -1373,10 +1378,8 @@
     "orthographic": "Ortograficzna",
     "sequencer": "Sekwencer",
     "histogram": "Histogram",
-    "depth_map": "Mapa głębokości",
     "viewport_export": "Eksport widoku",
     "depth_mode_disable": "Wyłącz tryb głębi",
-    "depth_map_disable": "Wyłącz mapę głębi",
     "depth_mode_enable": "Włącz tryb głębi",
     "delete_selection": "Usuń zaznaczenie",
     "undo": "Cofnij",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "Użyj istotnych kamer",
     "roi_relevant_cameras_tooltip": "Używaj tylko kamer istotnych dla treningu ROI",
     "roi_camera_coverage": "Pokrycie kamery (%)",
-    "roi_camera_coverage_tooltip": "Minimalne pokrycie kadru kamery dla treningu ROI"
+    "roi_camera_coverage_tooltip": "Minimalne pokrycie kadru kamery dla treningu ROI",
+    "render_modes": "Tryby renderowania"
   },
   "transform": {
     "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
@@ -1585,14 +1589,11 @@
     "selection_invert": "Odwróć zaznaczenie gaussianów",
     "selection_select_all": "Zaznacz wszystkie gaussiany",
     "selection_unselect": "Wyczyść zaznaczenie gaussianów",
-    "depth_view_panel": "Sterowanie mapą głębi",
-    "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
-    "gt_compare_mode": "Wybierz porównanie z referencją RGB, normalnych lub głębi",
+    "gt_compare_mode": "Wybierz wizualizację referencji RGB, normalnych, głębi lub straty",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",
     "depth_view_far": "Daleka granica zakresu głębi",
-    "depth_view_close": "Wyłącz widok głębi",
     "viewport_export_panel": "Elementy eksportu widoku",
     "viewport_export_tool": "Eksportuj obraz widoku",
     "viewport_export_format": "Wybierz PNG lub JPEG",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "Rozmiar podglądu",
     "seq_path_menu": "Pliki ścieżki kamery",
     "seq_ply_menu": "Pliki sekwencji PLY",
-    "seq_projection": "Projekcja"
+    "seq_projection": "Projekcja",
+    "render_modes": "Wybierz RGB, głębię lub normalne powierzchni w przestrzeni kamery. Normalne wymagają modelu splatów."
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Otwórz nową scenę lub przełącz wczytany zestaw danych w tryb edycji przed wyświetleniem zewnętrznego treningu.",
   "external_training.dependencies": "Przygotowywanie NumPy; instalacja w razie potrzeby…",
   "external_training.camera_overlay": "Bryły widzenia kamer (cała scena)",
-  "external_training.export_unavailable": "Nie można eksportować zewnętrznych podglądów. Aby wyeksportować model, otwórz plik zapisany przez proces treningu."
+  "external_training.export_unavailable": "Nie można eksportować zewnętrznych podglądów. Aby wyeksportować model, otwórz plik zapisany przez proces treningu.",
+  "external_training.result_invalid": "Zapisany model jest niekompletny, został zmieniony lub zawiera nieobsługiwane metadane.",
+  "external_training.result_unreadable": "Zapisany model jest niedostępny lub nie można go odczytać. Zachowaj dostęp do folderu wyjściowego i sprawdź uprawnienia pliku.",
+  "external_training.result_name": "{name} · zapisany model",
+  "external_training.import_result": "Importuj zapisany model",
+  "external_training.import_hint": "Dostępne po zakończeniu treningu. Importuje pełny zapisany model z najlepszą oceną lub ostatni poprawny model jako edytowalny model lokalny. Limity podglądu nie obowiązują.",
+  "external_training.import_busy": "Trwa już inny import. Poczekaj na jego zakończenie.",
+  "external_training.result_best": "Najlepsza ocena: krok {step} · {count} funkcji Gaussa · SH{degree}",
+  "external_training.result_last": "Ostatni zapis: krok {step} · {count} funkcji Gaussa · SH{degree}"
 }

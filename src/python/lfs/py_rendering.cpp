@@ -849,6 +849,7 @@ namespace lfs::python {
                    "Scene Reconstruction Preset",
                    "Backend-specific scene reconstruction quality preset",
                    "native");
+        add_bool(&Proxy::normal_view, "normal_view", "Normals View", "Render camera-space surface normals", false);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -859,7 +860,7 @@ namespace lfs::python {
                      {{"Color", "palette", 0}, {"Gray", "gray", 1}}, 0);
         add_int_enum(&Proxy::gt_comparison_mode, "gt_comparison_mode", "GT Compare",
                      "Ground-truth comparison payload",
-                     {{"RGB", "rgb", 0}, {"Normal", "normal", 1}, {"Depth", "depth", 2}}, 0);
+                     {{"RGB", "rgb", 0}, {"Normal", "normal", 1}, {"Depth", "depth", 2}, {"Loss", "loss", 3}}, 0);
         add_int_enum(&Proxy::camera_metrics_mode, "camera_metrics_mode", "Camera Metrics",
                      "Compute metrics when jumping to a source camera",
                      {{"Off", "OFF", 0}, {"PSNR", "PSNR", 1}, {"PSNR + SSIM", "PSNR_SSIM", 2}}, 0);

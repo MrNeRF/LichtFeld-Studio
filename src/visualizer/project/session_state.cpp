@@ -817,6 +817,7 @@ namespace lfs::vis::project {
                 required_field("orthographic", &RenderSettings::orthographic),
                 required_field("ortho_scale", &RenderSettings::ortho_scale),
                 required_field("depth_view", &RenderSettings::depth_view),
+                optional_field("normal_view", &RenderSettings::normal_view),
                 required_field("depth_view_min", &RenderSettings::depth_view_min),
                 required_field("depth_view_max", &RenderSettings::depth_view_max),
                 enum_field("depth_visualization_mode", &RenderSettings::depth_visualization_mode,
@@ -2053,7 +2054,7 @@ namespace lfs::vis::project {
                 {"VIEW", "render_settings.ppisp_mode", integers({0, 1}), static_cast<int>(PPISP::AUTO)},
                 {"VIEW", "render_settings.environment_mode", integers({0, 1}), static_cast<int>(Environment::SolidColor)},
                 {"VIEW", "render_settings.split_view_mode", integers({0, 1, 2, 3}), static_cast<int>(SplitViewMode::Disabled)},
-                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2}), static_cast<int>(Comparison::RGB)},
+                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2, 3}), static_cast<int>(Comparison::RGB)},
                 {"VIEW", "render_settings.depth_visualization_mode", integers({0, 1}), static_cast<int>(Depth::Palette)},
                 {"VIEW", "tools.selection_submode", string_parser([](const std::string_view value) {
                      return selection_submode_from_name(value).has_value();

@@ -27,6 +27,151 @@ def editor_wait(camera_runtime):
     _editor(camera_runtime, "import time\n" + inspect.getsource(wait_until))
 
 
+def test_completed_training_imports_full_model_with_result_coordinates(camera_runtime_with_numpy, tmp_path, monkeypatch):
+    camera_runtime = camera_runtime_with_numpy
+    import hashlib
+    from lichtfeld_sessions import geometry, transport
+    from test_training_sessions import arrays
+
+    artifact = tmp_path / "saved-full.ply"
+    _editor(camera_runtime, 'import lichtfeld as lf')
+    _ui_editor(camera_runtime, '''
+import numpy as np, time
+import lfs_plugins.external_training_panel as panel
+from lfs_plugins.external_training import ExternalTraining
+from lfs_plugins.external_training import presentation_transform
+from lichtfeld_sessions import geometry
+np.testing.assert_array_equal(
+    presentation_transform({"schema": 1, "source_frame": "blender-world"}, np),
+    presentation_transform({"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP}, np))
+scene = lf.get_scene()
+def tensor(value):
+    return lf.Tensor.from_numpy(np.ascontiguousarray(value, dtype=np.float32))
+means = np.arange(24, dtype=np.float32).reshape(8, 3) * .01
+sh0 = np.full((8, 1, 3), .1234567, dtype=np.float32)
+shN = np.arange(8 * 45, dtype=np.float32).reshape(8, 15, 3) * .001234567
+scene.add_splat("Existing local model", tensor(means), tensor(sh0), tensor(shN),
+                tensor(np.full((8, 3), -3)), tensor(np.tile([1, 0, 0, 0], (8, 1))),
+                tensor(np.zeros((8, 1))), sh_degree=3)
+''')
+    _editor(camera_runtime, f'''
+source = lf.get_scene().get_node("Existing local model").splat_data()
+saved_sh0 = source.sh0_raw.cpu().numpy().copy()
+saved_shN = source.shN_raw.cpu().numpy().copy()
+lf.io.save_ply(source, {str(artifact)!r})
+''')
+    result = {"root": str(tmp_path), "path": artifact.name, "bytes": artifact.stat().st_size,
+              "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "kind": "best", "score": {"psnr": 30},
+              "iteration": 4, "count": 8, "sh_degree": 3,
+              "presentation": {"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP,
+                               "model_to_data": [[2, 0, 0, 3], [0, 3, 0, 4], [0, 0, 4, 5], [0, 0, 0, 1]]}}
+    monkeypatch.setattr(transport, "registry_root", lambda: tmp_path / "sessions")
+    producer = transport.SessionPublisher({"label": "Result trainer", "state": "training"})
+    try:
+        producer.publish(arrays(2), 7)
+        record = {**transport.read_json(producer.root / "session.json"), "directory": str(producer.root)}
+        _ui_editor(camera_runtime, f'panel._current = ExternalTraining({record!r})\ncontrols = panel.ExternalTrainingPanel()')
+        _editor(camera_runtime, '''
+assert wait_until(lambda: panel._current.shown, 10)
+''')
+        producer.finish("completed", result=result)
+        _editor(camera_runtime, '''
+assert wait_until(panel._current.stop.is_set, 10)
+assert panel._current.status["result"]["count"] == 8
+''')
+        _ui_editor(camera_runtime, '''
+valid_status = panel._current.status
+panel._current.status = {**valid_status, "result": {**valid_status["result"], "count": "invalid"}}
+controls.on_update(None)
+assert controls._saved_result() == lf.ui.tr("external_training.result_invalid")
+assert not controls._can_import_result()
+panel._current.status = valid_status
+controls.on_update(None)
+assert controls._can_import_result()
+''')
+        # Integrity failure must not modify the preview or any existing model.
+        content = artifact.read_bytes()
+        artifact.write_bytes(content[:-1] + bytes([content[-1] ^ 1]))
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+assert wait_until(controls._result_future.done, 10)
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+assert controls._message() == lf.ui.tr("external_training.result_invalid"), controls._message()
+assert lf.get_scene().get_node("Existing local model").gaussian_count == 8
+assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
+''')
+        artifact.write_bytes(content)
+        # Scene/import failures must not be reported as a corrupt saved file.
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, 'assert wait_until(controls._result_future.done, 10)')
+        _ui_editor(camera_runtime, '''
+from unittest.mock import patch
+with patch.object(panel.lf, "load_gallery_scene", side_effect=ValueError("Scene changed")):
+    controls.on_update(None)
+assert controls._message() == lf.ui.tr("progress.import_failed_title"), controls._message()
+assert lf.get_scene().get_node_by_uuid(panel._current.uuid).get("visible")
+''')
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+assert wait_until(controls._result_future.done, 10)
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+assert not controls._message(), controls._message()
+from types import SimpleNamespace
+controls.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
+''')
+        _editor(camera_runtime, '''
+assert wait_until(lambda: lf.ui.get_import_state().get("success") or lf.ui.get_import_state().get("error"), 20)
+assert lf.ui.get_import_state()["success"], lf.ui.get_import_state()
+assert lf.ui.get_import_state()["path"] == "saved-full.ply"
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+scene = lf.get_scene()
+assert not scene.get_node_by_uuid(panel._current.uuid).get("visible")
+local = next(node for node in scene.nodes if node.name.startswith("Result trainer") and node.type == lf.scene.NodeType.SPLAT and not node.read_only)
+assert not local.read_only
+assert local.gaussian_count == 8
+assert local.splat_data().active_sh_degree == 3
+np.testing.assert_allclose(local.splat_data().sh0_raw.cpu().numpy(), saved_sh0, rtol=1e-6)
+np.testing.assert_allclose(local.splat_data().shN_raw.cpu().numpy(), saved_shN, rtol=1e-6, atol=1e-7)
+np.testing.assert_allclose(local.local_transform, [[2,0,0,3],[0,0,4,5],[0,-3,0,-4],[0,0,0,1]], atol=1e-6)
+assert scene.get_node("Existing local model").gaussian_count == 8
+imported_name = local.name
+''')
+        # Reimporting one iteration must add a different group, not replace it.
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, 'assert wait_until(controls._result_future.done, 10)')
+        _ui_editor(camera_runtime, 'controls.on_update(None)')
+        _editor(camera_runtime, 'assert wait_until(lambda: not lf.ui.get_import_state()["active"], 20)')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+copies = [node for node in scene.nodes if node.name.startswith("Result trainer") and node.type == lf.scene.NodeType.SPLAT and not node.read_only]
+assert len(copies) == 2
+assert len({node.parent_id for node in copies}) == 2
+''')
+        artifact.unlink()
+        _ui_editor(camera_runtime, 'controls._import_result()')
+        _editor(camera_runtime, '''
+assert wait_until(controls._result_future.done, 10)
+''')
+        _ui_editor(camera_runtime, '''
+controls.on_update(None)
+assert controls._message() == lf.ui.tr("external_training.result_unreadable"), controls._message()
+assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+controls._remove()
+assert not controls._message()
+assert not any(node.read_only for node in lf.get_scene().nodes)
+assert lf.get_scene().get_node(imported_name).gaussian_count == 8
+''')
+    finally:
+        producer.finish()
+        producer.pool.close()
+
+
 def test_external_preview_reads_session_and_late_cameras_without_edit_access(camera_runtime_with_numpy, numpy, tmp_path, monkeypatch, request):
     camera_runtime, np = camera_runtime_with_numpy, numpy
     from lichtfeld_sessions import geometry, transport
@@ -233,7 +378,8 @@ threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start
         producer.thread.join(3)
 
 
-def test_remove_preview_with_collision_and_degraded_splats(camera_runtime_with_numpy, tmp_path, monkeypatch, numpy, request):
+@pytest.mark.parametrize("ordinary_storage", [False, True], ids=["viewer", "ordinary-cuda"])
+def test_remove_preview_with_collision_after_undo(camera_runtime_with_numpy, tmp_path, monkeypatch, numpy, request, ordinary_storage):
     from lichtfeld_sessions import transport
     from test_selection_outline_runtime import _write_splat
     from test_training_sessions import arrays
@@ -265,6 +411,17 @@ assert wait_until(lambda: panel._current.shown, 15), panel._current.error
         _editor(endpoint, """
 assert wait_until(lambda: lf.get_scene().get_node("local"), 15)
 """)
+        if ordinary_storage:
+            _ui_editor(endpoint, """
+scene = lf.get_scene()
+model = scene.get_node("local").splat_data()
+count = model.num_points
+fields = (model.means_raw.clone(), model.sh0_raw.reshape([count, 1, 3]).clone(),
+          lf.Tensor.zeros([count, 0, 3], device="cuda"), model.scaling_raw.clone(),
+          model.rotation_raw.clone(), model.opacity_raw.reshape([count, 1]).clone())
+scene.remove_node("local")
+scene.add_splat("local", *fields, sh_degree=0)
+""")
         _ui_editor(endpoint, 'lf.select_node("local")\nlf.generate_collision(.03, .1, False, False, 0.)')
         _editor(endpoint, """
 assert wait_until(lambda: lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION), 15)
@@ -280,15 +437,14 @@ panel.ExternalTrainingPanel()._remove()
 assert lf.get_scene().get_node_by_uuid(target) is None
 assert lf.get_scene().get_node("local") and lf.get_scene().get_nodes(lf.scene.NodeType.COLLISION)
 """)
-        # Undo restores opacity in ordinary CUDA storage. The next frame must
-        # still present, even though VkSplat cannot produce a new depth image.
+        # Removing the preview after undo must preserve the local model,
+        # collision rendering and frame presentation with either storage type.
         start = _ledger(endpoint)["frames_presented"]
         app_log = tmp_path / "app.log"
-        def presented_degraded_frame():
+        def presented_frame():
             _ui_editor(endpoint, "lf.ui.request_redraw()")
-            degraded = "missing_opacity" in app_log.read_text(encoding="utf-8", errors="replace")
-            return degraded and _ledger(endpoint)["frames_presented"] >= start + 4
-        assert wait_until(presented_degraded_frame, 15), "Viewport did not present frames after losing its splat depth image"
+            return _ledger(endpoint)["frames_presented"] >= start + 4
+        assert wait_until(presented_frame, 15), "Viewport did not present frames after removing the preview"
         assert _tool(endpoint, "project_save_as", {"path": str(tmp_path / "local.licht")})["success"]
         _editor(endpoint, "threading.Timer(.2, lambda: lf.ui.schedule_on_ui_thread(lf.request_exit)).start()")
         assert request.node.camera_process.wait(timeout=10) == 0

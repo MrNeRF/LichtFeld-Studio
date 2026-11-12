@@ -21,6 +21,16 @@ The preview is read-only. It cannot be transformed, renamed, unlocked, cropped, 
 
 Closing a LichtFeld Studio window that owns its own training retains the existing behavior: that training stops. External observation does not transfer ownership or detach a GUI-owned trainer into another process.
 
+## Import the completed model
+
+After a compatible trainer finishes saving, **Import saved model** loads its full best evaluated model, or its last valid saved model if no evaluated candidate is available. The saved-model line reports its step, Gaussian count and SH degree independently of the preview. Preview point/SH limits do not apply to this import.
+
+File integrity checking, loading and renderer preparation run on workers through the normal import system. The result retains its declared coordinate presentation and SH coefficients. It becomes an independent, editable local model that can be saved and exported normally. Once import succeeds, the transient preview is hidden to avoid overlapping models. A failed import leaves the preview and existing local models available.
+
+The trainer's saved PLY is verified in place and loaded into a new group. Importing the same result again creates a separate group; it does not replace an earlier import.
+
+The action becomes available only after the producer publishes a completed saved artifact. Older or preview-only publishers remain observable without offering result import. The import requires the original result file to remain in its output folder; it does not resume or change training.
+
 ## Explicit publisher
 
 Ordinary training does not publish sessions automatically. A startup script can opt in using the shared package:

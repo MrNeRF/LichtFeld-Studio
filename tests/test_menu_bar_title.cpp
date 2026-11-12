@@ -37,6 +37,9 @@ namespace lfs::vis::gui {
     // Model registration, resources, layout, updates and hit tests are production code.
     class RmlMenuBarTestAccess {
     public:
+        static void toggleRenderModes(RmlMenuBar& bar) {
+            bar.dispatchToolbarAction("toggle_depth_view", "");
+        }
         static void toggleProjection(RmlMenuBar& bar) {
             bar.dispatchToolbarAction("toggle_projection", "");
         }
@@ -778,6 +781,23 @@ namespace {
         lfs::vis::RenderingManager rendering_;
         int height_ = 900;
     };
+
+    TEST_F(MenuBarProjectionTest, RenderModesButtonOnlyTogglesSelectorVisibility) {
+        for (const bool normals : {false, true}) {
+            auto settings = rendering_.getSettings();
+            settings.normal_view = normals;
+            settings.depth_view = !normals;
+            settings.render_mode_controls_open = false;
+            rendering_.updateSettings(settings);
+            for (const bool open : {true, false}) {
+                RmlMenuBarTestAccess::toggleRenderModes(bar_);
+                const auto current = rendering_.getSettings();
+                EXPECT_EQ(current.render_mode_controls_open, open);
+                EXPECT_EQ(current.normal_view, normals);
+                EXPECT_EQ(current.depth_view, !normals);
+            }
+        }
+    }
 
     TEST_F(MenuBarProjectionTest, EnterUsesMatchingScaleAfterRestoredOrWheelOverride) {
         for (const float stale_scale : {100.0f, 1.0f}) {

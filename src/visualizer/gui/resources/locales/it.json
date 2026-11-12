@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Errore minore",
+    "loss_higher_error": "Errore maggiore",
+    "unavailable": "Non disponibile"
+  },
   "preferences.models.downloading": "Download in corso…",
   "preferences.models.prepare": "Scarica / ripara",
   "preferences.models.verifying": "Verifica dell’integrità…",
@@ -1386,10 +1391,8 @@
     "orthographic": "Ortografica",
     "sequencer": "Sequencer",
     "histogram": "Istogramma",
-    "depth_map": "Mappa di profondità",
     "viewport_export": "Esporta viewport",
     "depth_mode_disable": "Disattiva modalità profondità",
-    "depth_map_disable": "Disattiva mappa di profondità",
     "depth_mode_enable": "Attiva modalità profondità",
     "delete_selection": "Elimina selezione",
     "undo": "Annulla",
@@ -1422,7 +1425,8 @@
     "roi_relevant_cameras": "Usa fotocamere rilevanti",
     "roi_relevant_cameras_tooltip": "Usa solo le fotocamere rilevanti per l'addestramento ROI",
     "roi_camera_coverage": "Copertura fotocamera (%)",
-    "roi_camera_coverage_tooltip": "Copertura minima del fotogramma per l'addestramento ROI"
+    "roi_camera_coverage_tooltip": "Copertura minima del fotogramma per l'addestramento ROI",
+    "render_modes": "Modalità di rendering"
   },
   "transform": {
     "scale_apriltag": "Ridimensiona la scena con AprilTags",
@@ -1598,14 +1602,11 @@
     "selection_invert": "Inverti la selezione di gaussiane",
     "selection_select_all": "Seleziona tutte le gaussiane",
     "selection_unselect": "Cancella la selezione di gaussiane",
-    "depth_view_panel": "Controlli della mappa di profondità",
-    "depth_view_tool": "Vista mappa di profondità attiva",
     "depth_view_mode": "Scegli il modo colore della profondità",
-    "gt_compare_mode": "Scegli il confronto con la ground truth RGB, delle normali o della profondità",
+    "gt_compare_mode": "Scegli la visualizzazione della ground truth RGB, delle normali, della profondità o della perdita",
     "depth_view_range": "Intervallo di visualizzazione della profondità",
     "depth_view_near": "Limite vicino dell'intervallo di profondità",
     "depth_view_far": "Limite lontano dell'intervallo di profondità",
-    "depth_view_close": "Disattiva la vista profondità",
     "viewport_export_panel": "Controlli esportazione viewport",
     "viewport_export_tool": "Esporta immagine viewport",
     "viewport_export_format": "Scegli PNG o JPEG",
@@ -1693,7 +1694,8 @@
     "seq_preview_options": "Dimensione anteprima",
     "seq_path_menu": "File del percorso camera",
     "seq_ply_menu": "File della sequenza PLY",
-    "seq_projection": "Proiezione"
+    "seq_projection": "Proiezione",
+    "render_modes": "Scegli RGB, profondità o normali di superficie nello spazio della fotocamera. Le normali richiedono un modello di splat."
   },
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Apri una nuova scena o passa il dataset caricato alla modalità di modifica prima di visualizzare un trainer esterno.",
   "external_training.dependencies": "Preparazione di NumPy; installazione se necessaria…",
   "external_training.camera_overlay": "Frustum delle camere (intera scena)",
-  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo."
+  "external_training.export_unavailable": "Le anteprime esterne non possono essere esportate. Apri il modello salvato dal trainer per esportarlo.",
+  "external_training.result_invalid": "Il modello salvato è incompleto, è stato modificato o contiene metadati non supportati.",
+  "external_training.result_unreadable": "Il modello salvato non è disponibile o non è leggibile. Mantieni disponibile la cartella di output e controlla i permessi del file.",
+  "external_training.result_name": "{name} · modello salvato",
+  "external_training.import_result": "Importa modello salvato",
+  "external_training.import_hint": "Disponibile al termine del training. Importa il miglior modello completo salvato, o l’ultimo modello valido, come modello locale modificabile. I limiti dell’anteprima non si applicano.",
+  "external_training.import_busy": "È già in corso un’importazione. Attendi che termini.",
+  "external_training.result_best": "Miglior valutato: passo {step} · {count} gaussiane · SH{degree}",
+  "external_training.result_last": "Ultimo salvato: passo {step} · {count} gaussiane · SH{degree}"
 }

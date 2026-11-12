@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Niedrigerer Fehler",
+    "loss_higher_error": "Höherer Fehler",
+    "unavailable": "Nicht verfügbar"
+  },
   "preferences.models.downloading": "Wird heruntergeladen…",
   "preferences.models.prepare": "Laden / reparieren",
   "preferences.models.verifying": "Integrität wird geprüft…",
@@ -1373,10 +1378,8 @@
     "orthographic": "Orthografisch",
     "sequencer": "Sequenzer",
     "histogram": "Histogramm",
-    "depth_map": "Tiefenkarte",
     "viewport_export": "Viewport-Export",
     "depth_mode_disable": "Tiefenmodus deaktivieren",
-    "depth_map_disable": "Tiefenkarte deaktivieren",
     "depth_mode_enable": "Tiefenmodus aktivieren",
     "delete_selection": "Auswahl löschen",
     "undo": "Rückgängig",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "Relevante Kameras verwenden",
     "roi_relevant_cameras_tooltip": "Nur für das ROI-Training relevante Kameras verwenden",
     "roi_camera_coverage": "Kameraabdeckung (%)",
-    "roi_camera_coverage_tooltip": "Mindestabdeckung des Kamerabilds für das ROI-Training"
+    "roi_camera_coverage_tooltip": "Mindestabdeckung des Kamerabilds für das ROI-Training",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Szene mit AprilTags skalieren",
@@ -1585,14 +1589,11 @@
     "selection_invert": "Gaussian-Auswahl invertieren",
     "selection_select_all": "Alle Gaussians auswählen",
     "selection_unselect": "Auswahl aufheben",
-    "depth_view_panel": "Tiefenkarten-Steuerung",
-    "depth_view_tool": "Aktive Tiefenkartenansicht",
     "depth_view_mode": "Farbmodus der Tiefenkarte wählen",
-    "gt_compare_mode": "RGB-, Normalen- oder Tiefen-Referenzvergleich auswählen",
+    "gt_compare_mode": "RGB-, Normalen-, Tiefen- oder Verlustvisualisierung auswählen",
     "depth_view_range": "Visualisierungsbereich der Tiefenkarte",
     "depth_view_near": "Nahe Grenze des Tiefenkartenbereichs",
     "depth_view_far": "Ferne Grenze des Tiefenkartenbereichs",
-    "depth_view_close": "Tiefenkartenansicht deaktivieren",
     "viewport_export_panel": "Viewport-Export-Steuerung",
     "viewport_export_tool": "Viewport-Bild exportieren",
     "viewport_export_format": "PNG oder JPEG wählen",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "Vorschaugröße",
     "seq_path_menu": "Kamerapfad-Dateien",
     "seq_ply_menu": "PLY-Sequenzdateien",
-    "seq_projection": "Projektion"
+    "seq_projection": "Projektion",
+    "render_modes": "RGB, Tiefe oder Oberflächennormalen im Kameraraum wählen. Normalen benötigen ein Splat-Modell."
   },
   "exit_popup": {
     "title": "Anwendung beenden?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Öffne eine neue Szene oder wechsle mit dem geladenen Datensatz in den Bearbeitungsmodus, bevor du einen externen Trainer anzeigst.",
   "external_training.dependencies": "NumPy wird vorbereitet und bei Bedarf installiert…",
   "external_training.camera_overlay": "Kamerafrusten (gesamte Szene)",
-  "external_training.export_unavailable": "Externe Vorschauen können nicht exportiert werden. Öffnen Sie zum Exportieren das vom Trainer gespeicherte Modell."
+  "external_training.export_unavailable": "Externe Vorschauen können nicht exportiert werden. Öffnen Sie zum Exportieren das vom Trainer gespeicherte Modell.",
+  "external_training.result_invalid": "Das gespeicherte Modell ist unvollständig, wurde geändert oder enthält nicht unterstützte Metadaten.",
+  "external_training.result_unreadable": "Das gespeicherte Modell ist nicht verfügbar oder nicht lesbar. Halten Sie den Ausgabeordner verfügbar und prüfen Sie die Dateiberechtigungen.",
+  "external_training.result_name": "{name} · gespeichertes Modell",
+  "external_training.import_result": "Gespeichertes Modell importieren",
+  "external_training.import_hint": "Nach Abschluss des Trainings verfügbar. Importiert das vollständig gespeicherte beste oder letzte gültige Modell als bearbeitbares lokales Modell. Vorschaugrenzen gelten nicht.",
+  "external_training.import_busy": "Ein anderer Import läuft bereits. Warten Sie, bis er abgeschlossen ist.",
+  "external_training.result_best": "Beste Bewertung: Schritt {step} · {count} Gaußfunktionen · SH{degree}",
+  "external_training.result_last": "Zuletzt gespeichert: Schritt {step} · {count} Gaußfunktionen · SH{degree}"
 }

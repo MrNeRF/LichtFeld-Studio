@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "Lagere fout",
+    "loss_higher_error": "Hogere fout",
+    "unavailable": "Niet beschikbaar"
+  },
   "preferences.models.downloading": "Bezig met downloaden…",
   "preferences.models.prepare": "Downloaden / herstellen",
   "preferences.models.verifying": "Integriteit controleren…",
@@ -1373,10 +1378,8 @@
     "orthographic": "Orthografisch",
     "sequencer": "Sequentie-editor",
     "histogram": "Histogram",
-    "depth_map": "Dieptekaart",
     "viewport_export": "Viewport exporteren",
     "depth_mode_disable": "Dieptemodus uitschakelen",
-    "depth_map_disable": "Dieptekaart uitschakelen",
     "depth_mode_enable": "Dieptemodus inschakelen",
     "delete_selection": "Selectie verwijderen",
     "undo": "Ongedaan maken",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "Relevante camera's gebruiken",
     "roi_relevant_cameras_tooltip": "Alleen voor ROI-training relevante camera's gebruiken",
     "roi_camera_coverage": "Cameradekking (%)",
-    "roi_camera_coverage_tooltip": "Minimale framedekking voor ROI-training"
+    "roi_camera_coverage_tooltip": "Minimale framedekking voor ROI-training",
+    "render_modes": "Rendermodi"
   },
   "transform": {
     "scale_apriltag": "Scène schalen met AprilTags",
@@ -1585,14 +1589,11 @@
     "selection_invert": "Gaussian-selectie omkeren",
     "selection_select_all": "Alle Gaussianen selecteren",
     "selection_unselect": "Gaussian-selectie wissen",
-    "depth_view_panel": "Bediening voor dieptekaart",
-    "depth_view_tool": "Actieve dieptekaartweergave",
     "depth_view_mode": "Kleurmodus voor dieptekaart kiezen",
-    "gt_compare_mode": "Kies RGB-, normaal- of diepte-ground-truthvergelijking",
+    "gt_compare_mode": "Kies RGB-, normaal-, diepte- of verliesvisualisatie voor ground truth",
     "depth_view_range": "Visualisatiebereik van dieptekaart",
     "depth_view_near": "Dichtbijgrens van het dieptebereik",
     "depth_view_far": "Verre grens van het dieptebereik",
-    "depth_view_close": "Dieptekaartweergave uitschakelen",
     "viewport_export_panel": "Viewport-exportbesturing",
     "viewport_export_tool": "Viewportafbeelding exporteren",
     "viewport_export_format": "PNG of JPEG kiezen",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "Voorbeeldgrootte",
     "seq_path_menu": "Camerapadbestanden",
     "seq_ply_menu": "PLY-reeksbestanden",
-    "seq_projection": "Projectie"
+    "seq_projection": "Projectie",
+    "render_modes": "Kies RGB, diepte of oppervlaktenormalen in cameraruimte. Normalen vereisen een splatmodel."
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "Open een nieuwe scène of zet de geladen dataset in de bewerkingsmodus voordat je een externe trainer bekijkt.",
   "external_training.dependencies": "NumPy voorbereiden; installeren indien nodig…",
   "external_training.camera_overlay": "Camerafrustums (hele scène)",
-  "external_training.export_unavailable": "Externe voorbeelden kunnen niet worden geëxporteerd. Open het model dat door het trainingsproces is opgeslagen om het te exporteren."
+  "external_training.export_unavailable": "Externe voorbeelden kunnen niet worden geëxporteerd. Open het model dat door het trainingsproces is opgeslagen om het te exporteren.",
+  "external_training.result_invalid": "Het opgeslagen model is onvolledig, is gewijzigd of bevat niet-ondersteunde metagegevens.",
+  "external_training.result_unreadable": "Het opgeslagen model is niet beschikbaar of niet leesbaar. Houd de uitvoermap beschikbaar en controleer de bestandsrechten.",
+  "external_training.result_name": "{name} · opgeslagen model",
+  "external_training.import_result": "Opgeslagen model importeren",
+  "external_training.import_hint": "Beschikbaar nadat de training is afgerond. Importeer het volledig opgeslagen beste model of het laatste geldige model als een bewerkbaar lokaal model. Voorbeeldlimieten zijn niet van toepassing.",
+  "external_training.import_busy": "Er wordt al een ander model geïmporteerd. Wacht tot dit klaar is.",
+  "external_training.result_best": "Beste beoordeling: stap {step} · {count} Gaussianen · SH{degree}",
+  "external_training.result_last": "Laatst opgeslagen: stap {step} · {count} Gaussianen · SH{degree}"
 }

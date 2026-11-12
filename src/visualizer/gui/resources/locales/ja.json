@@ -1,4 +1,9 @@
 {
+  "gt_compare": {
+    "loss_lower_error": "誤差小",
+    "loss_higher_error": "誤差大",
+    "unavailable": "利用不可"
+  },
   "preferences.models.downloading": "ダウンロード中…",
   "preferences.models.prepare": "ダウンロード／修復",
   "preferences.models.verifying": "整合性を確認中…",
@@ -1373,10 +1378,8 @@
     "orthographic": "平行投影",
     "sequencer": "シーケンサー",
     "histogram": "ヒストグラム",
-    "depth_map": "深度マップ",
     "viewport_export": "ビューポート書き出し",
     "depth_mode_disable": "深度モードを無効化",
-    "depth_map_disable": "深度マップを無効化",
     "depth_mode_enable": "深度モードを有効化",
     "delete_selection": "選択を削除",
     "undo": "元に戻す",
@@ -1409,7 +1412,8 @@
     "roi_relevant_cameras": "関連カメラを使用",
     "roi_relevant_cameras_tooltip": "ROI 学習に関連するカメラのみを使用",
     "roi_camera_coverage": "カメラカバー率 (%)",
-    "roi_camera_coverage_tooltip": "ROI 学習に必要なカメラフレームの最小カバー率"
+    "roi_camera_coverage_tooltip": "ROI 学習に必要なカメラフレームの最小カバー率",
+    "render_modes": "レンダリングモード"
   },
   "transform": {
     "scale_apriltag": "AprilTagでシーンのスケールを調整",
@@ -1585,14 +1589,11 @@
     "selection_invert": "ガウシアン選択を反転",
     "selection_select_all": "すべてのガウシアンを選択",
     "selection_unselect": "ガウシアン選択をクリア",
-    "depth_view_panel": "深度マップコントロール",
-    "depth_view_tool": "有効な深度マップ表示",
     "depth_view_mode": "深度マップのカラーモードを選択",
-    "gt_compare_mode": "RGB、法線、または深度のグラウンドトゥルース比較を選択",
+    "gt_compare_mode": "RGB、法線、深度、または損失のグラウンドトゥルース表示を選択",
     "depth_view_range": "深度マップの表示範囲",
     "depth_view_near": "深度範囲の近端",
     "depth_view_far": "深度範囲の遠端",
-    "depth_view_close": "深度マップ表示を無効化",
     "viewport_export_panel": "ビューポート書き出しコントロール",
     "viewport_export_tool": "ビューポート画像を書き出し",
     "viewport_export_format": "PNG または JPEG を選択",
@@ -1680,7 +1681,8 @@
     "seq_preview_options": "プレビューサイズ",
     "seq_path_menu": "カメラパスのファイル",
     "seq_ply_menu": "PLYシーケンスのファイル",
-    "seq_projection": "投影方式"
+    "seq_projection": "投影方式",
+    "render_modes": "RGB、深度、カメラ空間の表面法線を選択します。法線にはスプラットモデルが必要です。"
   },
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",
@@ -3970,5 +3972,13 @@
   "external_training.dataset_open": "外部トレーナーを表示するには、新しいシーンを開くか、読み込んだデータセットを編集モードに切り替えてください。",
   "external_training.dependencies": "NumPy を準備中（必要に応じてインストール）…",
   "external_training.camera_overlay": "カメラの視錐台（シーン全体）",
-  "external_training.export_unavailable": "外部プレビューはエクスポートできません。トレーナーが保存したモデルを開いてエクスポートしてください。"
+  "external_training.export_unavailable": "外部プレビューはエクスポートできません。トレーナーが保存したモデルを開いてエクスポートしてください。",
+  "external_training.result_invalid": "保存済みモデルが不完全、変更済み、または未対応のメタデータを含んでいます。",
+  "external_training.result_unreadable": "保存済みモデルが見つからないか、読み取れません。出力フォルダーにアクセスできることと、ファイルのアクセス権限を確認してください。",
+  "external_training.result_name": "{name} · 保存済みモデル",
+  "external_training.import_result": "保存済みモデルをインポート",
+  "external_training.import_hint": "トレーニング終了後に利用できます。保存された最良の完全モデル、または最後の有効なモデルを、編集可能なローカルモデルとしてインポートします。プレビューの制限は適用されません。",
+  "external_training.import_busy": "別のインポートが進行中です。完了するまでお待ちください。",
+  "external_training.result_best": "最高評価：ステップ {step} · ガウシアン {count} 個 · SH{degree}",
+  "external_training.result_last": "最終保存：ステップ {step} · ガウシアン {count} 個 · SH{degree}"
 }
