@@ -554,18 +554,18 @@ class PortalAccountService:
         except Exception:
             _log.debug("Portal approval browser dispatch is unavailable")
 
-    def sign_out(self) -> None:
+    def sign_out(self, *, revoke: bool = True) -> None:
         """Best-effort server revocation followed by unconditional backend removal."""
         self._cancel_event.set()
         removal_failed = False
         try:
-            credentials = self._current_credentials()
+            credentials = self._current_credentials() if revoke else None
             if credentials is not None and credentials.access_expires_at <= time.time():
                 if credentials.refresh_expires_at > time.time():
                     self._refresh_tokens(credentials.access_token, allow_disconnected=True)
             with self._refresh_lock:
                 with _locked_sidecar(self._lock_path):
-                    disk = self._read_credentials_file()
+                    disk = self._read_credentials_file() if revoke else None
                     if disk is not None and disk.portal_origin == self.base_url:
                         credentials = disk
                     if credentials is not None and credentials.portal_origin == self.base_url:

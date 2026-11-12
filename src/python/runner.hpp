@@ -40,11 +40,12 @@ namespace lfs::python {
     /**
      * @brief Execute a list of Python script files. Each script is expected to import `lichtfeld`
      *        and register its callbacks (e.g., with register_opacity_scaler or Session hooks).
+     *        Standalone CLI scripts can skip user-plugin loading with load_plugins=false.
      *
      * @return lfs::Result<void>: the latched init failure, or a typed IO/Python error on a
      *         missing script or execution failure. Success is a default Status.
      */
-    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts, bool load_plugins = true);
 
     /**
      * @brief Set the callback for Python stdout/stderr capture.

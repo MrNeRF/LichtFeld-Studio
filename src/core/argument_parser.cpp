@@ -3405,7 +3405,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return std::unexpected(std::move(error));
         } else if (arg1 == "plugin") {
             if (argc < 3) {
-                return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|list> [name]");
+                return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|run|list> [name or script]");
             }
 
             const std::string_view subcmd = argv[2];
@@ -3423,6 +3423,12 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
                 }
                 mode.command = PluginMode::Command::CHECK;
                 mode.name = argv[3];
+            } else if (subcmd == "run") {
+                if (argc != 4) {
+                    return std::unexpected("Usage: LichtFeld-Studio plugin run <script.py>");
+                }
+                mode.command = PluginMode::Command::RUN;
+                mode.name = argv[3];
             } else if (subcmd == "list") {
                 mode.command = PluginMode::Command::LIST;
             } else if (subcmd == "-h" || subcmd == "--help") {
@@ -3431,6 +3437,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
 Commands:
   create <name>   Create plugin with venv and VS Code config
   check <name>    Validate plugin structure
+  run <script>   Run a local Python script without GUI, training or user plugins
   list            List installed plugins
 )");
                 return HelpMode{};

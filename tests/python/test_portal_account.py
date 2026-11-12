@@ -815,6 +815,17 @@ def test_sign_out_deletes_local_credentials_when_offline(tmp_path, monkeypatch):
     assert service.snapshot().signed_in is False
 
 
+def test_sign_out_without_network_permission_never_refreshes_or_revokes(tmp_path, monkeypatch):
+    path = tmp_path / "account" / "credentials.json"
+    write_credentials(path, access_expires_at=time.time() - 1)
+    stub = StubUrlopen()
+    monkeypatch.setattr(portal_account, "urlopen", stub)
+    service = make_service(tmp_path)
+    service.sign_out(revoke=False)
+    assert stub.requests == []
+    assert not path.exists() and not service.snapshot().signed_in
+
+
 def test_sign_out_refreshes_expired_access_before_revoke(tmp_path, monkeypatch):
     credentials_path = tmp_path / "account" / "credentials.json"
     write_credentials(credentials_path, access_expires_at=time.time() - 1)

@@ -42,7 +42,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "lichtfeld-portal-client"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.11"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
