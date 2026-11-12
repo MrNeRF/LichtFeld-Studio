@@ -356,8 +356,10 @@ namespace lfs::core::nn::kernels {
                 const int oh = (idx / out_w) % out_h;
                 const int ch = (idx / (out_w * out_h)) % c;
                 const int ni = idx / (out_w * out_h * c);
-                const float fy = device::resize_coord(oh, in_h, out_h, coord);
-                const float fx = device::resize_coord(ow, in_w, out_w, coord);
+                const float fy = mode == 0 ? static_cast<float>(device::nearest_source(oh, in_h, out_h, coord))
+                                           : device::resize_coord(oh, in_h, out_h, coord);
+                const float fx = mode == 0 ? static_cast<float>(device::nearest_source(ow, in_w, out_w, coord))
+                                           : device::resize_coord(ow, in_w, out_w, coord);
                 const float v = sample_nchw(input, n, c, in_h, in_w, ni, ch, fy, fx, mode, is_half);
                 device::st_strided(output, idx, v, is_half);
             }
