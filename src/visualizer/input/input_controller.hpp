@@ -240,6 +240,13 @@ namespace lfs::vis {
         // it keeps turning while the locked pointer rests at the window edge.
         void handleMouseMove(double x, double y, std::optional<glm::dvec2> motion = std::nullopt);
         void handleScroll(double xoff, double yoff);
+        // A two-finger trackpad pan recognized by the OS (Windows Direct
+        // Manipulation): both axes at once, in logical pixels the content moved.
+        // It navigates like a swipe unless the device preference is Mouse.
+        void handleTrackpadPan(glm::vec2 pan);
+        // Whether a trackpad gesture starting now should be captured for
+        // navigation instead of arriving as scroll-wheel input.
+        [[nodiscard]] bool wantsTrackpadGesture() const;
         // scale: change since the previous pinch update, > 1 zooms in.
         void handlePinch(float scale);
         // A finger touched (down) or left the trackpad.
@@ -302,6 +309,10 @@ namespace lfs::vis {
         void maybeInitializeDepthViewRange();
 
         // WASD processing with proper frame timing
+
+        // known_trackpad: the OS recognized a trackpad gesture, so the swipe
+        // bindings apply without counting fingers.
+        void handleScrollInput(double xoff, double yoff, bool known_trackpad);
 
         // Helpers
         bool isInViewport(double x, double y) const;

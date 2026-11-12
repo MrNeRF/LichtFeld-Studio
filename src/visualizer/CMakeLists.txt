@@ -53,6 +53,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Window management
         window/window_manager.cpp
+        window/win32_trackpad.cpp
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:window/vulkan_graphics_context.cpp>
         $<$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>:rendering/viewport_reference_renderer.cpp>
         $<$<NOT:$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>>:rendering/viewport_tensor_renderer.cpp>
@@ -681,6 +682,7 @@ if (WIN32)
             Uuid
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
+            Comctl32    # SetWindowSubclass (Direct Manipulation trackpad hit tests)
             dxgi        # DXGI per-process VRAM query
     )
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
