@@ -45,8 +45,6 @@ tests/data/nn/*
 !tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
 !src/python/_lfs_path_io.py
-!src/python/_lfs_nn_weights.py
-!src/python/_lfs_llmdet_weights.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py
 !src/python/lichtfeld_sessions/**/*.py

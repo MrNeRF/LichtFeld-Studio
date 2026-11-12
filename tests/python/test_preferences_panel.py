@@ -1987,7 +1987,6 @@ def test_model_preferences_preserves_metadata_and_renders_native_state(preferenc
     assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
 
 
-
 @pytest.mark.parametrize("retained", [False, True])
 def test_model_preferences_closed_confirmation_does_not_remove(preferences_panel_module, monkeypatch, retained):
     module, _state = preferences_panel_module

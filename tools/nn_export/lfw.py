@@ -14,27 +14,20 @@ class FloatTensor:
     data: bytes | memoryview
 
 
-def check_cancelled(cancel_requested):
-    if cancel_requested():
-        raise InterruptedError("Model preparation cancelled")
-
-
-def sha256_file(stream, cancel_requested=lambda: False):
+def sha256_file(stream):
     digest = hashlib.sha256()
     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-        check_cancelled(cancel_requested)
         digest.update(chunk)
     return digest.hexdigest()
 
 
-def write_lfw(path: Path, tensors: dict, meta: dict[str, object], *, check_cancelled=lambda: None) -> None:
+def write_lfw(path: Path, tensors: dict, meta: dict[str, object]) -> None:
     blobs: list[tuple[int, memoryview]] = []
     blob = None
     try:
         payload_offset = 0
         entries: dict[str, dict[str, object]] = {}
         for name, value in tensors.items():
-            check_cancelled()
             if isinstance(value, FloatTensor):
                 shape = value.shape
                 blob = memoryview(value.data)
@@ -68,15 +61,12 @@ def write_lfw(path: Path, tensors: dict, meta: dict[str, object], *, check_cance
             stream.write(header)
             stream.write(bytes(file_payload_offset - stream.tell()))
             for offset, blob in blobs:
-                check_cancelled()
                 stream.write(bytes(file_payload_offset + offset - stream.tell()))
                 for begin in range(0, len(blob), 1024 * 1024):
-                    check_cancelled()
                     stream.write(blob[begin:begin + 1024 * 1024])
-            check_cancelled()
     finally:
-        # In particular, cancellation must release mmap-backed inputs before
-        # their owner closes the mapping, even while an exception holds frames.
+        # Release mmap-backed views before their owner closes the mapping,
+        # including when an exception retains the writer frame.
         for _, view in blobs:
             view.release()
         if blob is not None:

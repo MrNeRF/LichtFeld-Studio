@@ -80,12 +80,6 @@ namespace {
         return state;
     }
 
-    TEST(AssistedMasking, ModelAcquisitionCancellationPrecedesCacheAccess) {
-        const auto result = lfs::preprocessing::ensure_llmdet_weights(false, [] { return true; });
-        ASSERT_FALSE(result);
-        EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
-    }
-
     TEST(AssistedMasking, SemanticInputValidationDoesNotReserveAJob) {
         JobRegistry jobs;
         AssistedMasking service(jobs, [] { return false; });
@@ -122,7 +116,7 @@ namespace {
         const auto detector = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
         const auto sam = lfs::preprocessing::ensure_sam2_weights(false);
         if (!detector || !detector->present || !sam)
-            GTEST_SKIP() << "Verified semantic/SAM weights absent";
+            GTEST_SKIP() << "Cached semantic/SAM weights absent";
         lfs::test::long_paths::LongPathDirectory directory;
         const auto image = directory.path / "people.png";
         lfs::core::native_fs::copy_file(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/semantic_people.png", image);
@@ -218,7 +212,7 @@ namespace {
         const auto detector = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
         const auto sam = lfs::preprocessing::ensure_sam2_weights(false);
         if (!detector || !detector->present || !sam)
-            GTEST_SKIP() << "Verified semantic/SAM weights absent";
+            GTEST_SKIP() << "Cached semantic/SAM weights absent";
         lfs::test::long_paths::LongPathDirectory directory;
         const auto image = directory.path / "people.png";
         ASSERT_TRUE(lfs::core::native_fs::copy_file(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/semantic_people.png", image));

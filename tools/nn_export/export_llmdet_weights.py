@@ -8,7 +8,7 @@ import struct
 
 from pathlib import Path
 import argparse
-from lfw import FloatTensor, check_cancelled, sha256_file, write_lfw
+from lfw import FloatTensor, sha256_file, write_lfw
 
 SOURCE = "https://huggingface.co/iSEE-Laboratory/llmdet_tiny/resolve/d05199165a19320a9236396e20fca0a5e065189c/model.safetensors"
 SOURCE_SHA256 = "f0e476be3d65c7c50e13029b0adc4bb5d4e05f3eb6d7bb04856578095e6ad92f"
@@ -21,15 +21,13 @@ def _relative_position_indices():
                  for y in range(49) for x in range(49))
 
 
-def convert(checkpoint, output, cancel_requested=lambda: False):
-    check_cancelled(cancel_requested)
+def convert(checkpoint, output):
     source, target = Path(checkpoint), Path(output)
     if source.resolve() == target.resolve() or (target.exists() and source.samefile(target)):
         raise ValueError("Model conversion output must differ from its source")
     with source.open("rb") as stream:
-        if sha256_file(stream, cancel_requested) != SOURCE_SHA256:
+        if sha256_file(stream) != SOURCE_SHA256:
             raise ValueError("Checkpoint does not match the pinned LLMDet Tiny source")
-        check_cancelled(cancel_requested)
         # mmap keeps conversion from duplicating the complete checkpoint in RAM.
         # The mapping and every exported view end before returning.
         with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
@@ -43,7 +41,6 @@ def convert(checkpoint, output, cancel_requested=lambda: False):
                 integer_buffers = 0
                 expected_indices = _relative_position_indices()
                 for name, record in header.items():
-                    check_cancelled(cancel_requested)
                     if name == "__metadata__":
                         continue
                     shape = tuple(record["shape"])
@@ -63,10 +60,8 @@ def convert(checkpoint, output, cancel_requested=lambda: False):
                         raise ValueError("Unsupported LLMDet tensor representation")
                 if len(tensors) != 1015 or integer_buffers != 12:
                     raise ValueError("Unexpected LLMDet Tiny architecture")
-                check_cancelled(cancel_requested)
                 write_lfw(target, tensors,
-                          {"model": "llmdet-tiny", "source_sha256": SOURCE_SHA256},
-                          check_cancelled=lambda: check_cancelled(cancel_requested))
+                          {"model": "llmdet-tiny", "source_sha256": SOURCE_SHA256})
             finally:
                 for tensor in tensors.values():
                     tensor.data.release()
