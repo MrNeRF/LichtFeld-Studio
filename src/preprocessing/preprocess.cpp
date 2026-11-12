@@ -85,10 +85,10 @@ namespace {
         "b4a981065f3d64fe98cd882f28e5bd3a076b39f5f0c696c7885dbe404bc18fed";
 
     constexpr std::string_view kLlmDetModelFile = "llmdet-tiny-v1.lfw";
-    constexpr std::string_view kLlmDetSourceFile = "llmdet-tiny.safetensors";
-    constexpr std::string_view kLlmDetSourceUrl = "https://huggingface.co/iSEE-Laboratory/llmdet_tiny/resolve/d05199165a19320a9236396e20fca0a5e065189c/model.safetensors";
-    constexpr std::string_view kLlmDetSourceHash = "f0e476be3d65c7c50e13029b0adc4bb5d4e05f3eb6d7bb04856578095e6ad92f";
-    constexpr std::string_view kLlmDetModelHash = "713ec6c01b1ee41fd5c1823e0e372146213e5a2a103ca00651a9cf41805645c4";
+    constexpr std::string_view kLlmDetModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-llmdet-tiny-v1/llmdet-tiny-v1.lfw";
+    constexpr std::string_view kLlmDetModelHash =
+        "713ec6c01b1ee41fd5c1823e0e372146213e5a2a103ca00651a9cf41805645c4";
 
     using lfs::preprocessing::CachedModel;
     using lfs::preprocessing::ModelDescriptor;
@@ -98,7 +98,7 @@ namespace {
         ModelDescriptor{CachedModel::Sam2, "SAM 2.1 Hiera Base+", "preferences.models.masking", kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256},
         ModelDescriptor{CachedModel::Moge2, "MoGe-2 ViT-B", "preferences.models.depth", kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256},
         ModelDescriptor{CachedModel::Lpips, "LPIPS VGG16 v0.1", "preferences.models.quality", kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256},
-        ModelDescriptor{CachedModel::LlmDet, "LLMDet Tiny", "preferences.models.semantic", kLlmDetModelFile, kLlmDetSourceUrl, kLlmDetModelHash, kLlmDetSourceFile, kLlmDetSourceHash},
+        ModelDescriptor{CachedModel::LlmDet, "LLMDet Tiny", "preferences.models.semantic", kLlmDetModelFile, kLlmDetModelUrl, kLlmDetModelHash},
     };
 
     const ModelDescriptor& model_descriptor(const CachedModel id) {
@@ -400,23 +400,11 @@ namespace {
         }
     }
 
-    struct DownloadOutput {
-        std::ofstream& stream;
-        uint64_t limit = 0;
-        uint64_t written = 0;
-    };
-
     size_t curl_write(void* ptr, size_t size, size_t nmemb, void* userdata) {
-        auto& output = *static_cast<DownloadOutput*>(userdata);
-        if (size && nmemb > std::numeric_limits<size_t>::max() / size)
-            return 0;
+        auto* out = static_cast<std::ofstream*>(userdata);
         const auto bytes = size * nmemb;
-        if (bytes > uint64_t(std::numeric_limits<std::streamsize>::max()) ||
-            (output.limit && bytes > output.limit - output.written))
-            return 0;
-        output.stream.write(static_cast<const char*>(ptr), static_cast<std::streamsize>(bytes));
-        output.written += bytes;
-        return output.stream.good() ? bytes : 0;
+        out->write(static_cast<const char*>(ptr), static_cast<std::streamsize>(bytes));
+        return out->good() ? bytes : 0;
     }
 
     struct DownloadProgress {
@@ -461,8 +449,7 @@ namespace {
                                 std::string_view expected_hash,
                                 std::string_view label,
                                 const std::function<bool()>& cancel_requested = {},
-                                const ModelPreparationCallback& report = {},
-                                const uint64_t maximum_bytes = 0) {
+                                const ModelPreparationCallback& report = {}) {
         check_download_cancelled(cancel_requested);
         if (report)
             report(ModelPreparationPhase::Downloading, 0, 0);
@@ -482,7 +469,7 @@ namespace {
             }
             ~CurlGlobal() { curl_global_cleanup(); }
         };
-        static const CurlGlobal global;
+        static CurlGlobal global;
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), curl_easy_cleanup);
         CURL* curl = handle.get();
         if (!curl)
@@ -491,19 +478,16 @@ namespace {
         const std::string url_string(url);
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
         curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
         curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-        if (maximum_bytes)
-            curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(maximum_bytes));
+        curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "LichtFeld-Studio/preprocess");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
-        DownloadOutput bounded_output{output, maximum_bytes};
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &bounded_output);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output);
 
         DownloadProgress progress;
         progress.cancel_requested = cancel_requested;
@@ -566,8 +550,7 @@ namespace {
                                               const bool allow_download,
                                               const std::string_view label,
                                               const std::function<bool()>& cancel_requested = {},
-                                              const ModelPreparationCallback& progress = {},
-                                              const uint64_t maximum_bytes = 0) {
+                                              const ModelPreparationCallback& progress = {}) {
         try {
             check_download_cancelled(cancel_requested);
             const fs::path path = cached_model_path(filename);
@@ -590,7 +573,7 @@ namespace {
 
             std::cout << "Downloading " << label << " weights to " << path_to_string(path) << "\n";
             download_verified_file(url, path, expected_hash,
-                                   std::string("Downloaded ") + std::string(label), cancel_requested, progress, maximum_bytes);
+                                   std::string("Downloaded ") + std::string(label), cancel_requested, progress);
             std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
             return path;
         } catch (const lfs::Exception& e) {
@@ -1485,12 +1468,6 @@ namespace lfs::preprocessing {
             if (state.present) {
                 state.bytes = fs::file_size(state.path);
             }
-            if (!descriptor.source_filename.empty()) {
-                const auto source = cached_model_path(descriptor.source_filename);
-                state.source_present = cached_weight_file_present(source);
-                if (state.source_present)
-                    state.bytes += fs::file_size(source);
-            }
             return state;
         } catch (const lfs::Exception& error) {
             return error.error();
@@ -1503,62 +1480,9 @@ namespace lfs::preprocessing {
         }
     }
 
-    namespace {
-        lfs::Result<std::filesystem::path> ensure_llmdet_cached_model(
-            const bool allow_download, const NativeWeightConverter& convert,
-            const std::function<bool()>& cancel_requested, const ModelPreparationCallback& progress) {
-            try {
-                check_download_cancelled(cancel_requested);
-                const auto output = cached_model_path(kLlmDetModelFile);
-                if (cached_weight_file_present(output)) {
-                    try {
-                        require_sha256(output, kLlmDetModelHash, "LLMDet native model", cancel_requested, progress);
-                        check_download_cancelled(cancel_requested);
-                        return output;
-                    } catch (const DownloadIntegrityError&) {
-                        if (!allow_download)
-                            throw;
-                        fs::remove(output);
-                    }
-                }
-                if (!convert)
-                    throw std::runtime_error("LLMDet weight converter is unavailable");
-                const auto source = ensure_cached_model(
-                    kLlmDetSourceFile, kLlmDetSourceUrl, kLlmDetSourceHash,
-                    allow_download, "LLMDet Tiny source", cancel_requested, progress, 692015412);
-                if (!source)
-                    return source.error();
-                io::ScopedAtomicOutputFile staging(output);
-                if (progress)
-                    progress(ModelPreparationPhase::Converting, 0, 0);
-                if (auto converted = convert(*source, staging.temp_path(), cancel_requested); !converted) {
-                    check_download_cancelled(cancel_requested);
-                    return converted.error();
-                }
-                check_download_cancelled(cancel_requested);
-                require_sha256(staging.temp_path(), kLlmDetModelHash, "Converted LLMDet model", cancel_requested, progress);
-                check_download_cancelled(cancel_requested);
-                if (const auto committed = staging.commit(); !committed)
-                    throw std::runtime_error(committed.error().message);
-                return output;
-            } catch (const lfs::Exception& e) {
-                return e.error();
-            } catch (const std::exception& e) {
-                // LFS-CENSUS-OK(empty-catch): converts preparation failure to the existing Result contract.
-                return lfs::make_legacy_error(e.what(), lfs::LegacyErrorContext{
-                                                            .code = dynamic_cast<const DownloadCancelled*>(&e) ? lfs::ErrorCode::Cancelled : lfs::ErrorCode::Unavailable,
-                                                            .domain = lfs::ErrorDomain::Preprocess,
-                                                            .operation = "ensure_llmdet_weights",
-                                                            .source = LFS_SOURCE_SITE_CURRENT(),
-                                                        });
-            }
-        }
-
-    } // namespace
-
     lfs::Result<core::nn::WeightFile> prepare_cached_model(
         const CachedModel model, const bool allow_download, const std::function<bool()>& cancel_requested,
-        const ModelPreparationCallback& progress, const ModelPreparationMode mode, const NativeWeightConverter& convert) {
+        const ModelPreparationCallback& progress, const ModelPreparationMode mode) {
         try {
             check_download_cancelled(cancel_requested);
             const auto& descriptor = model_descriptor(model);
@@ -1569,9 +1493,7 @@ namespace lfs::preprocessing {
             while (!lock.try_lock_for(std::chrono::milliseconds(50)))
                 check_download_cancelled(cancel_requested);
             check_download_cancelled(cancel_requested);
-            auto result = mode == ModelPreparationMode::Acquire && model == CachedModel::LlmDet
-                              ? ensure_llmdet_cached_model(allow_download, convert, cancel_requested, progress)
-                          : mode == ModelPreparationMode::Acquire && model == CachedModel::Moge2
+            auto result = mode == ModelPreparationMode::Acquire && model == CachedModel::Moge2
                               ? lfs::Result<fs::path>(ensure_moge_cached_model(!allow_download, cancel_requested, progress))
                               : ensure_cached_model(descriptor.filename, descriptor.url, descriptor.sha256,
                                                     mode == ModelPreparationMode::Acquire && allow_download, descriptor.name, cancel_requested, progress);
@@ -1602,11 +1524,9 @@ namespace lfs::preprocessing {
                                         .detection = LFS_SOURCE_SITE_CURRENT()});
             }
             const auto path = cached_model_path(descriptor.filename);
-            const bool removed = cached_weight_file_present(path) && fs::remove(path);
-            if (descriptor.source_filename.empty())
-                return removed;
-            const auto source = cached_model_path(descriptor.source_filename);
-            return (cached_weight_file_present(source) && fs::remove(source)) || removed;
+            if (!cached_weight_file_present(path))
+                return false;
+            return fs::remove(path);
         } catch (const lfs::Exception& error) {
             return error.error();
         } catch (const std::exception& error) {
@@ -1622,14 +1542,12 @@ namespace lfs::preprocessing {
         return prepare_cached_model(CachedModel::Lpips, allow_download);
     }
 
-    lfs::Result<core::nn::WeightFile> ensure_llmdet_weights(
-        const bool allow_download, const NativeWeightConverter& convert,
-        const std::function<bool()>& cancel_requested) {
-        return prepare_cached_model(CachedModel::LlmDet, allow_download, cancel_requested, {}, ModelPreparationMode::Acquire, convert);
-    }
-
     lfs::Result<core::nn::WeightFile> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
         return prepare_cached_model(CachedModel::Sam2, allow_download, cancel_requested);
+    }
+
+    lfs::Result<core::nn::WeightFile> ensure_llmdet_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
+        return prepare_cached_model(CachedModel::LlmDet, allow_download, cancel_requested);
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

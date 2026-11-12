@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/cuda_error_typed.hpp"
-#include "core/environment.hpp"
 #include "core/image_io.hpp"
 #include "core/nn/models/bert_text.hpp"
 #include "core/nn/models/llmdet.hpp"
@@ -10,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "preprocessing/preprocess.hpp"
 #include <cmath>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -103,13 +103,23 @@ public:
     ~LlmDetBackboneParity() override {
         if (stream) {
             LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "Backbone upload drain");
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(stream), stream, "Backbone stream teardown");
+            LFS_CUDA_LOG_STREAM_DESTROY(stream, "Backbone stream teardown");
         }
     }
 
 protected:
     std::optional<nn::WeightFile> archive;
     cudaStream_t stream = nullptr;
+    void SetUp() override {
+        const auto cached = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
+        ASSERT_TRUE(cached);
+        if (!cached->present)
+            GTEST_SKIP() << "LLMDet model is not installed";
+        auto opened = nn::WeightFile::open(cached->path);
+        ASSERT_TRUE(opened);
+        archive.emplace(std::move(*opened));
+        ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    }
     void TearDown() override {
         if (stream)
             CudaMemoryPool::instance().release_stream(stream);
@@ -117,13 +127,6 @@ protected:
 };
 
 TEST_F(LlmDetBackboneParity, RealPeopleImageDistinguishesPresentAndAbsentCategories) {
-    const auto path = environment::value("LFS_LLMDET_WEIGHTS");
-    if (!path || path->empty())
-        GTEST_SKIP() << "LLMDet weights absent";
-    auto opened = nn::WeightFile::open(utf8_to_path(*path));
-    ASSERT_TRUE(opened);
-    archive.emplace(std::move(*opened));
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(stream);
     auto model = nn::models::LlmDet::load(*archive, Device::CUDA);
     ASSERT_TRUE(model);
@@ -159,13 +162,6 @@ TEST_F(LlmDetBackboneParity, RealPeopleImageDistinguishesPresentAndAbsentCategor
 }
 
 TEST_F(LlmDetBackboneParity, BertMatchesFloat64ReferenceForIsolatedCategorySpans) {
-    const auto path = environment::value("LFS_LLMDET_WEIGHTS");
-    if (!path || path->empty())
-        GTEST_SKIP() << "LLMDet weights absent";
-    auto opened = nn::WeightFile::open(utf8_to_path(*path));
-    ASSERT_TRUE(opened);
-    archive.emplace(std::move(*opened));
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(stream);
     std::ifstream input(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/bert_text_ref_fixture.json");
     ASSERT_TRUE(input);
@@ -206,13 +202,6 @@ TEST_F(LlmDetBackboneParity, BertMatchesFloat64ReferenceForIsolatedCategorySpans
 }
 
 TEST_F(LlmDetBackboneParity, SwinMatchesFloat64ReferenceWithOddPaddingAndShiftedBorders) {
-    const auto path = environment::value("LFS_LLMDET_WEIGHTS");
-    if (!path || path->empty())
-        GTEST_SKIP() << "LLMDet weights absent";
-    auto opened = nn::WeightFile::open(utf8_to_path(*path));
-    ASSERT_TRUE(opened);
-    archive.emplace(std::move(*opened));
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(stream);
     std::ifstream input(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/swin_tiny_ref_fixture.json");
     ASSERT_TRUE(input);
@@ -241,13 +230,6 @@ TEST_F(LlmDetBackboneParity, SwinMatchesFloat64ReferenceWithOddPaddingAndShifted
 }
 
 TEST_F(LlmDetBackboneParity, EncoderMatchesFloat64MultimodalReferenceAcrossSixLayers) {
-    const auto path = environment::value("LFS_LLMDET_WEIGHTS");
-    if (!path || path->empty())
-        GTEST_SKIP() << "LLMDet weights absent";
-    auto opened = nn::WeightFile::open(utf8_to_path(*path));
-    ASSERT_TRUE(opened);
-    archive.emplace(std::move(*opened));
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(stream);
     std::ifstream input(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/llmdet_encoder_ref_fixture.json");
     ASSERT_TRUE(input);
@@ -285,13 +267,6 @@ TEST_F(LlmDetBackboneParity, EncoderMatchesFloat64MultimodalReferenceAcrossSixLa
 }
 
 TEST_F(LlmDetBackboneParity, DecoderMatchesIndependentReferenceThroughFinalBoxRefinement) {
-    const auto path = environment::value("LFS_LLMDET_WEIGHTS");
-    if (!path || path->empty())
-        GTEST_SKIP() << "LLMDet weights absent";
-    auto opened = nn::WeightFile::open(utf8_to_path(*path));
-    ASSERT_TRUE(opened);
-    archive.emplace(std::move(*opened));
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(stream);
     std::ifstream input(std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/llmdet_decoder_ref_fixture.json");
     ASSERT_TRUE(input);

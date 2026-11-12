@@ -2808,31 +2808,6 @@ namespace lfs::python {
             "Get display work area size as (width, height)");
     }
 
-    namespace {
-        preprocessing::NativeWeightConverter native_weight_converter() {
-            return [](const std::filesystem::path& source, const std::filesystem::path& staging,
-                      const std::function<bool()>& stop) -> lfs::Status {
-                if (!python::can_acquire_gil())
-                    return lfs::Status::failure(lfs::make_legacy_error(
-                        "Python runtime unavailable for model conversion", lfs::LegacyErrorContext{
-                                                                               .code = lfs::ErrorCode::Unavailable,
-                                                                               .domain = lfs::ErrorDomain::Python,
-                                                                               .operation = "convert_llmdet_weights",
-                                                                               .source = LFS_SOURCE_SITE_CURRENT(),
-                                                                           }));
-                const python::GilAcquire gil;
-                try {
-                    const auto callback = nb::cpp_function([&stop] { return stop && stop(); });
-                    nb::module_::import_("_lfs_llmdet_weights").attr("_convert_verified")(core::path_to_utf8(source), core::path_to_utf8(staging), callback);
-                    return {};
-                } catch (nb::python_error& error) {
-                    error.restore();
-                    return lfs::Status::failure(python::error_from_python(LFS_SOURCE_SITE_CURRENT()));
-                }
-            };
-        }
-    } // namespace
-
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
         m.def("model_cache_snapshot", [] {
@@ -2849,7 +2824,6 @@ namespace lfs::python {
                     row["category_key"] = std::string(descriptor.category_key);
                     row["source"] = std::string(descriptor.url);
                     row["sha256"] = std::string(descriptor.sha256);
-                    row["source_sha256"] = std::string(descriptor.source_sha256.empty() ? descriptor.sha256 : descriptor.source_sha256);
                     row["path"] = core::path_to_utf8(entry.cache.path);
                     row["bytes"] = entry.cache.bytes;
                     row["present"] = entry.cache.present;
@@ -2902,7 +2876,7 @@ namespace lfs::python {
             else
                 throw nb::value_error("Unknown model cache action");
             auto* gui = get_gui_manager();
-            return gui && gui->asyncTasks().startModelCache(static_cast<preprocessing::CachedModel>(model), operation, native_weight_converter()); }, nb::arg("model"), nb::arg("action"), "UI thread: queue download, verification or removal through the shared model cache.");
+            return gui && gui->asyncTasks().startModelCache(static_cast<preprocessing::CachedModel>(model), operation); }, nb::arg("model"), nb::arg("action"), "UI thread: queue download, verification or removal through the shared model cache.");
         m.def("model_cache_cancel", [](const uint64_t job) {
             require_ui_texture_creation_thread();
             if (auto* gui = get_gui_manager())
@@ -5078,7 +5052,7 @@ namespace lfs::python {
                     throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
                 vis::gui::AssistedMaskSemantic selection;
                 selection.prepare_weights = [](const std::function<bool()>& cancelled) {
-                    return preprocessing::ensure_llmdet_weights(true, native_weight_converter(), cancelled);
+                    return preprocessing::ensure_llmdet_weights(true, cancelled);
                 };
                 const auto rows = nb::cast<nb::list>(context["descriptions"]);
                 if (rows.empty() || rows.size() > 16)
@@ -5092,7 +5066,7 @@ namespace lfs::python {
                     selection.confidence = nb::cast<float>(context["confidence"]);
                 input.semantic = std::move(selection);
             }
-            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache acquires and locally converts the official LLMDet Tiny model. Apply is a separate explicit action.");
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.");
         m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
             require_ui_texture_creation_thread();
             nb::list result;

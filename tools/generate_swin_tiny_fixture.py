@@ -12,12 +12,10 @@ import functools
 import json
 import math
 from pathlib import Path
-import sys
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/python"))
-from _lfs_nn_weights import sha256_file
+from nn_export.lfw import sha256_file
 
 
 def main():

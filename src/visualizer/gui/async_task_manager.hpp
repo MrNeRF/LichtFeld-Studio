@@ -79,8 +79,7 @@ namespace lfs::vis {
             };
             [[nodiscard]] std::vector<ModelCacheEntry> modelCacheEntries() const;
             [[nodiscard]] std::string_view modelCacheActionName() const;
-            bool startModelCache(preprocessing::CachedModel model, ModelCacheAction action,
-                                 preprocessing::NativeWeightConverter convert = {});
+            bool startModelCache(preprocessing::CachedModel model, ModelCacheAction action);
             void cancelModelCache(uint64_t expected_job = 0);
             [[nodiscard]] std::optional<JobSnapshot> modelCacheJob() const { return jobs_.peek(model_cache_job_); }
             [[nodiscard]] preprocessing::CachedModel modelCacheModel() const { return model_cache_model_; }

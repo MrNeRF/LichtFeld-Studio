@@ -2498,7 +2498,7 @@ def on_open_image_preview(callback: object, include_sequence: bool = False) -> N
 
 def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None, semantic: object | None = None) -> int:
     """
-    UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache acquires and locally converts the official LLMDet Tiny model. Apply is a separate explicit action.
+    UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.
     """
 
 def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> list:

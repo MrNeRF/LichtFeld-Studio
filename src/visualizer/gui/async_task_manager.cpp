@@ -1085,9 +1085,8 @@ namespace lfs::vis::gui {
             const auto cache = preprocessing::inspect_cached_model(descriptor.id);
             if (cache) {
                 entry.cache = *cache;
-                entry.status = cache->busy ? "in_use" : cache->present      ? "installed"
-                                                    : cache->source_present ? "source_cached"
-                                                                            : "missing";
+                entry.status = cache->busy ? "in_use" : cache->present ? "installed"
+                                                                       : "missing";
             } else {
                 entry.status = "failed";
                 entry.error = cache.error().detail();
@@ -1106,8 +1105,6 @@ namespace lfs::vis::gui {
                     if (!entry.canceling) {
                         if (job->stage.starts_with("downloading"))
                             entry.message = "downloading";
-                        else if (job->stage == "converting")
-                            entry.message = "converting";
                         else if (job->stage.starts_with("verifying"))
                             entry.message = "verifying";
                         entry.show_progress = job->stage.ends_with("_progress");
@@ -1128,14 +1125,13 @@ namespace lfs::vis::gui {
             }
             const bool available = !running && !entry.cache.busy && cache.has_value();
             entry.can_download = available;
-            entry.can_verify = available && entry.cache.present;
-            entry.can_remove = available && (entry.cache.present || entry.cache.source_present);
+            entry.can_verify = entry.can_remove = available && entry.cache.present;
             entries.push_back(std::move(entry));
         }
         return entries;
     }
 
-    bool AsyncTaskManager::startModelCache(const preprocessing::CachedModel model, const ModelCacheAction action, preprocessing::NativeWeightConverter convert) {
+    bool AsyncTaskManager::startModelCache(const preprocessing::CachedModel model, const ModelCacheAction action) {
         if (!beginJob(model_cache_job_, JobType::ModelCache, "working"))
             return false;
         model_cache_thread_.reset();
@@ -1143,7 +1139,7 @@ namespace lfs::vis::gui {
         model_cache_action_ = action;
         const auto job = model_cache_job_;
         try {
-            model_cache_thread_.emplace([this, job, model, action, convert = std::move(convert)](const std::stop_token stop) {
+            model_cache_thread_.emplace([this, job, model, action](const std::stop_token stop) {
                 jobs_.work(job);
                 try {
                     const auto canceled = [this, job, stop] { return stop.stop_requested() || jobs_.cancelRequested(job); };
@@ -1163,14 +1159,12 @@ namespace lfs::vis::gui {
                             using Phase = preprocessing::ModelPreparationPhase;
                             std::string stage = phase == Phase::Downloading ? "downloading" : phase == Phase::Verifying ? "verifying"
                                                                                                                         : "waiting";
-                            if (phase == Phase::Converting)
-                                stage = "converting";
                             if (total)
                                 stage += "_progress";
                             jobs_.report(job, total ? static_cast<float>(static_cast<double>(done) / static_cast<double>(total)) : 0.0f, std::move(stage));
                         };
                         const auto mode = action == ModelCacheAction::Verify ? preprocessing::ModelPreparationMode::Verify : preprocessing::ModelPreparationMode::Acquire;
-                        if (const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode, convert); !result) {
+                        if (const auto result = preprocessing::prepare_cached_model(model, action == ModelCacheAction::Download, canceled, progress, mode); !result) {
                             jobs_.finishWork(job, result.error().code() == lfs::ErrorCode::Cancelled,
                                              std::string(result.error().detail()), result.error().code(), result.error());
                             return;

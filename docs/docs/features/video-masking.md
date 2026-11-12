@@ -65,7 +65,8 @@ Frames extracted without camera association can therefore save masks directly. D
 ## Select objects by text or category
 
 Choose **Text and categories**, then add categories or enter English descriptions,
-one per line. Quick categories include common vehicles, animals, plants and everyday
+one per line. Prefer short object descriptions such as `round wooden table`;
+spatial relations and complete sentences are not reliably understood. Quick categories include common vehicles, animals, plants and everyday
 objects; descriptions let you request other objects. The official LLMDet Tiny
 weights are prepared automatically when needed. **Find in this frame**
 searches the current frame and asks the existing SAM2.1 model to segment the
@@ -80,7 +81,9 @@ one. Descriptions such as `people` are also accepted; wording can change results
 **Advanced options > Detection threshold** applies to all categories and descriptions
 in the next search. The default is **40%**; higher values reject more uncertain
 detections. Double-click the label to restore the default. Editing search settings
-keeps the current proposal until another search is submitted.
+keeps the current proposal until another search is submitted. Lowering the threshold can recover borderline detections, but also admits more false positives.
+An absent category searched alone can match a prominent unrelated object; adding
+other categories can change its score. Always review the mask, including apparently confident results.
 
 Review the overlay before applying or approving it. **Points and box** returns to
 the manual tools in the same editor, where the proposal can be refined. No match
@@ -110,29 +113,20 @@ without silently truncating it.
 ### Automatic semantic model preparation
 
 Models are managed in **Preferences > Models**. The first semantic search downloads
-the pinned original checkpoint from the official
-[`iSEE-Laboratory/llmdet_tiny`](https://huggingface.co/iSEE-Laboratory/llmdet_tiny)
-repository, verifies SHA-256, and converts it
-locally using the application's bundled Python standard library. Neither Torch nor
-external scripts are installed or downloaded for this operation.
+[`llmdet-tiny-v1.lfw`](https://github.com/MrNeRF/LichtFeld-Studio/releases/tag/model-llmdet-tiny-v1)
+from the LichtFeld Studio model release and verifies its pinned SHA-256. The
+application uses the same managed download, cancellation and atomic publication
+path as SAM, MoGe and LPIPS. It does not convert weights or require Python for
+model preparation.
 
 The existing model cache is used: `%USERPROFILE%/.lichtfeld/onnx` on Windows and
-`~/.lichtfeld/onnx` on Linux. It contains `llmdet-tiny.safetensors` (about 692 MB)
-and `llmdet-tiny-v1.lfw` (about 692 MB). The historical directory name
-`onnx` also contains native model archives; the inference runs natively.
+`~/.lichtfeld/onnx` on Linux. The native archive occupies about 692 MB; the
+historical `onnx` directory name also covers native models. No source checkpoint
+is downloaded or retained. Offline searches use the installed archive.
 
-Preparation runs on the masking worker and can be cancelled using the existing
-Cancel action. Download and conversion publish separate temporary outputs only
-after verification; failed or cancelled attempts do not install a partial model.
-The same preparation is available from Preferences. A retained source checkpoint
-is shown as cached but not ready until conversion succeeds. The displayed disk
-usage includes that checkpoint; Remove clears both managed LLMDet files and is
-blocked during preparation or while a caller holds the weight archive open.
-A verified source checkpoint is retained, so retrying an interrupted conversion
-does not require another download. An interrupted download restarts rather than
-resuming partial bytes. After a forced process termination, unique temporary
-files may remain, but are never treated as ready models. No offline search needs
-the source checkpoint once the verified native archive has been prepared.
+A failed or cancelled download does not install a partial model. Download,
+integrity verification and removal are also available in Preferences, through
+the same cache owner. Removal is blocked while the archive is in use.
 
 ### Prepare weights manually
 
@@ -148,8 +142,9 @@ The exporter uses the Python standard library, verifies the source SHA-256 befor
 reading checkpoint records, and uses the shared native weight writer. The upstream
 [LLMDet project](https://github.com/iSEE-Laboratory/LLMDet) and weights use Apache-2.0.
 For offline installation, put the resulting `llmdet-tiny-v1.lfw` in the model cache;
-the application verifies its pinned digest before loading it. The automatic path
-uses the same converter and official source.
+the application verifies its pinned digest before loading it. This developer
+export reproduces the archive distributed by the model release; it is not part
+of the application's automatic download path.
 
 ### Licenses and attribution
 

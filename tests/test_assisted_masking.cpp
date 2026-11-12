@@ -24,6 +24,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -79,49 +80,10 @@ namespace {
         return state;
     }
 
-    TEST(AssistedMasking, UnverifiedModelCacheCannotReachTheConverterOffline) {
-        lfs::test::long_paths::LongPathDirectory directory;
-#ifdef _WIN32
-        const lfs::test::licht::ScopedEnvironmentVariable home("USERPROFILE", lfs::core::path_to_utf8(directory.path));
-#else
-        const lfs::test::licht::ScopedEnvironmentVariable home("HOME", lfs::core::path_to_utf8(directory.path));
-#endif
-        const auto cache = directory.path / ".lichtfeld" / "onnx";
-        lfs::core::native_fs::create_directories(cache);
-        const auto source = cache / "llmdet-tiny.safetensors";
-        {
-            std::ofstream file(lfs::core::native_fs::native_path(source), std::ios::binary);
-            file << "unverified checkpoint";
-        }
-        bool converted = false;
-        const auto converter = [&](const auto&, const auto&, const auto&) -> lfs::Status {
-            converted = true;
-            return {};
-        };
-        EXPECT_FALSE(lfs::preprocessing::ensure_llmdet_weights(false, converter));
-        EXPECT_FALSE(converted);
-        const auto output = cache / "llmdet-tiny-v1.lfw";
-        {
-            std::ofstream file(lfs::core::native_fs::native_path(output), std::ios::binary);
-            file << "unverified native archive";
-        }
-        EXPECT_FALSE(lfs::preprocessing::ensure_llmdet_weights(false, converter));
-        EXPECT_FALSE(converted);
-        EXPECT_EQ(lfs::core::native_fs::file_size(source), 21);
-        EXPECT_EQ(lfs::core::native_fs::file_size(output), 25);
-        EXPECT_EQ(std::distance(lfs::core::native_fs::directory_iterator(cache),
-                                std::filesystem::directory_iterator{}),
-                  2);
-    }
-
     TEST(AssistedMasking, ModelAcquisitionCancellationPrecedesCacheAccess) {
-        bool converted = false;
-        const auto result = lfs::preprocessing::ensure_llmdet_weights(false, [&](const auto&, const auto&, const auto&) -> lfs::Status {
-                converted = true;
-                return {}; }, [] { return true; });
+        const auto result = lfs::preprocessing::ensure_llmdet_weights(false, [] { return true; });
         ASSERT_FALSE(result);
         EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
-        EXPECT_FALSE(converted);
     }
 
     TEST(AssistedMasking, SemanticInputValidationDoesNotReserveAJob) {
@@ -138,8 +100,15 @@ namespace {
         input.semantic->descriptions = {{101, -1, 1012, 102}};
         EXPECT_THROW(service.submit(input), std::invalid_argument);
         input.semantic->descriptions = {{101, 2711, 1012, 102}};
-        input.semantic->confidence = 0;
-        EXPECT_THROW(service.submit(input), std::invalid_argument);
+        for (const float threshold : {0.f, 1.f, -.1f, std::numeric_limits<float>::quiet_NaN()}) {
+            input.semantic->confidence = threshold;
+            try {
+                service.submit(input);
+                FAIL() << "Invalid detection threshold accepted";
+            } catch (const std::invalid_argument& error) {
+                EXPECT_STREQ(error.what(), LOC("image_preview.sam_semantic_threshold_invalid"));
+            }
+        }
         input.semantic->confidence = .25f;
         input.refine_request = 1;
         EXPECT_THROW(service.submit(input), std::invalid_argument);
@@ -150,9 +119,9 @@ namespace {
         int devices = 0;
         if (cudaGetDeviceCount(&devices) != cudaSuccess || !devices)
             GTEST_SKIP() << "CUDA device unavailable";
-        const auto detector = lfs::core::environment::value("LFS_LLMDET_WEIGHTS");
+        const auto detector = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
         const auto sam = lfs::preprocessing::ensure_sam2_weights(false);
-        if (!detector || !sam)
+        if (!detector || !detector->present || !sam)
             GTEST_SKIP() << "Verified semantic/SAM weights absent";
         lfs::test::long_paths::LongPathDirectory directory;
         const auto image = directory.path / "people.png";
@@ -169,7 +138,7 @@ namespace {
                              lfs::core::file_time_to_system_clock(lfs::core::native_fs::last_write_time(image)).time_since_epoch())
                              .count();
         input.size_bytes = lfs::core::native_fs::file_size(image);
-        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = detector->path](const auto&) { return lfs::core::nn::WeightFile::open(path); },
                                               .descriptions = {{101, 2482, 1012, 102}}};
         auto state = wait_for_mask(service, service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
@@ -246,9 +215,9 @@ namespace {
         int devices = 0;
         if (cudaGetDeviceCount(&devices) != cudaSuccess || !devices)
             GTEST_SKIP() << "CUDA device unavailable";
-        const auto detector = lfs::core::environment::value("LFS_LLMDET_WEIGHTS");
+        const auto detector = lfs::preprocessing::inspect_cached_model(lfs::preprocessing::CachedModel::LlmDet);
         const auto sam = lfs::preprocessing::ensure_sam2_weights(false);
-        if (!detector || !sam)
+        if (!detector || !detector->present || !sam)
             GTEST_SKIP() << "Verified semantic/SAM weights absent";
         lfs::test::long_paths::LongPathDirectory directory;
         const auto image = directory.path / "people.png";
@@ -265,9 +234,13 @@ namespace {
                              lfs::core::file_time_to_system_clock(lfs::core::native_fs::last_write_time(image)).time_since_epoch())
                              .count();
         input.size_bytes = lfs::core::native_fs::file_size(image);
-        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = lfs::core::utf8_to_path(*detector)](const auto&) { return lfs::core::nn::WeightFile::open(path); },
+        input.semantic = AssistedMaskSemantic{.prepare_weights = [path = detector->path](const auto&) { return lfs::core::nn::WeightFile::open(path); },
                                               .descriptions = {{101, 2711, 1012, 102}}}; // person: a category, not a count.
         auto state = wait_for_mask(service, service.submit(input), "ready");
+        ASSERT_EQ(state.phase, "ready") << state.error;
+        ASSERT_GE(state.matched_objects, 2);
+        input.semantic->descriptions = {{101, 1037, 2711, 1999, 1037, 2282, 1012, 102}}; // a person in a room.
+        state = wait_for_mask(service, service.submit(input), "ready");
         ASSERT_EQ(state.phase, "ready") << state.error;
         ASSERT_GE(state.matched_objects, 2);
         EXPECT_FALSE(state.semantic_limited);
@@ -321,7 +294,7 @@ namespace {
         // Repeated automatic requests reuse the already resident verified model.
         const auto acquisitions = std::make_shared<std::atomic_int>(0);
         input.semantic = AssistedMaskSemantic{
-            .prepare_weights = [acquisitions, path = lfs::core::utf8_to_path(*detector)](const auto&) -> lfs::Result<lfs::core::nn::WeightFile> {
+            .prepare_weights = [acquisitions, path = detector->path](const auto&) -> lfs::Result<lfs::core::nn::WeightFile> {
                 ++*acquisitions;
                 return lfs::core::nn::WeightFile::open(path);
             },

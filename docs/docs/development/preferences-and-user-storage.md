@@ -209,13 +209,10 @@ means the file is present;
 verification runs explicitly or when the feature acquires its weights, not during
 UI refreshes.
 
-LLMDet preparation downloads the pinned official safetensors checkpoint and converts it
-locally through the same converter used on first search. Its retained source is
-included in the reported disk usage and confirmed removal. A source-only cache
-is not a ready model and cannot pass Verify integrity.
-
-The model-cache snapshot distinguishes `source_sha256` (the downloaded file)
-from `sha256` (the ready native archive). They are equal for models that need no conversion.
+LLMDet Tiny downloads its native archive from the official LichtFeld Studio model
+release, just like the other managed models. The cache retains only the ready
+archive, verified against the catalog's pinned SHA-256; no runtime conversion or
+source checkpoint is required.
 
 The on-demand download remains available from each feature. Preferences uses the
 same acquisition, hashing and atomic publication code. Concurrent acquisitions

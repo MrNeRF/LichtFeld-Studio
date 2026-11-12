@@ -1985,17 +1985,7 @@ def test_model_preferences_preserves_metadata_and_renders_native_state(preferenc
     native.update(message="verifying", progress=.8)
     section.sync(force=True)
     assert records["managed_models"][0]["status"] == "preferences.models.verifying 80%"
-    native.update(message="converting", show_progress=False)
-    section.sync(force=True)
-    assert records["managed_models"][0]["status"] == "preferences.models.converting"
-    snapshot["job"] = {}
-    native.update(status="source_cached", message="source_cached", present=False,
-                  can_remove=True, can_verify=False, running=False, bytes=692015412)
-    section.sync(force=True)
-    assert records["managed_models"][0]["can_remove"]
-    assert not records["managed_models"][0]["can_verify"]
-    assert not records["managed_models"][0]["has_path"]
-    assert records["managed_models"][0]["size"]
+
 
 
 @pytest.mark.parametrize("retained", [False, True])

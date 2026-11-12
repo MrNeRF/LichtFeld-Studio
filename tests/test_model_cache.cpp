@@ -164,32 +164,4 @@ namespace {
         }
         EXPECT_TRUE(fs::exists(path));
     }
-
-    TEST_F(ModelCacheTest, SourceOnlyCacheCanBeRemovedButCannotPassVerification) {
-        const auto model = CachedModel::LlmDet;
-        const auto initial = inspect_cached_model(model);
-        ASSERT_TRUE(initial);
-        const auto source = initial->path.parent_path() / model_catalog().back().source_filename;
-        std::ofstream output;
-        ASSERT_TRUE(lfs::core::open_file_for_write(source, std::ios::binary, output));
-        output << "cached source";
-        output.close();
-        const auto cached = inspect_cached_model(model);
-        ASSERT_TRUE(cached);
-        EXPECT_FALSE(cached->present);
-        EXPECT_TRUE(cached->source_present);
-        EXPECT_GT(cached->bytes, 0);
-        bool converted = false;
-        const auto verified = prepare_cached_model(model, false, {}, {}, ModelPreparationMode::Verify, [&](const auto&, const auto&, const auto&) -> lfs::Status {
-            converted = true;
-            return {};
-        });
-        EXPECT_FALSE(verified);
-        EXPECT_FALSE(converted);
-        EXPECT_TRUE(fs::exists(source));
-        const auto removed = remove_cached_model(model);
-        ASSERT_TRUE(removed);
-        EXPECT_TRUE(*removed);
-        EXPECT_FALSE(fs::exists(source));
-    }
 } // namespace

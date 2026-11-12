@@ -71,7 +71,7 @@ class ModelPreferencesSection:
                 "id": str(row["id"]), "name": row["name"], "category": tr(row["category_key"]),
                 "status": message, "detail": detail, "failed": row["status"] == "failed",
                 "running": bool(row.get("running")), "canceling": bool(row.get("canceling")),
-                "size": previous.get("size", "") if busy else format_size(row.get("bytes", 0)) if present or row.get("bytes", 0) > 0 else "",
+                "size": previous.get("size", "") if busy else format_size(row.get("bytes", 0)) if present else "",
                 "path": str(row.get("path", "")) if present else "", "has_path": present,
                 "available": row["status"] == "installed", "working": busy or bool(row.get("running")),
                 "can_download": bool(row["can_download"]), "can_verify": bool(row["can_verify"]),

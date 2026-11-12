@@ -70,13 +70,10 @@ namespace lfs::vis::gui {
             const auto tokens = probabilities.size(2);
             for (size_t query = 0; query < boxes.size(1); ++query) {
                 float best = 0;
-                for (const auto& category : text.category_tokens) {
-                    float score = 0;
+                for (const auto& category : text.category_tokens)
                     for (const int token : category)
-                        score += probabilities.ptr<float>()[query * tokens + size_t(token)];
-                    best = std::max(best, score / float(category.size()));
-                }
-                if (best < confidence)
+                        best = std::max(best, probabilities.ptr<float>()[query * tokens + size_t(token)]);
+                if (best <= confidence)
                     continue;
                 const auto* b = boxes.ptr<float>() + query * 4;
                 std::array<float, 4> box{(b[0] - b[2] * .5f) * width, (b[1] - b[3] * .5f) * height,
@@ -943,8 +940,9 @@ namespace lfs::vis::gui {
             throw std::invalid_argument(LOC("image_preview.sam_invalid_input"));
         if (input.semantic) {
             auto& semantic = *input.semantic;
-            if (!semantic.prepare_weights || !LlmDet::valid_phrases(semantic.descriptions) || !std::isfinite(semantic.confidence) ||
-                semantic.confidence <= 0 || semantic.confidence >= 1 || !input.points.empty() || input.box ||
+            if (!std::isfinite(semantic.confidence) || semantic.confidence <= 0 || semantic.confidence >= 1)
+                throw std::invalid_argument(LOC("image_preview.sam_semantic_threshold_invalid"));
+            if (!semantic.prepare_weights || !LlmDet::valid_phrases(semantic.descriptions) || !input.points.empty() || input.box ||
                 input.refine_request || input.refine_candidate != -1)
                 throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
         }

@@ -9,15 +9,13 @@ This is a development reference, not a second application inference backend.
 """
 import argparse
 import hashlib
-import sys
 import json
 import math
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/python"))
-from _lfs_nn_weights import sha256_file
+from nn_export.lfw import sha256_file
 
 
 def main():
