@@ -1125,7 +1125,8 @@ def test_reopening_the_same_extraction_keeps_the_active_draft_and_approval_conte
 
 @pytest.mark.parametrize("enabled", [True, False])
 @pytest.mark.parametrize("same_instance", [True, False])
-def test_host_transfer_keeps_session_only_for_same_enabled_instance(panel_modules, monkeypatch, enabled, same_instance):
+@pytest.mark.parametrize("lazy", [True, False])
+def test_host_transfer_keeps_session_only_for_same_enabled_instance(panel_modules, monkeypatch, enabled, same_instance, lazy):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
     value = editor(module)
@@ -1138,7 +1139,10 @@ def test_host_transfer_keeps_session_only_for_same_enabled_instance(panel_module
     panel._sam_texture = SimpleNamespace(destroy=lambda: destroyed.append(True))
     panel._sam_texture_source = "existing-texture"
     monkeypatch.setattr(module.lf.ui, "is_panel_enabled", lambda _id: enabled)
-    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: panel if same_instance else object())
+    registered = panel if same_instance else object()
+    if lazy:
+        registered = SimpleNamespace(_implementation=registered)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: registered)
     monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: closed.append(True))
     monkeypatch.setattr(module.lf.ui, "release_rml_texture", released.append, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_end_sequence", ended.append, raising=False)
