@@ -174,7 +174,7 @@ namespace lfs::core {
         // Destroy CUDA stream if it was created
         if (_stream) {
             CudaMemoryPool::instance().release_stream(_stream);
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
+            LFS_CUDA_LOG_STREAM_DESTROY(_stream, "camera stream teardown");
             _stream = nullptr;
         }
     }
@@ -251,7 +251,7 @@ namespace lfs::core {
             // Destroy our current stream
             if (_stream) {
                 CudaMemoryPool::instance().release_stream(_stream);
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
+                LFS_CUDA_LOG_STREAM_DESTROY(_stream, "camera stream teardown");
             }
 
             // Move all members

@@ -2463,7 +2463,7 @@ namespace lfs::training {
                 if (stream) {
                     LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "blob seeding: synchronize worker stream");
                     lfs::core::CudaMemoryPool::instance().release_stream(stream);
-                    LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(stream), stream, "blob seeding: destroy worker stream");
+                    LFS_CUDA_LOG_STREAM_DESTROY(stream, "blob seeding: destroy worker stream");
                 }
                 promise.set_value(std::move(seeds));
             });
