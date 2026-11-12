@@ -301,14 +301,34 @@ def request_json(request):
     return json.loads(request.data.decode("utf-8")) if request.data else None
 
 
-def make_service(tmp_path, *, waiter=None, base_url=None):
+def make_service(tmp_path, *, waiter=None, base_url=None, **host):
     return portal_account.PortalAccountService(
         base_url=base_url,
         credentials_path=tmp_path / "account" / "credentials.json",
         client_version="1.2.3",
         platform="TestOS",
         waiter=waiter,
+        **host,
     )
+
+
+def test_external_host_device_flow_dispatches_without_native_ui(tmp_path, monkeypatch):
+    stub = StubUrlopen(start_response(), token_pair(), profile())
+    monkeypatch.setattr(portal_account, "urlopen", stub)
+    opened, scheduled, published, actions = [], [], [], []
+    service = make_service(tmp_path, waiter=lambda _: False,
+                           open_browser=opened.append, dispatch=scheduled.append,
+                           publish_state=published.append, user_agent="LichtFeld-Blender/test")
+    assert service.run_after_connection(lambda: actions.append("import"))
+    service.wait_for_idle()
+    assert service.snapshot().signed_in
+    assert len(opened) == 1 and opened[0].startswith(service.base_url + "/")
+    assert published[-1].signed_in
+    assert not actions
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert actions == ["import"]
+    assert all(request.get_header("User-agent") == "LichtFeld-Blender/test" for request in stub.requests)
 
 
 def test_account_runtime_state_publishes_session_identity_as_it_arrives(tmp_path, monkeypatch):

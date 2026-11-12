@@ -21,6 +21,19 @@ Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_vo
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
 returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
+## Export visible project splats
+
+```sh
+LichtFeld-Studio licht scene.licht --export-ply visible.ply
+```
+
+Exports the visible splats using the same closed-project materialization as the
+Project Manager, including their world transforms. The source project remains
+unchanged and an existing destination is rejected. The command requires the
+full LichtFeld Studio I/O/GPU runtime; it does not open a GUI, run project scripts
+or start training. Other project content, including environment and cameras, is
+not included in the PLY.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a

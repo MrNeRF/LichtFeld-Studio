@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from typing import Iterator
 from _lfs_path_io import Path
 
 
@@ -83,3 +85,37 @@ def mkdir_private(path, *, parents=False, exist_ok=False) -> None:
     except FileExistsError:
         if not exist_ok or not path.is_dir():
             raise
+
+
+@contextmanager
+def locked_sidecar(path: Path, *, blocking: bool = True) -> Iterator[None]:
+    """Lock one same-user sidecar without keeping any in-memory registry."""
+    mkdir_private(path.parent, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)

@@ -10,12 +10,11 @@ import os
 import platform as platform_module
 import threading
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from _lfs_path_io import Path
-from typing import Callable, Iterator, Mapping, Optional
+from typing import Callable, Mapping, Optional
 
-from .private_directory import mkdir_private
+from .private_directory import mkdir_private, locked_sidecar as _locked_sidecar
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
@@ -239,39 +238,6 @@ def _retry_after_seconds(headers: object) -> Optional[float]:
     return retry_after(headers)
 
 
-@contextmanager
-def _locked_sidecar(path: Path, *, blocking: bool = True) -> Iterator[None]:
-    mkdir_private(path.parent, parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        if os.name == "nt":
-            import msvcrt
-
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-
-        try:
-            yield
-        finally:
-            if os.name == "nt":
-                import msvcrt
-
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
 class PortalAccountService:
     """Owns portal device linking, refresh, profile state, and sign-out."""
 
@@ -286,6 +252,10 @@ class PortalAccountService:
         timeout: float = HTTP_TIMEOUT_SEC,
         waiter: Optional[Callable[[float], bool]] = None,
         storage_backend=None,
+        open_browser=None,
+        dispatch=None,
+        publish_state=None,
+        user_agent=None,
     ) -> None:
         import urllib.parse
 
@@ -316,6 +286,10 @@ class PortalAccountService:
         self._client_version = client_version if client_version is not None else _default_client_version()
         self._platform = platform if platform is not None else platform_module.system()
         self._timeout = timeout
+        self._open_browser = open_browser
+        self._dispatch = dispatch
+        self._publish_state = publish_state
+        self.user_agent = user_agent or f"LichtFeld-Studio/{self._client_version}"
         self._test_waiter = waiter
 
         self._lock = threading.Lock()
@@ -370,8 +344,10 @@ class PortalAccountService:
             return False
         return True
 
-    @staticmethod
-    def _run_connection_action(callback):
+    def _run_connection_action(self, callback):
+        if self._dispatch is not None:
+            self._dispatch(callback)
+            return
         try:
             import lichtfeld as lf
             lf.ui.schedule_on_ui_thread(callback)
@@ -558,6 +534,10 @@ class PortalAccountService:
             self._publish_account_state()
 
     def _open_verification_in_browser(self, uri: str) -> None:
+        if self._open_browser is not None:
+            from .portal_security import portal_url
+            self._open_browser(portal_url(self.base_url, uri))
+            return
         def open_current():
             snapshot = self.snapshot()
             if not snapshot.linking or snapshot.verification_uri_complete != uri or self._cancel_event.is_set():
@@ -926,7 +906,7 @@ class PortalAccountService:
 
         if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
             raise PortalProtocolError("Invalid portal request path")
-        request_headers = {"Accept": "application/json", "User-Agent": f"LichtFeld-Studio/{self._client_version}"}
+        request_headers = {"Accept": "application/json", "User-Agent": self.user_agent}
         data = None
         if body is not None:
             request_headers["Content-Type"] = "application/json"
@@ -1237,6 +1217,9 @@ class PortalAccountService:
 
     def _publish_account_state(self) -> None:
         snapshot = self.snapshot()
+        if self._publish_state is not None:
+            self._publish_state(snapshot)
+            return
         try:
             from .ui.store import RuntimeState
 

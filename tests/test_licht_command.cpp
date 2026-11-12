@@ -20,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -403,6 +404,22 @@ namespace {
         const auto pruned = bytes(project);
         ASSERT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--prune-checkpoints"}), 0);
         EXPECT_EQ(bytes(project), pruned);
+    }
+
+    TEST(LichtCommand, ExportPlyValidatesDestinationAndDoesNotOverwrite) {
+        TemporaryDirectory temporary;
+        const auto project = make_checkpoint_project(temporary.path / "project.licht", {30000});
+        const auto destination = temporary.path / "existing.ply";
+        const auto mode = parse_licht({"LichtFeld-Studio", "licht", project.string(), "--export-ply", destination.string()});
+        ASSERT_TRUE(mode);
+        EXPECT_EQ(mode->action, lfs::core::args::LichtMode::Action::EXPORT_PLY);
+        EXPECT_EQ(mode->export_path, destination);
+        EXPECT_FALSE(parse_licht({"LichtFeld-Studio", "licht", project.string(), "--export-ply"}));
+        EXPECT_FALSE(parse_licht({"LichtFeld-Studio", "licht", project.string(), "--export-ply", "wrong.licht"}));
+        std::ofstream(destination) << "Keep this file";
+        EXPECT_EQ(lfs::app::run_licht_command(*mode), 1);
+        std::ifstream stream(destination);
+        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(stream), {}), "Keep this file");
     }
 
     TEST(LichtCommand, RemoveCheckpointsByIterationAndRejectsUnknownIterations) {

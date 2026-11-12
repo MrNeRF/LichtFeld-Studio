@@ -3030,10 +3030,12 @@ Evaluation options:
             "       LichtFeld-Studio licht <project.licht> --checkpoints\n"
             "       LichtFeld-Studio licht <project.licht> --prune-checkpoints [--keep N]\n"
             "       LichtFeld-Studio licht <project.licht> --remove-checkpoints <iteration>[,<iteration>...]\n"
+            "       LichtFeld-Studio licht <project.licht> --export-ply <output.ply>\n"
             "       LichtFeld-Studio licht --help\n"
             "\n"
             "  --embed [dataset]        Embed the referenced dataset, or the given dataset folder.\n"
             "  --checkpoints            List the training checkpoints stored in the project.\n"
+            "  --export-ply <path>       Export visible splats with their project transforms.\n"
             "  --prune-checkpoints      Remove every checkpoint except the one training resumes from;\n"
             "                           --keep N also keeps the N newest other checkpoints.\n"
             "  --remove-checkpoints     Remove the checkpoints saved at these iterations.\n";
@@ -3053,9 +3055,9 @@ Evaluation options:
             return invalid("Missing licht action.");
         }
         const std::string_view action = argv[3];
-        const auto max_arguments = action == "--embed" || action == "--remove-checkpoints" ? 5
-                                   : action == "--prune-checkpoints"                       ? 6
-                                                                                           : 4;
+        const auto max_arguments = action == "--embed" || action == "--remove-checkpoints" || action == "--export-ply" ? 5
+                                   : action == "--prune-checkpoints"                                                   ? 6
+                                                                                                                       : 4;
         if (argc > max_arguments) {
             return invalid("Unexpected argument: " + std::string(argv[max_arguments]));
         }
@@ -3067,7 +3069,16 @@ Evaluation options:
             return invalid("The .licht project file could not be found.");
         }
         core_args::LichtMode mode{.project_path = project};
-        if (action == "--embed") {
+        if (action == "--export-ply") {
+            if (argc != 5) {
+                return invalid("--export-ply needs an output .ply path.");
+            }
+            mode.export_path = lfs::core::utf8_to_path(argv[4]);
+            if (mode.export_path.extension() != ".ply") {
+                return invalid("The export path must have a .ply extension.");
+            }
+            mode.action = Action::EXPORT_PLY;
+        } else if (action == "--embed") {
             if (argc == 5) {
                 if (std::string_view(argv[4]).starts_with('-')) {
                     return invalid(std::format("Unknown licht argument: {}", argv[4]));
