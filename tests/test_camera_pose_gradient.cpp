@@ -35,8 +35,12 @@ namespace {
         return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
     }
 
-    // Eight splats of different size, orientation and view-dependent colour, about three units in front.
-    SplatData make_scene() {
+    // Splats of about one scene unit: no pixel of the image crosses the alpha cutoff when the camera moves.
+    constexpr float kWideSplats = 2.2f;
+
+    // Eight splats of different size, orientation and view-dependent colour, about three units in front, their
+    // log-scales raised by log_scale_offset.
+    SplatData make_scene(const float log_scale_offset = 0.0f) {
         constexpr size_t n = 8;
         std::mt19937 rng(7);
         std::uniform_real_distribution<float> u(-1.0f, 1.0f);
@@ -46,7 +50,8 @@ namespace {
             sh0.insert(sh0.end(), {u(rng), u(rng), u(rng)});
             for (int k = 0; k < 9; ++k)
                 shN.push_back(0.4f * u(rng));
-            scales.insert(scales.end(), {-2.2f + 0.4f * u(rng), -2.0f + 0.4f * u(rng), -2.6f + 0.3f * u(rng)});
+            scales.insert(scales.end(), {-2.2f + log_scale_offset + 0.4f * u(rng), -2.0f + log_scale_offset + 0.4f * u(rng),
+                                         -2.6f + log_scale_offset + 0.3f * u(rng)});
             rotations.insert(rotations.end(), {1.0f, 0.4f * u(rng), 0.4f * u(rng), 0.4f * u(rng)});
             opacities.push_back(0.5f + u(rng));
         }
@@ -106,8 +111,8 @@ namespace {
 
     // L(offset) = <image, image_w> + <normal, normal_w> rendered from compose(start, offset).
     double render_loss(const std::array<float, 6>& off, const std::vector<float>& image_w,
-                       const std::vector<float>& normal_w) {
-        auto model = make_scene();
+                       const std::vector<float>& normal_w, const float log_scale_offset) {
+        auto model = make_scene(log_scale_offset);
         auto camera = make_camera(offset_pose(off));
         auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
         const bool normals = !normal_w.empty();
@@ -123,7 +128,7 @@ namespace {
     }
 
     void expect_matches_finite_differences(const std::array<float, 6>& analytic, const std::vector<float>& image_w,
-                                           const std::vector<float>& normal_w) {
+                                           const std::vector<float>& normal_w, const float log_scale_offset = 0.0f) {
         constexpr float h = 1e-3f;
         std::array<double, 6> numeric{};
         double scale = 0.0;
@@ -131,7 +136,9 @@ namespace {
             std::array<float, 6> plus{}, minus{};
             plus[k] = h;
             minus[k] = -h;
-            numeric[k] = (render_loss(plus, image_w, normal_w) - render_loss(minus, image_w, normal_w)) / (2.0 * h);
+            numeric[k] = (render_loss(plus, image_w, normal_w, log_scale_offset) -
+                          render_loss(minus, image_w, normal_w, log_scale_offset)) /
+                         (2.0 * h);
             scale = std::max(scale, std::abs(numeric[k]));
         }
         ASSERT_GT(scale, 1e-3) << "the test scene must respond to the camera pose";
@@ -150,6 +157,22 @@ namespace {
         return out;
     }
 
+    // The offset gradient of <image, image_w> from fast_rasterize_camera_backward.
+    std::array<float, 6> frozen_image_gradient(SplatData& model, const std::vector<float>& image_w) {
+        auto camera = make_camera(start_pose());
+        auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
+        auto forward = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, false, true, 1.0f, false);
+        EXPECT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+        if (!forward)
+            return {};
+        auto grad_image = Tensor::from_vector(image_w, {size_t{3}, size_t{kHeight}, size_t{kWidth}}, Device::CUDA);
+        auto grad_w2c = Tensor::zeros({16}, Device::CUDA);
+        auto grad_cam_position = Tensor::zeros({3}, Device::CUDA);
+        fast_rasterize_camera_backward(forward->second, grad_image, model, grad_w2c.ptr<float>(),
+                                       grad_cam_position.ptr<float>());
+        return offset_gradient(grad_w2c, grad_cam_position);
+    }
+
 } // namespace
 
 TEST(CameraPoseGradientTest, FrozenImageGradientMatchesFiniteDifferences) {
@@ -159,28 +182,30 @@ TEST(CameraPoseGradientTest, FrozenImageGradientMatchesFiniteDifferences) {
     auto model = make_scene();
     const auto means_before = model.means().cpu().to_vector();
     const auto opacity_before = model.opacity_raw().cpu().to_vector();
-
-    auto camera = make_camera(start_pose());
-    auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
-    auto forward = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, false, true, 1.0f, false);
-    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
-    auto grad_image = Tensor::from_vector(image_w, {size_t{3}, size_t{kHeight}, size_t{kWidth}}, Device::CUDA);
-    auto grad_w2c = Tensor::zeros({16}, Device::CUDA);
-    auto grad_cam_position = Tensor::zeros({3}, Device::CUDA);
-    fast_rasterize_camera_backward(forward->second, grad_image, model, grad_w2c.ptr<float>(),
-                                   grad_cam_position.ptr<float>());
-    const auto analytic = offset_gradient(grad_w2c, grad_cam_position);
+    const auto analytic = frozen_image_gradient(model, image_w);
 
     EXPECT_EQ(model.means().cpu().to_vector(), means_before) << "the camera backward must not move the model";
     EXPECT_EQ(model.opacity_raw().cpu().to_vector(), opacity_before);
     expect_matches_finite_differences(analytic, image_w, {});
 }
 
+// The camera position enters only through the colours' view direction (grad_cam_position), and only the translation
+// moves it. With the small splats that term stays inside the tolerance; with wide splats no pixel crosses the alpha
+// cutoff, the finite differences agree to 1% of the largest component and leaving the term out fails.
+TEST(CameraPoseGradientTest, FrozenImageGradientOfWideSplatsMatchesFiniteDifferences) {
+    if (!cuda_available())
+        GTEST_SKIP() << "CUDA not available";
+    const auto image_w = weights();
+    auto model = make_scene(kWideSplats);
+    expect_matches_finite_differences(frozen_image_gradient(model, image_w), image_w, {}, kWideSplats);
+}
+
+// Wide splats here too: with the small ones the finite differences of the normals drift with the step size.
 TEST(CameraPoseGradientTest, TrainingBackwardNormalGradientMatchesFiniteDifferences) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
     const auto normal_w = weights();
-    auto model = make_scene();
+    auto model = make_scene(kWideSplats);
     auto camera = make_camera(start_pose());
     auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
     auto forward = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, true, true, 1.0f, false);
@@ -200,5 +225,5 @@ TEST(CameraPoseGradientTest, TrainingBackwardNormalGradientMatchesFiniteDifferen
                             DensificationType::None, 1, extra, {}, grad_normal);
     const auto analytic = offset_gradient(grad_w2c, grad_cam_position);
 
-    expect_matches_finite_differences(analytic, {}, normal_w);
+    expect_matches_finite_differences(analytic, {}, normal_w, kWideSplats);
 }

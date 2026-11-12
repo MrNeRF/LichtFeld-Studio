@@ -254,9 +254,7 @@ void fast_lfs::rasterization::backward(
             if (grad_w2c != nullptr) {
                 // The camera gradient is only instantiated in the runtime-generic kernel.
                 launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false, true>();
-            } else if (force_generic_preprocess_for_testing()) {
-                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false, false>();
-            } else if (disabled_features) {
+            } else if (disabled_features && !force_generic_preprocess_for_testing()) {
                 launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, true, false>();
             } else {
                 launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false, false>();

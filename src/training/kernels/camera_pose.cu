@@ -20,16 +20,10 @@ namespace lfs::training::kernels {
             float* cam_position,
             const CameraPoseAdamStep step) {
             const int row = step.row;
-            float start[16], off[6], g_w2c[16], g_c[3], grad[6];
-            for (int k = 0; k < 16; ++k) {
-                start[k] = w2c0[row * 16 + k];
-                g_w2c[k] = grad_w2c[k];
-            }
-            for (int k = 0; k < 6; ++k)
-                off[k] = offsets[row * 6 + k];
-            for (int k = 0; k < 3; ++k)
-                g_c[k] = grad_cam_position[k];
-            camera_pose::offset_grad(start, off, g_w2c, g_c, grad);
+            const float* start = w2c0 + row * 16;
+            float* off = offsets + row * 6;
+            float grad[6];
+            camera_pose::offset_grad(start, off, grad_w2c, grad_cam_position, grad);
 
             bool finite = true;
             for (int k = 0; k < 6; ++k)
@@ -46,16 +40,10 @@ namespace lfs::training::kernels {
                     adam_v[i] = v;
                     const float lr = k < 3 ? step.lr_rotation : step.lr_translation;
                     off[k] -= lr * (m / bias1) / (sqrtf(v / bias2) + step.eps);
-                    offsets[i] = off[k];
                 }
                 steps[row] = t;
             }
-            float refined[16], centre[3];
-            camera_pose::compose(start, off, refined, centre);
-            for (int k = 0; k < 16; ++k)
-                w2c[k] = refined[k];
-            for (int k = 0; k < 3; ++k)
-                cam_position[k] = centre[k];
+            camera_pose::compose(start, off, w2c, cam_position);
         }
     } // namespace
 
