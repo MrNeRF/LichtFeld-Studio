@@ -200,11 +200,12 @@ TEST(CameraPoseGradientTest, FrozenImageGradientOfWideSplatsMatchesFiniteDiffere
     expect_matches_finite_differences(frozen_image_gradient(model, image_w), image_w, {}, kWideSplats);
 }
 
+// Wide splats here too: with the small ones the finite differences of the normals drift with the step size.
 TEST(CameraPoseGradientTest, TrainingBackwardNormalGradientMatchesFiniteDifferences) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
     const auto normal_w = weights();
-    auto model = make_scene();
+    auto model = make_scene(kWideSplats);
     auto camera = make_camera(start_pose());
     auto bg = Tensor::full({3}, 0.3f, Device::CUDA);
     auto forward = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, true, true, 1.0f, false);
@@ -224,5 +225,5 @@ TEST(CameraPoseGradientTest, TrainingBackwardNormalGradientMatchesFiniteDifferen
                             DensificationType::None, 1, extra, {}, grad_normal);
     const auto analytic = offset_gradient(grad_w2c, grad_cam_position);
 
-    expect_matches_finite_differences(analytic, {}, normal_w);
+    expect_matches_finite_differences(analytic, {}, normal_w, kWideSplats);
 }
