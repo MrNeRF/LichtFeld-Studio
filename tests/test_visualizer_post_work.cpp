@@ -1641,7 +1641,14 @@ namespace lfs::vis {
         EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
     }
 
-    class CameraMaskApplyTest : public VisualizerImplResetTest {};
+    class CameraMaskApplyTest : public VisualizerImplResetTest {
+    protected:
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!core::gpu_backend_available(core::default_gpu_backend()))
+                GTEST_SKIP() << "Selected tensor backend unavailable";
+        }
+    };
 
     TEST_F(CameraMaskApplyTest, ApplyIsImageBoundUndoableAndRejectsInvalidReplacement) {
         io::CacheLoader::getInstance(false);

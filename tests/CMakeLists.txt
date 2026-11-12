@@ -704,14 +704,9 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     if(TARGET SDL3::SDL3-shared)
         target_link_libraries(lichtfeld_visualizer_tests PRIVATE SDL3::SDL3-shared)
     endif()
-    set(_camera_mask_gpu_filter CameraMaskApplyTest.UnsavedMaskSurvivesTrainingCompletionAndReopen)
-    if(LFS_HAS_CUDA)
-        # Camera construction and mask loading also allocate CUDA tensors.
-        set(_camera_mask_gpu_filter CameraMaskApplyTest.*)
-    endif()
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-${_camera_mask_gpu_filter}:CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CameraMaskApplyTest.UnsavedMaskSurvivesTrainingCompletionAndReopen:CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
@@ -723,7 +718,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     )
     if(LFS_HAS_CUDA)
         # This training/reopen path needs a real Vulkan window and CUDA interop.
-        add_test(NAME lichtfeld.camera_mask_training_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CameraMaskApplyTest.*)
+        add_test(NAME lichtfeld.camera_mask_training_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CameraMaskApplyTest.UnsavedMaskSurvivesTrainingCompletionAndReopen)
         set_tests_properties(lichtfeld.camera_mask_training_gpu PROPERTIES
             LABELS "gpu;interop;camera;training" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     endif()
