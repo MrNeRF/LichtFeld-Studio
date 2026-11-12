@@ -1792,10 +1792,7 @@ namespace lfs::training {
             }
             slots.clear();
             if (d2h_stream) {
-                LFS_CUDA_LOG_TEARDOWN(
-                    cudaStreamDestroy(d2h_stream),
-                    d2h_stream,
-                    "training snapshot D2H stream teardown");
+                LFS_CUDA_LOG_STREAM_DESTROY(d2h_stream, "training snapshot D2H stream teardown");
                 d2h_stream = nullptr;
             }
         }

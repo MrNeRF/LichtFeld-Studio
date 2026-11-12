@@ -156,7 +156,7 @@ namespace lfs::vis::gui {
                 if (stream) {
                     LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask retirement");
                     core::CudaMemoryPool::instance().release_stream(stream);
-                    LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(stream), stream, "assisted mask stream teardown");
+                    LFS_CUDA_LOG_STREAM_DESTROY(stream, "assisted mask stream teardown");
                     stream = nullptr;
                 }
             };

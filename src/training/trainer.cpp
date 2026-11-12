@@ -1108,8 +1108,7 @@ namespace lfs::training {
         }
         if (copy_stream) {
             lfs::core::CudaMemoryPool::instance().release_stream(copy_stream);
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(copy_stream), copy_stream,
-                                  "heatmap state teardown: destroy copy stream");
+            LFS_CUDA_LOG_STREAM_DESTROY(copy_stream, "heatmap state teardown: destroy copy stream");
         }
     }
 
@@ -2251,18 +2250,15 @@ namespace lfs::training {
             // Roll back every member handle published by this transaction.
             destroySyncPrimitives();
             if (metrics_stream_) {
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(metrics_stream_), metrics_stream_,
-                                      "rollback: destroy metrics stream");
+                LFS_CUDA_LOG_STREAM_DESTROY(metrics_stream_, "rollback: destroy metrics stream");
                 metrics_stream_ = nullptr;
             }
             if (training_stream_) {
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(training_stream_), training_stream_,
-                                      "rollback: destroy training stream");
+                LFS_CUDA_LOG_STREAM_DESTROY(training_stream_, "rollback: destroy training stream");
                 training_stream_ = nullptr;
             }
             if (callback_stream_) {
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(callback_stream_), callback_stream_,
-                                      "rollback: destroy callback stream");
+                LFS_CUDA_LOG_STREAM_DESTROY(callback_stream_, "rollback: destroy callback stream");
                 callback_stream_ = nullptr;
             }
             throw;
@@ -3806,22 +3802,19 @@ namespace lfs::training {
         setActiveImageLoader(nullptr);
 
         if (callback_stream_) {
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(callback_stream_), callback_stream_,
-                                  "shutdown: destroy callback stream");
+            LFS_CUDA_LOG_STREAM_DESTROY(callback_stream_, "shutdown: destroy callback stream");
             callback_stream_ = nullptr;
         }
         callback_busy_ = false;
 
         if (metrics_stream_) {
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(metrics_stream_), metrics_stream_,
-                                  "shutdown: destroy metrics stream");
+            LFS_CUDA_LOG_STREAM_DESTROY(metrics_stream_, "shutdown: destroy metrics stream");
             metrics_stream_ = nullptr;
         }
 
         if (training_stream_) {
             destroySyncPrimitives();
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(training_stream_), training_stream_,
-                                  "shutdown: destroy training stream");
+            LFS_CUDA_LOG_STREAM_DESTROY(training_stream_, "shutdown: destroy training stream");
             training_stream_ = nullptr;
         }
 
