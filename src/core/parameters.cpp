@@ -1085,6 +1085,8 @@ namespace lfs::core {
             if (gut && pose_opt)
                 return "pose_opt needs the standard rasterizer and cannot be combined with GUT "
                        "(train distorted cameras with --undistort instead)";
+            if (gut && mip_filter)
+                return "mip_filter needs the standard rasterizer and cannot be combined with GUT";
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
                 return "use_exposure_correction cannot be combined with use_bilateral_grid, "

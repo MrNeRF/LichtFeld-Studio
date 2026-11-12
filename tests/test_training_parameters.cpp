@@ -379,6 +379,19 @@ namespace {
         EXPECT_FALSE(OptimizationParameters::from_json(opted_out_json).use_exposure_correction);
     }
 
+    // Catches GUT training with the mip filter silently left out: the 3DGUT rasterizer has no screen-space
+    // low-pass, so the two settings are refused together and each is accepted alone.
+    TEST_F(TrainingParametersTest, MipFilterAndGutAreRefusedTogether) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.gut = false;
+        params.mip_filter = true;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.gut = true;
+        EXPECT_EQ(params.validate(), "mip_filter needs the standard rasterizer and cannot be combined with GUT");
+    }
+
     TEST_F(TrainingParametersTest, ResumeAcceptsAppliedSplatCompositionOnly) {
         lfs::core::param::TrainingParameters params;
         params.add_splat_paths = {"no-longer-required.ply"};

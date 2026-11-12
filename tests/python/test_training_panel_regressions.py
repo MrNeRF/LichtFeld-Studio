@@ -2835,3 +2835,39 @@ def test_distorted_images_skipped_if_already_undistorted_or_gut(training_panel_m
     panel._check_distortion_and_start()
     assert len(dialog_opened) == 0
     assert len(started) == 1
+
+
+# Catches Start with GUT and the mip filter on offering the igs+ strategy dialog, whose
+# choices leave the two settings in conflict.
+@pytest.mark.parametrize(("button", "gut", "mip_filter"), [
+    ("training.conflict.btn_disable_gut", False, True),
+    ("training.conflict.btn_disable_mip_filter", True, False),
+])
+def test_start_with_gut_and_mip_filter_offers_to_disable_either(
+    training_panel_module, monkeypatch, button, gut, mip_filter
+):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.gut = True
+    params.mip_filter = True
+    params.validate = lambda: "conflict" if params.gut and params.mip_filter else ""
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module, "_trainer_run_is_finished", lambda: False)
+    started = []
+    monkeypatch.setattr(panel, "_proceed_to_start", lambda: started.append(True))
+    dialogs = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args, **kwargs: dialogs.append(args))
+
+    panel._start_after_consent()
+
+    assert len(dialogs) == 1
+    _title, message, buttons, callback = dialogs[0]
+    assert message == "training.conflict.mip_gut_start_message"
+    assert buttons == ["training.conflict.btn_disable_gut", "training.conflict.btn_disable_mip_filter",
+                       "training.conflict.btn_cancel"]
+    callback("training.conflict.btn_cancel")
+    assert (params.gut, params.mip_filter, started) == (True, True, [])
+    callback(button)
+    assert (params.gut, params.mip_filter, started) == (gut, mip_filter, [True])

@@ -128,6 +128,29 @@ TEST(ArgumentParserTest, NoiseInfillMeshIsParsedAndMustExist) {
     std::filesystem::remove(mesh_path);
 }
 
+// Catches --gut --enable-mip training with the mip filter ignored instead of stopping with the reason.
+TEST(ArgumentParserTest, GutAndEnableMipAreRefusedTogether) {
+    const auto data_path = make_test_path("lfs_arg_parser_gut_mip_data");
+    const auto output_path = make_test_path("lfs_arg_parser_gut_mip_output");
+    const auto parse = [&](std::initializer_list<const char*> flags) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str()};
+        argv.insert(argv.end(), flags);
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+    const auto both = parse({"--gut", "--enable-mip"});
+    ASSERT_FALSE(both);
+    EXPECT_NE(both.error().find("mip_filter needs the standard rasterizer and cannot be combined with GUT"),
+              std::string::npos)
+        << both.error();
+    const auto gut = parse({"--gut"});
+    ASSERT_TRUE(gut) << gut.error();
+    EXPECT_TRUE((*gut)->optimization.gut);
+    const auto mip = parse({"--enable-mip"});
+    ASSERT_TRUE(mip) << mip.error();
+    EXPECT_TRUE((*mip)->optimization.mip_filter);
+}
+
 // Catches an evaluation that would run without the mesh the green infill needs and only warn at its end, or a stop whose
 // message does not name the flags to add.
 TEST(ArgumentParserTest, EvalGreenInfillWithoutAMeshStopsNamingTheFlagsToAdd) {

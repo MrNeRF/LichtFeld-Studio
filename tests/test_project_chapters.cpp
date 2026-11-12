@@ -546,6 +546,22 @@ namespace {
         EXPECT_FLOAT_EQ(restored->mrnf_session.grow_fraction, defaults.grow_fraction);
     }
 
+    // Catches a project saved with GUT and the mip filter both on, which are now refused together,
+    // becoming unopenable: GUT goes back to its default and the mip filter stays on.
+    TEST(ProjectChapterTest, PresetWithGutAndMipFilterOpensWithGutOff) {
+        ParametersChapter chapter;
+        ASSERT_TRUE(chapter.set_snapshot(parameter_snapshot()));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.gut", true));
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.mip_filter", true));
+
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        const auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored) << lfs::format_for_developer(restored.error());
+        EXPECT_FALSE(restored->mrnf_current.gut);
+        EXPECT_TRUE(restored->mrnf_current.mip_filter);
+    }
+
     TEST(ProjectChapterTest, PathReferenceMintAndResolveRoundTrip) {
         TemporaryDirectory temporary;
         const fs::path project_root = temporary.path / "project";

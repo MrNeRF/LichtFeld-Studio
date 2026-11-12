@@ -676,6 +676,8 @@
     "conflict.strategy_gut_strategy_message": "Deze strategie is niet compatibel met GUT. GUT uitschakelen om te wisselen?",
     "conflict.btn_use_mcmc": "MCMC gebruiken",
     "conflict.btn_disable_gut": "GUT uitschakelen",
+    "conflict.btn_disable_mip_filter": "Mip-filter uitschakelen",
+    "conflict.mip_gut_start_message": "Het Mip-filter vereist de standaard rasterizer en kan niet met GUT worden gecombineerd. Kies een actie om de training te starten.",
     "conflict.btn_cancel": "Annuleren",
     "save_pc.title": "Gewijzigde puntenwolk",
     "save_pc.message": "De puntenwolk is gewijzigd. Opslaan in de datasetmap voor toekomstige sessies?",

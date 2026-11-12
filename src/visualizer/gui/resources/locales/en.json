@@ -685,6 +685,8 @@
     "conflict.strategy_gut_strategy_message": "This strategy is incompatible with GUT. Disable GUT to switch?",
     "conflict.btn_use_mcmc": "Use MCMC",
     "conflict.btn_disable_gut": "Disable GUT",
+    "conflict.btn_disable_mip_filter": "Disable Mip Filter",
+    "conflict.mip_gut_start_message": "The mip filter needs the standard rasterizer and cannot be combined with GUT. Choose an action to start training.",
     "conflict.btn_cancel": "Cancel",
     "save_pc.title": "Modified Point Cloud",
     "save_pc.message": "The point cloud has been modified. Save to the dataset folder for future sessions?",
