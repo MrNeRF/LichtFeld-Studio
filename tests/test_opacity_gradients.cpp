@@ -220,4 +220,21 @@ namespace {
         EXPECT_GT(numeric, 0.0);
         EXPECT_NEAR(analytic, numeric, 1e-2 * numeric);
     }
+
+    // The forward scales the dilation by dilation_scale; the backward must use the same kernel for the conic and
+    // the mip filter's compensation.
+    TEST_F(OpacityGradientTest, FastGsBackwardHonoursDilationScale) {
+        auto camera = make_camera();
+        for (const bool mip_filter : {false, true}) {
+            SCOPED_TRACE(mip_filter);
+            auto model = make_splat(1.f);
+            // The compensation is constant in the backward, so the mip filter is checked through the opacity.
+            auto& param = mip_filter ? model->opacity_raw() : model->scaling_raw();
+            const auto [analytic, numeric] = fastgs_gradient(
+                camera, *model, mip_filter, 4.f, mip_filter ? ParamType::Opacity : ParamType::Scaling, param, 1e-3f);
+            RecordProperty(mip_filter ? "mip_analytic" : "plain_analytic", std::format("{:.9e}", analytic));
+            RecordProperty(mip_filter ? "mip_numeric" : "plain_numeric", std::format("{:.9e}", numeric));
+            EXPECT_NEAR(analytic, numeric, (mip_filter ? 1e-3 : 2e-2) * std::abs(numeric));
+        }
+    }
 } // namespace

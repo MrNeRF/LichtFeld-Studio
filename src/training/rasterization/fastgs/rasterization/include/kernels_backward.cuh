@@ -72,6 +72,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_right,
         const float clip_top,
         const float clip_bottom,
+        const float dilation_scale,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
@@ -364,7 +365,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
             // 2d covariance gradient (use same dilation as forward pass)
-            constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
+            const float kernel_size = (MIP_FILTER ? config::dilation_mip_filter : config::dilation) * dilation_scale;
             const float raw_a = dot(jwc_r1, jw_r1);
             const float raw_b = dot(jwc_r1, jw_r2);
             const float raw_c = dot(jwc_r2, jw_r2);

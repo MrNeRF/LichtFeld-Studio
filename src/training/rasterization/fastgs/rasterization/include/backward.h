@@ -61,6 +61,7 @@ namespace fast_lfs::rasterization {
         const float cx,
         const float cy,
         bool mip_filter,
+        float dilation_scale,
         DensificationType densification_type,
         FusedAdamSettings fused_adam,
         // model-truth shN-rest decode binds (fused Adam's copy is
