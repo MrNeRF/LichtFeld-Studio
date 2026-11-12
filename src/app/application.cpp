@@ -280,6 +280,16 @@ namespace lfs::app {
             io::project::adopt_project_training_parameters(
                 params, std::move(*snapshot), std::move(*dataset_root),
                 std::move(images_folder), document->references(), path.parent_path());
+            // The dataset load disables these cameras again, matched by uid
+            // as for a checkpoint's disabled cameras.
+            auto disabled = io::project::disabled_camera_uids(document->scene_graph());
+            if (!disabled) {
+                return lfs::Status::failure(
+                    std::move(disabled).error().with_context(
+                        "read training project cameras",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+            params.disabled_camera_uids = std::move(*disabled);
             // dataset_project stays set: it is the save destination unless
             // -o redirects the result, exactly like --resume.
             LOG_INFO(
