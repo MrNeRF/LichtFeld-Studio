@@ -39,6 +39,7 @@ namespace gsplat_lfs {
         float* depths,        // [C, N]
         float* conics,        // [C, N, 3]
         float* compensations, // [C, N] optional (can be nullptr)
+        float* dilations,     // [C, N] optional (can be nullptr)
         cudaStream_t stream = nullptr);
 
 } // namespace gsplat_lfs

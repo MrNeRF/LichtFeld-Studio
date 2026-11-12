@@ -26,6 +26,8 @@ namespace gsplat_lfs {
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
+        const float* compensations,
+        const float* dilations,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -61,7 +63,8 @@ namespace gsplat_lfs {
     case CDIM:                                                       \
         launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM>( \
             means, quats, scales, colors, opacities,                 \
-            backgrounds, bg_images, masks, C, N, n_isects,           \
+            backgrounds, bg_images, masks, compensations, dilations, \
+            C, N, n_isects,                                          \
             image_width, image_height, tile_size,                    \
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
@@ -110,6 +113,8 @@ namespace gsplat_lfs {
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
+        const float* compensations,
+        const float* dilations,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -163,7 +168,8 @@ namespace gsplat_lfs {
     case CDIM:                                                       \
         launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM>( \
             means, quats, scales, colors, opacities,                 \
-            backgrounds, bg_images, masks, C, N, n_isects,           \
+            backgrounds, bg_images, masks, compensations, dilations, \
+            C, N, n_isects,                                          \
             image_width, image_height, tile_size,                    \
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
@@ -278,7 +284,7 @@ namespace gsplat_lfs {
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             result.radii, result.means2d, result.depths, result.conics,
-            result.compensations, stream);
+            result.compensations, result.dilations, stream);
 
         // The first call retains the existing speculative warm-cache path.
         auto intersect = [&](TileRange tiles) {
@@ -313,7 +319,7 @@ namespace gsplat_lfs {
             const uint32_t raster_n_isects = static_cast<uint32_t>(batch.n_sort);
             rasterize_to_pixels_from_world_3dgs_fwd(
                 means, quats, scaled_scales, result.colors, opacities,
-                render_backgrounds, render_bg_images, masks,
+                render_backgrounds, render_bg_images, masks, result.compensations, result.dilations,
                 C, N, raster_n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,
@@ -401,6 +407,7 @@ namespace gsplat_lfs {
         const float* means2d,
         const float* depths,
         const float* compensations,
+        const float* dilations,
         const float* v_render_colors,
         const float* v_render_alphas,
         float* v_means,
@@ -446,7 +453,7 @@ namespace gsplat_lfs {
         auto render_backward = [&](TileRange tiles) {
             rasterize_to_pixels_from_world_3dgs_bwd(
                 means, quats, scales, colors, opacities,
-                render_backgrounds, render_bg_images, masks,
+                render_backgrounds, render_bg_images, masks, compensations, dilations,
                 C, N, n_isects, channels,
                 image_width, image_height, tile_size,
                 viewmats0, viewmats1, Ks, camera_model,

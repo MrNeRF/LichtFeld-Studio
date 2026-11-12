@@ -51,6 +51,8 @@ namespace fast_lfs::rasterization {
         int n_instances = 0;
         int n_visible = 0;
         int sh_layout_bases = 1;
+        // The forward's dilation factor; the backward differentiates the same kernel.
+        float dilation_scale = 1.0f;
         uint64_t frame_id = 0;
         // The stream all of this context's kernels/allocations are ordered on;
         // releases (sorted indices, arena frame, helper buffers) must use it.

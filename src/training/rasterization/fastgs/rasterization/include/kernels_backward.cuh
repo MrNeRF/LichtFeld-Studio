@@ -73,6 +73,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_right,
         const float clip_top,
         const float clip_bottom,
+        const float dilation_scale,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
@@ -365,7 +366,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
             // 2d covariance gradient (use same dilation as forward pass)
-            constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
+            const float kernel_size = (MIP_FILTER ? config::dilation_mip_filter : config::dilation) * dilation_scale;
             const float raw_a = dot(jwc_r1, jw_r1);
             const float raw_b = dot(jwc_r1, jw_r2);
             const float raw_c = dot(jwc_r2, jw_r2);
@@ -385,12 +386,10 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float grad_compensated_opacity = grad_opacity_helper[work_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
-                const float det_raw = raw_a * raw_c - raw_b * raw_b;
-                if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                    opacity_compensation = sqrtf(det_raw * determinant_rcp);
-                } else {
-                    opacity_compensation = 0.0f;
-                }
+                // The forward's factor: it keeps every splat with det >= min_cov2d_determinant.
+                // It scales the opacity gradient only and stays detached from the covariance: feeding this
+                // determinant ratio into the scale and rotation gradients creates long splats.
+                opacity_compensation = sqrtf(fmaxf(raw_a * raw_c - raw_b * raw_b, 0.0f) * determinant_rcp);
             }
 
             const float sigmoid_derivative = lfs::core::sigmoid_derivative_from_logit(raw_opacities[primitive_idx]);

@@ -389,6 +389,7 @@ namespace fast_lfs::rasterization {
             ctx.n_instances = forward_result.n_instances;
             ctx.n_visible = forward_result.n_visible;
             ctx.sh_layout_bases = sh_layout_bases;
+            ctx.dilation_scale = dilation_scale;
             ctx.frame_id = frame_id;
             ctx.stream = stream;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
@@ -705,6 +706,7 @@ namespace fast_lfs::rasterization {
                 center_x,
                 center_y,
                 mip_filter,
+                forward_ctx.dilation_scale,
                 densification_type,
                 *fused_adam,
                 reinterpret_cast<const float2*>(shN_value_bounds_ptr),

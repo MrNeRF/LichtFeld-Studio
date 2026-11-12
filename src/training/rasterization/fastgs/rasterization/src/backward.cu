@@ -72,6 +72,7 @@ void fast_lfs::rasterization::backward(
     const float cx,
     const float cy,
     bool mip_filter,
+    float dilation_scale,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
     // model-truth shN-rest decode binds (independent of fused Adam
@@ -229,6 +230,7 @@ void fast_lfs::rasterization::backward(
                 clip_right,
                 clip_top,
                 clip_bottom,
+                dilation_scale,
                 sh_layout_slots,
                 fused_adam,
                 shN_value_bounds,
