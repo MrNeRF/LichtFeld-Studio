@@ -102,9 +102,9 @@ namespace {
         scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f)));
 
         lfs::core::RegionOfInterestData roi;
-        roi.min = cropbox.min;
-        roi.max = cropbox.max;
-        roi.inverse = inverse;
+        roi.box().min = cropbox.min;
+        roi.box().max = cropbox.max;
+        roi.setInverse(inverse);
         roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
         EXPECT_TRUE(scene.setRegionOfInterestData(model_id, roi));
 
@@ -152,12 +152,8 @@ namespace {
         lfs::core::param::TrainingParameters params;
         params.cropbox = box;
         params.cropbox_rotation = rotation;
-        params.roi = box;
-        params.roi_rotation = rotation;
         const auto applied = lfs::training::applyTrainingCropBox(params, scene);
         EXPECT_TRUE(applied) << (applied ? std::string_view{} : applied.error().user_message());
-        const auto roi_applied = lfs::training::applyTrainingRoi(params, scene);
-        EXPECT_TRUE(roi_applied) << (roi_applied ? std::string_view{} : roi_applied.error().user_message());
         return model_ptr;
     }
 
@@ -292,7 +288,7 @@ TEST(TrainingCropBoxMask, DisabledCropBoxReturnsNulloptWithoutMutation) {
     auto* const model = add_training_model_with_translated_cropbox(scene, false);
     const auto* const node = scene.getNode("Model");
     auto roi = *scene.getRegionOfInterestData(node->id);
-    roi.enabled = false;
+    roi.setEnabled(false);
     ASSERT_TRUE(scene.setRegionOfInterestData(node->id, roi));
     const auto before = snapshot_cropbox_scene(scene, *model);
 
@@ -416,8 +412,8 @@ TEST(TrainingCropBoxMask, TrainingModelTransformIsComposedBeforeChildCropBox) {
         "Model_cropbox",
         glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)));
     lfs::core::RegionOfInterestData roi;
-    roi.min = cropbox.min;
-    roi.max = cropbox.max;
+    roi.box().min = cropbox.min;
+    roi.box().max = cropbox.max;
     roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
     ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
 
@@ -599,14 +595,15 @@ TEST(TrainingCropBoxMask, CliCropBoxWithoutRotationKeepsTheCornersUnrotated) {
     add_training_model_with_cli_cropbox(scene, {0.0f, 0.0f, 0.0f}, {-1.0f, -2.0f, -3.0f, 4.0f, 5.0f, 6.0f},
                                         std::nullopt);
 
-    const lfs::core::NodeId cropbox_id = cropbox_id_for_model(scene);
-    const auto* const cropbox = scene.getCropBoxData(cropbox_id);
-    ASSERT_NE(cropbox, nullptr);
-    expect_vec3_eq(cropbox->min, {-1.0f, -2.0f, -3.0f});
-    expect_vec3_eq(cropbox->max, {4.0f, 5.0f, 6.0f});
-    EXPECT_TRUE(cropbox->enabled);
-    EXPECT_FALSE(cropbox->inverse);
-    expect_mat4_eq(scene.getNodeTransform(cropbox_id), glm::mat4(1.0f));
+    const auto* const model_node = scene.getNode("Model");
+    ASSERT_NE(model_node, nullptr);
+    const auto* const roi = scene.getRegionOfInterestData(model_node->id);
+    ASSERT_NE(roi, nullptr);
+    expect_vec3_eq(roi->box().min, {-1.0f, -2.0f, -3.0f});
+    expect_vec3_eq(roi->box().max, {4.0f, 5.0f, 6.0f});
+    EXPECT_TRUE(roi->enabled());
+    EXPECT_FALSE(roi->inverse());
+    expect_mat4_eq(roi->local_transform, glm::mat4(1.0f));
 }
 
 // Catches the rotation being ignored, turning the box about a corner or the origin instead of its centre,
@@ -657,8 +654,11 @@ TEST(TrainingCropBoxMask, CliCropBoxRotationRoundTripsThroughTheProject) {
     lfs::core::Scene scene;
     add_training_model_with_cli_cropbox(scene, {10.0f, 1.5f, 2.5f}, {7.0f, 1.0f, 2.0f, 13.0f, 2.0f, 3.0f},
                                         std::array<float, 3>{25.0f, -40.0f, 70.0f});
-    const lfs::core::NodeId cropbox_id = cropbox_id_for_model(scene);
-    const glm::mat4 transform = scene.getNodeTransform(cropbox_id);
+    const auto* const model_node = scene.getNode("Model");
+    ASSERT_NE(model_node, nullptr);
+    const auto* const roi = scene.getRegionOfInterestData(model_node->id);
+    ASSERT_NE(roi, nullptr);
+    const glm::mat4 transform = roi->local_transform;
     const glm::mat4 expected =
         glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 1.5f, 2.5f)) *
         glm::rotate(glm::mat4(1.0f), glm::radians(25.0f), glm::vec3(1.0f, 0.0f, 0.0f)) *
@@ -669,8 +669,6 @@ TEST(TrainingCropBoxMask, CliCropBoxRotationRoundTripsThroughTheProject) {
             EXPECT_NEAR(transform[col][row], expected[col][row], 1e-6f) << "at column " << col << ", row " << row;
     }
 
-    const auto* const model_node = scene.getNode("Model");
-    ASSERT_NE(model_node, nullptr);
     const lfs::io::project::ScenePayloadBindings bindings{
         {model_node->uuid, PayloadBinding{.fourcc = "CKPT",
                                           .instance_uuid = *lfs::core::Uuid::from_string(
@@ -689,21 +687,23 @@ TEST(TrainingCropBoxMask, CliCropBoxRotationRoundTripsThroughTheProject) {
     const auto hydrated = lfs::io::project::hydrate_scene_graph(*decoded, restored, resolver);
     ASSERT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
 
-    const lfs::core::NodeId restored_id = cropbox_id_for_model(restored);
-    const auto* const restored_cropbox = restored.getCropBoxData(restored_id);
-    ASSERT_NE(restored_cropbox, nullptr);
-    const glm::mat4 restored_transform = restored.getNodeTransform(restored_id);
+    const auto* const restored_model = restored.getNode("Model");
+    ASSERT_NE(restored_model, nullptr);
+    const auto* const restored_roi = restored.getRegionOfInterestData(restored_model->id);
+    ASSERT_NE(restored_roi, nullptr);
+    const glm::mat4 restored_transform = restored_roi->local_transform;
     for (int col = 0; col < 4; ++col) {
         for (int row = 0; row < 4; ++row)
             EXPECT_EQ(restored_transform[col][row], transform[col][row]) << "at column " << col << ", row " << row;
     }
-    expect_vec3_eq(restored_cropbox->min, {-3.0f, -0.5f, -0.5f});
-    expect_vec3_eq(restored_cropbox->max, {3.0f, 0.5f, 0.5f});
-    EXPECT_TRUE(restored_cropbox->enabled);
-    EXPECT_FALSE(restored_cropbox->inverse);
+    expect_vec3_eq(restored_roi->box().min, {-3.0f, -0.5f, -0.5f});
+    expect_vec3_eq(restored_roi->box().max, {3.0f, 0.5f, 0.5f});
+    EXPECT_TRUE(restored_roi->enabled());
+    EXPECT_FALSE(restored_roi->inverse());
 
     const glm::mat4 local = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
-    const glm::mat4 world = lfs::vis::scene_coords::nodeVisualizerWorldTransform(restored, restored_id);
+    const glm::mat4 world = lfs::rendering::dataWorldTransformToVisualizerWorld(
+        restored.getWorldTransform(restored_model->id) * restored_transform);
     for (const glm::mat4& panel : {local, world}) {
         const auto components = lfs::vis::cap::decomposeTransform(panel);
         const glm::mat3 shown = glm::mat3(
@@ -746,10 +746,13 @@ namespace {
                                        glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f))),
                   lfs::core::NULL_NODE);
         lfs::core::RegionOfInterestData roi;
-        roi.shape = lfs::core::RegionOfInterestShape::Polygon;
-        roi.vertices = kLOutline;
-        roi.half_depth = 0.5f;
-        roi.inverse = inverse;
+        roi.shape_data = lfs::core::CropPolygonData{
+            .vertices = kLOutline,
+            .half_depth = 0.5f,
+            .inverse = inverse,
+            .enabled = true,
+            .color = lfs::core::kDefaultRoiColor,
+        };
         roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
         EXPECT_TRUE(scene.setRegionOfInterestData(model_id, roi));
         return model_ptr;
@@ -785,7 +788,7 @@ TEST(TrainingCropBoxMask, CropPolygonRemovesRowsOutsideTheConcaveOutlineAndSlab)
     add_training_model_with_l_crop_polygon(disabled, false);
     const auto* const model_node = disabled.getNode("Model");
     auto data = *disabled.getRegionOfInterestData(model_node->id);
-    data.enabled = false;
+    data.setEnabled(false);
     ASSERT_TRUE(disabled.setRegionOfInterestData(model_node->id, data));
     EXPECT_FALSE(lfs::training::resolve_training_cropbox_geom(disabled).has_value());
 }
@@ -823,16 +826,19 @@ TEST(TrainingCropBoxMask, LegacyCropHelperDoesNotDefineTheTrainingRoi) {
     EXPECT_FALSE(lfs::training::resolve_training_cropbox_geom(scene).has_value());
 
     lfs::core::RegionOfInterestData roi;
-    roi.shape = lfs::core::RegionOfInterestShape::Ellipsoid;
-    roi.radii = {2.0f, 3.0f, 4.0f};
-    roi.inverse = true;
+    roi.shape_data = lfs::core::EllipsoidData{
+        .radii = {2.0f, 3.0f, 4.0f},
+        .inverse = true,
+        .enabled = true,
+        .color = lfs::core::kDefaultRoiColor,
+    };
     ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
 
     const auto geometry = lfs::training::resolve_training_cropbox_geom(scene);
     ASSERT_TRUE(geometry.has_value());
     EXPECT_TRUE(geometry->is_ellipsoid());
     EXPECT_TRUE(geometry->inverse);
-    expect_vec3_eq(geometry->ellipsoid_radii, roi.radii);
+    expect_vec3_eq(geometry->ellipsoid_radii, roi.ellipsoid().radii);
 }
 
 TEST(TrainingCropBoxMask, EllipsoidRoiRemovesRowsOutsideAndSupportsInversion) {
@@ -849,9 +855,12 @@ TEST(TrainingCropBoxMask, EllipsoidRoiRemovesRowsOutsideAndSupportsInversion) {
         scene.setTrainingModelNode("Model");
 
         lfs::core::RegionOfInterestData roi;
-        roi.shape = lfs::core::RegionOfInterestShape::Ellipsoid;
-        roi.radii = {2.0f, 1.0f, 3.0f};
-        roi.inverse = inverse;
+        roi.shape_data = lfs::core::EllipsoidData{
+            .radii = {2.0f, 1.0f, 3.0f},
+            .inverse = inverse,
+            .enabled = true,
+            .color = lfs::core::kDefaultRoiColor,
+        };
         roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
         ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
 
@@ -887,9 +896,8 @@ TEST(TrainingCropBoxMask, PointCloudRoiTransfersToModelAndSeedCropPreservesScene
     ASSERT_NE(pc_id, lfs::core::NULL_NODE);
 
     lfs::core::RegionOfInterestData roi;
-    roi.shape = lfs::core::RegionOfInterestShape::Box;
-    roi.min = {-1.0f, -1.0f, -1.0f};
-    roi.max = {1.0f, 1.0f, 1.0f};
+    roi.box().min = {-1.0f, -1.0f, -1.0f};
+    roi.box().max = {1.0f, 1.0f, 1.0f};
     roi.crop_point_cloud_before_training = true;
     roi.crop_model_after_training = true;
     ASSERT_TRUE(scene.setRegionOfInterestData(pc_id, roi));
@@ -914,8 +922,8 @@ TEST(TrainingCropBoxMask, PointCloudRoiTransfersToModelAndSeedCropPreservesScene
     ASSERT_NE(transferred_roi, nullptr);
     EXPECT_TRUE(transferred_roi->crop_point_cloud_before_training);
     EXPECT_TRUE(transferred_roi->crop_model_after_training);
-    expect_vec3_eq(transferred_roi->min, roi.min);
-    expect_vec3_eq(transferred_roi->max, roi.max);
+    expect_vec3_eq(transferred_roi->box().min, roi.box().min);
+    expect_vec3_eq(transferred_roi->box().max, roi.box().max);
 }
 
 TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShapeWithoutOverwritingExisting) {
@@ -927,13 +935,30 @@ TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShap
         scene.setTrainingModelNode("Model");
 
         lfs::core::RegionOfInterestData roi;
-        roi.shape = shape;
-        roi.min = {-2.0f, -3.0f, -4.0f};
-        roi.max = {2.0f, 3.0f, 4.0f};
-        roi.radii = {2.0f, 3.0f, 4.0f};
-        roi.vertices = kLOutline;
-        roi.half_depth = 1.5f;
-        roi.inverse = true;
+        if (shape == lfs::core::RegionOfInterestShape::Box) {
+            roi.shape_data = lfs::core::CropBoxData{
+                .min = {-2.0f, -3.0f, -4.0f},
+                .max = {2.0f, 3.0f, 4.0f},
+                .inverse = true,
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        } else if (shape == lfs::core::RegionOfInterestShape::Ellipsoid) {
+            roi.shape_data = lfs::core::EllipsoidData{
+                .radii = {2.0f, 3.0f, 4.0f},
+                .inverse = true,
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        } else {
+            roi.shape_data = lfs::core::CropPolygonData{
+                .vertices = kLOutline,
+                .half_depth = 1.5f,
+                .inverse = true,
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        }
         roi.crop_model_after_training = false;
         roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
         ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
@@ -947,8 +972,8 @@ TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShap
             ASSERT_NE(data, nullptr);
             EXPECT_FALSE(data->enabled);
             EXPECT_TRUE(data->inverse);
-            expect_vec3_eq(data->min, roi.min);
-            expect_vec3_eq(data->max, roi.max);
+            expect_vec3_eq(data->min, roi.box().min);
+            expect_vec3_eq(data->max, roi.box().max);
             expect_mat4_eq(scene.getNodeTransform(id), roi.local_transform);
         } else if (shape == lfs::core::RegionOfInterestShape::Ellipsoid) {
             const auto id = scene.getEllipsoidForSplat(model_id);
@@ -957,7 +982,7 @@ TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShap
             ASSERT_NE(data, nullptr);
             EXPECT_FALSE(data->enabled);
             EXPECT_TRUE(data->inverse);
-            expect_vec3_eq(data->radii, roi.radii);
+            expect_vec3_eq(data->radii, roi.ellipsoid().radii);
             expect_mat4_eq(scene.getNodeTransform(id), roi.local_transform);
         } else {
             const auto id = scene.getCropPolygonForSplat(model_id);
@@ -966,8 +991,8 @@ TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShap
             ASSERT_NE(data, nullptr);
             EXPECT_FALSE(data->enabled);
             EXPECT_TRUE(data->inverse);
-            EXPECT_EQ(data->vertices, roi.vertices);
-            EXPECT_FLOAT_EQ(data->half_depth, roi.half_depth);
+            EXPECT_EQ(data->vertices, roi.polygon().vertices);
+            EXPECT_FLOAT_EQ(data->half_depth, roi.polygon().half_depth);
             expect_mat4_eq(scene.getNodeTransform(id), roi.local_transform);
         }
     }
@@ -984,8 +1009,8 @@ TEST(TrainingCropBoxMask, ManualCropFallbackCreatesDisabledCropHelperForEachShap
     existing_scene.setCropBoxData(existing_crop_id, existing_crop);
 
     lfs::core::RegionOfInterestData roi;
-    roi.min = {-1.0f, -1.0f, -1.0f};
-    roi.max = {1.0f, 1.0f, 1.0f};
+    roi.box().min = {-1.0f, -1.0f, -1.0f};
+    roi.box().max = {1.0f, 1.0f, 1.0f};
     roi.crop_model_after_training = false;
     ASSERT_TRUE(existing_scene.setRegionOfInterestData(model_id, roi));
 
@@ -1027,12 +1052,27 @@ TEST(TrainingCropBoxMask, RelevantCameraSelectionSupportsAllShapesInversionAndZe
         const auto back_id = scene.addCamera("back", group_id, make_pinhole_camera("back", {0.0f, 0.0f, 10.0f}, 1));
 
         lfs::core::RegionOfInterestData roi;
-        roi.shape = shape;
-        roi.min = {-1.5f, -1.5f, -0.5f};
-        roi.max = {1.5f, 1.5f, 0.5f};
-        roi.radii = {1.5f, 1.5f, 0.5f};
-        roi.vertices = {{-1.5f, -1.5f}, {1.5f, -1.5f}, {1.5f, 1.5f}, {-1.5f, 1.5f}};
-        roi.half_depth = 0.5f;
+        if (shape == lfs::core::RegionOfInterestShape::Box) {
+            roi.shape_data = lfs::core::CropBoxData{
+                .min = {-1.5f, -1.5f, -0.5f},
+                .max = {1.5f, 1.5f, 0.5f},
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        } else if (shape == lfs::core::RegionOfInterestShape::Ellipsoid) {
+            roi.shape_data = lfs::core::EllipsoidData{
+                .radii = {1.5f, 1.5f, 0.5f},
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        } else {
+            roi.shape_data = lfs::core::CropPolygonData{
+                .vertices = {{-1.5f, -1.5f}, {1.5f, -1.5f}, {1.5f, 1.5f}, {-1.5f, 1.5f}},
+                .half_depth = 0.5f,
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+        }
         roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f));
         roi.select_relevant_cameras = true;
         roi.camera_coverage_percent = 10.0f;
@@ -1043,7 +1083,7 @@ TEST(TrainingCropBoxMask, RelevantCameraSelectionSupportsAllShapesInversionAndZe
         EXPECT_FALSE(scene.getNodeById(back_id)->training_enabled);
 
         // Inverted ROI measures retained area outside the ROI: back_cam has 100% outside, front_cam has < 50%.
-        roi.inverse = true;
+        roi.setInverse(true);
         roi.camera_coverage_percent = 80.0f;
         ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
         EXPECT_TRUE(lfs::training::select_relevant_roi_cameras(scene));
@@ -1051,42 +1091,12 @@ TEST(TrainingCropBoxMask, RelevantCameraSelectionSupportsAllShapesInversionAndZe
         EXPECT_TRUE(scene.getNodeById(back_id)->training_enabled);
 
         // Atomic preservation when no camera reaches the threshold: existing flags stay untouched.
-        roi.inverse = false;
+        roi.setInverse(false);
         roi.camera_coverage_percent = 99.9f;
         ASSERT_TRUE(scene.setRegionOfInterestData(model_id, roi));
         EXPECT_FALSE(lfs::training::select_relevant_roi_cameras(scene));
         EXPECT_FALSE(scene.getNodeById(front_id)->training_enabled);
         EXPECT_TRUE(scene.getNodeById(back_id)->training_enabled);
-    }
-}
-
-TEST(TrainingCropBoxMask, EvaluationRoiMeshSupportsBoxEllipsoidAndPolygonWithInversion) {
-    for (const bool inverse : {false, true}) {
-        lfs::training::TrainingCropBoxGeometry box{
-            .min = {-1.0f, -1.0f, -1.0f},
-            .max = {1.0f, 1.0f, 1.0f},
-            .world_to_cropbox = glm::mat4(1.0f),
-            .model_to_cropbox = glm::mat4(1.0f),
-            .inverse = inverse};
-        const auto box_mesh = lfs::training::make_evaluation_roi_mesh(box);
-        EXPECT_EQ(box_mesh.vertices.shape()[0], 8);
-        EXPECT_EQ(box_mesh.indices.shape()[0], 12);
-        EXPECT_EQ(box_mesh.invert, inverse);
-
-        lfs::training::TrainingCropBoxGeometry ellipsoid = box;
-        ellipsoid.ellipsoid = true;
-        ellipsoid.ellipsoid_radii = {1.0f, 2.0f, 3.0f};
-        const auto ellipsoid_mesh = lfs::training::make_evaluation_roi_mesh(ellipsoid);
-        EXPECT_GT(ellipsoid_mesh.vertices.shape()[0], 8);
-        EXPECT_GT(ellipsoid_mesh.indices.shape()[0], 12);
-        EXPECT_EQ(ellipsoid_mesh.invert, inverse);
-
-        lfs::training::TrainingCropBoxGeometry polygon = box;
-        polygon.polygon = kLOutline;
-        const auto polygon_mesh = lfs::training::make_evaluation_roi_mesh(polygon);
-        EXPECT_EQ(polygon_mesh.vertices.shape()[0], kLOutline.size() * 2);
-        EXPECT_EQ(polygon_mesh.indices.shape()[0], (kLOutline.size() - 2) * 2 + kLOutline.size() * 2);
-        EXPECT_EQ(polygon_mesh.invert, inverse);
     }
 }
 
@@ -1104,10 +1114,13 @@ TEST(TrainingCropBoxMask, RoiAndCropRoundTripIndependentlyThroughProjectSerializ
     scene.setCropBoxData(crop_id, crop);
 
     lfs::core::RegionOfInterestData roi;
-    roi.shape = lfs::core::RegionOfInterestShape::Polygon;
-    roi.vertices = kLOutline;
-    roi.half_depth = 2.5f;
-    roi.inverse = true;
+    roi.shape_data = lfs::core::CropPolygonData{
+        .vertices = kLOutline,
+        .half_depth = 2.5f,
+        .inverse = true,
+        .enabled = true,
+        .color = lfs::core::kDefaultRoiColor,
+    };
     roi.crop_point_cloud_before_training = true;
     roi.crop_model_after_training = true;
     roi.select_relevant_cameras = true;
@@ -1123,6 +1136,7 @@ TEST(TrainingCropBoxMask, RoiAndCropRoundTripIndependentlyThroughProjectSerializ
                                           .source_kind = "checkpoint"}}};
     const auto captured = lfs::io::project::capture_scene_graph(scene, bindings);
     ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+    EXPECT_EQ(captured->schema_version(), lfs::io::project::SCNG_CHAPTER_SCHEMA_VERSION);
     const auto decoded = lfs::io::project::SceneGraphChapter::from_bytes(captured->to_bytes());
     ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
 
@@ -1136,10 +1150,10 @@ TEST(TrainingCropBoxMask, RoiAndCropRoundTripIndependentlyThroughProjectSerializ
     const auto restored_model_id = restored.getTrainingModelNodeId();
     const auto* restored_roi = restored.getRegionOfInterestData(restored_model_id);
     ASSERT_NE(restored_roi, nullptr);
-    EXPECT_EQ(restored_roi->shape, lfs::core::RegionOfInterestShape::Polygon);
-    EXPECT_EQ(restored_roi->vertices, roi.vertices);
-    EXPECT_FLOAT_EQ(restored_roi->half_depth, roi.half_depth);
-    EXPECT_TRUE(restored_roi->inverse);
+    EXPECT_EQ(restored_roi->shape(), lfs::core::RegionOfInterestShape::Polygon);
+    EXPECT_EQ(restored_roi->polygon().vertices, roi.polygon().vertices);
+    EXPECT_FLOAT_EQ(restored_roi->polygon().half_depth, roi.polygon().half_depth);
+    EXPECT_TRUE(restored_roi->inverse());
     EXPECT_TRUE(restored_roi->crop_point_cloud_before_training);
     EXPECT_TRUE(restored_roi->crop_model_after_training);
     EXPECT_TRUE(restored_roi->select_relevant_cameras);
@@ -1153,32 +1167,154 @@ TEST(TrainingCropBoxMask, RoiAndCropRoundTripIndependentlyThroughProjectSerializ
     expect_vec3_eq(restored_crop->max, crop.max);
 }
 
-TEST(TrainingCropBoxMask, CliRoiOptionsPopulateRoiWithoutCreatingCropHelper) {
+TEST(TrainingCropBoxMask, LegacyScngSchemaVersionOneMigratesCropChildToRoiWhileVersionTwoKeepsCropHelper) {
+    using lfs::io::project::PayloadBinding;
+    lfs::core::Scene scene;
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.setTrainingModelNode("Model");
+
+    const auto crop_id = scene.addCropBox("Model_cropbox", model_id);
+    lfs::core::CropBoxData crop;
+    crop.min = {-2.0f, -3.0f, -4.0f};
+    crop.max = {2.0f, 3.0f, 4.0f};
+    crop.enabled = true;
+    crop.inverse = true;
+    scene.setCropBoxData(crop_id, crop);
+    const glm::mat4 crop_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+    scene.setNodeTransform(crop_id, crop_transform);
+
+    const auto* const model_node = scene.getNodeById(model_id);
+    const lfs::io::project::ScenePayloadBindings bindings{
+        {model_node->uuid, PayloadBinding{.fourcc = "CKPT",
+                                          .instance_uuid = *lfs::core::Uuid::from_string(
+                                              "6b1f0c52-2d3e-4f61-9a7b-0c1d2e3f4a5b"),
+                                          .source_kind = "checkpoint"}}};
+    auto captured = lfs::io::project::capture_scene_graph(scene, bindings);
+    ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+
+    const lfs::io::project::ScenePayloadResolver resolver{
+        .splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+            return make_test_splat({0.0f, 0.0f, 0.0f});
+        }};
+
+    // Schema v2 keeps the crop helper child as an actual Crop helper without synthesizing an ROI.
+    lfs::core::Scene restored_v2;
+    ASSERT_TRUE(lfs::io::project::hydrate_scene_graph(*captured, restored_v2, resolver));
+    const auto v2_model_id = restored_v2.getTrainingModelNodeId();
+    EXPECT_EQ(restored_v2.getRegionOfInterestData(v2_model_id), nullptr);
+    EXPECT_NE(restored_v2.getCropBoxForSplat(v2_model_id), lfs::core::NULL_NODE);
+
+    // Schema v1 (legacy .licht project) migrates the crop child of a SPLAT/POINTCLOUD node into its ROI.
+    ASSERT_TRUE(captured->dom().set("schema_version", std::uint32_t{1}));
+    const auto decoded_v1 = lfs::io::project::SceneGraphChapter::from_bytes(captured->to_bytes());
+    ASSERT_TRUE(decoded_v1) << lfs::format_for_developer(decoded_v1.error());
+    EXPECT_EQ(decoded_v1->schema_version(), 1u);
+
+    lfs::core::Scene restored_v1;
+    ASSERT_TRUE(lfs::io::project::hydrate_scene_graph(*decoded_v1, restored_v1, resolver));
+    const auto v1_model_id = restored_v1.getTrainingModelNodeId();
+    EXPECT_EQ(restored_v1.getCropBoxForSplat(v1_model_id), lfs::core::NULL_NODE);
+    const auto* migrated_roi = restored_v1.getRegionOfInterestData(v1_model_id);
+    ASSERT_NE(migrated_roi, nullptr);
+    EXPECT_EQ(migrated_roi->shape(), lfs::core::RegionOfInterestShape::Box);
+    EXPECT_TRUE(migrated_roi->enabled());
+    EXPECT_TRUE(migrated_roi->inverse());
+    expect_vec3_eq(migrated_roi->box().min, crop.min);
+    expect_vec3_eq(migrated_roi->box().max, crop.max);
+    expect_mat4_eq(migrated_roi->local_transform, crop_transform);
+}
+
+TEST(TrainingCropBoxMask, LegacyScngSchemaVersionOneParsesFlatRegionOfInterestFormat) {
+    using Json = lfs::io::JsonChapterDom::Json;
+    using lfs::io::project::PayloadBinding;
+
+    lfs::core::Scene scene;
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.setTrainingModelNode("Model");
+
+    const auto* const model_node = scene.getNodeById(model_id);
+    const lfs::io::project::ScenePayloadBindings bindings{
+        {model_node->uuid, PayloadBinding{.fourcc = "CKPT",
+                                          .instance_uuid = *lfs::core::Uuid::from_string(
+                                              "6b1f0c52-2d3e-4f61-9a7b-0c1d2e3f4a5b"),
+                                          .source_kind = "checkpoint"}}};
+    auto captured = lfs::io::project::capture_scene_graph(scene, bindings);
+    ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+
+    auto legacy_json = Json::parse(captured->dom().dump());
+    legacy_json["schema_version"] = 1u;
+    legacy_json["nodes"][0]["region_of_interest"] = Json{
+        {"shape", "box"},
+        {"min", {-2.0f, -3.0f, -4.0f}},
+        {"max", {2.0f, 3.0f, 4.0f}},
+        {"radii", {1.0f, 1.0f, 1.0f}},
+        {"vertices", Json::array({{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f}})},
+        {"half_depth", 1.0f},
+        {"local_transform", {1.0f, 0.0f, 0.0f, 0.0f,
+                             0.0f, 1.0f, 0.0f, 0.0f,
+                             0.0f, 0.0f, 1.0f, 0.0f,
+                             3.0f, -2.0f, 1.0f, 1.0f}},
+        {"inverse", true},
+        {"enabled", true},
+        {"crop_point_cloud_before_training", true},
+        {"crop_model_after_training", true},
+        {"select_relevant_cameras", true},
+        {"camera_coverage_percent", 55.0f},
+        {"color", {0.2f, 0.4f, 0.8f}},
+    };
+
+    const auto decoded_v1 = lfs::io::project::SceneGraphChapter::parse(legacy_json.dump());
+    ASSERT_TRUE(decoded_v1) << lfs::format_for_developer(decoded_v1.error());
+
+    // After parsing v1, the DOM is normalized to the nested representation while keeping schema_version 1.
+    const auto normalized_dom = Json::parse(decoded_v1->dom().dump());
+    EXPECT_TRUE(normalized_dom["nodes"][0]["region_of_interest"].contains("cropbox"));
+    EXPECT_FALSE(normalized_dom["nodes"][0]["region_of_interest"].contains("shape"));
+
+    const lfs::io::project::ScenePayloadResolver resolver{
+        .splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+            return make_test_splat({0.0f, 0.0f, 0.0f});
+        }};
+    lfs::core::Scene restored_v1;
+    ASSERT_TRUE(lfs::io::project::hydrate_scene_graph(*decoded_v1, restored_v1, resolver));
+    const auto restored_model_id = restored_v1.getTrainingModelNodeId();
+    const auto* restored_roi = restored_v1.getRegionOfInterestData(restored_model_id);
+    ASSERT_NE(restored_roi, nullptr);
+    EXPECT_EQ(restored_roi->shape(), lfs::core::RegionOfInterestShape::Box);
+    expect_vec3_eq(restored_roi->box().min, glm::vec3(-2.0f, -3.0f, -4.0f));
+    expect_vec3_eq(restored_roi->box().max, glm::vec3(2.0f, 3.0f, 4.0f));
+    EXPECT_TRUE(restored_roi->inverse());
+    EXPECT_TRUE(restored_roi->enabled());
+    EXPECT_TRUE(restored_roi->crop_point_cloud_before_training);
+    EXPECT_TRUE(restored_roi->crop_model_after_training);
+    EXPECT_TRUE(restored_roi->select_relevant_cameras);
+    EXPECT_FLOAT_EQ(restored_roi->camera_coverage_percent, 55.0f);
+
+    // Schema v2 rejects the legacy flat format.
+    legacy_json["schema_version"] = lfs::io::project::SCNG_CHAPTER_SCHEMA_VERSION;
+    const auto rejected_v2 = lfs::io::project::SceneGraphChapter::parse(legacy_json.dump());
+    EXPECT_FALSE(rejected_v2);
+}
+
+TEST(TrainingCropBoxMask, CliCropBoxOptionsPopulateRoiWithoutCreatingCropHelper) {
     lfs::core::Scene scene;
     const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
     scene.setTrainingModelNode("Model");
 
     lfs::core::param::TrainingParameters params;
-    params.roi = std::array<float, 6>{-2.0f, -3.0f, -4.0f, 2.0f, 3.0f, 4.0f};
-    params.roi_invert = true;
-    params.roi_crop_point_cloud = true;
-    params.crop_to_roi = true;
-    params.roi_relevant_cameras = true;
-    params.roi_camera_coverage = 65.0f;
+    params.cropbox = std::array<float, 6>{-2.0f, -3.0f, -4.0f, 2.0f, 3.0f, 4.0f};
+    params.crop = true;
 
-    ASSERT_TRUE(lfs::training::applyTrainingRoi(params, scene));
+    ASSERT_TRUE(lfs::training::applyTrainingCropBox(params, scene));
     EXPECT_EQ(scene.getCropBoxForSplat(model_id), lfs::core::NULL_NODE);
 
     const auto* roi = scene.getRegionOfInterestData(model_id);
     ASSERT_NE(roi, nullptr);
-    EXPECT_EQ(roi->shape, lfs::core::RegionOfInterestShape::Box);
-    expect_vec3_eq(roi->min, {-2.0f, -3.0f, -4.0f});
-    expect_vec3_eq(roi->max, {2.0f, 3.0f, 4.0f});
-    EXPECT_TRUE(roi->inverse);
-    EXPECT_TRUE(roi->crop_point_cloud_before_training);
+    EXPECT_EQ(roi->shape(), lfs::core::RegionOfInterestShape::Box);
+    expect_vec3_eq(roi->box().min, {-2.0f, -3.0f, -4.0f});
+    expect_vec3_eq(roi->box().max, {2.0f, 3.0f, 4.0f});
+    EXPECT_FALSE(roi->inverse());
     EXPECT_TRUE(roi->crop_model_after_training);
-    EXPECT_TRUE(roi->select_relevant_cameras);
-    EXPECT_FLOAT_EQ(roi->camera_coverage_percent, 65.0f);
 }
 
 TEST(TrainingCropBoxMask, BuiltinRoiToolRegistersAndActivatesInUnifiedToolRegistry) {
@@ -1257,9 +1393,8 @@ TEST(TrainingCropBoxMask, RelevantRoiCameraSelectionWorksOnPointCloudWithZeroCov
     const auto back_id = scene.addCamera("back", group_id, make_pinhole_camera("back", {0.0f, 0.0f, 10.0f}, 1));
 
     lfs::core::RegionOfInterestData roi;
-    roi.shape = lfs::core::RegionOfInterestShape::Box;
-    roi.min = {-1.5f, -1.5f, -0.5f};
-    roi.max = {1.5f, 1.5f, 0.5f};
+    roi.box().min = {-1.5f, -1.5f, -0.5f};
+    roi.box().max = {1.5f, 1.5f, 0.5f};
     roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f));
     roi.select_relevant_cameras = true;
     roi.camera_coverage_percent = 0.0f; // Default 0% threshold must still exclude cameras with 0% coverage!
@@ -1276,10 +1411,9 @@ TEST(TrainingCropBoxMask, EditModeManualCropFromRoiAttachesUnappliedCropShapeToT
     ASSERT_EQ(scene.getTrainingModelNodeId(), lfs::core::NULL_NODE);
 
     lfs::core::RegionOfInterestData roi;
-    roi.shape = lfs::core::RegionOfInterestShape::Box;
-    roi.min = {-2.5f, -1.5f, -3.5f};
-    roi.max = {2.5f, 1.5f, 3.5f};
-    roi.inverse = true;
+    roi.box().min = {-2.5f, -1.5f, -3.5f};
+    roi.box().max = {2.5f, 1.5f, 3.5f};
+    roi.setInverse(true);
     roi.crop_model_after_training = false;
     roi.local_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 4.0f));
 
@@ -1291,7 +1425,7 @@ TEST(TrainingCropBoxMask, EditModeManualCropFromRoiAttachesUnappliedCropShapeToT
     ASSERT_NE(crop_data, nullptr);
     EXPECT_FALSE(crop_data->enabled);
     EXPECT_TRUE(crop_data->inverse);
-    expect_vec3_eq(crop_data->min, roi.min);
-    expect_vec3_eq(crop_data->max, roi.max);
+    expect_vec3_eq(crop_data->min, roi.box().min);
+    expect_vec3_eq(crop_data->max, roi.box().max);
     expect_mat4_eq(scene.getNodeTransform(crop_id), roi.local_transform);
 }

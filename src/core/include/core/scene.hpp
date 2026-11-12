@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace lfs::core {
@@ -131,23 +132,52 @@ namespace lfs::core {
         Polygon,
     };
 
+    inline constexpr glm::vec3 kDefaultRoiColor{0.67f, 0.35f, 0.95f};
+
     struct RegionOfInterestData {
-        RegionOfInterestShape shape = RegionOfInterestShape::Box;
-        glm::vec3 min{-1.0f, -1.0f, -1.0f};
-        glm::vec3 max{1.0f, 1.0f, 1.0f};
-        glm::vec3 radii{1.0f, 1.0f, 1.0f};
-        std::vector<glm::vec2> vertices;
-        float half_depth = 1.0f;
+        std::variant<CropBoxData, EllipsoidData, CropPolygonData> shape_data =
+            CropBoxData{.enabled = true, .color = kDefaultRoiColor};
         // ROI-local to owning-node-local.  Crop helpers retain their own node
         // transforms, so editing one can never move the other.
         glm::mat4 local_transform{1.0f};
-        bool inverse = false;
-        bool enabled = true;
         bool crop_point_cloud_before_training = false;
         bool crop_model_after_training = false;
         bool select_relevant_cameras = false;
         float camera_coverage_percent = 40.0f;
-        glm::vec3 color{0.67f, 0.35f, 0.95f};
+
+        [[nodiscard]] RegionOfInterestShape shape() const noexcept {
+            if (std::holds_alternative<EllipsoidData>(shape_data))
+                return RegionOfInterestShape::Ellipsoid;
+            if (std::holds_alternative<CropPolygonData>(shape_data))
+                return RegionOfInterestShape::Polygon;
+            return RegionOfInterestShape::Box;
+        }
+
+        [[nodiscard]] CropBoxData* box() noexcept { return std::get_if<CropBoxData>(&shape_data); }
+        [[nodiscard]] const CropBoxData* box() const noexcept { return std::get_if<CropBoxData>(&shape_data); }
+        [[nodiscard]] EllipsoidData* ellipsoid() noexcept { return std::get_if<EllipsoidData>(&shape_data); }
+        [[nodiscard]] const EllipsoidData* ellipsoid() const noexcept { return std::get_if<EllipsoidData>(&shape_data); }
+        [[nodiscard]] CropPolygonData* polygon() noexcept { return std::get_if<CropPolygonData>(&shape_data); }
+        [[nodiscard]] const CropPolygonData* polygon() const noexcept { return std::get_if<CropPolygonData>(&shape_data); }
+
+        [[nodiscard]] bool enabled() const noexcept {
+            return std::visit([](const auto& s) { return s.enabled; }, shape_data);
+        }
+        void setEnabled(const bool value) noexcept {
+            std::visit([value](auto& s) { s.enabled = value; }, shape_data);
+        }
+        [[nodiscard]] bool inverse() const noexcept {
+            return std::visit([](const auto& s) { return s.inverse; }, shape_data);
+        }
+        void setInverse(const bool value) noexcept {
+            std::visit([value](auto& s) { s.inverse = value; }, shape_data);
+        }
+        [[nodiscard]] glm::vec3 color() const noexcept {
+            return std::visit([](const auto& s) { return s.color; }, shape_data);
+        }
+        void setColor(const glm::vec3& value) noexcept {
+            std::visit([&value](auto& s) { s.color = value; }, shape_data);
+        }
     };
 
     struct GeoreferencePose {

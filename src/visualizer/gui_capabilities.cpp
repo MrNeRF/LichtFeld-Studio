@@ -2396,14 +2396,14 @@ namespace lfs::vis::cap {
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
         const glm::vec3 half_size = glm::max((max_bounds - min_bounds) * 0.5f, glm::vec3(kCropVolumeMinExtent));
 
-        if (updated.shape == core::RegionOfInterestShape::Box) {
-            updated.min = -half_size;
-            updated.max = half_size;
+        if (auto* const box = updated.box()) {
+            box->min = -half_size;
+            box->max = half_size;
             updated.local_transform = glm::translate(glm::mat4(1.0f), center);
-        } else if (updated.shape == core::RegionOfInterestShape::Ellipsoid) {
-            updated.radii = glm::max(half_size * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
+        } else if (auto* const ellipsoid = updated.ellipsoid()) {
+            ellipsoid->radii = glm::max(half_size * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
             updated.local_transform = glm::translate(glm::mat4(1.0f), center);
-        } else {
+        } else if (const auto* const polygon = updated.polygon()) {
             const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
             if (!frame)
                 return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The ROI polygon transform is singular");
@@ -2421,7 +2421,7 @@ namespace lfs::vis::cap {
             }
 
             const glm::vec3 prism_half_extents(
-                core::crop_polygon::outlineHalfExtents(updated.vertices), updated.half_depth);
+                core::crop_polygon::outlineHalfExtents(polygon->vertices), polygon->half_depth);
             const glm::vec3 fitted_half_extents =
                 glm::max((hi - lo) * 0.5f, glm::vec3(core::crop_polygon::kMinHalfDepth));
             glm::mat4 fitted = *frame;
@@ -2438,7 +2438,7 @@ namespace lfs::vis::cap {
             .payload_uuids = std::vector<lfs::core::Uuid>{},
         };
         std::vector<core::NodeId> capture_ids{target_id};
-        if (updated.enabled && updated.select_relevant_cameras) {
+        if (updated.enabled() && updated.select_relevant_cameras) {
             for (const auto* const node : scene.getNodes()) {
                 if (node && node->type == core::NodeType::CAMERA)
                     capture_ids.push_back(node->id);
@@ -2448,7 +2448,7 @@ namespace lfs::vis::cap {
             vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
             return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI geometry");
-        if (updated.enabled && updated.select_relevant_cameras)
+        if (updated.enabled() && updated.select_relevant_cameras)
             (void)lfs::training::select_relevant_roi_cameras(scene);
         if (rendering_manager)
             rendering_manager->markDirty(vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -2471,13 +2471,13 @@ namespace lfs::vis::cap {
             return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI target");
 
         auto updated = *roi;
-        updated.inverse = false;
-        if (updated.shape == core::RegionOfInterestShape::Box) {
-            updated.min = glm::vec3(-1.0f);
-            updated.max = glm::vec3(1.0f);
+        updated.setInverse(false);
+        if (auto* const box = updated.box()) {
+            box->min = glm::vec3(-1.0f);
+            box->max = glm::vec3(1.0f);
             updated.local_transform = glm::mat4(1.0f);
-        } else if (updated.shape == core::RegionOfInterestShape::Ellipsoid) {
-            updated.radii = glm::vec3(1.0f);
+        } else if (auto* const ellipsoid = updated.ellipsoid()) {
+            ellipsoid->radii = glm::vec3(1.0f);
             updated.local_transform = glm::mat4(1.0f);
         } else {
             const auto frame = unscaled_crop_polygon_frame(updated.local_transform);
@@ -2493,7 +2493,7 @@ namespace lfs::vis::cap {
             .payload_uuids = std::vector<lfs::core::Uuid>{},
         };
         std::vector<core::NodeId> capture_ids{target_id};
-        if (updated.enabled && updated.select_relevant_cameras) {
+        if (updated.enabled() && updated.select_relevant_cameras) {
             for (const auto* const node : scene.getNodes()) {
                 if (node && node->type == core::NodeType::CAMERA)
                     capture_ids.push_back(node->id);
@@ -2503,7 +2503,7 @@ namespace lfs::vis::cap {
             vis::op::SceneGraphPatchEntry::captureStateByIds(scene_manager, capture_ids, history_options);
         if (!scene.setRegionOfInterestData(target_id, updated))
             return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid ROI geometry");
-        if (updated.enabled && updated.select_relevant_cameras)
+        if (updated.enabled() && updated.select_relevant_cameras)
             (void)lfs::training::select_relevant_roi_cameras(scene);
         if (rendering_manager)
             rendering_manager->markDirty(vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);

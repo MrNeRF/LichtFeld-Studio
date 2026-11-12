@@ -1291,14 +1291,14 @@ namespace lfs::vis::gui {
                 roi_snapshot.id = roi_id;
                 roi_snapshot.parent_id = node->id;
                 roi_snapshot.type =
-                    node->region_of_interest->shape == core::RegionOfInterestShape::Ellipsoid
+                    node->region_of_interest->shape() == core::RegionOfInterestShape::Ellipsoid
                         ? core::NodeType::ELLIPSOID
-                    : node->region_of_interest->shape == core::RegionOfInterestShape::Polygon
+                    : node->region_of_interest->shape() == core::RegionOfInterestShape::Polygon
                         ? core::NodeType::CROP_POLYGON
                         : core::NodeType::CROPBOX;
                 roi_snapshot.name = scene.getRoiNodeName(node->id);
                 roi_snapshot.label = roi_snapshot.name;
-                roi_snapshot.visible = node->region_of_interest->enabled;
+                roi_snapshot.visible = node->region_of_interest->enabled();
                 roi_snapshot.locked = static_cast<bool>(node->locked);
                 roi_snapshot.has_children = false;
                 roi_snapshot.camera_loss_icon_color = std::string(kRoiIconColor);
@@ -3143,7 +3143,7 @@ namespace lfs::vis::gui {
         const core::NodeId target_id = roiTargetNodeId(roi_row_id);
         const auto* const target = scene.getNodeById(target_id);
         const auto* const current = scene.getRegionOfInterestData(target_id);
-        if (!target || !current || static_cast<bool>(target->locked) || current->enabled == visible)
+        if (!target || !current || static_cast<bool>(target->locked) || current->enabled() == visible)
             return;
 
         const op::SceneGraphCaptureOptions history_options{
@@ -3154,7 +3154,7 @@ namespace lfs::vis::gui {
         };
         auto before = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);
         auto updated = *current;
-        updated.enabled = visible;
+        updated.setEnabled(visible);
         if (!scene.setRegionOfInterestData(target_id, updated))
             return;
         auto after = op::SceneGraphPatchEntry::captureState(*scene_manager, {target->name}, history_options);

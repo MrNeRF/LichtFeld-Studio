@@ -849,7 +849,8 @@ namespace lfs::io::project {
         }
 
         lfs::Result<void> ensure_schema(const JsonChapterDom& dom,
-                                        const std::string_view chapter) {
+                                        const std::string_view chapter,
+                                        const std::uint32_t max_version = JSON_CHAPTER_SCHEMA_VERSION) {
             const auto schema = dom.get<std::uint32_t>("schema_version");
             if (!schema) {
                 return fail<void>(
@@ -858,12 +859,12 @@ namespace lfs::io::project {
                     std::format("{} schema_version is missing or invalid", chapter),
                     chapter, "schema_version");
             }
-            if (*schema != JSON_CHAPTER_SCHEMA_VERSION) {
+            if (*schema < JSON_CHAPTER_SCHEMA_VERSION || *schema > max_version) {
                 return fail<void>(
                     lfs::ErrorCode::Unsupported,
                     "This project chapter version is not supported.",
                     std::format("{} schema version {} is not supported (expected {})",
-                                chapter, *schema, JSON_CHAPTER_SCHEMA_VERSION),
+                                chapter, *schema, max_version),
                     chapter, "schema_version");
             }
             return {};
@@ -2517,89 +2518,245 @@ namespace lfs::io::project {
             };
         }
 
-        lfs::Result<RegionOfInterestRecord> parse_region_of_interest(
+        lfs::Result<RegionOfInterestRecord> parse_legacy_flat_region_of_interest(
             const Json& value, const std::string_view field) {
-            if (auto valid = require_object(value, "SCNG", field); !valid)
-                return std::move(valid).error();
             auto shape = required<std::string>(value, "shape", "SCNG", field);
-            const auto min_member = value.find("min");
-            const auto max_member = value.find("max");
-            const auto radii_member = value.find("radii");
-            const auto transform_member = value.find("local_transform");
-            const auto color_member = value.find("color");
-            if (min_member == value.end() || max_member == value.end() ||
-                radii_member == value.end() || transform_member == value.end() ||
-                color_member == value.end()) {
-                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss,
-                    "A region of interest is incomplete.",
-                    std::format("SCNG.{} is missing a required geometry field", field), "SCNG", field);
+            if (!shape)
+                return std::move(shape).error();
+            if (*shape != "box" && *shape != "ellipsoid" && *shape != "polygon") {
+                return fail<RegionOfInterestRecord>(
+                    lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                    std::format("SCNG.{} has unsupported shape '{}'", field, *shape), "SCNG", field);
             }
-            auto min = fixed_array<float, 3>(*min_member, "SCNG", std::format("{}.min", field));
-            auto max = fixed_array<float, 3>(*max_member, "SCNG", std::format("{}.max", field));
-            auto radii = fixed_array<float, 3>(*radii_member, "SCNG", std::format("{}.radii", field));
-            auto half_depth = required<float>(value, "half_depth", "SCNG", field);
-            auto transform = fixed_array<float, 16>(*transform_member, "SCNG", std::format("{}.local_transform", field));
-            auto inverse = required<bool>(value, "inverse", "SCNG", field);
-            auto enabled = required<bool>(value, "enabled", "SCNG", field);
-            auto crop_seed = required<bool>(value, "crop_point_cloud_before_training", "SCNG", field);
-            auto crop_model = required<bool>(value, "crop_model_after_training", "SCNG", field);
-            auto select_cameras = required<bool>(value, "select_relevant_cameras", "SCNG", field);
-            auto coverage = required<float>(value, "camera_coverage_percent", "SCNG", field);
-            auto color = fixed_array<float, 3>(*color_member, "SCNG", std::format("{}.color", field));
-            if (!shape || !min || !max || !radii || !half_depth || !transform || !inverse || !enabled ||
-                !crop_seed || !crop_model || !select_cameras || !coverage || !color)
-                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
-                                                    std::format("SCNG.{} is missing a required field", field), "SCNG", field);
-            const bool valid_box = (*min)[0] < (*max)[0] && (*min)[1] < (*max)[1] && (*min)[2] < (*max)[2];
-            const bool valid_radii = (*radii)[0] > 0.0f && (*radii)[1] > 0.0f && (*radii)[2] > 0.0f;
-            if ((*shape != "box" && *shape != "ellipsoid" && *shape != "polygon") ||
-                !std::isfinite(*half_depth) || !std::isfinite(*coverage) || *coverage < 0.0f || *coverage > 100.0f ||
-                (*shape == "box" && !valid_box) || (*shape == "ellipsoid" && !valid_radii))
-                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
-                                                    std::format("SCNG.{} has invalid shape or settings", field), "SCNG", field);
-            RegionOfInterestRecord result{.shape = std::move(*shape), .min = *min, .max = *max, .radii = *radii,
-                                          .half_depth = *half_depth, .local_transform = *transform, .inverse = *inverse,
-                                          .enabled = *enabled, .crop_point_cloud_before_training = *crop_seed,
-                                          .crop_model_after_training = *crop_model, .select_relevant_cameras = *select_cameras,
-                                          .camera_coverage_percent = *coverage, .color = *color};
-            if (const Json* vertices = JsonChapterDom::read_json_ref(value, "vertices")) {
-                if (!vertices->is_array())
-                    return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "ROI vertices are invalid.",
-                                                        std::format("SCNG.{}.vertices is not an array", field), "SCNG", field);
-                for (std::size_t index = 0; index < vertices->size(); ++index) {
-                    auto vertex = fixed_array<float, 2>((*vertices)[index], "SCNG", std::format("{}.vertices[{}]", field, index));
+            std::array<float, 16> transform{
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1};
+            if (const auto transform_member = value.find("local_transform"); transform_member != value.end()) {
+                auto parsed_transform =
+                    fixed_array<float, 16>(*transform_member, "SCNG", std::format("{}.local_transform", field));
+                if (!parsed_transform)
+                    return std::move(parsed_transform).error();
+                if (std::ranges::any_of(*parsed_transform, [](const float item) { return !std::isfinite(item); })) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                        std::format("SCNG.{}.local_transform contains non-finite values", field), "SCNG", field);
+                }
+                transform = *parsed_transform;
+            }
+            auto crop_seed = optional<bool>(value, "crop_point_cloud_before_training", "SCNG", field);
+            auto crop_model = optional<bool>(value, "crop_model_after_training", "SCNG", field);
+            auto select_cameras = optional<bool>(value, "select_relevant_cameras", "SCNG", field);
+            auto coverage = optional<float>(value, "camera_coverage_percent", "SCNG", field);
+            auto inverse = optional<bool>(value, "inverse", "SCNG", field);
+            auto enabled = optional<bool>(value, "enabled", "SCNG", field);
+            auto line_width = optional<float>(value, "line_width", "SCNG", field);
+            if (auto error = first_error(crop_seed, crop_model, select_cameras, coverage, inverse, enabled, line_width))
+                return std::move(*error);
+            const float coverage_value = coverage->value_or(40.0f);
+            const float line_width_value = line_width->value_or(2.0f);
+            if (!std::isfinite(coverage_value) || coverage_value < 0.0f || coverage_value > 100.0f ||
+                !std::isfinite(line_width_value) || line_width_value <= 0.0f) {
+                return fail<RegionOfInterestRecord>(
+                    lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                    std::format("SCNG.{} has invalid coverage or line width", field), "SCNG", field);
+            }
+            std::array<float, 3> color{0.67f, 0.35f, 0.95f};
+            if (const auto color_member = value.find("color"); color_member != value.end()) {
+                auto parsed_color = fixed_array<float, 3>(*color_member, "SCNG", std::format("{}.color", field));
+                if (!parsed_color)
+                    return std::move(parsed_color).error();
+                color = *parsed_color;
+            }
+            RegionOfInterestRecord result{
+                .local_transform = transform,
+                .cropbox = std::nullopt,
+                .ellipsoid = std::nullopt,
+                .crop_polygon = std::nullopt,
+                .crop_point_cloud_before_training = crop_seed->value_or(false),
+                .crop_model_after_training = crop_model->value_or(false),
+                .select_relevant_cameras = select_cameras->value_or(false),
+                .camera_coverage_percent = coverage_value,
+            };
+            if (*shape == "box") {
+                const auto min_member = value.find("min");
+                const auto max_member = value.find("max");
+                if (min_member == value.end() || max_member == value.end()) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
+                        std::format("SCNG.{} box is missing min or max", field), "SCNG", field);
+                }
+                auto min = fixed_array<float, 3>(*min_member, "SCNG", std::format("{}.min", field));
+                auto max = fixed_array<float, 3>(*max_member, "SCNG", std::format("{}.max", field));
+                if (!min)
+                    return std::move(min).error();
+                if (!max)
+                    return std::move(max).error();
+                if (std::ranges::any_of(std::views::iota(std::size_t{0}, std::size_t{3}),
+                                        [&](const std::size_t i) { return (*min)[i] > (*max)[i]; })) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                        std::format("SCNG.{} has inverted box bounds", field), "SCNG", field);
+                }
+                result.cropbox = CropBoxRecord{
+                    .min = *min,
+                    .max = *max,
+                    .inverse = inverse->value_or(false),
+                    .enabled = enabled->value_or(true),
+                    .color = color,
+                    .line_width = line_width_value,
+                };
+            } else if (*shape == "ellipsoid") {
+                const auto radii_member = value.find("radii");
+                if (radii_member == value.end()) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
+                        std::format("SCNG.{} ellipsoid is missing radii", field), "SCNG", field);
+                }
+                auto radii = fixed_array<float, 3>(*radii_member, "SCNG", std::format("{}.radii", field));
+                if (!radii)
+                    return std::move(radii).error();
+                if (std::ranges::any_of(*radii, [](const float radius) { return radius <= 0.0f; })) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                        std::format("SCNG.{} has non-positive radii", field), "SCNG", field);
+                }
+                result.ellipsoid = EllipsoidRecord{
+                    .radii = *radii,
+                    .inverse = inverse->value_or(false),
+                    .enabled = enabled->value_or(true),
+                    .color = color,
+                    .line_width = line_width_value,
+                };
+            } else {
+                const auto vertices_member = value.find("vertices");
+                auto half_depth = required<float>(value, "half_depth", "SCNG", field);
+                if (vertices_member == value.end() || !vertices_member->is_array() || !half_depth) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
+                        std::format("SCNG.{} polygon is missing vertices or half_depth", field), "SCNG", field);
+                }
+                if (vertices_member->size() < lfs::core::crop_polygon::kMinVertices ||
+                    vertices_member->size() > lfs::core::crop_polygon::kMaxVertices) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest polygon is invalid.",
+                        std::format("SCNG.{}.vertices has {} entries, expected 3 to {}", field,
+                                    vertices_member->size(), lfs::core::crop_polygon::kMaxVertices),
+                        "SCNG", field);
+                }
+                CropPolygonRecord polygon;
+                std::vector<glm::vec2> outline;
+                outline.reserve(vertices_member->size());
+                for (std::size_t i = 0; i < vertices_member->size(); ++i) {
+                    auto vertex = fixed_array<float, 2>((*vertices_member)[i], "SCNG",
+                                                        std::format("{}.vertices[{}]", field, i));
                     if (!vertex)
                         return std::move(vertex).error();
-                    result.vertices.push_back(*vertex);
+                    polygon.vertices.push_back(*vertex);
+                    outline.emplace_back((*vertex)[0], (*vertex)[1]);
                 }
-            }
-            if (result.shape == "polygon") {
-                std::vector<glm::vec2> outline;
-                outline.reserve(result.vertices.size());
-                for (const auto& vertex : result.vertices)
-                    outline.emplace_back(vertex[0], vertex[1]);
-                if (!lfs::core::crop_polygon::isValidOutline(outline) ||
-                    !lfs::core::crop_polygon::isValidHalfDepth(result.half_depth)) {
-                    return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss,
-                        "A region of interest polygon is invalid.",
+                if (!lfs::core::crop_polygon::isValidHalfDepth(*half_depth) ||
+                    !lfs::core::crop_polygon::isValidOutline(outline)) {
+                    return fail<RegionOfInterestRecord>(
+                        lfs::ErrorCode::DataLoss, "A region of interest polygon is invalid.",
                         std::format("SCNG.{} has a degenerate outline or depth", field), "SCNG", field);
                 }
+                polygon.half_depth = *half_depth;
+                polygon.inverse = inverse->value_or(false);
+                polygon.enabled = enabled->value_or(true);
+                polygon.color = color;
+                polygon.line_width = line_width_value;
+                result.crop_polygon = std::move(polygon);
             }
             return result;
         }
 
+        lfs::Result<RegionOfInterestRecord> parse_region_of_interest(
+            const Json& value, const std::string_view field, const std::uint32_t schema_version) {
+            if (auto valid = require_object(value, "SCNG", field); !valid)
+                return std::move(valid).error();
+            const bool has_nested_shape = value.contains("cropbox") || value.contains("ellipsoid") ||
+                                          value.contains("crop_polygon");
+            if (!has_nested_shape && schema_version == JSON_CHAPTER_SCHEMA_VERSION && value.contains("shape"))
+                return parse_legacy_flat_region_of_interest(value, field);
+            if (value.contains("shape")) {
+                return fail<RegionOfInterestRecord>(
+                    lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                    std::format("SCNG.{} uses legacy flat shape fields in schema version {}", field, schema_version),
+                    "SCNG", field);
+            }
+            const auto transform_member = value.find("local_transform");
+            if (transform_member == value.end()) {
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss,
+                    "A region of interest is incomplete.",
+                    std::format("SCNG.{} is missing local_transform", field), "SCNG", field);
+            }
+            auto transform = fixed_array<float, 16>(*transform_member, "SCNG", std::format("{}.local_transform", field));
+            auto crop_seed = required<bool>(value, "crop_point_cloud_before_training", "SCNG", field);
+            auto crop_model = required<bool>(value, "crop_model_after_training", "SCNG", field);
+            auto select_cameras = required<bool>(value, "select_relevant_cameras", "SCNG", field);
+            auto coverage = required<float>(value, "camera_coverage_percent", "SCNG", field);
+            if (!transform || !crop_seed || !crop_model || !select_cameras || !coverage)
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is incomplete.",
+                                                    std::format("SCNG.{} is missing a required field", field), "SCNG", field);
+            if (!std::isfinite(*coverage) || *coverage < 0.0f || *coverage > 100.0f ||
+                std::ranges::any_of(*transform, [](const float item) { return !std::isfinite(item); }))
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                                                    std::format("SCNG.{} has invalid transform or coverage", field), "SCNG", field);
+            RegionOfInterestRecord result{
+                .local_transform = *transform,
+                .cropbox = std::nullopt,
+                .ellipsoid = std::nullopt,
+                .crop_polygon = std::nullopt,
+                .crop_point_cloud_before_training = *crop_seed,
+                .crop_model_after_training = *crop_model,
+                .select_relevant_cameras = *select_cameras,
+                .camera_coverage_percent = *coverage,
+            };
+            int shape_count = 0;
+            if (const Json* cropbox = JsonChapterDom::read_json_ref(value, "cropbox")) {
+                auto parsed = parse_cropbox(*cropbox, std::format("{}.cropbox", field));
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.cropbox = std::move(*parsed);
+                ++shape_count;
+            }
+            if (const Json* ellipsoid = JsonChapterDom::read_json_ref(value, "ellipsoid")) {
+                auto parsed = parse_ellipsoid(*ellipsoid, std::format("{}.ellipsoid", field));
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.ellipsoid = std::move(*parsed);
+                ++shape_count;
+            }
+            if (const Json* crop_polygon = JsonChapterDom::read_json_ref(value, "crop_polygon")) {
+                auto parsed = parse_crop_polygon(*crop_polygon, std::format("{}.crop_polygon", field));
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.crop_polygon = std::move(*parsed);
+                ++shape_count;
+            }
+            if (shape_count != 1)
+                return fail<RegionOfInterestRecord>(lfs::ErrorCode::DataLoss, "A region of interest is invalid.",
+                                                    std::format("SCNG.{} must contain exactly one shape record", field), "SCNG", field);
+            return result;
+        }
+
         Json region_of_interest_json(const RegionOfInterestRecord& value) {
-            Json vertices = Json::array();
-            for (const auto& vertex : value.vertices)
-                vertices.push_back(json_array(vertex));
-            return Json{{"shape", value.shape}, {"min", json_array(value.min)}, {"max", json_array(value.max)},
-                        {"radii", json_array(value.radii)}, {"vertices", std::move(vertices)},
-                        {"half_depth", value.half_depth}, {"local_transform", json_array(value.local_transform)},
-                        {"inverse", value.inverse}, {"enabled", value.enabled},
-                        {"crop_point_cloud_before_training", value.crop_point_cloud_before_training},
-                        {"crop_model_after_training", value.crop_model_after_training},
-                        {"select_relevant_cameras", value.select_relevant_cameras},
-                        {"camera_coverage_percent", value.camera_coverage_percent}, {"color", json_array(value.color)}};
+            Json json{
+                {"local_transform", json_array(value.local_transform)},
+                {"crop_point_cloud_before_training", value.crop_point_cloud_before_training},
+                {"crop_model_after_training", value.crop_model_after_training},
+                {"select_relevant_cameras", value.select_relevant_cameras},
+                {"camera_coverage_percent", value.camera_coverage_percent},
+            };
+            if (value.cropbox)
+                json["cropbox"] = cropbox_json(*value.cropbox);
+            if (value.ellipsoid)
+                json["ellipsoid"] = ellipsoid_json(*value.ellipsoid);
+            if (value.crop_polygon)
+                json["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
+            return json;
         }
 
         lfs::Result<std::vector<float>> finite_float_vector(
@@ -2778,7 +2935,7 @@ namespace lfs::io::project {
         }
 
         lfs::Result<SceneNodeRecord> parse_scene_node(
-            const Json& element, const lfs::core::Uuid& uuid) {
+            const Json& element, const lfs::core::Uuid& uuid, const std::uint32_t schema_version) {
             auto type = JsonChapterDom::read<std::string>(element, "type");
             auto name = JsonChapterDom::read<std::string>(element, "name");
             const Json* parent_value =
@@ -2915,7 +3072,7 @@ namespace lfs::io::project {
                 result.crop_polygon = std::move(*parsed);
             }
             if (const Json* region = JsonChapterDom::read_json_ref(element, "region_of_interest")) {
-                auto parsed = parse_region_of_interest(*region, "nodes.region_of_interest");
+                auto parsed = parse_region_of_interest(*region, "nodes.region_of_interest", schema_version);
                 if (!parsed)
                     return std::move(parsed).error();
                 result.region_of_interest = std::move(*parsed);
@@ -2942,6 +3099,7 @@ namespace lfs::io::project {
 
     SceneGraphChapter::SceneGraphChapter() {
         initialize_json_chapter(dom_, "nodes");
+        (void)dom_.set("schema_version", SCNG_CHAPTER_SCHEMA_VERSION);
         const auto training = dom_.set_json("training_model_uuid", nullptr);
         (void)training;
     }
@@ -2949,18 +3107,38 @@ namespace lfs::io::project {
     SceneGraphChapter::SceneGraphChapter(JsonChapterDom dom)
         : dom_(std::move(dom)) {}
 
+    std::uint32_t SceneGraphChapter::schema_version() const noexcept {
+        return dom_.get<std::uint32_t>("schema_version").value_or(SCNG_CHAPTER_SCHEMA_VERSION);
+    }
+
     lfs::Result<SceneGraphChapter> SceneGraphChapter::parse(
         const std::string_view bytes) {
         auto dom = JsonChapterDom::parse(bytes);
         if (!dom) {
             return std::move(dom).error();
         }
-        if (auto schema = ensure_schema(*dom, "SCNG"); !schema) {
+        if (auto schema = ensure_schema(*dom, "SCNG", SCNG_CHAPTER_SCHEMA_VERSION); !schema) {
             return std::move(schema).error();
         }
         SceneGraphChapter result(std::move(*dom));
         if (auto valid = result.validate_hierarchy(); !valid) {
             return std::move(valid).error();
+        }
+        if (result.schema_version() == JSON_CHAPTER_SCHEMA_VERSION && result.cached_nodes_) {
+            for (const SceneNodeRecord& node : *result.cached_nodes_) {
+                if (!node.region_of_interest)
+                    continue;
+                const std::string uuid = node.uuid.to_string();
+                auto element = result.dom_.array_get("nodes", uuid);
+                if (!element)
+                    continue;
+                const auto* region = JsonChapterDom::read_json_ref(*element, "region_of_interest");
+                if (!region || !region->contains("shape"))
+                    continue;
+                (*element)["region_of_interest"] = region_of_interest_json(*node.region_of_interest);
+                if (auto updated = result.dom_.array_put("nodes", uuid, std::move(*element)); !updated)
+                    return std::move(updated).error();
+            }
         }
         return result;
     }
@@ -3011,6 +3189,7 @@ namespace lfs::io::project {
         if (!items) {
             return std::move(items).error();
         }
+        const std::uint32_t schema = schema_version();
         std::vector<SceneNodeRecord> result;
         result.reserve(items->size());
         for (const auto& [id, element] : *items) {
@@ -3021,7 +3200,7 @@ namespace lfs::io::project {
                     std::format("SCNG node UUID '{}' cannot be decoded", id), "SCNG",
                     "nodes.uuid");
             }
-            auto parsed = parse_scene_node(*element, *uuid);
+            auto parsed = parse_scene_node(*element, *uuid, schema);
             if (!parsed) {
                 return std::move(parsed).error();
             }
@@ -3042,7 +3221,7 @@ namespace lfs::io::project {
         if (!element) {
             return std::optional<SceneNodeRecord>{};
         }
-        auto parsed = parse_scene_node(*element, uuid);
+        auto parsed = parse_scene_node(*element, uuid, schema_version());
         if (!parsed) {
             return std::move(parsed).error();
         }

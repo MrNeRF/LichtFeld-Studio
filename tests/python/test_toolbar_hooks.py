@@ -1159,7 +1159,6 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         cropbox_lr_scale = 0.1
         cropbox_loss_weight = 0.1
         cropbox_growth_inside = 0.8
-        crop_to_cropbox = False
 
         @staticmethod
         def has_params():
@@ -1273,7 +1272,7 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
 
     crop_getter, crop_setter = model.bound_binds["crop_to_cropbox"]
     crop_setter(True)
-    assert set_calls[-1] == ("crop_to_cropbox", True)
+    assert len(set_calls) == 3
     assert roi_set_calls[-1] == {"node_name": "bicycle", "crop_model_after_training": True}
     assert crop_getter() is True
     assert model.handle.request_update_calls == 4
@@ -1289,7 +1288,6 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
     params.cropbox_growth_inside = 1.0
-    params.crop_to_cropbox = False
     roi_state["crop_model_after_training"] = False
     signature = controller._gizmo.cropbox_toolbar_signature()
     assert signature[-4:] == (0.42, 0.73, 1.0, False)

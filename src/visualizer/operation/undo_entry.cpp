@@ -1510,8 +1510,10 @@ namespace lfs::vis::op {
                          snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.region_of_interest) {
-                total += sizeof(*snapshot.region_of_interest) +
-                         snapshot.region_of_interest->vertices.size() * sizeof(glm::vec2);
+                total += sizeof(*snapshot.region_of_interest);
+                if (const auto* const polygon =
+                        std::get_if<lfs::core::CropPolygonData>(&snapshot.region_of_interest->shape_data))
+                    total += polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total += sizeof(*snapshot.keyframe);
@@ -1566,8 +1568,10 @@ namespace lfs::vis::op {
                                    snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.region_of_interest) {
-                total.cpu_bytes += sizeof(*snapshot.region_of_interest) +
-                                   snapshot.region_of_interest->vertices.size() * sizeof(glm::vec2);
+                total.cpu_bytes += sizeof(*snapshot.region_of_interest);
+                if (const auto* const polygon =
+                        std::get_if<lfs::core::CropPolygonData>(&snapshot.region_of_interest->shape_data))
+                    total.cpu_bytes += polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total.cpu_bytes += sizeof(*snapshot.keyframe);

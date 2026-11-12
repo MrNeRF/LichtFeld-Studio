@@ -402,25 +402,47 @@ namespace lfs::io::project {
             if (node.region_of_interest) {
                 const auto& roi = *node.region_of_interest;
                 RegionOfInterestRecord record{
-                    .shape = roi.shape == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid" :
-                             roi.shape == lfs::core::RegionOfInterestShape::Polygon ? "polygon" : "box",
-                    .min = {roi.min.x, roi.min.y, roi.min.z},
-                    .max = {roi.max.x, roi.max.y, roi.max.z},
-                    .radii = {roi.radii.x, roi.radii.y, roi.radii.z},
-                    .vertices = {},
-                    .half_depth = roi.half_depth,
                     .local_transform = {},
-                    .inverse = roi.inverse,
-                    .enabled = roi.enabled,
+                    .cropbox = std::nullopt,
+                    .ellipsoid = std::nullopt,
+                    .crop_polygon = std::nullopt,
                     .crop_point_cloud_before_training = roi.crop_point_cloud_before_training,
                     .crop_model_after_training = roi.crop_model_after_training,
                     .select_relevant_cameras = roi.select_relevant_cameras,
                     .camera_coverage_percent = roi.camera_coverage_percent,
-                    .color = {roi.color.x, roi.color.y, roi.color.z},
                 };
                 std::copy_n(glm::value_ptr(roi.local_transform), 16, record.local_transform.begin());
-                for (const auto& vertex : roi.vertices)
-                    record.vertices.push_back({vertex.x, vertex.y});
+                if (const auto* box = roi.box()) {
+                    record.cropbox = CropBoxRecord{
+                        .min = {box->min.x, box->min.y, box->min.z},
+                        .max = {box->max.x, box->max.y, box->max.z},
+                        .inverse = box->inverse,
+                        .enabled = box->enabled,
+                        .color = {box->color.x, box->color.y, box->color.z},
+                        .line_width = box->line_width,
+                    };
+                } else if (const auto* ellipsoid = roi.ellipsoid()) {
+                    record.ellipsoid = EllipsoidRecord{
+                        .radii = {ellipsoid->radii.x, ellipsoid->radii.y, ellipsoid->radii.z},
+                        .inverse = ellipsoid->inverse,
+                        .enabled = ellipsoid->enabled,
+                        .color = {ellipsoid->color.x, ellipsoid->color.y, ellipsoid->color.z},
+                        .line_width = ellipsoid->line_width,
+                    };
+                } else if (const auto* polygon = roi.polygon()) {
+                    CropPolygonRecord poly_record{
+                        .vertices = {},
+                        .half_depth = polygon->half_depth,
+                        .inverse = polygon->inverse,
+                        .enabled = polygon->enabled,
+                        .color = {polygon->color.x, polygon->color.y, polygon->color.z},
+                        .line_width = polygon->line_width,
+                    };
+                    poly_record.vertices.reserve(polygon->vertices.size());
+                    for (const glm::vec2& vertex : polygon->vertices)
+                        poly_record.vertices.push_back({vertex.x, vertex.y});
+                    record.crop_polygon = std::move(poly_record);
+                }
                 result.region_of_interest = std::move(record);
             }
             if (node.camera) {
@@ -538,6 +560,42 @@ namespace lfs::io::project {
             SceneNodeRecord record;
             lfs::core::Scene::RestoreNodeDesc desc;
         };
+
+        lfs::core::CropBoxData hydrate_cropbox(const CropBoxRecord& record) {
+            return lfs::core::CropBoxData{
+                .min = glm::vec3(record.min[0], record.min[1], record.min[2]),
+                .max = glm::vec3(record.max[0], record.max[1], record.max[2]),
+                .inverse = record.inverse,
+                .enabled = record.enabled,
+                .color = glm::vec3(record.color[0], record.color[1], record.color[2]),
+                .line_width = record.line_width,
+                .flash_intensity = 0.0f,
+            };
+        }
+
+        lfs::core::EllipsoidData hydrate_ellipsoid(const EllipsoidRecord& record) {
+            return lfs::core::EllipsoidData{
+                .radii = glm::vec3(record.radii[0], record.radii[1], record.radii[2]),
+                .inverse = record.inverse,
+                .enabled = record.enabled,
+                .color = glm::vec3(record.color[0], record.color[1], record.color[2]),
+                .line_width = record.line_width,
+                .flash_intensity = 0.0f,
+            };
+        }
+
+        lfs::core::CropPolygonData hydrate_crop_polygon(const CropPolygonRecord& record) {
+            lfs::core::CropPolygonData data;
+            data.vertices.reserve(record.vertices.size());
+            for (const auto& vertex : record.vertices)
+                data.vertices.emplace_back(vertex[0], vertex[1]);
+            data.half_depth = record.half_depth;
+            data.inverse = record.inverse;
+            data.enabled = record.enabled;
+            data.color = glm::vec3(record.color[0], record.color[1], record.color[2]);
+            data.line_width = record.line_width;
+            return data;
+        }
 
     } // namespace
 
@@ -714,6 +772,57 @@ namespace lfs::io::project {
                 }
             }
 
+            std::unordered_map<lfs::core::Uuid, const SceneNodeRecord*> migrated_roi_child_by_parent;
+            std::unordered_set<lfs::core::Uuid> migrated_roi_children;
+            if (chapter.schema_version() < SCNG_CHAPTER_SCHEMA_VERSION) {
+                std::unordered_set<lfs::core::Uuid> has_children;
+                std::unordered_map<lfs::core::Uuid, const SceneNodeRecord*> records_by_uuid;
+                has_children.reserve(nodes->size());
+                records_by_uuid.reserve(nodes->size());
+                for (const SceneNodeRecord& record : *nodes) {
+                    records_by_uuid.emplace(record.uuid, &record);
+                    if (record.parent_uuid)
+                        has_children.insert(*record.parent_uuid);
+                }
+                const auto is_crop_enabled = [](const SceneNodeRecord& record) {
+                    return (record.cropbox && record.cropbox->enabled) ||
+                           (record.ellipsoid && record.ellipsoid->enabled) ||
+                           (record.crop_polygon && record.crop_polygon->enabled);
+                };
+                for (const SceneNodeRecord& record : *nodes) {
+                    if (!record.parent_uuid || has_children.contains(record.uuid))
+                        continue;
+                    const bool is_crop_record =
+                        (record.type == "cropbox" && record.cropbox) ||
+                        (record.type == "ellipsoid" && record.ellipsoid) ||
+                        (record.type == "crop_polygon" && record.crop_polygon);
+                    if (!is_crop_record)
+                        continue;
+                    const auto parent_it = records_by_uuid.find(*record.parent_uuid);
+                    if (parent_it == records_by_uuid.end())
+                        continue;
+                    const SceneNodeRecord& parent = *parent_it->second;
+                    if ((parent.type != "splat" && parent.type != "pointcloud") || parent.region_of_interest)
+                        continue;
+                    const auto [existing_it, inserted] =
+                        migrated_roi_child_by_parent.emplace(parent.uuid, &record);
+                    if (!inserted) {
+                        const bool candidate_enabled = is_crop_enabled(record);
+                        const bool current_enabled = is_crop_enabled(*existing_it->second);
+                        if ((candidate_enabled && !current_enabled) ||
+                            (candidate_enabled == current_enabled &&
+                             record.child_order < existing_it->second->child_order)) {
+                            existing_it->second = &record;
+                        }
+                    }
+                }
+                migrated_roi_children.reserve(migrated_roi_child_by_parent.size());
+                for (const auto& [parent_uuid, child_record] : migrated_roi_child_by_parent) {
+                    (void)parent_uuid;
+                    migrated_roi_children.insert(child_record->uuid);
+                }
+            }
+
             std::vector<StagedNode> staged;
             staged.reserve(payload_units_only ? keep.size() : nodes->size());
             for (const SceneNodeRecord& record : *nodes) {
@@ -768,6 +877,9 @@ namespace lfs::io::project {
                         std::format("SCNG camera model {} is outside the v1 enum",
                                     record.camera->camera_model_type),
                         record.uuid);
+                }
+                if (migrated_roi_children.contains(record.uuid)) {
+                    continue;
                 }
                 if (payload_units_only && !keep.contains(record.uuid)) {
                     continue;
@@ -829,73 +941,49 @@ namespace lfs::io::project {
                     desc.collision = std::move(*payload);
                 }
                 if (record.cropbox) {
-                    desc.cropbox = std::make_unique<lfs::core::CropBoxData>(
-                        lfs::core::CropBoxData{
-                            .min = glm::vec3(record.cropbox->min[0],
-                                             record.cropbox->min[1],
-                                             record.cropbox->min[2]),
-                            .max = glm::vec3(record.cropbox->max[0],
-                                             record.cropbox->max[1],
-                                             record.cropbox->max[2]),
-                            .inverse = record.cropbox->inverse,
-                            .enabled = record.cropbox->enabled,
-                            .color = glm::vec3(record.cropbox->color[0],
-                                               record.cropbox->color[1],
-                                               record.cropbox->color[2]),
-                            .line_width = record.cropbox->line_width,
-                            .flash_intensity = 0.0f,
-                        });
+                    desc.cropbox = std::make_unique<lfs::core::CropBoxData>(hydrate_cropbox(*record.cropbox));
                 }
                 if (record.ellipsoid) {
-                    desc.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(
-                        lfs::core::EllipsoidData{
-                            .radii = glm::vec3(record.ellipsoid->radii[0],
-                                               record.ellipsoid->radii[1],
-                                               record.ellipsoid->radii[2]),
-                            .inverse = record.ellipsoid->inverse,
-                            .enabled = record.ellipsoid->enabled,
-                            .color = glm::vec3(record.ellipsoid->color[0],
-                                               record.ellipsoid->color[1],
-                                               record.ellipsoid->color[2]),
-                            .line_width = record.ellipsoid->line_width,
-                            .flash_intensity = 0.0f,
-                        });
+                    desc.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(hydrate_ellipsoid(*record.ellipsoid));
                 }
                 if (record.crop_polygon) {
-                    auto data = std::make_unique<lfs::core::CropPolygonData>();
-                    data->vertices.reserve(record.crop_polygon->vertices.size());
-                    for (const auto& vertex : record.crop_polygon->vertices) {
-                        data->vertices.emplace_back(vertex[0], vertex[1]);
-                    }
-                    data->half_depth = record.crop_polygon->half_depth;
-                    data->inverse = record.crop_polygon->inverse;
-                    data->enabled = record.crop_polygon->enabled;
-                    data->color = glm::vec3(record.crop_polygon->color[0],
-                                            record.crop_polygon->color[1],
-                                            record.crop_polygon->color[2]);
-                    data->line_width = record.crop_polygon->line_width;
-                    desc.crop_polygon = std::move(data);
+                    desc.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(hydrate_crop_polygon(*record.crop_polygon));
                 }
                 if (record.region_of_interest) {
                     const auto& roi = *record.region_of_interest;
+                    const int shape_count = (roi.cropbox ? 1 : 0) + (roi.ellipsoid ? 1 : 0) + (roi.crop_polygon ? 1 : 0);
+                    if (shape_count != 1) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "A scene node has an invalid region of interest.",
+                            std::format("SCNG node {} ROI must contain exactly one shape record", record.uuid.to_string()),
+                            record.uuid);
+                    }
                     auto data = std::make_unique<lfs::core::RegionOfInterestData>();
-                    data->shape = roi.shape == "ellipsoid" ? lfs::core::RegionOfInterestShape::Ellipsoid :
-                                  roi.shape == "polygon" ? lfs::core::RegionOfInterestShape::Polygon :
-                                                           lfs::core::RegionOfInterestShape::Box;
-                    data->min = glm::vec3(roi.min[0], roi.min[1], roi.min[2]);
-                    data->max = glm::vec3(roi.max[0], roi.max[1], roi.max[2]);
-                    data->radii = glm::vec3(roi.radii[0], roi.radii[1], roi.radii[2]);
-                    data->half_depth = roi.half_depth;
+                    if (roi.cropbox)
+                        data->shape_data = hydrate_cropbox(*roi.cropbox);
+                    else if (roi.ellipsoid)
+                        data->shape_data = hydrate_ellipsoid(*roi.ellipsoid);
+                    else if (roi.crop_polygon)
+                        data->shape_data = hydrate_crop_polygon(*roi.crop_polygon);
                     data->local_transform = glm::make_mat4(roi.local_transform.data());
-                    data->inverse = roi.inverse;
-                    data->enabled = roi.enabled;
                     data->crop_point_cloud_before_training = roi.crop_point_cloud_before_training;
                     data->crop_model_after_training = roi.crop_model_after_training;
                     data->select_relevant_cameras = roi.select_relevant_cameras;
                     data->camera_coverage_percent = roi.camera_coverage_percent;
-                    data->color = glm::vec3(roi.color[0], roi.color[1], roi.color[2]);
-                    for (const auto& vertex : roi.vertices)
-                        data->vertices.emplace_back(vertex[0], vertex[1]);
+                    desc.region_of_interest = std::move(data);
+                } else if (const auto migrated = migrated_roi_child_by_parent.find(record.uuid);
+                           migrated != migrated_roi_child_by_parent.end()) {
+                    const SceneNodeRecord& child = *migrated->second;
+                    auto data = std::make_unique<lfs::core::RegionOfInterestData>();
+                    if (child.cropbox)
+                        data->shape_data = hydrate_cropbox(*child.cropbox);
+                    else if (child.ellipsoid)
+                        data->shape_data = hydrate_ellipsoid(*child.ellipsoid);
+                    else if (child.crop_polygon)
+                        data->shape_data = hydrate_crop_polygon(*child.crop_polygon);
+                    data->setColor(lfs::core::kDefaultRoiColor);
+                    data->local_transform = glm::make_mat4(child.local_transform.data());
                     desc.region_of_interest = std::move(data);
                 }
                 if (record.camera) {

@@ -179,15 +179,9 @@ def _crop_roi_param_state():
         lr_scale = float(params.cropbox_lr_scale)
         loss_weight = float(params.cropbox_loss_weight)
         growth_inside = float(params.cropbox_growth_inside)
-        get_fn = getattr(params, "get", None)
-        crop_at_end = (
-            bool(get_fn("crop_to_cropbox"))
-            if callable(get_fn)
-            else bool(getattr(params, "crop_to_cropbox", getattr(params, "crop_to_cropbox_at_end", False)))
-        )
         if not all(math.isfinite(value) for value in (lr_scale, loss_weight, growth_inside)):
             return unavailable
-        return True, lr_scale, loss_weight, growth_inside, crop_at_end
+        return True, lr_scale, loss_weight, growth_inside, False
     except (AttributeError, TypeError, ValueError, RuntimeError):
         return False, _CROP_ROI_DEFAULT, _CROP_ROI_DEFAULT, _CROP_ROI_GROWTH_DEFAULT, False
 
@@ -2159,24 +2153,19 @@ class _ViewportToolbarController:
         signature = self._gizmo.cropbox_toolbar_signature()
         if not self._crop_roi_signature_available(signature):
             return
+        if len(signature) < 15 or signature[1] != "roi":
+            return
         enabled = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "on")
         try:
             import lichtfeld as lf
 
-            params = lf.optimization_params()
-            if params is None:
+            setter = getattr(lf.ui, "set_roi_training_settings", None)
+            if not callable(setter):
                 return
-            has_params = getattr(params, "has_params", None)
-            if callable(has_params) and not has_params():
-                return
-            params.set("crop_to_cropbox", enabled)
-            if len(signature) >= 15 and signature[1] == "roi":
-                setter = getattr(lf.ui, "set_roi_training_settings", None)
-                if callable(setter):
-                    setter(
-                        node_name=signature[0],
-                        crop_model_after_training=enabled,
-                    )
+            setter(
+                node_name=signature[0],
+                crop_model_after_training=enabled,
+            )
         except (AttributeError, TypeError, ValueError, RuntimeError):
             return
         self._sync_value("crop_to_cropbox", enabled)

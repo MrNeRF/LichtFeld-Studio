@@ -313,7 +313,6 @@ namespace lfs::training {
 
     // Closed box from 8 corners in the training frame, corner index bits = (x, y, z) side; selected exactly like a mesh.
     [[nodiscard]] EvaluationMesh make_evaluation_box(const std::array<std::array<float, 3>, 8>& corners, bool invert);
-    [[nodiscard]] EvaluationMesh make_evaluation_roi_mesh(const TrainingCropBoxGeometry& geometry);
     [[nodiscard]] std::array<std::array<float, 3>, 8> axis_aligned_box_corners(
         const std::array<float, 6>& box, const std::array<float, 3>& training_origin);
 

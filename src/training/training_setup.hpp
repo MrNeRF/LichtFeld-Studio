@@ -165,13 +165,8 @@ namespace lfs::training {
         lfs::core::SplatTensorAllocator tensor_allocator = {});
 
     /// Give the training model the enabled --cropbox crop box, turned by --cropbox-rotation about its centre.
-    /// Does nothing without --cropbox.
+    /// Does nothing without --cropbox or --crop.
     [[nodiscard]] lfs::Status applyTrainingCropBox(
-        const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene);
-
-    /// Give the training model the dedicated CLI ROI. Does nothing without --roi.
-    [[nodiscard]] lfs::Status applyTrainingRoi(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
 

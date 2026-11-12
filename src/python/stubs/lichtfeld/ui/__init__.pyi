@@ -2443,6 +2443,12 @@ def get_crop_tool_inverse() -> bool | None:
     Whether the crop volume Invert acts on is inverted, or None without one
     """
 
+def get_roi_training_settings(node_name: str = '') -> dict:
+    """Read training controls for a target-owned ROI"""
+
+def set_roi_training_settings(node_name: str = '', enabled: bool | None = None, inverse: bool | None = None, crop_point_cloud_before_training: bool | None = None, crop_model_after_training: bool | None = None, select_relevant_cameras: bool | None = None, camera_coverage_percent: float | None = None) -> bool:
+    """Update training controls for a target-owned ROI"""
+
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""
 

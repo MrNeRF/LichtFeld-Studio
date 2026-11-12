@@ -3379,24 +3379,20 @@ namespace lfs::vis::gui {
                     if (active_roi_gizmo && node->id == active_roi_target_id)
                         continue;
                     const auto* const roi = scene.getRegionOfInterestData(node->id);
-                    if (!roi || !roi->enabled || !scene.isNodeEffectivelyVisible(node->id))
+                    if (!roi || !roi->enabled() || !scene.isNodeEffectivelyVisible(node->id))
                         continue;
                     const glm::mat4 roi_world =
                         lfs::rendering::dataWorldTransformToVisualizerWorld(
                             scene.getWorldTransform(node->id) * roi->local_transform);
                     const glm::vec4 roi_color =
                         cropGuideColor(glm::vec3(0.67f, 0.35f, 0.95f), false, 0.0f);
-                    switch (roi->shape) {
-                    case core::RegionOfInterestShape::Box:
-                        appendProjectedBox(params, panel, settings, roi->min, roi->max, roi_world, roi_color, 2.0f);
-                        break;
-                    case core::RegionOfInterestShape::Ellipsoid:
-                        appendProjectedEllipsoid(params, panel, settings, roi->radii, roi_world, roi_color, 2.0f);
-                        break;
-                    case core::RegionOfInterestShape::Polygon:
-                        appendProjectedCropPolygon(params, panel, settings, roi->vertices, roi->half_depth, roi_world,
+                    if (const auto* const box = roi->box()) {
+                        appendProjectedBox(params, panel, settings, box->min, box->max, roi_world, roi_color, 2.0f);
+                    } else if (const auto* const ellipsoid = roi->ellipsoid()) {
+                        appendProjectedEllipsoid(params, panel, settings, ellipsoid->radii, roi_world, roi_color, 2.0f);
+                    } else if (const auto* const polygon = roi->polygon()) {
+                        appendProjectedCropPolygon(params, panel, settings, polygon->vertices, polygon->half_depth, roi_world,
                                                    roi_color, 2.0f);
-                        break;
                     }
                 }
             }

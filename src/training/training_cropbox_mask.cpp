@@ -49,7 +49,7 @@ namespace lfs::training {
             for (const auto* node : scene.getNodes()) {
                 if (node &&
                     (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) &&
-                    node->region_of_interest && node->region_of_interest->enabled) {
+                    node->region_of_interest && node->region_of_interest->enabled()) {
                     return node;
                 }
             }
@@ -65,42 +65,46 @@ namespace lfs::training {
         }
 
         const auto* roi = scene.getRegionOfInterestData(training_node->id);
-        if (!roi || !roi->enabled) {
+        if (!roi || !roi->enabled()) {
             return std::nullopt;
         }
         const glm::mat4 world_to_cropbox = glm::inverse(
             scene.getWorldTransform(training_node->id) * roi->local_transform);
-        if (roi->shape == core::RegionOfInterestShape::Polygon) {
-            if (!core::crop_polygon::isValidOutline(roi->vertices) ||
-                !core::crop_polygon::isValidHalfDepth(roi->half_depth)) {
+        if (const auto* const polygon = roi->polygon()) {
+            if (!core::crop_polygon::isValidOutline(polygon->vertices) ||
+                !core::crop_polygon::isValidHalfDepth(polygon->half_depth)) {
                 return std::nullopt;
             }
-            const glm::vec2 extents = core::crop_polygon::outlineHalfExtents(roi->vertices);
-            return TrainingCropBoxGeometry{.min = glm::vec3(-extents, -roi->half_depth),
-                                           .max = glm::vec3(extents, roi->half_depth),
+            const glm::vec2 extents = core::crop_polygon::outlineHalfExtents(polygon->vertices);
+            return TrainingCropBoxGeometry{.min = glm::vec3(-extents, -polygon->half_depth),
+                                           .max = glm::vec3(extents, polygon->half_depth),
                                            .world_to_cropbox = world_to_cropbox,
                                            .model_to_cropbox = world_to_cropbox * scene.getWorldTransform(training_node->id),
-                                           .inverse = roi->inverse,
-                                           .polygon = roi->vertices,
+                                           .inverse = polygon->inverse,
+                                           .polygon = polygon->vertices,
                                            .crop_model_after_training = roi->crop_model_after_training};
         }
-        if (roi->shape == core::RegionOfInterestShape::Ellipsoid) {
-            return TrainingCropBoxGeometry{.min = -roi->radii,
-                                           .max = roi->radii,
+        if (const auto* const ellipsoid = roi->ellipsoid()) {
+            return TrainingCropBoxGeometry{.min = -ellipsoid->radii,
+                                           .max = ellipsoid->radii,
                                            .world_to_cropbox = world_to_cropbox,
                                            .model_to_cropbox = world_to_cropbox * scene.getWorldTransform(training_node->id),
-                                           .inverse = roi->inverse,
-                                           .ellipsoid_radii = roi->radii,
+                                           .inverse = ellipsoid->inverse,
+                                           .ellipsoid_radii = ellipsoid->radii,
                                            .ellipsoid = true,
                                            .crop_model_after_training = roi->crop_model_after_training};
         }
+        const auto* const box = roi->box();
+        if (!box) {
+            return std::nullopt;
+        }
         return TrainingCropBoxGeometry{
-            .min = roi->min,
-            .max = roi->max,
+            .min = box->min,
+            .max = box->max,
             .world_to_cropbox = world_to_cropbox,
             .model_to_cropbox =
                 world_to_cropbox * scene.getWorldTransform(training_node->id),
-            .inverse = roi->inverse,
+            .inverse = box->inverse,
             .crop_model_after_training = roi->crop_model_after_training};
     }
 
@@ -293,31 +297,27 @@ namespace lfs::training {
             const auto append = [&](const glm::vec3 local) {
                 points.push_back(glm::vec3(to_world * glm::vec4(local, 1.0F)));
             };
-            switch (roi.shape) {
-            case core::RegionOfInterestShape::Box:
+            if (const auto* const box = roi.box()) {
                 points.reserve(8);
-                for (const float x : {roi.min.x, roi.max.x})
-                    for (const float y : {roi.min.y, roi.max.y})
-                        for (const float z : {roi.min.z, roi.max.z})
+                for (const float x : {box->min.x, box->max.x})
+                    for (const float y : {box->min.y, box->max.y})
+                        for (const float z : {box->min.z, box->max.z})
                             append({x, y, z});
-                break;
-            case core::RegionOfInterestShape::Ellipsoid:
+            } else if (const auto* const ellipsoid = roi.ellipsoid()) {
                 points.reserve(26);
                 for (const float x : {-1.0F, 0.0F, 1.0F})
                     for (const float y : {-1.0F, 0.0F, 1.0F})
                         for (const float z : {-1.0F, 0.0F, 1.0F}) {
                             const glm::vec3 direction{x, y, z};
                             if (glm::dot(direction, direction) > 0.0F)
-                                append(glm::normalize(direction) * roi.radii);
+                                append(glm::normalize(direction) * ellipsoid->radii);
                         }
-                break;
-            case core::RegionOfInterestShape::Polygon:
-                points.reserve(roi.vertices.size() * 2);
-                for (const auto& vertex : roi.vertices) {
-                    append({vertex.x, vertex.y, -roi.half_depth});
-                    append({vertex.x, vertex.y, roi.half_depth});
+            } else if (const auto* const polygon = roi.polygon()) {
+                points.reserve(polygon->vertices.size() * 2);
+                for (const auto& vertex : polygon->vertices) {
+                    append({vertex.x, vertex.y, -polygon->half_depth});
+                    append({vertex.x, vertex.y, polygon->half_depth});
                 }
-                break;
             }
             return points;
         }
@@ -421,7 +421,7 @@ namespace lfs::training {
     bool select_relevant_roi_cameras(core::Scene& scene) {
         const auto* target = resolve_roi_target_node(scene);
         const auto* roi = target ? scene.getRegionOfInterestData(target->id) : nullptr;
-        if (!target || !roi || !roi->enabled || !roi->select_relevant_cameras)
+        if (!target || !roi || !roi->enabled() || !roi->select_relevant_cameras)
             return false;
         const auto geometry = resolve_training_cropbox_geom(scene);
         const auto points = roi_camera_coverage_points(scene, *target, *roi);
@@ -448,14 +448,14 @@ namespace lfs::training {
 
         std::unordered_set<core::NodeId> selected;
         const float threshold = std::clamp(roi->camera_coverage_percent, 0.0F, 100.0F);
-        const bool is_polygon_prism = roi->shape == core::RegionOfInterestShape::Polygon;
+        const bool is_polygon_prism = roi->polygon() != nullptr;
         for (const auto& [id, camera] : cameras) {
             const glm::vec3 local_center = glm::vec3(
                 geometry->world_to_cropbox * glm::vec4(camera.center, 1.0F));
             float coverage = roi_camera_crop_coverage(
                 camera, points, training_crop_region_contains(*geometry, local_center),
                 is_polygon_prism);
-            if (roi->inverse)
+            if (roi->inverse())
                 coverage = 100.0F - coverage;
             if (coverage > 0.0F && coverage >= threshold)
                 selected.insert(id);
@@ -473,13 +473,12 @@ namespace lfs::training {
         const core::NodeId target_id,
         const core::RegionOfInterestData& roi) {
         const auto* target_node = scene.getNodeById(target_id);
-        if (!target_node || !roi.enabled || roi.crop_model_after_training)
+        if (!target_node || !roi.enabled() || roi.crop_model_after_training)
             return;
 
         // Never repurpose a user's existing Crop helper. The fallback is
         // only an optional, disabled manual action when switching to edit mode.
-        switch (roi.shape) {
-        case core::RegionOfInterestShape::Box: {
+        if (const auto* const box = roi.box()) {
             if (scene.getCropBoxForSplat(target_id) != core::NULL_NODE)
                 return;
             const auto id = scene.addCropBox(target_node->name + "_roi_crop", target_id);
@@ -487,15 +486,15 @@ namespace lfs::training {
             const auto* node = scene.getNodeById(id);
             if (!data || !node)
                 return;
-            data->min = roi.min;
-            data->max = roi.max;
-            data->inverse = roi.inverse;
+            data->min = box->min;
+            data->max = box->max;
+            data->inverse = box->inverse;
             data->enabled = false;
             scene.setNodeTransform(node->id, roi.local_transform);
             scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
             return;
         }
-        case core::RegionOfInterestShape::Ellipsoid: {
+        if (const auto* const ellipsoid = roi.ellipsoid()) {
             if (scene.getEllipsoidForSplat(target_id) != core::NULL_NODE)
                 return;
             const auto id = scene.addEllipsoid(target_node->name + "_roi_ellipsoid", target_id);
@@ -503,27 +502,23 @@ namespace lfs::training {
             const auto* node = scene.getNodeById(id);
             if (!data || !node)
                 return;
-            data->radii = roi.radii;
-            data->inverse = roi.inverse;
+            data->radii = ellipsoid->radii;
+            data->inverse = ellipsoid->inverse;
             data->enabled = false;
             scene.setNodeTransform(node->id, roi.local_transform);
             scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
             return;
         }
-        case core::RegionOfInterestShape::Polygon: {
+        if (const auto* const polygon = roi.polygon()) {
             if (scene.getCropPolygonForSplat(target_id) != core::NULL_NODE ||
-                !core::crop_polygon::isValidOutline(roi.vertices) ||
-                !core::crop_polygon::isValidHalfDepth(roi.half_depth))
+                !core::crop_polygon::isValidOutline(polygon->vertices) ||
+                !core::crop_polygon::isValidHalfDepth(polygon->half_depth))
                 return;
-            core::CropPolygonData data;
-            data.vertices = roi.vertices;
-            data.half_depth = roi.half_depth;
-            data.inverse = roi.inverse;
+            core::CropPolygonData data = *polygon;
             data.enabled = false;
             static_cast<void>(scene.addCropPolygon(
                 target_node->name + "_roi_polygon", target_id, std::move(data), roi.local_transform));
             return;
-        }
         }
     }
 

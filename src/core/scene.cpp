@@ -6626,10 +6626,21 @@ namespace lfs::core {
         const auto finite_vec3 = [](const glm::vec3& value) {
             return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
         };
-        const bool finite_box = finite_vec3(data.min) && finite_vec3(data.max) &&
-                                data.min.x < data.max.x && data.min.y < data.max.y && data.min.z < data.max.z;
-        const bool finite_radii = finite_vec3(data.radii) && data.radii.x > 0.0f &&
-                                  data.radii.y > 0.0f && data.radii.z > 0.0f;
+        const bool valid_shape = std::visit(
+            [&](const auto& shape) {
+                using T = std::decay_t<decltype(shape)>;
+                if constexpr (std::is_same_v<T, CropBoxData>) {
+                    return finite_vec3(shape.min) && finite_vec3(shape.max) &&
+                           shape.min.x < shape.max.x && shape.min.y < shape.max.y && shape.min.z < shape.max.z;
+                } else if constexpr (std::is_same_v<T, EllipsoidData>) {
+                    return finite_vec3(shape.radii) &&
+                           shape.radii.x > 0.0f && shape.radii.y > 0.0f && shape.radii.z > 0.0f;
+                } else {
+                    return crop_polygon::isValidOutline(shape.vertices) &&
+                           crop_polygon::isValidHalfDepth(shape.half_depth);
+                }
+            },
+            data.shape_data);
         bool finite_transform = true;
         for (int column = 0; column < 4; ++column)
             for (int row = 0; row < 4; ++row)
@@ -6637,11 +6648,7 @@ namespace lfs::core {
         const bool finite_settings = std::isfinite(data.camera_coverage_percent) &&
                                      data.camera_coverage_percent >= 0.0f &&
                                      data.camera_coverage_percent <= 100.0f;
-        if (!finite_transform || !finite_settings ||
-            (data.shape == RegionOfInterestShape::Box && !finite_box) ||
-            (data.shape == RegionOfInterestShape::Ellipsoid && !finite_radii) ||
-            (data.shape == RegionOfInterestShape::Polygon &&
-             (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)))) {
+        if (!finite_transform || !finite_settings || !valid_shape) {
             LOG_WARN("Rejected invalid region-of-interest data for '{}'", node->name);
             return false;
         }

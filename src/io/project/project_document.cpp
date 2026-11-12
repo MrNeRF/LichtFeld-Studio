@@ -2416,11 +2416,18 @@ namespace lfs::io::project {
                         "The project contains duplicate SCNG chapters.",
                         "Only one SCNG instance is allowed", "SCNG");
                 }
+                auto source_dom = JsonChapterDom::from_bytes(*bytes);
+                if (!source_dom) {
+                    return std::move(source_dom).error();
+                }
                 auto chapter = SceneGraphChapter::from_bytes(*bytes);
                 if (!chapter) {
                     return std::move(chapter).error();
                 }
                 impl->scene_graph = std::move(*chapter);
+                if (source_dom->dump() != impl->scene_graph.dom().dump()) {
+                    impl->normalized_source_keys.insert(row.key);
+                }
                 if (has_unknown_json_root(
                         FOURCC_SCNG, impl->scene_graph.dom()) &&
                     !shared_reader->commit()

@@ -530,7 +530,7 @@ def remove_disabled_cameras(camera_group_id: int) -> int:
 
 def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
     """
-    Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    Start a cancellable camera-group selection job. roi_visibility uses the active training ROI; cropbox_visibility is accepted as a compatibility alias.
     """
 
 def camera_selection_status() -> dict:

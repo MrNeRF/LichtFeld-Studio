@@ -1578,15 +1578,7 @@ namespace lfs::core {
                     json["cropbox"] = *params.cropbox;
                 if (params.cropbox_rotation)
                     json["cropbox_rotation"] = *params.cropbox_rotation;
-                if (params.roi)
-                    json["roi"] = *params.roi;
-                if (params.roi_rotation)
-                    json["roi_rotation"] = *params.roi_rotation;
-                json["roi_invert"] = params.roi_invert;
-                json["roi_crop_point_cloud"] = params.roi_crop_point_cloud;
-                json["crop_to_roi"] = params.crop_to_roi;
-                json["roi_relevant_cameras"] = params.roi_relevant_cameras;
-                json["roi_camera_coverage"] = params.roi_camera_coverage;
+                json["crop"] = params.crop;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);

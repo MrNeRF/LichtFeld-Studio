@@ -4697,25 +4697,25 @@ namespace lfs::vis::gui {
             const auto append = [&](const glm::vec3 point) {
                 points.push_back(glm::vec3(transform * glm::vec4(point, 1.0F)));
             };
-            if (data.shape == core::RegionOfInterestShape::Polygon) {
-                points.reserve(data.vertices.size() * 2);
-                for (const auto& vertex : data.vertices) {
-                    append({vertex.x, vertex.y, -data.half_depth});
-                    append({vertex.x, vertex.y, data.half_depth});
+            if (const auto* const polygon = data.polygon()) {
+                points.reserve(polygon->vertices.size() * 2);
+                for (const auto& vertex : polygon->vertices) {
+                    append({vertex.x, vertex.y, -polygon->half_depth});
+                    append({vertex.x, vertex.y, polygon->half_depth});
                 }
-            } else if (data.shape == core::RegionOfInterestShape::Ellipsoid) {
+            } else if (const auto* const ellipsoid = data.ellipsoid()) {
                 // Axis and diagonal samples bound the projected ellipsoid without treating it as a crop box.
                 for (const float x : {-1.0F, 0.0F, 1.0F})
                     for (const float y : {-1.0F, 0.0F, 1.0F})
                         for (const float z : {-1.0F, 0.0F, 1.0F}) {
                             const glm::vec3 direction{x, y, z};
                             if (glm::dot(direction, direction) > 0.0F)
-                                append(glm::normalize(direction) * data.radii);
+                                append(glm::normalize(direction) * ellipsoid->radii);
                         }
-            } else {
-                for (const float x : {data.min.x, data.max.x})
-                    for (const float y : {data.min.y, data.max.y})
-                        for (const float z : {data.min.z, data.max.z})
+            } else if (const auto* const box = data.box()) {
+                for (const float x : {box->min.x, box->max.x})
+                    for (const float y : {box->min.y, box->max.y})
+                        for (const float z : {box->min.z, box->max.z})
                             append({x, y, z});
             }
             return points;
@@ -4723,17 +4723,17 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool roi_contains_local(const core::RegionOfInterestData& roi,
                                               const glm::vec3 local) {
-            switch (roi.shape) {
-            case core::RegionOfInterestShape::Box:
-                return glm::all(glm::greaterThanEqual(local, roi.min)) &&
-                       glm::all(glm::lessThanEqual(local, roi.max));
-            case core::RegionOfInterestShape::Ellipsoid: {
-                const glm::vec3 normalized = local / roi.radii;
+            if (const auto* const box = roi.box()) {
+                return glm::all(glm::greaterThanEqual(local, box->min)) &&
+                       glm::all(glm::lessThanEqual(local, box->max));
+            }
+            if (const auto* const ellipsoid = roi.ellipsoid()) {
+                const glm::vec3 normalized = local / ellipsoid->radii;
                 return glm::dot(normalized, normalized) <= 1.0F;
             }
-            case core::RegionOfInterestShape::Polygon:
-                return std::abs(local.z) <= roi.half_depth &&
-                       core::crop_polygon::containsPoint(roi.vertices, glm::vec2(local));
+            if (const auto* const polygon = roi.polygon()) {
+                return std::abs(local.z) <= polygon->half_depth &&
+                       core::crop_polygon::containsPoint(polygon->vertices, glm::vec2(local));
             }
             return false;
         }
@@ -4814,7 +4814,7 @@ namespace lfs::vis::gui {
             for (const auto* const node : scene.getNodes()) {
                 if (node &&
                     (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) &&
-                    node->region_of_interest && node->region_of_interest->enabled) {
+                    node->region_of_interest && node->region_of_interest->enabled()) {
                     return node->id;
                 }
             }
@@ -4824,7 +4824,7 @@ namespace lfs::vis::gui {
         const auto* roi_target = scene.getNodeById(roi_target_id);
         if (options.operation == CameraSelectionOperation::RoiVisibility) {
             const auto* roi = scene.getRegionOfInterestData(roi_target_id);
-            if (!roi_target || !roi || !roi->enabled)
+            if (!roi_target || !roi || !roi->enabled())
                 return selection_error(LOC("scene.camera_selection_roi_required"));
             if (std::ranges::any_of(cameras, [](const auto& camera) {
                     return camera.model != core::CameraModelType::PINHOLE;
@@ -4861,16 +4861,16 @@ namespace lfs::vis::gui {
                 const auto* roi = scene.getRegionOfInterestData(roi_target_id);
                 camera_selection_state_.cropbox_world_to_local = glm::inverse(
                     scene.getWorldTransform(roi_target_id) * roi->local_transform);
-                if (roi->shape == core::RegionOfInterestShape::Ellipsoid) {
-                    camera_selection_state_.cropbox_min = -roi->radii;
-                    camera_selection_state_.cropbox_max = roi->radii;
-                } else if (roi->shape == core::RegionOfInterestShape::Polygon) {
-                    const auto extents = core::crop_polygon::outlineHalfExtents(roi->vertices);
-                    camera_selection_state_.cropbox_min = {-extents.x, -extents.y, -roi->half_depth};
-                    camera_selection_state_.cropbox_max = {extents.x, extents.y, roi->half_depth};
-                } else {
-                    camera_selection_state_.cropbox_min = roi->min;
-                    camera_selection_state_.cropbox_max = roi->max;
+                if (const auto* const ellipsoid = roi->ellipsoid()) {
+                    camera_selection_state_.cropbox_min = -ellipsoid->radii;
+                    camera_selection_state_.cropbox_max = ellipsoid->radii;
+                } else if (const auto* const polygon = roi->polygon()) {
+                    const auto extents = core::crop_polygon::outlineHalfExtents(polygon->vertices);
+                    camera_selection_state_.cropbox_min = {-extents.x, -extents.y, -polygon->half_depth};
+                    camera_selection_state_.cropbox_max = {extents.x, extents.y, polygon->half_depth};
+                } else if (const auto* const box = roi->box()) {
+                    camera_selection_state_.cropbox_min = box->min;
+                    camera_selection_state_.cropbox_max = box->max;
                 }
             }
             camera_selection_state_.has_cropbox = has_cropbox;
@@ -4890,7 +4890,7 @@ namespace lfs::vis::gui {
             snapshot_cropbox_min = camera_selection_state_.cropbox_min;
             snapshot_cropbox_max = camera_selection_state_.cropbox_max;
         }
-        const bool roi_inverse = has_cropbox && scene.getRegionOfInterestData(roi_target_id)->inverse;
+        const bool roi_inverse = has_cropbox && scene.getRegionOfInterestData(roi_target_id)->inverse();
         camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points), snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max, roi_inverse, roi_snapshot = std::move(roi_snapshot)](std::stop_token stop) mutable {
             jobs_.work(job);
             std::vector<size_t> selected;
@@ -4930,7 +4930,7 @@ namespace lfs::vis::gui {
                                                               ? std::optional<bool>(roi_contains_local(*roi_snapshot, local_center))
                                                               : std::nullopt;
                             const bool is_polygon_prism =
-                                roi_snapshot && roi_snapshot->shape == core::RegionOfInterestShape::Polygon;
+                                roi_snapshot && roi_snapshot->polygon() != nullptr;
                             float coverage = camera_selection::crop_coverage(
                                 cameras[index], cropbox_points, snapshot_cropbox_world_to_local,
                                 snapshot_cropbox_min, snapshot_cropbox_max, center_is_inside,
@@ -5020,7 +5020,7 @@ namespace lfs::vis::gui {
             if (valid && has_cropbox) {
                 const auto* target = manager->getScene().getNodeByUuid(cropbox_uuid);
                 const auto* roi = target ? manager->getScene().getRegionOfInterestData(target->id) : nullptr;
-                valid = target && roi && roi->enabled &&
+                valid = target && roi && roi->enabled() &&
                         same_roi_points(cropbox_points, roi_world_points(manager->getScene(), *target, *roi));
             }
             if (valid) {

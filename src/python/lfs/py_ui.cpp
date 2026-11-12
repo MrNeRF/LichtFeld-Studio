@@ -4891,14 +4891,14 @@ namespace lfs::python {
                         out.exists = roi != nullptr;
                         if (!roi || !target)
                             return out;
-                        out.enabled = roi->enabled;
+                        out.enabled = roi->enabled();
                         out.locked = scene->isNodeEffectivelyLocked(target_id);
                         out.target_name = target->name;
                         out.roi_node_name = scene->getRoiNodeName(target_id);
-                        out.shape = roi->shape == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid"
-                                    : roi->shape == lfs::core::RegionOfInterestShape::Polygon ? "polygon"
-                                                                                              : "box";
-                        out.inverse = roi->inverse;
+                        out.shape = roi->shape() == lfs::core::RegionOfInterestShape::Ellipsoid ? "ellipsoid"
+                                    : roi->shape() == lfs::core::RegionOfInterestShape::Polygon ? "polygon"
+                                                                                                : "box";
+                        out.inverse = roi->inverse();
                         out.crop_point_cloud_before_training = roi->crop_point_cloud_before_training;
                         out.crop_model_after_training = roi->crop_model_after_training;
                         out.select_relevant_cameras = roi->select_relevant_cameras;
@@ -4948,15 +4948,15 @@ namespace lfs::python {
                         const auto* existing = target ? scene->getRegionOfInterestData(target_id) : nullptr;
                         if (!existing || !target)
                             return false;
-                        const bool was_selecting_cameras = existing->enabled && existing->select_relevant_cameras;
+                        const bool was_selecting_cameras = existing->enabled() && existing->select_relevant_cameras;
                         const bool camera_criteria_changed =
                             enabled.has_value() || inverse.has_value() ||
                             select_relevant_cameras.has_value() || camera_coverage_percent.has_value();
                         auto roi = *existing;
                         if (enabled.has_value())
-                            roi.enabled = *enabled;
+                            roi.setEnabled(*enabled);
                         if (inverse.has_value())
-                            roi.inverse = *inverse;
+                            roi.setInverse(*inverse);
                         if (crop_point_cloud_before_training.has_value())
                             roi.crop_point_cloud_before_training = *crop_point_cloud_before_training;
                         if (crop_model_after_training.has_value())
@@ -4974,7 +4974,7 @@ namespace lfs::python {
                             .payload_uuids = std::vector<lfs::core::Uuid>{},
                         };
                         std::vector<lfs::core::NodeId> capture_ids{target_id};
-                        if (camera_criteria_changed && ((roi.enabled && roi.select_relevant_cameras) || was_selecting_cameras)) {
+                        if (camera_criteria_changed && ((roi.enabled() && roi.select_relevant_cameras) || was_selecting_cameras)) {
                             for (const auto* const node : scene->getNodes()) {
                                 if (node && node->type == lfs::core::NodeType::CAMERA)
                                     capture_ids.push_back(node->id);
@@ -4988,7 +4988,7 @@ namespace lfs::python {
                             return false;
 
                         if (camera_criteria_changed) {
-                            if (roi.enabled && roi.select_relevant_cameras) {
+                            if (roi.enabled() && roi.select_relevant_cameras) {
                                 (void)lfs::training::select_relevant_roi_cameras(*scene);
                             } else if (was_selecting_cameras) {
                                 (void)scene->setAllCameraTrainingEnabled(true);

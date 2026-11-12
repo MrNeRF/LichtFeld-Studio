@@ -25,6 +25,7 @@
 namespace lfs::io::project {
 
     inline constexpr std::uint32_t JSON_CHAPTER_SCHEMA_VERSION = 1;
+    inline constexpr std::uint32_t SCNG_CHAPTER_SCHEMA_VERSION = 2;
 
     struct LFS_IO_API Hash128 {
         std::array<std::uint8_t, 16> bytes{};
@@ -395,21 +396,17 @@ namespace lfs::io::project {
     };
 
     struct RegionOfInterestRecord {
-        std::string shape = "box";
-        std::array<float, 3> min{-1.0f, -1.0f, -1.0f};
-        std::array<float, 3> max{1.0f, 1.0f, 1.0f};
-        std::array<float, 3> radii{1.0f, 1.0f, 1.0f};
-        std::vector<std::array<float, 2>> vertices;
-        float half_depth = 1.0f;
         std::array<float, 16> local_transform{1, 0, 0, 0, 0, 1, 0, 0,
                                                0, 0, 1, 0, 0, 0, 0, 1};
-        bool inverse = false;
-        bool enabled = true;
+        std::optional<CropBoxRecord> cropbox = CropBoxRecord{
+            .color = {0.67f, 0.35f, 0.95f},
+        };
+        std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
+        std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
         bool crop_point_cloud_before_training = false;
         bool crop_model_after_training = false;
         bool select_relevant_cameras = false;
         float camera_coverage_percent = 40.0f;
-        std::array<float, 3> color{0.67f, 0.35f, 0.95f};
 
         friend bool operator==(const RegionOfInterestRecord&, const RegionOfInterestRecord&) = default;
     };
@@ -494,6 +491,7 @@ namespace lfs::io::project {
             invalidate_parsed_nodes();
             return dom_;
         }
+        [[nodiscard]] std::uint32_t schema_version() const noexcept;
         [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>

@@ -120,37 +120,65 @@ namespace lfs::training {
 
         std::optional<TrainingCropBoxGeometry> point_cloud_roi_geometry(
             const lfs::core::RegionOfInterestData& roi) {
-            if (!roi.enabled)
+            if (!roi.enabled())
                 return std::nullopt;
             const glm::mat4 point_cloud_to_roi = glm::inverse(roi.local_transform);
             TrainingCropBoxGeometry geometry{
-                .min = roi.min,
-                .max = roi.max,
                 .world_to_cropbox = point_cloud_to_roi,
                 .model_to_cropbox = point_cloud_to_roi,
-                .inverse = roi.inverse,
+                .inverse = roi.inverse(),
                 .crop_model_after_training = roi.crop_model_after_training,
             };
-            switch (roi.shape) {
-            case lfs::core::RegionOfInterestShape::Box:
+            if (const auto* box = roi.box()) {
+                geometry.min = box->min;
+                geometry.max = box->max;
                 return geometry;
-            case lfs::core::RegionOfInterestShape::Ellipsoid:
-                geometry.min = -roi.radii;
-                geometry.max = roi.radii;
-                geometry.ellipsoid_radii = roi.radii;
+            }
+            if (const auto* ellipsoid = roi.ellipsoid()) {
+                geometry.min = -ellipsoid->radii;
+                geometry.max = ellipsoid->radii;
+                geometry.ellipsoid_radii = ellipsoid->radii;
                 geometry.ellipsoid = true;
                 return geometry;
-            case lfs::core::RegionOfInterestShape::Polygon:
-                if (!lfs::core::crop_polygon::isValidOutline(roi.vertices) ||
-                    !lfs::core::crop_polygon::isValidHalfDepth(roi.half_depth))
+            }
+            if (const auto* polygon = roi.polygon()) {
+                if (!lfs::core::crop_polygon::isValidOutline(polygon->vertices) ||
+                    !lfs::core::crop_polygon::isValidHalfDepth(polygon->half_depth))
                     return std::nullopt;
-                geometry.polygon = roi.vertices;
-                const glm::vec2 extents = lfs::core::crop_polygon::outlineHalfExtents(roi.vertices);
-                geometry.min = glm::vec3(-extents, -roi.half_depth);
-                geometry.max = glm::vec3(extents, roi.half_depth);
+                geometry.polygon = polygon->vertices;
+                const glm::vec2 extents = lfs::core::crop_polygon::outlineHalfExtents(polygon->vertices);
+                geometry.min = glm::vec3(-extents, -polygon->half_depth);
+                geometry.max = glm::vec3(extents, polygon->half_depth);
                 return geometry;
             }
             return std::nullopt;
+        }
+
+        lfs::core::RegionOfInterestData make_cli_cropbox_roi(
+            const std::array<float, 6>& box,
+            const std::optional<std::array<float, 3>>& rotation,
+            const bool crop_after_training) {
+            lfs::core::CropBoxData cropbox{
+                .min = {box[0], box[1], box[2]},
+                .max = {box[3], box[4], box[5]},
+                .inverse = false,
+                .enabled = true,
+                .color = lfs::core::kDefaultRoiColor,
+            };
+            glm::mat4 local_transform{1.0f};
+            if (rotation) {
+                const auto& degrees = *rotation;
+                local_transform = glm::translate(glm::mat4{1.0f}, (cropbox.min + cropbox.max) * 0.5f) *
+                                  glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
+                                                     glm::radians(degrees[2]));
+                cropbox.max = (cropbox.max - cropbox.min) * 0.5f;
+                cropbox.min = -cropbox.max;
+            }
+            return lfs::core::RegionOfInterestData{
+                .shape_data = std::move(cropbox),
+                .local_transform = local_transform,
+                .crop_model_after_training = crop_after_training,
+            };
         }
 
         bool crop_point_cloud_to_roi(lfs::core::PointCloud& point_cloud,
@@ -1379,40 +1407,16 @@ namespace lfs::training {
 
         TrainingModelGraphCapture context =
             graph_capture ? *graph_capture : captureTrainingModelGraph(scene);
-        if (params.roi) {
-            const auto& box = *params.roi;
-            lfs::core::RegionOfInterestData roi;
-            roi.shape = lfs::core::RegionOfInterestShape::Box;
-            roi.min = {box[0], box[1], box[2]};
-            roi.max = {box[3], box[4], box[5]};
-            roi.inverse = params.roi_invert;
-            roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
-            roi.crop_model_after_training = params.crop_to_roi || params.optimization.crop_to_cropbox;
-            roi.select_relevant_cameras = params.roi_relevant_cameras;
-            roi.camera_coverage_percent = params.roi_camera_coverage;
-            if (params.roi_rotation) {
-                const auto& degrees = *params.roi_rotation;
-                roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
-                                      glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
-                                                         glm::radians(degrees[2]));
-                roi.max = (roi.max - roi.min) * 0.5f;
-                roi.min = -roi.max;
-            }
-            context.preserved_region_of_interest = std::move(roi);
-        } else if (params.has_explicit_roi_controls() || params.optimization.crop_to_cropbox) {
+        if (params.cropbox) {
+            context.preserved_region_of_interest =
+                make_cli_cropbox_roi(*params.cropbox, params.cropbox_rotation, params.crop);
+        } else if (params.crop) {
             if (!context.preserved_region_of_interest) {
-                return std::unexpected("ROI controls need --roi, or a resumed project with an ROI");
+                return std::unexpected(
+                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                    "it needs --cropbox, or a resumed project that has a crop box");
             }
-            if (params.roi_invert)
-                context.preserved_region_of_interest->inverse = true;
-            if (params.roi_crop_point_cloud)
-                context.preserved_region_of_interest->crop_point_cloud_before_training = true;
-            if (params.crop_to_roi || params.optimization.crop_to_cropbox)
-                context.preserved_region_of_interest->crop_model_after_training = true;
-            if (params.roi_relevant_cameras)
-                context.preserved_region_of_interest->select_relevant_cameras = true;
-            if (params.roi_camera_coverage_set)
-                context.preserved_region_of_interest->camera_coverage_percent = params.roi_camera_coverage;
+            context.preserved_region_of_interest->crop_model_after_training = true;
         }
         warnIfMeshResolutionIgnored(params.optimization);
         const lfs::core::PointCloud* point_cloud =
@@ -1424,7 +1428,7 @@ namespace lfs::training {
             // The temporary copy is deliberately distinct from the PointCloud held by Scene.
             point_cloud_to_use = *point_cloud;
             if (context.preserved_region_of_interest &&
-                context.preserved_region_of_interest->enabled &&
+                context.preserved_region_of_interest->enabled() &&
                 context.preserved_region_of_interest->crop_point_cloud_before_training) {
                 const auto before = point_cloud_to_use.size();
                 if (!crop_point_cloud_to_roi(point_cloud_to_use, *context.preserved_region_of_interest)) {
@@ -1539,7 +1543,7 @@ namespace lfs::training {
     lfs::Status applyTrainingCropBox(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene) {
-        if (!params.cropbox) {
+        if (!params.cropbox && !params.crop) {
             return {};
         }
         const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
@@ -1551,102 +1555,37 @@ namespace lfs::training {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(model->id);
-        if (cropbox_id == lfs::core::NULL_NODE) {
-            cropbox_id = scene.addCropBox("Model_cropbox", model->id);
-        }
-        if (cropbox_id == lfs::core::NULL_NODE) {
-            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::Internal,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = "Failed to add the --cropbox Crop helper to the training model",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
-        }
-        const auto& box = *params.cropbox;
-        lfs::core::CropBoxData data = scene.getCropBoxData(cropbox_id) ? *scene.getCropBoxData(cropbox_id)
-                                                                       : lfs::core::CropBoxData{};
-        data.min = {box[0], box[1], box[2]};
-        data.max = {box[3], box[4], box[5]};
-        data.inverse = false;
-        data.enabled = true;
-        LOG_INFO("Pre-training Crop helper: box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
-                 box[5]);
-        glm::mat4 transform{1.0f};
-        if (params.cropbox_rotation) {
-            // Rx * Ry * Rz about the dataset's axes, the frame of the corners, turning the box about its centre.
-            const auto& degrees = *params.cropbox_rotation;
-            transform = glm::translate(glm::mat4{1.0f}, (data.min + data.max) * 0.5f) *
-                        glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]), glm::radians(degrees[2]));
-            data.max = (data.max - data.min) * 0.5f;
-            data.min = -data.max;
-            LOG_INFO("Pre-training Crop helper: box turned by ({}, {}, {}) degrees about its centre", degrees[0],
-                     degrees[1], degrees[2]);
-        }
-        scene.setCropBoxData(cropbox_id, data);
-        scene.setNodeTransform(cropbox_id, transform);
-        return {};
-    }
-
-    lfs::Status applyTrainingRoi(
-        const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene) {
-        if (!params.roi && !params.has_explicit_roi_controls() && !params.optimization.crop_to_cropbox)
-            return {};
-        const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
-        if (!model)
-            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::FailedPrecondition,
-                .domain = lfs::ErrorDomain::Training,
-                .user_message = "--roi needs the training model in the scene",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
         lfs::core::RegionOfInterestData roi;
-        if (params.roi) {
-            const auto& box = *params.roi;
-            roi.shape = lfs::core::RegionOfInterestShape::Box;
-            roi.min = {box[0], box[1], box[2]};
-            roi.max = {box[3], box[4], box[5]};
-            roi.inverse = params.roi_invert;
-            roi.crop_point_cloud_before_training = params.roi_crop_point_cloud;
-            roi.crop_model_after_training = params.crop_to_roi || params.optimization.crop_to_cropbox;
-            roi.select_relevant_cameras = params.roi_relevant_cameras;
-            roi.camera_coverage_percent = params.roi_camera_coverage;
-            if (params.roi_rotation) {
-                const auto& degrees = *params.roi_rotation;
-                roi.local_transform = glm::translate(glm::mat4{1.0f}, (roi.min + roi.max) * 0.5f) *
-                                      glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]),
-                                                         glm::radians(degrees[2]));
-                roi.max = (roi.max - roi.min) * 0.5f;
-                roi.min = -roi.max;
+        if (params.cropbox) {
+            const auto& box = *params.cropbox;
+            LOG_INFO("Region of interest: crop box ({}, {}, {}) to ({}, {}, {})",
+                     box[0], box[1], box[2], box[3], box[4], box[5]);
+            if (params.cropbox_rotation) {
+                const auto& degrees = *params.cropbox_rotation;
+                LOG_INFO("Region of interest: crop box turned by ({}, {}, {}) degrees about its centre",
+                         degrees[0], degrees[1], degrees[2]);
             }
+            roi = make_cli_cropbox_roi(*params.cropbox, params.cropbox_rotation, params.crop);
         } else {
             const auto* existing = scene.getRegionOfInterestData(model->id);
             if (!existing) {
                 return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::FailedPrecondition,
                     .domain = lfs::ErrorDomain::Training,
-                    .user_message = "ROI controls need --roi, or a resumed project with an ROI",
+                    .user_message =
+                        "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                        "it needs --cropbox, or a resumed project that has a crop box",
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));
             }
             roi = *existing;
-            if (params.roi_invert)
-                roi.inverse = true;
-            if (params.roi_crop_point_cloud)
-                roi.crop_point_cloud_before_training = true;
-            if (params.crop_to_roi || params.optimization.crop_to_cropbox)
-                roi.crop_model_after_training = true;
-            if (params.roi_relevant_cameras)
-                roi.select_relevant_cameras = true;
-            if (params.roi_camera_coverage_set)
-                roi.camera_coverage_percent = params.roi_camera_coverage;
+            roi.crop_model_after_training = true;
         }
         if (!scene.setRegionOfInterestData(model->id, roi)) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
                 .domain = lfs::ErrorDomain::Training,
-                .user_message = "Failed to set the --roi on the training model",
+                .user_message = "Failed to set the --cropbox region of interest on the training model",
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
@@ -1667,9 +1606,6 @@ namespace lfs::training {
             }
         }
         if (auto applied = applyTrainingCropBox(params, scene); !applied) {
-            return std::unexpected(std::string(applied.error().user_message()));
-        }
-        if (auto applied = applyTrainingRoi(params, scene); !applied) {
             return std::unexpected(std::string(applied.error().user_message()));
         }
         static_cast<void>(select_relevant_roi_cameras(scene));
@@ -1858,7 +1794,7 @@ namespace lfs::training {
             preloaded_model.set_frozen_ranges(hydrated->frozen_ranges());
             preloaded_model_ptr = &preloaded_model;
         }
-        if (const auto applied = applyTrainingRoi(params, scene); !applied) {
+        if (const auto applied = applyTrainingCropBox(params, scene); !applied) {
             return std::unexpected(std::string(applied.error().user_message()));
         }
         static_cast<void>(select_relevant_roi_cameras(scene));

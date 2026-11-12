@@ -262,9 +262,6 @@ namespace lfs::core {
             // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
             // follows the ROI-weighted error with no fixed split.
             float cropbox_growth_inside = 0.0f;
-            // With an active crop box: the splats outside it are removed when training completes and left out
-            // of every export. A stopped run keeps them so it can resume.
-            bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
             // SteadySplats Eq. 7: weighted RGB squared distance to each pixel's expected render color.
             float color_variance_weight = 0.0f;
@@ -608,23 +605,14 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
-            // Pre-training Crop operation. This is intentionally independent of the training ROI.
+            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
+            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
             std::optional<std::array<float, 6>> cropbox = std::nullopt;
+            // Turns the --cropbox box about its centre by X, Y, Z degrees about the dataset's axes, as Rx * Ry * Rz.
+            // Unset keeps the box axis-aligned with its corners stored as given.
             std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
-            // Dedicated training ROI, min x, y, z then max x, y, z in dataset coordinates.
-            std::optional<std::array<float, 6>> roi = std::nullopt;
-            std::optional<std::array<float, 3>> roi_rotation = std::nullopt;
-            bool roi_invert = false;
-            bool roi_crop_point_cloud = false;
-            bool crop_to_roi = false;
-            bool roi_relevant_cameras = false;
-            float roi_camera_coverage = 40.0f;
-            bool roi_camera_coverage_set = false;
-
-            [[nodiscard]] constexpr bool has_explicit_roi_controls() const noexcept {
-                return roi_invert || roi_crop_point_cloud || crop_to_roi ||
-                       roi_relevant_cameras || roi_camera_coverage_set;
-            }
+            // With an active ROI: remove every splat outside it when training completes and leave them out of exports.
+            bool crop = false;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

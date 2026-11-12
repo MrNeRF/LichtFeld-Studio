@@ -2048,12 +2048,12 @@ namespace lfs::training {
 
     std::optional<TrainingCropBoxGeometry> Trainer::export_cropbox() const {
         const auto roi = current_cropbox();
-        return roi && roi->crop_model_after_training ? roi : std::nullopt;
+        return roi && (roi->crop_model_after_training || params_.crop) ? roi : std::nullopt;
     }
 
     bool Trainer::should_crop_model_after_training() const {
         const auto roi = current_cropbox();
-        return roi && roi->crop_model_after_training;
+        return roi && (roi->crop_model_after_training || params_.crop);
     }
 
     namespace {
@@ -3365,7 +3365,8 @@ namespace lfs::training {
                         const auto cropbox = scene_ ? lfs::training::resolve_training_cropbox_geom(*scene_) : std::nullopt;
                         if (!cropbox)
                             return std::unexpected("Evaluation mask 'cropbox' needs an enabled ROI on the training model");
-                        evaluator_->set_eval_mesh(lfs::training::make_evaluation_roi_mesh(*cropbox));
+                        evaluator_->set_eval_mesh(lfs::training::make_evaluation_box(
+                            lfs::training::training_cropbox_model_corners(*cropbox), cropbox->inverse));
                         LOG_INFO("Evaluation mask: ROI{}", cropbox->inverse ? " (inverted)" : "");
                     } else {
                         LOG_INFO("Evaluation mask: {}", params_.optimization.eval_mask);

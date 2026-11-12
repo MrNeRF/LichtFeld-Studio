@@ -3214,6 +3214,9 @@ namespace {
         box.enabled = true;
         scene.setCropBoxData(cropbox_id, box);
         scene.setNodeTransform(cropbox_id, glm::mat4{1.0f});
+        lfs::core::RegionOfInterestData roi;
+        roi.shape_data = box;
+        ASSERT_TRUE(scene.setRegionOfInterestData(node->id, roi));
     }
 
     // A crop polygon on the training model over half of add_half_training_cropbox's box: the triangle under its
@@ -3240,6 +3243,10 @@ namespace {
         lfs::core::CropPolygonData polygon{
             .vertices = {{-half.x, -half.y}, {half.x, -half.y}, {-half.x, half.y}},
             .half_depth = (max.z - min.z) * 0.5f};
+        lfs::core::RegionOfInterestData roi;
+        roi.shape_data = polygon;
+        roi.local_transform = glm::translate(glm::mat4{1.0f}, centre);
+        ASSERT_TRUE(scene.setRegionOfInterestData(node->id, roi));
         ASSERT_NE(scene.addCropPolygon("Model_crop_polygon", node->id, std::move(polygon),
                                        glm::translate(glm::mat4{1.0f}, centre)),
                   lfs::core::NULL_NODE);
@@ -3266,7 +3273,7 @@ namespace {
             std::filesystem::create_directories(output_path);
 
             auto params = make_tiny_headless_params(output_path, 4);
-            params.optimization.crop_to_cropbox = true;
+            params.crop = true;
 
             lfs::core::Scene scene;
             ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
@@ -3323,7 +3330,7 @@ namespace {
             std::filesystem::create_directories(output_path);
 
             auto params = make_tiny_headless_params(output_path, 4);
-            params.optimization.crop_to_cropbox = crop;
+            params.crop = crop;
             params.dataset.output_name = "scene";
             params.export_formats = {lfs::core::param::OutputFormat::PLY};
 
@@ -3368,7 +3375,7 @@ namespace {
         std::filesystem::create_directories(output_path);
 
         auto params = make_tiny_headless_params(output_path, 4);
-        params.optimization.crop_to_cropbox = true;
+        params.crop = true;
 
         lfs::core::Scene scene;
         ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
@@ -3683,7 +3690,7 @@ namespace {
         auto params = make_tiny_headless_params(temporary.path, 4);
         params.optimization.save_steps = {1, 2};
         params.optimization.keep_all_checkpoints = true;
-        params.optimization.crop_to_cropbox = true;
+        params.crop = true;
         params.save_project_at_iteration = {1, 2, 3, 4};
         const auto snapshots = temporary.path / "snapshots";
         params.save_project_path = snapshots / "run.licht";

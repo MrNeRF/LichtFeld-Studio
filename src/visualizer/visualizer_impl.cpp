@@ -5174,7 +5174,7 @@ namespace lfs::vis {
                 roi_target_id = model_id;
             }
             if (roi_target_id != core::NULL_NODE && scene.setRegionOfInterestData(roi_target_id, *preserved_roi)) {
-                if (preserved_roi->enabled && preserved_roi->select_relevant_cameras)
+                if (preserved_roi->enabled() && preserved_roi->select_relevant_cameras)
                     (void)lfs::training::select_relevant_roi_cameras(scene);
             }
         }

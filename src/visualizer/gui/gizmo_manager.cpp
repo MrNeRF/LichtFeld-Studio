@@ -646,17 +646,26 @@ namespace lfs::vis::gui {
                 const glm::vec3 half_size = glm::max((world_max - world_min) * 0.5F, glm::vec3(MIN_GIZMO_SCALE));
                 core::RegionOfInterestData roi;
                 roi.local_transform = glm::translate(glm::mat4(1.0F), center);
-                roi.shape = crop_tool_shape_ == CropToolShape::Ellipsoid
-                                ? core::RegionOfInterestShape::Ellipsoid
-                                : crop_tool_shape_ == CropToolShape::Polygon
-                                      ? core::RegionOfInterestShape::Polygon
-                                      : core::RegionOfInterestShape::Box;
-                roi.min = -half_size;
-                roi.max = half_size;
-                roi.radii = half_size;
-                if (roi.shape == core::RegionOfInterestShape::Polygon) {
-                    roi.vertices = {{-half_size.x, -half_size.y}, {half_size.x, -half_size.y}, {half_size.x, half_size.y}, {-half_size.x, half_size.y}};
-                    roi.half_depth = half_size.z;
+                if (crop_tool_shape_ == CropToolShape::Ellipsoid) {
+                    roi.shape_data = core::EllipsoidData{
+                        .radii = half_size,
+                        .enabled = true,
+                        .color = core::kDefaultRoiColor,
+                    };
+                } else if (crop_tool_shape_ == CropToolShape::Polygon) {
+                    roi.shape_data = core::CropPolygonData{
+                        .vertices = {{-half_size.x, -half_size.y}, {half_size.x, -half_size.y}, {half_size.x, half_size.y}, {-half_size.x, half_size.y}},
+                        .half_depth = half_size.z,
+                        .enabled = true,
+                        .color = core::kDefaultRoiColor,
+                    };
+                } else {
+                    roi.shape_data = core::CropBoxData{
+                        .min = -half_size,
+                        .max = half_size,
+                        .enabled = true,
+                        .color = core::kDefaultRoiColor,
+                    };
                 }
                 const auto* const target = scene.getNodeById(*target_id);
                 if (!target)
@@ -713,9 +722,9 @@ namespace lfs::vis::gui {
 
         const auto* const roi = isRoiToolActive() ? scene.getRegionOfInterestData(target_id) : nullptr;
         if (roi) {
-            const auto roi_shape = roi->shape == core::RegionOfInterestShape::Ellipsoid ? CropToolShape::Ellipsoid
-                                   : roi->shape == core::RegionOfInterestShape::Polygon ? CropToolShape::Polygon
-                                                                                        : CropToolShape::Box;
+            const auto roi_shape = roi->shape() == core::RegionOfInterestShape::Ellipsoid ? CropToolShape::Ellipsoid
+                                   : roi->shape() == core::RegionOfInterestShape::Polygon ? CropToolShape::Polygon
+                                                                                          : CropToolShape::Box;
             if (crop_tool_shape_ != roi_shape) {
                 crop_tool_shape_ = roi_shape;
                 crop_tool_initialized_ = false;
@@ -731,10 +740,13 @@ namespace lfs::vis::gui {
 
         if (crop_tool_shape_ == CropToolShape::Box) {
             if (roi) {
-                state_changed = state_changed || !nearlyEqual(crop_tool_box_min_, roi->min) ||
-                                !nearlyEqual(crop_tool_box_max_, roi->max);
-                crop_tool_box_min_ = roi->min;
-                crop_tool_box_max_ = roi->max;
+                const auto* const box = roi->box();
+                if (!box)
+                    return false;
+                state_changed = state_changed || !nearlyEqual(crop_tool_box_min_, box->min) ||
+                                !nearlyEqual(crop_tool_box_max_, box->max);
+                crop_tool_box_min_ = box->min;
+                crop_tool_box_max_ = box->max;
                 goto crop_tool_state_done;
             }
             if (!node->cropbox)
@@ -745,11 +757,14 @@ namespace lfs::vis::gui {
             crop_tool_box_max_ = node->cropbox->max;
         } else if (crop_tool_shape_ == CropToolShape::Polygon) {
             if (roi) {
-                const glm::vec3 half_extents(core::crop_polygon::outlineHalfExtents(roi->vertices), roi->half_depth);
-                state_changed = state_changed || crop_tool_polygon_vertices_ != roi->vertices ||
+                const auto* const polygon = roi->polygon();
+                if (!polygon)
+                    return false;
+                const glm::vec3 half_extents(core::crop_polygon::outlineHalfExtents(polygon->vertices), polygon->half_depth);
+                state_changed = state_changed || crop_tool_polygon_vertices_ != polygon->vertices ||
                                 !nearlyEqual(crop_tool_polygon_half_extents_, half_extents);
-                crop_tool_polygon_vertices_ = roi->vertices;
-                crop_tool_polygon_half_depth_ = roi->half_depth;
+                crop_tool_polygon_vertices_ = polygon->vertices;
+                crop_tool_polygon_half_depth_ = polygon->half_depth;
                 crop_tool_polygon_half_extents_ = half_extents;
                 goto crop_tool_state_done;
             }
@@ -764,8 +779,11 @@ namespace lfs::vis::gui {
             crop_tool_polygon_half_extents_ = half_extents;
         } else {
             if (roi) {
-                state_changed = state_changed || !nearlyEqual(crop_tool_ellipsoid_radii_, roi->radii);
-                crop_tool_ellipsoid_radii_ = roi->radii;
+                const auto* const ellipsoid = roi->ellipsoid();
+                if (!ellipsoid)
+                    return false;
+                state_changed = state_changed || !nearlyEqual(crop_tool_ellipsoid_radii_, ellipsoid->radii);
+                crop_tool_ellipsoid_radii_ = ellipsoid->radii;
                 goto crop_tool_state_done;
             }
             if (!node->ellipsoid)
@@ -833,27 +851,45 @@ namespace lfs::vis::gui {
             auto before = op::SceneGraphPatchEntry::captureState(*sm, {target_name}, history_options);
             auto roi = *existing;
             roi.local_transform = *local_transform;
+            const bool was_enabled = roi.enabled();
+            const bool was_inverse = roi.inverse();
+            const glm::vec3 color = roi.color();
             switch (crop_tool_shape_) {
-            case CropToolShape::Box:
-                roi.shape = core::RegionOfInterestShape::Box;
-                roi.min = crop_tool_box_min_;
-                roi.max = crop_tool_box_max_;
-                break;
-            case CropToolShape::Ellipsoid:
-                roi.shape = core::RegionOfInterestShape::Ellipsoid;
-                roi.radii = glm::max(crop_tool_ellipsoid_radii_, glm::vec3(MIN_GIZMO_SCALE));
-                break;
-            case CropToolShape::Polygon:
-                roi.shape = core::RegionOfInterestShape::Polygon;
-                roi.vertices = crop_tool_polygon_vertices_;
-                roi.half_depth = crop_tool_polygon_half_depth_;
+            case CropToolShape::Box: {
+                auto box = roi.box() ? *roi.box() : core::CropBoxData{};
+                box.min = crop_tool_box_min_;
+                box.max = crop_tool_box_max_;
+                box.enabled = was_enabled;
+                box.inverse = was_inverse;
+                box.color = color;
+                roi.shape_data = box;
                 break;
             }
+            case CropToolShape::Ellipsoid: {
+                auto ellipsoid = roi.ellipsoid() ? *roi.ellipsoid() : core::EllipsoidData{};
+                ellipsoid.radii = glm::max(crop_tool_ellipsoid_radii_, glm::vec3(MIN_GIZMO_SCALE));
+                ellipsoid.enabled = was_enabled;
+                ellipsoid.inverse = was_inverse;
+                ellipsoid.color = color;
+                roi.shape_data = ellipsoid;
+                break;
+            }
+            case CropToolShape::Polygon: {
+                auto polygon = roi.polygon() ? *roi.polygon() : core::CropPolygonData{};
+                polygon.vertices = crop_tool_polygon_vertices_;
+                polygon.half_depth = crop_tool_polygon_half_depth_;
+                polygon.enabled = was_enabled;
+                polygon.inverse = was_inverse;
+                polygon.color = color;
+                roi.shape_data = std::move(polygon);
+                break;
+            }
+            }
             if (enable)
-                roi.enabled = true;
+                roi.setEnabled(true);
             if (!scene.setRegionOfInterestData(crop_tool_target_node_id_, roi))
                 return false;
-            if (roi.enabled && roi.select_relevant_cameras)
+            if (roi.enabled() && roi.select_relevant_cameras)
                 (void)lfs::training::select_relevant_roi_cameras(scene);
             if (rm)
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -1208,7 +1244,7 @@ namespace lfs::vis::gui {
             if (auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr) {
                 const auto& scene = sm->getScene();
                 const auto* const roi = scene.getRegionOfInterestData(crop_tool_target_node_id_);
-                effectively_visible = roi && roi->enabled && scene.isNodeEffectivelyVisible(crop_tool_target_node_id_);
+                effectively_visible = roi && roi->enabled() && scene.isNodeEffectivelyVisible(crop_tool_target_node_id_);
                 parent_node_index = scene.getVisibleNodeIndex(crop_tool_target_node_id_);
             }
         }
@@ -1250,33 +1286,44 @@ namespace lfs::vis::gui {
                 // Make the new shape valid before synchronising the shared
                 // gizmo.  This preserves all training controls and transform.
                 auto updated = *roi;
-                glm::vec3 source_half = (updated.max - updated.min) * 0.5f;
-                switch (updated.shape) {
-                case core::RegionOfInterestShape::Box:
-                    source_half = (updated.max - updated.min) * 0.5f;
-                    break;
-                case core::RegionOfInterestShape::Ellipsoid:
-                    source_half = updated.radii;
-                    break;
-                case core::RegionOfInterestShape::Polygon:
-                    source_half = glm::vec3(core::crop_polygon::outlineHalfExtents(updated.vertices), updated.half_depth);
-                    break;
+                glm::vec3 source_half(1.0f);
+                if (const auto* const box = updated.box()) {
+                    source_half = (box->max - box->min) * 0.5f;
+                } else if (const auto* const ellipsoid = updated.ellipsoid()) {
+                    source_half = ellipsoid->radii;
+                } else if (const auto* const polygon = updated.polygon()) {
+                    source_half = glm::vec3(core::crop_polygon::outlineHalfExtents(polygon->vertices), polygon->half_depth);
                 }
                 const glm::vec3 half = glm::max(source_half, glm::vec3(MIN_GIZMO_SCALE));
+                const bool was_enabled = updated.enabled();
+                const bool was_inverse = updated.inverse();
+                const glm::vec3 color = updated.color();
                 switch (crop_tool_shape_) {
                 case CropToolShape::Box:
-                    updated.shape = core::RegionOfInterestShape::Box;
-                    updated.min = -half;
-                    updated.max = half;
+                    updated.shape_data = core::CropBoxData{
+                        .min = -half,
+                        .max = half,
+                        .inverse = was_inverse,
+                        .enabled = was_enabled,
+                        .color = color,
+                    };
                     break;
                 case CropToolShape::Ellipsoid:
-                    updated.shape = core::RegionOfInterestShape::Ellipsoid;
-                    updated.radii = half;
+                    updated.shape_data = core::EllipsoidData{
+                        .radii = half,
+                        .inverse = was_inverse,
+                        .enabled = was_enabled,
+                        .color = color,
+                    };
                     break;
                 case CropToolShape::Polygon:
-                    updated.shape = core::RegionOfInterestShape::Polygon;
-                    updated.vertices = {{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}};
-                    updated.half_depth = half.z;
+                    updated.shape_data = core::CropPolygonData{
+                        .vertices = {{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}},
+                        .half_depth = half.z,
+                        .inverse = was_inverse,
+                        .enabled = was_enabled,
+                        .color = color,
+                    };
                     break;
                 }
                 const auto* const node = sm->getScene().getNodeById(*target_id);
@@ -1554,10 +1601,10 @@ namespace lfs::vis::gui {
             };
             auto before = op::SceneGraphPatchEntry::captureState(*sm, {node->name}, options);
             auto roi = *current;
-            roi.inverse = !roi.inverse;
+            roi.setInverse(!roi.inverse());
             if (!scene.setRegionOfInterestData(node->id, roi))
                 return;
-            if (roi.enabled && roi.select_relevant_cameras)
+            if (roi.enabled() && roi.select_relevant_cameras)
                 (void)lfs::training::select_relevant_roi_cameras(scene);
             op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
                 *sm, "roi.inverse", std::move(before),
@@ -1617,7 +1664,7 @@ namespace lfs::vis::gui {
         if (isRoiToolActive()) {
             const auto target_id = selectedCropTargetNodeId();
             const auto* const roi = target_id ? sm->getScene().getRegionOfInterestData(*target_id) : nullptr;
-            return roi ? std::optional<bool>(roi->inverse) : std::nullopt;
+            return roi ? std::optional<bool>(roi->inverse()) : std::nullopt;
         }
         if (const core::NodeId polygon_id = sm->getSelectedNodeCropPolygonId(); polygon_id != core::NULL_NODE) {
             const auto* const node = sm->getScene().getNodeById(polygon_id);
@@ -1694,7 +1741,7 @@ namespace lfs::vis::gui {
             return handles;
         if (isRoiToolActive()) {
             const auto* const roi = sm->getScene().getRegionOfInterestData(crop_tool_target_node_id_);
-            if (!roi || !roi->enabled || !sm->getScene().isNodeEffectivelyVisible(crop_tool_target_node_id_))
+            if (!roi || !roi->enabled() || !sm->getScene().isNodeEffectivelyVisible(crop_tool_target_node_id_))
                 return handles;
         } else if (!sm->getScene().isNodeEffectivelyVisible(crop_tool_volume_node_id_)) {
             return handles;
@@ -1807,12 +1854,18 @@ namespace lfs::vis::gui {
                 };
                 auto before = op::SceneGraphPatchEntry::captureState(*sm, {target->name}, options);
                 auto roi = *current;
-                roi.shape = core::RegionOfInterestShape::Polygon;
-                roi.vertices = std::move(vertices);
+                auto polygon = roi.polygon() ? *roi.polygon() : core::CropPolygonData{
+                    .half_depth = crop_tool_polygon_half_depth_,
+                    .inverse = roi.inverse(),
+                    .enabled = roi.enabled(),
+                    .color = roi.color(),
+                };
+                polygon.vertices = std::move(vertices);
+                roi.shape_data = std::move(polygon);
                 roi.local_transform = glm::translate(roi.local_transform, glm::vec3(centre, 0.0f));
                 committed = scene.setRegionOfInterestData(target->id, roi);
                 if (committed) {
-                    if (roi.enabled && roi.select_relevant_cameras)
+                    if (roi.enabled() && roi.select_relevant_cameras)
                         (void)lfs::training::select_relevant_roi_cameras(scene);
                     op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
                         *sm, "roi.polygon", std::move(before),
