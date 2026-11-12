@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "Diese Strategie ist nicht mit GUT kompatibel. GUT deaktivieren, um zu wechseln?",
     "conflict.btn_use_mcmc": "MCMC verwenden",
     "conflict.btn_disable_gut": "GUT deaktivieren",
-    "conflict.btn_disable_mip_filter": "Mip-Filter deaktivieren",
-    "conflict.mip_gut_start_message": "Der Mip-Filter benötigt den Standard-Rasterizer und kann nicht mit GUT kombiniert werden. Wählen Sie eine Aktion, um das Training zu starten.",
     "conflict.btn_cancel": "Abbrechen",
     "save_pc.title": "Geänderte Punktwolke",
     "save_pc.message": "Die Punktwolke wurde geändert. Für zukünftige Sitzungen im Datensatz-Ordner speichern?",

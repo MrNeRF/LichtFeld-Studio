@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "此策略与GUT不兼容。禁用GUT以切换？",
     "conflict.btn_use_mcmc": "使用MCMC",
     "conflict.btn_disable_gut": "禁用GUT",
-    "conflict.btn_disable_mip_filter": "禁用Mip滤波器",
-    "conflict.mip_gut_start_message": "Mip滤波器需要标准光栅化器，不能与GUT同时使用。请选择操作以开始训练。",
     "conflict.btn_cancel": "取消",
     "save_pc.title": "已修改的点云",
     "save_pc.message": "点云已被修改。是否保存到数据集文件夹以供未来使用？",

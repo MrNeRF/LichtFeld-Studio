@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "Ta strategia jest niekompatybilna z GUT. Wyłączyć GUT, aby przełączyć?",
     "conflict.btn_use_mcmc": "Użyj MCMC",
     "conflict.btn_disable_gut": "Wyłącz GUT",
-    "conflict.btn_disable_mip_filter": "Wyłącz filtr Mip",
-    "conflict.mip_gut_start_message": "Filtr Mip wymaga standardowego rasteryzatora i nie może być łączony z GUT. Wybierz akcję, aby rozpocząć trening.",
     "conflict.btn_cancel": "Anuluj",
     "save_pc.title": "Zmodyfikowana chmura punktów",
     "save_pc.message": "Chmura punktów została zmodyfikowana. Zapisać w folderze datasetu dla przyszłych sesji?",

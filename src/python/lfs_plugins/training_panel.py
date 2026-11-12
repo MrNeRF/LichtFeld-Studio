@@ -2905,36 +2905,9 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            self._show_start_conflict_dialog(params)
+            self._show_strategy_gut_conflict_dialog()
         else:
             self._proceed_to_start()
-
-    def _show_start_conflict_dialog(self, params):
-        if not (params.gut and params.mip_filter):
-            self._show_strategy_gut_conflict_dialog()
-            return
-        btn_gut = tr("training.conflict.btn_disable_gut")
-        btn_mip = tr("training.conflict.btn_disable_mip_filter")
-        btn_cancel = tr("training.conflict.btn_cancel")
-
-        def _on_conflict(button, _gut=btn_gut, _mip=btn_mip):
-            p = lf.optimization_params()
-            if button == _gut:
-                p.gut = False
-            elif button == _mip:
-                p.mip_filter = False
-            else:
-                return
-            if self._handle:
-                self._handle.dirty_all()
-            self._start_after_consent()
-
-        lf.ui.confirm_dialog(
-            tr("training.error.strategy_gut_title"),
-            tr("training.conflict.mip_gut_start_message"),
-            [btn_gut, btn_mip, btn_cancel],
-            _on_conflict,
-        )
 
     def _show_strategy_gut_conflict_dialog(self):
         btn_mcmc = tr("training.conflict.btn_use_mcmc")
@@ -3012,7 +2985,7 @@ class TrainingPanel(Panel):
                         self._handle.dirty_all()
                     error = p.validate() if p and p.has_params() else ""
                     if error:
-                        self._show_start_conflict_dialog(p)
+                        self._show_strategy_gut_conflict_dialog()
                     else:
                         lf.start_training()
 

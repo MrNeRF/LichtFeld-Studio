@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "この戦略はGUTと互換性がありません。切り替えるためにGUTを無効にしますか？",
     "conflict.btn_use_mcmc": "MCMCを使用",
     "conflict.btn_disable_gut": "GUTを無効化",
-    "conflict.btn_disable_mip_filter": "ミップフィルターを無効化",
-    "conflict.mip_gut_start_message": "ミップフィルターには標準ラスタライザーが必要なため、GUTと同時に使用できません。トレーニングを開始するアクションを選択してください。",
     "conflict.btn_cancel": "キャンセル",
     "save_pc.title": "変更されたポイントクラウド",
     "save_pc.message": "ポイントクラウドが変更されています。今後のセッションのためにデータセットフォルダに保存しますか？",

@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "Esta estrategia es incompatible con GUT. ¿Desactivar GUT para cambiar?",
     "conflict.btn_use_mcmc": "Usar MCMC",
     "conflict.btn_disable_gut": "Desactivar GUT",
-    "conflict.btn_disable_mip_filter": "Desactivar filtro Mip",
-    "conflict.mip_gut_start_message": "El filtro Mip necesita el rasterizador estándar y no se puede combinar con GUT. Elige una acción para iniciar el entrenamiento.",
     "conflict.btn_cancel": "Cancelar",
     "save_pc.title": "Nube de puntos modificada",
     "save_pc.message": "La nube de puntos se ha modificado. ¿Guardar en la carpeta del dataset para futuras sesiones?",

@@ -676,8 +676,6 @@
     "conflict.strategy_gut_strategy_message": "이 전략은 GUT와 호환되지 않습니다. 전환하려면 GUT를 비활성화하시겠습니까?",
     "conflict.btn_use_mcmc": "MCMC 사용",
     "conflict.btn_disable_gut": "GUT 비활성화",
-    "conflict.btn_disable_mip_filter": "밉 필터 비활성화",
-    "conflict.mip_gut_start_message": "밉 필터는 표준 래스터라이저가 필요하므로 GUT와 함께 사용할 수 없습니다. 훈련을 시작할 작업을 선택하세요.",
     "conflict.btn_cancel": "취소",
     "save_pc.title": "수정된 포인트 클라우드",
     "save_pc.message": "포인트 클라우드가 수정되었습니다. 향후 세션을 위해 데이터셋 폴더에 저장하시겠습니까?",
