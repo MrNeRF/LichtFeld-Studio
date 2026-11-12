@@ -249,6 +249,9 @@ namespace lfs::core {
             size_t sh_degree_interval = 1'000;
             float means_lr = 0.000016f;
             float means_lr_end = 0.00000016f;
+            // Bound of the per-step ray-depth move (fraction of the distance to the observing cameras),
+            // decaying with the position learning rate; 0 turns it off.
+            float ray_depth_lr = 0.01f;
             float shs_lr = 0.0025f;
             float opacity_lr = 0.025f;
             float scaling_lr = 0.005f;

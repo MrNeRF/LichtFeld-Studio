@@ -94,6 +94,12 @@ namespace lfs::training {
             fused_adam.mean_step_far_mask_n = std::min(
                 optimizer_fused.mean_step_far_mask_n, optimizer_fused.means.n_primitives);
         }
+        if (optimizer_fused.ray_depth_state != nullptr && optimizer_fused.means.n_primitives > 0) {
+            fused_adam.ray_depth_state = optimizer_fused.ray_depth_state;
+            fused_adam.ray_depth_n = std::min(optimizer_fused.ray_depth_n, optimizer_fused.means.n_primitives);
+            fused_adam.ray_depth_lr = optimizer_fused.ray_depth_lr;
+            fused_adam.ray_depth_mean_lr = optimizer_fused.ray_depth_mean_lr;
+        }
         return fused_adam;
     }
 
@@ -907,6 +913,9 @@ namespace lfs::training {
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
+        fused_adam.ray_depth_far_limit = ctx.far_plane;
+        if (defer_optimizer_step)
+            optimizer.set_ray_depth_view(ctx.cam_position_ptr, ctx.far_plane);
 
         const auto shN = backward_shN_bind(gaussian_model, ctx);
         auto backward_result = fast_lfs::rasterization::backward_raw(

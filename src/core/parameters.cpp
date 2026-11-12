@@ -1016,6 +1016,7 @@ namespace lfs::core {
             const std::array nonnegative_fields{
                 std::pair{"means_lr", means_lr},
                 std::pair{"means_lr_end", means_lr_end},
+                std::pair{"ray_depth_lr", ray_depth_lr},
                 std::pair{"shs_lr", shs_lr},
                 std::pair{"opacity_lr", opacity_lr},
                 std::pair{"scaling_lr", scaling_lr},

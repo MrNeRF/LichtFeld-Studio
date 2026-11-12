@@ -7668,6 +7668,10 @@ namespace lfs::training {
                                             depth_pixel_weight);
 
                                         tile_loss = tile_loss + depth_loss_scalar_;
+                                        // Rendered against an external depth target, the loss changes along the
+                                        // ray-depth coordinate: this step leaves the coordinate alone.
+                                        if (depth_weight_now > 0.0f)
+                                            strategy_->get_optimizer().skip_ray_depth_step();
                                     }
                                 } else {
                                     LOG_WARN("Skipping depth loss for '{}': rendered depth shape and target depth shape differ",
@@ -7842,6 +7846,8 @@ namespace lfs::training {
                                                 gsplat_ctx ? gsplat_ctx->camera_rays.ptr<float>() : nullptr,
                                                 gsplat_ctx && gsplat_ctx->camera_model == ::CameraModelType::EQUIRECTANGULAR);
                                             tile_loss = tile_loss + normal_prior_depth_scalar_;
+                                            if (step_params.normal_loss_weight > 0.0f)
+                                                strategy_->get_optimizer().skip_ray_depth_step();
                                         }
                                     }
 

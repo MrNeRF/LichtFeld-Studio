@@ -943,6 +943,7 @@ set(TEST_FILES
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
     test_camera_pose_gradient.cpp
+    test_ray_depth_step.cpp
     test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp

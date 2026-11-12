@@ -69,6 +69,7 @@ namespace lfs::training {
 
         // Camera pointers (kept alive by K_tensor)
         const float* viewmat_ptr = nullptr; // [C, 4, 4]
+        const float* cam_position_ptr = nullptr; // [3], world; owned by the camera
         const float* K_ptr = nullptr;       // [C, 3, 3]
         lfs::core::Tensor K_tensor;         // Keeps K_ptr alive
 

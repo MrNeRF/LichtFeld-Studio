@@ -638,6 +638,7 @@ namespace lfs::training {
 
             // Store camera pointers
             ctx.viewmat_ptr = viewmat_ptr;
+            ctx.cam_position_ptr = viewpoint_camera.cam_position_ptr();
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
             ctx.bg_color = channels == 3 ? bg_color : feature_bg;
@@ -956,6 +957,7 @@ namespace lfs::training {
                 stream, ctx.batches, ctx.tiles_per_gauss_ptr, ctx.shN_bounds_ptr, sh_grads);
 
             gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
+            optimizer.set_ray_depth_view(ctx.cam_position_ptr, ctx.far_plane);
 
             if (stage_means) {
                 kernels::launch_grad_accumulate(means_grad.ptr<float>(), v_means_ptr, N * 3, stream);

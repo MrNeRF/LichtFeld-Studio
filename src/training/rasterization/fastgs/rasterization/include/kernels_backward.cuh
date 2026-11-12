@@ -11,6 +11,7 @@
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/effective_rank.cuh"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/ray_depth_step.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include "warp_gradient_reduce.cuh"
@@ -570,6 +571,15 @@ namespace fast_lfs::rasterization::kernels::backward {
             densification_error[primitive_idx] += length(grad_mean2d[work_idx] * make_float2(0.5f * w, 0.5f * h));
         }
 
+        // Ray-depth proposal from the rendered parameters; applied after the geometry rows' steps.
+        [[maybe_unused]] lfs::training::ray_depth::Proposal ray_depth;
+        [[maybe_unused]] const bool ray_depth_row = !DISABLED_FEATURES && contributed &&
+                                                    fused_adam.ray_depth_state != nullptr &&
+                                                    fused_adam.means.gradient_out == nullptr &&
+                                                    fused_adam.means.param != nullptr &&
+                                                    fused_adam.scaling.param != nullptr &&
+                                                    fused_adam.rotation.param != nullptr &&
+                                                    primitive_idx < static_cast<uint>(fused_adam.ray_depth_n);
         if constexpr (DISABLED_FEATURES) {
             adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3,
                           fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -581,14 +591,32 @@ namespace fast_lfs::rasterization::kernels::backward {
                                        fused_adam.mean_step_far_mask[primitive_idx];
             // single call site: helper runs block-wide reductions; divergent duplicates deadlock
             FusedAdamParam means_p = fused_adam.means;
+            float mean_step_ratio = 1.0f;
             if (far_mean_step && fused_adam.scaling.param != nullptr) {
                 const uint sb = primitive_idx * 3u;
                 if (sb + 2u < static_cast<uint>(fused_adam.scaling.n_elements)) {
                     const float* s = fused_adam.scaling.param + sb;
-                    means_p.step_size *= lfs::training::per_splat_mean_step_ratio(
+                    mean_step_ratio = lfs::training::per_splat_mean_step_ratio(
                         s[0], s[1], s[2],
                         fused_adam.mean_step_median_extent);
+                    means_p.step_size *= mean_step_ratio;
                 }
+            }
+            if (ray_depth_row) {
+                const uint b3 = primitive_idx * 3u;
+                const float lr_scale = lfs::training::ray_depth::row_lr_scale(
+                    primitive_idx, fused_adam.means.frozen_mask, fused_adam.means.frozen_mask_size,
+                    fused_adam.means.frozen_lr_scale, fused_adam.means.crop_damping_mask,
+                    fused_adam.means.crop_damping_mask_size, fused_adam.means.cropbox_lr_scale);
+                const float3 camera = cam_position[0];
+                const float camera_xyz[3] = {camera.x, camera.y, camera.z};
+                ray_depth = lfs::training::ray_depth::propose(
+                    fused_adam.ray_depth_state + primitive_idx * lfs::training::ray_depth::kStateStride,
+                    fused_adam.means.param + b3, fused_adam.scaling.param + b3,
+                    fused_adam.rotation.param + primitive_idx * 4u, camera_xyz, mean_grads,
+                    fused_adam.ray_depth_lr * lr_scale,
+                    lfs::training::ray_depth::kSidewaysSteps * fused_adam.ray_depth_mean_lr * lr_scale *
+                        mean_step_ratio);
             }
             adam_step_row(mean_grads, means_p, primitive_idx, 3,
                           fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -596,6 +624,16 @@ namespace fast_lfs::rasterization::kernels::backward {
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (!DISABLED_FEATURES) {
+            if (ray_depth_row) {
+                const float3 camera = cam_position[0];
+                const float camera_xyz[3] = {camera.x, camera.y, camera.z};
+                lfs::training::ray_depth::commit(
+                    fused_adam.ray_depth_state + primitive_idx * lfs::training::ray_depth::kStateStride,
+                    fused_adam.means.param + primitive_idx * 3u, fused_adam.scaling.param + primitive_idx * 3u,
+                    camera_xyz, ray_depth.dt, ray_depth.bperp2 >= 0.0f, fused_adam.ray_depth_far_limit);
+            }
+        }
     }
 
     __device__ __forceinline__ float background_transmittance_grad(

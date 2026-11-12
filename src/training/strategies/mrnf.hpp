@@ -57,6 +57,7 @@ class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
+class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 
 namespace lfs::training {
 
@@ -144,6 +145,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
         friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
+        friend class ::MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
         friend class ::MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
@@ -212,6 +214,10 @@ namespace lfs::training {
         void refresh_far_field_mask(size_t n);
         void publish_mean_step_far_mask();
         void ensure_mean_step_far_mask();
+        // Keeps one ray-depth row per splat (new rows unobserved) and hands it to the optimizer
+        // with the current step bound; releases it when ray_depth_lr is 0.
+        void sync_ray_depth();
+        void ensure_ray_depth_rows(size_t n);
         [[nodiscard]] size_t densification_row_count() const;
         // Gumbel top-k picks split between the crop box ROI and the rest by the growth share.
         [[nodiscard]] lfs::core::Tensor sample_with_roi_share(
@@ -268,6 +274,8 @@ namespace lfs::training {
         std::future<BlobSeeds> _blob_seeds;
         std::jthread _blob_seed_worker;
         lfs::core::Tensor _far_field_mask;
+        // [N, ray_depth::kStateStride] ray-depth rows; transient (fresh after a resume).
+        lfs::core::Tensor _ray_depth_state;
         float _cam_centroid[3] = {0.0f, 0.0f, 0.0f};
         float _orbit_radius = 0.0f;
         bool _camera_hull_valid = false;

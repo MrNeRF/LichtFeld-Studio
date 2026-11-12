@@ -114,6 +114,7 @@
   "ppisp_warmup_steps": 500,
   "prune_opacity": 0.004999999888241291,
   "random": false,
+  "ray_depth_lr": 0.009999999776482582,
   "refine_every": 163,
   "reset_every": 3000,
   "rotation_lr": 0.001500000013038516,

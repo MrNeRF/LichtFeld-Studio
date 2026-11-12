@@ -8,6 +8,7 @@
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/ray_depth_step.cuh"
 #include "lfs/training/screen_share.cuh"
 
 #include <cstdint>
@@ -295,6 +296,41 @@ namespace fast_lfs::optimizer::kernels::adam {
                              us_u[i], us_s[i], new_mm.x, new_mm.z, inv_u, inv_s);
             }
         }
+    }
+
+    __global__ void ray_depth_propose_cu(const RayDepthStepArgs args) {
+        namespace rd = lfs::training::ray_depth;
+        const int prim = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (prim >= args.n)
+            return;
+        const int64_t b3 = static_cast<int64_t>(prim) * 3;
+        const float lr_scale = rd::row_lr_scale(
+            static_cast<unsigned>(prim), args.frozen_mask, args.frozen_mask_size, args.frozen_lr_scale,
+            args.crop_damping_mask, args.crop_damping_mask_size, args.cropbox_lr_scale);
+        float row_mean_lr = args.mean_lr * lr_scale;
+        if (args.mean_step_far_mask != nullptr && prim < args.mean_step_far_mask_n &&
+            args.mean_step_far_mask[prim]) {
+            row_mean_lr *= lfs::training::per_splat_mean_step_ratio(
+                args.log_scales[b3], args.log_scales[b3 + 1], args.log_scales[b3 + 2],
+                args.mean_step_median_extent);
+        }
+        const auto p = rd::propose(args.state + static_cast<int64_t>(prim) * rd::kStateStride,
+                                   args.means + b3, args.log_scales + b3,
+                                   args.rotations + static_cast<int64_t>(prim) * 4, args.camera,
+                                   args.means_grad + b3, args.lr * lr_scale,
+                                   rd::kSidewaysSteps * row_mean_lr);
+        args.proposals[prim] = p.bperp2 >= 0.0f ? p.dt : rd::kNotObserved;
+    }
+
+    __global__ void ray_depth_commit_cu(const RayDepthStepArgs args) {
+        namespace rd = lfs::training::ray_depth;
+        const int prim = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (prim >= args.n)
+            return;
+        const float dt = args.proposals[prim];
+        const int64_t b3 = static_cast<int64_t>(prim) * 3;
+        rd::commit(args.state + static_cast<int64_t>(prim) * rd::kStateStride, args.means + b3,
+                   args.log_scales + b3, args.camera, dt, dt != rd::kNotObserved, args.far_limit);
     }
 
     // Expand block bounds to include (u,log_s)=(0,0) so encode_us(0,0) is
