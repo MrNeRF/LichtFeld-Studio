@@ -5,6 +5,7 @@
 #pragma once
 
 #include "helper_math.h"
+#include "lfs/training/splat_dilation.hpp"
 
 #define DEF inline constexpr
 
@@ -41,8 +42,8 @@ namespace fast_lfs::rasterization {
 
 namespace fast_lfs::rasterization::config {
     // rendering constants
-    DEF float dilation = 0.3f;            // Standard dilation when mip_filter OFF
-    DEF float dilation_mip_filter = 0.1f; // Smaller dilation when mip_filter ON
+    DEF float dilation = lfs::training::kSplatDilation;                // Standard dilation when mip_filter OFF
+    DEF float dilation_mip_filter = lfs::training::kMipFilterDilation; // Smaller dilation when mip_filter ON
     DEF float min_alpha_threshold_rcp = 255.0f;
     DEF float min_alpha_threshold = 1.0f / min_alpha_threshold_rcp; // 0.00392156862
     DEF float max_fragment_alpha = 0.999f;                          // 0.99f in original 3dgs

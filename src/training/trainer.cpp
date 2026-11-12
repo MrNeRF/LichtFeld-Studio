@@ -3576,7 +3576,7 @@ namespace lfs::training {
                     if (params.optimization.gut) {
                         output = gsplat_rasterize(
                             render_camera, model, background,
-                            1.0f, false,
+                            1.0f, params.optimization.mip_filter,
                             lfs::core::param::is_eval_mask_depth(params.optimization.eval_mask)
                                 ? GsplatRenderMode::RGB_D
                                 : GsplatRenderMode::RGB,
@@ -6888,7 +6888,7 @@ namespace lfs::training {
                                     auto rasterize_result = gsplat_rasterize_forward(
                                         *cam, strategy_->get_model(), bg,
                                         0, 0, 0, 0,
-                                        1.0f, false,
+                                        1.0f, step_params.mip_filter,
                                         (normal_supervision_started && (step_params.normal_loss_weight > 0.f ||
                                                                         step_params.normal_consistency_weight > 0.f))
                                             ? GsplatRenderMode::RGB_D_N
@@ -8765,9 +8765,10 @@ namespace lfs::training {
                                 RenderOutput rendered_timelapse_output;
                                 if (step_params.gut) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
-                                                                                 1.0f, false, GsplatRenderMode::RGB, true);
+                                                                                 1.0f, step_params.mip_filter, GsplatRenderMode::RGB, true);
                                 } else {
-                                    rendered_timelapse_output = fast_rasterize(*cam_to_use, strategy_->get_model(), background_);
+                                    rendered_timelapse_output = fast_rasterize(*cam_to_use, strategy_->get_model(), background_,
+                                                                               step_params.mip_filter);
                                 }
 
                                 // Get folder name to save in by stripping file extension

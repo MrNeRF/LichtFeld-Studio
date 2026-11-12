@@ -44,6 +44,7 @@ namespace lfs::training {
         int32_t* tile_offsets_ptr = nullptr; // [C, tile_height, tile_width]
         int32_t* last_ids_ptr = nullptr;     // [C, H, W]
         float* compensations_ptr = nullptr;  // [C, N] or nullptr
+        float* dilations_ptr = nullptr;      // [C, N] or nullptr
 
         // Borrowed from the gsplat TLS VMM intersection cache (do NOT free).
         // Valid from forward through backward on this thread; released by the
@@ -122,6 +123,7 @@ namespace lfs::training {
     lfs::Status gsplat_accumulate_pop_scores(const GsplatRasterizeContext& ctx, lfs::core::Tensor& scores);
 
     // Forward pass with optional tiling (tile_width/height=0 = full image)
+    // mip_filter: optimization.mip_filter, the smaller dilation plus opacity compensation
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
     std::expected<std::pair<RenderOutput, GsplatRasterizeContext>, std::string> gsplat_rasterize_forward(
         lfs::core::Camera& viewpoint_camera,
@@ -132,7 +134,7 @@ namespace lfs::training {
         int tile_width = 0,
         int tile_height = 0,
         float scaling_modifier = 1.0f,
-        bool antialiased = false,
+        bool mip_filter = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false,
         const lfs::core::Tensor& bg_image = {});
@@ -160,12 +162,12 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         float scaling_modifier = 1.0f,
-        bool antialiased = false,
+        bool mip_filter = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false) {
         auto result = gsplat_rasterize_forward(
             viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0,
-            scaling_modifier, antialiased, render_mode, use_gut);
+            scaling_modifier, mip_filter, render_mode, use_gut);
         if (!result) {
             throw std::runtime_error(result.error());
         }
@@ -186,7 +188,7 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         float scaling_modifier = 1.0f,
-        bool antialiased = false,
+        bool mip_filter = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false) {
         return gsplat_rasterize(
@@ -194,7 +196,7 @@ namespace lfs::training {
             gaussian_model,
             bg_color,
             scaling_modifier,
-            antialiased,
+            mip_filter,
             render_mode,
             use_gut);
     }
