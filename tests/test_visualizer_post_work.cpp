@@ -22467,3 +22467,11 @@ namespace lfs::vis::gui {
     }
 
 } // namespace lfs::vis::gui
+
+namespace {
+    // Windows unloads DLL statics at process exit; release Python owners with the GIL held before that.
+    class PythonFinalizer final : public ::testing::Environment {
+        void TearDown() override { lfs::python::finalize(); }
+    };
+    [[maybe_unused]] const auto* const python_finalizer = ::testing::AddGlobalTestEnvironment(new PythonFinalizer);
+} // namespace

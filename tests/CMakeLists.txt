@@ -667,7 +667,6 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
     )
     target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
         LFS_TEST_SKIP_GPU_PREWARM
-        LFS_TEST_FINALIZE_PYTHON
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
