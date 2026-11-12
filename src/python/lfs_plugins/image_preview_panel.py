@@ -384,7 +384,7 @@ class ImagePreviewPanel(Panel):
         return needs_redraw
 
     def on_unmount(self, doc):
-        if lf.ui.is_panel_enabled(self.id):
+        if lf.ui.is_panel_enabled(self.id) and lf.ui.get_panel_object(self.id) is self:
             # A host/document transfer keeps the editing session, but its GPU
             # texture must be released before the old window device goes away.
             self._sam_release_texture()

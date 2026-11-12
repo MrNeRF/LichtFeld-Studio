@@ -1124,7 +1124,8 @@ def test_reopening_the_same_extraction_keeps_the_active_draft_and_approval_conte
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_host_transfer_releases_texture_and_only_close_ends_editing(panel_modules, monkeypatch, enabled):
+@pytest.mark.parametrize("same_instance", [True, False])
+def test_host_transfer_keeps_session_only_for_same_enabled_instance(panel_modules, monkeypatch, enabled, same_instance):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
     value = editor(module)
@@ -1133,10 +1134,12 @@ def test_host_transfer_releases_texture_and_only_close_ends_editing(panel_module
     panel._mask_editor = value
     sequence = {"run": "clip-a", "output": "frames", "frames": []}
     panel._sam_sequence = sequence
-    destroyed, released, ended = [], [], []
+    destroyed, released, ended, closed = [], [], [], []
     panel._sam_texture = SimpleNamespace(destroy=lambda: destroyed.append(True))
     panel._sam_texture_source = "existing-texture"
     monkeypatch.setattr(module.lf.ui, "is_panel_enabled", lambda _id: enabled)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _id: panel if same_instance else object())
+    monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: closed.append(True))
     monkeypatch.setattr(module.lf.ui, "release_rml_texture", released.append, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_end_sequence", ended.append, raising=False)
     panel.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
@@ -1144,13 +1147,15 @@ def test_host_transfer_releases_texture_and_only_close_ends_editing(panel_module
     assert released == ["existing-texture"]
     assert panel._sam_texture is None
     assert panel._sam_texture_source == ""
-    if enabled:
+    if enabled and same_instance:
         assert panel._sam_sequence is sequence
         assert value.draft.points == [(.3, .5, 1)]
         assert not ended
+        assert not closed
     else:
         assert panel._sam_sequence is None
         assert ended == ["clip-a"]
+        assert closed == [True]
 
 
 def test_sequence_failure_survives_navigation_to_another_frame(tracked_sequence, monkeypatch):
