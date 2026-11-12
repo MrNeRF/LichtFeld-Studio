@@ -1641,7 +1641,14 @@ namespace lfs::vis {
         EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
     }
 
-    class CameraMaskApplyTest : public VisualizerImplResetTest {};
+    class CameraMaskApplyTest : public VisualizerImplResetTest {
+    protected:
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!core::gpu_backend_available(core::default_gpu_backend()))
+                GTEST_SKIP() << "Selected tensor backend unavailable";
+        }
+    };
 
     TEST_F(CameraMaskApplyTest, ApplyIsImageBoundUndoableAndRejectsInvalidReplacement) {
         io::CacheLoader::getInstance(false);
@@ -22460,3 +22467,11 @@ namespace lfs::vis::gui {
     }
 
 } // namespace lfs::vis::gui
+
+namespace {
+    // Windows unloads DLL statics at process exit; release Python owners with the GIL held before that.
+    class PythonFinalizer final : public ::testing::Environment {
+        void TearDown() override { lfs::python::finalize(); }
+    };
+    [[maybe_unused]] const auto* const python_finalizer = ::testing::AddGlobalTestEnvironment(new PythonFinalizer);
+} // namespace
