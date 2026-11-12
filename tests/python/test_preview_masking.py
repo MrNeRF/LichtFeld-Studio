@@ -1123,6 +1123,36 @@ def test_reopening_the_same_extraction_keeps_the_active_draft_and_approval_conte
     assert panel._sam_sequence is None
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_host_transfer_releases_texture_and_only_close_ends_editing(panel_modules, monkeypatch, enabled):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    value = editor(module)
+    value.bind("frame.png", "r1")
+    value.point(.3, .5, 1)
+    panel._mask_editor = value
+    sequence = {"run": "clip-a", "output": "frames", "frames": []}
+    panel._sam_sequence = sequence
+    destroyed, released, ended = [], [], []
+    panel._sam_texture = SimpleNamespace(destroy=lambda: destroyed.append(True))
+    panel._sam_texture_source = "existing-texture"
+    monkeypatch.setattr(module.lf.ui, "is_panel_enabled", lambda _id: enabled)
+    monkeypatch.setattr(module.lf.ui, "release_rml_texture", released.append, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_end_sequence", ended.append, raising=False)
+    panel.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
+    assert destroyed == [True]
+    assert released == ["existing-texture"]
+    assert panel._sam_texture is None
+    assert panel._sam_texture_source == ""
+    if enabled:
+        assert panel._sam_sequence is sequence
+        assert value.draft.points == [(.3, .5, 1)]
+        assert not ended
+    else:
+        assert panel._sam_sequence is None
+        assert ended == ["clip-a"]
+
+
 def test_sequence_failure_survives_navigation_to_another_frame(tracked_sequence, monkeypatch):
     module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)

@@ -192,7 +192,7 @@ namespace lfs::vis::gui {
     }
 
     std::unique_ptr<RmlUIManager::NativeWindow> RmlUIManager::createNativeWindow(
-        const std::string& name, int width, int height) {
+        const std::string& name, int width, int height, std::optional<WindowRectangle> bounds) {
         const auto start = std::chrono::steady_clock::now();
         auto result = std::make_unique<NativeWindow>();
         result->name = name;
@@ -200,7 +200,8 @@ namespace lfs::vis::gui {
         if (!result->graphics)
             return {};
         result->graphics->setSceneRuntimeOwnership(false);
-        const auto rect = nativeDefaultRect(window_, std::max(width, 640), std::max(height, 480));
+        const auto rect = bounds ? recoverFloatingWindowRectangle(*bounds, nativeDisplays(), nativeParentDisplay(window_))
+                                 : nativeDefaultRect(window_, std::max(width, 640), std::max(height, 480));
         SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                 SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
         flags |= SDL_WINDOW_VULKAN;
@@ -1054,7 +1055,8 @@ namespace lfs::vis::gui {
         return dynamic_cast<RenderInterface_VK*>(owned_render_interface_.get());
     }
 
-    Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height, bool floating) {
+    Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height, bool desktop,
+                                              std::optional<WindowRectangle> desktop_bounds) {
         assert(initialized_);
 
         auto it = contexts_.find(name);
@@ -1062,8 +1064,10 @@ namespace lfs::vis::gui {
             return getContext(name);
         }
 
-        const bool external = floating && externalWindowsAllowed(name);
-        auto native = external ? createNativeWindow(name, width, height) : nullptr;
+        // Only a floating panel host explicitly requests a desktop context.
+        // Menus, modals and docked contexts keep the default main-window owner.
+        const bool external = desktop && externalWindowsAllowed(name);
+        auto native = external ? createNativeWindow(name, width, height, desktop_bounds) : nullptr;
         if (external && !native)
             disableExternalWindows(name);
         Rml::Context* ctx = Rml::CreateContext(name, Rml::Vector2i(width, height), native ? native->renderer.get() : nullptr);

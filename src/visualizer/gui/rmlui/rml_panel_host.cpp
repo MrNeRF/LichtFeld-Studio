@@ -259,11 +259,12 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100, desktop_requested_);
-        if (auto* native = nativeWindow()) {
-            SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
-            SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
-        }
+        const std::optional<WindowRectangle> bounds = desktop_requested_
+                                                          ? std::optional<WindowRectangle>{{static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]),
+                                                                                            static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3])}}
+                                                          : std::nullopt;
+        rml_context_ = manager_->createContext(context_name_, bounds ? bounds->width : 100, bounds ? bounds->height : 100,
+                                               desktop_requested_, bounds);
         return rml_context_ != nullptr;
     }
 

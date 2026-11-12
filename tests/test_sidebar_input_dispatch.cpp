@@ -117,6 +117,16 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
             input::InputBindings::setPersistenceEnabled(persistence_enabled_);
         }
+        bool hasDesktopHost(const Rml::Context* context) { return manager().native_windows_.contains(context); }
+
+        void failExternalGraphics(int& attempts) {
+            manager().native_windows_enabled_ = true;
+            manager().create_native_graphics_ = [&attempts]() -> std::unique_ptr<VulkanContext> {
+                ++attempts;
+                return nullptr;
+            };
+        }
+
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
         void setEventWatchActive(bool active) { window_->watching_event_ = active; }
         void setKeyboardContext(Rml::Context* context, bool external_enabled) {
@@ -287,6 +297,50 @@ namespace lfs::vis {
     };
 } // namespace lfs::vis
 namespace lfs::vis {
+    TEST_F(SidebarInputDispatchTest, UnvalidatedPanelsStayInternalIncludingExplicitDesktopRequests) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        for (const auto* name : {"lfs.asset_manager", "lfs.histogram", "plugin.custom", "modal"}) {
+            auto* context = manager().createContext(name, 400, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_TRUE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+        EXPECT_EQ(attempts, 0);
+    }
+
+    TEST_F(SidebarInputDispatchTest, ValidatedBuiltinWindowsUseTheSharedDesktopFallback) {
+        for (const auto* name : {"native.mesh2splat", "lfs.collision", "lfs.splat_simplify", "lfs.camera_selection",
+                                 "lfs.logging", "lfs.about", "lfs.scripts", "lfs.bug_report", "lfs.getting_started",
+                                 "lfs.export", "lfs.new_project", "lfs.resume_checkpoint", "lfs.gallery_file", "lfs.image_preview"}) {
+            SCOPED_TRACE(name);
+            int attempts = 0;
+            failExternalGraphics(attempts);
+            auto* context = manager().createContext(name, 420, 300, true);
+            ASSERT_NE(context, nullptr);
+            EXPECT_EQ(attempts, 1);
+            EXPECT_FALSE(hasDesktopHost(context));
+            EXPECT_FALSE(manager().externalWindowsAllowed());
+            manager().destroyContext(name);
+        }
+    }
+
+    TEST_F(SidebarInputDispatchTest, OnlyFloatingHostsAcceptDesktopGeometryAndFallbackKeepsRequestedSize) {
+        int attempts = 0;
+        failExternalGraphics(attempts);
+        gui::RmlPanelHost host(&manager(), "lfs.collision", "rmlui/collision.rml");
+        EXPECT_FALSE(host.configureExternal(10, 20, 780, 440, true));
+        host.setFloating(true);
+        ASSERT_TRUE(host.configureExternal(10, 20, 780, 440, true));
+        ASSERT_TRUE(host.ensureContext());
+        ASSERT_NE(host.getContext(), nullptr);
+        EXPECT_EQ(host.getContext()->GetDimensions(), Rml::Vector2i(780, 440));
+        EXPECT_EQ(attempts, 1);
+        EXPECT_EQ(host.nativeWindow(), nullptr);
+        EXPECT_FALSE(host.configureExternal(30, 40, 800, 600, true));
+    }
+
     TEST_F(SidebarInputDispatchTest, DesktopPinChangesOnlyTopmostState) {
         std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Pin state regression", 200, 100, SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE),

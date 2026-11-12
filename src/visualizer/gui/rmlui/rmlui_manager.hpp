@@ -122,7 +122,12 @@ namespace lfs::vis::gui {
         void setDpRatio(float ratio);
         bool externalWindowsAllowed() const { return native_windows_enabled_; }
         static bool validatedExternalPanel(std::string_view name) {
-            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor";
+            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor" ||
+                   name == "native.mesh2splat" || name == "lfs.collision" || name == "lfs.splat_simplify" ||
+                   name == "lfs.camera_selection" || name == "lfs.logging" || name == "lfs.about" ||
+                   name == "lfs.scripts" || name == "lfs.bug_report" || name == "lfs.getting_started" ||
+                   name == "lfs.export" || name == "lfs.new_project" || name == "lfs.resume_checkpoint" ||
+                   name == "lfs.gallery_file" || name == "lfs.image_preview";
         }
         bool externalWindowsAllowed(std::string_view name) const {
             return native_windows_enabled_ && validatedExternalPanel(name);
@@ -130,7 +135,8 @@ namespace lfs::vis::gui {
         SDL_Window* mainWindow() const { return window_; }
         bool restoredExternalBounds(const std::string& name, float* bounds);
 
-        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool floating = false);
+        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool desktop = false,
+                                                std::optional<WindowRectangle> desktop_bounds = std::nullopt);
         SDL_Window* nativeWindow(const Rml::Context* context) const;
         VulkanContext* nativeGraphics(const Rml::Context* context) const;
         void showNativeWindow(Rml::Context* context);
@@ -270,7 +276,8 @@ namespace lfs::vis::gui {
         void syncNativeWindowPins();
         void focusApplicationModal();
         bool launch_safe_mode_ = false;
-        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
+        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height,
+                                                         std::optional<WindowRectangle> bounds);
         std::function<std::unique_ptr<VulkanContext>()> create_native_graphics_ = [] { return std::make_unique<VulkanContext>(); };
         void recordNativeGeometry(NativeWindow& native);
         void flushNativeGeometry();

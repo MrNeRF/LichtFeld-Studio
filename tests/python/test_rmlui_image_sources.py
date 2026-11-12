@@ -35,6 +35,7 @@ def _install_lf_stub(monkeypatch):
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
         set_panel_enabled=lambda _panel_id, _enabled: None,
+        is_panel_enabled=lambda _panel_id: False,
         get_panel_object=lambda _panel_id: None,
         get_image_info=lambda _path: (0, 0, 0),
         preview_texture_status=lambda _source, _document=None: "ready",
