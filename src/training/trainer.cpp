@@ -6138,13 +6138,10 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor Trainer::get_random_background_for_camera(int width, int height, int iteration) {
-        const size_t required_size = 3 * static_cast<size_t>(height) * static_cast<size_t>(width);
+        const lfs::core::TensorShape shape{3, static_cast<size_t>(height), static_cast<size_t>(width)};
 
-        if (!random_bg_buffer_.is_valid() || random_bg_buffer_.numel() != required_size) {
-            random_bg_buffer_ = lfs::core::Tensor::empty(
-                {3, static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA,
-                lfs::core::DataType::Float32);
+        if (!random_bg_buffer_.is_valid() || random_bg_buffer_.shape() != shape) {
+            random_bg_buffer_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
 
         kernels::launch_random_background(

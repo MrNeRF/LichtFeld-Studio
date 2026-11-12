@@ -727,7 +727,7 @@ namespace lfs::training {
                         mask_path, params.dataset.resize_factor, params.dataset.max_width,
                         false, params.optimization.mask_threshold, true,
                         undistorted_reference);
-                    if (inputs.user_mask.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                    if (inputs.user_mask.shape() != lfs::core::TensorShape({inputs.gt_image.shape()[1], inputs.gt_image.shape()[2]}))
                         return evaluation_error(std::format("evaluation mask '{}' does not match the image size",
                                                             lfs::core::path_to_utf8(mask_path)),
                                                 LFS_SOURCE_SITE_CURRENT());
