@@ -4210,4 +4210,17 @@ namespace lfs::io::project {
         lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
     }
 
+    lfs::Result<std::vector<int>> disabled_camera_uids(const SceneGraphChapter& scene_graph) {
+        auto nodes = scene_graph.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        std::vector<int> uids;
+        for (const auto& node : *nodes) {
+            if (node.camera && !node.training_enabled)
+                uids.push_back(node.camera->uid);
+        }
+        return uids;
+    }
+
 } // namespace lfs::io::project

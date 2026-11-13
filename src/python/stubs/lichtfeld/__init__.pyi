@@ -757,6 +757,18 @@ def set_render_mode(mode: RenderMode) -> None:
 def is_orthographic() -> bool:
     """Check if orthographic projection is active"""
 
+def get_viewport_display_mode() -> str:
+    """Get viewport display mode: rgb, depth, or normal"""
+
+def set_viewport_display_mode(mode: str) -> None:
+    """Set viewport display mode independently of the selector visibility"""
+
+def get_render_mode_controls_open() -> bool:
+    """Return whether the viewport render-mode selector is open."""
+
+def set_render_mode_controls_open(open: bool) -> None:
+    """Open or close the render-mode selector without changing the view"""
+
 def get_depth_view() -> bool:
     """Check if depth-map view is active"""
 
@@ -2313,6 +2325,15 @@ class OptimizationParams:
     def eval_flip(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_green_infill(self) -> bool:
+        """
+        Also score with opaque green filling the inside of a mesh, so a see-through surface loses score
+        """
+
+    @eval_green_infill.setter
+    def eval_green_infill(self, arg: bool, /) -> None: ...
+
+    @property
     def eval_mask(self) -> str:
         """
         Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected
@@ -2518,6 +2539,15 @@ class OptimizationParams:
 
     @mip_filter.setter
     def mip_filter(self, arg: bool, /) -> None: ...
+
+    @property
+    def pose_opt(self) -> bool:
+        """
+        Refine the training camera poses during training; the refined poses replace the cameras' own
+        """
+
+    @pose_opt.setter
+    def pose_opt(self, arg: bool, /) -> None: ...
 
     @property
     def ppisp(self) -> bool:

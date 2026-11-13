@@ -11,6 +11,7 @@
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/effective_rank.cuh"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/ray_depth_step.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include "warp_gradient_reduce.cuh"
@@ -37,7 +38,8 @@ namespace fast_lfs::rasterization::kernels::backward {
 
     // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
-    template <bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES = false>
+    // CAMERA_GRAD: adds the camera gradient to grad_w2c and grad_cam_position (FastGSFusedExtraGradients).
+    template <bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES = false, bool CAMERA_GRAD = false>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
         // These four alias fused_adam.{means,scaling,rotation,opacity}.param (Adam writes).
         const float3* means,
@@ -57,6 +59,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* __restrict__ grad_opacity_helper,
         float3* __restrict__ grad_color_helper,
         float4* __restrict__ grad_w2c,
+        float3* __restrict__ grad_cam_position,
         float* __restrict__ densification_weight,
         float* __restrict__ densification_error,
         const uint n_primitives,
@@ -70,6 +73,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_right,
         const float clip_top,
         const float clip_bottom,
+        const float dilation_scale,
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam,
         // model-truth shN-rest decode binds. fused_adam.shN.sh_value_*
@@ -285,6 +289,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         }
         // sh0 / streamed shN Adam state is dead from here on (compiler can free it).
 
+        // dL/d(w2c rows 0-2) then dL/d(cam_position), summed over the block after the geometry.
+        [[maybe_unused]] float camera_grad[15] = {};
+
         // Re-enter the contribution path for covariance, EWA, and geometry gradients.
         if (contributed) {
             const float3 mean3d = means[primitive_idx];
@@ -359,7 +366,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
             // 2d covariance gradient (use same dilation as forward pass)
-            constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
+            const float kernel_size = (MIP_FILTER ? config::dilation_mip_filter : config::dilation) * dilation_scale;
             const float raw_a = dot(jwc_r1, jw_r1);
             const float raw_b = dot(jwc_r1, jw_r2);
             const float raw_c = dot(jwc_r2, jw_r2);
@@ -379,12 +386,10 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float grad_compensated_opacity = grad_opacity_helper[work_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
-                const float det_raw = raw_a * raw_c - raw_b * raw_b;
-                if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                    opacity_compensation = sqrtf(det_raw * determinant_rcp);
-                } else {
-                    opacity_compensation = 0.0f;
-                }
+                // The forward's factor: it keeps every splat with det >= min_cov2d_determinant.
+                // It scales the opacity gradient only and stays detached from the covariance: feeding this
+                // determinant ratio into the scale and rotation gradients creates long splats.
+                opacity_compensation = sqrtf(fmaxf(raw_a * raw_c - raw_b * raw_b, 0.0f) * determinant_rcp);
             }
 
             const float sigmoid_derivative = lfs::core::sigmoid_derivative_from_logit(raw_opacities[primitive_idx]);
@@ -434,21 +439,6 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float factor_y = 1.0f + static_cast<float>(valid_y);
             dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
 
-            if (grad_w2c != nullptr) {
-                atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
-                atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y);
-                atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z);
-                atomicAdd(&grad_w2c[0].x, dL_dmean3d_cam.x * mean3d.x);
-                atomicAdd(&grad_w2c[0].y, dL_dmean3d_cam.x * mean3d.y);
-                atomicAdd(&grad_w2c[0].z, dL_dmean3d_cam.x * mean3d.z);
-                atomicAdd(&grad_w2c[1].x, dL_dmean3d_cam.y * mean3d.x);
-                atomicAdd(&grad_w2c[1].y, dL_dmean3d_cam.y * mean3d.y);
-                atomicAdd(&grad_w2c[1].z, dL_dmean3d_cam.y * mean3d.z);
-                atomicAdd(&grad_w2c[2].x, dL_dmean3d_cam.z * mean3d.x);
-                atomicAdd(&grad_w2c[2].y, dL_dmean3d_cam.z * mean3d.y);
-                atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
-            }
-
             // Combine the splatting gradient with the saved SH color gradient.
             const float3 dL_dmean3d_from_splatting = make_float3(
                 w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
@@ -492,32 +482,54 @@ namespace fast_lfs::rasterization::kernels::backward {
                 2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
                 2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33)};
 
+            // Camera-space normal W n: n is the axis of least variance, turned to face the camera.
+            float3 dL_dnormal_cam = make_float3(0.0f);
+            float3 normal_world = make_float3(0.0f);
             if (grad_normal != nullptr) {
-                const float3 g_cam = grad_normal[work_idx];
+                dL_dnormal_cam = grad_normal[work_idx];
                 const float3 g_world = make_float3(
-                    w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
-                    w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
-                    w2c_r1.z * g_cam.x + w2c_r2.z * g_cam.y + w2c_r3.z * g_cam.z);
-                const float3 view_dir = mean3d - cam_position[0];
-                if (variance.x <= variance.y && variance.x <= variance.z) {
-                    const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m11 += sign * g_world.x;
-                    dL_drotation.m21 += sign * g_world.y;
-                    dL_drotation.m31 += sign * g_world.z;
-                } else if (variance.y <= variance.z) {
-                    const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m12 += sign * g_world.x;
-                    dL_drotation.m22 += sign * g_world.y;
-                    dL_drotation.m32 += sign * g_world.z;
+                    w2c_r1.x * dL_dnormal_cam.x + w2c_r2.x * dL_dnormal_cam.y + w2c_r3.x * dL_dnormal_cam.z,
+                    w2c_r1.y * dL_dnormal_cam.x + w2c_r2.y * dL_dnormal_cam.y + w2c_r3.y * dL_dnormal_cam.z,
+                    w2c_r1.z * dL_dnormal_cam.x + w2c_r2.z * dL_dnormal_cam.y + w2c_r3.z * dL_dnormal_cam.z);
+                const int axis = (variance.x <= variance.y && variance.x <= variance.z) ? 0
+                                 : (variance.y <= variance.z)                           ? 1
+                                                                                        : 2;
+                const float3 axis_dir = axis == 0   ? make_float3(rotation.m11, rotation.m21, rotation.m31)
+                                        : axis == 1 ? make_float3(rotation.m12, rotation.m22, rotation.m32)
+                                                    : make_float3(rotation.m13, rotation.m23, rotation.m33);
+                const float sign = dot(axis_dir, mean3d - cam_position[0]) > 0.0f ? -1.0f : 1.0f;
+                normal_world = sign * axis_dir;
+                const float3 dL_daxis = sign * g_world;
+                if (axis == 0) {
+                    dL_drotation.m11 += dL_daxis.x;
+                    dL_drotation.m21 += dL_daxis.y;
+                    dL_drotation.m31 += dL_daxis.z;
+                } else if (axis == 1) {
+                    dL_drotation.m12 += dL_daxis.x;
+                    dL_drotation.m22 += dL_daxis.y;
+                    dL_drotation.m32 += dL_daxis.z;
                 } else {
-                    const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
-                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                    dL_drotation.m13 += sign * g_world.x;
-                    dL_drotation.m23 += sign * g_world.y;
-                    dL_drotation.m33 += sign * g_world.z;
+                    dL_drotation.m13 += dL_daxis.x;
+                    dL_drotation.m23 += dL_daxis.y;
+                    dL_drotation.m33 += dL_daxis.z;
                 }
+            }
+
+            if constexpr (CAMERA_GRAD) {
+                // Through the camera-space centre W x + b, the covariance (J W) Sigma (J W)^T with J held (its
+                // dependence on the centre is in dL_dmean3d_cam) and the normal; the position only enters the colour.
+                const float3 dL_dW0 = dL_dmean3d_cam.x * mean3d + j11 * dL_djw_r1 + dL_dnormal_cam.x * normal_world;
+                const float3 dL_dW1 = dL_dmean3d_cam.y * mean3d + j22 * dL_djw_r2 + dL_dnormal_cam.y * normal_world;
+                const float3 dL_dW2 = dL_dmean3d_cam.z * mean3d + j13 * dL_djw_r1 + j23 * dL_djw_r2 +
+                                      dL_dnormal_cam.z * normal_world;
+                const float values[15] = {
+                    dL_dW0.x, dL_dW0.y, dL_dW0.z, dL_dmean3d_cam.x,
+                    dL_dW1.x, dL_dW1.y, dL_dW1.z, dL_dmean3d_cam.y,
+                    dL_dW2.x, dL_dW2.y, dL_dW2.z, dL_dmean3d_cam.z,
+                    -dL_dmean3d_from_color.x, -dL_dmean3d_from_color.y, -dL_dmean3d_from_color.z};
+#pragma unroll
+                for (int i = 0; i < 15; ++i)
+                    camera_grad[i] = values[i];
             }
 
             const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
@@ -539,12 +551,34 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         } // contribution geometry
 
+        if constexpr (CAMERA_GRAD) {
+            lfs::core::warp_ops::block_reduce_sum_n(camera_grad);
+            if (threadIdx.x == 0) {
+                float* w2c_out = reinterpret_cast<float*>(grad_w2c);
+#pragma unroll
+                for (int i = 0; i < 12; ++i)
+                    atomicAdd(w2c_out + i, camera_grad[i]);
+                atomicAdd(&grad_cam_position->x, camera_grad[12]);
+                atomicAdd(&grad_cam_position->y, camera_grad[13]);
+                atomicAdd(&grad_cam_position->z, camera_grad[14]);
+            }
+        }
+
         if (visible && densification_error != nullptr) {
             if (densification_weight != nullptr)
                 densification_weight[primitive_idx] += 1.0f;
             densification_error[primitive_idx] += length(grad_mean2d[work_idx] * make_float2(0.5f * w, 0.5f * h));
         }
 
+        // Ray-depth proposal from the rendered parameters; applied after the geometry rows' steps.
+        [[maybe_unused]] lfs::training::ray_depth::Proposal ray_depth;
+        [[maybe_unused]] const bool ray_depth_row = !DISABLED_FEATURES && contributed &&
+                                                    fused_adam.ray_depth_state != nullptr &&
+                                                    fused_adam.means.gradient_out == nullptr &&
+                                                    fused_adam.means.param != nullptr &&
+                                                    fused_adam.scaling.param != nullptr &&
+                                                    fused_adam.rotation.param != nullptr &&
+                                                    primitive_idx < static_cast<uint>(fused_adam.ray_depth_n);
         if constexpr (DISABLED_FEATURES) {
             adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3,
                           fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -556,14 +590,32 @@ namespace fast_lfs::rasterization::kernels::backward {
                                        fused_adam.mean_step_far_mask[primitive_idx];
             // single call site: helper runs block-wide reductions; divergent duplicates deadlock
             FusedAdamParam means_p = fused_adam.means;
+            float mean_step_ratio = 1.0f;
             if (far_mean_step && fused_adam.scaling.param != nullptr) {
                 const uint sb = primitive_idx * 3u;
                 if (sb + 2u < static_cast<uint>(fused_adam.scaling.n_elements)) {
                     const float* s = fused_adam.scaling.param + sb;
-                    means_p.step_size *= lfs::training::per_splat_mean_step_ratio(
+                    mean_step_ratio = lfs::training::per_splat_mean_step_ratio(
                         s[0], s[1], s[2],
                         fused_adam.mean_step_median_extent);
+                    means_p.step_size *= mean_step_ratio;
                 }
+            }
+            if (ray_depth_row) {
+                const uint b3 = primitive_idx * 3u;
+                const float lr_scale = lfs::training::ray_depth::row_lr_scale(
+                    primitive_idx, fused_adam.means.frozen_mask, fused_adam.means.frozen_mask_size,
+                    fused_adam.means.frozen_lr_scale, fused_adam.means.crop_damping_mask,
+                    fused_adam.means.crop_damping_mask_size, fused_adam.means.cropbox_lr_scale);
+                const float3 camera = cam_position[0];
+                const float camera_xyz[3] = {camera.x, camera.y, camera.z};
+                ray_depth = lfs::training::ray_depth::propose(
+                    fused_adam.ray_depth_state + primitive_idx * lfs::training::ray_depth::kStateStride,
+                    fused_adam.means.param + b3, fused_adam.scaling.param + b3,
+                    fused_adam.rotation.param + primitive_idx * 4u, camera_xyz, mean_grads,
+                    fused_adam.ray_depth_lr * lr_scale,
+                    lfs::training::ray_depth::kSidewaysSteps * fused_adam.ray_depth_mean_lr * lr_scale *
+                        mean_step_ratio);
             }
             adam_step_row(mean_grads, means_p, primitive_idx, 3,
                           fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -571,6 +623,16 @@ namespace fast_lfs::rasterization::kernels::backward {
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (!DISABLED_FEATURES) {
+            if (ray_depth_row) {
+                const float3 camera = cam_position[0];
+                const float camera_xyz[3] = {camera.x, camera.y, camera.z};
+                lfs::training::ray_depth::commit(
+                    fused_adam.ray_depth_state + primitive_idx * lfs::training::ray_depth::kStateStride,
+                    fused_adam.means.param + primitive_idx * 3u, fused_adam.scaling.param + primitive_idx * 3u,
+                    camera_xyz, ray_depth.dt, ray_depth.bperp2 >= 0.0f, fused_adam.ray_depth_far_limit);
+            }
+        }
     }
 
     __device__ __forceinline__ float background_transmittance_grad(

@@ -103,7 +103,7 @@ namespace lfs::training {
                                                tensor->is_valid(), tensor->is_valid() ? tensor->numel() : 0));
         }
         const gsplat_lfs::PopScoreInputs inputs{
-            ctx.means.ptr<float>(), ctx.quats.ptr<float>(), ctx.scales.ptr<float>(), ctx.opacities.ptr<float>(), ctx.colors_ptr,
+            ctx.means.ptr<float>(), ctx.quats.ptr<float>(), ctx.scales.ptr<float>(), ctx.opacities.ptr<float>(), ctx.compensations_ptr, ctx.dilations_ptr, ctx.colors_ptr,
             optional_float(ctx.bg_color), optional_float(ctx.bg_image), ctx.viewmat_ptr, ctx.K_ptr,
             ctx.radial_ptr, ctx.tangential_ptr, ctx.thin_prism_ptr, ctx.tile_offsets_ptr, ctx.flatten_ids_ptr,
             ctx.image_width, ctx.image_height, ctx.tile_size, ctx.channels, ctx.camera_model};

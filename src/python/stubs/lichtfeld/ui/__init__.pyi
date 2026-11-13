@@ -2348,13 +2348,15 @@ def is_gt_comparison_active() -> bool:
     """
 
 def get_gt_comparison_mode() -> str:
-    """Get ground-truth comparison mode: rgb, normal, or depth."""
+    """Get ground-truth comparison mode: rgb, normal, depth, or loss."""
 
 def set_gt_comparison_mode(mode: str) -> None:
     """Set ground-truth comparison mode."""
 
 def cycle_gt_comparison_mode() -> str:
-    """Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb."""
+    """
+    Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.
+    """
 
 def reveal_in_file_manager(path: str) -> bool:
     """
@@ -2504,9 +2506,9 @@ def on_open_image_preview(callback: object, include_sequence: bool = False) -> N
     Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.
     """
 
-def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None) -> int:
+def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None, semantic: object | None = None) -> int:
     """
-    UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.
+    UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.
     """
 
 def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> list:

@@ -94,6 +94,77 @@ namespace lfs::core::nn {
 
     } // namespace
 
+    Tensor group_norm(const Tensor& input, const Tensor& weight, const Tensor& bias,
+                      const int groups, const float eps) {
+        require_nn_tensor(input, "group_norm", "input");
+        require_nn_tensor(weight, "group_norm", "weight");
+        require_nn_tensor(bias, "group_norm", "bias");
+        require_same_dtype_device(input, weight, "group_norm", "input", "weight");
+        require_same_dtype_device(input, bias, "group_norm", "input", "bias");
+        LFS_ASSERT_MSG(input.ndim() == 4 && groups > 0 && input.size(0) > 0 && input.size(1) > 0 &&
+                           input.size(1) % size_t(groups) == 0 && input.size(2) > 0 && input.size(3) > 0,
+                       "GroupNorm expects nonempty NCHW with channels divisible by groups");
+        LFS_ASSERT_MSG(weight.ndim() == 1 && bias.ndim() == 1 &&
+                           weight.size(0) == input.size(1) && bias.size(0) == input.size(1) &&
+                           std::isfinite(eps) && eps > 0,
+                       "Invalid GroupNorm affine parameters or epsilon");
+        const auto channels = input.size(1);
+        const auto grouped = input.to(DataType::Float32).contiguous().reshape(TensorShape(std::vector<size_t>{input.size(0), size_t(groups), input.numel() / input.size(0) / size_t(groups)}));
+        const Tensor centered = grouped - grouped.mean(-1, true);
+        const Tensor variance = (centered * centered).mean(-1, true);
+        const Tensor normalized = centered / (variance + eps).sqrt();
+        const Tensor output = normalized.reshape(input.shape()) *
+                                  weight.to(DataType::Float32).reshape({1, int(channels), 1, 1}) +
+                              bias.to(DataType::Float32).reshape({1, int(channels), 1, 1});
+        return output.to(input.dtype());
+    }
+
+    Tensor deformable_attention(const Tensor& value, const Tensor& locations, const Tensor& weights,
+                                const std::span<const std::pair<int, int>> spatial_shapes) {
+        constexpr auto op = "deformable_attention";
+        require_nn_tensor(value, op, "value");
+        require_nn_tensor(locations, op, "locations");
+        require_nn_tensor(weights, op, "weights");
+        require_same_dtype_device(value, locations, op, "value", "locations");
+        require_same_dtype_device(value, weights, op, "value", "weights");
+        LFS_ASSERT_MSG(value.ndim() == 4 && locations.ndim() == 6 && weights.ndim() == 5,
+                       "Deformable attention expects BSHD, BQHLP2 and BQHLP inputs");
+        LFS_ASSERT_MSG(!spatial_shapes.empty() && spatial_shapes.size() <= 4,
+                       "Deformable attention requires one to four spatial levels");
+        kernels::DeformableLevels levels;
+        levels.count = int(spatial_shapes.size());
+        size_t spatial = 0;
+        for (size_t i = 0; i < spatial_shapes.size(); ++i) {
+            const auto [height, width] = spatial_shapes[i];
+            LFS_ASSERT_MSG(height > 0 && width > 0, "Invalid deformable spatial extent");
+            const size_t count = size_t(height) * size_t(width);
+            LFS_ASSERT_MSG(spatial <= value.size(1) && count <= value.size(1) - spatial,
+                           "Deformable spatial levels exceed the value extent");
+            levels.height[i] = height;
+            levels.width[i] = width;
+            levels.offset[i] = static_cast<long long>(spatial);
+            spatial += count;
+        }
+        LFS_ASSERT_MSG(spatial == value.size(1) && locations.size(5) == 2 &&
+                           locations.size(0) == value.size(0) && locations.size(2) == value.size(2) &&
+                           locations.size(3) == spatial_shapes.size(),
+                       "Deformable attention spatial or batch/head mismatch");
+        for (size_t dim = 0; dim < 5; ++dim)
+            LFS_ASSERT_MSG(weights.size(dim) == locations.size(dim) && weights.size(dim) > 0,
+                           "Deformable attention sampling shape mismatch");
+        LFS_ASSERT_MSG(value.size(3) > 0, "Deformable attention requires nonempty head channels");
+        const auto v = value.contiguous(), xy = locations.contiguous(), a = weights.contiguous();
+        auto output = empty_like_shape(v, {value.size(0), locations.size(1), value.size(2) * value.size(3)});
+        pin_operands({&v, &xy, &a});
+        output.set_stream(prepare_inputs_for_stream({&v, &xy, &a}, output.stream()));
+        kernels::deformable_attention(raw(v), raw(xy), raw(a), raw_mut(output),
+                                      static_cast<long long>(value.size(0)), static_cast<long long>(spatial),
+                                      static_cast<long long>(locations.size(1)), static_cast<long long>(value.size(2)),
+                                      static_cast<long long>(value.size(3)), static_cast<long long>(locations.size(4)),
+                                      levels, value.dtype(), output.stream());
+        return output;
+    }
+
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_a, bool trans_b, const Tensor* bias,
                 Activation activation, const Tensor* residual, const Tensor* scale) {
         require_nn_tensor(a, "gemm", "a");
@@ -911,8 +982,9 @@ namespace lfs::core::nn {
         return out;
     }
 
-    Tensor resize2d_pil_bicubic(const Tensor& input, int out_h, int out_w) {
-        require_nn_tensor(input, "resize2d_pil_bicubic", "input");
+    Tensor resize2d_pil(const Tensor& input, int out_h, int out_w, ResizeMode mode) {
+        require_nn_tensor(input, "resize2d_pil", "input");
+        LFS_ASSERT_MSG(mode == ResizeMode::Bilinear || mode == ResizeMode::Cubic, "PIL resampling requires bilinear or cubic filtering");
         LFS_ASSERT_MSG(input.ndim() == 4 && input.dtype() == DataType::Float32,
                        "PIL resampling expects Float32 NCHW");
         LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "PIL resampling size must be positive");
@@ -925,11 +997,13 @@ namespace lfs::core::nn {
                 continue;
             const double scale = double(in_size) / out_size;
             const double filter_scale = std::max(1.0, scale);
-            const double support = 2 * filter_scale;
+            const double support = (mode == ResizeMode::Cubic ? 2 : 1) * filter_scale;
             const int taps = 2 * int(std::ceil(support)) + 1;
             std::vector<int> bounds(size_t(out_size) * 2), coefficients(size_t(out_size) * taps);
-            const auto cubic = [](double x) {
+            const auto filter = [mode](double x) {
                 x = std::abs(x);
+                if (mode == ResizeMode::Bilinear)
+                    return std::max(0.0, 1.0 - x);
                 if (x < 1)
                     return ((1.5 * x - 2.5) * x) * x + 1;
                 if (x < 2)
@@ -945,7 +1019,7 @@ namespace lfs::core::nn {
                 std::vector<double> weights(size_t(end - first));
                 double total = 0;
                 for (int i = first; i < end; ++i) {
-                    weights[size_t(i - first)] = cubic((i - center + 0.5) / filter_scale);
+                    weights[size_t(i - first)] = filter((i - center + 0.5) / filter_scale);
                     total += weights[size_t(i - first)];
                 }
                 for (int i = first; i < end; ++i) {

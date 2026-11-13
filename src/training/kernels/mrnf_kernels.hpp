@@ -198,4 +198,13 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // Ray-depth rows (lfs/training/ray_depth_step.cuh) of split children: anchor and baseline spread from the
+    // parent, fresh moments for both, as the parent's other optimizer state is reset too.
+    void launch_ray_depth_inherit(
+        float* state,
+        const int64_t* parents,
+        const int64_t* children,
+        size_t K,
+        void* stream = nullptr);
+
 } // namespace lfs::training::mrnf_strategy

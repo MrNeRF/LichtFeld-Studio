@@ -40,6 +40,12 @@ target_include_directories(lichtfeld_camera_selection_tests PRIVATE ${CMAKE_SOUR
 target_link_libraries(lichtfeld_camera_selection_tests PRIVATE GTest::gtest_main glm::glm)
 add_test(NAME lichtfeld.camera_selection COMMAND lichtfeld_camera_selection_tests)
 set_tests_properties(lichtfeld.camera_selection PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
+add_executable(lichtfeld_camera_pose_math_tests test_camera_pose_math.cpp)
+target_compile_features(lichtfeld_camera_pose_math_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_camera_pose_math_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/training)
+target_link_libraries(lichtfeld_camera_pose_math_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.camera_pose_math COMMAND lichtfeld_camera_pose_math_tests)
+set_tests_properties(lichtfeld.camera_pose_math PROPERTIES LABELS "cpu;camera" TIMEOUT 30)
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
@@ -276,6 +282,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_preferences_tooltips.cpp
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
+        test_gt_comparison_loss.cpp
         test_panel_layout_render_demand.cpp
         test_right_panel_tabs.cpp
         test_preferences_migration.cpp
@@ -935,6 +942,8 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_camera_pose_gradient.cpp
+    test_ray_depth_step.cpp
     test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
@@ -1031,6 +1040,7 @@ set(TEST_FILES
     test_camera_training_notice.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
+    test_llmdet_backbones.cpp
     test_weight_file_paths.cpp
     test_model_cache.cpp
     test_moge2.cpp

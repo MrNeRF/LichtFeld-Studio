@@ -258,6 +258,16 @@ namespace gsplat_lfs {
         return v;
     }
 
+    // d s / d log(raw scale) for the scale s the kernel used: s itself, or s0^2 / s for s = sqrt(s0^2 + sigma2)
+    // under the mip filter, whose sigma2 is a constant.
+    __device__ __forceinline__ vec3 log_scale_chain(const vec3 scale_act, const vec3* scales, const float* dilations,
+                                                    const int32_t g) {
+        if (dilations == nullptr)
+            return scale_act;
+        const vec3 s0 = activated_scale(scales[g]);
+        return s0 * s0 / scale_act;
+    }
+
     __device__ __forceinline__ void flush_splat_grads(
         const int32_t g,
         const uint32_t N,
@@ -317,6 +327,8 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ backgrounds,
         const scalar_t* __restrict__ bg_images,
         const bool* __restrict__ masks,
+        const scalar_t* __restrict__ compensations,
+        const scalar_t* __restrict__ dilations,
         const uint32_t image_width,
         const uint32_t image_height,
         const uint32_t tile_size,
@@ -427,7 +439,9 @@ namespace gsplat_lfs {
                 const int32_t g = flatten_ids[idx];
                 id_batch[slot] = g;
                 const vec3 xyz = means[g];
-                const float opac = activated_opacity(opacities[g]);
+                float opac = activated_opacity(opacities[g]);
+                if (compensations != nullptr)
+                    opac *= compensations[g];
                 xyz_opacity_batch[slot] = {xyz.x, xyz.y, xyz.z, opac};
                 const vec3 scale_act = activated_scale(scales[g]);
                 const vec4 quat = quats[g];
@@ -439,6 +453,10 @@ namespace gsplat_lfs {
                     0.f, 1.0f / scale_act[1], 0.f,
                     0.f, 0.f, 1.0f / scale_act[2]);
                 mt_batch[slot] = glm::transpose(R * S);
+                if (dilations != nullptr) { // mip filter; kept apart so the unfiltered path is computed as before
+                    scale_batch[slot] = dilated_scale(scale_act, dilations[g]);
+                    mt_batch[slot] = glm::transpose(R * inverse_scale_matrix(scale_batch[slot]));
+                }
                 rgbs_batch[slot * 3u + 0] = colors[g * 3u + 0];
                 rgbs_batch[slot * 3u + 1] = colors[g * 3u + 1];
                 rgbs_batch[slot * 3u + 2] = colors[g * 3u + 2];
@@ -516,10 +534,16 @@ namespace gsplat_lfs {
                         edge_score_local = reduce_field(edge_score_local, n_contrib, src_lane);
                     }
                     if (warp.thread_rank() == 0) {
+                        // The compensation scales the opacity gradient only and stays detached from the
+                        // covariance: feeding this determinant ratio into the scale and rotation gradients
+                        // creates long splats.
+                        if (compensations != nullptr)
+                            v_opacity_local *= compensations[id_batch[t]];
                         flush_splat_grads(
                             id_batch[t], N, do_dens, v_rgb_local, v_mean_local, v_scale_local,
                             v_quat_local, v_opacity_local, densification_weight_local,
-                            densification_error_weighted_local, scale_act, opacities[id_batch[t]],
+                            densification_error_weighted_local,
+                            log_scale_chain(scale_act, scales, dilations, id_batch[t]), opacities[id_batch[t]],
                             v_means, v_quats, v_scales, v_colors, v_opacities, densification_weight,
                             densification_error);
                     }
@@ -556,6 +580,8 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ backgrounds, // [C, CDIM] - solid color (mutually exclusive with bg_images)
         const scalar_t* __restrict__ bg_images,   // [C, CDIM, H, W] - per-pixel background (mutually exclusive with backgrounds)
         const bool* __restrict__ masks,           // [C, tile_height, tile_width]
+        const scalar_t* __restrict__ compensations,
+        const scalar_t* __restrict__ dilations,
         const uint32_t image_width,
         const uint32_t image_height,
         const uint32_t tile_size,
@@ -733,7 +759,9 @@ namespace gsplat_lfs {
                 int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
                 id_batch[tr] = g;
                 const vec3 xyz = means[g];
-                const float opac = activated_opacity(opacities[g]);
+                float opac = activated_opacity(opacities[g]);
+                if (compensations != nullptr)
+                    opac *= compensations[g];
                 xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
                 const vec3 scale_act = activated_scale(scales[g]);
                 const vec4 quat = quats[g];
@@ -745,6 +773,10 @@ namespace gsplat_lfs {
                     0.f, 1.0f / scale_act[1], 0.f,
                     0.f, 0.f, 1.0f / scale_act[2]);
                 mt_batch[tr] = glm::transpose(R * S);
+                if (dilations != nullptr) { // mip filter, as above
+                    scale_batch[tr] = dilated_scale(scale_act, dilations[g]);
+                    mt_batch[tr] = glm::transpose(R * inverse_scale_matrix(scale_batch[tr]));
+                }
 #pragma unroll
                 for (uint32_t k = 0; k < CDIM; ++k) {
                     rgbs_batch[tr * CDIM + k] = colors[g * CDIM + k];
@@ -873,7 +905,7 @@ namespace gsplat_lfs {
                         gpuAtomicAdd(v_mean_ptr + 2, v_mean_local.z);
 
                         float* v_scale_ptr = (float*)(v_scales) + 3 * g;
-                        const vec3 scale_act = scale_batch[t];
+                        const vec3 scale_act = log_scale_chain(scale_batch[t], scales, dilations, g);
                         gpuAtomicAdd(v_scale_ptr, v_scale_local.x * scale_act.x);
                         gpuAtomicAdd(v_scale_ptr + 1, v_scale_local.y * scale_act.y);
                         gpuAtomicAdd(v_scale_ptr + 2, v_scale_local.z * scale_act.z);
@@ -884,6 +916,9 @@ namespace gsplat_lfs {
                         gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
                         gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
 
+                        // Detached from the covariance, as above.
+                        if (compensations != nullptr)
+                            v_opacity_local *= compensations[g];
                         const float derivative = lfs::core::sigmoid_derivative_from_logit(opacities[g]);
                         gpuAtomicAdd(v_opacities + g, v_opacity_local * derivative);
                         if (do_dens) {
@@ -924,6 +959,8 @@ namespace gsplat_lfs {
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
+        const float* compensations,
+        const float* dilations,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -985,6 +1022,8 @@ namespace gsplat_lfs {
                 backgrounds,
                 bg_images,
                 masks,
+                compensations,
+                dilations,
                 image_width,
                 image_height,
                 tile_size,
@@ -1123,6 +1162,8 @@ namespace gsplat_lfs {
         const float* backgrounds,                                              \
         const float* bg_images,                                                \
         const bool* masks,                                                     \
+        const float* compensations,                                            \
+        const float* dilations,                                                \
         uint32_t C,                                                            \
         uint32_t N,                                                            \
         uint32_t n_isects,                                                     \

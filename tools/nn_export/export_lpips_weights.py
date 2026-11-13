@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from lfw import write_lfw
+
 
 FIXTURE_BUDGET = 400 * 1024
 CROP_SIZE = 256
@@ -28,40 +30,6 @@ CROP_BOX = (400, 250, 400 + CROP_SIZE, 250 + CROP_SIZE)
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def write_lfw(path: Path, tensors: dict[str, np.ndarray], meta: dict[str, object]) -> None:
-    payload_offset = 0
-    entries: dict[str, dict[str, object]] = {}
-    blobs: list[tuple[int, bytes]] = []
-    for name, value in tensors.items():
-        array = np.ascontiguousarray(value, dtype=np.float32)
-        blob = array.tobytes(order="C")
-        payload_offset = (payload_offset + 63) & ~63
-        entries[name] = {
-            "dtype": "float32",
-            "shape": [int(dimension) for dimension in array.shape],
-            "offset": payload_offset,
-            "length": len(blob),
-        }
-        blobs.append((payload_offset, blob))
-        payload_offset += len(blob)
-
-    header = json.dumps(
-        {"format": "lfw", "version": 1, "meta": meta, "tensors": entries},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    file_payload_offset = (8 + len(header) + 63) & ~63
-    output = bytearray(file_payload_offset + payload_offset)
-    output[:4] = b"LFW1"
-    output[4:8] = len(header).to_bytes(4, "little")
-    output[8 : 8 + len(header)] = header
-    for offset, blob in blobs:
-        start = file_payload_offset + offset
-        output[start : start + len(blob)] = blob
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(output)
 
 
 def synthetic_pair(height: int = 64, width: int = 96) -> tuple[np.ndarray, np.ndarray]:

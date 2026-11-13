@@ -235,6 +235,14 @@
     padding: 0dp 8dp;
 }
 .sam-note { font-size: 12dp; margin: 6dp 0 10dp; }
+#sam-methods button { flex: 1; min-width: 0; padding: 0 4dp; font-size: 12dp; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sam-semantic-category { width: 100%; height: 28dp; margin: 4dp 0; box-sizing: border-box; }
+#sam-semantic-text { width: 100%; height: 44dp; box-sizing: border-box; }
+#sam-semantic-help { margin: 4dp 0; }
+.sam-confidence-row { display: flex; align-items: center; gap: 6dp; margin: 4dp 0; }
+.sam-confidence-row input { flex: 1; min-width: 0; }
+#sam-semantic-options { margin-top: 6dp; }
+#sam-semantic-options.hidden { display: none; }
 #sam-selection { font-size: 12dp; margin: 6dp 0; }
 #sam-quality { height: 18dp; line-height: 18dp; }
 #sam-track-direction { width: 100%; height: 28dp; margin: 6dp 0; box-sizing: border-box; }

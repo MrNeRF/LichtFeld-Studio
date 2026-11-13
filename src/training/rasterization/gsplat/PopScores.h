@@ -12,6 +12,8 @@ namespace gsplat_lfs {
         const float* quats;
         const float* scales;
         const float* opacities;
+        const float* compensations; // optional, as in the forward
+        const float* dilations;     // optional, as in the forward
         const float* colors;
         const float* background;
         const float* background_image;

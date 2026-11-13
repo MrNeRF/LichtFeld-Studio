@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_generic_ops.cuh"
 #include "lfs/cuda_scratch.hpp"
+#include "lfs/training/ray_depth_step.cuh"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
 #include <climits>
@@ -952,6 +953,43 @@ namespace lfs::training::mrnf_strategy {
         far_field_mask_kernel<<<blocks, threads, 0, s>>>(
             means, centroid_x, centroid_y, centroid_z, far_radius_sq, far_out, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.far_field_mask");
+    }
+
+    __global__ void ray_depth_inherit_kernel(
+        float* __restrict__ state,
+        const int64_t* __restrict__ parents,
+        const int64_t* __restrict__ children,
+        size_t K) {
+        namespace rd = lfs::training::ray_depth;
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= K)
+            return;
+        float* const parent = state + parents[idx] * rd::kStateStride;
+        float* const child = state + children[idx] * rd::kStateStride;
+        if (parent[5] < 0.0f) {
+            for (int k = 0; k < rd::kStateStride; ++k)
+                child[k] = rd::kUnobserved;
+            return;
+        }
+        for (int k = 0; k < 4; ++k)
+            child[k] = parent[k];
+        child[4] = child[5] = parent[4] = parent[5] = 0.0f;
+    }
+
+    void launch_ray_depth_inherit(
+        float* state,
+        const int64_t* parents,
+        const int64_t* children,
+        size_t K,
+        void* stream) {
+        if (K == 0)
+            return;
+        LFS_ASSERT(state != nullptr && parents != nullptr && children != nullptr);
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((K + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        ray_depth_inherit_kernel<<<blocks, threads, 0, s>>>(state, parents, children, K);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.ray_depth_inherit");
     }
 
 } // namespace lfs::training::mrnf_strategy

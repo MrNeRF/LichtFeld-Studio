@@ -3399,6 +3399,58 @@ NB_MODULE(lichtfeld, m) {
         "Check if orthographic projection is active");
 
     m.def(
+        "get_viewport_display_mode", []() -> std::string {
+            const auto* rm = lfs::python::get_rendering_manager();
+            if (!rm)
+                return "rgb";
+            const auto settings = rm->getSettings();
+            switch (lfs::vis::viewportDisplayMode(settings)) {
+            case lfs::vis::ViewportDisplayMode::Depth:
+                return "depth";
+            case lfs::vis::ViewportDisplayMode::Normal:
+                return "normal";
+            case lfs::vis::ViewportDisplayMode::RGB:
+                return "rgb";
+            }
+            return "rgb";
+        },
+        "Get viewport display mode: rgb, depth, or normal");
+    m.def(
+        "set_viewport_display_mode", [](const std::string& mode) {
+            if (mode != "rgb" && mode != "depth" && mode != "normal")
+                throw nb::value_error("Viewport display mode must be 'rgb', 'depth', or 'normal'");
+            auto* rm = lfs::python::get_rendering_manager();
+            if (!rm)
+                return;
+            auto settings = rm->getSettings();
+            const auto before = std::tuple{settings.depth_view, settings.normal_view, settings.split_view_mode, settings.point_cloud_mode};
+            settings.depth_view = mode == "depth";
+            settings.normal_view = mode == "normal";
+            if (settings.normal_view)
+                settings.point_cloud_mode = false;
+            if (lfs::vis::splitViewUsesGTComparison(settings.split_view_mode))
+                settings.split_view_mode = lfs::vis::SplitViewMode::Disabled;
+            rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            markViewSettingIfChanged(before, std::tuple{settings.depth_view, settings.normal_view, settings.split_view_mode, settings.point_cloud_mode});
+        },
+        nb::arg("mode"), "Set viewport display mode independently of the selector visibility");
+    m.def(
+        "get_render_mode_controls_open", [] {
+            const auto* rm = lfs::python::get_rendering_manager();
+            return rm && rm->getSettings().render_mode_controls_open;
+        },
+        "Return whether the viewport render-mode selector is open.");
+    m.def(
+        "set_render_mode_controls_open", [](bool open) {
+            if (auto* rm = lfs::python::get_rendering_manager()) {
+                auto settings = rm->getSettings();
+                settings.render_mode_controls_open = open;
+                rm->updateSettings(settings, lfs::vis::DirtyFlag::OVERLAY);
+            }
+        },
+        nb::arg("open"), "Open or close the render-mode selector without changing the view");
+
+    m.def(
         "get_depth_view", []() -> bool {
             const auto* rm = lfs::python::get_rendering_manager();
             return rm ? rm->getSettings().depth_view : false;
@@ -3413,6 +3465,10 @@ NB_MODULE(lichtfeld, m) {
             const bool before = rm->getSettings().depth_view;
             auto settings = rm->getSettings();
             settings.depth_view = enabled;
+            settings.render_mode_controls_open = enabled;
+            if (enabled) {
+                settings.normal_view = false;
+            }
             rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
             markViewSettingIfChanged(before, rm->getSettings().depth_view);
         },

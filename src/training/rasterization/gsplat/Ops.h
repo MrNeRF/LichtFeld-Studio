@@ -180,6 +180,7 @@ namespace gsplat_lfs {
         float* depths,        // [C, N]
         float* conics,        // [C, N, 3]
         float* compensations, // [C, N] optional
+        float* dilations,     // [C, N] optional, mip filter
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -196,6 +197,9 @@ namespace gsplat_lfs {
         const float* backgrounds, // [C, channels] (can be nullptr) - solid color
         const float* bg_images,   // [C, channels, H, W] (can be nullptr) - per-pixel background
         const bool* masks,        // [C, tile_height, tile_width] (can be nullptr)
+        // [C, N] mip filter: opacity factor and world variance added to every squared scale (nullptr: off)
+        const float* compensations,
+        const float* dilations,
         // dimensions
         uint32_t C,
         uint32_t N,
@@ -237,6 +241,9 @@ namespace gsplat_lfs {
         const float* backgrounds, // [C, channels] optional - solid color
         const float* bg_images,   // [C, channels, H, W] optional - per-pixel background
         const bool* masks,        // optional
+        // [C, N] mip filter: opacity factor and world variance added to every squared scale (nullptr: off)
+        const float* compensations,
+        const float* dilations,
         // dimensions
         uint32_t C,
         uint32_t N,
@@ -295,6 +302,7 @@ namespace gsplat_lfs {
         int32_t* tile_offsets;    // [C, tile_height, tile_width]
         int32_t* last_ids;        // [C, H, W]
         float* compensations;     // [C, N] optional (can be nullptr)
+        float* dilations;         // [C, N] optional (can be nullptr)
         // Borrowed from TLS high-water isect cache — do NOT cudaFree.
         int64_t* isect_ids;   // [n_isects]
         int32_t* flatten_ids; // [n_sort]
@@ -396,6 +404,7 @@ namespace gsplat_lfs {
         const float* means2d,       // [C, N, 2]
         const float* depths,        // [C, N]
         const float* compensations, // [C, N]
+        const float* dilations,     // [C, N]
         // gradients of outputs
         const float* v_render_colors, // [C, H, W, channels]
         const float* v_render_alphas, // [C, H, W, 1]

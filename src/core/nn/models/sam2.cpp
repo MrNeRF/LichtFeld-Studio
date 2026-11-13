@@ -150,6 +150,18 @@ namespace lfs::core::nn::models {
 
     } // namespace
 
+    lfs::Result<Tensor> Sam2::postprocess_masks(const Tensor& logits) const {
+        if (!image_set_ || !logits.is_valid() || logits.device() != device_ ||
+            logits.dtype() != DataType::Float32 || logits.ndim() != 3 || !logits.size(0) ||
+            logits.size(1) != kEmbed * 4 || logits.size(2) != kEmbed * 4)
+            return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 mask postprocessing requires an encoded image and float32 decoder logits");
+        const core::CUDAStreamGuard stream_guard(image_embed_hold_.stream());
+        return resize2d(logits.unsqueeze(1), orig_h_, orig_w_, ResizeMode::Bilinear,
+                        CoordTransform::HalfPixel)
+            .squeeze(1)
+            .contiguous();
+    }
+
     lfs::Result<Sam2> Sam2::load(const std::filesystem::path& weights, Device device,
                                  std::optional<DataType> compute) {
         auto file = WeightFile::open(weights);
@@ -619,7 +631,7 @@ namespace lfs::core::nn::models {
             if (img.dtype() != DataType::Float32) {
                 img = img.to(DataType::Float32);
             }
-            img = video ? resize2d_pil_bicubic(img, kImage, kImage)
+            img = video ? resize2d_pil(img, kImage, kImage)
                         : resize2d_bilinear_antialiased(img, kImage, kImage);
             img = img.sub(mean_).div(std_);
             img = as_compute(std::move(img), encoder_compute_);
@@ -895,19 +907,19 @@ namespace lfs::core::nn::models {
         {
             NvtxRange nvtx("sam2/postprocess");
             ActivationArena::bind(nullptr);
-            if (output == Sam2MaskOutput::OriginalResolution) {
-                auto nchw = sel.reshape(shape_of({static_cast<std::size_t>(count), 1,
-                                                  static_cast<std::size_t>(kEmbed * 4),
-                                                  static_cast<std::size_t>(kEmbed * 4)}));
-                auto up = resize2d(nchw.to(DataType::Float32), orig_h_, orig_w_, ResizeMode::Bilinear,
-                                   CoordTransform::HalfPixel);
-                masks_up = up.squeeze(1).contiguous();
-            }
             low_out = sel.reshape(shape_of({static_cast<std::size_t>(count),
                                             static_cast<std::size_t>(kEmbed * 4),
                                             static_cast<std::size_t>(kEmbed * 4)}))
                           .to(DataType::Float32);
-            if (!video)
+            if (output == Sam2MaskOutput::OriginalResolution) {
+                auto up = postprocess_masks(low_out);
+                if (!up)
+                    return std::move(up.error());
+                masks_up = std::move(*up);
+            }
+            if (output == Sam2MaskOutput::RawLowResolution)
+                low_out = low_out.clone(); // Escape decoder arena storage without clamping.
+            else if (!video)
                 low_out = low_out.clamp(-32.0f, 32.0f);
             iou_out = iou_sel.to(DataType::Float32).contiguous();
             if (iou_out.ndim() > 1) {

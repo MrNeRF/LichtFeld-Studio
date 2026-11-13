@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "gui/rmlui/elements/form_control_layout.hpp"
+#include "gui/rmlui/elements/viewport_select.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/ElementInstancer.h>
@@ -27,7 +28,7 @@ namespace {
         Renderer renderer;
         Rml::Context* context = nullptr;
         Rml::ElementInstancerGeneric<FormControlLayout<Rml::ElementFormControlInput>> input;
-        Rml::ElementInstancerGeneric<FormControlLayout<Rml::ElementFormControlSelect>> select;
+        Rml::ElementInstancerGeneric<ViewportSelect> select;
         Rml::ElementInstancerGeneric<FormControlLayout<Rml::ElementFormControlTextArea>> textarea;
 
         void SetUp() override {
@@ -56,6 +57,27 @@ namespace {
             return doc;
         }
     };
+
+    TEST_P(RmlFormControlLayoutTest, ReplacingSelectMarkupDoesNotAccumulateOptions) {
+        auto* doc = load("<select id='categories'><option value='old'>Old</option></select>");
+        ASSERT_NE(doc, nullptr);
+        auto* element = doc->GetElementById("categories");
+        auto* select = rmlui_dynamic_cast<Rml::ElementFormControlSelect*>(element);
+        ASSERT_NE(select, nullptr);
+        ASSERT_EQ(select->GetNumOptions(), 1);
+        for (int update = 0; update < 4; ++update) {
+            element->SetInnerRML("<option value='person'>Person</option><option value='car'>Car</option>");
+            context->Update();
+            ASSERT_EQ(select->GetNumOptions(), 2) << update;
+            EXPECT_EQ(select->GetOption(0)->GetAttribute<Rml::String>("value", ""), "person");
+            select->SetValue("car");
+            EXPECT_EQ(select->GetSelection(), 1);
+        }
+        element->SetInnerRML("");
+        context->Update();
+        EXPECT_EQ(select->GetNumOptions(), 0);
+        EXPECT_EQ(select->GetSelection(), -1);
+    }
 
     TEST_P(RmlFormControlLayoutTest, IntrinsicBoxesKeepTheEstablishedLayoutAtEveryScale) {
         auto* doc = load("<input id='range' type='range'/><input id='vertical' type='range' orientation='vertical'/>"

@@ -264,7 +264,7 @@ namespace lfs::training {
                         image_bg = get_random_background_for_camera(cam->image_width(), cam->image_height(), background_step);
                     if (params_.optimization.gut) {
                         auto rendered = gsplat_rasterize_forward(*cam, model, bg, 0, 0, 0, 0,
-                                                                 1.0f, false, GsplatRenderMode::RGB, true, image_bg);
+                                                                 1.0f, params_.optimization.mip_filter, GsplatRenderMode::RGB, true, image_bg);
                         if (!rendered)
                             throw std::runtime_error(rendered.error());
                         const auto scored = gsplat_accumulate_pop_scores(rendered->second, popspa_controller_.scores());

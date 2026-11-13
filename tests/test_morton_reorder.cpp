@@ -252,6 +252,49 @@ TEST(MortonReorderTest, CadenceMatchesStopRefineAndZeroDisables) {
     EXPECT_FALSE(morton::should_reorder(4999, 5000, 25000));
 }
 
+// A few splats far outside the scene must not stretch the grid until the rest shares one Morton cell: equal codes
+// would keep the near points in their (random) input order, and neighbouring rows would sit far apart in space.
+TEST(MortonReorderTest, DistantOutliersKeepTheNearPointsSpreadOverManyCells) {
+    constexpr size_t kNear = 32768;
+    constexpr size_t kFar = 8;
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    std::vector<float> means;
+    means.reserve((kNear + kFar) * 3);
+    for (size_t i = 0; i < kNear * 3; ++i)
+        means.push_back(unit(rng));
+    for (size_t i = 0; i < kFar; ++i) {
+        const float sign = (i % 2 == 0) ? 1.0f : -1.0f;
+        means.insert(means.end(), {sign * 1e5f, sign * 2e5f * static_cast<float>(i + 1), -sign * 5e4f});
+    }
+    const auto n = kNear + kFar;
+    const auto perm = kernels::launch_morton_permutation(Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA))
+                          .to(DataType::Float32)
+                          .cpu()
+                          .to_vector();
+    ASSERT_EQ(perm.size(), n);
+
+    double step_sum = 0.0;
+    size_t steps = 0;
+    int64_t previous = -1;
+    for (const float value : perm) {
+        const auto row = static_cast<int64_t>(value);
+        if (row >= static_cast<int64_t>(kNear))
+            continue;
+        if (previous >= 0) {
+            const float* a = means.data() + previous * 3;
+            const float* b = means.data() + row * 3;
+            step_sum += std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
+                                  (a[2] - b[2]) * (a[2] - b[2]));
+            ++steps;
+        }
+        previous = row;
+    }
+    ASSERT_EQ(steps, kNear - 1);
+    // Unsorted, consecutive near points lie about 0.66 apart; sorted over a fine grid a few hundredths.
+    EXPECT_LT(step_sum / static_cast<double>(steps), 0.1);
+}
+
 TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
     const ShValueQuantGuard quant_guard{true};
     constexpr size_t n = 2048;

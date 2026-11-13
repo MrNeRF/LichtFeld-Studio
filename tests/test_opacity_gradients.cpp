@@ -171,4 +171,70 @@ namespace {
 
     INSTANTIATE_TEST_SUITE_P(Backends, OpacityRasterizerTest, ::testing::Bool(),
                              [](const auto& info) { return info.param ? "Gsplat" : "FastGS"; });
+
+    // The FastGS backward's gradient of sum(image) w.r.t. param[0] next to its central difference.
+    std::pair<double, double> fastgs_gradient(Camera& camera, SplatData& model, const bool mip_filter,
+                                              const float dilation_scale, const ParamType type, Tensor& param,
+                                              const float eps) {
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        AdamOptimizer optimizer(model, {.lr = 0.f});
+        optimizer.allocate_gradients();
+        optimizer.zero_grad(1);
+        auto fwd = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, mip_filter, {}, false, true, dilation_scale);
+        EXPECT_TRUE(fwd.has_value());
+        fast_rasterize_backward(fwd->second, Tensor::ones_like(fwd->first.image), model, optimizer, {}, {},
+                                DensificationType::None, 1, {}, {}, {}, true);
+        const double analytic = optimizer.get_grad(type).cpu().ptr<float>()[0];
+        auto loss = [&](const float value) {
+            EXPECT_EQ(cudaMemcpy(param.ptr<float>(), &value, sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+            const auto image = fast_rasterize(camera, model, bg, mip_filter, {}, false, dilation_scale).image.cpu();
+            double sum = 0.0;
+            for (size_t i = 0; i < image.numel(); ++i)
+                sum += image.ptr<float>()[i];
+            return sum;
+        };
+        const float original = param.cpu().ptr<float>()[0];
+        const double numeric = (loss(original + eps) - loss(original - eps)) / (2.0 * eps);
+        loss(original);
+        return {analytic, numeric};
+    }
+
+    // A needle-thin splat (det of the raw 2D covariance 5e-7 px^4) is still visible through the mip filter's
+    // compensation sqrt(det_raw / det), so its opacity gradient must carry the same factor.
+    TEST_F(OpacityGradientTest, FastGsMipFilterNeedleOpacityGradientMatchesForward) {
+        // The principal point sits on a pixel center, so the needle covers exactly one pixel.
+        Camera camera(Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA),
+                      Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA), 32.f, 32.f, 16.5f, 16.5f, Tensor(),
+                      Tensor(), lfs::core::CameraModelType::PINHOLE, "needle", "", std::filesystem::path{}, 32, 32, 0);
+        // Pixel variances 0.1 and 5e-6 px^2 at depth 3 and focal 32.
+        const float wide = std::log(std::sqrt(0.1f) * 3.f / 32.f), thin = std::log(std::sqrt(5e-6f) * 3.f / 32.f);
+        SplatData model(0, Tensor::zeros({1, 3}, Device::CUDA), Tensor::full({1, 1, 3}, 0.5f, Device::CUDA),
+                        Tensor::zeros({1, 0, 3}, Device::CUDA),
+                        Tensor::from_vector({wide, thin, thin}, {1, 3}, Device::CUDA),
+                        Tensor::from_vector({1.f, 0.f, 0.f, 0.f}, {1, 4}, Device::CUDA),
+                        Tensor::full({1}, 3.f, Device::CUDA), 1.f);
+        const auto [analytic, numeric] =
+            fastgs_gradient(camera, model, true, 1.f, ParamType::Opacity, model.opacity_raw(), 1e-2f);
+        RecordProperty("analytic", std::format("{:.9e}", analytic));
+        RecordProperty("numeric", std::format("{:.9e}", numeric));
+        EXPECT_GT(numeric, 0.0);
+        EXPECT_NEAR(analytic, numeric, 1e-2 * numeric);
+    }
+
+    // The forward scales the dilation by dilation_scale; the backward must use the same kernel for the conic and
+    // the mip filter's compensation.
+    TEST_F(OpacityGradientTest, FastGsBackwardHonoursDilationScale) {
+        auto camera = make_camera();
+        for (const bool mip_filter : {false, true}) {
+            SCOPED_TRACE(mip_filter);
+            auto model = make_splat(1.f);
+            // The compensation is constant in the backward, so the mip filter is checked through the opacity.
+            auto& param = mip_filter ? model->opacity_raw() : model->scaling_raw();
+            const auto [analytic, numeric] = fastgs_gradient(
+                camera, *model, mip_filter, 4.f, mip_filter ? ParamType::Opacity : ParamType::Scaling, param, 1e-3f);
+            RecordProperty(mip_filter ? "mip_analytic" : "plain_analytic", std::format("{:.9e}", analytic));
+            RecordProperty(mip_filter ? "mip_numeric" : "plain_numeric", std::format("{:.9e}", numeric));
+            EXPECT_NEAR(analytic, numeric, (mip_filter ? 1e-3 : 2e-2) * std::abs(numeric));
+        }
+    }
 } // namespace

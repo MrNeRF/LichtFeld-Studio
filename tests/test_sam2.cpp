@@ -127,8 +127,19 @@ TEST(Sam2Predict, MasksDoNotDependOnEarlierPrompts) {
         const auto alone = model->predict(one, box, true);
         ASSERT_TRUE(alone.has_value());
         const auto expected = alone->low_res_logits.to(Device::CPU).contiguous().to_vector();
+        const auto expected_masks = alone->masks.to(Device::CPU).contiguous().to_vector();
+        const auto deferred = model->predict(one, box, true, nullptr, nn::models::Sam2MaskOutput::RawLowResolution);
+        ASSERT_TRUE(deferred.has_value());
+        EXPECT_FALSE(deferred->masks.is_valid());
         ASSERT_TRUE(model->predict(four, wide, true).has_value());
         ASSERT_TRUE(model->predict(four, std::nullopt, true).has_value());
+        // Deferred raw logits must survive arena reuse, and preserve original-resolution edges.
+        const auto restored = model->postprocess_masks(deferred->low_res_logits);
+        ASSERT_TRUE(restored.has_value());
+        const auto restored_masks = restored->to(Device::CPU).contiguous().to_vector();
+        ASSERT_EQ(restored_masks.size(), expected_masks.size());
+        for (size_t i = 0; i < restored_masks.size(); ++i)
+            ASSERT_NEAR(restored_masks[i], expected_masks[i], 1e-3f);
         const auto again = model->predict(one, box, true);
         ASSERT_TRUE(again.has_value());
         const auto actual = again->low_res_logits.to(Device::CPU).contiguous().to_vector();

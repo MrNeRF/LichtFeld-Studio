@@ -57,6 +57,8 @@ namespace lfs::vis::gui {
     // through this instead, so that code holding a raw handle sees fontResourceGeneration() change and looks it up
     // again.
     LFS_VIS_API void releaseFontResources();
+    // Rml::ReleaseRenderManagers releases the font resources too.
+    LFS_VIS_API void releaseRenderManagers();
     LFS_VIS_API std::uint64_t fontResourceGeneration();
 
     struct CachedVulkanContextRender {

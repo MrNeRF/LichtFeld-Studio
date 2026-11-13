@@ -1016,6 +1016,7 @@ namespace lfs::core {
             const std::array nonnegative_fields{
                 std::pair{"means_lr", means_lr},
                 std::pair{"means_lr_end", means_lr_end},
+                std::pair{"ray_depth_lr", ray_depth_lr},
                 std::pair{"shs_lr", shs_lr},
                 std::pair{"opacity_lr", opacity_lr},
                 std::pair{"scaling_lr", scaling_lr},
@@ -1082,6 +1083,9 @@ namespace lfs::core {
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
             if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return "GUT and igs+ strategy cannot be used together";
+            if (gut && pose_opt)
+                return "pose_opt needs the standard rasterizer and cannot be combined with GUT "
+                       "(train distorted cameras with --undistort instead)";
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
                 return "use_exposure_correction cannot be combined with use_bilateral_grid, "

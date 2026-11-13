@@ -22,12 +22,18 @@ class MaskApply:
 
 
 class FrameMaskEditor:
+    DEFAULT_SEMANTIC_CONFIDENCE = 40
     BUSY_PHASES = frozenset(("queued", "loading", "encoding", "predicting", "rendering", "closing", "tracking", "storing", "saving"))
 
     def __init__(self, on_edit=None):
         self.on_edit = on_edit
         self.enabled = False
         self.weights = ""
+        self.semantic_text = ""
+        self.semantic_categories = ()
+        self.semantic_confidence = self.DEFAULT_SEMANTIC_CONFIDENCE
+        self.matched_objects = -1
+        self.semantic_limited = False
         self.tool = "positive"
         self.drafts = {}
         self.key = None
@@ -38,6 +44,7 @@ class FrameMaskEditor:
         self.scores = []
         self.candidate = 0
         self.refinement = None
+        self.refinement_object_count = -1
         self.refinement_signature = None
         self.submitted_signature = None
         self.selected = None
@@ -58,11 +65,14 @@ class FrameMaskEditor:
     def invalidate(self, keep_refinement=False):
         if not keep_refinement:
             self.refinement = None
+            self.refinement_object_count = -1
         self.request = 0
         self.phase = "idle"
         self.error = ""
         self.overlays = []
         self.scores = []
+        self.matched_objects = -1
+        self.semantic_limited = False
         self.candidate = 0
         self.drag_start = None
         self.drag_end = None
@@ -90,7 +100,8 @@ class FrameMaskEditor:
 
     @property
     def can_refine(self):
-        return bool(self.refinement and self.signature != self.refinement_signature)
+        return bool(self.refinement and self.refinement_object_count in (-1, 1) and
+                    self.signature != self.refinement_signature)
 
     def bind(self, path, revision):
         key = (str(path), revision) if path and revision else None
@@ -193,8 +204,11 @@ class FrameMaskEditor:
         if phase == "ready" and not self.overlays:
             self.overlays = list(snapshot["overlays"])
             self.scores = list(snapshot.get("scores", ()))
+            self.matched_objects = snapshot.get("matched_objects", -1)
+            self.semantic_limited = bool(snapshot.get("semantic_limited", False))
             self.candidate = min(self.candidate, max(0, len(self.overlays) - 1))
             self.refinement = (self.request, self.candidate)
+            self.refinement_object_count = self.matched_objects
             self.refinement_signature = self.submitted_signature
             changed = True
         return changed

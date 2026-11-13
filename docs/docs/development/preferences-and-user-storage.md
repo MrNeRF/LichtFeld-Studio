@@ -201,13 +201,18 @@ backend, preset, lazy-loading, and fallback contracts.
 
 ## Downloaded models
 
-Preferences > Models shows the managed SAM 2.1, MoGe-2 and LPIPS weight files.
+Preferences > Models shows the managed SAM 2.1, MoGe-2, LPIPS and LLMDet Tiny weight files.
 Download / repair prepares a missing model or verifies an existing file
 and downloads a replacement if its pinned SHA-256 does not match. Verify integrity
 checks the local file without downloading, migration or replacement. Downloaded
 means the file is present;
 verification runs explicitly or when the feature acquires its weights, not during
 UI refreshes.
+
+LLMDet Tiny downloads its native archive from the official LichtFeld Studio model
+release, just like the other managed models. The cache retains only the ready
+archive, verified against the catalog's pinned SHA-256; no runtime conversion or
+source checkpoint is required.
 
 The on-demand download remains available from each feature. Preferences uses the
 same acquisition, hashing and atomic publication code. Concurrent acquisitions
