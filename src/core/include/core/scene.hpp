@@ -784,6 +784,10 @@ namespace lfs::core {
         // touched.
         size_t rebaseCameraAssetPaths(const std::filesystem::path& old_root,
                                       const std::filesystem::path& new_root);
+        // Synchronizes each camera node's cached image_path/mask_path/depth_path
+        // strings from its underlying Camera. Returns the number of camera nodes
+        // whose mirrored paths changed.
+        size_t syncCameraAssetPaths(bool emit_mask_mutation = true, bool transient = true);
         // Aligns each camera's has_image with whether its image_path is a regular
         // file. Empty image_path is left unchanged (dummy/test cameras). Returns
         // the image names of cameras whose files are currently missing.

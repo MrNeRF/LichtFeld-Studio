@@ -665,7 +665,8 @@ namespace lfs::training {
             const lfs::core::Tensor& structure_map = {},
             int iteration = 0);
 
-        // Validate masks exist for all cameras when mask mode is enabled
+        // Refresh and validate masks exist for all cameras when mask mode is enabled
+        lfs::Status refresh_masks_from_dataset();
         std::expected<void, std::string> validate_masks();
 
         // Returns GPU tensor for loss (avoid sync!)

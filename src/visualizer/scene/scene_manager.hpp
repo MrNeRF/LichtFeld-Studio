@@ -227,6 +227,10 @@ namespace lfs::vis {
 
         void prepareTrainingFromScene();
 
+        // Rescans dataset sidecar folders (masks, depths, normals) for cameras
+        // currently missing sidecars and synchronizes scene camera node mirrors.
+        size_t refreshDatasetSidecars();
+
         // Apply pre-loaded dataset to scene (for async loading)
         // The LoadResult comes from background thread, scene modification happens on main thread
         std::expected<void, std::string> applyLoadedDataset(

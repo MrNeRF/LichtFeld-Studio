@@ -10,6 +10,7 @@
 
 #include "core/error.hpp"
 #include "core/source_site.hpp"
+#include <array>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -522,6 +523,174 @@ TEST(PriorAutoGenerateIntegration, DepthAutoGenerateOffKeepsDepthMissing) {
     EXPECT_FALSE(outcome.attempted);
     EXPECT_EQ(outcome.depth.missing, 1u);
     EXPECT_FALSE(cameras.front()->has_depth());
+
+    fs::remove_all(root);
+}
+
+namespace {
+
+    constexpr std::array<unsigned char, 70> PNG_1X1_RGB = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0x68, 0x68, 0xF8, 0x0F, 0x00, 0x03, 0x83, 0x02, 0x00, 0x00, 0xA5, 0xFB,
+        0x89, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+
+    constexpr std::array<unsigned char, 71> PNG_2X1_RGB = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+        0x00, 0x7B, 0x40, 0xE8, 0xDD, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0x68, 0x68, 0xF8, 0x0F, 0x44, 0x00, 0x0D, 0x02, 0x03, 0xFF, 0x9E, 0xA6,
+        0x3E, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+
+    constexpr std::array<unsigned char, 71> PNG_1X1_RGBA = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0x9C, 0x63, 0x68, 0x68, 0xF8, 0xFF, 0x1F, 0x00, 0x06, 0x82, 0x02, 0xFF, 0xB3, 0xBE,
+        0x51, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+
+    void write_png_bytes(const fs::path& path, const std::span<const unsigned char> bytes) {
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << path;
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        ASSERT_TRUE(out.good()) << path;
+    }
+
+} // namespace
+
+TEST(PriorAutoGenerateIntegration, DiscoversPostImportMapsWhenAutoGenerateOff) {
+    const auto root = fs::temp_directory_path() / "lfs_prior_post_import_discovery_off";
+    fs::remove_all(root);
+
+    const fs::path img = root / "images/a.png";
+    const fs::path depth = root / "depths/a.png";
+    const fs::path normal = root / "normals/a.png";
+    write_png_bytes(img, PNG_1X1_RGB);
+    write_png_bytes(depth, PNG_1X1_RGBA);
+    write_png_bytes(normal, PNG_1X1_RGB);
+
+    auto cam = make_camera("a.png", img);
+    ASSERT_FALSE(cam->has_depth());
+    ASSERT_FALSE(cam->has_normal());
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_depth_loss = true;
+    params.optimization.depth_loss_weight = 0.5f;
+    params.optimization.depth_auto_generate = false;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_loss_weight = 0.05f;
+    params.optimization.normal_auto_generate = false;
+
+    bool called = false;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](std::span<const lfs::training::PriorMapJob>,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            called = true;
+            return {};
+        });
+
+    EXPECT_FALSE(called);
+    EXPECT_FALSE(outcome.attempted);
+    EXPECT_EQ(outcome.depth.existing, 1u);
+    EXPECT_EQ(outcome.depth.missing, 0u);
+    EXPECT_EQ(outcome.normal.existing, 1u);
+    EXPECT_EQ(outcome.normal.missing, 0u);
+    EXPECT_TRUE(cam->has_depth());
+    EXPECT_TRUE(cam->has_normal());
+    EXPECT_EQ(cam->depth_path(), depth);
+    EXPECT_EQ(cam->normal_path(), normal);
+
+    fs::remove_all(root);
+}
+
+TEST(PriorAutoGenerateIntegration, DiscoversValidPostImportMapsWithoutRecomputingWhenAutoGenerateOn) {
+    const auto root = fs::temp_directory_path() / "lfs_prior_post_import_discovery_on";
+    fs::remove_all(root);
+
+    const fs::path img = root / "images/a.png";
+    const fs::path depth = root / "depths/a.png";
+    const fs::path normal = root / "normals/a.png";
+    write_png_bytes(img, PNG_1X1_RGB);
+    write_png_bytes(depth, PNG_1X1_RGBA);
+    write_png_bytes(normal, PNG_1X1_RGB);
+
+    auto cam = make_camera("a.png", img);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_depth_loss = true;
+    params.optimization.depth_loss_weight = 0.5f;
+    params.optimization.depth_auto_generate = true;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_loss_weight = 0.05f;
+    params.optimization.normal_auto_generate = true;
+
+    bool called = false;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](std::span<const lfs::training::PriorMapJob>,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            called = true;
+            return {};
+        });
+
+    EXPECT_FALSE(called);
+    EXPECT_FALSE(outcome.attempted);
+    EXPECT_EQ(outcome.depth.existing, 1u);
+    EXPECT_EQ(outcome.normal.existing, 1u);
+    EXPECT_TRUE(cam->has_depth());
+    EXPECT_TRUE(cam->has_normal());
+
+    fs::remove_all(root);
+}
+
+TEST(PriorAutoGenerateIntegration, IgnoresMismatchedPostImportNormalsAndRegeneratesWhenAutoGenerateOn) {
+    const auto root = fs::temp_directory_path() / "lfs_prior_post_import_mismatched";
+    fs::remove_all(root);
+
+    const fs::path img_a = root / "images/a.png";
+    const fs::path img_b = root / "images/b.png";
+    write_png_bytes(img_a, PNG_1X1_RGB);
+    write_png_bytes(img_b, PNG_1X1_RGB);
+    // 4-channel normal violates the 3-channel normal contract; 2x1 violates the 1:1 aspect ratio.
+    write_png_bytes(root / "normals/a.png", PNG_1X1_RGBA);
+    write_png_bytes(root / "normals/b.png", PNG_2X1_RGB);
+
+    auto cam_a = make_camera("a.png", img_a);
+    auto cam_b = make_camera("b.png", img_b);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_a, cam_b};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_loss_weight = 0.05f;
+    params.optimization.normal_auto_generate = true;
+
+    size_t seen_jobs = 0;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            seen_jobs = jobs.size();
+            for (const auto& job : jobs) {
+                write_png_bytes(job.normal_output_path, PNG_1X1_RGB);
+            }
+            return {};
+        });
+
+    EXPECT_EQ(seen_jobs, 2u);
+    EXPECT_TRUE(outcome.attempted);
+    EXPECT_TRUE(outcome.generated);
+    EXPECT_FALSE(outcome.failed);
+    EXPECT_TRUE(cam_a->has_normal());
+    EXPECT_TRUE(cam_b->has_normal());
 
     fs::remove_all(root);
 }

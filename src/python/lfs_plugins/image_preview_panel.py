@@ -307,7 +307,7 @@ class ImagePreviewPanel(Panel):
             ("sam-candidate-1", lambda _ev: self._sam_candidate(1)),
             ("sam-candidate-2", lambda _ev: self._sam_candidate(2)),
             ("btn-picker", lambda _ev: self._toggle_picker()),
-            ("btn-refresh", lambda _ev: self._refresh_sources()),
+            ("btn-refresh", lambda _ev: self._refresh_sources_from_disk()),
             ("btn-apply-render-color", lambda _ev: self._apply_sampled_color("render")),
             ("btn-apply-training-color", lambda _ev: self._apply_sampled_color("training")),
         ]:
@@ -413,6 +413,10 @@ class ImagePreviewPanel(Panel):
             return True
 
         return needs_redraw
+
+    def _refresh_sources_from_disk(self):
+        _refresh_scene_sidecars()
+        self._refresh_sources()
 
     def on_unmount(self, doc):
         self._default_reset.unmount()
@@ -2957,6 +2961,17 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
         panel.open(*pending)
 
 
+def _refresh_scene_sidecars(scene=None):
+    if scene is None:
+        get_scene = getattr(lf, "get_scene", None)
+        if not callable(get_scene):
+            return
+        scene = get_scene()
+    refresh = getattr(scene, "refresh_sidecars", None) if scene else None
+    if callable(refresh):
+        refresh()
+
+
 def open_extracted_frame_preview(paths, weights="", sequence=None):
     open_image_preview([Path(path) for path in paths], [None] * len(paths), 0, assisted=True, weights=weights, sequence=sequence)
 
@@ -2965,6 +2980,7 @@ def open_camera_preview_by_uid(cam_uid: int):
     scene = lf.get_scene()
     if not scene:
         return
+    _refresh_scene_sidecars(scene)
     nodes = scene.get_nodes()
     target = None
     for node in nodes:

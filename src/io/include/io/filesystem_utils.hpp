@@ -428,6 +428,8 @@ namespace lfs::io {
             return {};
         }
 
+        [[nodiscard]] bool has_mask_dirs() const { return !dir_indices_.empty(); }
+
         [[nodiscard]] std::filesystem::path find(const std::string& image_name) const {
             if (auto result = lookup(image_name); result.found()) {
                 return result.path;

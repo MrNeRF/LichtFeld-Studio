@@ -6950,6 +6950,38 @@ namespace lfs::core {
         return touched;
     }
 
+    size_t Scene::syncCameraAssetPaths(const bool emit_mask_mutation, const bool transient) {
+        size_t updated = 0;
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::CAMERA || !node->camera) {
+                continue;
+            }
+            std::string next_image = lfs::core::path_to_utf8(node->camera->image_path());
+            std::string next_mask = lfs::core::path_to_utf8(node->camera->mask_path());
+            std::string next_depth = lfs::core::path_to_utf8(node->camera->depth_path());
+            bool node_changed = false;
+            if (node->image_path != next_image) {
+                node->image_path = std::move(next_image);
+                node_changed = true;
+            }
+            if (node->mask_path != next_mask) {
+                node->mask_path = std::move(next_mask);
+                node_changed = true;
+            }
+            if (node->depth_path != next_depth) {
+                node->depth_path = std::move(next_depth);
+                node_changed = true;
+            }
+            if (node_changed) {
+                ++updated;
+            }
+        }
+        if (updated > 0 && emit_mask_mutation) {
+            notifyMutation(MutationType::CAMERA_MASK_CHANGED, transient);
+        }
+        return updated;
+    }
+
     std::vector<std::string> Scene::revalidateCameraImagePresence() {
         std::vector<std::string> missing;
         for (const auto& node : nodes_) {

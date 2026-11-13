@@ -1545,3 +1545,102 @@ def test_combined_semantic_point_refinement_does_not_queue_a_replacement(panel_m
     assert value.error == "image_preview.sam_semantic_refine_combined"
     assert value.draft.points == [(.7, .6, 1)]
     panel._metadata.close()
+
+
+def test_open_camera_preview_refreshes_sidecars_before_reading_mask_paths(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    monkeypatch.setattr(module.lf, "scene", SimpleNamespace(NodeType=SimpleNamespace(CAMERA="CAMERA")), raising=False)
+
+    cam_node = SimpleNamespace(
+        id=11,
+        uuid="cam-uuid-11",
+        type="CAMERA",
+        camera_uid=7,
+        parent_id=10,
+        image_path="/tmp/ds/images/frame.png",
+        mask_path="",
+    )
+    parent_node = SimpleNamespace(id=10, type="GROUP", children=[11])
+    events = []
+
+    def _refresh_sidecars():
+        events.append("refresh")
+        cam_node.mask_path = "/tmp/ds/masks/frame.png"
+        return 1
+
+    def _get_nodes():
+        events.append("get_nodes")
+        return [parent_node, cam_node]
+
+    scene = SimpleNamespace(
+        refresh_sidecars=_refresh_sidecars,
+        get_nodes=_get_nodes,
+        get_node_by_id=lambda nid: parent_node if nid == 10 else cam_node,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    opened = []
+    monkeypatch.setattr(module, "open_image_preview", lambda *args: opened.append(args))
+
+    module.open_camera_preview_by_uid(7)
+    assert events == ["refresh", "get_nodes"]
+    assert len(opened) == 1
+    image_paths, mask_paths, start_index, camera_uids, camera_nodes = opened[0]
+    assert image_paths == [module.Path("/tmp/ds/images/frame.png")]
+    assert mask_paths == [module.Path("/tmp/ds/masks/frame.png")]
+    assert start_index == 0
+    assert camera_uids == [7]
+    assert camera_nodes == {7: (11, "cam-uuid-11")}
+
+
+def test_refresh_from_disk_discovers_sidecars_while_on_update_does_not(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    monkeypatch.setattr(module.lf, "scene", SimpleNamespace(NodeType=SimpleNamespace(CAMERA="CAMERA")), raising=False)
+
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("/tmp/ds/images/frame.png")]
+    panel._mask_paths = [None]
+    panel._camera_uids = [7]
+    panel._camera_nodes = {7: (11, "cam-uuid-11")}
+    panel._current_index = 0
+
+    cam_node = SimpleNamespace(
+        id=11,
+        uuid="cam-uuid-11",
+        type="CAMERA",
+        camera_uid=7,
+        image_path="/tmp/ds/images/frame.png",
+        mask_path="",
+    )
+    refresh_calls = []
+
+    def _refresh_sidecars():
+        refresh_calls.append(True)
+        cam_node.mask_path = "/tmp/ds/masks/frame.png"
+        return 1
+
+    scene = SimpleNamespace(
+        refresh_sidecars=_refresh_sidecars,
+        get_node_by_id=lambda nid: cam_node if nid == 11 else None,
+        get_nodes=lambda: [cam_node],
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    # Routine per-frame updates must not hit disk for sidecar discovery.
+    panel._service_metadata = panel._service_sam = lambda: None
+    panel._update_filmstrip = panel._update_main_image = lambda *args: None
+    panel._refresh_ui = lambda *args: None
+    panel._preview_state = "ready"
+    panel._dirty = False
+    panel._last_training_params = panel._get_training_params()
+    panel._mask_inverted = panel._last_training_params[3]
+    panel._sam_controls_state = (0, False)
+    panel.on_update(_DocumentStub({}))
+    assert refresh_calls == []
+    assert panel._mask_paths == [None]
+
+    # Explicit Refresh action refreshes dataset sidecars and picks up the new mask.
+    panel._refresh_sources_from_disk()
+    assert len(refresh_calls) == 1
+    assert panel._mask_paths == [module.Path("/tmp/ds/masks/frame.png")]
+    panel._metadata.close()

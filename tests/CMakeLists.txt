@@ -1007,6 +1007,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
     test_normal_auto_generate.cpp
+    test_sidecar_discovery.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
     test_metrics_eval_mask.cpp

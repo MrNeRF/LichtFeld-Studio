@@ -2835,3 +2835,47 @@ def test_distorted_images_skipped_if_already_undistorted_or_gut(training_panel_m
     panel._check_distortion_and_start()
     assert len(dialog_opened) == 0
     assert len(started) == 1
+
+
+def test_mask_and_prior_controls_refresh_scene_sidecars(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    params.mask_mode = SimpleNamespace(value=0)
+    params.use_depth_loss = False
+    params.use_normal_loss = False
+    params.mip_filter = False
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "MaskMode", lambda value: SimpleNamespace(value=value), raising=False)
+
+    refresh_calls = []
+    scene = SimpleNamespace(refresh_sidecars=lambda: refresh_calls.append(True) or 1)
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    # Disabling mask mode does not rescan sidecars; enabling any non-zero mask mode does.
+    assert panel._set_mask_mode("0") is True
+    assert refresh_calls == []
+    assert panel._set_mask_mode("1") is True
+    assert len(refresh_calls) == 1
+    assert panel._set_mask_mode("2") is True
+    assert len(refresh_calls) == 2
+
+    # Enabling depth or normal priors refreshes sidecars; disabling or other flags do not.
+    assert panel._set_bool_prop("use_depth_loss", False) is True
+    assert len(refresh_calls) == 2
+    assert panel._set_bool_prop("use_depth_loss", True) is True
+    assert len(refresh_calls) == 3
+    assert panel._set_bool_prop("use_normal_loss", True) is True
+    assert len(refresh_calls) == 4
+    assert panel._set_bool_prop("use_normal_loss", False) is True
+    assert len(refresh_calls) == 4
+    assert panel._set_bool_prop("mip_filter", True) is True
+    assert len(refresh_calls) == 4
+
+    # Scenes without refresh_sidecars (or missing scene) fail gracefully.
+    monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace())
+    assert panel._set_mask_mode("1") is True
+    monkeypatch.setattr(module.lf, "get_scene", lambda: None)
+    assert panel._set_bool_prop("use_depth_loss", True) is True
