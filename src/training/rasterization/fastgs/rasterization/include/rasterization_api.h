@@ -51,6 +51,8 @@ namespace fast_lfs::rasterization {
         int n_instances = 0;
         int n_visible = 0;
         int sh_layout_bases = 1;
+        // The forward's dilation factor; the backward differentiates the same kernel.
+        float dilation_scale = 1.0f;
         uint64_t frame_id = 0;
         // The stream all of this context's kernels/allocations are ordered on;
         // releases (sorted indices, arena frame, helper buffers) must use it.
@@ -143,7 +145,8 @@ namespace fast_lfs::rasterization {
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         const ForwardContext& forward_ctx,
-        float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
+        float* grad_w2c_ptr,          // Device pointer [4*4] - output or nullptr: dL/d(w2c), rows 0-2
+        float* grad_cam_position_ptr, // Device pointer [3] - output, required with grad_w2c_ptr: dL/d(cam_position)
         int n_primitives,
         int n_visible,
         int active_sh_bases,

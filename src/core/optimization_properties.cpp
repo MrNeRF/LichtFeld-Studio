@@ -71,6 +71,14 @@ namespace lfs::core::param {
             .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::ray_depth_lr,
+                        "ray_depth_lr", "Ray Depth LR", d.ray_depth_lr, 0.0f, 0.1f,
+                        "Lets splats far from the cameras slide along the viewing ray to the depth the views agree on, growing in proportion; largest step as a fraction of the distance, decays with the position LR; 0 turns it off")
+            .precision(4)
+            .ui_step(0.001)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::shs_lr,
                         "shs_lr", "SH LR", d.shs_lr, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
@@ -703,6 +711,12 @@ namespace lfs::core::param {
                        "Enable mip filtering (anti-aliasing)")
             .locale("training_params.mip_filter")
             .tooltip("training.tooltip.mip_filter")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::pose_opt,
+                       "pose_opt", "Pose Refinement", d.pose_opt,
+                       "Refine the training camera poses during training; the refined poses replace the cameras' own")
+            .locale("training_params.pose_opt")
+            .tooltip("training.tooltip.pose_opt")
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,

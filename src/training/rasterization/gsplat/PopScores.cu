@@ -9,14 +9,17 @@
 namespace gsplat_lfs {
     __device__ float pop_alpha(const PopScoreInputs& p, int g, const WorldRay& ray) {
         const vec3 xyz = reinterpret_cast<const vec3*>(p.means)[g];
-        const vec3 scale = activated_scale(reinterpret_cast<const vec3*>(p.scales)[g]);
+        vec3 scale = activated_scale(reinterpret_cast<const vec3*>(p.scales)[g]);
+        if (p.dilations != nullptr)
+            scale = dilated_scale(scale, p.dilations[g]);
         const mat3 R = quat_to_rotmat(reinterpret_cast<const vec4*>(p.quats)[g]);
         const mat3 S(1.f / scale[0], 0.f, 0.f, 0.f, 1.f / scale[1], 0.f, 0.f, 0.f, 1.f / scale[2]);
         const mat3 iscl_rot = S * glm::transpose(R);
         const vec3 gro = iscl_rot * (ray.ray_org - xyz);
         const vec3 grd = safe_normalize(iscl_rot * ray.ray_dir);
         const vec3 cross = glm::cross(grd, gro);
-        return min(0.999f, activated_opacity(p.opacities[g]) * __expf(-0.5f * glm::dot(cross, cross)));
+        const float opacity = activated_opacity(p.opacities[g]) * (p.compensations ? p.compensations[g] : 1.f);
+        return min(0.999f, opacity * __expf(-0.5f * glm::dot(cross, cross)));
     }
 
     template <bool Perfect>

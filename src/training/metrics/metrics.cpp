@@ -727,7 +727,7 @@ namespace lfs::training {
                         mask_path, params.dataset.resize_factor, params.dataset.max_width,
                         false, params.optimization.mask_threshold, true,
                         undistorted_reference);
-                    if (inputs.user_mask.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                    if (inputs.user_mask.shape() != lfs::core::TensorShape({inputs.gt_image.shape()[1], inputs.gt_image.shape()[2]}))
                         return evaluation_error(std::format("evaluation mask '{}' does not match the image size",
                                                             lfs::core::path_to_utf8(mask_path)),
                                                 LFS_SOURCE_SITE_CURRENT());
@@ -869,7 +869,7 @@ namespace lfs::training {
                 lfs::core::Tensor alpha;
                 try {
                     alpha = params.optimization.gut
-                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, false,
+                                ? gsplat_rasterize(*render_camera, model, mask_background, 1.0f, params.optimization.mip_filter,
                                                    GsplatRenderMode::RGB, true)
                                       .alpha
                                 : fast_rasterize(*render_camera, model, mask_background, params.optimization.mip_filter,
@@ -1573,7 +1573,7 @@ namespace lfs::training {
                 if (_params.optimization.gut) {
                     output = gsplat_rasterize(
                         render_camera, *rendered, background,
-                        1.0f, false,
+                        1.0f, _params.optimization.mip_filter,
                         render_normal ? GsplatRenderMode::RGB_D_N : GsplatRenderMode::RGB_D,
                         true);
                 } else {

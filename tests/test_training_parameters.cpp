@@ -131,6 +131,7 @@ namespace {
         const std::set<std::string> canonical = {"mcmc", "mrnf", "igs+"};
         const std::map<std::string, std::vector<std::string>> expected = {
             {"means_lr_end", {"mrnf"}},
+            {"ray_depth_lr", {"mrnf"}},
             {"scaling_lr_end", {"mrnf"}},
             {"late_lr_anneal", {"mrnf"}},
             {"growth_grad_threshold", {"mrnf"}},
