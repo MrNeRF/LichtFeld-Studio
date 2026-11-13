@@ -1019,7 +1019,6 @@ namespace lfs::io {
         constexpr int EMEANS_REVIVAL_PERIOD = 5;
         constexpr float EMEANS_SPLIT_DELTA = 0.0078125f; // BF16 machine epsilon (2^-7)
         constexpr float EMEANS_INITIAL_COUNT = 1e-10f;
-        constexpr unsigned long long EMEANS_EMPTY_KEY = ~0ull;
         constexpr int EMEANS_IVF_MIN_K = 4096;
         constexpr std::uint32_t EMEANS_SEED = 2611; // fixed so identical inputs export the same palette
 
@@ -1114,152 +1113,11 @@ namespace lfs::io {
             ema_counts[c] = EMEANS_INITIAL_COUNT;
         }
 
-        __device__ __forceinline__ unsigned long long emeans_pack_key(const float dist, const int idx) {
-            // Order-preserving float bits in the high word, index in the low word:
-            // atomicMin keeps the smallest distance and, on ties, the lowest index.
-            std::uint32_t bits = __float_as_uint(dist);
-            bits = (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
-            return (static_cast<unsigned long long>(bits) << 32) | static_cast<std::uint32_t>(idx);
-        }
-
-        // Exact FP32 nearest-centroid search for one batch. Batches are small
-        // relative to the GPU, so the centroid range is split across blockIdx.y
-        // and the per-split winners are merged with a packed 64-bit atomicMin.
-        template <int N_DIMS, int POINTS_PER_THREAD = ASSIGN_POINTS_PER_THREAD, int THREAD_COUNT = BLOCK_SIZE>
-        __global__ void __launch_bounds__(THREAD_COUNT, 3)
-            emeans_assign_split_kernel(
-                const float4* __restrict__ shN,
-                const float* __restrict__ centroids,
-                const float* __restrict__ centroid_norms,
-                unsigned long long* __restrict__ best_keys,
-                const int n_points,
-                const int k,
-                const int centroids_per_split) {
-            constexpr int POINT_TILE = THREAD_COUNT / ASSIGN_CENTROID_GROUPS * POINTS_PER_THREAD;
-            __shared__ float shared_points[POINT_TILE][ASSIGN_SHARED_K_STRIDE];
-            __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
-            __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
-
-            const int tid = threadIdx.x;
-            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * POINTS_PER_THREAD;
-            const int centroid_col = (tid % ASSIGN_CENTROID_GROUPS) * ASSIGN_CENTROIDS_PER_THREAD;
-            const int point_start = blockIdx.x * POINT_TILE;
-            const int centroid_begin = blockIdx.y * centroids_per_split;
-            const int centroid_end = min(k, centroid_begin + centroids_per_split);
-            if (centroid_begin >= centroid_end)
-                return;
-
-            constexpr int point_slots_count = (N_DIMS + 3) / 4;
-            for (int i = tid; i < POINT_TILE * point_slots_count; i += THREAD_COUNT) {
-                const int point = i / point_slots_count;
-                const int slot = i % point_slots_count;
-                const int global_point = point_start + point;
-                const float4 values = global_point < n_points
-                                          ? shN[shAt_device(static_cast<std::uint32_t>(global_point),
-                                                            static_cast<std::uint32_t>(slot), point_slots_count)]
-                                          : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-                shared_points[point][slot * 4 + 0] = values.x;
-                shared_points[point][slot * 4 + 1] = values.y;
-                shared_points[point][slot * 4 + 2] = values.z;
-                shared_points[point][slot * 4 + 3] = values.w;
-            }
-            __syncthreads();
-
-            float best_dist[POINTS_PER_THREAD];
-            int best_idx[POINTS_PER_THREAD];
-#pragma unroll
-            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
-                best_dist[p] = 1e30f;
-                best_idx[p] = k;
-            }
-
-            for (int centroid_start = centroid_begin; centroid_start < centroid_end;
-                 centroid_start += ASSIGN_CENTROID_TILE) {
-                for (int i = tid; i < ASSIGN_CENTROID_TILE * N_DIMS; i += THREAD_COUNT) {
-                    const int centroid = i / N_DIMS;
-                    const int dim = i % N_DIMS;
-                    const int global_centroid = centroid_start + centroid;
-                    shared_centroids[centroid][dim] = global_centroid < centroid_end
-                                                          ? centroids[static_cast<long long>(global_centroid) * N_DIMS + dim]
-                                                          : 0.0f;
-                }
-                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += THREAD_COUNT) {
-                    const int global_centroid = centroid_start + i;
-                    shared_centroid_norms[i] = global_centroid < centroid_end ? centroid_norms[global_centroid] : 0.0f;
-                }
-                __syncthreads();
-
-                float dots[POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
-#pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    float point_values[POINTS_PER_THREAD];
-                    float centroid_values[ASSIGN_CENTROIDS_PER_THREAD];
-#pragma unroll
-                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
-                        point_values[p] = shared_points[point_row + p][d];
-                    }
-#pragma unroll
-                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
-                        centroid_values[c] = shared_centroids[centroid_col + c][d];
-                    }
-#pragma unroll
-                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
-#pragma unroll
-                        for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
-                            dots[p][c] = fmaf(point_values[p], centroid_values[c], dots[p][c]);
-                        }
-                    }
-                }
-
-#pragma unroll
-                for (int p = 0; p < POINTS_PER_THREAD; ++p) {
-#pragma unroll
-                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
-                        const int global_centroid = centroid_start + centroid_col + c;
-                        if (global_centroid < centroid_end) {
-                            const float dist = fmaf(-2.0f, dots[p][c],
-                                                    shared_centroid_norms[centroid_col + c]);
-                            if (dist < best_dist[p] ||
-                                (dist == best_dist[p] && global_centroid < best_idx[p])) {
-                                best_dist[p] = dist;
-                                best_idx[p] = global_centroid;
-                            }
-                        }
-                    }
-                }
-                __syncthreads();
-            }
-
-            const unsigned group_mask = 0xffffffffu;
-            const int group_lane = tid % ASSIGN_CENTROID_GROUPS;
-#pragma unroll
-            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
-                for (int offset = ASSIGN_CENTROID_GROUPS / 2; offset > 0; offset >>= 1) {
-                    const float other_dist = __shfl_down_sync(
-                        group_mask, best_dist[p], offset, ASSIGN_CENTROID_GROUPS);
-                    const int other_idx = __shfl_down_sync(
-                        group_mask, best_idx[p], offset, ASSIGN_CENTROID_GROUPS);
-                    if (other_dist < best_dist[p] ||
-                        (other_dist == best_dist[p] && other_idx < best_idx[p])) {
-                        best_dist[p] = other_dist;
-                        best_idx[p] = other_idx;
-                    }
-                }
-                if (group_lane == 0) {
-                    const int global_point = point_start + point_row + p;
-                    if (global_point < n_points && best_idx[p] < k) {
-                        atomicMin(&best_keys[global_point], emeans_pack_key(best_dist[p], best_idx[p]));
-                    }
-                }
-            }
-        }
-
         // Accumulates batch sums/counts. In the last epoch the batch labels are
         // also scattered to source order as hints for the exact final search.
-        template <int N_DIMS, bool FROM_KEYS>
+        template <int N_DIMS>
         __global__ void emeans_accumulate_kernel(
             const float4* __restrict__ shN,
-            const unsigned long long* __restrict__ best_keys,
             const int* __restrict__ batch_labels,
             const int* __restrict__ batch_order,
             int* __restrict__ source_labels,
@@ -1271,13 +1129,7 @@ namespace lfs::io {
             const int tid = blockIdx.x * blockDim.x + threadIdx.x;
             if (tid >= n_points)
                 return;
-            int label;
-            if constexpr (FROM_KEYS) {
-                const unsigned long long key = best_keys[tid];
-                label = key == EMEANS_EMPTY_KEY ? -1 : static_cast<int>(key & 0xffffffffull);
-            } else {
-                label = batch_labels[tid];
-            }
+            const int label = batch_labels[tid];
             if (label < 0 || label >= k)
                 return;
             if (source_labels)
@@ -1757,12 +1609,10 @@ namespace lfs::io {
             auto epoch_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             auto labels = Tensor::empty({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             LFS_CUDA_CHECK(cudaMemset(labels.ptr<int>(), 0xff, static_cast<size_t>(n) * sizeof(int)));
-            auto best_keys = Tensor::empty({static_cast<size_t>(B)}, Device::CUDA, DataType::Int64);
             auto batch_labels = Tensor::empty({static_cast<size_t>(B)}, Device::CUDA, DataType::Int32);
             auto* d_centroids = centroids.ptr<float>();
             auto* d_norms = norms.ptr<float>();
             auto* d_ema_counts = ema_counts.ptr<float>();
-            auto* d_best_keys = reinterpret_cast<unsigned long long*>(best_keys.ptr<int64_t>());
 
             std::mt19937 rng(EMEANS_SEED);
             const std::uint32_t shuffle_seed = rng();
@@ -1794,12 +1644,6 @@ namespace lfs::io {
                 ivf.emplace();
                 ivf->initialize(d_centroids, k, B, rng(), fixed);
             }
-
-            const int point_blocks = (B + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
-            const int centroid_tiles = (k + ASSIGN_CENTROID_TILE - 1) / ASSIGN_CENTROID_TILE;
-            const int target_blocks = emeans_device_sm_count() * 3 * 2;
-            const int splits = std::clamp((target_blocks + point_blocks - 1) / point_blocks, 1, centroid_tiles);
-            const int centroids_per_split = (centroid_tiles + splits - 1) / splits * ASSIGN_CENTROID_TILE;
 
             std::vector<float> host_counts(static_cast<size_t>(k));
             std::vector<int> dead;
@@ -1867,18 +1711,14 @@ namespace lfs::io {
                     if (ivf) {
                         ivf->rebuild_palette_buckets(d_centroids, k);
                         ivf->assign(d_batch, d_centroids, d_norms, batch_labels.ptr<int>(), B, k);
-                        emeans_accumulate_kernel<N_DIMS, false><<<grid_b, BLOCK_SIZE>>>(
-                            d_batch, nullptr, batch_labels.ptr<int>(), d_batch_order, d_source_labels,
-                            fixed_sums(sums), counts.ptr<int>(), B, k, fixed);
                     } else {
-                        LFS_CUDA_CHECK(cudaMemsetAsync(d_best_keys, 0xff, static_cast<size_t>(B) * sizeof(unsigned long long)));
-                        emeans_assign_split_kernel<N_DIMS><<<dim3(point_blocks, splits), BLOCK_SIZE>>>(
-                            d_batch, d_centroids, d_norms, d_best_keys, B, k, centroids_per_split);
-                        LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_split");
-                        emeans_accumulate_kernel<N_DIMS, true><<<grid_b, BLOCK_SIZE>>>(
-                            d_batch, d_best_keys, nullptr, d_batch_order, d_source_labels,
-                            fixed_sums(sums), counts.ptr<int>(), B, k, fixed);
+                        assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<(B + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
+                            d_batch, d_centroids, d_norms, batch_labels.ptr<int>(), B, k);
+                        LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.assign_batch");
                     }
+                    emeans_accumulate_kernel<N_DIMS><<<grid_b, BLOCK_SIZE>>>(
+                        d_batch, batch_labels.ptr<int>(), d_batch_order, d_source_labels,
+                        fixed_sums(sums), counts.ptr<int>(), B, k, fixed);
                     LFS_CUDA_LAUNCH_CHECK(nullptr, "io.emeans.accumulate");
 
                     emeans_update_kernel<N_DIMS><<<update_blocks, BLOCK_SIZE>>>(
@@ -1901,7 +1741,6 @@ namespace lfs::io {
             identity = Tensor();
             order = Tensor();
             sort_temp = Tensor();
-            best_keys = Tensor();
             batch_labels = Tensor();
 
             // Last-epoch-mean finalization, then one exact full assignment and
@@ -1929,9 +1768,9 @@ namespace lfs::io {
             LFS_CUDA_AWAIT(ticket, cudaDeviceSynchronize(), "io.emeans.train_sync");
 
             LOG_DEBUG("SH e-means: n=%d k=%d dims=%d epochs=%d batch=%d batches_per_epoch=%d updates=%d "
-                      "alpha0=%.4f assignment=%s splits=%d revived=%lld",
+                      "alpha0=%.4f assignment=%s revived=%lld",
                       n, k, N_DIMS, EMEANS_EPOCHS, B, schedule.batches_per_epoch, schedule.total_updates,
-                      schedule.alpha0, use_ivf ? "ivf" : "exact", use_ivf ? 0 : splits, revived_total);
+                      schedule.alpha0, use_ivf ? "ivf" : "exact", revived_total);
             return {centroids, labels};
         }
 
