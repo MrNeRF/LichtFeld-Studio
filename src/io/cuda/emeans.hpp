@@ -12,28 +12,25 @@ namespace lfs::io {
     using lfs::core::Tensor;
 
     /**
-     * @brief K-means over resident vksplat-swizzled shN (SOG path; non-swizzled API removed).
+     * @brief e-means (EMA mini-batch k-means, arXiv:2611.09501) over resident swizzled shN.
      *
-     * @param shN_swizzled 1D swizzled SH-rest tensor
-     * @param n_points Number of primitives
-     * @param sh_coeffs Active SH-rest coefficient count (3, 8, or 15)
-     * @param k Number of clusters
-     * @param iterations Maximum iterations
-     * @param fast_assignment Use exact screened SH3 assignment for streamed exports
+     * Batch size and decay schedule follow the paper's scaling laws with 10 epochs.
+     * Ends with an exact full assignment (screened at SH3) followed by a centroid
+     * refit, so the palette is the mean of each label's members.
+     *
      * @return Tuple of (centroids [k, sh_coeffs * 3], labels [n_points])
      */
-    std::tuple<Tensor, Tensor> kmeans_sh_swizzled(
+    std::tuple<Tensor, Tensor> emeans_sh_swizzled(
         const Tensor& shN_swizzled,
         int n_points,
         int sh_coeffs,
-        int k,
-        int iterations = 10,
-        bool fast_assignment = false);
+        int k);
 
     // Internal CUDA launcher: SH3 swizzled rows, float32 centroids/norms and
     // preallocated int32 labels. Norms must be FP32 squared centroid norms.
-    // Screening preserves FP32 winners; have_labels permits valid prior labels
-    // as search hints (invalid hints are ignored).
+    // fast screens candidates in FP16 and preserves FP32 winners; otherwise a
+    // brute-force FP32 search. have_labels permits valid prior labels as
+    // search hints (invalid hints are ignored).
     void assign_sh3_labels(const Tensor& shN_swizzled, const Tensor& centroids,
                            const Tensor& centroid_norms, Tensor& labels, bool fast, bool have_labels = false);
 
