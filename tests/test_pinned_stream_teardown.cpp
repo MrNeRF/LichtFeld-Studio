@@ -6,6 +6,7 @@
 // destroyed during teardown.
 
 #include "core/pinned_memory_allocator.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -95,4 +96,30 @@ TEST_F(PinnedStreamTeardownTest, RecycledStreamHandleIsLiveAgainAfterRecordStrea
         << "live stream use was not event-fenced";
 
     ASSERT_EQ(cudaStreamDestroy(s2), cudaSuccess);
+}
+
+// The driver hands out a released handle value again for a new stream. Once
+// that handle enters the API anywhere (here as the current stream, as a tensor's
+// stream does in an H2D copy), its pinned staging frees must be fenced again.
+TEST_F(PinnedStreamTeardownTest, RecycledStreamHandleIsLiveAgainAfterEnteringTheApi) {
+    auto& alloc = PinnedMemoryAllocator::instance();
+
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    alloc.release_stream(stream); // stands in for the old stream with this value
+
+    lfs::core::setCurrentCUDAStream(stream);
+    lfs::core::setCurrentCUDAStream(nullptr);
+
+    void* ptr = alloc.allocate(1 << 20);
+    ASSERT_NE(ptr, nullptr);
+    const auto before = alloc.get_stats();
+    alloc.deallocate(ptr, stream);
+    const auto after = alloc.get_stats();
+
+    EXPECT_GE(after.use_events_recorded, before.use_events_recorded + 1)
+        << "live stream use was not event-fenced";
+
+    alloc.release_stream(stream);
+    ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }
