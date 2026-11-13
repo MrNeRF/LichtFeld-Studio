@@ -153,7 +153,7 @@ TEST(SidecarDiscoveryTest, AssociatesColmapNestedAndBlenderSubdirSidecars) {
     opts.masks = true;
     opts.depths = true;
     const auto result = lfs::io::associate_dataset_sidecars(cameras, root, opts);
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
     EXPECT_EQ(result->masks_bound, 3u);
     EXPECT_EQ(result->depths_bound, 1u);
     EXPECT_EQ(result->normals_bound, 0u);
@@ -200,7 +200,7 @@ TEST(SidecarDiscoveryTest, PreservesExistingAssetsAndRebindsDeletedMask) {
     lfs::io::SidecarAssociationOptions opts;
     opts.masks = true;
     const auto result = lfs::io::associate_dataset_sidecars(cameras, root, opts);
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << lfs::format_for_developer(result.error());
     EXPECT_EQ(result->masks_bound, 1u);
 
     EXPECT_TRUE(cam_mem->has_in_memory_mask());
@@ -232,7 +232,7 @@ TEST(SidecarDiscoveryTest, AmbiguousMaskHonorsFailFlag) {
     warn_opts.masks = true;
     warn_opts.fail_on_ambiguous_mask = false;
     const auto warned = lfs::io::associate_dataset_sidecars(cameras, root, warn_opts);
-    ASSERT_TRUE(warned.has_value()) << warned.error();
+    ASSERT_TRUE(warned.has_value()) << lfs::format_for_developer(warned.error());
     EXPECT_EQ(warned->masks_bound, 0u);
     EXPECT_EQ(warned->ambiguous_masks, 1u);
     EXPECT_FALSE(cam->has_mask());
@@ -266,7 +266,7 @@ TEST_F(SceneSidecarSyncGpuTest, SyncCameraAssetPathsUpdatesNodesAndEmitsTransien
     opts.masks = true;
     opts.depths = true;
     const auto associated = lfs::io::associate_dataset_sidecars(cameras, root, opts);
-    ASSERT_TRUE(associated.has_value()) << associated.error();
+    ASSERT_TRUE(associated.has_value()) << lfs::format_for_developer(associated.error());
     EXPECT_EQ(associated->masks_bound, 1u);
     EXPECT_EQ(associated->depths_bound, 1u);
 

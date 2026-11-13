@@ -4,15 +4,14 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/loader.hpp"
 
 #include <cstddef>
-#include <expected>
 #include <filesystem>
 #include <memory>
 #include <span>
-#include <string>
 
 namespace lfs::core {
     class Camera;
@@ -61,7 +60,7 @@ namespace lfs::io {
     // cameras that do not currently have a valid file/in-memory asset bound.
     // Existing valid paths, in-memory masks, and project mask assets are kept
     // untouched.
-    [[nodiscard]] LFS_IO_API std::expected<SidecarAssociationResult, std::string>
+    [[nodiscard]] LFS_IO_API lfs::Result<SidecarAssociationResult>
     associate_dataset_sidecars(
         std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
         const std::filesystem::path& dataset_path,

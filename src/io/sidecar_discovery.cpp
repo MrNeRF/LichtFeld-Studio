@@ -5,9 +5,12 @@
 #include "io/sidecar_discovery.hpp"
 
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/source_site.hpp"
 #include "io/filesystem_utils.hpp"
 
 #include <algorithm>
@@ -65,9 +68,10 @@ namespace lfs::io {
             }
 
             std::error_code ec;
-            const std::filesystem::path abs_image = image_path.is_absolute()
-                                                        ? image_path.lexically_normal()
-                                                        : std::filesystem::absolute(image_path, ec).lexically_normal();
+            const std::filesystem::path abs_image =
+                image_path.is_absolute()
+                    ? image_path.lexically_normal()
+                    : lfs::core::native_fs::absolute(image_path, ec).lexically_normal();
             if (!ec) {
                 if (auto rel = abs_image.lexically_relative(normalized_root); is_within_root(rel)) {
                     return rel;
@@ -76,7 +80,8 @@ namespace lfs::io {
 
             if (!canonical_root.empty()) {
                 std::error_code canon_ec;
-                const auto canon_image = std::filesystem::weakly_canonical(abs_image, canon_ec);
+                const auto canon_image =
+                    lfs::core::native_fs::weakly_canonical(abs_image, canon_ec);
                 if (!canon_ec) {
                     if (auto rel = canon_image.lexically_relative(canonical_root); is_within_root(rel)) {
                         return rel;
@@ -211,6 +216,8 @@ namespace lfs::io {
             try {
                 std::tie(sc_w, sc_h, sc_c) = lfs::core::get_image_info(sidecar_path);
             } catch (...) {
+                LOG_TRACE("Ignoring unreadable sidecar '{}' during contract validation",
+                          lfs::core::path_to_utf8(sidecar_path));
                 return false;
             }
             if (sc_w <= 0 || sc_h <= 0) {
@@ -227,6 +234,8 @@ namespace lfs::io {
             try {
                 std::tie(img_w, img_h, img_c) = lfs::core::get_image_info(cam.image_path());
             } catch (...) {
+                LOG_TRACE("Skipping sidecar dimension check because image '{}' could not be probed",
+                          lfs::core::path_to_utf8(cam.image_path()));
                 return true;
             }
             if (img_w <= 0 || img_h <= 0) {
@@ -236,7 +245,7 @@ namespace lfs::io {
         }
 
         template <typename Cache, typename Setter>
-        [[nodiscard]] std::expected<void, std::string> bind_camera_sidecar(
+        [[nodiscard]] lfs::Status bind_camera_sidecar(
             const std::optional<Cache>& cache,
             const bool needed,
             const std::vector<std::string>& candidates,
@@ -269,7 +278,13 @@ namespace lfs::io {
                 const std::string msg =
                     format_ambiguity_message(kind_label, folder_label, cam, dataset_root);
                 if (fail_on_ambiguous) {
-                    return std::unexpected(msg);
+                    return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::InvalidArgument,
+                        .domain = lfs::ErrorDomain::IO,
+                        .user_message = msg,
+                        .detail = msg,
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
                 }
                 ++ambiguous_count;
                 if (!warned_ambiguous) {
@@ -300,7 +315,7 @@ namespace lfs::io {
         return {};
     }
 
-    std::expected<SidecarAssociationResult, std::string> associate_dataset_sidecars(
+    lfs::Result<SidecarAssociationResult> associate_dataset_sidecars(
         const std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
         const std::filesystem::path& dataset_path,
         const SidecarAssociationOptions& options) {
@@ -355,12 +370,13 @@ namespace lfs::io {
         }
 
         std::error_code ec;
-        const std::filesystem::path normalized_root = dataset_root.is_absolute()
-                                                          ? dataset_root.lexically_normal()
-                                                          : std::filesystem::absolute(dataset_root, ec).lexically_normal();
+        const std::filesystem::path normalized_root =
+            dataset_root.is_absolute()
+                ? dataset_root.lexically_normal()
+                : lfs::core::native_fs::absolute(dataset_root, ec).lexically_normal();
         std::error_code canon_ec;
         const std::filesystem::path canonical_root =
-            std::filesystem::weakly_canonical(normalized_root, canon_ec);
+            lfs::core::native_fs::weakly_canonical(normalized_root, canon_ec);
         const std::filesystem::path effective_canon_root = canon_ec ? std::filesystem::path{} : canonical_root;
 
         bool warned_ambiguous_mask = false;
@@ -369,7 +385,14 @@ namespace lfs::io {
 
         for (size_t i = 0; i < cameras.size(); ++i) {
             if ((i % detail::CANCEL_POLL_INTERVAL) == 0 && options.cancel_requested && options.cancel_requested()) {
-                return std::unexpected("Sidecar discovery cancelled");
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Cancelled,
+                    .domain = lfs::ErrorDomain::IO,
+                    .severity = lfs::Severity::Warning,
+                    .user_message = "Sidecar discovery cancelled",
+                    .detail = "Sidecar discovery cancelled",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
             }
 
             const auto& cam = cameras[i];
@@ -394,7 +417,7 @@ namespace lfs::io {
                     result.masks_bound, result.ambiguous_masks, warned_ambiguous_mask,
                     [&](std::filesystem::path path) { cam->set_mask_path(std::move(path)); });
                 !ok) {
-                return std::unexpected(ok.error());
+                return ok.error();
             }
             if (auto ok = bind_camera_sidecar(
                     depth_cache, find_depth, candidates, *cam, dataset_root,
@@ -403,7 +426,7 @@ namespace lfs::io {
                     result.depths_bound, result.ambiguous_depths, warned_ambiguous_depth,
                     [&](std::filesystem::path path) { cam->set_depth_path(std::move(path)); });
                 !ok) {
-                return std::unexpected(ok.error());
+                return ok.error();
             }
             if (auto ok = bind_camera_sidecar(
                     normal_cache, find_normal, candidates, *cam, dataset_root,
@@ -412,7 +435,7 @@ namespace lfs::io {
                     result.normals_bound, result.ambiguous_normals, warned_ambiguous_normal,
                     [&](std::filesystem::path path) { cam->set_normal_path(std::move(path)); });
                 !ok) {
-                return std::unexpected(ok.error());
+                return ok.error();
             }
         }
 

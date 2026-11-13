@@ -3577,7 +3577,7 @@ namespace lfs::vis {
                 .fail_on_ambiguous_normal = false,
             });
         if (!associated) {
-            LOG_WARN("Sidecar refresh failed: {}", associated.error());
+            LOG_WARN("Sidecar refresh failed: {}", associated.error().user_message());
             return 0;
         }
 
