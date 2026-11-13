@@ -40,6 +40,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/sidecar_discovery.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
@@ -1755,10 +1756,48 @@ namespace lfs::training {
             .raw_residual = raw_residual};
     }
 
+    std::expected<void, std::string> Trainer::refresh_masks_from_dataset() {
+        if (params_.optimization.mask_mode == lfs::core::param::MaskMode::None) {
+            return {};
+        }
+
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        if (train_dataset_) {
+            const auto& train_cams = train_dataset_->get_cameras();
+            cameras.insert(cameras.end(), train_cams.begin(), train_cams.end());
+        }
+        if (val_dataset_) {
+            const auto& val_cams = val_dataset_->get_cameras();
+            cameras.insert(cameras.end(), val_cams.begin(), val_cams.end());
+        }
+        if (cameras.empty()) {
+            return {};
+        }
+
+        const auto associated = lfs::io::associate_dataset_sidecars(
+            cameras,
+            params_.dataset.data_path,
+            {
+                .masks = true,
+                .fail_on_ambiguous_mask = true,
+            });
+        if (!associated) {
+            return std::unexpected(associated.error());
+        }
+        if (associated->masks_bound > 0) {
+            LOG_INFO("Discovered and bound {} mask file(s) from dataset folder",
+                     associated->masks_bound);
+        }
+        return {};
+    }
+
     std::expected<void, std::string> Trainer::validate_masks() {
         const auto& opt = params_.optimization;
         if (opt.mask_mode == lfs::core::param::MaskMode::None) {
             return {};
+        }
+        if (auto refreshed = refresh_masks_from_dataset(); !refreshed) {
+            return std::unexpected(refreshed.error());
         }
 
         // Segment and ignore does not support mask invert
@@ -9339,6 +9378,9 @@ namespace lfs::training {
                 });
             }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                if (auto refreshed = refresh_masks_from_dataset(); !refreshed) {
+                    LOG_WARN("Mask refresh before training run reported: {}", refreshed.error());
+                }
                 aux_pipeline_config.fill_masked_rgb = true;
                 aux_pipeline_config.mask_keep_high_band = params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;

@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/sidecar_discovery.hpp"
 #include "preprocessing/preprocess.hpp"
 
 #include <algorithm>
@@ -129,31 +130,23 @@ namespace lfs::training {
         void associate_depth_maps(
             std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
             const std::filesystem::path& dataset_root) {
-            lfs::io::DepthDirCache cache(dataset_root);
-            if (!cache.has_depth_dirs())
-                return;
-            for (const auto& cam : cameras) {
-                if (!cam || cam->has_depth())
-                    continue;
-                if (auto lookup = cache.lookup(cam->image_name()); lookup.found()) {
-                    cam->set_depth_path(std::move(lookup.path));
-                }
-            }
+            (void)lfs::io::associate_dataset_sidecars(
+                cameras, dataset_root,
+                {
+                    .depths = true,
+                    .fail_on_ambiguous_depth = false,
+                });
         }
 
         void associate_normal_maps(
             std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
             const std::filesystem::path& dataset_root) {
-            lfs::io::NormalDirCache cache(dataset_root);
-            if (!cache.has_normal_dirs())
-                return;
-            for (const auto& cam : cameras) {
-                if (!cam || cam->has_normal())
-                    continue;
-                if (auto lookup = cache.lookup(cam->image_name()); lookup.found()) {
-                    cam->set_normal_path(std::move(lookup.path));
-                }
-            }
+            (void)lfs::io::associate_dataset_sidecars(
+                cameras, dataset_root,
+                {
+                    .normals = true,
+                    .fail_on_ambiguous_normal = false,
+                });
         }
 
         // One preprocess run per output combination so a camera that already has
@@ -244,6 +237,24 @@ namespace lfs::training {
         const bool normal_enabled = training_normal_priors_enabled(opt);
         if (!depth_enabled && !normal_enabled)
             return outcome;
+
+        // Discover existing sidecar maps created on disk after import before
+        // counting missing maps or invoking auto-generation.
+        if (const auto prebound = lfs::io::associate_dataset_sidecars(
+                cameras, params.dataset.data_path,
+                {
+                    .depths = depth_enabled,
+                    .normals = normal_enabled,
+                    .fail_on_ambiguous_depth = false,
+                    .fail_on_ambiguous_normal = false,
+                    .skip_mismatched_depths = opt.depth_auto_generate,
+                    .skip_mismatched_normals = opt.normal_auto_generate,
+                });
+            prebound && prebound->total_bound() > 0) {
+            LOG_INFO("Associated existing prior maps from dataset folder "
+                     "(depth={}, normal={})",
+                     prebound->depths_bound, prebound->normals_bound);
+        }
 
         count_prior_maps(cameras, outcome);
         const bool generate_depth = depth_enabled && opt.depth_auto_generate && outcome.depth.missing > 0;

@@ -252,6 +252,7 @@ add_library(lfs_io STATIC
     collision_export.cpp
         # Implementation file only (header is in include/io/)
         loader.cpp
+        sidecar_discovery.cpp
         splat_decimate.cpp
 
         # Internal implementation files

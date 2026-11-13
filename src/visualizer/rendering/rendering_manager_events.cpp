@@ -133,9 +133,14 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
-        if (!isGTComparisonActive() && !hasGTComparisonAvailable()) {
-            LOG_WARN("GT comparison requires a loaded dataset with source images");
-            return;
+        if (!isGTComparisonActive()) {
+            if (!hasGTComparisonAvailable()) {
+                LOG_WARN("GT comparison requires a loaded dataset with source images");
+                return;
+            }
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                scene_manager->refreshDatasetSidecars();
+            }
         }
 
         SplitViewService::ModeChangeResult result;

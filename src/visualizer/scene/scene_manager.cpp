@@ -24,6 +24,7 @@
 #include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
+#include "io/sidecar_discovery.hpp"
 #include "io/splat_path.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -3529,6 +3530,68 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to prepare training from scene: {}", e.what());
         }
+    }
+
+    size_t SceneManager::refreshDatasetSidecars() {
+        if (!hasDataset() && !scene_.hasTrainingData()) {
+            return 0;
+        }
+        // Camera instances are shared without locking with an active Trainer
+        // worker and its prefetch threads; never mutate sidecar paths mid-run.
+        if (const auto* trainer_mgr = services().trainerOrNull();
+            trainer_mgr &&
+            (trainer_mgr->isTrainingActive() ||
+             trainer_mgr->getState() == TrainingState::Stopping ||
+             trainer_mgr->isCompletionPending())) {
+            return 0;
+        }
+
+        std::filesystem::path dataset_path;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            dataset_path = dataset_path_;
+        }
+        if (dataset_path.empty()) {
+            if (const auto* params = services().paramsOrNull()) {
+                dataset_path = params->getDatasetConfig().data_path;
+            }
+        }
+        if (dataset_path.empty()) {
+            return 0;
+        }
+
+        const auto cameras = scene_.getAllCameras();
+        if (cameras.empty()) {
+            return 0;
+        }
+
+        const auto associated = lfs::io::associate_dataset_sidecars(
+            cameras,
+            dataset_path,
+            {
+                .masks = true,
+                .depths = true,
+                .normals = true,
+                .fail_on_ambiguous_mask = false,
+                .fail_on_ambiguous_depth = false,
+                .fail_on_ambiguous_normal = false,
+            });
+        if (!associated) {
+            LOG_WARN("Sidecar refresh failed: {}", associated.error());
+            return 0;
+        }
+
+        const size_t total_bound = associated->total_bound();
+        const size_t nodes_synced = scene_.syncCameraAssetPaths(true, /*transient=*/true);
+        if (total_bound > 0) {
+            if (nodes_synced == 0) {
+                scene_.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED,
+                                      /*transient=*/true);
+            }
+            LOG_INFO("Refreshed dataset sidecars: {} mask(s), {} depth map(s), {} normal map(s)",
+                     associated->masks_bound, associated->depths_bound, associated->normals_bound);
+        }
+        return total_bound;
     }
 
     void SceneManager::loadCheckpointForTraining(const std::filesystem::path& path,

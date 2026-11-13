@@ -1536,6 +1536,16 @@ namespace lfs::python {
         return scene_->mergeGroup(group_name);
     }
 
+    size_t PyScene::refresh_sidecars() {
+        return point_cloud_access(scene_, [&]() -> size_t {
+            if (auto* const scene_manager = get_scene_manager();
+                scene_manager && &scene_manager->getScene() == scene_) {
+                return scene_manager->refreshDatasetSidecars();
+            }
+            return 0;
+        });
+    }
+
     std::string PyScene::create_external_preview(const std::string& name, const std::string& model_name) {
         if (!is_valid() || !on_graphics_thread())
             throw std::runtime_error("External previews require the current scene on the UI thread");
@@ -2166,6 +2176,8 @@ Returns:
             .def("has_nodes", &PyScene::has_nodes, "Check if the scene contains any nodes")
             // Operations
             .def("apply_deleted", &PyScene::apply_deleted, "Permanently remove soft-deleted Gaussians from all nodes")
+            .def("refresh_sidecars", &PyScene::refresh_sidecars,
+                 "Rescan dataset sidecar folders (masks, depths, normals) for cameras missing sidecars and return the number bound")
             .def("invalidate_cache", &PyScene::invalidate_cache, "Invalidate the combined model cache")
             .def("notify_changed", &PyScene::notify_changed, "Notify the renderer that scene data has changed")
             .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns the new node name")

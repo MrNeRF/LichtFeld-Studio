@@ -4493,6 +4493,12 @@ namespace lfs::python {
                 } else {
                     throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
                 }
+                if (settings.gt_comparison_mode == vis::GTComparisonMode::Normal ||
+                    settings.gt_comparison_mode == vis::GTComparisonMode::Depth) {
+                    if (auto* const sm = get_scene_manager(); sm && sm->hasDataset()) {
+                        sm->refreshDatasetSidecars();
+                    }
+                }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
                 markProjectSessionChapterCommitted("VIEW");
             },
@@ -4519,6 +4525,12 @@ namespace lfs::python {
                 default:
                     settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
                     break;
+                }
+                if (settings.gt_comparison_mode == vis::GTComparisonMode::Normal ||
+                    settings.gt_comparison_mode == vis::GTComparisonMode::Depth) {
+                    if (auto* const sm = get_scene_manager(); sm && sm->hasDataset()) {
+                        sm->refreshDatasetSidecars();
+                    }
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
                 markProjectSessionChapterCommitted("VIEW");

@@ -2021,10 +2021,21 @@ class TrainingPanel(Panel):
             self._add_save_steps_to_eval_steps(params)
         if prop in RENDER_SYNC:
             self._sync_render_setting(RENDER_SYNC[prop], val)
+        if prop in ("use_depth_loss", "use_normal_loss") and val:
+            self._refresh_scene_sidecars()
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
         return True
+
+    def _refresh_scene_sidecars(self):
+        get_scene = getattr(lf, "get_scene", None)
+        if not callable(get_scene):
+            return
+        scene = get_scene()
+        refresh = getattr(scene, "refresh_sidecars", None) if scene else None
+        if callable(refresh):
+            refresh()
 
     def _set_ppisp_sidecar_path(self, val):
         params = lf.optimization_params()
@@ -2084,9 +2095,12 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
         try:
-            params.mask_mode = lf.MaskMode(int(val_str))
+            mode_value = int(val_str)
+            params.mask_mode = lf.MaskMode(mode_value)
         except (ValueError, TypeError):
             return False
+        if mode_value != 0:
+            self._refresh_scene_sidecars()
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
