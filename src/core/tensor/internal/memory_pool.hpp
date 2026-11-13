@@ -571,26 +571,24 @@ namespace lfs::core {
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
                 return;
             }
+            // The device sync only waits for work submitted before it. Another
+            // thread can free a block during the sync whose last use it queued
+            // after the sync began, so only blocks free before the sync may lose
+            // their stream: take them out of the caches first.
+            auto slab_blocks = GPUSlabAllocator::instance().take_stream_free_lists();
+            const auto bucket_blocks = SizeBucketedPool::instance().take_cache();
             const cudaError_t sync_status = cudaDeviceSynchronize();
-            if (sync_status != cudaSuccess) {
+            const bool synchronized = sync_status == cudaSuccess;
+            GPUSlabAllocator::instance().return_stream_free_lists(std::move(slab_blocks), synchronized);
+            SizeBucketedPool::free_taken(bucket_blocks, synchronized);
+            if (!synchronized) {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool trim)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 return;
             }
-            {
-                std::lock_guard<std::mutex> lock(map_mutex_);
-                for (auto& entry : allocation_map_) {
-                    auto& info = entry.second;
-                    info.extra_streams.clear();
-                }
-            }
-            GPUSlabAllocator::instance().merge_all_streams_into_virgin();
             // Return fully-empty slabs to the driver (steady-state VRAM hygiene).
-            // Device is synchronized above; free lists are stream-merged into virgin.
             GPUSlabAllocator::instance().reclaim_empty_slabs();
-            SizeBucketedPool::instance().retag_all_streams(nullptr);
-            SizeBucketedPool::instance().trim_cache();
 
 #if CUDART_VERSION >= 12080
             trim_default_pool("cached-memory trim");
