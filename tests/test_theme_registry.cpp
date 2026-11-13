@@ -7,6 +7,7 @@
 #include "core/user_paths.hpp"
 #include "visualizer/internal/resource_paths.hpp"
 #include "visualizer/preferences.hpp"
+#include "visualizer/theme/style_tokens.hpp"
 #include "visualizer/theme/theme.hpp"
 
 #include <gtest/gtest.h>
@@ -805,4 +806,36 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     EXPECT_EQ(persisted, original);
     file.close();
     std::filesystem::remove_all(root, error);
+}
+
+TEST(ThemeStyleTokens, NativeMenusUsePaletteAndTypographyRoles) {
+    lfs::vis::Theme t;
+    t.palette.border = {0.2f, 0.3f, 0.4f, 0.8f};
+    t.palette.text_dim = {0.4f, 0.5f, 0.6f, 1.0f};
+    t.fonts.small_size = 13.0f;
+    t.fonts.large_size = 19.0f;
+    const auto style = lfs::vis::ui_style::menuStyle(t);
+    EXPECT_FLOAT_EQ(style.border.w, t.palette.border.w);
+    EXPECT_FLOAT_EQ(style.border.x, t.palette.border.x);
+    EXPECT_FLOAT_EQ(style.disabled_text.w, t.palette.text_dim.w);
+    EXPECT_FLOAT_EQ(style.label_size, t.fonts.small_size);
+    EXPECT_FLOAT_EQ(style.submode_label_size, t.fonts.small_size);
+    EXPECT_FLOAT_EQ(style.fallback_icon_size, t.fonts.large_size);
+    EXPECT_FLOAT_EQ(style.stroke_width, lfs::vis::ui_style::normal_stroke);
+}
+
+TEST(ThemeStyleTokens, NativeMenusResolveNewThemesAndShadowPreferences) {
+    lfs::vis::Theme first;
+    first.palette.primary = {0.1f, 0.2f, 0.3f, 1.0f};
+    first.shadows.alpha = 0.25f;
+    const auto old_style = lfs::vis::ui_style::menuStyle(first);
+    auto next = first;
+    next.palette.primary = {0.8f, 0.7f, 0.6f, 1.0f};
+    next.shadows.enabled = false;
+    const auto new_style = lfs::vis::ui_style::menuStyle(next);
+    EXPECT_FLOAT_EQ(old_style.hovered.x, first.palette.primary.x);
+    EXPECT_FLOAT_EQ(new_style.hovered.x, next.palette.primary.x);
+    EXPECT_NE(old_style.hovered.x, new_style.hovered.x);
+    EXPECT_FLOAT_EQ(old_style.shadow.w, first.shadows.alpha);
+    EXPECT_FLOAT_EQ(new_style.shadow.w, 0.0f);
 }

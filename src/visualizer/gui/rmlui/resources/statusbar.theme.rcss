@@ -1,3 +1,50 @@
+/* Shared border roles and shape scale. */
+
+#safe-mode-badge {
+    border-radius: @{radius.control}dp;
+}
+
+#mcp-chip {
+    border-radius: @{radius.control}dp;
+}
+
+#mcp-popup {
+    border-radius: @{radius.surface}dp;
+}
+
+.mcp-switch-track {
+    border-radius: @{radius.control}dp;
+}
+
+.mcp-switch-knob {
+    border-radius: @{radius.round}dp;
+}
+
+.mcp-edit-button {
+    border-radius: @{radius.control}dp;
+}
+
+#progress-container {
+    border-radius: @{radius.control}dp;
+}
+
+.progress-marker {
+    border-radius: @{radius.control}dp;
+}
+
+#progress-container.miner .progress-marker {
+    border-radius: 0;
+}
+
+#progress-container.tessle {
+    border-radius: @{radius.control}dp;
+    border-bottom: 1dp @{border};
+}
+
+#progress-container.tessle .progress-marker {
+    border-radius: 0;
+}
+
 /* Theme-dependent status bar styles. */
 
 body,
@@ -20,13 +67,13 @@ body,
 
 #mcp-chip {
     background-color: @{alpha(surface_bright,0.35)};
-    border-color: @{alpha(text_dim,0.55)};
+    border-color: @{border};
 }
 
 #mcp-chip:hover,
 #mcp-chip.expanded {
     background-color: @{alpha(surface_bright,0.45)};
-    border-color: @{text_dim};
+    border-color: @{border};
 }
 
 #mcp-popup {
@@ -63,12 +110,12 @@ body,
 .mcp-edit-button {
     color: @{text};
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
 }
 
 .mcp-edit-button:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .dim,

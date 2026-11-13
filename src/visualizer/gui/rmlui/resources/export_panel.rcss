@@ -15,7 +15,7 @@
 
 .ep-section-title {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 4dp;
 }
 
@@ -37,7 +37,7 @@
     width: 8dp;
     height: 8dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     margin-right: 8dp;
     flex-shrink: 0;
 }
@@ -71,7 +71,7 @@
 }
 
 .ep-model-row.is-group .ep-model-name {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .ep-model-row .setting-label {

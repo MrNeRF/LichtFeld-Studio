@@ -64,11 +64,11 @@
       "sizes": {
         "_info": "UI element sizes in pixels",
 
-        "window_rounding": 6.0,
-        "frame_rounding": 3.0,
-        "popup_rounding": 6.0,
-        "scrollbar_rounding": 6.0,
-        "grab_rounding": 3.0,
+        "window_rounding": 8.0,
+        "frame_rounding": 4.0,
+        "popup_rounding": 8.0,
+        "scrollbar_rounding": 4.0,
+        "grab_rounding": 4.0,
         "tab_rounding": 4.0,
 
         "border_size": 0.0,
@@ -114,7 +114,7 @@
         "popup_lighten": 0.02,
         "_popup_lighten": "How much to lighten popup background",
 
-        "popup_rounding": 6.0,
+        "popup_rounding": 8.0,
         "_popup_rounding": "Popup corner radius",
 
         "popup_border_size": 1.0,

@@ -6,12 +6,10 @@ import json
 import re
 from pathlib import Path
 
+from rcss_test_support import rule_body as _rule_body
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _rule_body(rcss: str, selector: str) -> str:
-    return rcss.split(f"{selector} {{", 1)[1].split("}", 1)[0]
 
 
 def _theme_size_values(node, key):
@@ -473,7 +471,7 @@ def test_histogram_controls_and_chart_follow_semantic_theme_colors():
     assert "background-color: @{warning};" in theme
 
 
-def test_signal_family_keeps_a_distinct_visual_language():
+def test_signal_family_keeps_its_palette_with_shared_corner_sizes():
     themes = (
         PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     )
@@ -486,8 +484,8 @@ def test_signal_family_keeps_a_distinct_visual_language():
         progress = variant["gradients"]["progress"]
         assert progress["start"] == palette["primary"]
         assert progress["end"] == palette["secondary"]
-        assert variant["sizes"]["window_rounding"] >= 12.0
-        assert variant["sizes"]["frame_rounding"] >= 7.0
+        assert variant["sizes"]["window_rounding"] == 8.0
+        assert variant["sizes"]["frame_rounding"] == 4.0
 
     signal_day = signal["variants"]["light"]
     lichtfeld_light = lichtfeld["variants"]["light"]
@@ -499,9 +497,7 @@ def test_signal_family_keeps_a_distinct_visual_language():
         )
     )
     assert canvas_distance >= 0.10
-    assert signal_day["sizes"]["window_rounding"] >= (
-        lichtfeld_light["sizes"]["window_rounding"] + 4.0
-    )
+    assert signal_day["sizes"]["window_rounding"] == lichtfeld_light["sizes"]["window_rounding"]
 
 
 def test_sequencer_export_quality_uses_shared_native_range_and_theme():
@@ -519,8 +515,8 @@ def test_sequencer_export_quality_uses_shared_native_range_and_theme():
     quality_rules = modal_css.split(".export-quality-scale", 1)[1].split("@media", 1)[0]
     assert "decorator:" not in quality_rules
     assert re.search(r"#[0-9a-fA-F]{3,8}\b", quality_rules) is None
-    track = components.split('input[type="range"] slidertrack {', 1)[1].split("\n}", 1)[0]
-    thumb = components.split('input[type="range"] sliderbar {', 1)[1].split("\n}", 1)[0]
+    track = _rule_body(components, 'input[type="range"] slidertrack')
+    thumb = _rule_body(components, 'input[type="range"] sliderbar')
     assert "background-color: @{border};" in track
     assert "background-color: @{primary};" in thumb
 
@@ -574,9 +570,10 @@ def test_asset_manager_palette_is_fully_theme_driven():
         ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
     }
     for selector, expected_tokens in required_theme_rules.items():
-        body = re.split(r";\s*}", theme_rcss.split(f"{selector} {{", 1)[1], 1)[0]
-        for token in expected_tokens:
-            assert token in body
+        for target in selector.split(","):
+            body = _rule_body(theme_rcss, target.strip())
+            for token in expected_tokens:
+                assert token in body
 
     assert 'id="asset-scope-select"' in rml
     assert "stroke=" not in rml
@@ -1004,7 +1001,9 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert ".tree-row:hover .tree-checkbox" not in scene_rcss
     assert "(selection_markers_visible_ ? 17 : 4) + depth * 16" in scene_graph
     assert 'selection_markers_visible_ ? "inline-block" : "none"' in scene_graph
-    assert "border-radius: 5dp;" in checkbox_rule
+    scene_theme = (PROJECT_ROOT / "src/visualizer/gui/rmlui/resources/scene_tree.theme.rcss").read_text(encoding="utf-8")
+    assert "border-radius:" not in checkbox_rule
+    assert "border-radius: @{radius.control}dp;" in _rule_body(scene_theme, ".tree-checkbox")
     assert 'prefixedAction("select_hierarchy")' in scene_graph
     assert "selectHierarchyFromSelection()" in scene_graph
     assert "if (ctrl && shift)" in scene_graph

@@ -1,3 +1,29 @@
+/* Shared border roles and shape scale. */
+
+#histogram-chart {
+    border-radius: @{radius.control}dp;
+}
+
+#histogram-selection {
+    border-radius: @{radius.control}dp;
+}
+
+.histogram-bar-fill {
+    border-radius: @{radius.control}dp @{radius.control}dp 0 0;
+}
+
+#compare-chart {
+    border-radius: @{radius.control}dp;
+}
+
+#compare-selection {
+    border-radius: @{radius.control}dp;
+}
+
+.compare-cell-fill {
+    border-radius: @{radius.control}dp;
+}
+
 /* Solid surfaces and semantic chart colors follow the active theme. */
 #histogram-toolbar,
 #histogram-stats {

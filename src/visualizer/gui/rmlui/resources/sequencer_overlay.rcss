@@ -24,7 +24,6 @@ body {
     width: 220dp;
     padding: 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 .popup-title {
@@ -58,7 +57,6 @@ body {
     position: absolute;
     padding: 8dp 8dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 #pip-preview-window {
@@ -67,7 +65,7 @@ body {
 }
 
 #pip-preview-window.playing {
-    border-width: 2dp;
+    border-width: 1dp;
 }
 
 #pip-preview-title {

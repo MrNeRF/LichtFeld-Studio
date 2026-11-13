@@ -82,6 +82,66 @@ All sections may appear in `shared` or in an individual variant. Shared values a
 
 Two-component dimensions such as padding and shadow offset use `[x, y]`. Theme font properties are retained for format compatibility and for consumers that use them; defining a font section is optional.
 
+## Shared borders and corners
+
+Application chrome uses two corner sizes: `sizes.frame_rounding` for controls
+and `sizes.window_rounding` for containers and popups. Bundled themes use 4dp
+and 8dp respectively. Square joins remain 0; radio buttons, circular indicators,
+and pills use a full radius. Custom themes can change the two sizes; containers
+use at least the control radius.
+
+In `.theme.rcss`, use `@{radius.control}dp`, `@{radius.surface}dp`, or
+`@{radius.round}dp`. Keep border colors on `@{border}` for neutral edges,
+`@{primary}` for hover/focus/selection, and `@{success}`, `@{warning}` or
+`@{error}` for semantic status. Use `transparent` for intentionally invisible
+edges. Avoid per-panel alpha variations and literal border colors. CSS borders
+that draw window glyphs use text ink, and image annotation handles retain white
+contrast outlines; those are drawing primitives rather than panel edges.
+
+These roles resolve from each loaded theme variant and participate in the
+existing theme switching and file hot reload. Shared linked stylesheets can
+supply a sibling `.theme.rcss`; hosted panels load those before their own theme
+rules. Keep structural layout in the base `.rcss` and border presentation in
+its theme sibling.
+
+### Border widths and font weights
+
+Use `0` for no edge, `1dp` for normal outlines and dividers, and `2dp` for
+selection indicators and emphasis. Keep all UI stroke dimensions in `dp`,
+including thumbnail outlines, so they scale consistently with the rest of the UI.
+Transparent borders must not be used as padding. Section spacing belongs in
+padding; the sequencer's four 4dp triangle edges are drawing geometry and retain
+their dimensions.
+
+Typography has two weights: `400` for regular text and `600` for headings and
+emphasis. These match the loaded Inter Regular and Inter SemiBold faces. Use the
+numeric values rather than `normal`, `bold`, `500`, or `700`. This also applies
+to generated plugin templates and terminal emphasis markup. Existing aliases
+may have resolved to the same loaded face, so consolidating them can preserve
+their rendered appearance.
+
+### Native drawing and runtime state
+
+`src/visualizer/theme/style_tokens.hpp` is the shared native style contract.
+Its `normal_stroke` and `emphasis_stroke` constants are also exposed to RmlUi
+as `@{stroke.normal}dp` and `@{stroke.emphasis}dp`. The pie menu resolves its
+palette, disabled text, font sizes, stroke and shadow preference through
+`ui_style::menuStyle(theme())` on each draw. Keep its radial geometry in the
+menu implementation; presentation belongs to the shared resolver.
+
+The shared `.text-body` class uses `palette.text`, `fonts.base_size`, and weight
+400. Use this for ordinary text such as the video extractor's rotation and time
+values. Its base stylesheet contains layout, while preview, timeline, HDR and
+status presentation use semantic theme roles. Disabled buttons and inputs use
+the shared control rule; custom controls such as its timeline opt in with the
+`.control` class.
+
+Sequencer keyframes expose `alternate`, `loop-point`, and `selected` classes.
+Their theme stylesheet assigns primary, secondary, and info fills, with the
+existing lightened selected variants and the shared emphasis stroke. Runtime
+code controls state and position, so switching or reloading a theme also
+updates existing keyframes without rebuilding their elements.
+
 ## Optional gradients
 
 Every gradient is optional and contains `start` and `end` colors. Missing or invalid gradients use the palette-derived default, so existing themes do not need to be changed merely to support gradients.

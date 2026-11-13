@@ -47,7 +47,7 @@
     display: block;
     padding: 6dp 8dp;
     border-left-width: 2dp;
-    border-radius: 4dp;
+
     font-size: 12dp;
     line-height: 16dp;
 }
@@ -61,7 +61,6 @@
     margin-bottom: 12dp;
     padding: 8dp 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 .mp-controls-main {
@@ -158,7 +157,6 @@
     margin-bottom: 12dp;
     padding: 6dp 10dp;
     border-width: 1dp;
-    border-radius: 6dp;
 }
 
 .mp-collapse-toggle {
@@ -247,7 +245,7 @@ input.mp-url-input[type="text"] {
     margin: 8dp 0 12dp;
     padding: 24dp 16dp;
     border-width: 1dp;
-    border-radius: 6dp;
+
     text-align: center;
 }
 
@@ -256,7 +254,7 @@ input.mp-url-input[type="text"] {
     width: 24dp;
     height: 24dp;
     border-width: 1dp;
-    border-radius: 12dp;
+
     font-size: 16dp;
     line-height: 21dp;
     text-align: center;
@@ -312,7 +310,7 @@ input.mp-url-input[type="text"] {
     flex-direction: column;
     padding: 12dp;
     border-width: 1dp;
-    border-radius: 6dp;
+
     transition: background-color 0.14s quadratic-out, border-color 0.14s quadratic-out;
 }
 
@@ -462,7 +460,6 @@ input.mp-url-input[type="text"] {
     margin-top: 6dp;
     padding: 6dp 8dp;
     border-width: 1dp;
-    border-radius: 4dp;
 }
 
 /* Panel rules are loaded after the shared .hidden utility, so keep the
@@ -496,8 +493,8 @@ input.mp-url-input[type="text"] {
     display: block;
     min-width: 0;
     border-width: 1dp;
-    border-left-width: 3dp;
-    border-radius: 6dp;
+    border-left-width: 2dp;
+
     transition: background-color 0.14s quadratic-out, border-color 0.14s quadratic-out;
 }
 
@@ -715,7 +712,7 @@ input.mp-url-input[type="text"] {
     display: block;
     width: 6dp;
     height: 6dp;
-    border-radius: 3dp;
+
     flex-shrink: 0;
 }
 
@@ -752,7 +749,6 @@ input.mp-url-input[type="text"] {
     max-width: 100%;
     padding: 16dp;
     border-width: 1dp;
-    border-radius: 8dp;
 }
 
 .confirm-title {

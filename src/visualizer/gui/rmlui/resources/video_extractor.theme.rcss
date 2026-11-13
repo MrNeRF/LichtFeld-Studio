@@ -1,3 +1,68 @@
+/* Shared border roles and shape scale. */
+
+#action-footer {
+    border-top-color: @{border};
+}
+
+#preview-shell {
+    border-color: @{border};
+}
+
+.transport-btn {
+    border-radius: @{radius.control}dp;
+}
+
+.hdr-badge {
+    border-radius: @{radius.control}dp;
+}
+
+#timeline {
+    border-color: @{border};
+}
+
+.batch-video-item {
+    border-color: @{border};
+}
+
+.batch-video-item:hover,
+.batch-video-item:focus-visible,
+.batch-video-item--selected {
+    border-color: @{primary};
+}
+
+.value-slider slidertrack {
+    border-radius: @{radius.control}dp;
+}
+
+.value-slider sliderprogress {
+    border-radius: @{radius.control}dp;
+}
+
+.value-slider sliderbar {
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
+}
+
+.status-section {
+    border-color: @{border};
+}
+
+.status-section--success {
+    border-color: @{success};
+}
+
+.status-section--stopped {
+    border-color: @{warning};
+}
+
+.status-section--error {
+    border-color: @{error};
+}
+
+.confirm-dialog {
+    border-color: @{border};
+}
+
 body,
 .row-label,
 .field-label,
@@ -11,11 +76,6 @@ body,
     color: @{text_dim};
 }
 
-.section-rule__lead,
-.section-rule__line {
-    background-color: @{alpha(border,0.65)};
-}
-
 .status-section--warning {
     border-color: @{warning};
 }
@@ -26,7 +86,7 @@ body,
 
 .timeline-segment {
     background-color: @{alpha(primary,0.15)};
-    border-color: @{alpha(primary,0.55)};
+    border-color: @{primary};
 }
 
 .timeline-segment-remove {
@@ -36,4 +96,151 @@ body,
 
 .timeline-segment-remove:hover {
     color: @{error};
+}
+
+/* Presentation uses the same semantic roles as shared controls and dialogs. */
+body,
+#preview-empty,
+.confirm-message {
+    font-size: @{num(font.base_size)}dp;
+}
+
+body {
+    background-color: transparent;
+}
+
+#preview-shell {
+    background-color: @{background};
+}
+
+#preview-empty,
+.trim-separator,
+.dimension-separator,
+.batch-video-item__status,
+.path-value,
+.naming-note {
+    color: @{text_dim};
+}
+
+.transport-btn {
+    background-color: transparent;
+}
+
+.transport-btn:hover,
+.transport-btn:focus-visible {
+    background-color: @{components.border_soft};
+}
+
+.transport-btn img {
+    image-color: @{text};
+}
+
+.hdr-badge,
+.naming-note {
+    font-size: @{num(font.small_size)}dp;
+}
+
+.hdr-badge--sdr {
+    background-color: @{surface_bright};
+    color: @{text_dim};
+}
+
+.hdr-badge--sdr #hdr-badge-label {
+    color: @{text_dim};
+}
+
+.hdr-badge--hdr {
+    background-color: @{blend(surface,warning,button.tint_normal)};
+    color: @{warning};
+}
+
+.hdr-badge--hdr #hdr-badge-label,
+.inline-warning,
+#naming-error {
+    color: @{warning};
+}
+
+#timeline {
+    background-color: @{surface_bright};
+}
+
+#timeline-trim {
+    background-color: @{alpha(primary,0.16)};
+}
+
+#timeline-progress {
+    background-color: @{primary};
+}
+
+#timeline-playhead,
+.value-slider sliderbar {
+    background-color: @{text};
+}
+
+.timeline-handle--start {
+    background-color: @{success};
+}
+
+.timeline-handle--end {
+    background-color: @{error};
+}
+
+.timeline-marker {
+    background-color: @{warning};
+}
+
+.timeline-marker-band {
+    background-color: @{blend(surface,warning,button.tint_normal)};
+}
+
+input.time-input--start {
+    background-color: @{blend(surface,success,button.tint_normal)};
+}
+
+input.time-input--end {
+    background-color: @{blend(surface,error,button.tint_normal)};
+}
+
+.section-rule__lead,
+.section-rule__line {
+    background-color: @{border};
+}
+
+.batch-video-item,
+.status-section {
+    background-color: @{surface};
+}
+
+.batch-video-item,
+.value-readout,
+.interval-label,
+.interval-unit,
+.status-text {
+    color: @{text};
+}
+
+.batch-video-item:hover,
+.batch-video-item:focus-visible {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+}
+
+.batch-video-item--selected {
+    background-color: @{blend(surface,primary,button.tint_active)};
+}
+
+.value-slider sliderbar:hover {
+    background-color: @{primary};
+}
+
+.extractor-overlay {
+    background-color: @{modal.backdrop};
+}
+
+.confirm-dialog {
+    background-color: @{modal.surface};
+    color: @{text};
+}
+
+.timeline-segment-remove {
+    font-size: @{num(font.small_size)}dp;
 }

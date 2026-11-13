@@ -107,7 +107,7 @@ body {
     padding: 0 8dp;
     gap: 6dp;
     margin: 0 3dp;
-    border-radius: 5dp;
+
     white-space: nowrap;
     flex-shrink: 1;
     min-width: 34dp;
@@ -144,7 +144,7 @@ body {
     height: 28dp;
     padding: 0 6dp;
     gap: 1dp;
-    border-radius: 5dp;
+
     flex-shrink: 0;
     cursor: pointer;
 }
@@ -173,13 +173,12 @@ body {
 .menu-gallery-progress-track {
     width: 100%;
     height: 3dp;
-    border-radius: 2dp;
+
     overflow: hidden;
 }
 
 .menu-gallery-progress-fill {
     height: 100%;
-    border-radius: 2dp;
 }
 
 .menu-gallery-progress.indeterminate .menu-gallery-progress-fill {
@@ -207,8 +206,7 @@ body {
     min-height: 24dp;
     padding: 2dp;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 6dp;
+
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
@@ -236,7 +234,7 @@ body {
     min-height: 30dp;
     padding: 6dp;
     border-width: 0;
-    border-radius: 0;
+
     box-sizing: border-box;
     flex-shrink: 0;
     cursor: pointer;
@@ -364,7 +362,7 @@ body {
     min-width: 200dp;
     max-width: 360dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     overflow: visible;
 }
 
@@ -449,7 +447,7 @@ body {
     min-width: 200dp;
     max-width: 420dp;
     border-width: 1dp;
-    border-radius: 4dp;
+
     overflow: visible;
     z-index: 3;
     pointer-events: auto;

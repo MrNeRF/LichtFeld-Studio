@@ -6,6 +6,7 @@
 #include "core/editor_context.hpp"
 #include "gui/icon_cache.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "theme/style_tokens.hpp"
 #include "theme/theme.hpp"
 #include "tools/tool_descriptor.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -92,8 +93,8 @@ namespace lfs::vis::gui {
             return normalizeAngle(-PI / 2.0f - sector_size / 2.0f);
         }
 
-        lfs::rendering::OverlayColor toOverlay(const ThemeColor& c, const float alpha_scale = 1.0f) {
-            return {c.x, c.y, c.z, c.w * alpha_scale};
+        lfs::rendering::OverlayColor toOverlay(const ThemeColor& c) {
+            return {c.x, c.y, c.z, c.w};
         }
 
         std::vector<glm::vec2> sectorFan(const glm::vec2 center,
@@ -143,11 +144,12 @@ namespace lfs::vis::gui {
                              const glm::vec2 center,
                              const std::string_view text,
                              const lfs::rendering::OverlayColor color,
+                             const lfs::rendering::OverlayColor shadow,
                              const float size_px) {
             const glm::vec2 measured = overlay.measureText(text, size_px);
             overlay.addTextWithShadow({center.x - measured.x * 0.5f,
                                        center.y - measured.y * 0.5f},
-                                      text, color, {0.0f, 0.0f, 0.0f, 0.45f}, size_px);
+                                      text, color, shadow, size_px);
         }
     } // namespace
 
@@ -341,16 +343,19 @@ namespace lfs::vis::gui {
             return;
 
         const auto& t = theme();
+        const auto style = ui_style::menuStyle(t);
         const float scale = dpiScale();
+        const float stroke_width = style.stroke_width * scale;
         const float outer_r = OUTER_RADIUS * scale;
         const float dead_r = DEAD_ZONE_RADIUS * scale;
         const int n = static_cast<int>(items_.size());
         const float sector_size = TWO_PI / static_cast<float>(n);
         const float angle_offset = sectorAngleOffset(n);
-        const auto border_col = toOverlay(t.palette.border, 0.50f);
+        const auto border_col = toOverlay(style.border);
+        const auto shadow_col = toOverlay(style.shadow);
 
-        overlay.addCircleFilled(center_, outer_r + 2.0f * scale,
-                                toOverlay(t.palette.background, 0.30f), 64);
+        overlay.addCircleFilled(center_, outer_r + ui_style::emphasis_stroke * scale,
+                                shadow_col, 64);
 
         for (int i = 0; i < n; ++i) {
             const auto& item = items_[i];
@@ -359,13 +364,13 @@ namespace lfs::vis::gui {
 
             lfs::rendering::OverlayColor fill;
             if (!item.enabled) {
-                fill = toOverlay(t.palette.surface, 0.55f);
+                fill = toOverlay(style.surface);
             } else if (i == hovered_sector_) {
-                fill = toOverlay(t.palette.primary, 0.92f);
+                fill = toOverlay(style.hovered);
             } else if (item.is_active) {
-                fill = toOverlay(t.palette.primary_dim, 0.80f);
+                fill = toOverlay(style.active);
             } else {
-                fill = toOverlay(t.palette.surface, 0.92f);
+                fill = toOverlay(style.surface);
             }
 
             const auto points = sectorFan(center_, outer_r, a0, a1, 24);
@@ -373,15 +378,15 @@ namespace lfs::vis::gui {
             overlay.addLine(center_,
                             {center_.x + std::cos(a0) * outer_r,
                              center_.y + std::sin(a0) * outer_r},
-                            border_col, 1.0f * scale);
+                            border_col, stroke_width);
 
             const float mid_angle = (a0 + a1) * 0.5f;
             const float icon_r = (INNER_RADIUS + OUTER_RADIUS) * 0.5f * scale;
             const glm::vec2 icon_center{
                 center_.x + std::cos(mid_angle) * icon_r,
                 center_.y + std::sin(mid_angle) * icon_r};
-            const auto text_col = item.enabled ? toOverlay(t.palette.text, 1.0f)
-                                               : toOverlay(t.palette.text_dim, 0.40f);
+            const auto text_col = item.enabled ? toOverlay(style.text)
+                                               : toOverlay(style.disabled_text);
 
             const std::uintptr_t icon_texture =
                 IconCache::instance().getIcon(item.icon_name);
@@ -393,19 +398,21 @@ namespace lfs::vis::gui {
                                  icon_min + glm::vec2(icon_size), text_col);
             } else if (!item.label.empty()) {
                 const char initial[2] = {item.label[0], '\0'};
-                addCenteredText(overlay, icon_center, initial, text_col, 16.0f * scale);
+                addCenteredText(overlay, icon_center, initial, text_col, shadow_col,
+                                style.fallback_icon_size * scale);
             }
 
             const float label_r = (OUTER_RADIUS + 18.0f) * scale;
             const glm::vec2 label_pos{
                 center_.x + std::cos(mid_angle) * label_r,
                 center_.y + std::sin(mid_angle) * label_r};
-            addCenteredText(overlay, label_pos, item.label, text_col, 11.0f * scale);
+            addCenteredText(overlay, label_pos, item.label, text_col, shadow_col,
+                            style.label_size * scale);
         }
 
-        overlay.addCircle(center_, outer_r, border_col, 64, 1.0f * scale);
-        overlay.addCircleFilled(center_, dead_r, toOverlay(t.palette.background, 0.55f), 32);
-        overlay.addCircle(center_, INNER_RADIUS * scale, border_col, 48, 1.0f * scale);
+        overlay.addCircle(center_, outer_r, border_col, 64, stroke_width);
+        overlay.addCircleFilled(center_, dead_r, toOverlay(style.center), 32);
+        overlay.addCircle(center_, INNER_RADIUS * scale, border_col, 48, stroke_width);
 
         if (hovered_sector_ < 0 || hovered_sector_ >= n ||
             items_[hovered_sector_].submodes.empty() || !items_[hovered_sector_].enabled) {
@@ -427,14 +434,14 @@ namespace lfs::vis::gui {
             const float a0 = start + static_cast<float>(si) * sub_size;
             const float a1 = a0 + sub_size;
             const auto fill = si == hovered_submode_
-                                  ? toOverlay(t.palette.primary, 0.85f)
-                                  : toOverlay(t.palette.surface, 0.70f);
+                                  ? toOverlay(style.hovered)
+                                  : toOverlay(style.surface);
             addRingSector(overlay, center_, sm_inner_radius, sm_radius, a0, a1, 12, fill);
             const float mid = (a0 + a1) * 0.5f;
             const glm::vec2 item_center{
                 center_.x + std::cos(mid) * text_radius,
                 center_.y + std::sin(mid) * text_radius};
-            const auto text_color = toOverlay(t.palette.text, 1.0f);
+            const auto text_color = toOverlay(style.text);
             const auto& submode = item.submodes[si];
             const std::uintptr_t icon_texture =
                 submode.icon_name.empty()
@@ -449,12 +456,12 @@ namespace lfs::vis::gui {
                                  icon_min + glm::vec2(icon_size), text_color);
             } else {
                 addCenteredText(overlay, item_center, submode.label,
-                                text_color, 10.0f * scale);
+                                text_color, shadow_col, style.submode_label_size * scale);
             }
         }
 
-        overlay.addCircle(center_, sm_radius, border_col, 64, 1.0f * scale);
-        overlay.addCircle(center_, sm_inner_radius, border_col, 64, 1.0f * scale);
+        overlay.addCircle(center_, sm_radius, border_col, 64, stroke_width);
+        overlay.addCircle(center_, sm_inner_radius, border_col, 64, stroke_width);
     }
 
 } // namespace lfs::vis::gui

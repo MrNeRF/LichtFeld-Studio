@@ -1,3 +1,73 @@
+/* Shared border roles and shape scale. */
+
+.asset-button {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-size-menu {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-quick-look-card {
+    border-radius: @{radius.surface}dp;
+}
+
+.asset-search-box {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-card {
+    border-radius: @{radius.surface}dp;
+}
+
+.asset-thumbnail-placeholder {
+    border-radius: @{radius.surface}dp;
+}
+
+.asset-list-header {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-list-row {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-loading-track {
+    border-radius: @{radius.control}dp;
+}
+
+.gallery-progress {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-list-thumb .asset-thumbnail-placeholder {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-list-column-handle {
+    border-right-color: transparent;
+}
+
+#asset-info-thumbnail {
+    border-radius: @{radius.control}dp;
+}
+
+.asset-quick-look-thumb .asset-thumbnail-placeholder {
+    border-radius: @{radius.surface}dp;
+}
+
+#asset-info-thumbnail .asset-thumbnail-placeholder {
+    border-radius: @{radius.surface}dp;
+}
+
+.asset-health-badge {
+    border-radius: @{radius.surface}dp;
+}
+
+.contents-tag {
+    border-radius: @{radius.control}dp;
+}
+
 /* Asset Manager theme-dependent styles */
 
 /* ── Window ────────────────────────────────────────────── */
@@ -102,18 +172,18 @@
 
 .asset-import-button {
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
     color: @{text};
 }
 
 .asset-import-button:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .asset-import-button:active {
     background-color: @{blend(surface,primary,button.tint_active)};
-    border-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{primary};
 }
 
 .asset-sort-button {
@@ -339,7 +409,7 @@
 .gallery-progress { background-color: @{statusbar.progress_bg}; }
 .gallery-progress-fill { background-color: @{primary}; }
 
-.gallery-remote { border-color: @{text_dim}; }
+.gallery-remote { border-color: @{border}; }
 
 .asset-list-sort { color: @{text_dim}; }
 .asset-list-sort:hover, .asset-list-sort:focus { background-color: @{surface_bright}; color: @{text}; }

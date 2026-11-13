@@ -9,6 +9,7 @@
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "theme/style_tokens.hpp"
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
@@ -462,6 +463,12 @@ namespace lfs::vis::gui::rml_theme {
         }
 
         float numericThemeValue(const Theme& t, const std::string& name) {
+            if (name == "font.base_size")
+                return t.fonts.base_size;
+            if (name == "font.small_size")
+                return t.fonts.small_size;
+            if (name == "font.large_size")
+                return t.fonts.large_size;
             if (name == "button.tint_normal")
                 return t.button.tint_normal;
             if (name == "button.tint_hover")
@@ -576,8 +583,7 @@ namespace lfs::vis::gui::rml_theme {
             const auto panel_host_body_decor = enhanced_panel_chrome
                                                    ? "decorator: none; background-color: transparent"
                                                    : panel_body_decor;
-            const int enhanced_header_rounding =
-                std::max(4, static_cast<int>(std::round(t.sizes.frame_rounding)));
+            const float enhanced_header_rounding = std::max(0.0f, t.sizes.frame_rounding);
             const auto right_panel_tab_hover_decor = enhanced_panel_chrome
                                                          ? std::format(
                                                                "decorator: vertical-gradient({} {}); background-color: transparent",
@@ -607,9 +613,11 @@ namespace lfs::vis::gui::rml_theme {
                                                 "margin: 4dp 0 2dp 0; border-width: 1dp; "
                                                 "border-radius: {}dp; border-color: {}",
                                                 enhanced_header_rounding,
-                                                colorToRmlAlpha(p.border, 0.58f))
-                                          : "margin: 0 -6dp; border-width: 0; "
-                                            "border-top-width: 4dp; border-radius: 0";
+                                                colorToRml(p.border))
+                                          : std::format(
+                                                "margin: 0 -6dp; border-width: 0; border-radius: 0; "
+                                                "padding-top: {}dp",
+                                                t.sizes.frame_padding.y + 4.0f);
             const ThemeGradient progress_gradient = t.gradients.progress.value_or(
                 ThemeGradient{p.primary, blend(p.primary, ThemeColor{1, 1, 1, 1}, 0.08f)});
             const auto progress_fill_decor = std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
@@ -827,6 +835,13 @@ namespace lfs::vis::gui::rml_theme {
             const float window_shadow_padding = layeredShadowPadding(t, 4);
 
             std::unordered_map<std::string, std::string> tokens{
+                {"stroke.normal", std::format("{}", ui_style::normal_stroke)},
+                {"stroke.emphasis", std::format("{}", ui_style::emphasis_stroke)},
+                // Two authored corner sizes per theme. Circles/pills are geometry,
+                // rather than a third decorative corner size.
+                {"radius.control", std::format("{}", std::max(0.0f, t.sizes.frame_rounding))},
+                {"radius.surface", std::format("{}", std::max(t.sizes.frame_rounding, t.sizes.window_rounding))},
+                {"radius.round", "999"},
                 {"window.surface", window_surface},
                 {"window.body_decor", window_body_decor},
                 {"panel.body_decor", panel_body_decor},
@@ -837,6 +852,9 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.header_decor", header_decor},
                 {"components.header_hover_decor", header_hover_decor},
                 {"components.header_shape", header_shape},
+                {"components.header_focus_padding_top",
+                 std::format("{}", std::max(0.0f, t.sizes.frame_padding.y +
+                                                      (t.gradients.section_header ? -1.0f : 2.0f)))},
                 {"components.header_state_border",
                  t.gradients.section_header ? colorToRmlAlpha(p.border, 0.72f)
                                             : colorToRml(t.menu_background())},

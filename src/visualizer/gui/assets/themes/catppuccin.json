@@ -64,11 +64,11 @@
       "sizes": {
         "_info": "UI element sizes in pixels",
 
-        "window_rounding": 6.0,
-        "frame_rounding": 3.0,
-        "popup_rounding": 6.0,
-        "scrollbar_rounding": 6.0,
-        "grab_rounding": 3.0,
+        "window_rounding": 8.0,
+        "frame_rounding": 4.0,
+        "popup_rounding": 8.0,
+        "scrollbar_rounding": 4.0,
+        "grab_rounding": 4.0,
         "tab_rounding": 4.0,
 
         "border_size": 0.0,
@@ -106,7 +106,7 @@
         "hover_lighten": 0.09,
         "active_alpha": 0.45,
         "popup_lighten": 0.02,
-        "popup_rounding": 6.0,
+        "popup_rounding": 8.0,
         "popup_border_size": 1.0,
         "border_alpha": 0.55,
         "bottom_border_darken": 0.06,
@@ -223,11 +223,11 @@
       "sizes": {
         "_info": "UI element sizes in pixels",
 
-        "window_rounding": 6.0,
-        "frame_rounding": 2.0,
-        "popup_rounding": 4.0,
-        "scrollbar_rounding": 6.0,
-        "grab_rounding": 2.0,
+        "window_rounding": 8.0,
+        "frame_rounding": 4.0,
+        "popup_rounding": 8.0,
+        "scrollbar_rounding": 4.0,
+        "grab_rounding": 4.0,
         "tab_rounding": 4.0,
 
         "border_size": 0.0,
@@ -265,7 +265,7 @@
         "hover_lighten": 0.04,
         "active_alpha": 0.40,
         "popup_lighten": 0.02,
-        "popup_rounding": 6.0,
+        "popup_rounding": 8.0,
         "popup_border_size": 1.0,
         "border_alpha": 0.50,
         "bottom_border_darken": 0.05,
@@ -306,7 +306,7 @@
       "context_menu": {
         "_info": "Right-click context menu styling",
 
-        "rounding": 6.0,
+        "rounding": 8.0,
         "header_alpha": 0.4,
         "header_hover_alpha": 0.6,
         "header_active_alpha": 0.8,

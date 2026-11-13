@@ -1,7 +1,54 @@
+/* Shared border roles and shape scale. */
+
+body {
+    border-radius: @{radius.control}dp;
+}
+
+.scene-tab {
+    border-top-left-radius: @{radius.control}dp;
+    border-top-right-radius: @{radius.control}dp;
+}
+
+.tree-row {
+    border-left-color: transparent;
+}
+
+.tree-drag-ghost {
+    border-radius: @{radius.control}dp;
+}
+
+.tree-drag-ghost.invalid {
+    border-color: @{error};
+}
+
+.tree-insert-line {
+    border-radius: @{radius.control}dp;
+}
+
+.tree-insert-line-dot {
+    border-radius: @{radius.round}dp;
+}
+
+.tree-row.keyboard-cursor {
+    border-left-color: @{warning};
+}
+
+.tree-checkbox {
+    border-radius: @{radius.control}dp;
+}
+
+.tree-checkbox:hover {
+    border-color: @{primary};
+}
+
+.training-mixed-mark {
+    border-radius: @{radius.control}dp;
+}
+
 /* Scene tree theme overrides. */
 
 body {
-    border-color: @{right_panel.border};
+    border-color: @{border};
 }
 
 #search-container {
@@ -42,7 +89,7 @@ body {
 
 .tree-row.selected:hover {
     background-color: @{panel.row_selected_hover};
-    border-left-color: @{primary_dim};
+    border-left-color: @{primary};
 }
 
 .tree-row.drop-target {
@@ -137,7 +184,7 @@ body {
 .scene-tab {
     color: @{text};
     background-color: @{panel.tab_active_bg};
-    border-color: @{panel.tab_active_border};
+    border-color: @{primary};
     border-bottom-color: @{primary};
 }
 
@@ -188,12 +235,12 @@ body {
 .scene-chip--accent {
     color: @{text};
     background-color: @{panel.chip_accent_bg};
-    border-color: @{panel.chip_accent_border};
+    border-color: @{primary};
 }
 
 .tree-checkbox {
     color: @{text};
-    border-color: @{alpha(text_dim,0.75)};
+    border-color: @{border};
     background-color: @{alpha(surface_bright,0.85)};
 }
 

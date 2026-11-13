@@ -17,19 +17,18 @@ body {
     display: block;
     margin-top: 8dp;
     padding: 10dp 12dp;
-    border-width: 2dp;
-    border-radius: 6dp;
+    border-width: 1dp;
 }
 
 .toast-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .toast-count {
     display: inline;
-    font-weight: normal;
+    font-weight: 400;
 }
 
 .toast-message {

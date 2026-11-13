@@ -63,7 +63,6 @@
     width: 100%;
     min-height: 48dp;
     border-width: 1dp;
-    border-radius: 3dp;
 }
 
 .im-label {
@@ -148,14 +147,14 @@
 .im-color-swatch {
     width: 24dp;
     height: 24dp;
-    border-radius: 3dp;
+
     border-width: 1dp;
 }
 
 .im-color-btn {
     min-width: 24dp;
     min-height: 24dp;
-    border-radius: 3dp;
+
     border-width: 1dp;
     padding: 0;
 }
@@ -174,7 +173,6 @@
 
 .im-image-frame {
     border-width: 1dp;
-    border-radius: 3dp;
 }
 
 .im-image-button {
@@ -247,7 +245,7 @@
     z-index: 80;
     min-width: 160dp;
     border-width: 1dp;
-    border-radius: 3dp;
+
     padding: 4dp;
 }
 
@@ -269,7 +267,7 @@
 }
 
 .im-menu-item.selected {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .im-menu-label {
@@ -287,7 +285,7 @@
     position: absolute;
     z-index: 100;
     border-width: 1dp;
-    border-radius: 3dp;
+
     padding: 4dp 8dp;
     font-size: 12dp;
     max-width: 300dp;
@@ -352,7 +350,7 @@
     flex-direction: column;
     width: 100%;
     border-width: 1dp;
-    border-radius: 3dp;
+
     padding: 4dp;
 }
 
@@ -366,7 +364,7 @@
 
 .im-child-bordered {
     border-width: 1dp;
-    border-radius: 3dp;
+
     padding: 4dp;
 }
 
@@ -392,7 +390,7 @@
     z-index: 100;
     min-width: 300dp;
     border-width: 1dp;
-    border-radius: 6dp;
+
     padding: 12dp;
 }
 
@@ -403,7 +401,7 @@
 
 .im-popup-title {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     padding-bottom: 8dp;
     border-bottom-width: 1dp;
     margin-bottom: 8dp;

@@ -1,3 +1,21 @@
+/* Shared border roles and shape scale. */
+
+#splitter-grip {
+    border-radius: @{radius.control}dp;
+}
+
+.tab-nav {
+    border-radius: @{radius.control}dp;
+}
+
+.tab {
+    border-radius: @{radius.control}dp 0 0 @{radius.control}dp;
+}
+
+.tab-close {
+    border-radius: @{radius.control}dp;
+}
+
 /* Theme-dependent right panel chrome. */
 
 #tab-bar {
@@ -42,7 +60,7 @@
 .tab {
     background-color: @{alpha(surface_bright,0.36)};
     color: @{text_dim};
-    border-color: @{right_panel.tab_border};
+    border-color: @{border};
 }
 
 .tab:hover {
@@ -52,15 +70,15 @@
 .tab:focus-visible {
     @{right_panel.tab_hover_decor};
     color: @{text};
-    border-color: @{right_panel.tab_active_border};
-    border-left-color: @{right_panel.tab_focus_border};
+    border-color: @{primary};
+    border-left-color: @{primary};
 }
 
 .tab.active {
     decorator: none;
     background-color: transparent;
     color: @{text};
-    border-color: @{right_panel.tab_active_border};
+    border-color: @{primary};
 }
 
 #left-border {

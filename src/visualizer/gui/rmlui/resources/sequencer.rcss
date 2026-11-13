@@ -43,7 +43,7 @@ body {
 
 #floating-title {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     color: #cdd6f4;
 }
 
@@ -69,7 +69,6 @@ body {
     min-height: 36dp;
     padding-bottom: 3dp;
     margin-bottom: 3dp;
-    border-bottom: 1dp rgba(160, 160, 180, 40);
 }
 .toolbar-group {
     display: flex;
@@ -100,7 +99,7 @@ body {
     justify-content: center;
     width: 26dp;
     height: 26dp;
-    border-radius: 4dp;
+
     flex-shrink: 0;
     transition: background-color 0.12s quadratic-out;
     position: relative;
@@ -119,7 +118,6 @@ body {
 }
 
 .transport-btn.toggle {
-    border-radius: 4dp;
 }
 
 .transport-btn.text {
@@ -197,12 +195,11 @@ body {
 .play-btn {
     width: 30dp;
     height: 30dp;
-    border-radius: 15dp;
 }
 
 .speed-val {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .speed-text {
@@ -228,8 +225,7 @@ body {
     padding: 0 6dp;
     box-sizing: border-box;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 4dp;
+
     cursor: pointer;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
 }
@@ -237,7 +233,7 @@ body {
 .sequence-fps-field:hover,
 .sequence-fps-field.active,
 .sequence-fps-field.is-editing {
-    border-color: #45475a;
+
     background-color: #313244;
 }
 
@@ -287,7 +283,7 @@ body {
     width: 10dp;
     height: 10dp;
     border-width: 1dp;
-    border-radius: 2dp;
+
     margin-right: 3dp;
 }
 
@@ -375,7 +371,6 @@ body {
     width: 100%;
     height: 24dp;
     margin-top: -12dp;
-    border-radius: 4dp;
 }
 
 #hint {
@@ -405,12 +400,12 @@ body {
 #track-area.two-clips #reveal-strip { top: 0; margin-top: 0; }
 #track-area.two-clips #sequence-strip { top: 24dp; margin-top: 0; }
 #ply-sequence-clip { pointer-events: auto; }
-#ply-sequence-clip.selected { border-color: rgba(240, 245, 255, 255); }
+#ply-sequence-clip.selected {  }
 
 #reveal-settings { position: absolute; left: 20dp; top: 102dp; display: flex; align-items: center; gap: 4dp; }
 #reveal-settings.hidden { display: none; }
 #reveal-settings input { width: 42dp; height: 20dp; font-size: 11dp; }
-.reveal-clip { pointer-events: auto; background-color: rgba(150, 90, 190, 180); border-color: rgba(210, 160, 255, 220); }
+.reveal-clip { pointer-events: auto; background-color: rgba(150, 90, 190, 180);  }
 
 .sequence-clip {
     display: block;
@@ -420,8 +415,7 @@ body {
     min-width: 2dp;
     box-sizing: border-box;
     border-width: 1dp;
-    border-color: rgba(105, 175, 255, 190);
-    border-radius: 4dp;
+
     background-color: rgba(70, 120, 190, 95);
 }
 
@@ -468,17 +462,13 @@ body {
     margin-top: -7dp;
     margin-left: -7dp;
     transform: rotate(45deg);
-    border-radius: 1dp;
-    pointer-events: none;
-}
 
-.keyframe.selected {
-    border-width: 1dp;
+    pointer-events: none;
 }
 
 .keyframe.loop-point {
     transform: none;
-    border-radius: 6dp;
+
     width: 10dp;
     height: 10dp;
     top: 50%;
@@ -502,7 +492,7 @@ body {
     width: 14dp;
     height: 14dp;
     background-color: #ff6688;
-    border-radius: 7dp;
+
     pointer-events: none;
     transform-origin: 50% 50%;
     transition: transform 0.12s quadratic-out, background-color 0.12s quadratic-out;
@@ -520,7 +510,7 @@ body {
     bottom: 0;
     width: 100%;
     height: 6dp;
-    border-radius: 3dp;
+
     background-color: rgba(160, 160, 180, 40);
     overflow: hidden;
 }
@@ -534,7 +524,7 @@ body {
     position: absolute;
     top: 0;
     height: 100%;
-    border-radius: 3dp;
+
     background-color: rgba(200, 210, 230, 120);
 }
 
@@ -563,15 +553,14 @@ body {
     padding: 0 4dp;
     min-height: 18dp;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 4dp;
+
     cursor: pointer;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
 }
 
 #duration-field:hover,
 #duration-field.is-editing {
-    border-color: #45475a;
+
     background-color: #313244;
 }
 
@@ -620,7 +609,7 @@ body {
     width: auto;
     height: 36dp;
     box-sizing: border-box;
-    border-top: 1dp rgba(160, 160, 180, 40);
+
     position: relative;
     overflow: hidden;
     margin-left: -16dp;
@@ -650,7 +639,7 @@ body {
     display: block;
     position: absolute;
     height: 1.5dp;
-    border-radius: 1dp;
+
     transform-origin: 0 50%;
 }
 
@@ -661,7 +650,6 @@ body {
     height: 6dp;
     margin-left: -3dp;
     margin-top: -3dp;
-    border-radius: 3dp;
 }
 
 .easing-indicator {
@@ -675,9 +663,8 @@ body {
     height: 0;
     margin-left: -4dp;
     border-left-width: 4dp;
-    border-left-color: rgba(0, 0, 0, 0);
+
     border-right-width: 4dp;
-    border-right-color: rgba(0, 0, 0, 0);
 }
 
 .easing-indicator.ease-in {
@@ -692,7 +679,7 @@ body {
     width: 8dp;
     height: 8dp;
     margin-left: -4dp;
-    border-radius: 2dp;
+
     transform: rotate(45deg);
 }
 
@@ -715,7 +702,7 @@ body {
     right: 12px;
     top: 4px;
     bottom: 4px;
-    border-radius: 4px;
+
     overflow: hidden;
 }
 
@@ -753,7 +740,7 @@ body {
     position: absolute;
     top: 0;
     bottom: 0;
-    border-radius: 3px;
+
     overflow: hidden;
 }
 
@@ -802,9 +789,8 @@ body {
     top: 0;
     width: 100%;
     height: 100%;
-    border-radius: 3px;
+
     border-width: 0;
-    border-color: transparent;
 }
 
 .film-thumb-midline {
@@ -834,11 +820,11 @@ body {
 .film-thumb.hovered .film-thumb-outline,
 .film-thumb.contains-hovered-keyframe .film-thumb-outline,
 .film-thumb.contains-selected .film-thumb-outline {
-    border-width: 1px;
+    border-width: 1dp;
 }
 
 .film-thumb.contains-selected .film-thumb-outline {
-    border-width: 2px;
+    border-width: 2dp;
 }
 
 .film-strip-divider {
@@ -881,7 +867,6 @@ body {
     left: -2px;
     width: 4px;
     height: 4px;
-    border-radius: 1.5px;
 }
 
 .film-strip-marker-cap.top {
@@ -897,7 +882,6 @@ body {
     position: absolute;
     width: 4px;
     height: 3px;
-    border-radius: 1px;
 }
 
 .film-strip-sprocket.top {
@@ -928,7 +912,7 @@ body {
     max-width: 220dp;
     padding: 7dp 10dp;
     border-width: 1dp;
-    border-radius: 8dp;
+
     pointer-events: none;
     box-sizing: border-box;
 }

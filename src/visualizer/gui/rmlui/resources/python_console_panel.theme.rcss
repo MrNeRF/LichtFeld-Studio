@@ -1,3 +1,77 @@
+/* Shared border roles and shape scale. */
+
+#python-console-toolbar {
+    border-bottom-color: @{primary};
+}
+
+#content #python-console-toolbar {
+    border-bottom-color: @{primary};
+}
+
+button {
+    border-radius: @{radius.control}dp;
+}
+
+#python-console-toolbar button {
+    border-radius: @{radius.control}dp;
+}
+
+#python-console-toolbar button:active,
+#python-console-toolbar button.active {
+    border-color: @{primary};
+}
+
+button:active,
+button.active {
+    border-color: @{primary};
+}
+
+.run-button {
+    border-color: @{success};
+}
+
+.stop-button {
+    border-color: @{error};
+}
+
+.stop-button.disabled {
+    border-color: @{error};
+}
+
+#python-console-toolbar .run-button {
+    border-color: @{success};
+}
+
+#python-console-toolbar .stop-button {
+    border-color: @{error};
+}
+
+#python-console-toolbar .stop-button.disabled {
+    border-color: @{error};
+}
+
+.popup-menu {
+    border-radius: @{radius.surface}dp;
+}
+
+#python-splitter {
+    border-top-color: @{border};
+    border-bottom-color: @{border};
+}
+
+#tabbar {
+    border-bottom-color: @{border};
+}
+
+#tabbar button {
+    border-radius: @{radius.control}dp;
+}
+
+.pkg-header,
+.pkg-row {
+    border-bottom-color: @{border};
+}
+
 body {
     background-color: @{background};
     color: @{text};
@@ -50,7 +124,7 @@ button.disabled {
 
 #python-console-toolbar button:hover {
     background-color: @{blend(surface_bright,primary,button.tint_hover)};
-    border-color: @{blend(border,primary,0.35)};
+    border-color: @{primary};
 }
 
 #python-console-toolbar button.disabled {

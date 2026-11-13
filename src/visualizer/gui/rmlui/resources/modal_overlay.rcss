@@ -22,8 +22,7 @@ body {
     display: none;
     position: absolute;
     padding: 16dp 20dp;
-    border-width: 2dp;
-    border-radius: 6dp;
+    border-width: 1dp;
 }
 
 #modal-form {
@@ -33,7 +32,7 @@ body {
 .modal-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     text-align: center;
     margin-bottom: 4dp;
 }

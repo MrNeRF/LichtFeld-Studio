@@ -1,3 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.rendering-simplify-stat {
+    border-radius: @{radius.surface}dp;
+}
+
 /* Rendering panel theme overrides. */
 
 .rendering-simplify-stat__value {
@@ -10,7 +16,7 @@
 
 .rendering-simplify-stat {
     background-color: @{alpha(background,0.74)};
-    border-color: @{alpha(text_dim,0.14)};
+    border-color: @{border};
 }
 
 .rendering-simplify-error {
@@ -19,7 +25,7 @@
 
 .selection-groups__title {
     color: @{text_dim};
-    border-top-color: @{panel.primary_border_faint};
+    border-top-color: @{primary};
 }
 
 .group-row:hover {

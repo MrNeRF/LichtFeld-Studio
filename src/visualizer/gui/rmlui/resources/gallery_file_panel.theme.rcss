@@ -1,0 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.gallery-choice-row {
+    border-bottom-color: @{border};
+}
+
+.gallery-segmented .btn {
+    border-radius: 0;
+}

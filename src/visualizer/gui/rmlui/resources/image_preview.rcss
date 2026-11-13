@@ -104,9 +104,7 @@
     padding: 0;
     margin: 2dp 0;
     cursor: pointer;
-    border-width: 1.5dp;
-    border-color: transparent;
-    border-radius: 3dp;
+    border-width: 1dp;
     opacity: 0.85;
     position: relative;
     overflow: hidden;
@@ -192,7 +190,6 @@
     padding: 10dp;
     flex-shrink: 0;
     border-bottom-width: 1dp;
-    border-bottom-color: #454545;
 }
 #sam-controls.hidden { display: none; }
 #sam-pages.hidden { display: none; }
@@ -268,11 +265,10 @@
     width: 18dp; height: 18dp;
     margin-left: -9dp; margin-top: -9dp;
     border-width: 1dp;
-    border-radius: 9dp;
     text-align: center;
     line-height: 16dp;
 }
-.sam-point-selected { border-width: 3dp; line-height: 12dp; }
+.sam-point-selected { border-width: 2dp; line-height: 14dp; }
 .sam-box { position: absolute; border-width: 2dp; }
 .sam-box-handle {
     position: absolute;
@@ -317,7 +313,7 @@
     margin-top: -16dp;
     width: 32dp;
     height: 32dp;
-    border-radius: 16dp;
+
     border-width: 1dp;
     font-size: 14dp;
     text-align: center;
@@ -436,8 +432,6 @@
     height: 28dp;
     padding: 0;
     border-width: 1dp;
-    border-color: transparent;
-    border-radius: 3dp;
     cursor: pointer;
     background-color: transparent;
 }
@@ -516,7 +510,7 @@
     height: 28dp;
     padding: 0;
     border-width: 1dp;
-    border-radius: 3dp;
+
     cursor: pointer;
     font-size: 12dp;
     text-align: center;
@@ -564,7 +558,7 @@
 .hk-key {
     font-size: 12dp;
     padding: 1dp 3dp;
-    border-radius: 2dp;
+
     letter-spacing: 0.3dp;
 }
 

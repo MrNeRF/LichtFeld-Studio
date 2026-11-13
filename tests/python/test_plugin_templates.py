@@ -6,6 +6,7 @@ from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from types import ModuleType
+import re
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +60,18 @@ def test_create_plugin_generates_unified_panel_template(tmp_path):
         assert '<link type="text/rcss" href="main_panel.rcss"/>' in panel_rml.read_text()
         assert '<div id="im-root"></div>' in panel_rml.read_text()
         assert ".panel-shell" in panel_rcss.read_text()
+        markup = panel_rml.read_text()
+        assert 'class="plugin-panel example_plugin-panel text-body"' in markup
+        assert 'class="panel-kicker text-accent"' in markup
+        assert 'class="panel-title"' in markup
+        assert 'class="panel-note text-muted"' in markup
+        # New plugins inherit appearance from the shared component stylesheet.
+        # Their local sheet owns layout, so theme changes cannot be shadowed by
+        # scaffold-specific color or typography declarations.
+        assert not re.search(
+            r"\b(?:color|[\w-]+-color|font[\w-]*|border[\w-]*|box-shadow)\s*:",
+            panel_rcss.read_text(),
+        )
     finally:
         if original_lf is None:
             sys.modules.pop("lichtfeld", None)

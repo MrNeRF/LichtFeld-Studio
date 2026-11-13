@@ -1,13 +1,88 @@
+/* Shared border roles and shape scale. */
+
+#close-btn {
+    border-radius: @{radius.control}dp;
+}
+
+input[type="radio"] {
+    border-radius: @{radius.round}dp;
+}
+
+input[type="range"] slidertrack {
+    border-radius: @{radius.control}dp;
+}
+
+input[type="range"] sliderprogress {
+    border-radius: @{radius.control}dp;
+}
+
+input[type="range"] sliderbar {
+    border-radius: @{radius.control}dp;
+}
+
+select:focus-visible,
+button:focus-visible,
+.btn:focus-visible,
+.context-menu-item:focus-visible,
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
+    border-color: @{primary};
+}
+
+.scrub-field {
+    border-radius: @{radius.control}dp;
+}
+
+.scrub-field-fill {
+    border-radius: @{radius.control}dp;
+}
+
+.section-header {
+    border-radius: 0;
+}
+
+.section-content {
+    border-color: @{border};
+}
+
+.section-gap {
+    border-color: @{border};
+}
+
+.color-comp {
+    border-color: @{border};
+}
+
+.color-channel {
+    border-color: @{border};
+}
+
+.color-hex {
+    border-color: @{border};
+}
+
+.frame-tooltip {
+    border-radius: @{radius.control}dp;
+}
+
 /* Theme-dependent shared component styles.
  * Selectors live in RCSS; C++ only expands theme tokens from the active theme
  * presets and wraps this file in RmlUi theme media blocks. */
 
 #window-frame {
     @{window.body_decor};
-    border-color: @{alpha(border,0.4)};
-    border-radius: @{num(size.window_rounding)}dp;
+    border-width: @{stroke.normal}dp;
+    border-color: @{border};
+    border-radius: @{radius.surface}dp;
     position: relative;
     z-index: 1;
+}
+
+.text-body {
+    color: @{text};
+    font-size: @{num(font.base_size)}dp;
+    font-weight: 400;
 }
 
 #window-shadow-ambient,
@@ -45,13 +120,13 @@ body.floating-panel {
     width: auto;
     height: auto;
     box-shadow: none;
-    border-radius: @{num(size.window_rounding)}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 #title-bar {
     @{window.title_decor};
-    border-top-left-radius: @{window.rounding}dp;
-    border-top-right-radius: @{window.rounding}dp;
+    border-top-left-radius: @{radius.surface}dp;
+    border-top-right-radius: @{radius.surface}dp;
     border-bottom-color: @{border};
 }
 
@@ -243,7 +318,7 @@ progress fill {
 .section-header {
     @{components.header_decor};
     color: @{text};
-    border-color: @{menu.background};
+    border-color: transparent;
     padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
     @{components.header_shape};
 }
@@ -252,13 +327,20 @@ progress fill {
 .section-header.is-expanded,
 .section-gap,
 .section-content {
-    border-color: @{menu.background};
+    border-color: transparent;
 }
 
 .section-header:hover,
 .section-header.is-expanded {
     @{components.header_hover_decor};
-    border-color: @{components.header_state_border};
+    /* Flat headers use their border box for spacing, not an outline. */
+    border-color: transparent;
+}
+
+.section-header:focus-visible {
+    border-top-width: 2dp;
+    padding-top: @{components.header_focus_padding_top}dp;
+    border-color: @{primary};
 }
 
 .section-header.text-accent,
@@ -319,7 +401,7 @@ progress fill {
     color: @{text};
     background-color: @{surface_bright};
     border-color: @{border};
-    border-radius: @{num(size.frame_rounding)}dp;
+    border-radius: @{radius.control}dp;
 }
 
 .btn:hover {
@@ -342,66 +424,66 @@ progress fill {
 
 .btn--primary {
     background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{primary};
     color: @{text};
 }
 
 .btn--primary:hover {
     background-color: @{blend(surface,primary,button.tint_hover)};
-    border-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{primary};
 }
 
 .btn--primary:active {
     background-color: @{blend(surface,primary,button.tint_active)};
-    border-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{primary};
 }
 
 .btn--success {
     background-color: @{blend(surface,success,button.tint_normal)};
-    border-color: @{blend(surface,success,button.tint_normal)};
+    border-color: @{success};
     color: @{text};
 }
 
 .btn--success:hover {
     background-color: @{blend(surface,success,button.tint_hover)};
-    border-color: @{blend(surface,success,button.tint_hover)};
+    border-color: @{success};
 }
 
 .btn--success:active {
     background-color: @{blend(surface,success,button.tint_active)};
-    border-color: @{blend(surface,success,button.tint_active)};
+    border-color: @{success};
 }
 
 .btn--warning {
     background-color: @{blend(surface,warning,button.tint_normal)};
-    border-color: @{blend(surface,warning,button.tint_normal)};
+    border-color: @{warning};
     color: @{text};
 }
 
 .btn--warning:hover {
     background-color: @{blend(surface,warning,button.tint_hover)};
-    border-color: @{blend(surface,warning,button.tint_hover)};
+    border-color: @{warning};
 }
 
 .btn--warning:active {
     background-color: @{blend(surface,warning,button.tint_active)};
-    border-color: @{blend(surface,warning,button.tint_active)};
+    border-color: @{warning};
 }
 
 .btn--error {
     background-color: @{blend(surface,error,button.tint_normal)};
-    border-color: @{blend(surface,error,button.tint_normal)};
+    border-color: @{error};
     color: @{text};
 }
 
 .btn--error:hover {
     background-color: @{blend(surface,error,button.tint_hover)};
-    border-color: @{blend(surface,error,button.tint_hover)};
+    border-color: @{error};
 }
 
 .btn--error:active {
     background-color: @{blend(surface,error,button.tint_active)};
-    border-color: @{blend(surface,error,button.tint_active)};
+    border-color: @{error};
 }
 
 .border-error {
@@ -521,13 +603,13 @@ scrollbarvertical {
 
 scrollbarvertical slidertrack {
     background-color: @{components.scroll_track};
-    border-radius: @{components.scrollbar_rounding}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 scrollbarvertical sliderbar {
     background-color: @{components.scroll_thumb};
     min-height: @{num(size.grab_min_size)}dp;
-    border-radius: @{components.scrollbar_rounding}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 scrollbarvertical sliderbar:hover {
@@ -540,13 +622,13 @@ scrollbarhorizontal {
 
 scrollbarhorizontal slidertrack {
     background-color: @{components.scroll_track};
-    border-radius: @{components.scrollbar_rounding}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 scrollbarhorizontal sliderbar {
     background-color: @{components.scroll_thumb};
     min-width: @{num(size.grab_min_size)}dp;
-    border-radius: @{components.scrollbar_rounding}dp;
+    border-radius: @{radius.surface}dp;
 }
 
 scrollbarhorizontal sliderbar:hover {
@@ -556,7 +638,7 @@ scrollbarhorizontal sliderbar:hover {
 .frame-tooltip {
     color: @{text};
     background-color: @{alpha(surface,0.94)};
-    border-color: @{alpha(border,0.50)};
+    border-color: @{border};
 }
 
 .window-minimize-line,
@@ -575,4 +657,8 @@ button.window-control .window-minimize-line {
 button.window-control .window-maximize-box,
 button.window-control .window-restore-box {
     border-color: @{text_dim};
+}
+
+button.window-control {
+    border-radius: @{radius.control}dp;
 }

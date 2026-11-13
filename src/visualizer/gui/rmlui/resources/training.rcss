@@ -42,7 +42,7 @@ body {
     align-items: center;
     padding: 10dp 8dp;
     margin-bottom: 6dp;
-    border-radius: 4dp;
+
     background-color: #89b4fa14;
 }
 
@@ -61,7 +61,7 @@ body {
     height: 8dp;
     flex-shrink: 0;
     margin-right: 8dp;
-    border-radius: 4dp;
+
     background-color: #89b4fa;
 }
 
@@ -145,7 +145,7 @@ body {
     padding: 6dp 0 0;
     border-top-width: 1dp;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .training-panel-title--secondary {

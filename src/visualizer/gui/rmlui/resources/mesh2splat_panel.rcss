@@ -18,7 +18,7 @@
 .m2s-section-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 4dp;
 }
 .m2s-help {
@@ -72,7 +72,7 @@
     padding: 2dp 8dp;
     text-align: center;
     font-size: 12dp;
-    border-radius: 999dp;
+
     background-color: transparent;
     border-width: 1dp;
     cursor: pointer;
@@ -80,7 +80,7 @@
 
 .m2s-summary-value {
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .m2s-progress-wrap {
