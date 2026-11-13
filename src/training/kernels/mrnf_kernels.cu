@@ -121,6 +121,40 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.apply_edge_guidance");
     }
 
+    __global__ void fold_need_kernel(float* __restrict__ error,
+                                     const float* __restrict__ footprint,
+                                     const NeedScales scales,
+                                     const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+        const float e = error[i];
+        if (!(e > 0.0f)) {
+            error[i] = 0.0f;
+            return;
+        }
+        const float need_error = fminf(e / scales.error_scale, scales.error_max);
+        float sparsity = 1.0f;
+        if (footprint != nullptr && scales.footprint_scale > 0.0f) {
+            float f = footprint[i];
+            f = f > 0.0f ? (scales.footprint_is_area ? sqrtf(f) : f) : 0.0f;
+            sparsity = fminf(fmaxf(f / scales.footprint_scale, scales.sparsity_min), scales.sparsity_max);
+        }
+        error[i] = need_error * sparsity;
+    }
+
+    void launch_fold_need(float* error_inout, const float* footprint, const NeedScales scales,
+                          const size_t N, void* stream) {
+        if (N == 0)
+            return;
+        LFS_ASSERT_MSG(scales.error_scale > 0.0f, "need error scale must be positive");
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        fold_need_kernel<<<blocks, threads, 0, s>>>(error_inout, footprint, scales, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_need");
+    }
+
     // Ascending float order as unsigned radix keys, matching sort_less_op:
     // NaN after everything and -0 equal to +0.
     __device__ __forceinline__ uint32_t ascending_float_key(const float value) {

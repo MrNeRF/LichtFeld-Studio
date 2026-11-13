@@ -2757,3 +2757,268 @@ TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRow
         EXPECT_NEAR(std::sqrt(squared_length), expected_lengths[row], tolerance);
     }
 }
+
+namespace {
+    param::OptimizationParameters need_growth_test_params(const int max_cap) {
+        auto opt = vanilla_mrnf_params();
+        opt.iterations = 10'000;
+        opt.sh_degree_interval = 10'000;
+        opt.max_cap = max_cap;
+        opt.growth_grad_threshold = 0.5f;
+        opt.grow_fraction = 0.0f;
+        opt.grow_until_iter = 10'000;
+        opt.need_guided_growth = true;
+        return opt;
+    }
+
+    // Window error and footprint per row, all rows seen.
+    void set_need_window(SplatData& splat, Tensor& refine_weight_max, Tensor visibility,
+                         const std::vector<float>& error, const std::vector<float>& footprint) {
+        const size_t n = splat.size();
+        refine_weight_max = Tensor::from_vector(error, TensorShape({n}), Device::CUDA);
+        splat._max_screen_share.copy_(Tensor::from_vector(footprint, TensorShape({n}), Device::CUDA));
+        visibility.fill_(1.0f);
+    }
+
+    Tensor row_range(const size_t from, const size_t to) {
+        std::vector<int> rows;
+        for (size_t i = from; i < to; ++i)
+            rows.push_back(static_cast<int>(i));
+        return Tensor::from_vector(rows, TensorShape({rows.size()}), Device::CUDA).to(DataType::Int64);
+    }
+
+    size_t rows_below(const Tensor& indices, const int64_t limit) {
+        size_t count = 0;
+        for (const int64_t row : selected_rows(indices))
+            count += row < limit ? 1 : 0;
+        return count;
+    }
+
+    double mass_share_below(const Tensor& weights, const size_t limit) {
+        const auto host = weights.cpu().to_vector();
+        double below = 0.0, total = 0.0;
+        for (size_t i = 0; i < host.size(); ++i) {
+            total += host[i];
+            below += i < limit ? host[i] : 0.0f;
+        }
+        return total > 0.0 ? below / total : 0.0;
+    }
+} // namespace
+
+// Option off: the error is not turned into NEED and the refill draws by opacity x visibility only.
+TEST(MRNFStrategyTest, NeedGrowthOffLeavesErrorAndRefillWeightsUnchanged) {
+    constexpr size_t n = 40;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(static_cast<int>(n));
+    params.need_guided_growth = false;
+    strategy.initialize(params);
+
+    std::vector<float> error(n), footprint(n);
+    for (size_t i = 0; i < n; ++i) {
+        error[i] = i < 36 ? 0.01f * static_cast<float>(i + 1) : 0.0f;
+        footprint[i] = 0.001f * static_cast<float>(i % 7 + 1);
+    }
+    set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+    strategy.soft_delete_rows(row_range(36, splat_data.size()));
+    const auto active = strategy._free_mask.slice(0, 0, n).logical_not().contiguous();
+
+    strategy._densify_n_scratch.ensure_n(n, Device::CUDA);
+    const auto weights = strategy.build_replace_parent_weights(n, active, {}, {}).clone();
+    auto plain = Tensor::empty({n}, Device::CUDA);
+    auto raw = splat_data.opacity_raw().squeeze(-1).contiguous();
+    mrnf_strategy::launch_replace_parent_weights(raw.ptr<float>(), strategy.visibility_accumulator().ptr<float>(),
+                                                 active.ptr<bool>(), nullptr, {}, plain.ptr<float>(), n);
+    EXPECT_EQ(weights.cpu().to_vector(), plain.cpu().to_vector());
+
+    const auto result = strategy.grow_and_split(100, 4, Tensor::zeros_bool({n}, Device::CUDA));
+    EXPECT_EQ(result.replacement_count, 4);
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), error);
+}
+
+// Two groups of equal opacity and footprint: the high-error group gets (almost) all refills.
+TEST(MRNFStrategyTest, NeedGrowthRefillsFromHighErrorGroup) {
+    constexpr size_t n = 220;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(static_cast<int>(n));
+    params.grow_until_iter = 0;
+    strategy.initialize(params);
+
+    std::vector<float> error(n, 0.0f), footprint(n, 0.01f);
+    for (size_t i = 0; i < 200; ++i)
+        error[i] = i < 100 ? 1.0f : 0.01f;
+    set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+    strategy.soft_delete_rows(row_range(200, splat_data.size()));
+
+    const auto result = strategy.grow_and_split(100, 20, Tensor::zeros_bool({n}, Device::CUDA));
+    ASSERT_EQ(result.replacement_count, 20);
+    EXPECT_EQ(result.growth_count, 0);
+    EXPECT_GE(rows_below(result.split_indices, 100), 16u);
+
+    const auto active = strategy._free_mask.slice(0, 0, n).logical_not().contiguous();
+    const auto weights = strategy.build_replace_parent_weights(n, active, {}, {}, strategy._refine_weight_max);
+    EXPECT_GT(mass_share_below(weights, 100), 0.98);
+}
+
+// Equal error and opacity: the group of large splats (few splats cover the region) gets almost
+// all growth and refills.
+TEST(MRNFStrategyTest, NeedGrowthPrefersLargeSplatsAtEqualError) {
+    constexpr size_t live = 120;
+    constexpr size_t large = 49;
+    constexpr size_t n = live + 20;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(1000);
+    strategy.initialize(params);
+
+    std::vector<float> error(n, 0.0f), footprint(n, 0.0f);
+    for (size_t i = 0; i < live; ++i) {
+        error[i] = 1.0f;
+        footprint[i] = i < large ? 0.1f : 0.001f;
+    }
+    set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+    strategy.soft_delete_rows(row_range(live, splat_data.size()));
+
+    const auto candidates = strategy._free_mask.slice(0, 0, n).logical_not().contiguous();
+    const auto result = strategy.grow_and_split(100, 20, candidates, 10);
+    ASSERT_EQ(result.replacement_count, 20);
+    ASSERT_EQ(result.growth_count, 10);
+    EXPECT_GE(rows_below(result.split_indices, large), 18u);
+
+    // NEED: large splats boosted to the clamp (16x the median footprint), small ones at 1.
+    const auto need = strategy._refine_weight_max.cpu().to_vector();
+    EXPECT_FLOAT_EQ(need[0], 16.0f);
+    EXPECT_FLOAT_EQ(need[large], 1.0f);
+    EXPECT_GT(mass_share_below(strategy._refine_weight_max.slice(0, 0, live).contiguous(), large), 0.9);
+}
+
+// Donors rank by the blend weight summed over about one pass: windows add, older ones fade.
+TEST(MRNFStrategyTest, NeedGrowthDonorsAreLowestSummedContribution) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(32);
+    params.refine_every = 1;
+    strategy.initialize(params);
+    strategy.set_training_dataset(make_hull_dataset()); // two views: older windows keep half
+    const size_t n = splat_data.size();
+    EXPECT_FALSE(strategy.impact_scratch(100).first.is_valid());
+
+    const std::vector<float> first{1.0f, 4.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f};
+    const std::vector<float> second{1.0f, 0.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 0.5f};
+    strategy.visibility_accumulator().copy_(Tensor::from_vector(first, TensorShape({n}), Device::CUDA));
+    strategy.update_exchange_importance();
+    strategy.visibility_accumulator().copy_(Tensor::from_vector(second, TensorShape({n}), Device::CUDA));
+    strategy.update_exchange_importance();
+
+    const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
+    for (size_t i = 0; i < n; ++i)
+        EXPECT_FLOAT_EQ(sum[i], 0.5f * first[i] + second[i]) << i;
+    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
+
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    // Sums: 1.5, 2.0, 0.3, ..., 5.0 -> row 2 then row 0; row 1 was seen once but brightly.
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{0, 2}));
+}
+
+TEST(MRNFStrategyTest, NeedGrowthProtectsNewbornsUntilAFullPass) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(need_growth_test_params(32));
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto filled = Tensor::from_vector(std::vector<int>{1, 2}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::CUDA);
+    strategy._exchange_free_before_growth.index_put_(filled, Tensor::ones_bool({2}, Device::CUDA));
+    strategy.record_exchange_births();
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{3, 4}));
+
+    strategy._exchange_windows += strategy.exchange_warmup_windows() + 1;
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{1, 2}));
+}
+
+// 5 % at the start, a cosine to 0 at grow_until_iter, nothing freed after it.
+TEST(MRNFStrategyTest, NeedGrowthDonorShareTapersToZero) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(32);
+    params.grow_until_iter = 1000;
+    strategy.initialize(params);
+
+    EXPECT_EQ(strategy.exchange_quota(0, 1000), 50u);
+    EXPECT_EQ(strategy.exchange_quota(250, 1000), 42u);
+    EXPECT_EQ(strategy.exchange_quota(500, 1000), 25u);
+    EXPECT_EQ(strategy.exchange_quota(999, 1000), 0u);
+    EXPECT_EQ(strategy.exchange_quota(1000, 1000), 0u);
+    EXPECT_EQ(strategy.exchange_quota(5000, 1000), 0u);
+    EXPECT_TRUE(strategy.growth_exchange_active(999));
+    EXPECT_FALSE(strategy.growth_exchange_active(1000));
+}
+
+// At the cap, every donor slot goes to growth drawn by NEED, even without error-driven demand,
+// and the donors are the least contributing splats, never the parents.
+TEST(MRNFStrategyTest, NeedGrowthFreedSlotsGoToTheNeedDraw) {
+    constexpr size_t n = 40;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF strategy(splat_data);
+    strategy.initialize(need_growth_test_params(static_cast<int>(n)));
+
+    std::vector<float> error(n), footprint(n, 0.01f), contribution(n, 10.0f);
+    for (size_t i = 0; i < n; ++i)
+        error[i] = i < 20 ? 1.0f : 0.01f;
+    for (size_t i = 20; i < 24; ++i)
+        contribution[i] = 0.1f;
+    set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+    strategy._exchange_importance_sum = Tensor::from_vector(contribution, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto result = strategy.grow_and_split(100, 0, strategy.compute_refine_candidates(), 4);
+    EXPECT_EQ(result.replacement_count, 0);
+    ASSERT_EQ(result.growth_count, 4);
+    ASSERT_EQ(result.exchange_victims, 4u);
+    EXPECT_EQ(selected_rows(result.exchange_victim_indices), (std::vector<int64_t>{20, 21, 22, 23}));
+    EXPECT_EQ(rows_below(result.split_indices, 20), 4u);
+    EXPECT_EQ(strategy.active_count(), n);
+    EXPECT_EQ(splat_data.size(), n);
+}
+
+// A resume keeps the donor schedule (derived from the iteration) and rebuilds the contribution
+// memory, which warms up for a full pass before donors are taken again.
+TEST(MRNFStrategyTest, NeedGrowthResumeRebuildsDonorMemory) {
+    constexpr size_t n = 40;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF strategy(splat_data);
+    const auto params = need_growth_test_params(static_cast<int>(n));
+    strategy.initialize(params);
+    strategy._exchange_importance_sum = Tensor::ones({n}, Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 4;
+    const auto quota = strategy.exchange_quota(3000, n * 100);
+
+    std::stringstream ss;
+    strategy.serialize(ss);
+    auto splat_copy = create_mrnf_test_splat_data(static_cast<int>(n));
+    MRNF restored(splat_copy);
+    restored.initialize(params);
+    restored.deserialize(ss);
+
+    EXPECT_EQ(restored.exchange_quota(3000, n * 100), quota);
+    EXPECT_EQ(restored._exchange_windows, 0);
+    EXPECT_FALSE(restored._exchange_importance_sum.is_valid());
+
+    std::vector<float> error(n, 1.0f), footprint(n, 0.01f);
+    set_need_window(splat_copy, restored._refine_weight_max, restored.visibility_accumulator(), error, footprint);
+    restored.soft_delete_rows(row_range(n - 4, splat_copy.size()));
+    for (int window = 0; window <= restored.exchange_warmup_windows(); ++window)
+        restored.update_exchange_importance();
+    EXPECT_GT(restored._exchange_windows, restored.exchange_warmup_windows());
+    const auto result = restored.grow_and_split(3000, 4, Tensor::zeros_bool({n}, Device::CUDA));
+    EXPECT_EQ(result.replacement_count, 4);
+    EXPECT_EQ(restored.active_count(), n);
+    restored.record_exchange_births(result.split_indices);
+    EXPECT_EQ(restored._exchange_birth.numel(), n);
+}

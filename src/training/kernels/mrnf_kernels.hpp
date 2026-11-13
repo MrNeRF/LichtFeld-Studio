@@ -36,6 +36,27 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // Need-guided growth: turns the refine window's error into NEED in place,
+    //   need = clamp(error / error_scale, 0, error_max) *
+    //          clamp(footprint / footprint_scale, sparsity_min, sparsity_max).
+    // footprint is a splat's largest on-screen share over the window; an area share is
+    // square-rooted first so it measures a length. A null footprint or footprint_scale <= 0
+    // leaves the sparsity factor at 1. Non-positive and NaN errors give 0.
+    struct NeedScales {
+        float error_scale = 1.0f;
+        float error_max = 20.0f;
+        float footprint_scale = 0.0f;
+        float sparsity_min = 0.25f;
+        float sparsity_max = 16.0f;
+        bool footprint_is_area = false;
+    };
+    void launch_fold_need(
+        float* error_inout,
+        const float* footprint,
+        NeedScales scales,
+        size_t N,
+        void* stream = nullptr);
+
     // weights *= edge guidance factor.
     void launch_apply_edge_guidance(float* weights, EdgeGuidance edge_guidance, size_t N,
                                     void* stream = nullptr);

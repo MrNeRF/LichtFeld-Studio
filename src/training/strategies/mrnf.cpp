@@ -30,9 +30,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <format>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -53,6 +55,9 @@ namespace lfs::training {
         // cosine to an eighth of that by grow_until_iter.
         constexpr double MRNF_EXCHANGE_START_SHARE = 0.04;
         constexpr double MRNF_EXCHANGE_END_SHARE = MRNF_EXCHANGE_START_SHARE / 8.0;
+        // Need-guided growth frees this share of the active splats per refine at the cap; it
+        // tapers on a cosine over [0, grow_until_iter] to 0, so the last children can settle.
+        constexpr double MRNF_NEED_DONOR_SHARE = 0.05;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -738,7 +743,8 @@ namespace lfs::training {
             publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
             if (_optimizer) {
                 _optimizer->set_collect_projected_screen_share(
-                    _params->gut && screen_share_cap_active(_params->max_screen_share));
+                    _params->gut && (screen_share_cap_active(_params->max_screen_share) ||
+                                     _params->need_guided_growth));
             }
         }
     }
@@ -1037,6 +1043,7 @@ namespace lfs::training {
             record_exchange_births(growth.split_indices);
         }
 
+        log_refine_census(iter, pruned_count, growth, exchanging && exchange_ready ? quota : 0);
         enforce_max_cap();
         if (exchanging) {
             reset_exchange_window_outputs();
@@ -1109,9 +1116,96 @@ namespace lfs::training {
 
     bool MRNF::growth_exchange_active(const int iter) const {
         // Without a finite cap growth always has budget, so there is nothing to exchange.
-        return _params && _params->growth_exchange && _params->max_cap > 0 && !_topology_frozen &&
-               iter < static_cast<int>(_params->grow_until_iter) &&
+        return _params && (_params->growth_exchange || _params->need_guided_growth) && _params->max_cap > 0 &&
+               !_topology_frozen && iter < static_cast<int>(_params->grow_until_iter) &&
                iter < static_cast<int>(_params->stop_refine);
+    }
+
+    bool MRNF::need_guided_growth_on() const {
+        return _params && _params->need_guided_growth && !_topology_frozen;
+    }
+
+    void MRNF::fold_need_into_refine_weights() {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0 || !_refine_weight_max.is_valid() || _refine_weight_max.numel() != n) {
+            return;
+        }
+        // Error first: the window error over its mean among the splats that had any.
+        const Tensor has_error = _refine_weight_max > 0.0f;
+        const size_t with_error = has_error.count_nonzero();
+        if (with_error == 0) {
+            return;
+        }
+        mrnf_strategy::NeedScales scales;
+        scales.error_scale = std::max(
+            _refine_weight_max.masked_fill(has_error.logical_not(), 0.0f).sum_scalar() /
+                static_cast<float>(with_error),
+            std::numeric_limits<float>::min());
+        // Sparsity as a boost: the largest footprint in the window over its median among the
+        // splats seen. GUT collects an area share, FastGS an angular extent.
+        const Tensor& footprint = _splat_data->_max_screen_share;
+        const bool has_footprint = footprint.is_valid() && footprint.numel() == n;
+        if (has_footprint) {
+            scales.footprint_is_area = _params->gut;
+            const float median = kernels::launch_select_positive_median(footprint.ptr<float>(), n, nullptr);
+            scales.footprint_scale = scales.footprint_is_area ? std::sqrt(median) : median;
+        }
+        mrnf_strategy::launch_fold_need(_refine_weight_max.ptr<float>(),
+                                        has_footprint ? footprint.ptr<float>() : nullptr, scales, n);
+    }
+
+    void MRNF::log_refine_census(const int iter, const int pruned, const GrowthResult& growth,
+                                 const size_t quota) const {
+        using namespace lfs::core;
+        const bool need = need_guided_growth_on();
+        if (!need && !Logger::get().is_enabled(LogLevel::Debug)) {
+            return;
+        }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0) {
+            return;
+        }
+        const Tensor active = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not().contiguous()
+                                                    : Tensor::ones_bool({n}, Device::CUDA);
+        const size_t n_active = active.count_nonzero();
+        const auto kth = [n](const Tensor& values, const Tensor& include, const size_t count, const double q) {
+            if (count == 0) {
+                return 0.0f;
+            }
+            const size_t k = std::clamp<size_t>(static_cast<size_t>(std::ceil(q * static_cast<double>(count))),
+                                                1, count);
+            return mrnf_strategy::launch_kth_largest(values.ptr<float>(), include.ptr<bool>(), n, k);
+        };
+        Tensor raw = _splat_data->opacity_raw();
+        if (raw.ndim() == 2) {
+            raw = raw.squeeze(-1);
+        }
+        const Tensor opacity = raw.sigmoid().contiguous();
+        const auto share_below = [&](const float level) {
+            return n_active == 0 ? 0.0
+                                 : 100.0 * static_cast<double>((opacity < level).logical_and(active).count_nonzero()) /
+                                       static_cast<double>(n_active);
+        };
+        float weight_median = 0.0f;
+        float weight_p95 = 0.0f;
+        if (_refine_weight_max.is_valid() && _refine_weight_max.numel() == n) {
+            const Tensor weighted = (_refine_weight_max > 0.0f).logical_and(active).contiguous();
+            const size_t count = weighted.count_nonzero();
+            weight_median = kth(_refine_weight_max, weighted, count, 0.5);
+            weight_p95 = kth(_refine_weight_max, weighted, count, 0.05);
+        }
+        const std::string line = std::format(
+            "MRNF refine {}: active {} / cap {}, pruned {}, refilled {}, grown {}, donors {} (quota {}), "
+            "{} median {:.4g} p95 {:.4g}, opacity <0.1 {:.1f}% <0.5 {:.1f}% median {:.3f}",
+            iter, n_active, _params->max_cap, pruned, growth.replacement_count, growth.growth_count,
+            growth.exchange_victims, quota, need ? "need" : "error", weight_median, weight_p95,
+            share_below(0.1f), share_below(0.5f), kth(opacity, active, n_active, 0.5));
+        if (need) {
+            LOG_INFO("{}", line);
+        } else {
+            LOG_DEBUG("{}", line);
+        }
     }
 
     float MRNF::exchange_importance_decay() const {
@@ -1132,6 +1226,14 @@ namespace lfs::training {
     }
 
     size_t MRNF::exchange_quota(const int iter, const size_t active) const {
+        constexpr double pi = 3.14159265358979323846;
+        if (_params->need_guided_growth) {
+            // Derived from the iteration alone, so a resume keeps the schedule.
+            const double end = static_cast<double>(_params->grow_until_iter);
+            const double u = end > 0.0 ? std::clamp(static_cast<double>(iter) / end, 0.0, 1.0) : 1.0;
+            return static_cast<size_t>(std::floor(MRNF_NEED_DONOR_SHARE * 0.5 * (1.0 + std::cos(pi * u)) *
+                                                  static_cast<double>(active)));
+        }
         double fraction = MRNF_EXCHANGE_START_SHARE;
         if (_exchange_first_iter >= 0) {
             const int duration = static_cast<int>(_params->grow_until_iter) - _exchange_first_iter;
@@ -1140,7 +1242,6 @@ namespace lfs::training {
                                                   static_cast<double>(duration),
                                               0.0, 1.0)
                                  : 1.0;
-            constexpr double pi = 3.14159265358979323846;
             fraction = MRNF_EXCHANGE_END_SHARE +
                        (MRNF_EXCHANGE_START_SHARE - MRNF_EXCHANGE_END_SHARE) * 0.5 * (1.0 + std::cos(pi * u));
         }
@@ -1148,7 +1249,9 @@ namespace lfs::training {
     }
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::impact_scratch(const int iter) {
-        if (!growth_exchange_active(iter) || !_splat_data || _splat_data->size() == 0) {
+        // Need-guided growth ranks by the blend weight sum the backward already writes.
+        if (!growth_exchange_active(iter) || _params->need_guided_growth || !_splat_data ||
+            _splat_data->size() == 0) {
             return {};
         }
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -1207,6 +1310,18 @@ namespace lfs::training {
         LFS_ASSERT_MSG(_exchange_importance_sum.numel() == n && _exchange_birth.numel() == n &&
                            (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == n),
                        "MRNF growth exchange: importance does not match the splat count");
+        if (_params->need_guided_growth) {
+            // Contribution: summed blend weight over about one pass. Each window adds its sum and
+            // older windows fade by 1 - refine_every / views (their weights sum to one pass).
+            const size_t views = _views ? _views->size() : 0;
+            const float keep = views == 0 ? 0.0f
+                                          : std::max(0.0f, 1.0f - static_cast<float>(_params->refine_every) /
+                                                                      static_cast<float>(views));
+            _exchange_importance_sum = _exchange_importance_sum.mul(keep).add(primary);
+            _exchange_importance_peak = Tensor();
+            ++_exchange_windows;
+            return;
+        }
         const float decay = exchange_importance_decay();
         _exchange_importance_sum = primary.maximum(_exchange_importance_sum.mul(decay));
         if (!secondary.is_valid()) {
@@ -1480,6 +1595,10 @@ namespace lfs::training {
         if (trainable_mask.is_valid()) {
             refine_candidates = refine_candidates.logical_and(trainable_mask);
         }
+        const bool need_guided = need_guided_growth_on();
+        if (need_guided) {
+            fold_need_into_refine_weights();
+        }
 
         // Free slots are reused in place; only rows appended past N need VRAM.
         const size_t vram_budget = std::min<size_t>(
@@ -1512,7 +1631,8 @@ namespace lfs::training {
         // share one D2H transfer. Store the final weights in grow-only scratch.
         Tensor replace_weights;
         if (requested_replace > 0) {
-            replace_weights = build_replace_parent_weights(n, active_mask, trainable_mask, edge_guidance);
+            replace_weights = build_replace_parent_weights(n, active_mask, trainable_mask, edge_guidance,
+                                                           need_guided ? _refine_weight_max : Tensor{});
         }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
@@ -1553,6 +1673,10 @@ namespace lfs::training {
         if (iter < static_cast<int>(_params->grow_until_iter)) {
             above_threshold = refine_candidates;
             n_grow = std::max(0, desired_total - actual_replace);
+            if (need_guided) {
+                // Every donor slot goes to growth, also when the error-driven demand is smaller.
+                n_grow = std::max(n_grow, exchange_extra);
+            }
             if (physical_budget < cap_budget && n_grow > budget - actual_replace) {
                 note_vram_growth_limit(*_splat_data, _optimizer.get(),
                                        static_cast<size_t>(std::max(0, budget - actual_replace)),
@@ -1806,7 +1930,8 @@ namespace lfs::training {
         const size_t n,
         const lfs::core::Tensor& active_mask,
         const lfs::core::Tensor& trainable_mask,
-        const mrnf_strategy::EdgeGuidance& edge_guidance) const {
+        const mrnf_strategy::EdgeGuidance& edge_guidance,
+        const lfs::core::Tensor& need) const {
         using namespace lfs::core;
 
         const auto& raw_opacities = _splat_data->opacity_raw();
@@ -1821,6 +1946,10 @@ namespace lfs::training {
             active_mask.is_valid() ? active_mask.ptr<bool>() : nullptr,
             trainable_mask.is_valid() ? trainable_mask.ptr<bool>() : nullptr,
             edge_guidance, w_view.ptr<float>(), n);
+        if (need.is_valid()) {
+            assert(need.ndim() == 1 && need.numel() == n);
+            w_view.mul_(need);
+        }
         return w_view;
     }
 

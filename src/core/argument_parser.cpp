@@ -54,6 +54,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
             OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
             OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
+            OptimizationCliBinding{"--need-guided-growth", "need_guided_growth", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
@@ -815,6 +816,7 @@ namespace {
             ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
             ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
+            ::args::Flag need_guided_growth(training_group, "need_guided_growth", lfs::core::args::optimization_cli_help("--need-guided-growth"), {"need-guided-growth"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
@@ -1689,6 +1691,7 @@ namespace {
                                         no_exposure_correction_flag = bool(no_exposure_correction),
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
                                         crop_flag = bool(crop),
+                                        need_guided_growth_flag = bool(need_guided_growth),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
                                         use_ppisp_flag = bool(use_ppisp),
@@ -1828,6 +1831,8 @@ namespace {
                     opt.opacity_decay_rendered_only = true;
                 if (crop_flag)
                     opt.crop_to_cropbox = true;
+                if (need_guided_growth_flag)
+                    opt.need_guided_growth = true;
                 if (no_opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = false;
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
@@ -2000,6 +2005,7 @@ namespace {
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
                 note_opt("cropbox_growth_inside", cropbox_growth_inside_val.has_value());
                 note_opt("crop_to_cropbox", crop_flag);
+                note_opt("need_guided_growth", need_guided_growth_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());

@@ -620,6 +620,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::need_guided_growth,
+                       "need_guided_growth", "Need-Guided Growth", d.need_guided_growth,
+                       "At the splat cap, moves the least contributing splats to where the error of large splats is highest (MRNF)")
+            .locale("training.advanced.need_guided_growth")
+            .tooltip("training.tooltip.need_guided_growth")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

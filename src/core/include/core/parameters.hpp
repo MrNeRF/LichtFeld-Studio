@@ -397,6 +397,10 @@ namespace lfs::core {
             // At the cap, frees the splats whose removal changes the image least so error-guided
             // growth keeps working until grow_until_iter.
             bool growth_exchange = false;
+            // At the cap, frees the splats that gave the least blend weight to the pixels over a full pass
+            // (5 % per refine, tapering to 0 by grow_until_iter) and grows where the error of large, sparse
+            // splats is highest; the refill of pruned slots draws by the same need.
+            bool need_guided_growth = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

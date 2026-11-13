@@ -345,6 +345,7 @@ REGISTRY_PLACEMENT = {
         "growth_grad_threshold",
         "grow_fraction",
         "growth_exchange",
+        "need_guided_growth",
         "cropbox_growth_inside",
         "opacity_decay",
         "opacity_decay_rendered_only",

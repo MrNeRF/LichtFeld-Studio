@@ -58,6 +58,14 @@ class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
+class MRNFStrategyTest_NeedGrowthOffLeavesErrorAndRefillWeightsUnchanged_Test;
+class MRNFStrategyTest_NeedGrowthRefillsFromHighErrorGroup_Test;
+class MRNFStrategyTest_NeedGrowthPrefersLargeSplatsAtEqualError_Test;
+class MRNFStrategyTest_NeedGrowthDonorsAreLowestSummedContribution_Test;
+class MRNFStrategyTest_NeedGrowthProtectsNewbornsUntilAFullPass_Test;
+class MRNFStrategyTest_NeedGrowthDonorShareTapersToZero_Test;
+class MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
+class MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
 
 namespace lfs::training {
 
@@ -154,6 +162,14 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthOffLeavesErrorAndRefillWeightsUnchanged_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthRefillsFromHighErrorGroup_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthPrefersLargeSplatsAtEqualError_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthDonorsAreLowestSummedContribution_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthProtectsNewbornsUntilAFullPass_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthDonorShareTapersToZero_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -161,8 +177,14 @@ namespace lfs::training {
         void soft_delete_rows(const lfs::core::Tensor& indices);
 
         // Growth exchange preserves splats with high removal impact. Rasterizers without
-        // impact output use coverage as the single protection score.
+        // impact output use coverage as the single protection score. Need-guided growth runs
+        // on the same plumbing: its donors are the splats with the least summed blend weight
+        // over about one pass, on its own schedule.
         [[nodiscard]] bool growth_exchange_active(int iter) const;
+        [[nodiscard]] bool need_guided_growth_on() const;
+        // Turns the window error in _refine_weight_max into NEED (error first, sparsity as a
+        // boost); after it, growth and refill draw by NEED for the rest of the refine.
+        void fold_need_into_refine_weights();
         [[nodiscard]] float exchange_importance_decay() const;
         [[nodiscard]] int exchange_warmup_windows() const;
         [[nodiscard]] size_t exchange_quota(int iter, size_t active) const;
@@ -189,6 +211,9 @@ namespace lfs::training {
             int pruned_count,
             lfs::core::Tensor refine_candidates = {},
             size_t exchange_quota = 0);
+        // One line per refine: counts, the growth weights and the opacity gate. Info with
+        // need-guided growth, debug (computed only when enabled) without.
+        void log_refine_census(int iter, int pruned, const GrowthResult& growth, size_t quota) const;
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}.
@@ -309,11 +334,13 @@ namespace lfs::training {
         float _median_splat_extent = 0.0f;
         bool _median_splat_extent_valid = false;
 
+        // need (optional, [n]) multiplies the weights: need-guided refill.
         [[nodiscard]] lfs::core::Tensor build_replace_parent_weights(
             size_t n,
             const lfs::core::Tensor& active_mask,
             const lfs::core::Tensor& trainable_mask,
-            const mrnf_strategy::EdgeGuidance& edge_guidance) const;
+            const mrnf_strategy::EdgeGuidance& edge_guidance,
+            const lfs::core::Tensor& need = {}) const;
 
         // Grow MRNF bookkeeping after parameter preflight and before any
         // parameter append. This is intentionally grow-only: refine resets

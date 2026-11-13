@@ -71,6 +71,7 @@
   "min_opacity": 0.003921568859368563,
   "mip_filter": false,
   "morton_reorder_interval": 5000,
+  "need_guided_growth": false,
   "noise_infill_mesh": "",
   "normal_auto_generate": true,
   "normal_consistency_weight": 0.0010000000474974513,
