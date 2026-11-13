@@ -64,7 +64,8 @@ namespace lfs::training {
             if (dataset_root.empty())
                 return {};
 
-            std::optional<std::filesystem::path> common_dir;
+            bool have_common = false;
+            std::filesystem::path common_dir;
             for (const auto& cam : cameras) {
                 if (!cam || !cam->has_image() || cam->image_path().empty())
                     continue;
@@ -78,25 +79,28 @@ namespace lfs::training {
                     return ".";
 
                 const auto rel_dir = normalize_dir_path(rel.parent_path());
-                if (!common_dir.has_value()) {
+                if (!have_common) {
                     common_dir = rel_dir;
+                    have_common = true;
                 } else {
                     std::filesystem::path prefix;
-                    auto it1 = common_dir->begin();
+                    auto it1 = common_dir.begin();
+                    const auto end1 = common_dir.end();
                     auto it2 = rel_dir.begin();
-                    while (it1 != common_dir->end() && it2 != rel_dir->end() && *it1 == *it2) {
+                    const auto end2 = rel_dir.end();
+                    while (it1 != end1 && it2 != end2 && *it1 == *it2) {
                         prefix /= *it1;
                         ++it1;
                         ++it2;
                     }
                     common_dir = normalize_dir_path(prefix);
                 }
-                if (common_dir->empty())
+                if (common_dir.empty())
                     return ".";
             }
-            if (!common_dir.has_value() || common_dir->empty())
+            if (!have_common || common_dir.empty())
                 return ".";
-            return lfs::core::path_to_generic_utf8(*common_dir);
+            return lfs::core::path_to_generic_utf8(common_dir);
         }
 
         [[nodiscard]] std::string training_images_folder(
