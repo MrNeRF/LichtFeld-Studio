@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "training/normal_auto_generate.hpp"
 
 #include "core/error.hpp"
@@ -522,6 +523,109 @@ TEST(PriorAutoGenerateIntegration, DepthAutoGenerateOffKeepsDepthMissing) {
     EXPECT_FALSE(outcome.attempted);
     EXPECT_EQ(outcome.depth.missing, 1u);
     EXPECT_FALSE(cameras.front()->has_depth());
+
+    fs::remove_all(root);
+}
+
+TEST(NormalAutoGenerateIntegration, InfersCustomImageFolderWhenImagesDirMissing) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_auto_generate_custom_dir";
+    fs::remove_all(root);
+    write_file(root / "rgb/a.jpg");
+    write_file(root / "rgb/b.jpg");
+
+    auto cam_a = make_camera("a.jpg", root / "rgb/a.jpg");
+    auto cam_b = make_camera("b.jpg", root / "rgb/b.jpg");
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_a, cam_b};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root / "";
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (const auto& job : jobs) {
+                seen.push_back(job);
+                write_file(job.normal_output_path, "normal");
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].image_path, root / "rgb/a.jpg");
+    EXPECT_EQ(seen[0].normal_output_path, root / "normals/a.png");
+    EXPECT_EQ(seen[1].image_path, root / "rgb/b.jpg");
+    EXPECT_EQ(seen[1].normal_output_path, root / "normals/b.png");
+    EXPECT_TRUE(cam_a->has_normal());
+    EXPECT_TRUE(cam_b->has_normal());
+
+    fs::remove_all(root);
+}
+
+TEST(NormalAutoGenerateIntegration, MultiFolderImagesPreserveRelativeSubdirsAndAssociate) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_auto_generate_multi_dir";
+    fs::remove_all(root);
+    write_file(root / "cam0/frame.jpg");
+    write_file(root / "cam1/frame.jpg");
+
+    auto cam_0 = make_camera("frame.jpg", root / "cam0/frame.jpg");
+    auto cam_1 = make_camera("frame.jpg", root / "cam1/frame.jpg");
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_0, cam_1};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (const auto& job : jobs) {
+                seen.push_back(job);
+                write_file(job.normal_output_path, "normal");
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].normal_output_path, root / "normals/cam0/frame.png");
+    EXPECT_EQ(seen[1].normal_output_path, root / "normals/cam1/frame.png");
+    EXPECT_EQ(cam_0->normal_path(), root / "normals/cam0/frame.png");
+    EXPECT_EQ(cam_1->normal_path(), root / "normals/cam1/frame.png");
+
+    fs::remove_all(root);
+}
+
+TEST(PreprocessExplicitImagePaths, SkipsMissingDefaultImagesDirectory) {
+    const auto root = fs::temp_directory_path() / "lfs_preprocess_explicit_paths";
+    fs::remove_all(root);
+    const auto image_path = root / "rgb/a.jpg";
+    const auto normal_path = root / "normals/rgb/a.png";
+    write_file(image_path);
+    write_file(normal_path, "existing");
+
+    lfs::core::param::PreprocessParameters params;
+    params.dataset_path = root;
+    params.images_folder = "images";
+    params.mode = lfs::core::param::PreprocessOutputMode::Normals;
+    params.overwrite = false;
+    params.image_paths = {image_path};
+
+    const auto result = lfs::preprocessing::run_preprocess_ex(params);
+    EXPECT_TRUE(result.ok) << result.error;
+    EXPECT_EQ(result.processed, 0u);
+    EXPECT_EQ(result.skipped, 1u);
 
     fs::remove_all(root);
 }

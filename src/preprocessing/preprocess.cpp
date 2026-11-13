@@ -1183,40 +1183,72 @@ namespace {
         std::size_t total_;
     };
 
+    // Strips trailing '.' and separator components so lexically_relative matches child paths.
+    fs::path normalize_dir_path(const fs::path& path) {
+        if (path.empty())
+            return {};
+        auto normalized = path.lexically_normal();
+        while (normalized.has_relative_path() &&
+               (normalized.filename().empty() || normalized.filename() == ".")) {
+            normalized = normalized.parent_path();
+        }
+        return normalized;
+    }
+
+    std::vector<fs::path> resolve_explicit_images(const std::vector<fs::path>& image_paths) {
+        std::unordered_set<std::string> seen;
+        seen.reserve(image_paths.size());
+        std::vector<fs::path> images;
+        images.reserve(image_paths.size());
+        for (const auto& raw_path : image_paths) {
+            if (raw_path.empty())
+                continue;
+            std::error_code ec;
+            const fs::path abs_path = fs::absolute(raw_path, ec).lexically_normal();
+            if (ec || !fs::is_regular_file(abs_path, ec) || ec)
+                continue;
+            const fs::path canon = fs::weakly_canonical(abs_path, ec);
+            const std::string key = path_to_string(ec ? abs_path : canon);
+            if (seen.insert(key).second)
+                images.push_back(abs_path);
+        }
+        if (images.empty())
+            throw std::runtime_error("None of the requested image_paths exist");
+        std::sort(images.begin(), images.end());
+        return images;
+    }
+
     PreprocessPlan build_preprocess_plan(const lfs::core::param::PreprocessParameters& params) {
         PreprocessPlan plan;
-        plan.dataset_root = fs::absolute(params.dataset_path);
-        plan.images_dir = plan.dataset_root / params.images_folder;
-
-        // Flat COLMAP exports keep the images next to the sparse model files. Scan the
-        // root non-recursively there so generated depth/normals outputs are never
-        // picked up as inputs on a rerun.
-        bool flat_layout = is_same_directory(plan.images_dir, plan.dataset_root);
-        if (!flat_layout && !fs::is_directory(plan.images_dir) &&
-            fs::is_directory(plan.dataset_root) &&
-            !collect_images(plan.dataset_root, false).empty()) {
-            std::cout << "Images folder '" << params.images_folder
-                      << "' not found; using images in the dataset root (flat layout)\n";
-            flat_layout = true;
-        }
-        if (flat_layout)
-            plan.images_dir = plan.dataset_root;
-
-        plan.images = collect_images(plan.images_dir, !flat_layout);
-        if (plan.images.empty())
-            throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
+        std::error_code ec;
+        const fs::path abs_dataset = fs::absolute(params.dataset_path, ec);
+        plan.dataset_root = normalize_dir_path(ec ? params.dataset_path : abs_dataset);
+        if (fs::is_regular_file(plan.dataset_root, ec))
+            plan.dataset_root = plan.dataset_root.parent_path();
+        plan.images_dir = normalize_dir_path(plan.dataset_root / lfs::core::utf8_to_path(params.images_folder));
 
         if (!params.image_paths.empty()) {
-            std::unordered_set<std::string> requested;
-            requested.reserve(params.image_paths.size());
-            for (const auto& path : params.image_paths)
-                requested.insert(path_to_string(fs::weakly_canonical(path)));
-            std::erase_if(plan.images, [&requested](const fs::path& path) {
-                return !requested.contains(path_to_string(fs::weakly_canonical(path)));
-            });
+            plan.images = resolve_explicit_images(params.image_paths);
+            if (!fs::is_directory(plan.images_dir))
+                plan.images_dir = plan.dataset_root;
+        } else {
+            // Flat COLMAP exports keep the images next to the sparse model files. Scan the
+            // root non-recursively there so generated depth/normals outputs are never
+            // picked up as inputs on a rerun.
+            bool flat_layout = is_same_directory(plan.images_dir, plan.dataset_root);
+            if (!flat_layout && !fs::is_directory(plan.images_dir) &&
+                fs::is_directory(plan.dataset_root) &&
+                !collect_images(plan.dataset_root, false).empty()) {
+                std::cout << "Images folder '" << params.images_folder
+                          << "' not found; using images in the dataset root (flat layout)\n";
+                flat_layout = true;
+            }
+            if (flat_layout)
+                plan.images_dir = plan.dataset_root;
+
+            plan.images = collect_images(plan.images_dir, !flat_layout);
             if (plan.images.empty())
-                throw std::runtime_error("None of the requested image_paths are under " +
-                                         path_to_string(plan.images_dir));
+                throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
         }
 
         plan.jobs.reserve(plan.images.size());
