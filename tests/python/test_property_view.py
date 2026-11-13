@@ -789,16 +789,18 @@ def test_registry_placement_groups_auto_rows_and_leaves_new_ones_in_more_paramet
         for run_id in property_view.REGISTRY_PLACEMENT
         for prop_id in resolved[run_id]
     ]
-    # These advanced properties have no curated placement and remain in More Parameters.
-    assert sorted(placed) == sorted(set(EXPECTED_ADVANCED_IDS) - {"ray_depth_lr", "crop_to_cropbox"})
-    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("ray_depth_lr", "crop_to_cropbox")
+    assert resolved["learning_rates_registry"] == (
+        "means_lr_end", "ray_depth_lr", "scaling_lr_end", "late_lr_anneal", "cropbox_lr_scale"
+    )
+    # Crop-at-end has no curated placement and remains in More Parameters.
+    assert sorted(placed) == sorted(set(EXPECTED_ADVANCED_IDS) - {"crop_to_cropbox"})
+    assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == ("crop_to_cropbox",)
 
     future_group = {
         "properties": [*group_info["properties"], {"id": "future_scalar", "type": "float"}]
     }
     resolved = {run.id: run.prop_ids for run in property_view.resolve_runs(future_group)}
     assert resolved[property_view.AUTO_ADVANCED_RUN_ID] == (
-        "ray_depth_lr",
         "crop_to_cropbox",
         "future_scalar",
     )
