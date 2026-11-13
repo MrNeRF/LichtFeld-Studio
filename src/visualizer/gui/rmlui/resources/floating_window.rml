@@ -9,7 +9,7 @@
   <div id="title-bar">
     <span id="title-text">{{panel_label}}</span>
     <button id="pin-btn" class="window-control" type="button" data-tooltip="ui.always_on_top" aria-pressed="false">
-      <div class="window-icon"><div class="window-pin-head"/><div class="window-pin-stem"/><div class="window-pin-tip"/></div>
+      <img class="window-pin-icon" src="../icon/pin.png" />
     </button>
     <button id="minimize-btn" class="window-control" type="button" data-tooltip="ui.minimize">
       <div class="window-icon"><div class="window-minimize-line"/></div>
