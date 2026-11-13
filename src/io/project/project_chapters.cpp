@@ -2939,6 +2939,31 @@ namespace lfs::io::project {
         return *cached_nodes_;
     }
 
+    lfs::Result<std::optional<PublishedSplatMetadata>> SceneGraphChapter::published_splat_metadata(
+        const lfs::core::Uuid& uuid) const {
+        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto metadata = element ? element->get_json("publication") : std::nullopt;
+        if (!metadata)
+            return std::optional<PublishedSplatMetadata>{};
+        const auto invalid = [] {
+            return fail<std::optional<PublishedSplatMetadata>>(
+                lfs::ErrorCode::DataLoss, "The published splat metadata is invalid.",
+                "Invalid publication count or SH degree", "SCNG", "nodes.publication");
+        };
+        if (!metadata->is_object() || !metadata->contains("count") ||
+            !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
+            !metadata->at("sh_degree").is_number_integer())
+            return invalid();
+        if ((metadata->at("count").is_number_unsigned() && metadata->at("count").get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) ||
+            (metadata->at("sh_degree").is_number_unsigned() && metadata->at("sh_degree").get<std::uint64_t>() > 3))
+            return invalid();
+        const auto count = metadata->at("count").get<std::int64_t>();
+        const auto degree = metadata->at("sh_degree").get<std::int64_t>();
+        if (count <= 0 || degree < 0 || degree > 3)
+            return invalid();
+        return std::optional<PublishedSplatMetadata>{PublishedSplatMetadata{static_cast<std::uint64_t>(count), static_cast<int>(degree)}};
+    }
+
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
         const lfs::core::Uuid& uuid) const {
         if (uuid.is_nil()) {

@@ -7,7 +7,6 @@ import stat
 import struct
 
 MAX_NODES = 4096
-MAX_SPLATS = 100_000_000
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_HEADER_BYTES = 64 * 1024
 MAX_READ_BYTES = 8 * 1024 * 1024
@@ -103,7 +102,7 @@ def _ply_header(source, size):
                 count = int(words[2])
             except ValueError:
                 raise ValueError("Invalid gallery PLY count.") from None
-            _require(0 < count <= MAX_SPLATS, "Invalid gallery PLY count.")
+            _require(0 < count, "Invalid gallery PLY count.")
         elif len(words) == 3 and words[:2] == ["property", "float"] and count is not None:
             properties.append(words[2])
         else:

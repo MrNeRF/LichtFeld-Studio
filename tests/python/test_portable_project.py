@@ -150,6 +150,26 @@ FIXTURES = Path(__file__).parents[1] / "data"
 NATIVE_SPZ = Path(__file__).parents[1] / "data" / "spz"
 
 
+def test_large_ply_header_still_requires_matching_payload_size():
+    count = 200_000_000
+    properties = codec.codec._properties(0)
+    header = ("ply\nformat binary_little_endian 1.0\nelement vertex " + str(count) + "\n" +
+              "".join("property float " + name + "\n" for name in properties) + "end_header\n").encode()
+    size = len(header) + count * len(properties) * 4
+    assert codec.codec._ply_header(io.BytesIO(header), size) == (count, 0)
+    with unittest.TestCase().assertRaisesRegex(ValueError, "size does not match"):
+        codec.codec._ply_header(io.BytesIO(header), size - 1)
+
+
+def test_invalid_publication_reports_validation_error():
+    source = (FIXTURES / 'portable-ply.licht').read_bytes()
+    for publication in (None, {}, {'count': 1}):
+        data = rewrite_chapter(source, b'SCNG',
+                               lambda graph: graph['nodes'][0].update(publication=publication))
+        with unittest.TestCase().assertRaises(ValueError):
+            codec.ProjectFile(io.BytesIO(data))
+
+
 def test_gallery_publishing_corpus():
     expected = json.loads((FIXTURES / 'gallery_publishing' / 'expected.json').read_text())
     messages = {

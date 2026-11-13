@@ -838,6 +838,25 @@ namespace lfs::io::project {
                 if (!data) {
                     return std::move(data).error();
                 }
+                // Published assets may retain dormant SH bands in their encoded
+                // payload. Preserve each node's published appearance when merging.
+                std::optional<PublishedSplatMetadata> publication;
+                if (record.payload->fourcc == "DSRC" && !record.payload_diverged) {
+                    auto metadata = document->scene_graph().published_splat_metadata(record.uuid);
+                    if (!metadata)
+                        return std::move(metadata).error();
+                    publication = *metadata;
+                }
+                if (publication) {
+                    if (publication->count != static_cast<std::uint64_t>((*data)->size()) ||
+                        publication->sh_degree > (*data)->get_max_sh_degree()) {
+                        return fail<ExportSceneData>(
+                            lfs::ErrorCode::DataLoss, path,
+                            "The published splat metadata does not match its data.", record.name,
+                            "export.publication");
+                    }
+                    (*data)->set_sh_degree(publication->sh_degree);
+                }
                 result.owners.push_back(*data);
                 result.splats.emplace_back(result.owners.back().get(), world);
             }

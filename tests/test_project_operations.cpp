@@ -14,6 +14,9 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#ifndef LFS_FORMAT_TEST_TARGET
+#include <cuda_runtime_api.h>
+#endif
 
 namespace {
 
@@ -519,6 +522,60 @@ namespace {
         EXPECT_FALSE(fs::exists(repaired));
 #endif
     }
+
+#ifndef LFS_FORMAT_TEST_TARGET
+    TEST(ProjectOperations, ExportUsesPublishedShDegree) {
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+            GTEST_SKIP() << "Project splat export requires a CUDA device";
+        TemporaryDirectory temporary;
+        for (const bool published : {false, true}) {
+            const auto path = temporary.path / (published ? "published.licht" : "ordinary.licht");
+            const auto input = temporary.path / (published ? "published-input.ply" : "ordinary-input.ply");
+            {
+                std::ofstream ply(input, std::ios::binary);
+                ply << "ply\nformat binary_little_endian 1.0\nelement vertex 1\n";
+                for (const auto* name : {"x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2"})
+                    ply << "property float " << name << '\n';
+                for (int index = 0; index < 9; ++index)
+                    ply << "property float f_rest_" << index << '\n';
+                for (const auto* name : {"opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"})
+                    ply << "property float " << name << '\n';
+                ply << "end_header\n";
+                constexpr std::array<float, 23> values{0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1,
+                                                       1, 1, 1, 0, -3, -3, -3, 1, 0, 0, 0};
+                ply.write(reinterpret_cast<const char*>(values.data()), sizeof(values));
+            }
+            auto document = require_result(ProjectDocument::create(fixed_uuid(1290),
+                                                                   1'700'000'000'000'000'000));
+            const auto id = fixed_uuid(1291);
+            require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+                .uuid = id,
+                .type = "splat",
+                .name = "Stored SH1",
+                .payload = PayloadBinding{.fourcc = "DSRC", .instance_uuid = id, .source_kind = "ply"},
+            }));
+            if (published) {
+                auto node = document.edit_scene_graph().dom().array_find("nodes", id.to_string());
+                ASSERT_TRUE(node);
+                require_status(node->set_json("publication", lfs::io::JsonChapterDom::Json{{"count", 1}, {"sh_degree", 0}}));
+            }
+            require_status(document.set_dataset_source(id, require_result(LazyChunkValue::from_owned(read_file_bytes(input), id))));
+            static_cast<void>(require_result(save_document(document, path, fixed_uuid(1292))));
+            const auto output = temporary.path / (published ? "published.ply" : "ordinary.ply");
+            static_cast<void>(require_result(export_project_as(path, ProjectExportFormat::Ply, output)));
+            std::ifstream file(output, std::ios::binary);
+            ASSERT_TRUE(file);
+            std::string line, header;
+            while (std::getline(file, line)) {
+                header += line;
+                if (line == "end_header" || line == "end_header\r")
+                    break;
+            }
+            EXPECT_EQ(header.find("property float f_rest_0") != std::string::npos, !published);
+        }
+    }
+#endif
 
     TEST(ProjectOperations, CoversCopiedInspectFixtures) {
         const char* fixture_root = std::getenv("LFS_PROJECT_INSPECT_FIXTURES");
