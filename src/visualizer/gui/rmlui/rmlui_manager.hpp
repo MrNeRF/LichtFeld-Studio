@@ -124,7 +124,12 @@ namespace lfs::vis::gui {
         void setDpRatio(float ratio);
         bool externalWindowsAllowed() const { return native_windows_enabled_; }
         static bool validatedExternalPanel(std::string_view name) {
-            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor";
+            return name == "lfs.preferences" || name == "lfs.plugin_marketplace" || name == "video_extractor" ||
+                   name == "native.mesh2splat" || name == "lfs.collision" || name == "lfs.splat_simplify" ||
+                   name == "lfs.camera_selection" || name == "lfs.logging" || name == "lfs.about" ||
+                   name == "lfs.scripts" || name == "lfs.bug_report" || name == "lfs.getting_started" ||
+                   name == "lfs.export" || name == "lfs.new_project" || name == "lfs.resume_checkpoint" ||
+                   name == "lfs.gallery_file" || name == "lfs.image_preview";
         }
         bool externalWindowsAllowed(std::string_view name) const {
             return native_windows_enabled_ && validatedExternalPanel(name);
@@ -132,12 +137,15 @@ namespace lfs::vis::gui {
         SDL_Window* mainWindow() const { return window_; }
         bool restoredExternalBounds(const std::string& name, float* bounds);
 
-        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool floating = false);
+        LFS_VIS_API Rml::Context* createContext(const std::string& name, int width, int height, bool desktop = false,
+                                                std::optional<WindowRectangle> desktop_bounds = std::nullopt);
         SDL_Window* nativeWindow(const Rml::Context* context) const;
         VulkanContext* nativeGraphics(const Rml::Context* context) const;
         void showNativeWindow(Rml::Context* context);
         void minimizeNativeWindow(Rml::Context* context);
         void toggleNativeWindowMaximized(Rml::Context* context);
+        [[nodiscard]] LFS_VIS_API std::optional<bool> nativeWindowPinned(std::string_view panel_id) const;
+        LFS_VIS_API bool setNativeWindowPinned(std::string_view panel_id, bool pinned);
         void renderNativeWindows();
         std::optional<double> secondsUntilNativeGeometryFlush() const;
         void resetNativeWindowGeometry();
@@ -173,8 +181,9 @@ namespace lfs::vis::gui {
                 return false;
             return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker), std::move(interceptor));
         }
+        // Application modals also block desktop panels and suspend their pins until deactivation.
         LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
-                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {});
+                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {}, bool application_modal = false);
         LFS_VIS_API void deactivateInput(Rml::Context* context, bool keep_pointer_input = false);
         struct InputDispatchResult {
             bool consumed = false;
@@ -246,13 +255,31 @@ namespace lfs::vis::gui {
         LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
     private:
-        struct NativeWindow;
+        struct NativeWindow {
+            SDL_Window* window = nullptr;
+            std::unique_ptr<VulkanContext> graphics;
+            std::unique_ptr<RenderInterface_VK> renderer;
+            std::string name;
+            bool drawn = false;
+            bool visible = false;
+            bool failed = false;
+            bool geometry_dirty = false;
+            WindowRectangle rectangle;
+            bool rectangle_initialized = false;
+            std::function<void(lfs::Result<VulkanContext::WindowCapture>)> capture_callback;
+            LFS_VIS_API ~NativeWindow();
+        };
         std::unordered_map<const Rml::Context*, std::unique_ptr<NativeWindow>> native_windows_;
         std::unordered_map<const Rml::Context*, SDL_Window*> context_windows_;
         SDL_Window* render_window_ = nullptr;
         bool native_windows_enabled_ = false;
+        bool native_pins_suspended_ = false;
+        LFS_VIS_API static bool applyNativeWindowPin(SDL_Window* window, bool pinned);
+        void syncNativeWindowPins();
+        void focusApplicationModal();
         bool launch_safe_mode_ = false;
-        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height);
+        std::unique_ptr<NativeWindow> createNativeWindow(const std::string& name, int width, int height,
+                                                         std::optional<WindowRectangle> bounds);
         std::function<std::unique_ptr<VulkanContext>()> create_native_graphics_ = [] { return std::make_unique<VulkanContext>(); };
         void recordNativeGeometry(NativeWindow& native);
         void flushNativeGeometry();
@@ -314,6 +341,7 @@ namespace lfs::vis::gui {
             std::vector<SDL_Scancode> shortcuts;
             uint64_t frame = 0;
             bool exclusive = false;
+            bool application_modal = false;
             bool enabled = true;
             bool persistent = false;
         };

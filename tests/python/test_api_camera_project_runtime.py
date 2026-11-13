@@ -24,6 +24,11 @@ def camera_runtime(tmp_path, monkeypatch, request):
     endpoint = f"http://127.0.0.1:{port}/mcp"
     home = tmp_path / "home"
     home.mkdir()
+    preferences = getattr(request, "param", {}).get("preferences")
+    if preferences is not None:
+        config = home / "config"
+        config.mkdir()
+        (config / "preferences.json").write_text(json.dumps(preferences), encoding="utf-8")
     for name, value in {
         "HOME": str(home),
         "LFS_HOME": str(home),

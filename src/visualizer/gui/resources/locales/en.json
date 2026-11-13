@@ -3041,6 +3041,7 @@
     "hide_ui": "Hide UI",
     "minimize": "Minimize",
     "restore_window": "Restore Window",
+    "always_on_top": "Always on Top",
     "maximize_window": "Maximize Window",
     "rad_lod": "RAD LOD",
     "status": "Status",

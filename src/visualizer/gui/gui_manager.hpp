@@ -554,7 +554,7 @@ namespace lfs::vis {
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
             uint64_t last_ui_layout_panel_visibility_revision_ = 0;
-            bool last_ui_layout_left_dock_visible_ = false;
+            bool last_ui_layout_left_dock_rendered_ = false;
             mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
             mutable std::string animation_demand_description_cache_;
             enum class RightPanelPointerRegion : uint8_t {

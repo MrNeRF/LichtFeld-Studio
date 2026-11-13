@@ -3029,6 +3029,7 @@
     "hide_ui": "隐藏界面",
     "minimize": "最小化",
     "restore_window": "还原窗口",
+    "always_on_top": "始终置顶",
     "maximize_window": "最大化窗口",
     "rad_lod": "RAD LOD",
     "status": "状态",

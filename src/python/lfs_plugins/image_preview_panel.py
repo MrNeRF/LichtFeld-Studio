@@ -57,7 +57,6 @@ def _sam_confirmation_rml(message):
                    for i, part in enumerate(paragraphs))
 
 
-_instance = None
 _pending_open = None
 _RML_PATH_SAFE_CHARS = "/:._-~"
 
@@ -70,8 +69,7 @@ def _encode_rml_path(path: Path | str) -> str:
 class ImagePreviewPanel(Panel):
 
     def __init__(self):
-        global _instance, _pending_open
-        _instance = self
+        global _pending_open
 
         self._image_paths: list[Path] = []
         self._mask_paths: list[Optional[Path]] = []
@@ -416,10 +414,19 @@ class ImagePreviewPanel(Panel):
 
     def on_unmount(self, doc):
         self._default_reset.unmount()
-        self._sam_cancel()
-        if self._sam_sequence:
-            lf.ui.sam_preview_end_sequence(self._sam_sequence["run"])
-            self._sam_sequence = None
+        registered = lf.ui.get_panel_object(self.id)
+        # Builtins may be registered through panels.LazyPanel, which owns the
+        # implementation without changing its lifecycle callbacks.
+        same_instance = registered is self or getattr(registered, "_implementation", None) is self
+        if lf.ui.is_panel_enabled(self.id) and same_instance:
+            # A host/document transfer keeps the editing session, but its GPU
+            # texture must be released before the old window device goes away.
+            self._sam_release_texture()
+        else:
+            self._sam_cancel()
+            if self._sam_sequence:
+                lf.ui.sam_preview_end_sequence(self._sam_sequence["run"])
+                self._sam_sequence = None
         self._sample_request = None
         self._metadata.close()
         self._unsubscribe_reactive_state()
@@ -2948,9 +2955,7 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
     elif assisted:
         _pending_open += (True, weights)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
-    panel = _instance
-    if panel is None:
-        panel = lf.ui.get_panel_object("lfs.image_preview")
+    panel = lf.ui.get_panel_object("lfs.image_preview")
     pending = _pending_open
     if panel and pending is not None:
         _pending_open = None

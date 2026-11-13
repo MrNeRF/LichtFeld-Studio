@@ -6,8 +6,10 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_viewport_overlay.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -310,6 +312,59 @@ namespace {
                 EXPECT_NEAR(1240 * scale - bar->GetAbsoluteOffset(Rml::BoxArea::Border).x - bar->GetBox().GetSize(Rml::BoxArea::Border).x, 121 * scale, 0.1f);
             }
         }
+    }
+
+    TEST_F(ViewportDepthLayoutTest, DesktopPinFitsNarrowTitleAndStaysHiddenForInternalPanels) {
+        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/rmlui/resources/floating_window.rml";
+        std::ifstream input(path);
+        ASSERT_TRUE(input.is_open());
+        std::string markup((std::istreambuf_iterator<char>(input)), {});
+        markup.replace(0, markup.find('>') + 1, "<rml>");
+        markup.replace(markup.find("</template>"), 11, "</rml>");
+        markup.replace(markup.find("{{panel_label}}"), 15, "A very long translated title for a narrow desktop window");
+        real_context_ = Rml::CreateContext("viewport_depth_layout_real", {320, 200}, &renderer_);
+        ASSERT_NE(real_context_, nullptr);
+        auto* doc = real_context_->LoadDocumentFromMemory(markup, rmlSourceUrl(path));
+        ASSERT_NE(doc, nullptr);
+        doc->SetClass("window-controls", true);
+        doc->Show();
+        auto* pin = doc->GetElementById("pin-btn");
+        ASSERT_NE(pin, nullptr);
+        for (float scale : {1.0f, 1.5f, 2.0f}) {
+            real_context_->SetDensityIndependentPixelRatio(scale);
+            real_context_->SetDimensions({int(320 * scale), int(200 * scale)});
+            pin->SetClass("available", false);
+            real_context_->Update();
+            EXPECT_EQ(pin->GetDisplay(), Rml::Style::Display::None);
+            pin->SetClass("available", true);
+            real_context_->Update();
+            auto* title = doc->GetElementById("title-text");
+            float right = title->GetAbsoluteOffset(Rml::BoxArea::Border).x + title->GetBox().GetSize(Rml::BoxArea::Border).x;
+            for (const char* id : {"pin-btn", "minimize-btn", "maximize-btn", "close-btn"}) {
+                auto* control = doc->GetElementById(id);
+                ASSERT_NE(control, nullptr);
+                EXPECT_TRUE(control->IsVisible());
+                const auto pos = control->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = control->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(pos.x, right);
+                EXPECT_LE(pos.x + size.x, 320 * scale);
+                EXPECT_GT(size.x, 0);
+                right = pos.x + size.x;
+            }
+        }
+        lfs::vis::gui::rml_theme::applyTheme(
+            doc, {}, lfs::vis::gui::rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
+        pin->SetClass("pinned", true);
+        lfs::vis::visitThemePresets([&](const std::string_view theme_id, const lfs::vis::Theme&) {
+            real_context_->ActivateTheme(std::string(theme_id), true);
+            pin->SetPseudoClass("hover", false);
+            real_context_->Update();
+            const auto normal = pin->GetProperty("background-color")->Get<Rml::Colourb>();
+            pin->SetPseudoClass("hover", true);
+            real_context_->Update();
+            EXPECT_NE(normal, pin->GetProperty("background-color")->Get<Rml::Colourb>()) << theme_id;
+            real_context_->ActivateTheme(std::string(theme_id), false);
+        });
     }
 
     TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {

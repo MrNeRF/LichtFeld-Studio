@@ -3029,6 +3029,7 @@
     "hide_ui": "Masquer l’interface",
     "minimize": "Réduire",
     "restore_window": "Restaurer la fenêtre",
+    "always_on_top": "Toujours au premier plan",
     "maximize_window": "Agrandir la fenêtre",
     "rad_lod": "RAD LOD",
     "status": "État",

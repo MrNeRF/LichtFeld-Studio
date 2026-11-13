@@ -6440,7 +6440,7 @@ namespace lfs::vis::gui {
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            left_dock_rendered != last_ui_layout_left_dock_visible_ ||
+            left_dock_rendered != last_ui_layout_left_dock_rendered_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
             panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
@@ -6464,7 +6464,7 @@ namespace lfs::vis::gui {
                 reg.suspend_input(PanelSpace::SceneHeader);
                 reg.suspend_input(PanelSpace::MainPanelTab);
             }
-            if (last_ui_layout_left_dock_visible_ && !left_dock_rendered)
+            if (last_ui_layout_left_dock_rendered_ && !left_dock_rendered)
                 reg.suspend_input(PanelSpace::LeftDock);
             ui_layout_settle_frames_ = kUiLayoutSettleFrames;
             if (ui_visibility_resize_active_ &&
@@ -6487,7 +6487,7 @@ namespace lfs::vis::gui {
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = left_dock_rendered;
+            last_ui_layout_left_dock_rendered_ = left_dock_rendered;
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
             last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();

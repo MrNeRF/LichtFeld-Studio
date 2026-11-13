@@ -35,6 +35,7 @@ def _install_lf_stub(monkeypatch):
         open_url=lambda _url: None,
         get_ui_scale=lambda: 1.0,
         set_panel_enabled=lambda _panel_id, _enabled: None,
+        is_panel_enabled=lambda _panel_id: False,
         get_panel_object=lambda _panel_id: None,
         get_image_info=lambda _path: (0, 0, 0),
         preview_texture_status=lambda _source, _document=None: "ready",
@@ -101,7 +102,6 @@ def test_preview_url_percent_encodes_image_paths(panel_modules, tmp_path):
 
 def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_path):
     image_preview, _ = panel_modules
-    image_preview._instance = None
     image_preview._pending_open = None
     image_path = tmp_path / "first.jpg"
 
@@ -117,7 +117,6 @@ def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_p
 def test_first_preview_request_opens_once_during_lazy_reentry(
         panel_modules, tmp_path, monkeypatch):
     image_preview, _ = panel_modules
-    image_preview._instance = None
     image_preview._pending_open = None
     image_path = tmp_path / "first.jpg"
     open_calls = []
@@ -129,10 +128,14 @@ def test_first_preview_request_opens_once_during_lazy_reentry(
 
     monkeypatch.setattr(image_preview.ImagePreviewPanel, "open", track_open)
 
+    instances = []
+
     class LazyPanel:
         @property
         def open(self):
-            return image_preview.ImagePreviewPanel().open
+            panel = image_preview.ImagePreviewPanel()
+            instances.append(panel)
+            return panel.open
 
     sys.modules["lichtfeld"].ui.get_panel_object = lambda _panel_id: LazyPanel()
 
@@ -140,8 +143,22 @@ def test_first_preview_request_opens_once_during_lazy_reentry(
 
     assert image_preview._pending_open is None
     assert open_calls == [([image_path], [None], 0, [17])]
-    assert image_preview._instance._image_paths == [image_path.resolve()]
-    assert image_preview._instance._camera_uids == [17]
+    assert len(instances) == 1
+    assert instances[0]._image_paths == [image_path.resolve()]
+    assert instances[0]._camera_uids == [17]
+
+
+def test_preview_request_uses_the_current_registered_panel_after_replacement(panel_modules, tmp_path, monkeypatch):
+    image_preview, _ = panel_modules
+    old_panel = image_preview.ImagePreviewPanel()
+    new_panel = image_preview.ImagePreviewPanel()
+    monkeypatch.setattr(image_preview.lf.ui, "get_panel_object", lambda _id: new_panel)
+    image_path = tmp_path / "replacement.jpg"
+
+    image_preview.open_image_preview([image_path], [None], 0)
+
+    assert new_panel._image_paths == [image_path.resolve()]
+    assert old_panel._image_paths == []
 
 
 def test_image_preview_discards_info_for_previous_image_sets(panel_modules, tmp_path):
