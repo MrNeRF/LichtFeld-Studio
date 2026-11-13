@@ -891,7 +891,7 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
         }
         points = points.cuda();
 
-        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, k, 10);
+        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, k);
         const size_t palette = std::min<size_t>(k, n);
         ASSERT_EQ(centroids.shape()[0], palette);
         ASSERT_EQ(centroids.shape()[1], dims);
@@ -924,7 +924,7 @@ TEST_F(SogFormatTest, EMeansPaletteResolvesSeparatedModes) {
         EXPECT_LE(mse, double(sigma) * sigma) << "e-means left a mode unresolved";
 
         // Fixed seed and order-independent accumulation: a rerun is bit-identical.
-        const auto [centroids_again, labels_again] = emeans_sh_swizzled(points, int(n), sh_coeffs, k, 10);
+        const auto [centroids_again, labels_again] = emeans_sh_swizzled(points, int(n), sh_coeffs, k);
         const auto centroids_again_cpu = centroids_again.cpu(), labels_again_cpu = labels_again.cpu();
         EXPECT_EQ(std::memcmp(centroids_cpu.ptr<float>(), centroids_again_cpu.ptr<float>(), palette * dims * sizeof(float)), 0);
         EXPECT_TRUE(std::equal(label, label + n, labels_again_cpu.ptr<int>()));
@@ -945,7 +945,7 @@ TEST_F(SogFormatTest, EMeansPaletteKeepsLargeCoefficients) {
                     (d % 2 ? -scale : scale) * (1.0f + static_cast<float>(i % 4) / 8.0f);
         points = points.cuda();
 
-        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, 1, 10);
+        const auto [centroids, labels] = emeans_sh_swizzled(points, int(n), sh_coeffs, 1);
         const auto centroids_cpu = centroids.cpu();
         for (size_t d = 0; d < dims; ++d)
             EXPECT_FLOAT_EQ(centroids_cpu.ptr<float>()[d], (d % 2 ? -scale : scale) * 1.1875f) << "dim " << d;

@@ -1012,6 +1012,7 @@ namespace lfs::io {
     // ------------------------------------------------------------------------
     namespace {
 
+        constexpr int EMEANS_EPOCHS = 10;
         constexpr double EMEANS_PI = 3.14159265358979323846;
         constexpr double EMEANS_SCHEDULE_FLOOR = 0.1;
         constexpr float EMEANS_DEAD_FRACTION = 0.1f;
@@ -1032,10 +1033,10 @@ namespace lfs::io {
         // Scaling laws of the paper (Section 3.3): the batch size is rounded to
         // a power of two (which keeps batches aligned to the 32-row swizzle
         // blocks) and the initial decay rate follows from k, B, n and T.
-        EMeansSchedule emeans_schedule(const int n, const int k, const int epochs) {
+        EMeansSchedule emeans_schedule(const int n, const int k) {
             const double nd = static_cast<double>(n);
             const double kd = static_cast<double>(k);
-            const double td = static_cast<double>(epochs);
+            const double td = static_cast<double>(EMEANS_EPOCHS);
             const double batch_coefficient = n > 2'000'000 ? 0.0044 : 0.035;
             const double raw_batch = batch_coefficient * std::pow(kd, 0.13) * std::pow(nd, 0.88) * std::pow(td, 0.81);
             const int log2_batch = std::clamp(static_cast<int>(std::lround(std::log2(std::max(raw_batch, 1.0)))),
@@ -1043,7 +1044,7 @@ namespace lfs::io {
             EMeansSchedule schedule;
             schedule.batch_size = static_cast<int>(std::min<long long>(1LL << log2_batch, n));
             schedule.batches_per_epoch = std::max(1, n / schedule.batch_size);
-            schedule.total_updates = schedule.batches_per_epoch * epochs;
+            schedule.total_updates = schedule.batches_per_epoch * EMEANS_EPOCHS;
             schedule.alpha0 = std::min(1.0, 0.824 * std::pow(kd, -0.46) *
                                                 std::pow(static_cast<double>(schedule.batch_size), 0.90) *
                                                 std::pow(nd, -0.45) * std::pow(td, -0.11));
@@ -1693,8 +1694,7 @@ namespace lfs::io {
         std::tuple<Tensor, Tensor> emeans_swizzled_impl(
             const Tensor& shN_swizzled,
             const int n,
-            const int k,
-            const int epochs) {
+            const int k) {
             auto shN_gpu = as_cuda_contiguous(shN_swizzled);
             const auto* d_shN = reinterpret_cast<const float4*>(shN_gpu.ptr<float>());
             constexpr int SLOTS = (N_DIMS + 3) / 4;
@@ -1711,7 +1711,7 @@ namespace lfs::io {
                 return {centroids, labels};
             }
 
-            const auto schedule = emeans_schedule(n, k, epochs);
+            const auto schedule = emeans_schedule(n, k);
             const int B = schedule.batch_size;
             // Large palettes use the inverted-file candidate search during training; the
             // final labels always come from an exact assignment.
@@ -1848,10 +1848,10 @@ namespace lfs::io {
             };
 
             int step = 0;
-            for (int epoch = 0; epoch < epochs; ++epoch) {
+            for (int epoch = 0; epoch < EMEANS_EPOCHS; ++epoch) {
                 if (epoch > 0)
                     shuffle(epoch);
-                const bool last_epoch = epoch == epochs - 1;
+                const bool last_epoch = epoch == EMEANS_EPOCHS - 1;
                 for (int batch = 0; batch < schedule.batches_per_epoch; ++batch, ++step) {
                     const double progress = static_cast<double>(step) / schedule.total_updates;
                     const float alpha = static_cast<float>(
@@ -1930,7 +1930,7 @@ namespace lfs::io {
 
             LOG_DEBUG("SH e-means: n=%d k=%d dims=%d epochs=%d batch=%d batches_per_epoch=%d updates=%d "
                       "alpha0=%.4f assignment=%s splits=%d revived=%lld",
-                      n, k, N_DIMS, epochs, B, schedule.batches_per_epoch, schedule.total_updates,
+                      n, k, N_DIMS, EMEANS_EPOCHS, B, schedule.batches_per_epoch, schedule.total_updates,
                       schedule.alpha0, use_ivf ? "ivf" : "exact", use_ivf ? 0 : splits, revived_total);
             return {centroids, labels};
         }
@@ -1941,15 +1941,14 @@ namespace lfs::io {
         const Tensor& shN_swizzled,
         const int n_points,
         const int sh_coeffs,
-        const int k,
-        const int epochs) {
+        const int k) {
         if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 ||
             shN_swizzled.dtype() != DataType::Float32) {
             LOG_ERROR("emeans_sh_swizzled expects a 1D float32 swizzled shN tensor");
             return {Tensor(), Tensor()};
         }
-        if (n_points <= 0 || k <= 0 || epochs <= 0) {
-            LOG_ERROR("emeans_sh_swizzled expects positive n_points, k and epochs");
+        if (n_points <= 0 || k <= 0) {
+            LOG_ERROR("emeans_sh_swizzled expects positive n_points and k");
             return {Tensor(), Tensor()};
         }
         const auto required_floats = static_cast<int64_t>(
@@ -1963,11 +1962,11 @@ namespace lfs::io {
 
         switch (sh_coeffs * 3) {
         case 9:
-            return emeans_swizzled_impl<9>(shN_swizzled, n_points, k, epochs);
+            return emeans_swizzled_impl<9>(shN_swizzled, n_points, k);
         case 24:
-            return emeans_swizzled_impl<24>(shN_swizzled, n_points, k, epochs);
+            return emeans_swizzled_impl<24>(shN_swizzled, n_points, k);
         case 45:
-            return emeans_swizzled_impl<45>(shN_swizzled, n_points, k, epochs);
+            return emeans_swizzled_impl<45>(shN_swizzled, n_points, k);
         default:
             LOG_ERROR("emeans_sh_swizzled unsupported SH coefficient count %d. Supported: 3, 8, 15", sh_coeffs);
             return {Tensor(), Tensor()};

@@ -1644,11 +1644,6 @@ namespace lfs::io {
             }
         }
 
-        if (options_in.emeans_epochs < 1) {
-            return make_error(ErrorCode::INVALID_DATASET, "SOG e-means epochs must be at least 1",
-                              options_in.output_path);
-        }
-
         SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
@@ -1823,11 +1818,11 @@ namespace lfs::io {
                 sh_palette_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
-                     epochs = options.emeans_epochs, fast = options.fast_webp, export_started]() mutable {
+                     fast = options.fast_webp, export_started]() mutable {
                         const auto started = std::chrono::steady_clock::now();
                         auto [centroids, labels] = lfs::io::emeans_sh_swizzled(
                             shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                            palette_size, epochs);
+                            palette_size);
                         if (fast) {
                             // Deliver CPU inputs with the future so packing can
                             // proceed without a later default-stream readback.

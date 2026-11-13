@@ -875,7 +875,6 @@ namespace lfs::io {
                 SogEncodeOptions encode;
                 encode.output_path = temp.path / fs::path(filenames[f]).parent_path();
                 encode.kmeans_iterations = o.kmeans_iterations;
-                encode.emeans_epochs = o.emeans_epochs;
                 encode.use_gpu = o.use_gpu;
                 encode.provenance = stamp;
                 encode.presorted = true;

@@ -72,7 +72,6 @@ namespace lfs::io {
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
-        int emeans_epochs = 10;                            // e-means (arXiv:2611.09501) epochs for the higher-order SH palette
     };
 
     struct SsogSaveOptions {
@@ -86,14 +85,12 @@ namespace lfs::io {
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{};
-        int emeans_epochs = 10;
 
         [[nodiscard]] bool validate() const {
             return lod_levels >= 1 && lod_levels <= 8 &&
                    std::isfinite(lod_ratio) && lod_ratio > 0 && lod_ratio < 1 &&
                    chunk_count_k > 0 && chunk_min_k >= 0 &&
-                   std::isfinite(chunk_extent) && chunk_extent > 0 && kmeans_iterations >= 1 &&
-                   emeans_epochs >= 1;
+                   std::isfinite(chunk_extent) && chunk_extent > 0 && kmeans_iterations >= 1;
         }
     };
 
@@ -129,7 +126,6 @@ namespace lfs::io {
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         std::optional<glm::vec3> background_color{};
-        int emeans_epochs = 10;
     };
 
     /**

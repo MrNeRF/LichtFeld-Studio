@@ -734,7 +734,6 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
-            int sog_emeans_epochs = 10;
             int lod_levels = 4;
             float lod_ratio = 0.5f;
             int lod_chunk_count = 512;
