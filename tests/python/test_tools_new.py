@@ -344,3 +344,11 @@ class TestToolPolling:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("selected", [["group"], ["splat", "group"], ["group", "crop"]])
+def test_crop_rejects_scene_groups_even_when_transformable(monkeypatch, selected):
+    _install_scene_stub(monkeypatch, selected, {
+        "group": _node("GROUP", [1]), "splat": _node("SPLAT"), "crop": _node("CROPBOX")
+    }, {1: _node("SPLAT")})
+    assert not get_tool_by_id("builtin.cropbox").can_activate(MockContext(can_transform=True))

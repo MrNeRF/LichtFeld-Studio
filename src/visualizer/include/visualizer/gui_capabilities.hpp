@@ -160,6 +160,20 @@ namespace lfs::vis::cap {
         const std::vector<int>& indices,
         const std::vector<float>& values);
 
+    // Repeat one existing crop without converting/replacing any sibling.
+    // Convert exactly one crop, retaining its identity and siblings.
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> convertSplatCrop(
+        SceneManager& scene_manager, RenderingManager* rendering_manager,
+        const core::Uuid& volume_uuid, core::NodeType target_type);
+
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createSplatCrop(
+        SceneManager& scene_manager, RenderingManager* rendering_manager,
+        const core::Uuid& owner_uuid, core::NodeType type);
+
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> duplicateSplatCrop(
+        SceneManager& scene_manager, RenderingManager* rendering_manager,
+        const core::Uuid& source_uuid);
+
     [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> resolveCropBoxParentId(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);
@@ -244,13 +258,13 @@ namespace lfs::vis::cap {
         core::NodeId polygon_id,
         std::vector<glm::vec2> vertices);
 
-    // Adds an enabled polygon under a splat in one history entry, replacing the
-    // splat's existing crop box, ellipsoid or polygon.
+    // Adds an enabled polygon in one history entry. Explicit new instances retain
+    // every sibling; the default keeps the legacy single-volume replacement path.
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createCropPolygon(
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId parent_id,
         core::CropPolygonData data,
-        const glm::mat4& local_transform);
+        const glm::mat4& local_transform, bool new_instance = false);
 
 } // namespace lfs::vis::cap

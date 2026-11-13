@@ -98,7 +98,15 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    void registerSceneOperators();
-    void unregisterSceneOperators();
+    class CropVolumeDuplicateOperator : public Operator {
+    public:
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
+        const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
+        bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
+        OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
+    };
+
+    LFS_VIS_API void registerSceneOperators();
+    LFS_VIS_API void unregisterSceneOperators();
 
 } // namespace lfs::vis::op

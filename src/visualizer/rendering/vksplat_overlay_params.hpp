@@ -10,6 +10,7 @@
 #include "rendering/rendering.hpp"
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 struct VulkanGSRendererUniforms;
@@ -36,27 +37,20 @@ namespace lfs::vis::vksplat_overlay {
         SelectionCursor = 23,
         SelectionFlags = 24,
         VisibilityFlags = 25,
-        CropExtraBase = 26,
+        RevealParams = 26,
+        RevealEffectBounds = 27,
+        CropDirectory = 28, // (base, bucket count, 0, 0), sorted by parent index.
+        ParamCount = 29,    // Fixed prefix; optional custom tail, then dynamic crop directory/payload.
+        CropDirectoryStride = 2,
         CropParamStride = 7,
-        CropExtraCount = 15,
-        EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
         EllipsoidParamStride = 5,
-        EllipsoidExtraCount = 15,
-        // Polygon slots: flags, (half_depth, vertex_count), world->local rows,
-        // then two vertices per float4. Packed densely; the first disabled slot ends the list.
-        CropPolygonBase = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
         CropPolygonParams = 1,
         CropPolygonTransform = 2,
         CropPolygonVertices = 6,
         CropPolygonParamStride = CropPolygonVertices + lfs::core::crop_polygon::kMaxVertices / 2,
-        CropPolygonCount = 16,
-        RevealParams = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
-        RevealEffectBounds = RevealParams + 1,
-        ParamCount = RevealEffectBounds + 1,
     };
     static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewFlags);
     static_assert(CropPolygonTransform + 4 == CropPolygonVertices);
-    static_assert(CropPolygonBase + CropPolygonParamStride * CropPolygonCount == RevealParams);
 
     // The table the renderer uploads for `request`; empty if staging fails.
     [[nodiscard]] LFS_VIS_API std::vector<float> buildParams(
@@ -65,9 +59,10 @@ namespace lfs::vis::vksplat_overlay {
         bool preview_enabled,
         bool transform_indices_enabled,
         std::size_t node_mask_count,
-        bool node_visibility_cull);
+        bool node_visibility_cull,
+        std::span<const float> custom_tail = {});
 
-    // The custom effect tail (custom_effect_layout.inc) that follows that table
+    // The custom effect tail (custom_effect_layout.inc) placed after the fixed prefix
     // in a custom effect draw, with `camera` the draw's projection camera.
     [[nodiscard]] LFS_VIS_API lfs::Result<std::vector<float>> buildCustomEffectTail(
         const lfs::rendering::ViewportRenderRequest& request,
