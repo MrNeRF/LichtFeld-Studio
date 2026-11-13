@@ -324,12 +324,15 @@ Deprecated raw dataset-camera properties are still available on `Camera`:
 | `@lf.on_pre_optimizer_step` | Called before optimizer step         |
 | `@lf.on_post_step`          | Called after each step               |
 | `@lf.on_training_end`       | Called when training ends            |
+| `@lf.on_save_start`         | Called when a project save begins    |
+| `@lf.on_save_end`           | Called when a project save ends      |
 
 Callbacks registered with `lf.on_*` receive one positional hook payload. If
 you do not need it, declare the parameter as `_hook`. Keep a `lf.ControlSession()`
 for plugin-owned registrations; its `on_training_start`, `on_iteration_start`,
-`on_pre_optimizer_step`, `on_post_step`, and `on_training_end` methods register
-callbacks, and `clear()` unregisters that session's callbacks on unload.
+`on_pre_optimizer_step`, `on_post_step`, `on_training_end`, `on_save_start`,
+and `on_save_end` methods register callbacks, and `clear()` unregisters that
+session's callbacks on unload.
 The module-level decorators register callbacks until app shutdown; setting a
 Python variable to `None` does not unregister them.
 
@@ -338,6 +341,14 @@ Hook payloads are dictionaries containing `iteration`, `loss`, `num_splats`
 (the planned total). `on_training_end` additionally receives `terminal_state`:
 `"completed"`, `"stopped"`, or `"failed"`. An unspecified native outcome is
 reported as `"unknown"`; adapters must not treat it as successful completion.
+
+`on_save_start` and `on_save_end` are called for every project file (`.licht`)
+the trainer writes. Their payload adds `snapshot_id`, the same for a save's
+start and its end, `path`, and `type`: `"save"`, `"autosave"`, `"standalone"`,
+`"final"`, `"stopped"`, or `"emergency"`. `on_save_end` also receives `ok`;
+`error`, which is `None` when the save succeeded; the project's `generation`;
+the file's size in `bytes`; and `seconds`, how long the write took. A save
+given up before it was written still calls both, with `ok` false.
 
 Inside a model read boundary, `SplatData.shN_rows(rows, degree)` copies only the
 requested SH-rest rows and bands into owned Float32 CPU storage with shape

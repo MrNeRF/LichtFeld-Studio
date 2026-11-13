@@ -1329,6 +1329,17 @@ def on_post(_hook):
 @lf.on_training_end
 def on_end(_hook):
     lf.log.info(f"Training finished: {lf.finish_reason()}")
+
+@lf.on_save_start
+def on_saving(save):
+    lf.log.info(f"Saving at iteration {save['iteration']} ({save['type']})")
+
+@lf.on_save_end
+def on_saved(save):
+    if save["ok"]:
+        lf.log.info(f"Saved {save['path']}")
+    else:
+        lf.log.warn(f"Save failed: {save['error']}")
 ```
 
 For unloadable plugins, keep registrations in a `lf.ControlSession()` and

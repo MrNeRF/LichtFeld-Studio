@@ -594,6 +594,47 @@ namespace {
         return d;
     }
 
+    const char* save_type_name(const lfs::training::SaveType type) {
+        switch (type) {
+        case lfs::training::SaveType::Save: return "save";
+        case lfs::training::SaveType::Autosave: return "autosave";
+        case lfs::training::SaveType::Standalone: return "standalone";
+        case lfs::training::SaveType::Final: return "final";
+        case lfs::training::SaveType::Stopped: return "stopped";
+        case lfs::training::SaveType::Emergency: return "emergency";
+        }
+        return "save";
+    }
+
+    // The save hooks' own fields: which save, and on its end how the write went.
+    // `iteration`, `loss` and `num_splats` are those of the trained state the save holds.
+    void add_save_fields(nb::dict& payload, const ControlHook hook, const HookContext& ctx) {
+        if (!ctx.save) {
+            return;
+        }
+        const auto& save = *ctx.save;
+        payload["snapshot_id"] = save.snapshot_id;
+        payload["path"] = save.path;
+        payload["type"] = save_type_name(save.type);
+        if (hook != ControlHook::SaveEnd) {
+            return;
+        }
+        payload["ok"] = save.ok;
+        if (save.ok) {
+            payload["error"] = nb::none();
+        } else {
+            payload["error"] = save.error;
+        }
+        payload["generation"] = save.generation;
+        payload["bytes"] = save.bytes;
+        payload["seconds"] = save.seconds;
+        // A save's end may come once its trainer is gone: its state as the save began.
+        if (!ctx.trainer) {
+            payload["is_paused"] = save.is_paused;
+            payload["iterations"] = save.iterations;
+        }
+    }
+
     void invoke_python_dict_hook(const nb::object& callback, const ControlHook hook, const HookContext& ctx) {
         nb::gil_scoped_acquire guard;
         HookInvocationGuard hook_guard(ctx);
@@ -607,6 +648,9 @@ namespace {
                 case lfs::training::TrainingOutcome::Failed: payload["terminal_state"] = "failed"; break;
                 default: payload["terminal_state"] = "unknown"; break;
                 }
+            }
+            if (hook == ControlHook::SaveStart || hook == ControlHook::SaveEnd) {
+                add_save_fields(payload, hook, ctx);
             }
             callback(payload);
         } catch (const std::exception& e) {
@@ -632,6 +676,10 @@ namespace {
         void on_pre_optimizer_step(nb::callable fn) { add(ControlHook::PreOptimizerStep, std::move(fn)); }
         void on_post_step(nb::callable fn) { add(ControlHook::PostStep, std::move(fn)); }
         void on_training_end(nb::callable fn) { add(ControlHook::TrainingEnd, std::move(fn)); }
+        // The save hooks take the payload dict, as their decorators do: positional values
+        // cannot say which save.
+        void on_save_start(nb::callable fn) { add_dict(ControlHook::SaveStart, std::move(fn)); }
+        void on_save_end(nb::callable fn) { add_dict(ControlHook::SaveEnd, std::move(fn)); }
 
     private:
         struct RegistrationHandle {
@@ -646,6 +694,18 @@ namespace {
                 nb::gil_scoped_acquire gil;
                 HookInvocationGuard hook_guard(ctx);
                 (*callback)(ctx.iteration, ctx.loss, ctx.num_gaussians, ctx.is_refining);
+            };
+
+            const auto id = ControlBoundary::instance().register_callback(hook, std::move(cb));
+            registrations_.push_back({hook, id});
+            owned_callbacks_.push_back(std::move(callback));
+        }
+
+        void add_dict(ControlHook hook, nb::callable fn) {
+            nb::object fn_obj = std::move(fn);
+            auto callback = make_safe_py_callback(std::move(fn_obj));
+            auto cb = [callback, hook](const HookContext& ctx) {
+                invoke_python_dict_hook(*callback, hook, ctx);
             };
 
             const auto id = ControlBoundary::instance().register_callback(hook, std::move(cb));
@@ -672,6 +732,8 @@ namespace {
         void on_pre_optimizer_step(nb::callable cb) { add_hook(ControlHook::PreOptimizerStep, cb); }
         void on_post_step(nb::callable cb) { add_hook(ControlHook::PostStep, cb); }
         void on_training_end(nb::callable cb) { add_hook(ControlHook::TrainingEnd, cb); }
+        void on_save_start(nb::callable cb) { add_hook(ControlHook::SaveStart, cb); }
+        void on_save_end(nb::callable cb) { add_hook(ControlHook::SaveEnd, cb); }
 
         void clear() {
             handler_ = lfs::event::ScopedHandler();
@@ -981,7 +1043,9 @@ NB_MODULE(lichtfeld, m) {
         .value("iteration_start", ControlHook::IterationStart)
         .value("pre_optimizer_step", ControlHook::PreOptimizerStep)
         .value("post_step", ControlHook::PostStep)
-        .value("training_end", ControlHook::TrainingEnd);
+        .value("training_end", ControlHook::TrainingEnd)
+        .value("save_start", ControlHook::SaveStart)
+        .value("save_end", ControlHook::SaveEnd);
 
     nb::class_<PyControlSession>(m, "ControlSession")
         .def(nb::init<>())
@@ -990,6 +1054,10 @@ NB_MODULE(lichtfeld, m) {
         .def("on_pre_optimizer_step", &PyControlSession::on_pre_optimizer_step, "Register pre-optimizer callback")
         .def("on_post_step", &PyControlSession::on_post_step, "Register post-step callback")
         .def("on_training_end", &PyControlSession::on_training_end, "Register training end callback")
+        .def("on_save_start", &PyControlSession::on_save_start,
+             "Register a callback called as the trainer begins writing a project file; it receives the save's dict")
+        .def("on_save_end", &PyControlSession::on_save_end,
+             "Register a callback called once a project file is written, or failed; it receives the save's dict")
         .def("clear", &PyControlSession::clear, "Unregister all callbacks");
 
     nb::class_<PyScopedHandler>(m, "ScopedHandler")
@@ -1004,6 +1072,10 @@ NB_MODULE(lichtfeld, m) {
              "Register post-step callback")
         .def("on_training_end", &PyScopedHandler::on_training_end, nb::arg("callback"),
              "Register training end callback")
+        .def("on_save_start", &PyScopedHandler::on_save_start, nb::arg("callback"),
+             "Register save start callback")
+        .def("on_save_end", &PyScopedHandler::on_save_end, nb::arg("callback"),
+             "Register save end callback")
         .def("clear", &PyScopedHandler::clear, "Unregister all callbacks");
 
     // Context view class (caches snapshot on creation, call refresh() to update)
@@ -3616,6 +3688,20 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("callback"), "Decorator for training end handler");
 
+    m.def(
+        "on_save_start", [](nb::callable cb) {
+            register_hook(ControlHook::SaveStart, cb);
+            return cb;
+        },
+        nb::arg("callback"), "Decorator for a handler called as the trainer begins writing a project file");
+
+    m.def(
+        "on_save_end", [](nb::callable cb) {
+            register_hook(ControlHook::SaveEnd, cb);
+            return cb;
+        },
+        nb::arg("callback"), "Decorator for a handler called once a project file is written, or failed");
+
     m.def("_clear_training_hooks", []() { ControlBoundary::instance().clear_all(); });
     nb::module_::import_("atexit").attr("register")(m.attr("_clear_training_hooks"));
 
@@ -4307,6 +4393,7 @@ Example:
         // Hook decorators
         "on_training_start", "on_iteration_start",
         "on_post_step", "on_pre_optimizer_step", "on_training_end",
+        "on_save_start", "on_save_end",
         // Mesh-to-splat conversion
         "mesh_to_splat", "is_mesh2splat_active",
         "get_mesh2splat_progress", "get_mesh2splat_stage", "get_mesh2splat_error",

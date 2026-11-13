@@ -90,6 +90,10 @@ class Hook(enum.Enum):
 
     training_end = 4
 
+    save_start = 5
+
+    save_end = 6
+
 class ControlSession:
     def __init__(self) -> None: ...
 
@@ -107,6 +111,16 @@ class ControlSession:
 
     def on_training_end(self, arg: Callable, /) -> None:
         """Register training end callback"""
+
+    def on_save_start(self, arg: Callable, /) -> None:
+        """
+        Register a callback called as the trainer begins writing a project file; it receives the save's dict
+        """
+
+    def on_save_end(self, arg: Callable, /) -> None:
+        """
+        Register a callback called once a project file is written, or failed; it receives the save's dict
+        """
 
     def clear(self) -> None:
         """Unregister all callbacks"""
@@ -128,6 +142,12 @@ class ScopedHandler:
 
     def on_training_end(self, callback: Callable) -> None:
         """Register training end callback"""
+
+    def on_save_start(self, callback: Callable) -> None:
+        """Register save start callback"""
+
+    def on_save_end(self, callback: Callable) -> None:
+        """Register save end callback"""
 
     def clear(self) -> None:
         """Unregister all callbacks"""
@@ -806,6 +826,16 @@ def on_pre_optimizer_step(callback: Callable) -> Callable:
 
 def on_training_end(callback: Callable) -> Callable:
     """Decorator for training end handler"""
+
+def on_save_start(callback: Callable) -> Callable:
+    """
+    Decorator for a handler called as the trainer begins writing a project file
+    """
+
+def on_save_end(callback: Callable) -> Callable:
+    """
+    Decorator for a handler called once a project file is written, or failed
+    """
 
 class Tensor:
     def __init__(self) -> None: ...
@@ -3087,4 +3117,4 @@ def scale_scene_by_apriltags(constraints: Sequence[tuple[int, int, float]], fami
     Calibrate the complete scene from a background editor script. Explicit targets allow partial scaling; viewer-thread calls are rejected
     """
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp', 'shaders')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'on_save_start', 'on_save_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp', 'shaders')
