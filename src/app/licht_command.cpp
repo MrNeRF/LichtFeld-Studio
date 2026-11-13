@@ -216,6 +216,22 @@ namespace lfs::app {
     int run_licht_command(const core::args::LichtMode& mode) {
         const auto project = std::filesystem::absolute(mode.project_path).lexically_normal();
         switch (mode.action) {
+        case core::args::LichtMode::Action::EXPORT_PLY: {
+            const auto destination = std::filesystem::absolute(mode.export_path).lexically_normal();
+            if (lfs::core::native_fs::exists(destination)) {
+                return print_error("The export destination already exists.");
+            }
+            TerminalProgressBar bar("Exporting");
+            auto result = lfs::io::project::export_project_as(
+                project, lfs::io::project::ProjectExportFormat::Ply, destination,
+                [&bar](const float value, const std::string& stage) { bar.report(value, stage); });
+            if (!result) {
+                bar.abort();
+                return print_io_error(result.error());
+            }
+            bar.complete();
+            return 0;
+        }
         case core::args::LichtMode::Action::LIST_CHECKPOINTS:
             return list_checkpoints(project);
         case core::args::LichtMode::Action::PRUNE_CHECKPOINTS:

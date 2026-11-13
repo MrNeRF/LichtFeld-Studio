@@ -145,7 +145,7 @@ def _fingerprint(path, cancel=None):
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             if cancel is not None and cancel.is_set():
-                raise GalleryTransferCanceled("Upload paused")
+                raise GalleryTransferCanceled("Transfer paused")
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -168,7 +168,9 @@ class PortalGalleryClient:
         self.storage_hosts = None
         self._logged_storage_hosts = set()
         self.processing_deadline = None
-        self.user_agent = "LichtFeld-Studio/" + getattr(account, "_client_version", _default_client_version())
+        self.user_agent = getattr(account, "user_agent", None)
+        if not self.user_agent:
+            self.user_agent = "LichtFeld-Studio/" + (getattr(account, "_client_version", None) or _default_client_version())
 
     def _request(self, method, path, body=None):
         kwargs = {"expected_session": self.expected_session} if self.expected_session is not None else {}
@@ -361,7 +363,7 @@ class PortalGalleryClient:
 
     def download(self, scene_id, destination, *, on_progress=lambda completed, total: None, cancel=None,
                  checkpoint=None, on_checkpoint=lambda value: None, on_message=lambda message: None,
-                 final_destination=None, on_processing=lambda state: None):
+                 final_destination=None, on_processing=lambda state: None, reuse_completed=False):
         from .project_identity import ProjectPathIdentity
         destination_identity = ProjectPathIdentity.capture(destination)
         cancel = cancel or threading.Event()
@@ -394,7 +396,8 @@ class PortalGalleryClient:
                 raise ValueError("The portal could not prepare this download. Please try again later.")
             if status == "ready":
                 return self._download_representation(scene_id, choice, destination, cancel,
-                    checkpoint, on_checkpoint, on_progress, on_message, final_destination, destination_identity)
+                    checkpoint, on_checkpoint, on_progress, on_message, final_destination, destination_identity,
+                    reuse_completed=reuse_completed)
             if status != "preparing":
                 raise PortalProtocolError("Invalid gallery download status")
             if monotonic_deadline is None:
@@ -560,8 +563,14 @@ class PortalGalleryClient:
             partial.unlink(missing_ok=True)
             raise
 
+    def _recheck_download_scene(self, scene_id, scene):
+        current = self.scene(scene_id)
+        if domain_tokens(current) != domain_tokens(scene) or current.get("presentationRevision") != scene.get("presentationRevision"):
+            raise GalleryTransferInvalid("The gallery scene changed while downloading. Check gallery again.")
+
     def _download_representation(self, scene_id, choice, destination, cancel, checkpoint,
-                                 on_checkpoint, on_progress, on_message, final_destination, destination_identity):
+                                 on_checkpoint, on_progress, on_message, final_destination, destination_identity,
+                                 *, reuse_completed=False):
         identifier, total, expected_hash = (choice.get(key) for key in ("representationId", "size", "sha256"))
         if (not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,160}", identifier)
                 or type(total) is not int or total <= 0 or total > self.max_file_bytes
@@ -574,7 +583,6 @@ class PortalGalleryClient:
         scene = self.scene(scene_id)
         destination = Path(destination)
         final = Path(final_destination) if final_destination else destination
-        disk_preflight([(destination, total * 2), (final, total)])
         mkdir_private(destination.parent, parents=True, exist_ok=True)
         partial = destination.with_name("." + destination.name + ".part")
         if partial.is_symlink() or destination.is_symlink():
@@ -582,6 +590,17 @@ class PortalGalleryClient:
         saved = dict(checkpoint or {})
         pin = {"apiRepresentationId": identifier, "sceneId": scene_id, "size": total,
                "expectedSha256": expected_hash}
+        if (reuse_completed and all(saved.get(key) == value for key, value in pin.items())
+                and isinstance(saved.get("sha256"), str) and destination.is_file()
+                and destination.stat().st_size == total
+                and _fingerprint(destination, cancel) == saved["sha256"]
+                and (expected_hash is None or saved["sha256"] == expected_hash)):
+            validate_download(destination, ".licht", cancel)
+            self._recheck_download_scene(scene_id, scene)
+            destination_identity.validate()
+            on_progress(total, total)
+            return scene
+        disk_preflight([(destination, total * 2), (final, total)])
         resume = all(saved.get(key) == value for key, value in pin.items()) and partial.is_file()
         if not resume or partial.stat().st_size > total:
             if partial.exists():
@@ -624,9 +643,7 @@ class PortalGalleryClient:
             if expected_hash is not None and checksum != expected_hash:
                 raise GalleryTransferInvalid("Gallery representation checksum failed")
             validate_download(partial, ".licht", cancel)
-            current = self.scene(scene_id)
-            if domain_tokens(current) != domain_tokens(scene) or current.get("presentationRevision") != scene.get("presentationRevision"):
-                raise GalleryTransferInvalid("The gallery scene changed while downloading. Check gallery again.")
+            self._recheck_download_scene(scene_id, scene)
             on_checkpoint({**pin, "sha256": checksum})
             destination_identity.validate()
             os.replace(native_path(partial), native_path(destination))

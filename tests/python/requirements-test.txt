@@ -4,3 +4,4 @@ pytest-xdist>=3.0  # Parallel test execution
 numpy>=1.20
 Pillow>=10.0  # GPU capture integration tests
 cryptography>=42.0  # Throwaway certificate chains for TLS tests
+wheel==0.46.3  # Shared wheel normalization and RECORD validation

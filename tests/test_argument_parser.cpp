@@ -37,6 +37,18 @@ namespace {
 
 } // namespace
 
+TEST(ArgumentParserTest, StandalonePluginScriptRequiresExactlyOneExplicitPath) {
+    const char* argv[]{"LichtFeld-Studio", "plugin", "run", "local check.py", "unexpected"};
+    EXPECT_FALSE(lfs::core::args::parse_args(3, argv));
+    const auto parsed = lfs::core::args::parse_args(4, argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto* mode = std::get_if<lfs::core::args::PluginMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_EQ(mode->command, lfs::core::args::PluginMode::Command::RUN);
+    EXPECT_EQ(mode->name, "local check.py");
+    EXPECT_FALSE(lfs::core::args::parse_args(5, argv));
+}
+
 // An untrained .licht on --data-path is its own destination, so
 // --output-path is optional and the project stays bound for the run.
 TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {

@@ -33,6 +33,7 @@ def removal_sequence(gallery, tmp_path, monkeypatch):
     class Account:
         base_url = 'https://portal.lichtfeld.io'
         _client_version, _timeout = 'test', 1
+        user_agent = 'LichtFeld-Studio/test'
         email = 'test@example.com'
         def snapshot(self):
             return SimpleNamespace(signed_in=True, email=self.email, connected_since='session')

@@ -21,6 +21,19 @@ Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_vo
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
 returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
+## Export visible project splats
+
+```sh
+LichtFeld-Studio licht scene.licht --export-ply visible.ply
+```
+
+Exports the visible splats using the same closed-project materialization as the
+Project Manager, including their world transforms. The source project remains
+unchanged and an existing destination is rejected. The command requires the
+full LichtFeld Studio I/O/GPU runtime; it does not open a GUI, run project scripts
+or start training. Other project content, including environment and cameras, is
+not included in the PLY.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a
@@ -77,3 +90,7 @@ its rotation, the ROI training options and tiled training.
 combined with `--gut`. At the end of training `pose_refinement.tsv` lists each camera's move and turn, and
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
+
+## Run a local Python integration check
+
+`LichtFeld-Studio plugin run /path/to/check.py` executes an explicitly selected local script in LichtFeld Studio's Python runtime. It reuses the training script executor without preloading user plugins, opening the GUI, loading a dataset or starting training. The process returns a nonzero status if initialization or the script fails. Scripts are trusted local code and can perform any operation available to the Python runtime; do not use project metadata or downloaded content as the script path.

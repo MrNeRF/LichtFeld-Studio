@@ -174,6 +174,9 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::LichtMode>) {
+                if (mode.action == lfs::core::args::LichtMode::Action::EXPORT_PLY) {
+                    preflightGpuOrExit(false);
+                }
                 return lfs::app::run_licht_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::BatchTrainingMode>) {
                 if (!mode.params.dry_run) {

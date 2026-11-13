@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -336,6 +337,30 @@ namespace {
         auto hash_mismatch = chapter.verify_and_refresh(ref_id, path);
         ASSERT_FALSE(hash_mismatch);
         EXPECT_EQ(hash_mismatch.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
+    TEST(ProjectChapterTest, PublishedSplatMetadataUsesValidCountAndDegree) {
+        const auto id = fixed_uuid(3900);
+        SceneGraphChapter scene;
+        ASSERT_TRUE(scene.upsert_node(SceneNodeRecord{.uuid = id, .type = "splat", .name = "Asset"}));
+        ASSERT_TRUE(scene.published_splat_metadata(id));
+        EXPECT_FALSE(*scene.published_splat_metadata(id));
+        auto element = scene.dom().array_find("nodes", id.to_string());
+        ASSERT_TRUE(element);
+        using Json = lfs::io::JsonChapterDom::Json;
+        ASSERT_TRUE(element->set_json("publication", Json{{"count", 4}, {"sh_degree", 1}}));
+        const auto metadata = scene.published_splat_metadata(id);
+        ASSERT_TRUE(metadata);
+        ASSERT_TRUE(*metadata);
+        EXPECT_EQ((*metadata)->count, 4u);
+        EXPECT_EQ((*metadata)->sh_degree, 1);
+        for (const auto& invalid : {Json{{"count", 0}, {"sh_degree", 1}},
+                                    Json{{"count", 4}, {"sh_degree", 4}},
+                                    Json{{"count", 4}, {"sh_degree", "1"}},
+                                    Json{{"count", std::numeric_limits<std::uint64_t>::max()}, {"sh_degree", 0}}}) {
+            ASSERT_TRUE(element->set_json("publication", invalid));
+            EXPECT_FALSE(scene.published_splat_metadata(id));
+        }
     }
 
     TEST(ProjectChapterTest, SceneGraphRetentionHierarchyAndReverseOwners) {

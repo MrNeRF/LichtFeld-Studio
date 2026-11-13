@@ -1755,14 +1755,14 @@ _repl_out.close()
         }
     }
 
-    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts) {
+    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts, const bool load_plugins) {
         if (scripts.empty()) {
             return {};
         }
 
         if (auto status = ensure_initialized(); !status)
             return status;
-        if (!ensure_plugins_loaded())
+        if (load_plugins && !ensure_plugins_loaded())
             return lfs::Status::failure(lfs::make_error({
                 .code = lfs::ErrorCode::Unavailable,
                 .domain = lfs::ErrorDomain::Python,

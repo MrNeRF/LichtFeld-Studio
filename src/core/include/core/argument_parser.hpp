@@ -83,6 +83,7 @@ namespace lfs::core::args {
     struct PluginMode {
         enum class Command { CREATE,
                              CHECK,
+                             RUN,
                              LIST };
         Command command;
         std::string name;
@@ -91,12 +92,14 @@ namespace lfs::core::args {
         enum class Action { EMBED,
                             LIST_CHECKPOINTS,
                             PRUNE_CHECKPOINTS,
-                            REMOVE_CHECKPOINTS };
+                            REMOVE_CHECKPOINTS,
+                            EXPORT_PLY };
         std::filesystem::path project_path;
         std::optional<std::filesystem::path> dataset_path;
         Action action = Action::EMBED;
         std::size_t keep_checkpoints = 0;
         std::vector<std::int32_t> checkpoint_iterations;
+        std::filesystem::path export_path;
     };
     struct BatchTrainingMode {
         param::BatchTrainingParameters params;
