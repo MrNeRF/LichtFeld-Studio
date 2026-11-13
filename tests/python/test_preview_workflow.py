@@ -16,7 +16,7 @@ from test_preview_file_revision import settle_metadata
 def test_extracted_review_hides_extractor_only_after_success_and_can_retry(panel_modules, monkeypatch):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()
-    monkeypatch.setattr(module, "_instance", panel)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _panel_id: panel)
     changes = []
     monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: changes.append(args))
     with monkeypatch.context() as patch:
@@ -41,7 +41,7 @@ def test_pending_or_empty_review_keeps_extractor_available(panel_modules, monkey
     empty.open([], [], 0, assisted=True)
     assert not changes
     empty._metadata.close()
-    monkeypatch.setattr(module, "_instance", None)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _panel_id: None)
     module.open_extracted_frame_preview(["frame.png"])
     assert changes == [("lfs.image_preview", True)]
     panel = module.ImagePreviewPanel()
