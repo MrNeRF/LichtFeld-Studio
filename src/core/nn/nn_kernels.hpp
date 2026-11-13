@@ -8,6 +8,16 @@
 #include <cuda_runtime.h>
 
 namespace lfs::core::nn::kernels {
+    struct DeformableLevels {
+        int height[4]{};
+        int width[4]{};
+        long long offset[4]{};
+        int count = 0;
+    };
+    void deformable_attention(const void* value, const void* locations, const void* weights,
+                              void* output, long long batch, long long spatial, long long queries,
+                              long long heads, long long channels, long long points,
+                              DeformableLevels levels, DataType dtype, cudaStream_t stream);
     void resample_pil_axis(const float* input, float* output, const int* bounds, const int* coefficients,
                            int taps, int planes, int in_h, int in_w, int out_h, int out_w,
                            bool horizontal, cudaStream_t stream);

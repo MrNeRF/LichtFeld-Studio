@@ -5013,7 +5013,7 @@ namespace lfs::python {
                 }
             }); }, nb::arg("callback"), nb::arg("include_sequence") = false, "Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.");
 
-        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence) {
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence, nb::object semantic) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
@@ -5046,7 +5046,27 @@ namespace lfs::python {
                     };
                 }
             }
-            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), "UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.");
+            if (!semantic.is_none()) {
+                const auto context = nb::cast<nb::dict>(semantic);
+                if (!context.contains("descriptions"))
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                vis::gui::AssistedMaskSemantic selection;
+                selection.prepare_weights = [](const std::function<bool()>& cancelled) {
+                    return preprocessing::ensure_llmdet_weights(true, cancelled);
+                };
+                const auto rows = nb::cast<nb::list>(context["descriptions"]);
+                if (rows.empty() || rows.size() > 16)
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                for (const auto row : rows) {
+                    if (nb::len(row) > 256)
+                        throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                    selection.descriptions.push_back(nb::cast<std::vector<int>>(row));
+                }
+                if (context.contains("confidence"))
+                    selection.confidence = nb::cast<float>(context["confidence"]);
+                input.semantic = std::move(selection);
+            }
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.");
         m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
             require_ui_texture_creation_thread();
             nb::list result;
@@ -5061,6 +5081,8 @@ namespace lfs::python {
                     item["approved"] = frame.approved;
                     item["mask_path"] = core::path_to_utf8(frame.mask_path);
                     item["keyframe"] = frame.keyframe;
+                    item["matched_objects"] = frame.matched_objects;
+                    item["semantic_limited"] = frame.semantic_limited;
                     result.append(std::move(item));
                 }
             }
@@ -5102,6 +5124,9 @@ namespace lfs::python {
             result["completed"] = state.completed;
             result["total"] = state.total;
             result["approved"] = state.approved;
+            result["empty_approved"] = state.empty_approved;
+            result["matched_objects"] = state.matched_objects;
+            result["semantic_limited"] = state.semantic_limited;
             nb::list overlays;
             for (const auto& mask : state.overlays)
                 overlays.append(nb::cast(PyTensor(mask)));

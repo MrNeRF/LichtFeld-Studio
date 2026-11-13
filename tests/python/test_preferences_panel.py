@@ -1973,7 +1973,7 @@ def test_model_preferences_preserves_metadata_and_renders_native_state(preferenc
     native.update(busy=False, status="missing", message="missing", can_download=True)
     section.sync(force=True)
     row = records["managed_models"][0]
-    assert not row["path"] and not row["can_open"] and not row["available"]
+    assert not row["path"] and not row["can_open"] and not row["available"] and not row["size"]
     native.update(status="failed", message="failed", error="bad checksum")
     section.sync(force=True)
     assert records["managed_models"][0]["failed"]

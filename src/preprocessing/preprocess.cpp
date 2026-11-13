@@ -84,6 +84,12 @@ namespace {
     constexpr std::string_view kSam2ModelSha256 =
         "b4a981065f3d64fe98cd882f28e5bd3a076b39f5f0c696c7885dbe404bc18fed";
 
+    constexpr std::string_view kLlmDetModelFile = "llmdet-tiny-v1.lfw";
+    constexpr std::string_view kLlmDetModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-llmdet-tiny-v1/llmdet-tiny-v1.lfw";
+    constexpr std::string_view kLlmDetModelHash =
+        "713ec6c01b1ee41fd5c1823e0e372146213e5a2a103ca00651a9cf41805645c4";
+
     using lfs::preprocessing::CachedModel;
     using lfs::preprocessing::ModelDescriptor;
     using lfs::preprocessing::ModelPreparationCallback;
@@ -92,6 +98,7 @@ namespace {
         ModelDescriptor{CachedModel::Sam2, "SAM 2.1 Hiera Base+", "preferences.models.masking", kSam2ModelFile, kSam2ModelUrl, kSam2ModelSha256},
         ModelDescriptor{CachedModel::Moge2, "MoGe-2 ViT-B", "preferences.models.depth", kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256},
         ModelDescriptor{CachedModel::Lpips, "LPIPS VGG16 v0.1", "preferences.models.quality", kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256},
+        ModelDescriptor{CachedModel::LlmDet, "LLMDet Tiny", "preferences.models.semantic", kLlmDetModelFile, kLlmDetModelUrl, kLlmDetModelHash},
     };
 
     const ModelDescriptor& model_descriptor(const CachedModel id) {
@@ -1537,6 +1544,10 @@ namespace lfs::preprocessing {
 
     lfs::Result<core::nn::WeightFile> ensure_sam2_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
         return prepare_cached_model(CachedModel::Sam2, allow_download, cancel_requested);
+    }
+
+    lfs::Result<core::nn::WeightFile> ensure_llmdet_weights(const bool allow_download, const std::function<bool()>& cancel_requested) {
+        return prepare_cached_model(CachedModel::LlmDet, allow_download, cancel_requested);
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

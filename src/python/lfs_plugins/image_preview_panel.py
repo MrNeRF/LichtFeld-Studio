@@ -17,6 +17,8 @@ from .panels import panel_class
 from .preview_geometry import THUMB_ROW_DP, visible_thumbnail_range, view_to_source, source_to_view
 from .preview_metadata import PreviewMetadata, SourceChangedError
 from .preview_masking import FrameMaskEditor, MaskApply
+from .bert_tokenizer import BertTokenizer
+from .default_reset import LabelDefaultReset
 from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DELETE, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
@@ -37,6 +39,12 @@ ZOOM_MIN = 0.01
 ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0
 THUMB_MAX_PX = 256
+SEMANTIC_CATEGORIES = {
+    "person": "person", "car": "car", "bicycle": "bicycle", "motorcycle": "motorcycle",
+    "bus": "bus", "truck": "truck", "boat": "boat", "dog": "dog", "cat": "cat",
+    "plant": "potted plant", "chair": "chair", "bottle": "bottle",
+    "backpack": "backpack", "suitcase": "suitcase", "sky": "sky",
+}
 
 
 def _sam_key(name):
@@ -78,9 +86,14 @@ class ImagePreviewPanel(Panel):
         self._show_filmstrip = True
         self._show_overlay = False
         self._show_help = False
+        self._show_semantic_options = False
         self._sampled_color = None
         self._sample_request = None
         self._mask_editor = FrameMaskEditor(self._sam_record_edit)
+        self._default_reset = LabelDefaultReset(self._sam_reset_default, self._sam_apply_reset)
+        self._sam_tokenizer = None
+        self._sam_semantic_ui_state = None
+        self._sam_method = "manual"
         self._sam_texture = None
         self._sam_texture_key = None
         self._sam_texture_source = ""
@@ -97,11 +110,13 @@ class ImagePreviewPanel(Panel):
         self._sam_track_direction = "both"
         self._sam_syncing_sequence = False
         self._sam_progress = (0, 0, 0)
+        self._sam_empty_approved = 0
         self._sam_sequence_error = ""
         self._sam_tracking_request = 0
         self._sam_worker_busy = False
         self._sam_markers_rml = None
         self._sam_selection_options = None
+        self._sam_direction_options = None
         self._sam_syncing_selection = False
         self._mask_inverted = False
         self._metadata = PreviewMetadata()
@@ -219,6 +234,12 @@ class ImagePreviewPanel(Panel):
 
         model.bind_func("panel_label", lambda: self._get_title())
         model.bind_record_list("thumbs")
+        model.bind_record_list("semantic_categories")
+        model.bind("semantic_text", lambda: self._mask_editor.semantic_text,
+                   lambda value: self._sam_semantic_edit("semantic_text", str(value)))
+        model.bind("semantic_confidence", lambda: self._mask_editor.semantic_confidence,
+                   self._sam_set_semantic_confidence)
+        model.bind_event("remove_semantic_category", lambda _h, _e, args: self._sam_remove_category(args[0]) if args else None)
         model.bind_func("filmstrip_top_spacer_height", lambda: f"{self._filmstrip_top_spacer:.1f}dp")
         model.bind_func("filmstrip_bottom_spacer_height", lambda: f"{self._filmstrip_bottom_spacer:.1f}dp")
         self._handle = model.get_handle()
@@ -227,8 +248,11 @@ class ImagePreviewPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
+        self._default_reset.mount(doc)
         self._sam_markers_rml = None
         self._sam_selection_options = None
+        self._sam_direction_options = None
+        self._sam_semantic_ui_state = None
         self._layout_show_info = None
         self._layout_show_filmstrip = None
         self._reset_preview()
@@ -267,6 +291,10 @@ class ImagePreviewPanel(Panel):
             ("sam-flip", lambda _ev: self._sam_edit("flip_selected")),
             ("sam-show", lambda _ev: self._sam_show()),
             ("sam-generate", lambda _ev: self._sam_generate()),
+            ("sam-semantic-find", lambda _ev: self._sam_generate(semantic=True)),
+            ("sam-semantic-advanced", lambda _ev: self._toggle_chrome("_show_semantic_options")),
+            ("sam-method-manual", lambda _ev: self._set_sam_method("manual")),
+            ("sam-semantic-heading", lambda _ev: self._set_sam_method("semantic")),
             ("sam-refine", lambda _ev: self._sam_generate(True)),
             ("sam-cancel", lambda _ev: self._sam_cancel()),
             ("sam-apply", lambda _ev: self._sam_apply(False)),
@@ -300,6 +328,9 @@ class ImagePreviewPanel(Panel):
         selection = doc.get_element_by_id("sam-selection")
         if selection:
             selection.add_event_listener("change", self._sam_select_control)
+        category = doc.get_element_by_id("sam-semantic-category")
+        if category:
+            category.add_event_listener("change", self._sam_add_category)
 
         filmstrip = doc.get_element_by_id("filmstrip")
         if filmstrip:
@@ -384,6 +415,7 @@ class ImagePreviewPanel(Panel):
         return needs_redraw
 
     def on_unmount(self, doc):
+        self._default_reset.unmount()
         self._sam_cancel()
         if self._sam_sequence:
             lf.ui.sam_preview_end_sequence(self._sam_sequence["run"])
@@ -467,14 +499,20 @@ class ImagePreviewPanel(Panel):
         self._sam_sequence = sequence
         self._sam_page = "frame"
         self._sam_sequence_revision = -1
+        self._sam_method = "manual"
         self._sam_frame_summaries = {}
         self._sam_progress = (0, 0, 0)
+        self._sam_empty_approved = 0
         self._sam_tracking_request = 0
         self._sam_track_first, self._sam_track_last = 0, max(0, len(image_paths) - 1)
         self._sam_inspect_pending = bool(sequence)
         self._mask_editor = FrameMaskEditor(self._sam_record_edit)
         self._mask_editor.enabled = assisted
         self._mask_editor.weights = weights
+        self._sam_semantic_ui_state = None
+        if self._handle:
+            self._handle.dirty("semantic_text")
+            self._handle.dirty("semantic_confidence")
         if assisted:
             self._show_info = False
         if not image_paths:
@@ -842,7 +880,7 @@ class ImagePreviewPanel(Panel):
             action = (keymap.get_action_for_mouse_button(keymap.ToolMode.IMAGE_PREVIEW, mouse,
                                                         self._sam_modifiers(event), double_click)
                       if mouse is not None else keymap.Action.NONE)
-            if action == keymap.Action.IMAGE_PREVIEW_REMOVE_POINT:
+            if action == keymap.Action.IMAGE_PREVIEW_REMOVE_POINT and self._sam_method == "manual":
                 self._mask_editor.selected = self._sam_hit(event)
                 self._sam_edit("remove_selected")
                 event.stop_propagation()
@@ -850,7 +888,7 @@ class ImagePreviewPanel(Panel):
         if button != 0 or double_click:
             return
 
-        if self._mask_editor.enabled and self._mask_editor.tool != "pan":
+        if self._mask_editor.enabled and self._sam_method == "manual" and self._mask_editor.tool != "pan":
             self._sam_pointer(event)
             return
         if self._color_picker_active and self._image_paths:
@@ -1038,7 +1076,7 @@ class ImagePreviewPanel(Panel):
                  RuntimeState.language_generation.value, self._mask_editor.enabled,
                  self._mask_editor.phase, self._mask_editor.error, bool(self._mask_editor.scores),
                  self._mask_editor.can_refine, self._mask_editor.show_proposal,
-                 self._show_overlay, self._has_valid_overlay())
+                 self._show_overlay, self._has_valid_overlay(), self._sam_method)
         if (self._show_info != self._layout_show_info
                 or self._show_filmstrip != self._layout_show_filmstrip or extra != self._layout_extra):
             self._layout_show_info = self._show_info
@@ -1581,6 +1619,17 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
         self._mark_dirty()
 
+    def _set_sam_method(self, method):
+        if method not in ("manual", "semantic") or method == self._sam_method:
+            return
+        self._sam_method = method
+        # End transient gestures, keeping the draft, proposal and selected tool.
+        self._sam_tool(self._mask_editor.tool)
+        if self._doc:
+            controls = self._doc.get_element_by_id("sam-controls")
+            if controls:
+                controls.scroll_top = 0
+
     def _sam_record_edit(self, key, before, after):
         panel_ref = weakref.ref(self)
         editor = self._mask_editor
@@ -1648,6 +1697,8 @@ class ImagePreviewPanel(Panel):
                          or event.get_bool_parameter("command_key", False)) else 0))
 
     def _sam_edit(self, action):
+        if self._sam_method != "manual":
+            return
         if self._sam_apply_target is not None or self._sam_worker_busy or self._mask_editor.busy:
             return
         getattr(self._mask_editor, action)()
@@ -1669,6 +1720,7 @@ class ImagePreviewPanel(Panel):
         self._mark_dirty()
 
     def _sam_cancel(self):
+        self._sam_tokenizer = None
         self._sam_apply_target = None
         self._sam_inspect_pending = False
         self._sam_tracking_request = 0
@@ -1708,7 +1760,7 @@ class ImagePreviewPanel(Panel):
                 min(1.0, max(0.0, sy / max(1, layout["height"] - 1))))
 
     def _sam_pointer(self, event):
-        if self._sam_apply_target is not None or self._sam_worker_busy or self._mask_editor.busy:
+        if self._sam_method != "manual" or self._sam_apply_target is not None or self._sam_worker_busy or self._mask_editor.busy:
             return
         point = self._sam_source_point(event)
         if point is None:
@@ -1763,22 +1815,107 @@ class ImagePreviewPanel(Panel):
                 return "box"
         return None
 
-    def _sam_generate(self, refine=False):
+    def _sam_semantic_busy(self):
+        return (self._mask_editor.busy or self._sam_worker_busy
+                or self._sam_apply_target is not None or bool(self._sam_tracking_request))
+
+    def _sam_semantic_edit(self, name, value):
+        editor = self._mask_editor
+        if not editor.enabled or self._sam_semantic_busy() or getattr(editor, name) == value:
+            return
+        setattr(editor, name, value)
+        # Search settings describe the next request. Keep the current proposal
+        # and sequence approval until a replacement is successfully submitted.
+        editor.error = ""
+        if name == "semantic_categories":
+            self._sam_semantic_ui_state = None
+        if self._handle and name in ("semantic_text", "semantic_confidence"):
+            self._handle.dirty(name)
+        self._mark_dirty()
+
+    def _sam_set_semantic_confidence(self, value):
+        try:
+            value = int(float(value))
+        except (ValueError, TypeError, OverflowError):
+            return
+        self._sam_semantic_edit("semantic_confidence", max(1, min(99, value)))
+
+    def _sam_reset_default(self, prop):
+        if prop == "semantic_confidence":
+            return FrameMaskEditor.DEFAULT_SEMANTIC_CONFIDENCE
+        return None
+
+    def _sam_apply_reset(self, prop, value):
+        if self._sam_reset_default(prop) is None or not self._mask_editor.enabled or self._sam_semantic_busy():
+            return False
+        self._sam_set_semantic_confidence(value)
+        return self._mask_editor.semantic_confidence == value
+
+    def _sam_add_category(self, event):
+        value = event.get_parameter("value", "")
+        if value not in SEMANTIC_CATEGORIES:
+            return
+        if self._doc:
+            element = self._doc.get_element_by_id("sam-semantic-category")
+            if element:
+                element.set_attribute("value", "")
+        selected = self._mask_editor.semantic_categories
+        if value not in selected:
+            self._sam_semantic_edit("semantic_categories", selected + (value,))
+
+    def _sam_remove_category(self, value):
+        selected = tuple(key for key in self._mask_editor.semantic_categories if key != value)
+        self._sam_semantic_edit("semantic_categories", selected)
+
+    def _sam_semantic_payload(self):
+        editor = self._mask_editor
+        phrases = list(dict.fromkeys(
+            [SEMANTIC_CATEGORIES[key] for key in editor.semantic_categories]
+            + [line.strip() for line in editor.semantic_text.splitlines() if line.strip()]))
+        if not phrases:
+            raise ValueError(lf.ui.tr(_sam_key("semantic_invalid")))
+        try:
+            if self._sam_tokenizer is None:
+                self._sam_tokenizer = BertTokenizer.load()
+        except (OSError, EOFError, ValueError):
+            raise ValueError(lf.ui.tr(_sam_key("semantic_resource_error"))) from None
+        try:
+            descriptions = list(dict.fromkeys(self._sam_tokenizer.encode(phrase) for phrase in phrases))
+        except ValueError:
+            raise ValueError(lf.ui.tr(_sam_key("semantic_text_error"))) from None
+        if len(descriptions) > 16:
+            raise ValueError(lf.ui.tr(_sam_key("semantic_invalid")))
+        if 2 + sum(len(ids) - 2 for ids in descriptions) > 256:
+            raise ValueError(lf.ui.tr(_sam_key("semantic_text_error")))
+        return {"descriptions": [list(ids) for ids in descriptions],
+                "confidence": editor.semantic_confidence / 100.0}
+
+    def _sam_generate(self, refine=False, *, semantic=False):
         editor = self._mask_editor
         draft = editor.draft
         if not editor.enabled or not draft or not editor.key or self._preview_state != "ready" or editor.busy or self._sam_worker_busy or self._sam_apply_target is not None:
             return
-        stat = self._path_stat_cache.get(editor.key[0])
-        if not stat or not stat[0] or (not draft.points and not draft.box):
+        if semantic and self._sam_semantic_busy():
             return
+        stat = self._path_stat_cache.get(editor.key[0])
+        if not stat or not stat[0] or (not semantic and not draft.points and not draft.box):
+            return
+        if refine and editor.refinement_object_count > 1:
+            editor.error = lf.ui.tr(_sam_key("semantic_refine_combined"))
+            self._mark_dirty()
+            return
+        if refine and editor.refinement_object_count == 0:
+            refine = False
         base, candidate = editor.refinement if refine and editor.refinement else (0, -1)
         try:
+            arguments = {"semantic": self._sam_semantic_payload()} if semantic else {}
             self._sam_apply_target = None
             self._sam_inspect_pending = False
             self._sam_sequence_error = ""
             request = lf.ui.sam_preview_submit(editor.key[0], editor.key[1], stat[1], stat[2],
-                                               draft.points, draft.box, base, candidate, editor.weights,
-                                               **self._sam_sequence_arguments())
+                                               [] if semantic else draft.points, None if semantic else draft.box,
+                                               base, candidate, editor.weights,
+                                               **self._sam_sequence_arguments(), **arguments)
             self._sam_tracking_request = 0
             editor.invalidate()
             editor.request = request
@@ -1787,13 +1924,17 @@ class ImagePreviewPanel(Panel):
             editor.show_proposal = True
             editor.phase = "queued" if request else "closing"
         except Exception as error:
-            editor.phase, editor.error = "error", str(error)
+            # Validation or submission failure did not replace the native result.
+            # A ready proposal remains usable while the user corrects the query.
+            if not semantic or editor.phase != "ready":
+                editor.phase = "error"
+            editor.error = str(error)
         self._mark_dirty()
 
     def _sam_apply(self, exclude):
         editor = self._mask_editor
         node = self._current_camera_node(resolve_unbound=True)
-        if not node or node.read_only or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None:
+        if not node or node.read_only or editor.phase != "ready" or editor.overlay is None or not editor.key or self._sam_apply_target is not None or (not exclude and editor.matched_objects == 0):
             return
         stat = self._path_stat_cache.get(editor.key[0])
         if not stat or not stat[0]:
@@ -1826,6 +1967,10 @@ class ImagePreviewPanel(Panel):
             snapshot = lf.ui.sam_preview_poll()
             revision, approved = snapshot.get("sequence_revision"), snapshot.get("approved", 0)
             if not approved or snapshot.get("phase", "idle") in FrameMaskEditor.BUSY_PHASES:
+                return
+            if not exclude and snapshot.get("empty_approved", 0):
+                self._sam_sequence_error = lf.ui.tr("image_preview.sam_empty_keep")
+                self._mark_dirty()
                 return
             label = lf.ui.tr("image_preview.sam_save_excluded" if exclude else "image_preview.sam_save_approved")
             answered = False
@@ -1907,6 +2052,10 @@ class ImagePreviewPanel(Panel):
         editor = self._mask_editor
         stat = self._path_stat_cache.get(editor.key[0]) if editor.key else None
         if not self._sam_sequence or not stat or not stat[0] or editor.phase != "ready":
+            return
+        if editor.matched_objects == 0:
+            editor.error = lf.ui.tr("image_preview.sam_semantic_no_matches")
+            self._mark_dirty()
             return
         if self._doc and not self._sam_track_options_changed(None):
             return
@@ -2169,8 +2318,10 @@ class ImagePreviewPanel(Panel):
         if not self._sam_sequence:
             return
         progress = (state.get("completed", 0), state.get("total", 0), state.get("approved", 0))
-        if progress != self._sam_progress:
+        empty_approved = state.get("empty_approved", 0)
+        if progress != self._sam_progress or empty_approved != self._sam_empty_approved:
             self._sam_progress = progress
+            self._sam_empty_approved = empty_approved
             self._mark_dirty()
         lo, hi = self._filmstrip_range[:2] if self._filmstrip_range else (self._current_index, self._current_index + 1)
         key = (state.get("sequence_revision", 0), self._current_index, lo, hi)
@@ -2199,8 +2350,71 @@ class ImagePreviewPanel(Panel):
             status += " · " + lf.ui.tr("image_preview.sam_frame_low_confidence")
         return status
 
+    def _update_sam_semantic(self, doc):
+        editor = self._mask_editor
+        if not editor.enabled:
+            return
+        semantic = self._sam_method == "semantic"
+        for element_id, hidden in (("sam-semantic-controls", not semantic), ("sam-manual-controls", semantic)):
+            element = doc.get_element_by_id(element_id)
+            if element:
+                element.set_attribute("class", "hidden" if hidden else "")
+        for element_id, active, key in (("sam-method-manual", not semantic, "method_manual"),
+                                         ("sam-semantic-heading", semantic, "semantic_heading")):
+            button = doc.get_element_by_id(element_id)
+            if button:
+                label = lf.ui.tr(_sam_key(key))
+                button.set_text(label)
+                button.set_attribute("title", label)
+                button.set_attribute("aria-pressed", "true" if active else "false")
+                button.set_attribute("class", "btn btn--primary" if active else "btn")
+        for element_id, style in (("sam-proposals-heading", "section-label-ip"),
+                                   ("sam-candidates-row", "sam-tool-row"), ("sam-quality", "sam-note")):
+            element = doc.get_element_by_id(element_id)
+            if element:
+                element.set_attribute("class", style + (" hidden" if semantic else ""))
+        for suffix in ("heading", "descriptions", "find", "help"):
+            _set_text(doc, "sam-semantic-" + suffix, lf.ui.tr(_sam_key("semantic_" + suffix)))
+        advanced = doc.get_element_by_id("sam-semantic-advanced")
+        if advanced:
+            advanced.set_attribute("aria-expanded", "true" if self._show_semantic_options else "false")
+        options = doc.get_element_by_id("sam-semantic-options")
+        if options:
+            options.set_class("hidden", not self._show_semantic_options)
+        busy = self._sam_semantic_busy()
+        self._set_disabled(doc.get_element_by_id("sam-semantic-confidence"), busy)
+        state = (editor.semantic_categories, RuntimeState.language_generation.value, busy)
+        if state != self._sam_semantic_ui_state:
+            records = []
+            for key in editor.semantic_categories:
+                label = lf.ui.tr(_sam_key("category_" + key))
+                records.append({"value": key, "label": label, "disabled": busy,
+                                "remove_label": lf.ui.tr(_sam_key("semantic_remove_category")).format(name=label)})
+            if self._handle:
+                self._handle.update_record_list("semantic_categories", records)
+            category = doc.get_element_by_id("sam-semantic-category")
+            if category:
+                category.set_attribute("aria-label", lf.ui.tr(_sam_key("semantic_add_category")))
+                options = [("", lf.ui.tr(_sam_key("semantic_add_category")))] + [
+                    (key, lf.ui.tr(_sam_key("category_" + key))) for key in SEMANTIC_CATEGORIES
+                    if key not in editor.semantic_categories]
+                category.set_inner_rml("".join(f'<option value="{key}">{escape(label)}</option>' for key, label in options))
+                category.set_attribute("value", "")
+                self._set_disabled(category, busy or len(options) == 1)
+            self._sam_semantic_ui_state = state
+        self._set_disabled(doc.get_element_by_id("sam-semantic-text"), busy)
+        has_query = bool(editor.semantic_categories or editor.semantic_text.strip())
+        ready = self._preview_state == "ready" and bool(editor.key and has_query)
+        self._set_disabled(doc.get_element_by_id("sam-semantic-find"), busy or not ready)
+        find = doc.get_element_by_id("sam-semantic-find")
+        if find:
+            label = lf.ui.tr(_sam_key("semantic_find"))
+            binding = lf.keymap.get_trigger_description(lf.keymap.Action.IMAGE_PREVIEW_GENERATE, lf.keymap.ToolMode.IMAGE_PREVIEW)
+            find.set_attribute("title", f"{label} ({binding})" if binding else label)
+
     def _update_sam(self, doc):
         editor = self._mask_editor
+        self._update_sam_semantic(doc)
         toggle = doc.get_element_by_id("btn-sam")
         if toggle:
             toggle.set_attribute("aria-pressed", "true" if editor.enabled else "false")
@@ -2216,7 +2430,8 @@ class ImagePreviewPanel(Panel):
                 element.set_attribute("aria-pressed", "true" if editor.tool == key else "false")
         _set_text(doc, "btn-sam", lf.ui.tr("image_preview.sam_title"))
         for key in ("heading", "proposals-heading", "apply-heading", "edit-hint"):
-            _set_text(doc, "sam-" + key, lf.ui.tr(_sam_key(key.replace("-", "_"))))
+            hint = "semantic_help" if key == "edit-hint" and self._sam_method == "semantic" else key.replace("-", "_")
+            _set_text(doc, "sam-" + key, lf.ui.tr(_sam_key(hint)))
         if self._sam_sequence:
             _set_text(doc, "sam-apply-heading", lf.ui.tr("image_preview.sam_save_heading"))
         refine = doc.get_element_by_id("sam-refine")
@@ -2238,9 +2453,10 @@ class ImagePreviewPanel(Panel):
                         else lf.keymap.get_action_name(action))
                 element.set_attribute("title", f"{hint} ({binding})" if binding else hint)
         bindings = []
-        for action in (lf.keymap.Action.IMAGE_PREVIEW_DELETE,
-                       lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT,
-                       lf.keymap.Action.IMAGE_PREVIEW_GENERATE):
+        actions = ((lf.keymap.Action.IMAGE_PREVIEW_GENERATE,) if self._sam_method == "semantic" else
+                   (lf.keymap.Action.IMAGE_PREVIEW_DELETE, lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT,
+                    lf.keymap.Action.IMAGE_PREVIEW_GENERATE))
+        for action in actions:
             binding = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.IMAGE_PREVIEW)
             if binding:
                 bindings.append(f"{binding}: {lf.keymap.get_action_name(action)}")
@@ -2252,14 +2468,24 @@ class ImagePreviewPanel(Panel):
         _set_text(doc, "sam-apply", lf.ui.tr("image_preview.sam_apply"))
         _set_text(doc, "sam-exclude", lf.ui.tr("image_preview.sam_exclude"))
         applicable = editor.phase == "ready" and (editor.overlay is not None) and has_target
-        self._set_disabled(doc.get_element_by_id("sam-apply"), not applicable)
-        self._set_disabled(doc.get_element_by_id("sam-exclude"), not applicable)
+        for element_id, label in (("sam-apply", "apply"), ("sam-exclude", "exclude")):
+            button = doc.get_element_by_id(element_id)
+            empty_keep = element_id == "sam-apply" and editor.matched_objects == 0
+            self._set_disabled(button, not applicable or empty_keep)
+            if button:
+                hint_key = "semantic_no_matches" if empty_keep and has_target else "apply_dataset" if not has_target else label
+                button.set_attribute("title", lf.ui.tr(_sam_key(hint_key)))
         phase = editor.phase if not editor.error else "error"
         has_controls = bool(editor.draft and (editor.draft.points or editor.draft.box))
         status = ("" if phase == "idle" and not has_controls else
                   lf.ui.tr(_sam_key("generate_hint" if phase == "idle" else phase)))
         if phase in ("tracking", "saving", "saved") or (phase == "error" and self._sam_progress[1]):
             status += f" · {self._sam_progress[0]} / {self._sam_progress[1]}"
+        if phase == "ready" and editor.matched_objects >= 0:
+            status = (lf.ui.tr(_sam_key("semantic_no_matches")) if editor.matched_objects == 0 else
+                      lf.ui.tr(_sam_key("semantic_matches")).format(count=editor.matched_objects))
+            if editor.semantic_limited:
+                status += " " + lf.ui.tr(_sam_key("semantic_limited"))
         status += ": " + editor.error if editor.error else ""
         if self._sam_sequence_error:
             status = lf.ui.tr("image_preview.sam_error") + ": " + self._sam_sequence_error
@@ -2271,16 +2497,19 @@ class ImagePreviewPanel(Panel):
         busy = editor.busy or self._sam_worker_busy
         self._set_disabled(doc.get_element_by_id("sam-generate"), not ready or busy)
         self._set_disabled(doc.get_element_by_id("sam-refine"), not ready or busy or not editor.can_refine)
+        refine = doc.get_element_by_id("sam-refine")
+        if refine and editor.refinement_object_count > 1:
+            refine.set_attribute("title", lf.ui.tr(_sam_key("semantic_refine_combined")))
         self._set_disabled(doc.get_element_by_id("sam-cancel"), not self._sam_session_active or editor.phase == "closing")
         applying = self._sam_apply_target is not None or busy
         self._set_disabled(doc.get_element_by_id("sam-clear"), applying or not bool(editor.draft and (editor.draft.points or editor.draft.box)))
         self._set_disabled(doc.get_element_by_id("sam-remove"), applying or editor.selected is None)
         self._set_disabled(doc.get_element_by_id("sam-flip"), applying or not isinstance(editor.selected, int))
         self._set_disabled(doc.get_element_by_id("sam-undo"), applying or not lf.undo.can_undo())
-        self._set_disabled(doc.get_element_by_id("sam-show"), not bool(editor.overlays))
+        self._set_disabled(doc.get_element_by_id("sam-show"), not bool(editor.overlays) or editor.matched_objects == 0)
         self._update_sam_selection(doc)
         _set_text(doc, "sam-quality", (lf.ui.tr("image_preview.sam_quality").format(score=round(100 * editor.scores[editor.candidate]))
-                                       if editor.scores else ""))
+                                       if editor.scores and editor.matched_objects != 0 else ""))
         show = doc.get_element_by_id("sam-show")
         if show:
             show.set_attribute("aria-pressed", "true" if editor.show_proposal else "false")
@@ -2299,7 +2528,7 @@ class ImagePreviewPanel(Panel):
                 self._set_disabled(button, not available or busy)
         legend = doc.get_element_by_id("mask-legend")
         if legend:
-            proposal = editor.enabled and editor.show_proposal and editor.overlay is not None
+            proposal = editor.enabled and editor.show_proposal and editor.overlay is not None and editor.matched_objects != 0
             applied = not editor.enabled and self._show_overlay and self._has_valid_overlay()
             legend.set_attribute("class", "sam-note" if proposal or applied else "sam-note hidden")
             key = ("image_preview.sam_proposal_legend" if proposal else
@@ -2335,6 +2564,10 @@ class ImagePreviewPanel(Panel):
             element = doc.get_element_by_id(content)
             if element:
                 element.set_class("hidden", not active)
+        for row, method in (("sam-generate-row", "manual"), ("sam-semantic-find-row", "semantic")):
+            action = doc.get_element_by_id(row)
+            if action:
+                action.set_class("hidden", self._sam_method != method or (sequence and self._sam_page != "frame"))
 
     def _update_sam_sequence(self, doc, busy):
         for eid in ("sam-apply", "sam-exclude"):
@@ -2368,8 +2601,11 @@ class ImagePreviewPanel(Panel):
             direction = doc.get_element_by_id("sam-track-direction")
             options = "".join(f'<option value="{value}">{escape(lf.ui.tr(_sam_key(value)))}</option>'
                               for value in ("both", "forward", "reverse"))
-            if direction.get_inner_rml() != options:
+            # RmlUI select options are not exposed by get_inner_rml(). Rebuilding
+            # them on every refresh emits change events and keeps the UI awake.
+            if self._sam_direction_options != options:
                 direction.set_inner_rml(options)
+                self._sam_direction_options = options
             if direction.get_attribute("value", "") != self._sam_track_direction:
                 direction.set_attribute("value", self._sam_track_direction)
             self._set_disabled(direction, busy)
@@ -2386,8 +2622,9 @@ class ImagePreviewPanel(Panel):
             self._sam_syncing_sequence = False
         track = doc.get_element_by_id("sam-track")
         track.set_text(lf.ui.tr(_sam_key("stop_tracking" if self._sam_tracking_request else "track")))
-        track.set_attribute("title", lf.ui.tr("image_preview.sam_tracking_hint"))
-        self._set_disabled(track, not self._sam_tracking_request and (busy or self._mask_editor.phase != "ready"))
+        empty = self._mask_editor.matched_objects == 0
+        track.set_attribute("title", lf.ui.tr("image_preview.sam_semantic_no_matches" if empty and not self._sam_tracking_request else "image_preview.sam_tracking_hint"))
+        self._set_disabled(track, not self._sam_tracking_request and (busy or self._mask_editor.phase != "ready" or empty))
         approve_range = doc.get_element_by_id("sam-approve-range")
         if approve_range:
             approve_range.set_text(lf.ui.tr("image_preview.sam_approve_range"))
@@ -2403,8 +2640,9 @@ class ImagePreviewPanel(Panel):
         for eid, key in (("sam-save", "save_approved"), ("sam-save-exclude", "save_excluded")):
             button = doc.get_element_by_id(eid)
             button.set_text(lf.ui.tr(_sam_key(key)))
-            button.set_attribute("title", self._sam_save_message())
-            self._set_disabled(button, busy or not self._sam_progress[2])
+            empty_keep = eid == "sam-save" and self._sam_empty_approved > 0
+            button.set_attribute("title", lf.ui.tr("image_preview.sam_empty_keep") if empty_keep else self._sam_save_message())
+            self._set_disabled(button, busy or not self._sam_progress[2] or empty_keep)
 
     def _update_sam_selection(self, doc):
         editor = self._mask_editor
@@ -2436,7 +2674,7 @@ class ImagePreviewPanel(Panel):
         editor = self._mask_editor
         overlay = doc.get_element_by_id("sam-overlay")
         if overlay:
-            visible = bool(editor.enabled and editor.show_proposal and editor.overlay is not None and self._preview_state == "ready")
+            visible = bool(editor.enabled and editor.show_proposal and editor.overlay is not None and editor.matched_objects != 0 and self._preview_state == "ready")
             overlay.set_attribute("class", "image-layer" if visible else "image-layer hidden")
             if visible:
                 path = self._image_paths[self._current_index]
@@ -2452,12 +2690,12 @@ class ImagePreviewPanel(Panel):
                     self._sam_texture_key = texture_key
                 self._set_decorator(overlay, "sam-overlay", f"image({self._sam_texture_source})")
                 self._apply_zoom(overlay, path)
-            elif not editor.enabled or editor.overlay is None:
+            elif not editor.enabled or editor.overlay is None or editor.matched_objects == 0:
                 self._sam_release_texture(destroy=not editor.enabled)
         markers = doc.get_element_by_id("sam-markers")
         if markers:
             html = []
-            if editor.enabled and editor.draft and self._preview_state == "ready":
+            if editor.enabled and self._sam_method == "manual" and editor.draft and self._preview_state == "ready":
                 layout = self._get_image_layout(self._image_paths[self._current_index])
                 if layout:
                     def view(x, y):
@@ -2541,7 +2779,7 @@ class ImagePreviewPanel(Panel):
             return
         container = self._doc.get_element_by_id("image-container")
         if container:
-            if self._mask_editor.enabled and self._mask_editor.tool != "pan":
+            if self._mask_editor.enabled and self._sam_method == "manual" and self._mask_editor.tool != "pan":
                 container.set_attribute("class", "sam-prompt")
             elif self._color_picker_active:
                 container.set_attribute("class", "picker-active")
@@ -2571,7 +2809,7 @@ class ImagePreviewPanel(Panel):
             if action == keymap.Action.IMAGE_PREVIEW_DELETE:
                 self._sam_edit("remove_selected")
             elif action == keymap.Action.IMAGE_PREVIEW_GENERATE:
-                self._sam_generate()
+                self._sam_generate(semantic=self._sam_method == "semantic")
             else:
                 action = keymap.Action.NONE
             if action != keymap.Action.NONE:

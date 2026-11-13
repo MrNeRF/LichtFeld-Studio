@@ -250,7 +250,7 @@ namespace {
     // CPU separable reconstruction filter. Enumerating the whole source axis also checks
     // the GPU's truncated support and boundary normalization. PIL rounds each pass to bytes.
     std::vector<float> cpu_photo_resize(std::vector<float> input, int planes, int height, int width,
-                                        int out_h, int out_w, bool cubic) {
+                                        int out_h, int out_w, bool cubic, bool byte_rounding) {
         const auto filter = [cubic](double distance) {
             const double x = std::abs(distance);
             if (!cubic)
@@ -275,17 +275,17 @@ namespace {
                     weights[source] = filter((source + 0.5 - (target + 0.5) * scale) / std::max(1.0, scale));
                 const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
                 for (auto& weight : weights)
-                    weight = cubic ? std::round(weight / total * (1 << 22)) : weight / total;
+                    weight = byte_rounding ? std::round(weight / total * (1 << 22)) : weight / total;
                 for (int plane = 0; plane < planes; ++plane)
                     for (int other = 0; other < (horizontal ? height : width); ++other) {
                         double sum = 0;
                         for (int source = 0; source < source_size; ++source) {
                             const int y = horizontal ? other : source, x = horizontal ? source : other;
                             const float value = input[(plane * height + y) * width + x];
-                            sum += weights[source] * (cubic ? std::round(value * 255.0) : value);
+                            sum += weights[source] * (byte_rounding ? std::round(value * 255.0) : value);
                         }
                         const int y = horizontal ? other : target, x = horizontal ? target : other;
-                        output[(plane * next_h + y) * next_w + x] = cubic
+                        output[(plane * next_h + y) * next_w + x] = byte_rounding
                                                                         ? float(std::clamp(std::floor(sum / (1 << 22) + 0.5), 0.0, 255.0) / 255.0)
                                                                         : float(sum);
                     }
@@ -307,6 +307,80 @@ protected:
         ASSERT_GT(devices, 0);
     }
 };
+
+TEST_F(NnOpsTest, DeformableAttentionBilinearPaddingAndIndependentBatches) {
+    using namespace lfs::core;
+    // Two levels (2x2 and 1x1), two batches and two heads distinguish every
+    // indexing axis. The three queries sample centers, borders and outside.
+    std::vector<float> value(2 * 5 * 2 * 2);
+    for (int b = 0; b < 2; ++b)
+        for (int s = 0; s < 5; ++s)
+            for (int h = 0; h < 2; ++h)
+                for (int c = 0; c < 2; ++c)
+                    value[((b * 5 + s) * 2 + h) * 2 + c] = float(b * 100 + h * 10 + c + s);
+    std::vector<float> xy, weights, expected;
+    for (int b = 0; b < 2; ++b)
+        for (int q = 0; q < 3; ++q)
+            for (int h = 0; h < 2; ++h) {
+                for (int level = 0; level < 2; ++level)
+                    for (int p = 0; p < 2; ++p) {
+                        float x = .5f, y = .5f;
+                        if (q == 1 || (q == 0 && p == 1))
+                            x = y = 0;
+                        else if (q == 2 && level == 0)
+                            x = y = -100;
+                        else if (q == 0 && level == 0) {
+                            x = .25f;
+                            y = .75f;
+                        }
+                        xy.insert(xy.end(), {x, y});
+                        constexpr float per_sample_weights[]{.125f, .125f, .25f, .5f};
+                        weights.push_back(q == 1 ? .25f : per_sample_weights[level * 2 + p]);
+                    }
+                for (int c = 0; c < 2; ++c) {
+                    const float base = float(b * 100 + h * 10 + c);
+                    expected.push_back(q == 0 ? .53125f * base + 1.75f : q == 1 ? .25f * base + .5f
+                                                                                : .75f * base + 3.f);
+                }
+            }
+    const std::array<std::pair<int, int>, 2> levels{{{2, 2}, {1, 1}}};
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        const auto v = upload(value, {2, 5, 2, 2}, dtype);
+        // Exercise the public strided-input contract, not only a flat kernel.
+        const auto locations = upload(xy, {2, 3, 2, 2, 2, 2}, dtype).permute({0, 2, 1, 3, 4, 5}).contiguous().permute({0, 2, 1, 3, 4, 5});
+        const auto a = upload(weights, {2, 3, 2, 2, 2}, dtype);
+        const auto actual = nn::deformable_attention(v, locations, a, levels);
+        EXPECT_EQ(actual.shape(), TensorShape({2, 3, 4}));
+        EXPECT_TRUE(all_close(host_f32(actual), expected, 0, dtype == DataType::Float32 ? 1e-5f : .04f));
+        const std::array<std::pair<int, int>, 2> oversized{{{2, 3}, {1, 1}}};
+        EXPECT_THROW((void)nn::deformable_attention(v, locations, a, oversized), std::exception);
+        EXPECT_THROW((void)nn::deformable_attention(v, locations, a, {}), std::exception);
+    }
+}
+
+TEST_F(NnOpsTest, GroupNormUsesPopulationVarianceAndPerChannelAffine) {
+    using namespace lfs::core;
+    std::vector<float> input(2 * 4 * 2 * 3), expected(input.size());
+    const std::vector<float> scale{.5f, -1.f, 2.f, .25f}, bias{-.125f, .25f, .5f, -.5f};
+    for (size_t i = 0; i < input.size(); ++i)
+        input[i] = float(int(i % 17) - 8) / 4.f;
+    for (size_t first = 0; first < input.size(); first += 12) {
+        double mean = 0, variance = 0;
+        for (size_t i = first; i < first + 12; ++i)
+            mean += input[i] / 12.;
+        for (size_t i = first; i < first + 12; ++i)
+            variance += (input[i] - mean) * (input[i] - mean) / 12.;
+        for (size_t i = first; i < first + 12; ++i)
+            expected[i] = float((input[i] - mean) / std::sqrt(variance + 1e-5) * scale[i / 6 % 4] + bias[i / 6 % 4]);
+    }
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        const auto x = upload(input, {2, 4, 2, 3}, dtype);
+        const auto w = upload(scale, {4}, dtype), b = upload(bias, {4}, dtype);
+        EXPECT_TRUE(all_close(host_f32(nn::group_norm(x, w, b, 2)), expected, 0,
+                              dtype == DataType::Float32 ? 1e-5f : .003f));
+        EXPECT_THROW((void)nn::group_norm(x, w, b, 3), std::exception);
+    }
+}
 
 TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
     using namespace lfs::core;
@@ -1450,14 +1524,16 @@ TEST_F(NnOpsTest, PhotoDepthwiseConvolution) {
         }
 }
 
-TEST_F(NnOpsTest, PhotoPilBicubicResize) {
+TEST_F(NnOpsTest, PhotoPilResize) {
     // Catches omitting byte rounding after either axis or using ordinary cubic interpolation without downsampling support.
     using namespace lfs::core;
     const auto values = photo_values(2 * 3 * 11 * 13);
     auto input = upload(values, {2, 3, 11, 13}, DataType::Float32);
     for (const auto [height, width] : {std::pair{5, 7}, {19, 17}, {11, 7}, {5, 13}}) {
-        const auto expected = cpu_photo_resize(values, 6, 11, 13, height, width, true);
-        EXPECT_TRUE(all_close(host_f32(nn::resize2d_pil_bicubic(input, height, width)), expected, 0, 1e-7f));
+        for (const bool cubic : {false, true}) {
+            const auto expected = cpu_photo_resize(values, 6, 11, 13, height, width, cubic, true);
+            EXPECT_TRUE(all_close(host_f32(nn::resize2d_pil(input, height, width, cubic ? nn::ResizeMode::Cubic : nn::ResizeMode::Bilinear)), expected, 0, 1e-7f));
+        }
     }
 }
 
@@ -1468,7 +1544,7 @@ TEST_F(NnOpsTest, PhotoAntialiasedBilinearResize) {
     for (const auto dtype : {DataType::Float32, DataType::Float16}) {
         auto input = upload(values, {2, 3, 11, 13}, dtype);
         for (const auto [height, width] : {std::pair{5, 7}, {19, 17}, {1, 1}}) {
-            const auto expected = cpu_photo_resize(host_f32(input), 6, 11, 13, height, width, false);
+            const auto expected = cpu_photo_resize(host_f32(input), 6, 11, 13, height, width, false, false);
             const float tolerance = dtype == DataType::Float16 ? 6e-4f : 2e-6f;
             EXPECT_TRUE(all_close(host_f32(nn::resize2d_bilinear_antialiased(input, height, width)), expected, 0, tolerance));
         }

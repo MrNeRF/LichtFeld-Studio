@@ -142,7 +142,7 @@ def test_all_declared_reset_targets_are_labels_with_explicit_adapters():
     import re
     resources = Path(__file__).resolve().parents[2]/"src/visualizer/gui/rmlui/resources"
     expected = {"rendering.rml", "training.rml", "preferences.rml", "mesh2splat_panel.rml",
-                "histogram_panel.rml", "splat_simplify.rml", "export_panel.rml"}
+                "histogram_panel.rml", "splat_simplify.rml", "export_panel.rml", "image_preview.rml"}
     found = set()
     for path in resources.glob("*.rml"):
         for match in re.finditer(r'<([a-z]+)\b[^>]*data-(?:attr-data-)?reset-prop="([^"]+)"[^>]*>',

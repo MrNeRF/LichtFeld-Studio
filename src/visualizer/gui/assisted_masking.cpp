@@ -8,6 +8,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
+#include "core/nn/models/llmdet.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -33,12 +34,75 @@ namespace lfs::vis::gui {
     using core::DataType;
     using core::Device;
     using core::Tensor;
+    using core::nn::models::LlmDet;
     using core::nn::models::Sam2;
     namespace {
         struct FrameDrain {
             cudaStream_t stream;
             ~FrameDrain() { LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask frame lease drain"); }
         };
+
+        struct SemanticBoxes {
+            std::vector<std::array<float, 4>> boxes;
+            bool limited = false;
+        };
+
+        // Consume the decoder's lease on this worker/stream; no second image
+        // cache, decoder or CPU inference path. Only bounded CPU boxes escape.
+        SemanticBoxes find_semantic_boxes(const LlmDet& detector, const Tensor& rgb,
+                                          const core::nn::models::LlmDetText& text, int width, int height,
+                                          float confidence, cudaStream_t stream) {
+            auto predicted = detector.forward(rgb.to(DataType::Float32), text);
+            if (!predicted)
+                throw lfs::Exception(predicted.error());
+            const auto probabilities = core::nn::sigmoid(predicted->logits).to(Device::CPU, stream).contiguous();
+            const auto boxes = predicted->boxes.to(Device::CPU, stream).contiguous();
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            struct Candidate {
+                std::array<float, 4> box;
+                float score;
+            };
+            std::vector<Candidate> candidates;
+            const auto finite = [](float value) { return std::isfinite(value); };
+            if (!std::ranges::all_of(std::span(probabilities.ptr<float>(), probabilities.numel()), finite) ||
+                !std::ranges::all_of(std::span(boxes.ptr<float>(), boxes.numel()), finite))
+                throw std::runtime_error(LOC("image_preview.sam_semantic_failed"));
+            const auto tokens = probabilities.size(2);
+            for (size_t query = 0; query < boxes.size(1); ++query) {
+                float best = 0;
+                for (const auto& category : text.category_tokens)
+                    for (const int token : category)
+                        best = std::max(best, probabilities.ptr<float>()[query * tokens + size_t(token)]);
+                if (best <= confidence)
+                    continue;
+                const auto* b = boxes.ptr<float>() + query * 4;
+                std::array<float, 4> box{(b[0] - b[2] * .5f) * width, (b[1] - b[3] * .5f) * height,
+                                         (b[0] + b[2] * .5f) * width, (b[1] + b[3] * .5f) * height};
+                for (int axis = 0; axis < 4; ++axis)
+                    box[axis] = std::clamp(box[axis], 0.f, float(axis % 2 ? height : width));
+                if (box[2] > box[0] && box[3] > box[1])
+                    candidates.push_back({box, best});
+            }
+            std::ranges::stable_sort(candidates, std::greater{}, &Candidate::score);
+            SemanticBoxes result;
+            constexpr size_t max_instances = 256;
+            const auto overlap = [](const auto& a, const auto& b) {
+                const float intersection = std::max(0.f, std::min(a[2], b[2]) - std::max(a[0], b[0])) *
+                                           std::max(0.f, std::min(a[3], b[3]) - std::max(a[1], b[1]));
+                const float area = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]);
+                return intersection / std::max(area - intersection, 1e-9f);
+            };
+            for (const auto& candidate : candidates) {
+                if (std::ranges::any_of(result.boxes, [&](const auto& box) { return overlap(box, candidate.box) > 0.7f; }))
+                    continue;
+                if (result.boxes.size() == max_instances) {
+                    result.limited = true;
+                    break;
+                }
+                result.boxes.push_back(candidate.box);
+            }
+            return result;
+        }
 
         Tensor decode_mask(const std::vector<std::byte>& bytes, int width, int height) {
             auto [raw, w, h, channels] = core::load_image_from_memory(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
@@ -79,6 +143,7 @@ namespace lfs::vis::gui {
             std::filesystem::path output, weights;
             size_t retained_bytes = 0;
             size_t approved = 0;
+            size_t empty_approved = 0;
             uint64_t revision = 0;
         };
         std::shared_ptr<Sequence> sequence;
@@ -108,7 +173,8 @@ namespace lfs::vis::gui {
         }
 
         void retain(const Work& work, size_t index, std::shared_ptr<const std::vector<std::byte>> png,
-                    std::filesystem::file_time_type time, uint64_t bytes, float score, bool reliable, bool keyframe = false) {
+                    std::filesystem::file_time_type time, uint64_t bytes, float score, bool reliable, bool keyframe = false,
+                    int matched_objects = -1, bool semantic_limited = false) {
             std::lock_guard lock(mutex);
             if (release || stopping || result.request != work.id || sequence != work.sequence)
                 return;
@@ -122,16 +188,20 @@ namespace lfs::vis::gui {
             if (png->size() > budget || sequence->retained_bytes - previous > budget - png->size())
                 throw lfs::Exception(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::Core, .user_message = LOC("image_preview.sam_sequence_budget"), .detection = LFS_SOURCE_SITE_CURRENT()}));
             sequence->retained_bytes = sequence->retained_bytes - previous + png->size();
-            if (frame.summary.approved)
+            if (frame.summary.approved) {
                 --sequence->approved;
+                if (frame.summary.matched_objects == 0)
+                    --sequence->empty_approved;
+            }
             auto saved_path = std::move(frame.summary.mask_path);
-            frame = {{work.id, score, reliable, false, keyframe, std::move(saved_path)}, std::move(png), time, bytes};
+            frame = {{work.id, score, reliable, false, keyframe, std::move(saved_path), matched_objects, semantic_limited}, std::move(png), time, bytes};
             ++sequence->revision;
             ++result.completed;
         }
 
         void run() {
             std::optional<Sam2> model;
+            std::optional<LlmDet> detector;
             std::filesystem::path image, model_key;
             std::filesystem::file_time_type stamp{};
             uintmax_t bytes = 0;
@@ -142,15 +212,25 @@ namespace lfs::vis::gui {
             std::filesystem::file_time_type previous_time{};
             uint64_t previous_bytes = 0;
             uint64_t previous_id = 0;
+            int previous_matches = -1;
+            bool previous_limited = false;
             cudaStream_t stream = nullptr;
             JobHandle active;
-            const auto retire = [&] {
-                if (stream)
-                    LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask drain");
+            const auto clear_previous = [&] {
                 previous = {};
                 previous_png.reset();
                 previous_scores.clear();
                 previous_image.clear();
+                previous_time = {};
+                previous_bytes = previous_id = 0;
+                previous_matches = -1;
+                previous_limited = false;
+            };
+            const auto retire = [&] {
+                if (stream)
+                    LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask drain");
+                clear_previous();
+                detector.reset();
                 model.reset();
                 image.clear();
                 if (stream) {
@@ -205,11 +285,14 @@ namespace lfs::vis::gui {
                         result.phase = value;
                 };
                 bool model_failure = false;
+                bool preparation_failure = false;
                 try {
                     if (w.input.publish_approved) {
                         std::vector<std::pair<size_t, Sequence::Frame>> approved;
                         {
                             std::lock_guard lock(mutex);
+                            if (!w.input.exclude && w.sequence->empty_approved)
+                                throw std::runtime_error(LOC("image_preview.sam_empty_keep"));
                             for (size_t i = 0; i < w.sequence->frames.size(); ++i)
                                 if (w.sequence->frames[i].summary.approved)
                                     approved.emplace_back(i, w.sequence->frames[i]);
@@ -283,6 +366,7 @@ namespace lfs::vis::gui {
                     if (!stream)
                         LFS_CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
                     const core::CUDAStreamGuard guard(stream);
+                    SemanticBoxes detected;
                     if (w.input.review_frame >= 0) {
                         Sequence::Frame frame;
                         const auto index = size_t(w.input.review_frame);
@@ -304,6 +388,8 @@ namespace lfs::vis::gui {
                         previous_id = w.id;
                         previous_png = frame.png;
                         previous_scores = {frame.summary.score};
+                        previous_matches = frame.summary.matched_objects;
+                        previous_limited = frame.summary.semantic_limited;
                         previous_image = w.input.image;
                         previous_time = current_stamp;
                         previous_bytes = current_bytes;
@@ -321,6 +407,8 @@ namespace lfs::vis::gui {
                         if (!release && result.request == w.id) {
                             result.overlays = {std::move(overlay)};
                             result.scores = {frame.summary.score};
+                            result.matched_objects = previous_matches;
+                            result.semantic_limited = previous_limited;
                             result.phase = "ready";
                         }
                         continue;
@@ -328,32 +416,37 @@ namespace lfs::vis::gui {
                     if (w.input.export_candidate < 0) {
                         if (model && model_key != w.input.weights) {
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                            previous = {};
+                            clear_previous();
                             model.reset();
                             image.clear();
                         }
-                        if (!model || image != w.input.image || stamp != current_stamp || bytes != current_bytes) {
-                            // Release the old encoder before admitting the next source's buffers.
+                        const bool encode_image = !model || image != w.input.image || stamp != current_stamp || bytes != current_bytes;
+                        if (encode_image || w.input.semantic) {
+                            // Drain prior work before admitting the next source buffers.
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                             if (previous_image != w.input.image || previous_time != current_stamp || previous_bytes != current_bytes) {
-                                previous = {};
-                                previous_png.reset();
-                                previous_scores.clear();
-                                previous_id = 0;
+                                clear_previous();
                             }
                             size_t available = 0, total = 0;
                             LFS_CUDA_CHECK(cudaMemGetInfo(&available, &total));
                             auto [width, height, channels] = core::probe_image_info(w.input.image);
+                            if (w.input.semantic && !LlmDet::input_size(size_t(height), size_t(width)))
+                                throw std::runtime_error(LOC("image_preview.sam_semantic_geometry"));
                             preprocessing::VideoMaskFrame frame{};
                             frame.image_path = w.input.image;
                             frame.width = width;
                             frame.height = height;
                             // Credit only allocations already owned by this model, not a second estimated model reserve.
-                            const auto resident = model ? model->weights_bytes() + model->arena_bytes() : 0;
+                            const auto resident = (model ? model->weights_bytes() + model->arena_bytes() : 0) +
+                                                  (w.input.semantic && detector ? detector->weights_bytes() : 0);
+                            const auto accounted = std::min(total, available + resident);
+                            // LLMDet weights and bounded 800/1333 detector activations. The
+                            // canonical planner already accounts for source-sized buffers.
+                            const auto extra = w.input.semantic ? size_t(2) << 30 : 0;
                             const auto plan = preprocessing::plan_video_mask_resources({&frame, 1}, {},
-                                                                                       std::min(total, available + resident));
+                                                                                       accounted > extra ? accounted - extra : 0);
                             if (!plan)
-                                throw std::runtime_error(std::string(plan.error().user_message()));
+                                throw std::runtime_error(w.input.semantic ? LOC("image_preview.sam_semantic_memory") : std::string(plan.error().user_message()));
                             if (!model) {
                                 std::optional<core::nn::WeightFile> prepared_weights;
                                 auto weights = w.input.weights;
@@ -388,13 +481,49 @@ namespace lfs::vis::gui {
                                 throw std::runtime_error(decoded.error);
                             core::waitForCUDAStream(stream, decoded.stream);
                             decoded.tensor.set_stream(stream);
-                            stage("encoding", 0.3f);
-                            model_failure = true;
-                            const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
+                            if (encode_image) {
+                                // Cancellation during detection must not leave the
+                                // previous source associated with new encoder features.
+                                image.clear();
+                                stage("encoding", 0.3f);
+                                model_failure = true;
+                                const auto encoded = model->set_image(decoded.tensor.unsqueeze(0));
+                                if (!encoded)
+                                    throw std::runtime_error(std::string(encoded.error().user_message()));
+                                model_failure = false;
+                            }
+                            if (w.input.semantic) {
+                                const auto& semantic = *w.input.semantic;
+                                if (decoded.tensor.ndim() != 3 || decoded.tensor.size(0) != 3 ||
+                                    decoded.tensor.size(1) != size_t(height) || decoded.tensor.size(2) != size_t(width))
+                                    throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+                                if (!detector) {
+                                    stage("loading", 0.35f);
+                                    preparation_failure = true;
+                                    auto prepared = semantic.prepare_weights(obsolete);
+                                    if (!prepared)
+                                        throw lfs::Exception(prepared.error());
+                                    preparation_failure = false;
+                                    model_failure = true;
+                                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                                    const FrameDrain transfer_drain{stream};
+                                    auto loaded = LlmDet::load(*prepared, Device::CUDA);
+                                    if (!loaded)
+                                        throw lfs::Exception(loaded.error());
+                                    detector.emplace(std::move(*loaded));
+                                }
+                                model_failure = true;
+                                if (obsolete())
+                                    continue;
+                                auto text = detector->encode(semantic.descriptions);
+                                if (!text)
+                                    throw lfs::Exception(text.error());
+                                stage("predicting", 0.5f);
+                                detected = find_semantic_boxes(*detector, decoded.tensor.unsqueeze(0), *text,
+                                                               width, height, semantic.confidence, stream);
+                                model_failure = false;
+                            }
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream)); // Decoder owns frame leases until this point.
-                            if (!encoded)
-                                throw std::runtime_error(std::string(encoded.error().user_message()));
-                            model_failure = false;
                             image = w.input.image;
                             stamp = current_stamp;
                             bytes = current_bytes;
@@ -542,9 +671,7 @@ namespace lfs::vis::gui {
                             for (size_t i = 1; i < checkpoints.size() && !obsolete(); ++i)
                                 run_pass(checkpoints[i - 1], checkpoints[i], reverse);
                         }
-                        previous = {};
-                        previous_png.reset();
-                        previous_id = 0;
+                        clear_previous();
                         if (!obsolete())
                             stage("tracked", 1.0f);
                         continue;
@@ -583,7 +710,7 @@ namespace lfs::vis::gui {
                                 throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
                             const float score = previous_scores[size_t(w.input.export_candidate)];
                             retain(w, size_t(found - w.sequence->sources.begin()), png, current_stamp, current_bytes, score,
-                                   score >= core::nn::models::kSam2MinIou, true);
+                                   score >= core::nn::models::kSam2MinIou && !previous_limited, true, previous_matches, previous_limited);
                         }
                         std::lock_guard lock(mutex);
                         if (!release && result.request == w.id) {
@@ -593,49 +720,118 @@ namespace lfs::vis::gui {
                             result.image = w.input.image;
                             result.source_time = current_stamp;
                             result.source_bytes = current_bytes;
+                            result.matched_objects = previous_matches;
+                            result.semantic_limited = previous_limited;
                             result.phase = "mask_ready";
                         }
                         continue;
                     }
-                    std::vector<core::nn::models::Sam2PointPrompt> points;
-                    for (const auto& point : w.input.points)
-                        points.push_back({point[0] * (width - 1), point[1] * (height - 1), int(point[2])});
-                    auto box = w.input.box;
-                    if (box) {
-                        (*box)[0] *= width - 1;
-                        (*box)[2] *= width - 1;
-                        (*box)[1] *= height - 1;
-                        (*box)[3] *= height - 1;
+                    Tensor semantic_preview;
+                    if (w.input.semantic) {
+                        model_failure = true;
+                        auto low_union = Tensor::full({1, 256, 256}, -10.f, Device::CUDA);
+                        auto combined = Tensor::full({1u, size_t(height), size_t(width)}, -10.f, Device::CUDA);
+                        float quality = detected.boxes.empty() ? 0.f : 1.f;
+                        const auto prediction_quality = [stream](const core::nn::models::Sam2Prediction& prediction) {
+                            auto score = prediction.iou.to(Device::CPU, stream).contiguous();
+                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                            if (!score.numel() || !std::isfinite(score.ptr<float>()[0]))
+                                throw std::runtime_error(LOC("image_preview.sam_semantic_failed"));
+                            return score.ptr<float>()[0];
+                        };
+                        for (size_t i = 0; i < detected.boxes.size(); ++i) {
+                            if (obsolete())
+                                break;
+                            auto prediction = model->predict({}, detected.boxes[i], false, nullptr,
+                                                             core::nn::models::Sam2MaskOutput::RawLowResolution);
+                            if (!prediction)
+                                throw lfs::Exception(prediction.error());
+                            const float initial_quality = prediction_quality(*prediction);
+                            if (obsolete())
+                                break;
+                            // Refine each detector proposal before combining objects. A
+                            // union is not a valid single-object SAM refinement prompt.
+                            const auto mask_input = prediction->low_res_logits.clamp(-32.f, 32.f).unsqueeze(1);
+                            auto refined = model->predict({}, detected.boxes[i], false, &mask_input,
+                                                          core::nn::models::Sam2MaskOutput::RawLowResolution);
+                            if (!refined)
+                                throw lfs::Exception(refined.error());
+                            const float refined_quality = prediction_quality(*refined);
+                            const bool improved = refined_quality > initial_quality;
+                            const auto& selected = improved ? *refined : *prediction;
+                            auto original = model->postprocess_masks(selected.low_res_logits);
+                            if (!original)
+                                throw lfs::Exception(original.error());
+                            combined = combined.maximum(*original);
+                            low_union = low_union.maximum(selected.low_res_logits);
+                            quality = std::min(quality, improved ? refined_quality : initial_quality);
+                            stage("predicting", 0.6f + 0.3f * float(i + 1) / float(detected.boxes.size()));
+                        }
+                        if (obsolete())
+                            continue;
+                        // Keep the exact source-resolution union for Apply/export;
+                        // the low-resolution union is only a future refinement seed.
+                        semantic_preview = combined.gt(0).to(DataType::Float32);
+                        auto selected = semantic_preview.mul(255).to(DataType::UInt8).to(Device::CPU, stream).contiguous();
+                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                        auto png = encode_mask({selected.ptr<uint8_t>(), selected.numel()}, width, height);
+                        if (obsolete())
+                            continue;
+                        previous = low_union.clamp(-32.f, 32.f);
+                        previous_png = std::move(png);
+                        previous_scores = {quality};
+                        model_failure = false;
+                    } else {
+                        std::vector<core::nn::models::Sam2PointPrompt> points;
+                        for (const auto& point : w.input.points)
+                            points.push_back({point[0] * (width - 1), point[1] * (height - 1), int(point[2])});
+                        auto box = w.input.box;
+                        if (box) {
+                            (*box)[0] *= width - 1;
+                            (*box)[2] *= width - 1;
+                            (*box)[1] *= height - 1;
+                            (*box)[3] *= height - 1;
+                        }
+                        Tensor refinement;
+                        if (w.input.refine_candidate >= 0) {
+                            if (w.input.refine_request != previous_id || !previous.is_valid() ||
+                                w.input.refine_candidate >= int(previous.size(0)))
+                                throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
+                            if (previous_matches > 1)
+                                throw lfs::Exception(lfs::make_error({
+                                    .code = lfs::ErrorCode::Unsupported,
+                                    .domain = lfs::ErrorDomain::Preprocess,
+                                    .user_message = LOC("image_preview.sam_semantic_refine_combined"),
+                                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                                }));
+                            if (previous_matches != 0)
+                                refinement = previous.slice(0, w.input.refine_candidate, w.input.refine_candidate + 1).reshape({1, 1, 256, 256});
+                        }
+                        stage("predicting", 0.7f);
+                        model_failure = true;
+                        auto prediction = model->predict(points, box, true, refinement.is_valid() ? &refinement : nullptr,
+                                                         core::nn::models::Sam2MaskOutput::LowResolutionOnly);
+                        if (!prediction)
+                            throw std::runtime_error(std::string(prediction.error().user_message()));
+                        model_failure = false;
+                        previous = prediction->low_res_logits;
+                        previous_png.reset();
+                        auto scores = prediction->iou.to(Device::CPU, stream).contiguous();
+                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                        previous_scores.assign(scores.ptr<float>(), scores.ptr<float>() + previous.size(0));
                     }
-                    Tensor refinement;
-                    if (w.input.refine_candidate >= 0) {
-                        if (w.input.refine_request != previous_id || !previous.is_valid() ||
-                            w.input.refine_candidate >= int(previous.size(0)))
-                            throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
-                        refinement = previous.slice(0, w.input.refine_candidate, w.input.refine_candidate + 1).reshape({1, 1, 256, 256});
-                    }
-                    stage("predicting", 0.7f);
-                    model_failure = true;
-                    auto prediction = model->predict(points, box, true, refinement.is_valid() ? &refinement : nullptr,
-                                                     core::nn::models::Sam2MaskOutput::LowResolutionOnly);
-                    if (!prediction)
-                        throw std::runtime_error(std::string(prediction.error().user_message()));
-                    model_failure = false;
-                    previous = prediction->low_res_logits;
-                    previous_png.reset();
                     previous_id = w.id;
+                    previous_matches = w.input.semantic ? int(detected.boxes.size()) : -1;
+                    previous_limited = detected.limited;
                     previous_image = w.input.image;
                     previous_time = current_stamp;
                     previous_bytes = current_bytes;
                     const int ow = std::max(1, int(width * std::min(1.0, 1536.0 / std::max(width, height))));
                     const int oh = std::max(1, int(height * std::min(1.0, 1536.0 / std::max(width, height))));
-                    auto masks = core::nn::resize2d(previous.unsqueeze(0), oh, ow, core::nn::ResizeMode::Bilinear,
-                                                    core::nn::CoordTransform::HalfPixel)
-                                     .gt(0)
+                    auto masks = core::nn::resize2d((semantic_preview.is_valid() ? semantic_preview : previous).unsqueeze(0), oh, ow,
+                                                    core::nn::ResizeMode::Bilinear, core::nn::CoordTransform::HalfPixel)
+                                     .gt(semantic_preview.is_valid() ? 0.5f : 0.f)
                                      .to(DataType::Float32);
-                    auto scores = prediction->iou.to(Device::CPU, stream).contiguous();
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-                    previous_scores.assign(scores.ptr<float>(), scores.ptr<float>() + previous.size(0));
                     if (obsolete())
                         continue;
                     if (fs::last_write_time(image) != stamp || fs::file_size(image) != bytes)
@@ -643,19 +839,23 @@ namespace lfs::vis::gui {
                     if (w.sequence) {
                         const auto found = std::ranges::find(w.sequence->sources, w.input.image, &core::ExtractedFrame::path);
                         if (found != w.sequence->sources.end()) {
-                            auto selected = core::nn::resize2d(previous.slice(0, 0, 1).unsqueeze(0), height, width,
-                                                               core::nn::ResizeMode::Bilinear, core::nn::CoordTransform::HalfPixel)
-                                                .gt(0)
-                                                .to(DataType::Float32)
-                                                .mul(255)
-                                                .to(DataType::UInt8)
-                                                .to(Device::CPU, stream)
-                                                .contiguous();
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                            auto png = previous_png;
+                            if (!png) {
+                                auto selected = core::nn::resize2d(previous.slice(0, 0, 1).unsqueeze(0), height, width,
+                                                                   core::nn::ResizeMode::Bilinear, core::nn::CoordTransform::HalfPixel)
+                                                    .gt(0)
+                                                    .to(DataType::Float32)
+                                                    .mul(255)
+                                                    .to(DataType::UInt8)
+                                                    .to(Device::CPU, stream)
+                                                    .contiguous();
+                                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                                png = encode_mask({selected.ptr<uint8_t>(), selected.numel()}, width, height);
+                            }
                             const float score = previous_scores.front();
-                            retain(w, size_t(found - w.sequence->sources.begin()),
-                                   encode_mask({selected.ptr<uint8_t>(), selected.numel()}, width, height), current_stamp,
-                                   current_bytes, score, score >= core::nn::models::kSam2MinIou, true);
+                            retain(w, size_t(found - w.sequence->sources.begin()), std::move(png), current_stamp,
+                                   current_bytes, score, score >= core::nn::models::kSam2MinIou && !previous_limited,
+                                   true, previous_matches, previous_limited);
                         }
                     }
                     std::vector<Tensor> overlays;
@@ -666,28 +866,38 @@ namespace lfs::vis::gui {
                     if (!release && result.request == w.id) {
                         result.overlays = std::move(overlays);
                         result.scores = previous_scores;
+                        result.matched_objects = previous_matches;
+                        result.semantic_limited = previous_limited;
                         result.phase = "ready";
                     }
                 } catch (const std::exception& error) {
                     if (stream)
                         LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(stream), stream, "assisted mask error drain");
+                    // An obsolete preparation is a normal cancellation, not a
+                    // failed model. Atomic staging has already unwound here.
+                    if (preparation_failure && obsolete())
+                        continue;
                     const auto* typed = dynamic_cast<const lfs::Exception*>(&error);
                     if (w.input.tracking && model) {
                         model->reset_video();
                         image.clear();
                     }
                     if (model_failure || (typed && typed->error().domain() == lfs::ErrorDomain::CUDA)) {
-                        previous = {};
-                        previous_png.reset();
-                        previous_scores.clear();
-                        previous_id = 0;
+                        clear_previous();
+                        detector.reset();
                         model.reset();
                         image.clear();
                     }
+                    const bool semantic_failure = w.input.semantic &&
+                                                  (model_failure || (typed && typed->error().domain() == lfs::ErrorDomain::CUDA));
+                    if (semantic_failure || preparation_failure)
+                        LOG_ERROR("Semantic mask generation failed: {}", error.what());
                     std::lock_guard lock(mutex);
                     if (result.request == w.id) {
                         result.phase = "error";
-                        result.error = typed ? std::string(typed->error().user_message()) : error.what();
+                        result.error = preparation_failure ? LOC("image_preview.sam_semantic_prepare_failed") : semantic_failure ? LOC("image_preview.sam_semantic_failed")
+                                                                                                            : typed              ? std::string(typed->error().user_message())
+                                                                                                                                 : error.what();
                     }
                 }
             }
@@ -720,14 +930,22 @@ namespace lfs::vis::gui {
         }
         const auto valid = [](float v) { return std::isfinite(v) && v >= 0 && v <= 1; };
         // Retaining is a destination for export_candidate, not another request mode.
-        const int modes = int(input.tracking.has_value()) + int(input.review_frame >= 0) + int(input.publish_approved) + int(input.export_candidate >= 0);
+        const int modes = int(input.tracking.has_value()) + int(input.review_frame >= 0) + int(input.publish_approved) + int(input.export_candidate >= 0) + int(input.semantic.has_value());
         if (modes > 1 || input.review_frame < -1 || (sequence && std::ranges::none_of(sequence->sources, [&](const auto& source) {
                                                          return source.path.lexically_normal() == input.image.lexically_normal();
                                                      })))
             throw std::invalid_argument(LOC("image_preview.sam_sequence_invalid"));
         if (input.image.empty() || input.revision.empty() || input.points.size() > 256 ||
-            (input.points.empty() && !input.box && !input.tracking && !input.publish_approved && input.review_frame < 0 && input.export_candidate < 0))
+            (input.points.empty() && !input.box && !input.tracking && !input.semantic && !input.publish_approved && input.review_frame < 0 && input.export_candidate < 0))
             throw std::invalid_argument(LOC("image_preview.sam_invalid_input"));
+        if (input.semantic) {
+            auto& semantic = *input.semantic;
+            if (!std::isfinite(semantic.confidence) || semantic.confidence <= 0 || semantic.confidence >= 1)
+                throw std::invalid_argument(LOC("image_preview.sam_semantic_threshold_invalid"));
+            if (!semantic.prepare_weights || !LlmDet::valid_phrases(semantic.descriptions) || !input.points.empty() || input.box ||
+                input.refine_request || input.refine_candidate != -1)
+                throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+        }
         for (const auto& p : input.points)
             if (!valid(p[0]) || !valid(p[1]) || (p[2] != 0 && p[2] != 1))
                 throw std::invalid_argument(LOC("image_preview.sam_invalid_point"));
@@ -795,6 +1013,7 @@ namespace lfs::vis::gui {
         auto result = impl_->result;
         result.sequence_revision = impl_->sequence ? impl_->sequence->revision : 0;
         result.approved = impl_->sequence ? impl_->sequence->approved : 0;
+        result.empty_approved = impl_->sequence ? impl_->sequence->empty_approved : 0;
         return result;
     }
     void AssistedMasking::close() {
@@ -893,6 +1112,12 @@ namespace lfs::vis::gui {
                 ++sequence->approved;
             else
                 --sequence->approved;
+            if (frame.summary.matched_objects == 0) {
+                if (update.approved)
+                    ++sequence->empty_approved;
+                else
+                    --sequence->empty_approved;
+            }
             frame.summary.approved = update.approved;
             changed = true;
         }
@@ -946,8 +1171,11 @@ namespace lfs::vis::gui {
         auto& frame = sequence->frames[index];
         if (frame.png)
             sequence->retained_bytes -= frame.png->size();
-        if (frame.summary.approved)
+        if (frame.summary.approved) {
             --sequence->approved;
+            if (frame.summary.matched_objects == 0)
+                --sequence->empty_approved;
+        }
         auto saved_path = std::move(frame.summary.mask_path);
         frame = {};
         frame.summary.mask_path = std::move(saved_path);

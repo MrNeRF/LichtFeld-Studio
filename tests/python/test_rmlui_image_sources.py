@@ -203,6 +203,13 @@ class _DocumentStub:
         if "main-image-a" in elements:
             self._elements.setdefault("main-image-b", _ElementStub())
         self.removed_models = []
+        self.attributes = {}
+
+    def has_attribute(self, name):
+        return name in self.attributes
+
+    def set_attribute(self, name, value):
+        self.attributes[name] = value
 
     def get_element_by_id(self, element_id):
         return self._elements.get(element_id)

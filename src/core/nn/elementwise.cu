@@ -12,9 +12,54 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
+#include <math_constants.h>
 
 namespace lfs::core::nn::kernels {
     namespace {
+
+        __global__ void deformable_attention_kernel(
+            const void* value, const void* locations, const void* weights, void* output,
+            long long total, long long spatial, long long queries, long long heads,
+            long long channels, long long points, DeformableLevels levels, bool half) {
+            for (long long i = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+                 i < total; i += static_cast<long long>(blockDim.x) * gridDim.x) {
+                const auto channel = i % channels, head = i / channels % heads;
+                const auto query = i / (channels * heads) % queries;
+                const auto batch = i / (channels * heads * queries);
+                float sum = 0;
+                for (int level = 0; level < levels.count; ++level) {
+                    const int height = levels.height[level], width = levels.width[level];
+                    for (long long point = 0; point < points; ++point) {
+                        const auto sample = ((((batch * queries + query) * heads + head) * levels.count + level) * points + point);
+                        const float x = device::ld_strided(locations, sample * 2, half) * width - 0.5f;
+                        const float y = device::ld_strided(locations, sample * 2 + 1, half) * height - 0.5f;
+                        const float weight = device::ld_strided(weights, sample, half);
+                        if (!isfinite(x) || !isfinite(y)) {
+                            sum = CUDART_NAN_F;
+                            continue;
+                        }
+                        // Reject before floor/cast: arbitrarily distant coordinates are valid zero padding.
+                        if (x <= -1 || x >= width || y <= -1 || y >= height)
+                            continue;
+                        const int x0 = int(floorf(x)), y0 = int(floorf(y));
+                        const float dx = x - x0, dy = y - y0;
+                        float sampled = 0;
+                        for (int iy = 0; iy < 2; ++iy)
+                            for (int ix = 0; ix < 2; ++ix) {
+                                const int sx = x0 + ix, sy = y0 + iy;
+                                if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
+                                    const auto position = levels.offset[level] + static_cast<long long>(sy) * width + sx;
+                                    const auto index = ((batch * spatial + position) * heads + head) * channels + channel;
+                                    sampled += device::ld_strided(value, index, half) *
+                                               (ix ? dx : 1 - dx) * (iy ? dy : 1 - dy);
+                                }
+                            }
+                        sum += sampled * weight;
+                    }
+                }
+                device::st_strided(output, i, sum, half);
+            }
+        }
 
         __global__ void resample_pil_axis_kernel(const float* input, float* output, const int* bounds,
                                                  const int* coefficients, int taps, int count,
@@ -1193,6 +1238,19 @@ namespace lfs::core::nn::kernels {
         fourier_pe_grid_kernel<<<grid, block, 0, stream>>>(gaussian, output, height, width, feats,
                                                            dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.fourier_pe_grid");
+    }
+
+    void deformable_attention(const void* value, const void* locations, const void* weights,
+                              void* output, long long batch, long long spatial, long long queries,
+                              long long heads, long long channels, long long points,
+                              DeformableLevels levels, DataType dtype, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/deformable_attention");
+        const auto total = batch * queries * heads * channels;
+        const int grid = static_cast<int>(std::min(2048LL, (total + 255) / 256));
+        deformable_attention_kernel<<<grid, 256, 0, stream>>>(
+            value, locations, weights, output, total, spatial, queries, heads, channels,
+            points, levels, dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.deformable_attention");
     }
 
 } // namespace lfs::core::nn::kernels
