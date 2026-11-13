@@ -33,4 +33,7 @@ namespace lfs::app {
 
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params);
 
+    int run_auto_tile_training(const lfs::core::param::TrainingParameters& params,
+                               const std::vector<std::string>& command_line);
+
 } // namespace lfs::app

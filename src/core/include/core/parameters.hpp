@@ -621,6 +621,69 @@ namespace lfs::core {
             // Unset keeps the box axis-aligned with its corners stored as given.
             std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
 
+            // CLI auto-tiling is orchestrated by the parent process; each tile is a fresh headless run.
+            std::optional<std::pair<int, int>> auto_tile_grid = std::nullopt;
+            int auto_tile_count = 0;
+            float auto_tile_size = 0.0f;
+            float tile_overlap = 0.15f;
+            bool auto_tile_align_pca = true;
+            std::string auto_tile_align_mode = "obb_3d";
+            std::string auto_tile_source = "points";
+            float auto_tile_quantile = 0.02f;
+            bool auto_tile_crop = true;
+            bool auto_tile_merge = true;
+            // Reject or coalesce cells that do not have enough independent
+            // multi-view evidence before the expensive coarse pass starts.
+            int tile_min_cameras = 2;
+            // Bound the per-tile camera/mask set for large captures while
+            // retaining a coverage-first subset.  This protects the dense
+            // coarse-mask pass from a tile that is visible in every image.
+            int tile_max_cameras = 512;
+            int tile_min_multi_view_cells = 2;
+            bool tile_merge_infeasible = true;
+            // Extra final ownership extent on the scene-facing local OBB X/Y
+            // sides of boundary tiles. Camera assignment deliberately happens first.
+            float tile_boundary_padding = 0.0f;
+            // Internal: prevents a worker launched by the auto-tile parent from
+            // recursively becoming another auto-tile parent through --config.
+            bool tile_child_job = false;
+            float tile_outside_loss_weight = 0.0f;
+            // A low-resolution global pass anchors each local optimization.
+            int tile_coarse_iterations = 5000;
+            int tile_coarse_resize_factor = 4;
+            // The coarse model is rasterized with its actual Gaussian
+            // footprints to make conservative tile loss masks.  This is kept
+            // intentionally low resolution because the result is resized in
+            // each worker before it is applied to a training image.
+            int tile_visibility_mask_resolution = 64;
+            float tile_visibility_min_alpha = 0.15f;
+            float tile_visibility_foreign_weight = 0.15f;
+            // A first-class partitioning run must prove that its masks came
+            // from dense Gaussian rasterization. Disable only for recovery of
+            // old/manual jobs where the sparse estimator is acceptable.
+            bool tile_require_dense_masks = true;
+            // Relative exposure fitting samples every participating image and
+            // can be expensive on thousands of views, so it is opt-in.  The
+            // lock below enables it implicitly because a shared reference is
+            // otherwise unavailable.
+            bool tile_calibrate_exposure = false;
+            // This optional lock disables per-tile learned appearance
+            // correction so individual tiles cannot drift away from the
+            // calibrated shared reference.
+            bool tile_lock_exposure_correction = false;
+            std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
+            // Internal: parent-job snapshot of the cameras enabled in the GUI
+            // scene.  The parent uses it before planning so disabled views
+            // cannot affect bounds, feasibility, coarse training, or tiles.
+            std::optional<std::filesystem::path> tile_source_camera_uids_path = std::nullopt;
+            std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
+            std::optional<std::filesystem::path> tile_exposure_gains_path = std::nullopt;
+            std::optional<std::array<float, 6>> tile_contextbox = std::nullopt;
+            // Internal: per-camera conservative masks derived from dense
+            // global-coarse Gaussian depth/opacity rasterization. Tile jobs
+            // only consume this file.
+            std::optional<std::filesystem::path> tile_depth_masks_path = std::nullopt;
+
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;
