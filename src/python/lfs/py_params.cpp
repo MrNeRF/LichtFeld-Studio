@@ -1131,6 +1131,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_flip = v; }); },
                 "Also compute FLIP per evaluated image and save its error map next to the evaluation images")
             .def_prop_rw(
+                "eval_green_infill",
+                [](PyOptimizationParams& self) { return self.params().eval_green_infill; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_green_infill = v; }); },
+                "Also score with opaque green filling the inside of a mesh, so a see-through surface loses score")
+            .def_prop_rw(
                 "eval_mask",
                 [](PyOptimizationParams& self) { return self.params().eval_mask; },
                 [](PyOptimizationParams& self, const std::string& v) {
@@ -1295,6 +1300,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.mip_filter = v; }); },
                 "Enable mip filtering (anti-aliasing)")
+            .def_prop_rw(
+                "pose_opt",
+                [](PyOptimizationParams& self) { return self.params().pose_opt; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.pose_opt = v; }); },
+                "Refine the training camera poses during training; the refined poses replace the cameras' own")
             .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },
