@@ -1200,7 +1200,10 @@ def test_host_transfer_keeps_session_only_for_same_enabled_instance(panel_module
     monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: closed.append(True))
     monkeypatch.setattr(module.lf.ui, "release_rml_texture", released.append, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_end_sequence", ended.append, raising=False)
-    panel.on_unmount(SimpleNamespace(remove_data_model=lambda name: None))
+    doc = SimpleNamespace(remove_data_model=lambda name: None)
+    panel._default_reset._doc = doc
+    panel.on_unmount(doc)
+    assert panel._default_reset._doc is None
     assert destroyed == [True]
     assert released == ["existing-texture"]
     assert panel._sam_texture is None

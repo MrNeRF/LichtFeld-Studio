@@ -21,6 +21,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL.h>
 #include <gtest/gtest.h>
+#include <string_view>
 
 namespace lfs::vis {
     namespace {
@@ -452,6 +453,12 @@ namespace lfs::vis {
         manager().activateInput(context, [](const gui::PanelInputState&) {}, false);
         const auto generation = lfs::python::redraw_request_generation();
         const bool supported = manager().setNativeWindowPinned("test.input_float", true);
+        if (!manager().nativeWindowPinned("test.input_float").has_value()) {
+            EXPECT_FALSE(supported);
+            EXPECT_FALSE(topmost());
+            EXPECT_EQ(lfs::python::redraw_request_generation(), generation);
+            return;
+        }
         EXPECT_EQ(supported, topmost());
         EXPECT_EQ(manager().nativeWindowPinned("test.input_float"), supported);
         EXPECT_EQ(lfs::python::redraw_request_generation() > generation, supported);
@@ -494,6 +501,26 @@ namespace lfs::vis {
         EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
         EXPECT_FALSE(manager().nativeWindowPinned("unknown").has_value());
         EXPECT_FALSE(manager().setNativeWindowPinned("unknown", true));
+    }
+
+    TEST_F(SidebarInputDispatchTest, NativeWaylandDoesNotExposeDesktopPin) {
+        const char* const driver = SDL_GetCurrentVideoDriver();
+        if (!driver || std::string_view(driver) != "wayland")
+            GTEST_SKIP() << "Requires the native Wayland video driver";
+
+        registerInputFloat();
+        const auto [context, window] = attachDesktopContext("wayland-pin", "test.input_float");
+        ASSERT_NE(context, nullptr);
+        ASSERT_NE(window, nullptr);
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(gui::PanelRegistry::instance().native_window_pinned("test.input_float"));
+
+        manager().activateInput(context_, [](const gui::PanelInputState&) {}, true, {}, true);
+        EXPECT_FALSE(manager().setNativeWindowPinned("test.input_float", true));
+        EXPECT_FALSE(manager().nativeWindowPinned("test.input_float").has_value());
+        EXPECT_FALSE(gui::PanelRegistry::instance().native_window_pinned("test.input_float"));
+        manager().deactivateInput(context_);
     }
 
     TEST_F(SidebarInputDispatchTest, GamepadDiscoveryLifetimeFollowsVisibleDiagnostics) {

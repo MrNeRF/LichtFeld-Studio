@@ -428,7 +428,7 @@ def set_panel_enabled(panel_id: str, enabled: bool) -> None:
 
 def get_panel_always_on_top(panel_id: str) -> bool | None:
     """
-    Get the session pin choice, or None if the panel has no desktop window.
+    Get the session pin choice, or None if the panel has no desktop window or pinning is unavailable.
     """
 
 def set_panel_always_on_top(panel_id: str, enabled: bool) -> bool:

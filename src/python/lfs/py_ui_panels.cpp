@@ -710,7 +710,7 @@ namespace lfs::python {
                     },
                     std::optional<bool>{});
             },
-            nb::arg("panel_id"), "Get the session pin choice, or None if the panel has no desktop window.");
+            nb::arg("panel_id"), "Get the session pin choice, or None if the panel has no desktop window or pinning is unavailable.");
         m.def(
             "set_panel_always_on_top", [](std::string panel_id, const bool enabled) {
                 return invoke_on_viewer(

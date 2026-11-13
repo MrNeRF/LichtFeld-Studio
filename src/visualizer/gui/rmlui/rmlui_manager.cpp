@@ -84,6 +84,11 @@ namespace lfs::vis::gui {
     }
 
     namespace {
+        bool nativeWindowPinSupported() {
+            const char* const driver = SDL_GetCurrentVideoDriver();
+            return driver && std::string_view(driver) != "wayland";
+        }
+
         RenderInterface_VK::ExternalContext nativeRenderContext(VulkanContext& vulkan_context) {
             RenderInterface_VK::ExternalContext context{};
             context.instance = vulkan_context.instance();
@@ -327,6 +332,8 @@ namespace lfs::vis::gui {
     }
 
     std::optional<bool> RmlUIManager::nativeWindowPinned(const std::string_view panel_id) const {
+        if (!nativeWindowPinSupported())
+            return std::nullopt;
         for (const auto& [context, native] : native_windows_) {
             const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
             if (panel_id == id && !panel_id.empty())
@@ -336,6 +343,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlUIManager::setNativeWindowPinned(const std::string_view panel_id, const bool pinned) {
+        if (!nativeWindowPinSupported())
+            return false;
         for (const auto& [context, native] : native_windows_) {
             const char* id = SDL_GetStringProperty(SDL_GetWindowProperties(native->window), "lfs.panel_id", "");
             if (panel_id != id || panel_id.empty())
