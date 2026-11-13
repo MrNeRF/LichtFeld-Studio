@@ -119,6 +119,21 @@ def test_builtin_panels_can_register_again(camera_runtime, tmp_path):
         _editor(endpoint, "import lichtfeld as lf; assert lf.ui.get_panel_object('lfs.rendering') is not None")
 
 
+def test_preview_opens_on_new_lazy_panel_after_builtin_reregistration(camera_runtime, tmp_path):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    _ui_editor(camera_runtime, "import lichtfeld as lf, lfs_plugins\n"
+               "from lfs_plugins.image_preview_panel import open_image_preview\n"
+               "from pathlib import Path\n"
+               f"open_image_preview([Path({str(first)!r})], [None], 0)\n"
+               "old = lf.ui.get_panel_object('lfs.image_preview')._load()\n"
+               "assert lfs_plugins.register_builtin_panels()\n"
+               f"open_image_preview([Path({str(second)!r})], [None], 0)\n"
+               "new = lf.ui.get_panel_object('lfs.image_preview')._load()\n"
+               "assert new is not old\n"
+               f"assert str(new._image_paths[0]) == str(Path({str(second)!r}).resolve())")
+
+
 @pytest.mark.parametrize("retained", [True, False])
 @pytest.mark.parametrize("unregister_first", ["none", "class", "module", "all"])
 def test_panel_id_can_register_again(camera_runtime, tmp_path, retained, unregister_first):

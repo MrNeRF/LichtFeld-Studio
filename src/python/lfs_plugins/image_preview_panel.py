@@ -49,7 +49,6 @@ def _sam_confirmation_rml(message):
                    for i, part in enumerate(paragraphs))
 
 
-_instance = None
 _pending_open = None
 _RML_PATH_SAFE_CHARS = "/:._-~"
 
@@ -62,8 +61,7 @@ def _encode_rml_path(path: Path | str) -> str:
 class ImagePreviewPanel(Panel):
 
     def __init__(self):
-        global _instance, _pending_open
-        _instance = self
+        global _pending_open
 
         self._image_paths: list[Path] = []
         self._mask_paths: list[Optional[Path]] = []
@@ -2719,9 +2717,7 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
     elif assisted:
         _pending_open += (True, weights)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
-    panel = _instance
-    if panel is None:
-        panel = lf.ui.get_panel_object("lfs.image_preview")
+    panel = lf.ui.get_panel_object("lfs.image_preview")
     pending = _pending_open
     if panel and pending is not None:
         _pending_open = None
