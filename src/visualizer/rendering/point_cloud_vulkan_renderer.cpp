@@ -1588,8 +1588,8 @@ namespace lfs::vis {
         }
 
         // Device-side copy of `src` into `dst`. Returns false when interop is
-        // unavailable; the caller then falls back to host staging.
-        [[nodiscard]] std::expected<bool, std::string> copyViaInterop(
+        // unavailable or fails; the caller then falls back to host staging.
+        [[nodiscard]] bool copyViaInterop(
             const lfs::core::Tensor& src,
             const lfs::core::DataType dtype,
             const VkBufferUsageFlags extra_usage,
@@ -1613,8 +1613,10 @@ namespace lfs::vis {
                 }
                 auto owner = tensor->external_storage_owner();
                 if (!owner) {
-                    return std::unexpected(std::format(
-                        "Point-cloud {} interop tensor has no Vulkan storage owner", what));
+                    LOG_WARN("Point-cloud {} interop tensor has no Vulkan storage owner, using host staging",
+                             what);
+                    interop_unavailable = true;
+                    return false;
                 }
                 tensor->set_stream(upload_stream.stream());
                 dst.storage = std::static_pointer_cast<VulkanExternalTensorStorage>(std::move(owner));
@@ -1676,13 +1678,9 @@ namespace lfs::vis {
             if (pos_key != cache.cached_positions_ptr || cache.cached_positions_count != n_points ||
                 cache.cached_positions_revision != req.positions_revision ||
                 bufferRef(cache.positions, cache.positions_interop).buffer == VK_NULL_HANDLE) {
-                auto on_gpu = copyViaInterop(*req.positions, lfs::core::DataType::Float32,
-                                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                             cache.positions_interop, cache.positions, "positions");
-                if (!on_gpu) {
-                    return std::unexpected(on_gpu.error());
-                }
-                if (!*on_gpu) {
+                if (!copyViaInterop(*req.positions, lfs::core::DataType::Float32,
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                    cache.positions_interop, cache.positions, "positions")) {
                     std::vector<float> host;
                     if (!tensorToHost(*req.positions, host)) {
                         return std::unexpected<std::string>("Failed to read positions to CPU");
@@ -1715,13 +1713,9 @@ namespace lfs::vis {
                         : (col_dtype == lfs::core::DataType::UInt8
                                ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
                                : req.colors->to(lfs::core::DataType::Float32));
-                auto on_gpu = copyViaInterop(colors_f32, lfs::core::DataType::Float32,
-                                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                             cache.colors_interop, cache.colors, "colors");
-                if (!on_gpu) {
-                    return std::unexpected(on_gpu.error());
-                }
-                if (!*on_gpu) {
+                if (!copyViaInterop(colors_f32, lfs::core::DataType::Float32,
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                    cache.colors_interop, cache.colors, "colors")) {
                     std::vector<float> host;
                     if (!tensorToHost(colors_f32, host)) {
                         return std::unexpected<std::string>("Failed to read colors to CPU");
@@ -1867,7 +1861,7 @@ namespace lfs::vis {
                     cached_count != n_points ||
                     (cached_revision && *cached_revision != revision);
                 if (changed) {
-                    std::expected<bool, std::string> on_gpu = false;
+                    bool on_gpu = false;
                     if (interopAvailable()) {
                         on_gpu = copyViaInterop(mask->flatten().to(lfs::core::DataType::UInt8),
                                                 lfs::core::DataType::Int32,
@@ -1879,9 +1873,6 @@ namespace lfs::vis {
                         releaseInterop(interop);
                     }
                     if (!on_gpu) {
-                        return std::unexpected(on_gpu.error());
-                    }
-                    if (!*on_gpu) {
                         auto host = maskTensorToUint32Host(*mask);
                         if (host.size() != n_points) {
                             return std::unexpected<std::string>(
