@@ -44,6 +44,7 @@ namespace lfs::io {
         void* cuda_stream = nullptr;
         const lfs::core::UndistortParams* undistort = nullptr;
         bool output_uint8 = false;
+        // Bypass encoded blob-cache reads and writes for this request.
         bool skip_blob_cache = false;
         // Keeps 16-bit samples for this request even when the loader decodes 8-bit by default.
         bool decode_16bit = false;

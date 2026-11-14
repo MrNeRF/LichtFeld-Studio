@@ -194,14 +194,15 @@ TEST_F(PipelinedImageLoaderTest, DecoderWarmupSharesDecodersInEitherLifetimeOrde
 }
 
 TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencoding) {
-    for (const bool high_precision : {false, true}) {
-        SCOPED_TRACE(high_precision);
+    for (const auto [high_precision, bypass] : {std::pair{false, false}, {true, false}, {false, true}, {true, true}}) {
+        SCOPED_TRACE(::testing::Message() << "16-bit=" << high_precision << ", bypass=" << bypass);
         auto settings = config();
         settings.use_16bit_color = high_precision;
         PipelinedImageLoader loader(settings);
         auto input = request(0, 0, false);
         input.params.resize_factor = 1;
         input.params.output_uint8 = !high_precision;
+        input.params.skip_blob_cache = bypass;
         loader.prefetch({input});
         const auto ready = loader.get();
         ASSERT_TRUE(ready.tensor.is_valid());
@@ -215,6 +216,8 @@ TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencodi
         const auto repeated = loader.get();
         EXPECT_EQ(ready.tensor.to(DataType::Float32).cpu().to_vector(),
                   repeated.tensor.to(DataType::Float32).cpu().to_vector());
+        EXPECT_EQ(loader.get_stats().jpeg_cache_entries, bypass ? 0u : 1u);
+        EXPECT_EQ(loader.get_stats().spill_cache_entries, 0u);
     }
 }
 
@@ -531,6 +534,24 @@ TEST_F(PipelinedImageLoaderTest, SkipBlobCacheIgnoresTheTrainingJpegCopy) {
 
     params.skip_blob_cache = true;
     EXPECT_EQ(loader.load_image_immediate(png_path, params).cpu().to_vector_uint8(), lossless);
+
+    const auto cached = loader.get_stats();
+    request.sequence_id = 1;
+    request.params = params;
+    loader.prefetch({request});
+    EXPECT_EQ(loader.get().tensor.cpu().to_vector_uint8(), lossless);
+    EXPECT_EQ(loader.get_stats().hot_path_hits, cached.hot_path_hits);
+    EXPECT_EQ(loader.get_stats().jpeg_cache_bytes, cached.jpeg_cache_bytes);
+
+    PipelinedImageLoader uncached(config());
+    for (size_t pass = 0; pass < 2; ++pass) {
+        request.sequence_id = pass;
+        uncached.prefetch({request});
+        EXPECT_EQ(uncached.get().tensor.cpu().to_vector_uint8(), lossless);
+    }
+    EXPECT_EQ(uncached.get_stats().jpeg_cache_entries, 0u);
+    EXPECT_EQ(uncached.get_stats().jpeg_cache_bytes, 0u);
+    EXPECT_EQ(uncached.get_stats().spill_cache_entries, 0u);
 }
 
 // Catches the alpha-as-mask path resizing RGBA on the host: its RGB would then differ
@@ -647,6 +668,19 @@ TEST_F(PipelinedImageLoaderTest, AlphaAsMaskCacheKeepsResizedAlpha) {
     ASSERT_EQ(cached.size(), first.size());
     for (size_t pixel = 0; pixel < first.size(); ++pixel)
         EXPECT_EQ(cached[pixel], first[pixel]) << "pixel=" << pixel;
+
+    params.skip_blob_cache = true;
+    PipelinedImageLoader uncached(config());
+    ImageRequest input{};
+    input.path = image_path;
+    input.params = params;
+    input.extract_alpha_as_mask = true;
+    uncached.prefetch({input});
+    const auto bypassed = uncached.get();
+    ASSERT_TRUE(bypassed.mask);
+    EXPECT_EQ(bypassed.mask->cpu().to_vector(), first);
+    EXPECT_EQ(uncached.get_stats().jpeg_cache_entries, 0u);
+    EXPECT_EQ(uncached.get_stats().spill_cache_entries, 0u);
 }
 
 TEST_F(PipelinedImageLoaderTest, ImmediateCacheHitDoesNotRepeatResize) {

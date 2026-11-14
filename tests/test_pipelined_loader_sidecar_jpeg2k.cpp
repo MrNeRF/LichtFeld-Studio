@@ -145,6 +145,13 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     const auto stats_after_second = loader.get_stats();
     EXPECT_GT(stats_after_second.hot_path_hits, stats_after_first.hot_path_hits);
 
+    // A bypass request must report the missing source, not reuse the cached prior.
+    auto bypassed = second;
+    bypassed.sequence_id = 3;
+    bypassed.params.skip_blob_cache = true;
+    loader.prefetch({bypassed});
+    EXPECT_FALSE(wait_for_ready(loader).depth.has_value());
+
     const std::vector<float> first_values = first_ready.depth->cpu().to_vector();
     const std::vector<float> second_values = second_ready.depth->cpu().to_vector();
     ASSERT_EQ(second_values.size(), first_values.size());
