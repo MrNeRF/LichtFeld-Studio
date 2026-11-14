@@ -1788,7 +1788,7 @@ class _ViewportToolbarController:
         show_crop_toolbar = gizmo_state["show_crop_toolbar"] and not gt_compare_active
 
         dirty = False
-        if not gizmo_state["crop_settings_buttons"] or not show_crop_toolbar:
+        if not gizmo_state["crop_settings_buttons"] or gt_compare_active:
             dirty |= self._sync_flag("crop_roi_settings_open", False)
         dirty |= self._sync_crop_roi_params(cropbox_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])

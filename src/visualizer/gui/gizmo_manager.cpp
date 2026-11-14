@@ -307,6 +307,12 @@ namespace lfs::vis::gui {
             return panels;
         }
 
+        // GT compare shows a training camera, not the free viewport camera the handles hit-test against.
+        [[nodiscard]] bool volumeHandlesSuspendedForGTCompare(VisualizerImpl* const viewer) {
+            const auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+            return rendering_manager && rendering_manager->isGTComparisonActive();
+        }
+
         [[nodiscard]] std::optional<ViewportGizmoPanelTarget> resolveActiveGizmoPanel(
             VisualizerImpl* const viewer,
             const ViewportLayout& viewport) {
@@ -2909,7 +2915,8 @@ namespace lfs::vis::gui {
         (void)syncSelectedCropShape();
         // Selecting a crop only shows its scene-owned outline. Interactive handles
         // belong exclusively to an explicit crop edit or selection-volume tool.
-        if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box)
+        if (isVolumeGizmoToolActive() && crop_tool_shape_ == CropToolShape::Box &&
+            !volumeHandlesSuspendedForGTCompare(ctx.viewer))
             renderCropToolBoxGizmo(ctx, viewport);
     }
 
@@ -3178,7 +3185,8 @@ namespace lfs::vis::gui {
         // Polygon prisms share this explicit volume-edit path. There is no
         // selection-only fallback that can draw or hit-test transform handles.
         if (isVolumeGizmoToolActive() &&
-            (crop_tool_shape_ == CropToolShape::Ellipsoid || crop_tool_shape_ == CropToolShape::Polygon))
+            (crop_tool_shape_ == CropToolShape::Ellipsoid || crop_tool_shape_ == CropToolShape::Polygon) &&
+            !volumeHandlesSuspendedForGTCompare(ctx.viewer))
             renderCropToolEllipsoidGizmo(ctx, viewport);
     }
 

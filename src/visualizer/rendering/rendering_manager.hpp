@@ -496,9 +496,12 @@ namespace lfs::vis {
         ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
 
         // Training camera behind the displayed GT comparison frame; intrinsics are in render_size pixels.
+        // content_rect is the compositor's letterbox, in coordinate_extent pixels.
         struct GTComparisonGuideCamera {
             GTRenderCamera camera;
             glm::ivec2 render_size{0, 0};
+            glm::ivec4 content_rect{0};
+            glm::ivec2 coordinate_extent{0, 0};
         };
         [[nodiscard]] std::optional<GTComparisonGuideCamera> getGTComparisonGuideCamera() const {
             return isGTComparisonActive() ? vulkan_gt_comparison_camera_ : std::nullopt;

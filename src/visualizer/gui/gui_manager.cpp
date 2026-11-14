@@ -1210,17 +1210,19 @@ namespace lfs::vis::gui {
             }
 
             const auto gt_camera = rendering_manager.getGTComparisonGuideCamera();
-            if (!gt_camera) {
+            if (!gt_camera || gt_camera->coordinate_extent.x <= 0 || gt_camera->coordinate_extent.y <= 0) {
                 return {};
             }
-            const auto bounds = rendering_manager.getContentBounds(glm::ivec2(
-                std::max(static_cast<int>(viewport_layout.size.x), 0),
-                std::max(static_cast<int>(viewport_layout.size.y), 0)));
+            // Scale the compositor's letterbox the way VulkanViewportPass does, so guides share its edges.
+            const glm::vec2 scale = viewport_layout.size / glm::vec2(gt_camera->coordinate_extent);
+            const glm::ivec4& rect = gt_camera->content_rect;
+            const glm::vec2 content_min = glm::vec2(rect.x, rect.y) * scale;
+            const glm::vec2 content_max = glm::vec2(rect.x + rect.z, rect.y + rect.w) * scale;
             return {{
                 .panel = SplitViewPanelId::Left,
                 .viewport = &viewer.getViewport(),
-                .pos = viewport_layout.pos + glm::vec2(bounds.x, bounds.y),
-                .size = {bounds.width, bounds.height},
+                .pos = viewport_layout.pos + content_min,
+                .size = content_max - content_min,
                 .render_size = gt_camera->render_size,
                 .camera_override = gt_camera->camera,
             }};

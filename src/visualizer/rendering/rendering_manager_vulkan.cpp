@@ -3908,7 +3908,11 @@ namespace lfs::vis {
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
                                 if (render_camera) {
-                                    rendered_gt_camera = GTComparisonGuideCamera{*render_camera, render_gt_size};
+                                    rendered_gt_camera = GTComparisonGuideCamera{
+                                        *render_camera,
+                                        render_gt_size,
+                                        {rect.x, rect.y, rect.width, rect.height},
+                                        gt_comparison_size};
                                 }
                                 std::string mode_label = "GT Compare";
                                 const char* left_name = "Ground Truth";
