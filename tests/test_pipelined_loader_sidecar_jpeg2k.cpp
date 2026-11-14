@@ -132,6 +132,18 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     const auto stats_after_first = loader.get_stats();
     EXPECT_GE(stats_after_first.jpeg_cache_entries, size_t{2});
     EXPECT_GT(stats_after_first.jpeg_cache_bytes, size_t{0});
+    {
+        lfs::io::PipelinedImageLoader uncached(config);
+        auto input = first;
+        input.params.skip_blob_cache = true;
+        uncached.prefetch({input});
+        const auto ready = wait_for_ready(uncached);
+        ASSERT_TRUE(ready.error.empty()) << ready.error;
+        ASSERT_TRUE(ready.tensor.is_valid());
+        ASSERT_TRUE(ready.depth.has_value());
+        EXPECT_EQ(uncached.get_stats().jpeg_cache_entries, 0u);
+        EXPECT_EQ(uncached.get_stats().spill_cache_entries, 0u);
+    }
     std::error_code remove_ec;
     fs::remove(depth_path, remove_ec);
     ASSERT_FALSE(fs::exists(depth_path));
@@ -150,7 +162,10 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     bypassed.sequence_id = 3;
     bypassed.params.skip_blob_cache = true;
     loader.prefetch({bypassed});
-    EXPECT_FALSE(wait_for_ready(loader).depth.has_value());
+    const auto bypassed_ready = wait_for_ready(loader);
+    ASSERT_TRUE(bypassed_ready.error.empty()) << bypassed_ready.error;
+    ASSERT_TRUE(bypassed_ready.tensor.is_valid());
+    EXPECT_FALSE(bypassed_ready.depth.has_value());
 
     const std::vector<float> first_values = first_ready.depth->cpu().to_vector();
     const std::vector<float> second_values = second_ready.depth->cpu().to_vector();
