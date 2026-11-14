@@ -1830,7 +1830,8 @@ namespace lfs::vis {
                               vulkan_external_viewport_image_view_, vulkan_external_viewport_image_layout_,
                               vulkan_external_viewport_image_generation_, vulkan_viewport_image_size_,
                               vulkan_viewport_image_alloc_size_, vulkan_viewport_coordinate_size_, vulkan_viewport_image_flip_y_,
-                              vulkan_gt_comparison_content_size_, split_view_image_generation_, split_left_image_generation_,
+                              vulkan_gt_comparison_content_size_, vulkan_gt_comparison_camera_,
+                              split_view_image_generation_, split_left_image_generation_,
                               split_right_image_generation_, split_left_source_, split_left_source_size_, split_left_source_camera_uid_,
                               split_left_source_undistorted_, split_right_source_size_, gt_async_held_display_,
                               vksplat_stale_frame_guard_, parked_arena_retry_, last_logged_vksplat_render_error_,
@@ -2780,6 +2781,7 @@ namespace lfs::vis {
         std::string render_error;
         bool rendered_image_contains_ground_truth = false;
         glm::ivec2 rendered_gt_content_size{0, 0};
+        std::optional<GTComparisonGuideCamera> rendered_gt_camera;
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         // Mesh shown on each PLY-comparison side; null where that side is a splat node.
@@ -3905,6 +3907,9 @@ namespace lfs::vis {
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
+                                if (render_camera) {
+                                    rendered_gt_camera = GTComparisonGuideCamera{*render_camera, render_gt_size};
+                                }
                                 std::string mode_label = "GT Compare";
                                 const char* left_name = "Ground Truth";
                                 const char* right_name = "Rendered";
@@ -4715,6 +4720,7 @@ namespace lfs::vis {
                                     vulkan_viewport_image_alloc_size_ = render_result.size;
                                     vulkan_viewport_image_flip_y_ = render_result.flip_y;
                                     vulkan_gt_comparison_content_size_ = {0, 0};
+                                    vulkan_gt_comparison_camera_.reset();
                                     viewport_artifact_service_.updateFromImageOutput(
                                         corrected_image, metadata, render_result.size, true);
                                     if (transparent_viewer_compositing) {
@@ -5042,6 +5048,8 @@ namespace lfs::vis {
             clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
+            vulkan_gt_comparison_camera_ =
+                rendered_image_contains_ground_truth ? rendered_gt_camera : std::nullopt;
             FrameResources split_info_resources;
             if (rendered_split_info) {
                 split_info_resources.split_view_executed = true;
@@ -5289,6 +5297,8 @@ namespace lfs::vis {
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
+        vulkan_gt_comparison_camera_ =
+            rendered_image_contains_ground_truth ? rendered_gt_camera : std::nullopt;
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();

@@ -616,6 +616,7 @@ namespace lfs::vis {
         vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         vulkan_viewport_image_flip_y_ = flip_y;
         vulkan_gt_comparison_content_size_ = {0, 0};
+        vulkan_gt_comparison_camera_.reset();
     }
 
     void RenderingManager::releaseSceneRenderResources() {

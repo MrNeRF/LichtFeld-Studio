@@ -495,6 +495,15 @@ namespace lfs::vis {
         };
         ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
 
+        // Training camera behind the displayed GT comparison frame; intrinsics are in render_size pixels.
+        struct GTComparisonGuideCamera {
+            GTRenderCamera camera;
+            glm::ivec2 render_size{0, 0};
+        };
+        [[nodiscard]] std::optional<GTComparisonGuideCamera> getGTComparisonGuideCamera() const {
+            return isGTComparisonActive() ? vulkan_gt_comparison_camera_ : std::nullopt;
+        }
+
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
             const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
@@ -1091,6 +1100,7 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        std::optional<GTComparisonGuideCamera> vulkan_gt_comparison_camera_;
         struct GTComparisonImageCacheEntry {
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;
