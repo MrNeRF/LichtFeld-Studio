@@ -982,7 +982,17 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(gps["gps_fix"], 3)
         self.assertEqual(gps["gps_precision_raw"], 184)
         self.assertEqual(gps["gps_utc"], "190506181507.285")
-        self.assertIn("b2", first["ACCL"]["units_bytes"])
+        self.assertEqual(first["ACCL"]["units_bytes"], ["6d2f73b2"])
+        self.assertEqual(first["GYRO"]["units"], ["rad/s"])
+        self.assertEqual(gps["units"], ["deg", "deg", "m", "m/s", "m/s"])
+        self.assertEqual(gps["units_bytes"], ["646567", "646567", "6d0000", "6d2f73", "6d2f73"])
+        for key in ["ACCL", "GYRO"]:
+            self.assertEqual(first[key]["orientation_in"], "YxZ")
+            self.assertEqual(first[key]["orientation_in_bytes"], "59785a")
+            self.assertEqual(first[key]["orientation_out"], "ZXY")
+            self.assertEqual(first[key]["orientation_out_bytes"], "5a5859")
+            self.assertEqual(first[key]["total_samples"], 198)
+        self.assertEqual(gps["total_samples"], 19)
         for key, expected in [("ACCL", [0.476076555023923, -0.236842105263158, 7.16507177033493]),
                               ("GYRO", [0.016506922257721, -0.0580404685835996, -0.474973375931842])]:
             for actual, value in zip(first[key]["samples"][0], expected):

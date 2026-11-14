@@ -46,15 +46,6 @@ namespace lfs::media {
             bytes = bytes.subspan(8 + padded);
             return record;
         }
-        void validateNested(const Record& record, unsigned depth) {
-            if (record.type != 0)
-                return;
-            if (depth >= 16)
-                throw Failure{ErrorCode::ResourceExhausted, "GPMF nesting exceeds the parser limit"};
-            auto bytes = record.data;
-            while (auto child = next(bytes))
-                validateNested(*child, depth + 1);
-        }
         unsigned numericWidth(std::uint8_t type) {
             switch (type) {
             case 'b':
@@ -103,9 +94,14 @@ namespace lfs::media {
                 malformed("GPMF text descriptor has a non-text type");
             return {reinterpret_cast<const char*>(field->data.data()), field->data.size()};
         }
-        std::optional<std::uint64_t> counter(const std::optional<Record>& field) {
+        std::optional<std::uint64_t> counter(const std::optional<Record>& field, bool device_id = false) {
             if (!field)
                 return {};
+            if (device_id && field->type == 'F') {
+                if (field->count != 1 || field->width != 4)
+                    malformed("GPMF device FourCC requires one complete value");
+                return integer(field->data);
+            }
             if (field->type != 'B' && field->type != 'S' && field->type != 'L' && field->type != 'J')
                 malformed("GPMF counter requires an unsigned integer");
             if (field->count != 1 || field->width != numericWidth(field->type))
@@ -124,24 +120,30 @@ namespace lfs::media {
         GpmfStream samples(const Record& record, const Context& context, std::size_t& remaining) {
             const auto width = numericWidth(record.type);
             const unsigned components = record.key == "GPS5" ? 5 : 3;
+            const auto count = numericCount(record);
             if (record.width != components * width)
-                malformed("Unexpected GPMF sample dimensions");
+                throw Failure{ErrorCode::Unsupported, "Unsupported GPMF sample dimensions"};
             const auto name = text(context.name), device_name = text(context.device_name);
             const auto si_units = text(context.si_units);
-            const auto units = si_units.empty() ? text(context.units) : si_units;
+            const auto& units_record = si_units.empty() ? context.units : context.si_units;
+            const auto units = text(units_record);
+            const auto unit_count = units_record ? units_record->count : 0;
+            if (unit_count && unit_count != 1 && unit_count != components)
+                malformed("GPMF unit dimensions do not match samples");
             const auto orientation_in = text(context.orientation_in), orientation_out = text(context.orientation_out);
             const auto gps_utc = record.key == "GPS5" ? text(context.gps_utc) : std::string_view{};
             const auto matrix_count = context.matrix ? numericCount(*context.matrix) : 0;
             if (context.matrix && matrix_count != components * components)
                 malformed("GPMF calibration matrix dimensions do not match samples");
-            const auto count = numericCount(record);
-            retain(sizeof(GpmfStream) + device_name.size() + name.size() + units.size() + orientation_in.size() + orientation_out.size() + gps_utc.size() + (count + matrix_count) * sizeof(double), remaining);
+            retain(sizeof(GpmfStream) + device_name.size() + name.size() + units.size() + unit_count * sizeof(std::string) + orientation_in.size() + orientation_out.size() + gps_utc.size() + (count + matrix_count) * sizeof(double), remaining);
             GpmfStream result;
-            result.device_id = counter(context.device_id);
+            result.device_id = counter(context.device_id, true);
             result.device_name = device_name;
             result.key = record.key;
             result.name = name;
-            result.units = units;
+            result.units.reserve(unit_count);
+            for (unsigned i = 0; i < unit_count; ++i)
+                result.units.emplace_back(units.substr(i * units_record->width, units_record->width));
             result.orientation_in = orientation_in;
             result.orientation_out = orientation_out;
             result.total_samples = counter(context.total_samples);
@@ -186,7 +188,6 @@ namespace lfs::media {
                     output.push_back(samples(*field, context, remaining));
                     continue;
                 }
-                validateNested(*field, 2);
                 if (field->key == "STNM")
                     context.name = field;
                 else if (field->key == "SIUN")
@@ -229,7 +230,6 @@ namespace lfs::media {
                 bool device = false;
                 while (auto root = next(bytes)) {
                     if (root->key != "DEVC") {
-                        validateNested(*root, 0);
                         continue;
                     }
                     if (root->type != 0)
@@ -243,7 +243,6 @@ namespace lfs::media {
                                 malformed("GPMF STRM must contain nested records");
                             stream(*field, context, decoded.streams, remaining);
                         } else {
-                            validateNested(*field, 1);
                             if (field->key == "DVID")
                                 context.device_id = field;
                             else if (field->key == "DVNM")

@@ -384,7 +384,15 @@ namespace lfs::media::json_detail {
                         row.push_back(stream.values[i + j]);
                     values.push_back(std::move(row));
                 }
-                json item{{"key", stream.key}, {"device_id", optional(stream.device_id)}, {"device_name", stream.device_name}, {"device_name_bytes", hexBytes(stream.device_name)}, {"name", stream.name}, {"name_bytes", hexBytes(stream.name)}, {"units", stream.units}, {"units_bytes", hexBytes(stream.units)}, {"orientation_in", stream.orientation_in}, {"orientation_out", stream.orientation_out}, {"total_samples", optional(stream.total_samples)}, {"sensor_timestamp", optional(stream.sensor_timestamp)}, {"samples", std::move(values)}};
+                json units = json::array(), unit_bytes = json::array();
+                for (const auto& unit : stream.units) {
+                    std::string_view label = unit;
+                    while (!label.empty() && label.back() == '\0')
+                        label.remove_suffix(1);
+                    units.push_back(std::string(label));
+                    unit_bytes.push_back(hexBytes(unit));
+                }
+                json item{{"key", stream.key}, {"device_id", optional(stream.device_id)}, {"device_name", stream.device_name}, {"device_name_bytes", hexBytes(stream.device_name)}, {"name", stream.name}, {"name_bytes", hexBytes(stream.name)}, {"units", std::move(units)}, {"units_bytes", std::move(unit_bytes)}, {"orientation_in", stream.orientation_in}, {"orientation_in_bytes", hexBytes(stream.orientation_in)}, {"orientation_out", stream.orientation_out}, {"orientation_out_bytes", hexBytes(stream.orientation_out)}, {"total_samples", optional(stream.total_samples)}, {"sensor_timestamp", optional(stream.sensor_timestamp)}, {"samples", std::move(values)}};
                 if (!stream.calibration_matrix.empty())
                     item["calibration_matrix"] = stream.calibration_matrix;
                 if (stream.key == "GPS5") {

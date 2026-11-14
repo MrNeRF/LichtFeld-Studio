@@ -1227,12 +1227,19 @@ Each packet retains its PTS and duration. Streams contain SCAL-scaled samples,
 device identifiers/names, units, TSMP/STMP counters and declared MTRX/ORIN/ORIO
 calibration/axis descriptors. Sample order and axes remain as recorded. GPS5
 also carries GPSF, raw GPSP and GPSU when present. Text byte fields preserve
-labels that are not valid UTF-8. The collected observation retains all original
+labels that are not valid UTF-8. Units are arrays: one entry applies to every
+component, or entries correspond to the recorded components. Display labels omit
+trailing NUL padding; the matching `units_bytes` entries preserve it. A FourCC
+device ID is represented by its unsigned big-endian integer value. STMP counters
+are in microseconds and are not converted into container timestamps.
+The collected observation retains all original
 packet bytes, including fields outside this interpretation.
 
 Packet clocks, sensor counters and per-sample times are distinct. This API
 reports the available observations; it does not assign sample times from the
 packet rate. Unsupported compressed/complex selected samples, malformed records,
-invalid dimensions/scales and nonfinite numeric values are refused. A separate
+incomplete numeric components, invalid scales and nonfinite numeric values are
+refused. Other sample dimensions are reported as unsupported. Unknown records
+are retained in the raw observation without interpreting their contents. A separate
 128 MiB retained-decoded-data budget bounds expansion; adjust it with
 `--gpmf-max-decoded-bytes N`, Python's `decoded_byte_limit`, or the native argument.

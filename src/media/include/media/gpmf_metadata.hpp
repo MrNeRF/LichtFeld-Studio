@@ -9,7 +9,8 @@ namespace lfs::media {
         std::string device_name;
         std::string key;
         std::string name;
-        std::string units;
+        // One fixed-width byte string for all components, or one per component.
+        std::vector<std::string> units;
         std::string orientation_in;
         std::string orientation_out;
         std::vector<double> calibration_matrix;
