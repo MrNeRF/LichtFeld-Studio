@@ -1244,7 +1244,27 @@
     "viewport_defaults_invalid": "Wprowadź prawidłową wartość z obsługiwanego zakresu.",
     "sidebar_defaults_description": "Zapisz bieżącą szerokość prawego paska bocznego, podział sceny i aktywną kartę na potrzeby uruchamiania aplikacji. Istniejące projekty .licht przywracają własną przestrzeń roboczą. Nowy projekt zachowuje bieżącą przestrzeń roboczą.",
     "save_startup_sidebar": "Zapisz pasek boczny na start",
-    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego"
+    "clear_startup_sidebar": "Wyczyść ustawienia startowe paska bocznego",
+    "status_bar": "Pasek stanu",
+    "status_bar_hint": "Włączone elementy pojawiają się tylko wtedy, gdy są istotne. Ostrzeżenia pozostają widoczne przy włączonym pasku.",
+    "status_bar_enabled": "Pokaż pasek stanu",
+    "status_bar_activity": "Pasek postępu",
+    "status_bar_training_progress": "Iteracja treningu",
+    "status_bar_camera": "Aktywna kamera i tryb porównania",
+    "status_bar_gaussians": "Liczba gaussów",
+    "status_bar_selected": "Liczba zaznaczonych gaussów",
+    "status_bar_fps": "FPS widoku",
+    "status_bar_vram": "Użycie VRAM",
+    "status_bar_gpu_name": "Nazwa GPU",
+    "status_bar_renderer": "Silnik renderowania / backend",
+    "status_bar_training_loss": "Strata treningowa",
+    "status_bar_training_speed": "Szybkość treningu",
+    "status_bar_elapsed": "Upływ czasu treningu",
+    "status_bar_mcp": "Stan połączenia MCP",
+    "status_bar_portal": "Stan połączenia Portal",
+    "status_bar_reset": "Przywróć domyślny pasek stanu",
+    "status_bar_eta": "Szacowany pozostały czas",
+    "status_bar_build_version": "Wersja kompilacji"
   },
   "main_panel": {
     "console": "Konsola",
@@ -2635,7 +2655,9 @@
     "ui_fps_tooltip": "Liczba wyświetlanych klatek interfejsu na sekundę.",
     "view_fps_tooltip": "Liczba renderowanych klatek widoku 3D na sekundę. Statyczny widok może pokazywać 0, gdy interfejs nadal reaguje.",
     "ui": "UI",
-    "view": "Widok"
+    "view": "Widok",
+    "selected": "zaznaczonych",
+    "iterations_per_second": "iter./s"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub lub skrót:",

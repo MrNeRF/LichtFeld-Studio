@@ -100,42 +100,6 @@ body {
     top: 30dp;
 }
 
-.menu-portal-connection {
-    display: flex;
-    align-items: center;
-    height: 26dp;
-    padding: 0 8dp;
-    gap: 6dp;
-    margin: 0 3dp;
-    border-radius: 5dp;
-    white-space: nowrap;
-    flex-shrink: 1;
-    min-width: 34dp;
-    overflow: hidden;
-    cursor: pointer;
-}
-
-/* The menus keep their space; the connection label gives way down to its icon. */
-.menu-portal-connection span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.menu-portal-connection img {
-    width: 18dp;
-    height: 18dp;
-}
-
-@keyframes portal-transfer-pulse {
-    from { opacity: 1; }
-    to { opacity: 0.35; }
-}
-
-.menu-portal-connection.transferring img {
-    animation: portal-transfer-pulse 0.8s quadratic-in-out infinite alternate;
-}
-
 .menu-gallery-progress {
     display: flex;
     flex-direction: column;
@@ -463,19 +427,9 @@ body {
     display: flex;
 }
 
-/* A wide portal status yields its words before the viewport tools wrap. The icon stays. */
-body.toolbar-squeeze #menu-portal-connection span {
-    display: none;
-}
-body.toolbar-squeeze #menu-portal-connection {
-    padding: 0 4dp;
-    min-width: 26dp;
-}
-
 /* Keep menus and native window controls reachable in narrow windows. */
 body.compact .menu-window-utility-btn,
-body.compact .menu-window-separator,
-body.compact #menu-portal-connection span {
+body.compact .menu-window-separator {
     display: none;
 }
 body.compact .menu-label {
@@ -485,8 +439,4 @@ body.compact .menu-label {
 body.compact .menu-window-btn {
     width: 24dp;
     min-width: 24dp;
-}
-body.compact #menu-portal-connection {
-    padding: 0 2dp;
-    margin: 0;
 }

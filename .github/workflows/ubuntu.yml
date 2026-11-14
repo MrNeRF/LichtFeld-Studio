@@ -190,6 +190,12 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld_format_tests$'
 
+      - name: Build and run status bar tests
+        run: |
+          cmake --build build --target lichtfeld_visualizer_tests -j $(nproc)
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.status_bar$'
+
       - name: Build and run EXR image codec tests
         run: |
           cmake --build build --target lichtfeld_image_codec_tests -j $(nproc)

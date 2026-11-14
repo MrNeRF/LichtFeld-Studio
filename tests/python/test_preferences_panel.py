@@ -5,6 +5,7 @@
 from enum import IntEnum
 from importlib import import_module
 import json
+import re
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -1945,6 +1946,39 @@ def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
     on_change(None, typing, [])
     on_change(None, enter, ["45"])
     assert calls == ["4", "45", "commit"]
+
+
+def test_status_bar_choices_use_partial_updates_and_dedicated_reset(preferences_panel_module, monkeypatch):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    defaults = panel.STATUS_BAR_DEFAULTS
+    saved = defaults.copy()
+    updates = []
+    monkeypatch.setattr(module.lf.ui, "get_status_bar_preferences", lambda: saved.copy(), raising=False)
+    def update(values):
+        updates.append(values)
+        saved.update(values)
+    monkeypatch.setattr(module.lf.ui, "set_status_bar_preferences", update, raising=False)
+    monkeypatch.setattr(module.lf.ui, "reset_status_bar_preferences", lambda: (saved.clear(), saved.update(defaults)), raising=False)
+    panel._set_status_bar_preference("fps", False)
+    assert updates == [{"fps": False}]
+    assert not panel._status_bar_preferences()["fps"]
+    assert saved["activity"] and saved["vram"]
+    panel._reset_status_bar()
+    assert saved == defaults
+
+
+def test_status_bar_defaults_match_native_defaults_and_have_no_untranslated_labels(preferences_panel_module):
+    module, _state = preferences_panel_module
+    defaults = module.PreferencesPanel.STATUS_BAR_DEFAULTS
+    root = Path(__file__).resolve().parents[2]
+    native = (root / "src/visualizer/preferences.hpp").read_text()
+    rml = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text()
+    for key, value in defaults.items():
+        assert re.search(rf"\bbool\s+{re.escape(key)}\s*=\s*{str(value).lower()}\s*;", native)
+        assert f'data-checked="status_bar_{key}"' in rml
+        assert f"@tr:preferences.status_bar_{key}" in rml
+    assert 'data-event-click="reset_status_bar"' in rml
 
 
 

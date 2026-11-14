@@ -2,14 +2,14 @@
 <head>
     <link type="text/rcss" href="statusbar.rcss"/>
 </head>
-<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode">
+<body id="body" data-model="status_bar" data-class-safe-mode="safe_mode" data-class-has-notice="show_status_message || preview_reduced">
   <div id="status-row">
     <div id="status-left">
         <span id="safe-mode-badge" class="hidden" data-class-hidden="!safe_mode" data-attr-title="safe_mode_text">{{ safe_mode_text }}</span>
         <span id="mode-text" data-style-color="mode_color">{{ mode_text }}</span>
-        <div id="training-section" class="hidden" data-class-hidden="!show_training">
+        <div id="training-section" class="hidden" data-class-hidden="!show_training || (!pref_activity && !pref_training_progress && !pref_training_loss && !pref_gaussians && !pref_elapsed && !pref_eta)">
             <span class="separator section-sep">|</span>
-            <div id="progress-group" class="status-item">
+            <div id="progress-group" class="status-item" data-class-hidden="!pref_activity">
                 <div id="progress-container" data-class-miner="progress_miner" data-class-tessle="progress_tessle">
                     <div id="progress-wall"></div>
                     <div id="progress-fill" data-style-width="progress_width"></div>
@@ -29,40 +29,44 @@
                     <span id="progress-text" data-class-progress-text--miner="progress_miner" data-class-progress-text--tessle="progress_tessle" data-style-left="progress_text_left">{{ progress_text }}</span>
                 </div>
             </div>
-            <div id="step-metric" class="status-item">
+            <div id="step-metric" class="status-item" data-class-hidden="!pref_training_progress">
                 <span id="step-label" class="dim metric-label">{{ step_label }}</span>
                 <span id="step-value">{{ step_value }}</span>
             </div>
-            <div id="loss-metric" class="status-item">
+            <div id="loss-metric" class="status-item" data-class-hidden="!pref_training_loss">
                 <span class="separator">|</span>
                 <span id="loss-label" class="dim metric-label">{{ loss_label }}</span>
                 <span id="loss-value">{{ loss_value }}</span>
             </div>
-            <div id="eval-metric" class="status-item hidden" data-class-hidden="!show_eval_metrics">
+            <div id="eval-metric" class="status-item hidden" data-class-hidden="!show_eval_metrics || !pref_training_loss">
                 <span class="separator">|</span>
                 <span id="eval-metrics-value" class="dim">{{ eval_metrics_value }}</span>
             </div>
-            <div id="gaussians-metric" class="status-item">
+            <div id="gaussians-metric" class="status-item" data-class-hidden="!pref_gaussians">
                 <span class="separator">|</span>
                 <span id="gaussians-label" class="dim metric-label">{{ gaussians_label }}</span>
                 <span id="gaussians-value">{{ gaussians_value }}</span>
             </div>
-            <div id="time-metric" class="status-item">
+            <div id="time-metric" class="status-item" data-class-hidden="!pref_elapsed && !pref_eta">
                 <span class="separator">|</span>
-                <span id="time-value">{{ time_value }}</span>
-                <span id="eta-label" class="dim metric-label">{{ eta_label }}</span>
-                <span id="eta-value">{{ eta_value }}</span>
+                <span id="time-value" data-class-hidden="!pref_elapsed">{{ time_value }}</span>
+                <span id="eta-label" data-class-hidden="!pref_eta" class="dim metric-label">{{ eta_label }}</span>
+                <span id="eta-value" data-class-hidden="!pref_eta">{{ eta_value }}</span>
             </div>
         </div>
-        <div id="splat-section" class="hidden" data-class-hidden="!show_splats">
+        <div id="splat-section" class="hidden" data-class-hidden="!show_splats || !pref_gaussians">
             <span class="separator">|</span>
             <span id="splat-text" data-style-color="splat_color">{{ splat_text }}</span>
         </div>
-        <div id="split-section" class="hidden" data-class-hidden="!show_split">
+        <div id="split-section" class="hidden" data-class-hidden="!show_split || !pref_camera">
             <span class="separator">|</span>
             <span id="split-mode" data-style-color="split_mode_color">{{ split_mode }}</span>
             <span id="split-detail" class="dim">{{ split_detail }}</span>
         </div>
+        <div class="status-item" data-class-hidden="!pref_renderer || renderer_text == ''"><span class="separator">|</span><span>{{ renderer_text }}</span></div>
+        <div class="status-item" data-class-hidden="!pref_camera || camera_text == ''"><span class="separator">|</span><span>{{ camera_text }}</span></div>
+        <div class="status-item" data-class-hidden="!pref_selected || selected_text == ''"><span class="separator">|</span><span>{{ selected_text }}</span></div>
+        <div class="status-item" data-class-hidden="!pref_training_speed || training_speed_text == ''"><span class="separator">|</span><span>{{ training_speed_text }}</span></div>
         <div id="wasd-section" class="hidden" data-class-hidden="!show_wasd">
             <span class="separator wasd-sep" data-style-color="wasd_sep_color">|</span>
             <span id="wasd-text" data-style-color="wasd_color">{{ wasd_text }}</span>
@@ -81,7 +85,7 @@
         </div>
     </div>
     <div id="status-right">
-        <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
+        <div id="mcp-chip" data-class-hidden="!pref_mcp" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
             <span id="mcp-summary">{{ mcp_summary }}</span>
             <span id="mcp-compact">@tr:status_bar.mcp_name</span>
             <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
@@ -103,23 +107,19 @@
             </div>
         </div>
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
-        <img id="gpu-icon" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
-        <div id="lfs-mem-group" class="status-item">
+        <img id="gpu-icon" data-class-hidden="!pref_vram" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
+        <div id="lfs-mem-group" class="status-item" data-class-hidden="!pref_vram">
             <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
             <span class="separator thin">|</span>
         </div>
-        <span id="gpu-mem" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
-        <div id="fps-group" class="status-item">
-            <span id="fps-label" class="dim">{{ fps_label }}:</span><div
-                class="fps-metric" data-tooltip="status_bar.ui_fps_tooltip"><span
-                class="fps-caption dim">{{ fps_ui_label }}</span><span
-                id="fps-value" class="fps-number" data-style-color="fps_color">{{ fps_value }}</span></div><span
-                class="fps-separator dim">&#183;</span><div
-                class="fps-metric" data-tooltip="status_bar.view_fps_tooltip"><span
-                class="fps-caption dim">{{ fps_view_label }}</span><span
-                id="fps-view-value" class="fps-number" data-style-color="fps_color">{{ fps_view_value }}</span></div>
+        <span id="gpu-mem" data-class-hidden="!pref_vram" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
+        <div id="fps-group" class="status-item" data-class-hidden="!pref_fps">
+            <span id="fps-label" class="dim">{{ fps_label }}:</span>
+            <div class="fps-metric hidden" data-tooltip="status_bar.ui_fps_tooltip"><span class="fps-caption dim">{{ fps_ui_label }}</span><span id="fps-value" class="fps-number">{{ fps_value }}</span></div>
+            <div class="fps-metric" data-tooltip="status_bar.view_fps_tooltip"><span class="fps-caption dim hidden">{{ fps_view_label }}</span><span id="fps-view-value" class="fps-number" data-style-color="fps_color">{{ fps_view_value }}</span></div>
         </div>
-        <span id="git-commit" class="dim">{{ git_commit }}</span>
+        <div id="portal-status" class="status-item status-portal-connection" data-class-connected="portal_tone == 'connected'" data-class-transferring="portal_tone == 'transferring'" data-class-connecting="portal_tone == 'connecting'" data-class-error="portal_tone == 'error'" data-class-disconnected="portal_tone == 'disconnected'" data-class-hidden="!pref_portal" data-attr-title="portal_tooltip"><img data-attr-src="portal_icon" /><span>{{ portal_text }}</span></div>
+        <span id="git-commit" class="dim" data-class-hidden="!pref_build_version">{{ git_commit }}</span>
     </div>
   </div>
 </body>

@@ -93,6 +93,26 @@ class PreferencesPanel(Panel):
         "vr_move_speed": ScrubFieldSpec(0.1, 10.0, 0.1, "%.1f"),
     }
 
+    STATUS_BAR_DEFAULTS = {
+        "enabled": True,
+        "activity": True,
+        "training_progress": True,
+        "eta": True,
+        "camera": True,
+        "gaussians": True,
+        "selected": True,
+        "fps": True,
+        "vram": True,
+        "gpu_name": True,
+        "renderer": False,
+        "training_loss": False,
+        "training_speed": False,
+        "elapsed": True,
+        "build_version": False,
+        "mcp": False,
+        "portal": False,
+    }
+
     VR_PREFERENCE_DEFAULTS = {
         "enabled": False,
         "resolution_scale": 0.7,
@@ -113,6 +133,7 @@ class PreferencesPanel(Panel):
         "view_snap",
         "key_bindings",
         "interface",
+        "status_bar",
         "scene_graph",
         "file_associations",
         "mcp",
@@ -205,6 +226,11 @@ class PreferencesPanel(Panel):
             model.bind("vr_" + key, lambda k=key: lf.ui.get_vr_preferences()[k],
                        lambda value, k=key: self._set_vr_preference(k, value))
         model.bind_func("vr_status", lambda: lf.ui.get_vr_state()["status"])
+        for key in self.STATUS_BAR_DEFAULTS:
+            model.bind("status_bar_" + key,
+                       lambda k=key: self._status_bar_preferences().get(k, self.STATUS_BAR_DEFAULTS[k]),
+                       lambda value, k=key: self._set_status_bar_preference(k, value))
+        model.bind_event("reset_status_bar", lambda *_: self._reset_status_bar())
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
@@ -486,6 +512,7 @@ class PreferencesPanel(Panel):
             lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             bool(lf.ui.get_native_floating_windows()),
+            tuple(self._status_bar_preferences().items()),
             tuple(splat_drag_preferences[key] for key in ("format", "sh_degree", "up_axis")),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
@@ -1898,6 +1925,8 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode("orbit")
             lf.set_camera_view_snap_enabled(False)
         elif section == "interface":
+            if hasattr(lf.ui, "reset_status_bar_preferences"):
+                self._reset_status_bar()
             lf.ui.clear_startup_sidebar()
             lf.ui.set_native_floating_windows(False)
             if not self._mcp_safe_mode:
@@ -1912,12 +1941,30 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
         return reset_error
 
+    def _status_bar_preferences(self):
+        getter = getattr(lf.ui, "get_status_bar_preferences", None)
+        return getter() if getter else self.STATUS_BAR_DEFAULTS.copy()
+
+    def _set_status_bar_preference(self, key, value):
+        lf.ui.set_status_bar_preferences({key: bool(value)})
+        self._dirty_status_bar()
+
+    def _reset_status_bar(self):
+        lf.ui.reset_status_bar_preferences()
+        self._dirty_status_bar()
+
+    def _dirty_status_bar(self):
+        if self._handle:
+            for key in self.STATUS_BAR_DEFAULTS:
+                self._handle.dirty("status_bar_" + key)
+
     def _refresh_selection(self):
         self._last_state = self._state()
         self._sync_theme_variant_records()
         self._dirty_selection()
 
     def _dirty_selection(self):
+        self._dirty_status_bar()
         if self._handle:
             for prop in ("enabled", "intensity", "radius", "softness"):
                 self._handle.dirty("theme_vignette_" + prop)

@@ -1240,6 +1240,30 @@ namespace lfs::vis {
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<bool>(impl_->values, "scene_graph_selection_markers", false);
     }
+    void UserPreferences::setStatusBar(const StatusBarPreferences& state) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& values = impl_->values["status_bar"];
+        if (!values.is_object())
+            values = json::object();
+        values.erase("frame_time");
+        values.erase("gpu_utilization");
+        for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS)
+            values[field.key] = state.*field.member;
+        impl_->saveLocked();
+    }
+    StatusBarPreferences UserPreferences::statusBar() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        StatusBarPreferences state;
+        const auto it = impl_->values.find("status_bar");
+        if (it != impl_->values.end() && it->is_object()) {
+            for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS)
+                state.*field.member = lfs::core::persisted_settings::field<bool>(*it, field.key, state.*field.member);
+        }
+        return state;
+    }
+
     void UserPreferences::setProgressBarStyle(const std::string_view value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

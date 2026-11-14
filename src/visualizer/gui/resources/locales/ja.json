@@ -1244,7 +1244,27 @@
     "viewport_defaults_invalid": "対応範囲内の有効な値を入力してください。",
     "sidebar_defaults_description": "現在の右サイドバーの幅、シーンの分割位置、アクティブなタブをアプリ起動時の設定として保存します。既存の .licht プロジェクトでは、そのプロジェクトのワークスペースが復元されます。新規プロジェクトでは現在のワークスペースが維持されます。",
     "save_startup_sidebar": "起動時のサイドバーを保存",
-    "clear_startup_sidebar": "起動時のサイドバー設定をクリア"
+    "clear_startup_sidebar": "起動時のサイドバー設定をクリア",
+    "status_bar": "ステータスバー",
+    "status_bar_hint": "有効な項目は必要な場合のみ表示されます。ステータスバーが有効な間、警告は表示されます。",
+    "status_bar_enabled": "ステータスバーを表示",
+    "status_bar_activity": "進行状況バー",
+    "status_bar_training_progress": "学習の反復回数",
+    "status_bar_camera": "現在のカメラと比較モード",
+    "status_bar_gaussians": "ガウシアン数",
+    "status_bar_selected": "選択中のガウシアン数",
+    "status_bar_fps": "ビューポートFPS",
+    "status_bar_vram": "VRAM使用量",
+    "status_bar_gpu_name": "GPU名",
+    "status_bar_renderer": "レンダラー / バックエンド",
+    "status_bar_training_loss": "学習損失",
+    "status_bar_training_speed": "学習速度",
+    "status_bar_elapsed": "学習経過時間",
+    "status_bar_mcp": "MCP接続状態",
+    "status_bar_portal": "Portal接続状態",
+    "status_bar_reset": "ステータスバーを既定に戻す",
+    "status_bar_eta": "推定残り時間",
+    "status_bar_build_version": "ビルドバージョン"
   },
   "main_panel": {
     "console": "コンソール",
@@ -2635,7 +2655,9 @@
     "ui_fps_tooltip": "1秒あたりに表示されるインターフェースのフレーム数。",
     "view_fps_tooltip": "1秒あたりにレンダリングされる3Dビューのフレーム数。静止したビューでは、インターフェースが応答していても0と表示されることがあります。",
     "ui": "UI",
-    "view": "ビュー"
+    "view": "ビュー",
+    "selected": "選択中",
+    "iterations_per_second": "反復/秒"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL または短縮形式:",

@@ -6272,7 +6272,7 @@ namespace lfs::vis::gui {
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.shell_frame", 0.25);
-            const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+            const float status_bar_h = (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * current_ui_scale_;
             const float screen_w = static_cast<float>(sdl_input.window_w);
             const float screen_h = static_cast<float>(sdl_input.window_h);
             const float menu_h = rml_menu_bar_.barHeight();
@@ -6408,7 +6408,7 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.panel_input_state", 0.25);
             const float menu_h = rml_menu_bar_.barHeight();
-            const float status_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+            const float status_h = (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * current_ui_scale_;
             screen.work_pos = {0.0f, menu_h};
             screen.work_size = {
                 static_cast<float>(sdl_input.window_w),
@@ -7262,10 +7262,10 @@ namespace lfs::vis::gui {
 
         applyFrameInputCapture(&rml_right_panel_, &rml_bottom_dock_);
 
-        if (!ui_hidden_) {
+        if (!ui_hidden_ && UserPreferences::instance().statusBar().enabled) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);
             const float status_bar_height =
-                PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
+                (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * lfs::python::get_shared_dpi_scale();
             const float status_bar_x = screen.work_pos.x;
             const float status_bar_y = screen.work_pos.y + screen.work_size.y;
             const float status_bar_w = screen.work_size.x;
@@ -7302,6 +7302,8 @@ namespace lfs::vis::gui {
                                   },
                                   status_draw_ctx);
             }
+        } else {
+            rml_status_bar_.suspend();
         }
 
         if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {
@@ -8725,7 +8727,7 @@ namespace lfs::vis::gui {
             return;
         const auto size = viewer_->getWindowManager()->getFramebufferSize();
         const float menu_h = rml_menu_bar_.barHeight();
-        const float status_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+        const float status_h = (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * current_ui_scale_;
         const ScreenState screen{
             .work_pos = {0.0f, menu_h},
             .work_size = {static_cast<float>(size.x), std::max(0.0f, size.y - menu_h - status_h)}};
@@ -8840,7 +8842,7 @@ namespace lfs::vis::gui {
         input.screen_h = window_h;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float panel_h = work_h - PanelLayoutManager::STATUS_BAR_HEIGHT * dpi;
+        const float panel_h = work_h - (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * dpi;
         if (panel_h <= 0.0f) {
             return;
         }

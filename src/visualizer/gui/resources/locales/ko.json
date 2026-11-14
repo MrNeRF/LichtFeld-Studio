@@ -1244,7 +1244,27 @@
     "viewport_defaults_invalid": "지원 범위 내의 올바른 값을 입력하세요.",
     "sidebar_defaults_description": "현재 오른쪽 사이드바 너비, 장면 분할 위치 및 활성 탭을 앱 시작 설정으로 저장합니다. 기존 .licht 프로젝트는 자체 작업 공간을 복원합니다. 새 프로젝트는 현재 작업 공간을 유지합니다.",
     "save_startup_sidebar": "시작 시 사이드바 저장",
-    "clear_startup_sidebar": "시작 사이드바 설정 지우기"
+    "clear_startup_sidebar": "시작 사이드바 설정 지우기",
+    "status_bar": "상태 표시줄",
+    "status_bar_hint": "활성화된 항목은 관련된 경우에만 표시됩니다. 상태 표시줄이 활성화된 동안 경고는 계속 표시됩니다.",
+    "status_bar_enabled": "상태 표시줄 표시",
+    "status_bar_activity": "진행률 표시줄",
+    "status_bar_training_progress": "학습 반복",
+    "status_bar_camera": "활성 카메라 및 비교 모드",
+    "status_bar_gaussians": "가우시안 수",
+    "status_bar_selected": "선택한 가우시안 수",
+    "status_bar_fps": "뷰포트 FPS",
+    "status_bar_vram": "VRAM 사용량",
+    "status_bar_gpu_name": "GPU 이름",
+    "status_bar_renderer": "렌더러 / 백엔드",
+    "status_bar_training_loss": "학습 손실",
+    "status_bar_training_speed": "학습 속도",
+    "status_bar_elapsed": "학습 경과 시간",
+    "status_bar_mcp": "MCP 연결 상태",
+    "status_bar_portal": "Portal 연결 상태",
+    "status_bar_reset": "상태 표시줄 기본값 복원",
+    "status_bar_eta": "예상 남은 시간",
+    "status_bar_build_version": "빌드 버전"
   },
   "main_panel": {
     "console": "콘솔",
@@ -2635,7 +2655,9 @@
     "ui_fps_tooltip": "초당 표시되는 인터페이스 프레임 수입니다.",
     "view_fps_tooltip": "초당 렌더링되는 3D 뷰 프레임 수입니다. 정적인 뷰는 인터페이스가 응답하는 동안에도 0으로 표시될 수 있습니다.",
     "ui": "UI",
-    "view": "뷰"
+    "view": "뷰",
+    "selected": "선택됨",
+    "iterations_per_second": "반복/초"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 또는 단축 형식:",

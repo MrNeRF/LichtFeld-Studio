@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panel_registry.hpp"
+#include "preferences.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -762,7 +763,7 @@ apply_registered_chrome:
         }
         const auto screen_anchor = floatingAnchorRect(ctx);
         const float shelf_bottom = std::min(shelf_anchor.y + shelf_anchor.height,
-                                            screen_anchor.y + screen_anchor.height - PanelLayoutManager::STATUS_BAR_HEIGHT * dpi);
+                                            screen_anchor.y + screen_anchor.height - (UserPreferences::instance().statusBar().enabled ? PanelLayoutManager::STATUS_BAR_HEIGHT : 0.0f) * dpi);
         shelf_anchor.height = std::max(0.0f, shelf_bottom - shelf_anchor.y);
         std::vector<std::string_view> minimized_ids;
         for (size_t i = 0; i < snapshots.size(); ++i) {

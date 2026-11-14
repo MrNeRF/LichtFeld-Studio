@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "gui/utils/splat_drag_preferences.hpp"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -26,6 +27,51 @@ namespace lfs::vis {
         int port = 45677;
         bool request_logging = false;
     };
+
+    struct StatusBarPreferences {
+        bool enabled = true;
+        bool activity = true;
+        bool training_progress = true;
+        bool eta = true;
+        bool camera = true;
+        bool gaussians = true;
+        bool selected = true;
+        bool fps = true;
+        bool vram = true;
+        bool gpu_name = true;
+        bool renderer = false;
+        bool training_loss = false;
+        bool training_speed = false;
+        bool elapsed = true;
+        bool build_version = false;
+        bool mcp = false;
+        bool portal = false;
+        bool operator==(const StatusBarPreferences&) const = default;
+    };
+
+    struct StatusBarPreferenceField {
+        const char* key;
+        bool StatusBarPreferences::* member;
+    };
+    inline constexpr std::array<StatusBarPreferenceField, 17> STATUS_BAR_PREFERENCE_FIELDS{{
+        {"enabled", &StatusBarPreferences::enabled},
+        {"activity", &StatusBarPreferences::activity},
+        {"training_progress", &StatusBarPreferences::training_progress},
+        {"eta", &StatusBarPreferences::eta},
+        {"camera", &StatusBarPreferences::camera},
+        {"gaussians", &StatusBarPreferences::gaussians},
+        {"selected", &StatusBarPreferences::selected},
+        {"fps", &StatusBarPreferences::fps},
+        {"vram", &StatusBarPreferences::vram},
+        {"gpu_name", &StatusBarPreferences::gpu_name},
+        {"renderer", &StatusBarPreferences::renderer},
+        {"training_loss", &StatusBarPreferences::training_loss},
+        {"training_speed", &StatusBarPreferences::training_speed},
+        {"elapsed", &StatusBarPreferences::elapsed},
+        {"build_version", &StatusBarPreferences::build_version},
+        {"mcp", &StatusBarPreferences::mcp},
+        {"portal", &StatusBarPreferences::portal},
+    }};
 
     struct VrPreferences {
         bool enabled = false;               // read at startup
@@ -93,6 +139,8 @@ namespace lfs::vis {
         [[nodiscard]] bool rememberCameraViewSnap();
         void setSceneGraphSelectionMarkers(bool enabled);
         [[nodiscard]] bool sceneGraphSelectionMarkers();
+        void setStatusBar(const StatusBarPreferences& state);
+        [[nodiscard]] StatusBarPreferences statusBar();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
         void setViewportChromeStyle(std::string_view value);
