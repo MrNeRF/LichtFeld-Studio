@@ -956,6 +956,59 @@ class MediaBindings(unittest.TestCase):
                     shutil.rmtree(normalized)
             cls.temp.cleanup()
 
+    def test_gpmf_samples_owned_result_and_cli_parity(self):
+        fixture = ROOT / "tests/media/fixtures/gopro-gpmf/hero6a-gpmd.mp4"
+        path = self.root / "GoPro telemetry é 日本語.mp4"
+        shutil.copyfile(fixture, path)
+        observed = media.MediaIngest.probe(path, timed_metadata_stream=0)
+        raw = json.loads(observed.to_json())["timed_metadata"]["packets"]
+        interpreted = json.loads(observed.gpmf_metadata_json())
+        packets = interpreted["packets"]
+        self.assertEqual(len(packets), len(raw))
+        self.assertGreater(len(packets), 1)
+        for packet, source in zip(packets, raw):
+            self.assertEqual(packet["pts"], source["pts"])
+            self.assertEqual(packet["duration"], source["duration"])
+            self.assertEqual({stream["key"] for stream in packet["streams"]}, {"ACCL", "GYRO", "GPS5"})
+            for stream in packet["streams"]:
+                self.assertGreater(len(stream["samples"]), 1)
+                self.assertEqual(len(stream["samples"][0]), 5 if stream["key"] == "GPS5" else 3)
+                self.assertTrue(all(math.isfinite(value) for sample in stream["samples"] for value in sample))
+        first = {stream["key"]: stream for stream in packets[0]["streams"]}
+        # ExifTool 13.63 independently decodes GPS; its km/h speeds are converted back to m/s.
+        gps = first["GPS5"]
+        for actual, expected in zip(gps["samples"][0], [33.1268436, -117.3274061, -22.997, 5.5188 / 3.6, 5.724 / 3.6]):
+            self.assertAlmostEqual(actual, expected, places=7)
+        self.assertEqual(gps["gps_fix"], 3)
+        self.assertEqual(gps["gps_precision_raw"], 184)
+        self.assertEqual(gps["gps_utc"], "190506181507.285")
+        self.assertIn("b2", first["ACCL"]["units_bytes"])
+        for key, expected in [("ACCL", [0.476076555023923, -0.236842105263158, 7.16507177033493]),
+                              ("GYRO", [0.016506922257721, -0.0580404685835996, -0.474973375931842])]:
+            for actual, value in zip(first[key]["samples"][0], expected):
+                self.assertAlmostEqual(actual, value, places=12)
+        self.assertEqual(first["ACCL"]["device_name"], "Hero6 Black")
+        self.assertEqual(first["ACCL"]["calibration_matrix"], [0, 0, 1, 0, -1, 0, 1, 0, 0])
+        cli = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--gpmf-metadata"],
+                             check=True, capture_output=True, timeout=30)
+        self.assertEqual(json.loads(cli.stdout)["media"]["gpmf_metadata"], interpreted)
+        for flags, message in [(["--gpmf-metadata"], "require --timed-stream"),
+                               (["--timed-stream", "0", "--gpmf-metadata", "--dji-metadata"], "Choose one")]:
+            failed = subprocess.run([str(METADATA_CLI), "probe", str(path), *flags], capture_output=True, timeout=30)
+            self.assertEqual(failed.returncode, 2)
+            self.assertIn(message, json.loads(failed.stdout)["error"]["message"])
+        with self.assertRaisesRegex(MEDIA_ERROR, "requires collected timed packets"):
+            media.MediaIngest.probe(path, headers_only=True).gpmf_metadata_json()
+        with self.assertRaisesRegex(MEDIA_ERROR, "byte budget"):
+            observed.gpmf_metadata_json(decoded_byte_limit=1)
+        limited = subprocess.run([str(METADATA_CLI), "probe", str(path), "--timed-stream", "0", "--gpmf-metadata", "--gpmf-max-decoded-bytes", "1"], capture_output=True, timeout=30)
+        self.assertNotEqual(limited.returncode, 0)
+        self.assertEqual(json.loads(limited.stdout)["error"]["code"], "ResourceExhausted")
+        path.unlink()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(lambda _: json.loads(observed.gpmf_metadata_json()), range(6)))
+        self.assertEqual(results, [interpreted] * 6)
+
     def test_dji_metadata_owned_result_and_cli_parity(self):
         path = fixtures.dji_ac204(self.root)
         observed = media.MediaIngest.probe(path, timed_metadata_stream=0)

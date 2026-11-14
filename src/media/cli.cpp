@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--dji-metadata] [--timed-max-bytes N] [--timed-max-records N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest source-srt-metadata SIDECAR [--timestamp TICKS NUM DEN --offset-ms N [--point-tolerance-ms N]]\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N] [--timed-stream INDEX] [--dji-metadata] [--gpmf-metadata [--gpmf-max-decoded-bytes N]] [--timed-max-bytes N] [--timed-max-records N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -199,8 +199,8 @@ namespace {
             std::optional<std::int64_t> srt_offset, srt_tolerance;
             std::optional<int> dji_frame_stream;
             ProbeOptions probe;
-            bool dji_metadata_requested = false;
-            std::optional<std::size_t> timed_bytes, timed_records;
+            bool dji_metadata_requested = false, gpmf_metadata_requested = false;
+            std::optional<std::size_t> timed_bytes, timed_records, gpmf_decoded_bytes;
             bool avif_options = false;
             bool quiet = false, selection_set = false, geometry_set = false, exr_options = false, quality_set = false, exr_codec_options = false, tiff_options = false, jxl_options = false;
             for (size_t i = 3; i < args.size(); ++i) {
@@ -209,7 +209,13 @@ namespace {
                 if (args[1] == "probe") {
                     if (flag == "--dji-metadata" && !dji_metadata_requested)
                         dji_metadata_requested = true;
-                    else if (flag == "--headers-only")
+                    else if (flag == "--gpmf-metadata" && !gpmf_metadata_requested)
+                        gpmf_metadata_requested = true;
+                    else if (flag == "--gpmf-max-decoded-bytes") {
+                        if (gpmf_decoded_bytes)
+                            throw std::invalid_argument("Specify --gpmf-max-decoded-bytes once");
+                        gpmf_decoded_bytes = number<std::size_t>(value());
+                    } else if (flag == "--headers-only")
                         probe.depth = ProbeDepth::Headers;
                     else if (flag == "--timeout-ms")
                         probe.timeout = std::chrono::milliseconds(number<int64_t>(value()));
@@ -368,7 +374,11 @@ namespace {
                     throw std::invalid_argument("Unknown extract option: " + flag);
             }
             if (args[1] == "probe") {
-                if ((dji_metadata_requested || timed_bytes || timed_records) && !probe.timed_metadata_stream)
+                if (gpmf_decoded_bytes && !gpmf_metadata_requested)
+                    throw std::invalid_argument("--gpmf-max-decoded-bytes requires --gpmf-metadata");
+                if (dji_metadata_requested && gpmf_metadata_requested)
+                    throw std::invalid_argument("Choose one timed metadata interpreter");
+                if ((dji_metadata_requested || gpmf_metadata_requested || timed_bytes || timed_records) && !probe.timed_metadata_stream)
                     throw std::invalid_argument("Timed metadata interpretation and limits require --timed-stream");
                 if (timed_bytes)
                     probe.timed_metadata_limits.bytes = *timed_bytes;
@@ -387,7 +397,13 @@ namespace {
                 auto media = json_detail::description(*result);
                 if (dji_metadata)
                     media["dji_metadata"] = std::move(*dji_metadata);
-                std::cout << json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}}.dump() << '\n';
+                if (gpmf_metadata_requested) {
+                    const auto interpreted = interpretGpmfMetadata(*result->timed_metadata, gpmf_decoded_bytes.value_or(gpmf_default_decoded_bytes));
+                    if (!interpreted)
+                        return failed(interpreted.error());
+                    media["gpmf_metadata"] = json_detail::gpmfMetadata(*interpreted);
+                }
+                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"media", std::move(media)}}) << '\n';
                 return 0;
             }
             if (tiff_options && output.files.format != FrameFileFormat::TIFF16)

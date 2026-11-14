@@ -1213,3 +1213,26 @@ as `DjiObservation`. The CLI equivalent is `extract --dji-stream INDEX`.
 Association uses exact container PTS, including equivalent rational time bases.
 Missing or non-increasing packet timestamps are refused. Resume checks the
 selected track, packet clocks and raw payloads before continuing an export.
+
+
+### GoPro GPMF observations
+
+`probe --timed-stream INDEX --gpmf-metadata` interprets ACCL, GYRO and GPS5
+records from a selected `gpmd` track. In Python, call
+`observed.gpmf_metadata_json()` on the result of
+`media.MediaIngest.probe(path, timed_metadata_stream=INDEX)`; C++ uses
+`interpretGpmfMetadata(observation)`.
+
+Each packet retains its PTS and duration. Streams contain SCAL-scaled samples,
+device identifiers/names, units, TSMP/STMP counters and declared MTRX/ORIN/ORIO
+calibration/axis descriptors. Sample order and axes remain as recorded. GPS5
+also carries GPSF, raw GPSP and GPSU when present. Text byte fields preserve
+labels that are not valid UTF-8. The collected observation retains all original
+packet bytes, including fields outside this interpretation.
+
+Packet clocks, sensor counters and per-sample times are distinct. This API
+reports the available observations; it does not assign sample times from the
+packet rate. Unsupported compressed/complex selected samples, malformed records,
+invalid dimensions/scales and nonfinite numeric values are refused. A separate
+128 MiB retained-decoded-data budget bounds expansion; adjust it with
+`--gpmf-max-decoded-bytes N`, Python's `decoded_byte_limit`, or the native argument.
