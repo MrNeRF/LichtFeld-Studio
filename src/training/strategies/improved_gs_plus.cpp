@@ -517,6 +517,8 @@ namespace lfs::training {
                 chunk_idxs.ptr<int64_t>(),
                 static_cast<int>(count),
                 0,
+                kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
+                kernels::LONG_AXIS_SPLIT_OPACITY_SCALE,
                 nullptr);
 
             if (use_shN) {

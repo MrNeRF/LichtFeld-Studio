@@ -66,6 +66,7 @@ class MRNFStrategyTest_NeedGrowthProtectsNewbornsUntilAFullPass_Test;
 class MRNFStrategyTest_NeedGrowthDonorShareTapersToZero_Test;
 class MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
 class MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
+class MRNFStrategyTest_NeedGrowthReceiverSplitsOnlyAtTheCap_Test;
 
 namespace lfs::training {
 
@@ -170,6 +171,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_NeedGrowthDonorShareTapersToZero_Test;
         friend class ::MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
         friend class ::MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
+        friend class ::MRNFStrategyTest_NeedGrowthReceiverSplitsOnlyAtTheCap_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -182,6 +184,9 @@ namespace lfs::training {
         // over about one pass, on its own schedule.
         [[nodiscard]] bool growth_exchange_active(int iter) const;
         [[nodiscard]] bool need_guided_growth_on() const;
+        // The model is full enough for donors; with need-guided growth every split then uses
+        // the receiver rule.
+        [[nodiscard]] bool at_cap(size_t active) const;
         // Turns the window error in _refine_weight_max into NEED (error first, sparsity as a
         // boost); after it, growth and refill draw by NEED for the rest of the refine.
         void fold_need_into_refine_weights();
@@ -204,6 +209,7 @@ namespace lfs::training {
             int replacement_count = 0;
             int growth_count = 0;
             size_t exchange_victims = 0;
+            int receiver_splits = 0;
         };
         // refine_candidates defaults to compute_refine_candidates().
         GrowthResult grow_and_split(
@@ -216,9 +222,10 @@ namespace lfs::training {
         void log_refine_census(int iter, int pruned, const GrowthResult& growth, size_t quota) const;
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
-        // Returns {children placed in free slots, children appended}.
+        // Returns {children placed in free slots, children appended}. The receiver rule makes
+        // children smaller on every axis that keep the parent's opacity.
         std::pair<size_t, size_t> split_parents_into_children(const lfs::core::Tensor& split_indices,
-                                                              size_t chunk_rows);
+                                                              size_t chunk_rows, bool receiver = false);
         [[nodiscard]] bool screen_share_shrink_active(int iter) const;
         [[nodiscard]] lfs::core::Tensor compute_refine_candidates() const;
         void apply_decay(int iter);

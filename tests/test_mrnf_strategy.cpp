@@ -59,6 +59,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -71,6 +72,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <vector>
 
@@ -2737,7 +2739,8 @@ TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRow
         positions.ptr<float>(), quaternions.ptr<float>(), log_scales.ptr<float>(),
         sh0.ptr<float>(), nullptr, opacities.ptr<float>(), children_positions.ptr<float>(),
         children_rotations.ptr<float>(), children_scales.ptr<float>(), children_sh0.ptr<float>(),
-        nullptr, children_opacities.ptr<float>(), split_indices.ptr<int64_t>(), static_cast<int>(n), 0);
+        nullptr, children_opacities.ptr<float>(), split_indices.ptr<int64_t>(), static_cast<int>(n), 0,
+        kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE, kernels::LONG_AXIS_SPLIT_OPACITY_SCALE);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto first = positions.cpu().to_vector();
     const auto second = children_positions.cpu().to_vector();
@@ -2756,6 +2759,122 @@ TEST(MRNFStrategyTest, LongAxisSplitPlacementIgnoresQuaternionMagnitudeOnRealRow
         }
         EXPECT_NEAR(std::sqrt(squared_length), expected_lengths[row], tolerance);
     }
+}
+
+namespace {
+    // Random splats with one distinct long axis each, split once with the given factors.
+    struct SplitRun {
+        std::vector<float> means, quats, scales, opacities;               // parents before the split
+        std::vector<float> first_means, first_scales, first_opacities;    // parent rows after
+        std::vector<float> second_means, second_scales, second_opacities; // children
+    };
+
+    SplitRun run_long_axis_split(const float cross_axis_scale, const float opacity_scale) {
+        constexpr size_t n = 64;
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+        SplitRun run;
+        for (size_t i = 0; i < n; ++i) {
+            for (int c = 0; c < 3; ++c)
+                run.means.push_back(3.0f * unit(rng));
+            float q[4], norm = 0.0f;
+            for (float& v : q) {
+                v = unit(rng);
+                norm += v * v;
+            }
+            for (const float v : q)
+                run.quats.push_back(v / std::sqrt(norm));
+            const int axis = static_cast<int>(i % 3);
+            for (int c = 0; c < 3; ++c)
+                run.scales.push_back(c == axis ? -1.0f + 0.5f * unit(rng) : -3.0f + 0.5f * unit(rng));
+            run.opacities.push_back(3.0f * unit(rng));
+        }
+        auto means = Tensor::from_vector(run.means, {n, 3}, Device::CUDA);
+        auto quats = Tensor::from_vector(run.quats, {n, 4}, Device::CUDA);
+        auto scales = Tensor::from_vector(run.scales, {n, 3}, Device::CUDA);
+        auto sh0 = Tensor::zeros({n, 3}, Device::CUDA);
+        auto opacities = Tensor::from_vector(run.opacities, {n}, Device::CUDA);
+        auto second_means = Tensor::empty({n, 3}, Device::CUDA);
+        auto second_quats = Tensor::empty({n, 4}, Device::CUDA);
+        auto second_scales = Tensor::empty({n, 3}, Device::CUDA);
+        auto second_sh0 = Tensor::empty({n, 3}, Device::CUDA);
+        auto second_opacities = Tensor::empty({n}, Device::CUDA);
+        std::vector<int> rows(n);
+        for (size_t i = 0; i < n; ++i)
+            rows[i] = static_cast<int>(i);
+        const auto split_indices = Tensor::from_vector(rows, {n}, Device::CUDA).to(DataType::Int64);
+        kernels::launch_long_axis_split_gaussians_inplace(
+            means.ptr<float>(), quats.ptr<float>(), scales.ptr<float>(), sh0.ptr<float>(), nullptr,
+            opacities.ptr<float>(), second_means.ptr<float>(), second_quats.ptr<float>(), second_scales.ptr<float>(),
+            second_sh0.ptr<float>(), nullptr, second_opacities.ptr<float>(), split_indices.ptr<int64_t>(),
+            static_cast<int>(n), 0, cross_axis_scale, opacity_scale);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        run.first_means = means.cpu().to_vector();
+        run.first_scales = scales.cpu().to_vector();
+        run.first_opacities = opacities.cpu().to_vector();
+        run.second_means = second_means.cpu().to_vector();
+        run.second_scales = second_scales.cpu().to_vector();
+        run.second_opacities = second_opacities.cpu().to_vector();
+        return run;
+    }
+
+    // Offset of the first child: +0.5 sigma_long along the parent's long axis.
+    std::array<float, 3> long_axis_offset(const SplitRun& run, const size_t row) {
+        const float* q = run.quats.data() + 4 * row;
+        const float w = q[0], x = q[1], y = q[2], z = q[3];
+        const float R[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+                            2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+                            2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)};
+        const float* scale = run.scales.data() + 3 * row;
+        const int axis = static_cast<int>(std::max_element(scale, scale + 3) - scale);
+        const float length = 0.5f * std::exp(scale[axis]);
+        return {R[axis] * length, R[axis + 3] * length, R[axis + 6] * length};
+    }
+
+    void expect_long_axis_split(const SplitRun& run, const float cross_axis_scale) {
+        for (size_t row = 0; row < run.opacities.size(); ++row) {
+            SCOPED_TRACE(row);
+            const auto offset = long_axis_offset(run, row);
+            const float* scale = run.scales.data() + 3 * row;
+            const int axis = static_cast<int>(std::max_element(scale, scale + 3) - scale);
+            for (int c = 0; c < 3; ++c) {
+                EXPECT_NEAR(run.first_means[3 * row + c], run.means[3 * row + c] + offset[c], 1e-5f);
+                EXPECT_NEAR(run.second_means[3 * row + c], run.means[3 * row + c] - offset[c], 1e-5f);
+                const float expected = scale[c] + std::log(c == axis ? 0.5f : cross_axis_scale);
+                EXPECT_NEAR(run.first_scales[3 * row + c], expected, 1e-5f);
+                EXPECT_EQ(run.second_scales[3 * row + c], run.first_scales[3 * row + c]);
+            }
+        }
+    }
+} // namespace
+
+// Today's call passes 0.85 / 0.6: long axis halved, the others x0.85, both children at 0.6x opacity.
+TEST(MRNFStrategyTest, LongAxisSplitDefaultFactorsKeepTodaysRule) {
+    const auto run = run_long_axis_split(kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
+                                         kernels::LONG_AXIS_SPLIT_OPACITY_SCALE);
+    expect_long_axis_split(run, 0.85f);
+    for (size_t row = 0; row < run.opacities.size(); ++row) {
+        const float alpha = 0.6f / (1.0f + std::exp(-run.opacities[row]));
+        const float expected = std::log(alpha / (1.0f - alpha));
+        EXPECT_NEAR(run.first_opacities[row], expected, 1e-5f) << row;
+        EXPECT_EQ(run.second_opacities[row], run.first_opacities[row]) << row;
+    }
+}
+
+// Receiver rule: both children keep the parent's opacity and are smaller on every axis (long x0.5,
+// the others x0.7); they sit at the same +-0.5 sigma_long offsets as with today's rule.
+TEST(MRNFStrategyTest, ReceiverSplitKeepsOpacityAndShrinksEveryAxis) {
+    const auto receiver = run_long_axis_split(0.7f, 1.0f);
+    expect_long_axis_split(receiver, 0.7f);
+    EXPECT_EQ(receiver.first_opacities, receiver.opacities);
+    EXPECT_EQ(receiver.second_opacities, receiver.opacities);
+    for (size_t i = 0; i < receiver.scales.size(); ++i)
+        EXPECT_LT(receiver.second_scales[i], receiver.scales[i]) << i;
+
+    const auto today = run_long_axis_split(kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
+                                           kernels::LONG_AXIS_SPLIT_OPACITY_SCALE);
+    EXPECT_EQ(receiver.first_means, today.first_means);
+    EXPECT_EQ(receiver.second_means, today.second_means);
 }
 
 namespace {
@@ -3021,4 +3140,58 @@ TEST(MRNFStrategyTest, NeedGrowthResumeRebuildsDonorMemory) {
     EXPECT_EQ(restored.active_count(), n);
     restored.record_exchange_births(result.split_indices);
     EXPECT_EQ(restored._exchange_birth.numel(), n);
+}
+
+// The receiver rule is one choice per refine: off without the option and before the cap; at the
+// cap every split of the refine (refills and donor-funded growth) uses it.
+TEST(MRNFStrategyTest, NeedGrowthReceiverSplitsOnlyAtTheCap) {
+    constexpr size_t n = 200;
+    const float today = std::log(0.3f / 0.7f); // 0.6 x sigmoid(0)
+    struct Case {
+        bool need;
+        int max_cap;
+        size_t receivers;
+        float split_opacity;
+        float cross_scale;
+    };
+    for (const auto& c : {Case{false, static_cast<int>(n), 0, today, 0.85f},
+                          Case{true, 1000, 0, today, 0.85f},
+                          Case{true, static_cast<int>(n), 5, 0.0f, 0.7f}}) {
+        SCOPED_TRACE(testing::Message() << "need " << c.need << ", cap " << c.max_cap);
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(c.max_cap);
+        params.need_guided_growth = c.need;
+        strategy.initialize(params);
+        std::vector<float> error(n, 1.0f), footprint(n, 0.01f), contribution(n, 10.0f);
+        for (size_t i = 100; i < 103; ++i)
+            contribution[i] = 0.1f;
+        set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy._exchange_importance_sum = Tensor::from_vector(contribution, TensorShape({n}), Device::CUDA);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        strategy.soft_delete_rows(row_range(n - 2, n)); // 198 of 200 active: at the cap
+
+        const auto result = strategy.grow_and_split(100, 2, strategy.compute_refine_candidates(), 3);
+        EXPECT_EQ(result.replacement_count, 2);
+        EXPECT_EQ(result.growth_count, c.need ? 3 : 0);
+        EXPECT_EQ(static_cast<size_t>(result.receiver_splits), c.receivers);
+
+        const auto opacity = splat_data.opacity_raw().cpu().to_vector();
+        const auto scales = splat_data.scaling_raw().cpu().to_vector();
+        for (const int64_t row : selected_rows(result.split_indices)) {
+            EXPECT_NEAR(opacity[row], c.split_opacity, 1e-6f) << row;
+            EXPECT_NEAR(scales[3 * row + 0], std::log(0.5f), 1e-6f) << row;
+            EXPECT_NEAR(scales[3 * row + 1], std::log(c.cross_scale), 1e-6f) << row;
+            EXPECT_NEAR(scales[3 * row + 2], std::log(c.cross_scale), 1e-6f) << row;
+        }
+        if (c.receivers > 0) {
+            EXPECT_EQ(static_cast<size_t>(result.receiver_splits), result.split_indices.numel());
+            const auto free_cpu = strategy._free_mask.cpu();
+            const bool* free = free_cpu.ptr<bool>();
+            for (size_t row = 0; row < n; ++row)
+                if (!free[row])
+                    EXPECT_EQ(opacity[row], 0.0f) << row;
+        }
+    }
 }

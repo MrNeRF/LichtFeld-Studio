@@ -58,6 +58,11 @@ namespace lfs::training {
         // Need-guided growth frees this share of the active splats per refine at the cap; it
         // tapers on a cosine over [0, grow_until_iter] to 0, so the last children can settle.
         constexpr double MRNF_NEED_DONOR_SHARE = 0.05;
+        // At the cap, need-guided growth splits into receivers: the long axis halves, the other
+        // two shrink to 0.7 and both children keep the parent's opacity, so the turnover does
+        // not leave a faint cohort.
+        constexpr float MRNF_RECEIVER_CROSS_AXIS_SCALE = 0.7f;
+        constexpr float MRNF_RECEIVER_OPACITY_SCALE = 1.0f;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -1010,9 +1015,7 @@ namespace lfs::training {
         if (exchanging) {
             update_exchange_importance();
             const size_t active = active_count();
-            exchange_ready = _exchange_windows > exchange_warmup_windows() &&
-                             static_cast<double>(active) >=
-                                 MRNF_EXCHANGE_MIN_CAP_FILL * static_cast<double>(_params->max_cap);
+            exchange_ready = _exchange_windows > exchange_warmup_windows() && at_cap(active);
             if (exchange_ready) {
                 quota = exchange_quota(iter, active);
             }
@@ -1125,6 +1128,11 @@ namespace lfs::training {
         return _params && _params->need_guided_growth && !_topology_frozen;
     }
 
+    bool MRNF::at_cap(const size_t active) const {
+        return _params && _params->max_cap > 0 &&
+               static_cast<double>(active) >= MRNF_EXCHANGE_MIN_CAP_FILL * static_cast<double>(_params->max_cap);
+    }
+
     void MRNF::fold_need_into_refine_weights() {
         using namespace lfs::core;
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -1196,10 +1204,10 @@ namespace lfs::training {
             weight_p95 = kth(_refine_weight_max, weighted, count, 0.05);
         }
         const std::string line = std::format(
-            "MRNF refine {}: active {} / cap {}, pruned {}, refilled {}, grown {}, donors {} (quota {}), "
+            "MRNF refine {}: active {} / cap {}, pruned {}, refilled {}, grown {}, receiver splits {}, donors {} (quota {}), "
             "{} median {:.4g} p95 {:.4g}, opacity <0.1 {:.1f}% <0.5 {:.1f}% median {:.3f}",
             iter, n_active, _params->max_cap, pruned, growth.replacement_count, growth.growth_count,
-            growth.exchange_victims, quota, need ? "need" : "error", weight_median, weight_p95,
+            growth.receiver_splits, growth.exchange_victims, quota, need ? "need" : "error", weight_median, weight_p95,
             share_below(0.1f), share_below(0.5f), kth(opacity, active, n_active, 0.5));
         if (need) {
             LOG_INFO("{}", line);
@@ -1800,8 +1808,11 @@ namespace lfs::training {
         // so its values may differ from a single pass by one quantization step.
         constexpr std::size_t CHILD_CHUNK_BYTES = 256ull << 20;
         const std::size_t child_row_bytes = (3 + 4 + 3 + 3 + 1 + (use_shN ? sh_rest * 3 : 0)) * sizeof(float);
+        // One rule per refine: refills and growth alike are receivers once need-guided growth is at the cap.
+        const bool receiver = need_guided && at_cap(current_active);
+        result.receiver_splits = receiver ? static_cast<int>(K) : 0;
         const auto [reused, n_append] = split_parents_into_children(
-            split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes));
+            split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes), receiver);
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, reused, n_append, active_count(), _splat_data->size());
@@ -1814,7 +1825,7 @@ namespace lfs::training {
     }
 
     std::pair<size_t, size_t> MRNF::split_parents_into_children(
-        const lfs::core::Tensor& split_indices, const size_t chunk_rows) {
+        const lfs::core::Tensor& split_indices, const size_t chunk_rows, const bool receiver) {
         using namespace lfs::core;
         assert(split_indices.ndim() == 1 && split_indices.dtype() == DataType::Int64 && chunk_rows > 0);
         const size_t K = split_indices.numel();
@@ -1866,6 +1877,8 @@ namespace lfs::training {
                 chunk_indices.ptr<int64_t>(),
                 static_cast<int>(count),
                 0,
+                receiver ? MRNF_RECEIVER_CROSS_AXIS_SCALE : kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
+                receiver ? MRNF_RECEIVER_OPACITY_SCALE : kernels::LONG_AXIS_SPLIT_OPACITY_SCALE,
                 nullptr);
 
             if (use_shN) {
