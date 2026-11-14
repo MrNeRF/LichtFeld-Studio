@@ -1328,6 +1328,7 @@
     "scale": "Escalar",
     "mirror": "Reflejar",
     "crop": "Recortar",
+    "roi": "ROI",
     "align": "Alinear",
     "scale_distance": "Escalar distancia"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "Activar caja de recorte",
     "enable_crop_polygon": "Activar polígono de recorte",
     "invert_crop": "Invertir recorte",
+    "roi_ellipsoid_unsupported": "El elipsoide no es compatible como ROI de entrenamiento. Cámbielo por una caja o un polígono.",
     "crop_roi_settings": "Ajustes de ROI de recorte",
     "rejected_splat_lr_scale": "Escala de LR de splats rechazados",
     "outside_roi_loss_weight": "Peso de pérdida fuera de la ROI",

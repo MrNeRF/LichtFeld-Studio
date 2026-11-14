@@ -2266,6 +2266,9 @@ def is_tool_available(id: str) -> bool:
 def set_active_tool(id: str) -> None:
     """Set the active tool via C++ event"""
 
+def activate_crop_tool(role: str) -> bool:
+    """Activate the pre-training roi or crop tool and its volume."""
+
 def set_active_operator(id: str, gizmo_type: str = '') -> None:
     """Set active operator with optional gizmo type"""
 
@@ -2394,6 +2397,9 @@ def change_crop_tool_shape(shape: str) -> bool:
     """
     Change only the crop being edited, preserving its identity and siblings
     """
+
+def set_crop_polygon_outline(uuid: str, vertices: list[tuple[float, float]]) -> bool:
+    """Update a crop polygon outline in one undo step."""
 
 def edit_crop_tool(uuid: str) -> None:
     """Edit an existing crop volume without creating another"""

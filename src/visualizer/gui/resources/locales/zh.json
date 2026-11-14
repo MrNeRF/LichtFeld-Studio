@@ -1328,6 +1328,7 @@
     "scale": "缩放",
     "mirror": "镜像",
     "crop": "裁剪",
+    "roi": "ROI",
     "align": "对齐",
     "scale_distance": "按距离缩放"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "启用裁剪框",
     "enable_crop_polygon": "启用裁剪多边形",
     "invert_crop": "反转裁剪",
+    "roi_ellipsoid_unsupported": "训练 ROI 不支持椭球体。请改为框或多边形。",
     "crop_roi_settings": "裁剪 ROI 设置",
     "rejected_splat_lr_scale": "被排除点的学习率缩放",
     "outside_roi_loss_weight": "ROI 外损失权重",

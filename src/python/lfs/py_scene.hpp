@@ -13,6 +13,7 @@
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
 #include "visualizer/scene/external_preview.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include <cstdint>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -59,6 +60,7 @@ namespace lfs::python {
         }
         [[nodiscard]] nb::list python_dir() const {
             nb::list result;
+            result.append("role");
             result.append("prop_info");
             result.append("get");
             result.append("set");
@@ -98,6 +100,7 @@ namespace lfs::python {
         }
         [[nodiscard]] nb::list python_dir() const {
             nb::list result;
+            result.append("role");
             result.append("prop_info");
             result.append("get");
             result.append("set");
@@ -146,6 +149,7 @@ namespace lfs::python {
         }
         [[nodiscard]] nb::list python_dir() const {
             nb::list result;
+            result.append("role");
             result.append("prop_info");
             result.append("get");
             result.append("set");
@@ -251,6 +255,14 @@ namespace lfs::python {
             return node_uuid_.to_string();
         }
         int32_t parent_id() const { return node().parent_id; }
+        [[nodiscard]] std::optional<std::string> crop_role() const {
+            const auto& live = node();
+            const auto role = live.cropRole();
+            const auto* owner = scene_->getNodeById(live.parent_id);
+            if (!role || !owner || (owner->type != core::NodeType::POINTCLOUD && !vis::isTrainingRoi(*scene_, live)))
+                return std::nullopt;
+            return *role == core::CropRole::Secondary ? "crop" : "roi";
+        }
         std::vector<int32_t> children() const { return node().children; }
         core::NodeType type() const { return node().type; }
         bool read_only() const { return node().isExternalPreview(); }
@@ -399,7 +411,7 @@ namespace lfs::python {
         nb::list python_dir() const {
             (void)node();
             nb::list result;
-            for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
+            for (const char* attr : {"id", "uuid", "parent_id", "children", "type", "crop_role",
                                      "local_transform", "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid", "read_only",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "crop_polygon",

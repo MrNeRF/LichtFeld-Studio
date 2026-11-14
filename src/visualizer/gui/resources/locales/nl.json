@@ -1328,6 +1328,7 @@
     "scale": "Schalen",
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
+    "roi": "ROI",
     "align": "Uitlijnen",
     "scale_distance": "Afstand schalen"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "Bijsnijvak inschakelen",
     "enable_crop_polygon": "Bijsnijpolygoon inschakelen",
     "invert_crop": "Bijsnijden omkeren",
+    "roi_ellipsoid_unsupported": "Een ellipsoïde wordt niet ondersteund als trainings-ROI. Kies een box of polygoon.",
     "crop_roi_settings": "Instellingen voor bijsnij-ROI",
     "rejected_splat_lr_scale": "LR-schaal voor afgewezen splats",
     "outside_roi_loss_weight": "Verliesgewicht buiten ROI",

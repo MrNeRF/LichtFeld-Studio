@@ -14,6 +14,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -271,6 +272,59 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(rendering.getSettings().ortho_scale, 70.0f);
     }
 
+    TEST_F(OrthographicZoomTest, PointCloudCropRolesKeepDistinctVisibleGuideColors) {
+        for (const bool reverse : {false, true}) {
+            SCOPED_TRACE(reverse);
+            VisualizerImpl viewer(projectOptions());
+            auto& viewport = viewer.getViewport();
+            viewport.windowSize = {400, 200};
+            viewport.setViewMatrix(glm::mat3(1.0f), {0.0f, 0.0f, 10.0f});
+            viewport.ortho_scale_override = 60.0f;
+            auto* rendering = viewer.getRenderingManager();
+            configure(*rendering);
+            auto settings = rendering->getSettings();
+            settings.show_crop_box = true;
+            settings.show_coord_axes = false;
+            rendering->updateSettings(settings);
+            auto* manager = viewer.getSceneManager();
+            auto& scene = manager->getScene();
+            core::Scene::RestoreNodeDesc owner;
+            owner.uuid = core::generate_uuid_v4();
+            owner.name = "Cloud";
+            owner.type = core::NodeType::POINTCLOUD;
+            const auto cloud = scene.restoreNodeWithUuid(std::move(owner));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto owner_uuid = scene.getNodeById(cloud)->uuid;
+            const auto make_crop = [&](core::CropRole role) {
+                return cap::createSplatCrop(*manager, rendering, owner_uuid, core::NodeType::CROPBOX, role);
+            };
+            const auto first = make_crop(reverse ? core::CropRole::Secondary : core::CropRole::Primary);
+            const auto second = make_crop(reverse ? core::CropRole::Primary : core::CropRole::Secondary);
+            ASSERT_TRUE(first);
+            ASSERT_TRUE(second);
+            for (const auto shape : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+                SCOPED_TRACE(static_cast<int>(shape));
+                for (const auto id : {*first, *second}) {
+                    const auto uuid = scene.getNodeById(id)->uuid;
+                    if (scene.getNodeById(id)->type != shape)
+                        ASSERT_TRUE(cap::convertSplatCrop(*manager, rendering, uuid, shape));
+                }
+                for (const auto selected : {*first, *second}) {
+                    manager->selectNode(selected);
+                    const auto result = overlays(viewer);
+                    bool purple = false;
+                    bool yellow = false;
+                    for (const auto& vertex : result.shape_overlay_triangles) {
+                        const auto& c = vertex.color;
+                        purple |= c.r > 0.4f && c.b > 0.6f && c.g < 0.7f;
+                        yellow |= c.r > 0.8f && c.g > 0.8f && c.b < 0.2f;
+                    }
+                    EXPECT_TRUE(purple) << "primary crop outline missing";
+                    EXPECT_TRUE(yellow) << "secondary crop outline missing";
+                }
+            }
+        }
+    }
     TEST_F(OrthographicZoomTest, FrustumCacheAndGridRespectViewportScale) {
         // core::Camera keeps its transforms on the device; the CPU-only CI runners have none.
         if (int devices = 0; cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)

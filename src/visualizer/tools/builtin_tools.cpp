@@ -6,6 +6,7 @@
 #include "core/editor_context.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/gui_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "unified_tool_registry.hpp"
 
@@ -50,16 +51,18 @@ namespace lfs::vis {
             UnifiedToolRegistry::instance().registerTool(std::move(desc));
         }
 
-        void addCropTool() {
+        void addCropTool(const char* id) {
             ToolDescriptor desc;
-            desc.id = "builtin.cropbox";
-            desc.label = "Crop";
-            desc.icon = "cropbox";
+            desc.id = id;
+            desc.label = std::string_view(id) == "builtin.roi" ? "ROI" : "Crop";
+            desc.icon = std::string_view(id) == "builtin.roi" ? "roi" : "cropbox";
             desc.group = "utility";
             desc.order = ORDER_CROP;
             desc.source = ToolSource::CPP;
-            desc.poll_fn = [] {
+            desc.poll_fn = [pre_training_only = std::string_view(id) != "builtin.cropbox"] {
                 const auto* editor = services().editorOrNull();
+                if (pre_training_only && (!editor || !editor->forcePointCloudMode()))
+                    return false;
                 if (const auto* manager = services().sceneOrNull()) {
                     for (const auto id : manager->getSelectedNodeIds()) {
                         const auto* node = manager->getScene().getNodeById(id);
@@ -68,6 +71,15 @@ namespace lfs::vis {
                     }
                 }
                 return editor && editor->hasSelection() && !editor->isToolsDisabled();
+            };
+            desc.invoke_fn = [tool_id = std::string(id)] {
+                auto* editor = services().editorOrNull();
+                auto* gui = services().guiOrNull();
+                if (!editor || !gui)
+                    return;
+                editor->setActiveOperator(tool_id, "translate");
+                UnifiedToolRegistry::instance().setActiveTool(tool_id);
+                gui->gizmo().newCropTool("box");
             };
             UnifiedToolRegistry::instance().registerTool(std::move(desc));
         }
@@ -87,7 +99,9 @@ namespace lfs::vis {
         addTool("builtin.rotate", "Rotate", "rotation", "3", "transform", ORDER_ROTATE, ToolType::Rotate);
         addTool("builtin.scale", "Scale", "scaling", "4", "transform", ORDER_SCALE, ToolType::Scale);
         addTool("builtin.mirror", "Mirror", "mirror", "5", "transform", ORDER_MIRROR, ToolType::Mirror);
-        addCropTool();
+        addCropTool("builtin.roi");
+        addCropTool("builtin.cropbox");
+        addCropTool("builtin.crop");
         addTool("builtin.align", "Align", "align", "6", "align", ORDER_ALIGN, ToolType::Align);
         addTool("builtin.scale_distance", "Scale Distance", "bounds", "7", "align", ORDER_SCALE_DISTANCE, ToolType::ScaleDistance);
     }

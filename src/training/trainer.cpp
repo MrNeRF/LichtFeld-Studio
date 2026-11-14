@@ -2106,11 +2106,11 @@ namespace lfs::training {
         optimizer.set_crop_damping_mask(rejected);
     }
 
-    void Trainer::crop_to_training_cropbox() {
+    lfs::Status Trainer::crop_to_training_cropbox() {
         refresh_cropbox_snapshot();
         if (!cropbox_ || !strategy_) {
             LOG_WARN("--crop: the training model has no active crop box or polygon, nothing is removed");
-            return;
+            return {};
         }
         // Removing rows rebuilds each per-splat buffer beside the old one; a
         // model grown to the VRAM limit needs the idle rasterizer memory back.
@@ -2119,18 +2119,32 @@ namespace lfs::training {
         std::unique_lock render_lock(render_mutex_);
         std::unique_lock model_lock(model_access_mutex_);
         waitForModelReaders();
-        const auto& model = strategy_->get_model();
+        auto& model = strategy_->get_model();
         if (model.size() == 0)
-            return;
+            return {};
         const auto before = model.visible_count();
         const auto outside = training_cropbox_crop_mask(model, *cropbox_);
         LFS_ASSERT_MSG(outside && outside->numel() == model.size(), "crop selection must cover every splat");
         // Removed through the strategy so the optimizer state shrinks with the model and the project stays resumable.
-        if (outside->sum_scalar() > 0)
+        if (outside->sum_scalar() > 0) {
             strategy_->remove_gaussians(*outside);
+            // Compaction may replace renderer-shareable tensors with ordinary CUDA
+            // allocations. Restore them while the model and renderer are locked.
+            if (auto storage = lfs::from_legacy_expected(
+                    ensureModelTensorAllocatorStorage(model, "crop at training completion"),
+                    lfs::LegacyErrorContext{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .operation = "restore model storage after training ROI crop",
+                        .source = LFS_SOURCE_SITE_CURRENT(),
+                    }); !storage) {
+                return lfs::Status::failure(std::move(storage).error());
+            }
+        }
         // MCMC soft-deletes removed splats, so count the live ones.
         LOG_INFO("Cropped the trained model to its crop {}: {} of {} splats kept",
                  cropbox_->is_polygon() ? "polygon" : "box", strategy_->get_model().visible_count(), before);
+        return {};
     }
 
     bool Trainer::cropbox_contains_camera(const lfs::core::Camera& camera) const {
@@ -9815,17 +9829,21 @@ namespace lfs::training {
                 terminal_project_path = *live_project_path_;
             }
         }
+        // Before the terminal save, whose own failure must not drop the final
+        // standalone --save-project-at-iter file.
+        // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
+        // are cropped instead (export_cropbox()).
+        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox) {
+            if (auto cropped = crop_to_training_cropbox(); !cropped)
+                append_terminal_error(std::move(cropped).error());
+        }
+        const bool training_failed = terminal_error.has_value();
+        if (training_failed)
+            pending_snapshot_finish_reason_ = lfs::io::project::TrainingFinishReason::Error;
         const bool authorize_terminal_save =
             (user_stopped || terminal_error)
                 ? terminal_save_policy.on_stop_or_error
                 : terminal_save_policy.on_completion;
-        // Before the terminal save, whose own failure must not drop the final
-        // standalone --save-project-at-iter file.
-        const bool training_failed = terminal_error.has_value();
-        // Only a completed run is cropped: a stopped one saves every splat so it can resume, and its exports
-        // are cropped instead (export_cropbox()).
-        if (!terminal_error && !user_stopped && params_.optimization.crop_to_cropbox)
-            crop_to_training_cropbox();
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);

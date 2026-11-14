@@ -1408,7 +1408,7 @@ def test_crop_roi_stale_slider_events_do_not_write_live_params(
     controller = module._ViewportToolbarController()
     # Selection can disappear before the next toolbar poll updates its cached flag.
     controller._crop_roi_params_available = True
-    monkeypatch.setattr(controller._gizmo, "cropbox_toolbar_signature", lambda: signature)
+    monkeypatch.setattr(controller._gizmo, "cropbox_toolbar_signature", lambda roi_only=False: signature)
 
     controller._set_crop_roi_param("cropbox_lr_scale", "0.1")
     controller._set_crop_roi_param("cropbox_loss_weight", "0.1")

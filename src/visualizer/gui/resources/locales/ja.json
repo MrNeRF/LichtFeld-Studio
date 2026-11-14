@@ -1328,6 +1328,7 @@
     "scale": "拡大縮小",
     "mirror": "ミラー",
     "crop": "切り抜き",
+    "roi": "ROI",
     "align": "整列",
     "scale_distance": "距離で拡大縮小"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "クロップボックスを有効化",
     "enable_crop_polygon": "クロップポリゴンを有効化",
     "invert_crop": "クロップを反転",
+    "roi_ellipsoid_unsupported": "楕円体はトレーニングROIに対応していません。ボックスまたはポリゴンに変更してください。",
     "crop_roi_settings": "クロップ ROI 設定",
     "rejected_splat_lr_scale": "除外スプラットの LR スケール",
     "outside_roi_loss_weight": "ROI 外の損失の重み",

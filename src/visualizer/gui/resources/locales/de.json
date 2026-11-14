@@ -1328,6 +1328,7 @@
     "scale": "Skalieren",
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
+    "roi": "ROI",
     "align": "Ausrichten",
     "scale_distance": "Abstand skalieren"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "Zuschneidebox aktivieren",
     "enable_crop_polygon": "Zuschneidepolygon aktivieren",
     "invert_crop": "Zuschnitt umkehren",
+    "roi_ellipsoid_unsupported": "Ellipsoide werden als Trainings-ROI nicht unterstützt. Verwenden Sie einen Quader oder ein Polygon.",
     "crop_roi_settings": "Crop-ROI-Einstellungen",
     "rejected_splat_lr_scale": "LR-Skalierung abgelehnter Splats",
     "outside_roi_loss_weight": "Verlustgewicht außerhalb der ROI",

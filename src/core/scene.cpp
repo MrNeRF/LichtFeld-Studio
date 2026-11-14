@@ -4561,7 +4561,7 @@ namespace lfs::core {
         }
         for (const NodeId child_id : parent->children) {
             const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::CROPBOX) {
+            if (child && child->type == NodeType::CROPBOX && child->cropbox && child->cropbox->role == CropRole::Primary) {
                 return child_id;
             }
         }
@@ -4603,7 +4603,7 @@ namespace lfs::core {
         }
         for (const NodeId child_id : parent->children) {
             const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::ELLIPSOID) {
+            if (child && child->type == NodeType::ELLIPSOID && child->ellipsoid && child->ellipsoid->role == CropRole::Primary) {
                 return child_id;
             }
         }
@@ -4641,7 +4641,7 @@ namespace lfs::core {
             LOG_WARN("Cannot add crop polygon '{}': parent is not a splat or point cloud", name);
             return NULL_NODE;
         }
-        if (const NodeId existing = getCropPolygonForSplat(parent_id); existing != NULL_NODE) {
+        if (const NodeId existing = getCropForRole(parent_id, data.role, NodeType::CROP_POLYGON); existing != NULL_NODE) {
             return existing;
         }
         if (!crop_polygon::isValidOutline(data.vertices) || !crop_polygon::isValidHalfDepth(data.half_depth)) {
@@ -6387,6 +6387,18 @@ namespace lfs::core {
             return (min_bounds + max_bounds) * 0.5f;
         }
         return glm::vec3(0.0f);
+    }
+
+    NodeId Scene::getCropForRole(const NodeId owner_id, const CropRole role, const NodeType type) const {
+        const auto* owner = getNodeById(owner_id);
+        if (!owner)
+            return NULL_NODE;
+        for (const NodeId id : owner->children) {
+            const auto* child = getNodeById(id);
+            if (child && child->type == type && child->cropRole() == role)
+                return id;
+        }
+        return NULL_NODE;
     }
 
     NodeId Scene::getCropBoxForSplat(const NodeId splat_id) const {

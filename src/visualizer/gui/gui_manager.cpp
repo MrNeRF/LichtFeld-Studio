@@ -91,6 +91,7 @@
 #include "tools/selection_tool.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -3281,6 +3282,29 @@ namespace lfs::vis::gui {
                                    4.5f);
             }
 
+            const auto point_crop = [&](const core::NodeId id) -> const core::SceneNode* {
+                if (!scene_manager)
+                    return nullptr;
+                const auto& scene = scene_manager->getScene();
+                const auto* node = scene.getNodeById(id);
+                const auto* parent = node ? scene.getNodeById(node->parent_id) : nullptr;
+                return node && ((parent && parent->type == core::NodeType::POINTCLOUD) ||
+                                isTrainingRoi(scene, *node)) ? node : nullptr;
+            };
+            const auto role_color = [](const core::CropRole role) {
+                return role == core::CropRole::Primary ? glm::vec3(0.7f, 0.3f, 1.0f)
+                                                       : glm::vec3(1.0f, 1.0f, 0.0f);
+            };
+            const auto crop_color = [&](const core::NodeId id, const glm::vec3& legacy_color) {
+                const auto* node = point_crop(id);
+                return node ? role_color(node->cropRole().value_or(core::CropRole::Primary)) : legacy_color;
+            };
+            const auto pending_belongs_to = [&](const core::NodeId id) {
+                if (!point_crop(id))
+                    return true;
+                const auto* gui = services().guiOrNull();
+                return gui && gui->gizmo().cropToolVolumeNodeId() == id;
+            };
             const auto selected_cropbox_is_visible = [&]() {
                 if (!scene_state || !scene_manager)
                     return true;
@@ -3294,7 +3318,8 @@ namespace lfs::vis::gui {
                 return activeVolumeGuideVisible(gizmo.ellipsoid_affects_render, selected_id, scene_state->ellipsoids);
             };
 
-            if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
+            if (gizmo.cropbox_active && selected_cropbox_is_visible() &&
+                (!scene_manager || !point_crop(scene_manager->getSelectedNodeCropBoxId()))) {
                 appendProjectedBox(params, panel, settings,
                                    gizmo.cropbox_min,
                                    gizmo.cropbox_max,
@@ -3303,7 +3328,8 @@ namespace lfs::vis::gui {
                                    2.0f);
             }
 
-            if (gizmo.ellipsoid_active && selected_ellipsoid_is_visible()) {
+            if (gizmo.ellipsoid_active && selected_ellipsoid_is_visible() &&
+                (!scene_manager || !point_crop(scene_manager->getSelectedNodeEllipsoidId()))) {
                 appendProjectedEllipsoid(params, panel, settings,
                                          gizmo.ellipsoid_radii,
                                          gizmo.ellipsoid_transform,
@@ -3313,7 +3339,7 @@ namespace lfs::vis::gui {
 
             const auto selected_polygon_id = scene_manager ? scene_manager->getSelectedNodeCropPolygonId()
                                                            : core::NULL_NODE;
-            if (gizmo.crop_polygon_active &&
+            if (gizmo.crop_polygon_active && !point_crop(selected_polygon_id) &&
                 (!scene_state || activeVolumeGuideVisible(gizmo.crop_polygon_affects_render, selected_polygon_id,
                                                           scene_state->crop_polygons))) {
                 appendProjectedCropPolygon(params, panel, settings,
@@ -3326,7 +3352,20 @@ namespace lfs::vis::gui {
 
             // Outline being drawn: placed vertices and a rubber band to the cursor on the plane.
             if (!gizmo.crop_polygon_draft.empty()) {
-                const glm::vec4 draft_color = cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f);
+                glm::vec3 draft_base(1.0f, 1.0f, 0.0f);
+                if (scene_manager) {
+                    const auto selected = scene_manager->getSelectedNodeIds();
+                    const auto& scene = scene_manager->getScene();
+                    const auto* node = selected.size() == 1 ? scene.getNodeById(selected.front()) : nullptr;
+                    if (node && node->type != core::NodeType::POINTCLOUD)
+                        node = scene.getNodeById(node->parent_id);
+                    if (node && node->type == core::NodeType::POINTCLOUD) {
+                        const auto role = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
+                                              ? core::CropRole::Secondary : core::CropRole::Primary;
+                        draft_base = role_color(role);
+                    }
+                }
+                const glm::vec4 draft_color = cropGuideColor(draft_base, false, 0.0f);
                 const auto& draft = gizmo.crop_polygon_draft;
                 for (size_t i = 0; i + 1 < draft.size(); ++i)
                     addProjectedOverlayLine(params, panel, settings, draft[i], draft[i + 1], draft_color, 2.0f);
@@ -3341,10 +3380,10 @@ namespace lfs::vis::gui {
 
             const core::NodeId selected_cropbox_id = scene_manager->getSelectedNodeCropBoxId();
             for (const auto& cb : scene_state->cropboxes) {
-                if (!cb.data || !cb.effectively_visible || cb.node_id != selected_cropbox_id) {
+                if (!cb.data || !cb.effectively_visible || (cb.node_id != selected_cropbox_id && !point_crop(cb.node_id))) {
                     continue;
                 }
-                const bool use_pending = gizmo.cropbox_active;
+                const bool use_pending = gizmo.cropbox_active && cb.node_id == selected_cropbox_id && pending_belongs_to(cb.node_id);
                 const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
                 const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
                 const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
@@ -3353,37 +3392,37 @@ namespace lfs::vis::gui {
                                    box_min,
                                    box_max,
                                    world_transform,
-                                   cropGuideColor(cb.data->color, cb.data->inverse, flash),
+                                   cropGuideColor(crop_color(cb.node_id, cb.data->color), point_crop(cb.node_id) ? false : cb.data->inverse, flash),
                                    cb.data->line_width + flash * 4.0f);
             }
 
             const core::NodeId selected_ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
             for (const auto& el : scene_state->ellipsoids) {
-                if (!el.data || !el.effectively_visible || el.node_id != selected_ellipsoid_id) {
+                if (!el.data || !el.effectively_visible || (el.node_id != selected_ellipsoid_id && !point_crop(el.node_id))) {
                     continue;
                 }
-                const bool use_pending = gizmo.ellipsoid_active;
+                const bool use_pending = gizmo.ellipsoid_active && el.node_id == selected_ellipsoid_id && pending_belongs_to(el.node_id);
                 const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
                 const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
                 const float flash = std::clamp(el.data->flash_intensity, 0.0f, 1.0f);
                 appendProjectedEllipsoid(params, panel, settings,
                                          radii,
                                          world_transform,
-                                         cropGuideColor(el.data->color, el.data->inverse, flash),
+                                         cropGuideColor(crop_color(el.node_id, el.data->color), point_crop(el.node_id) ? false : el.data->inverse, flash),
                                          el.data->line_width + flash * 4.0f);
             }
 
             for (const auto& polygon : scene_state->crop_polygons) {
-                if (!polygon.data || !polygon.effectively_visible || polygon.node_id != selected_polygon_id) {
+                if (!polygon.data || !polygon.effectively_visible || (polygon.node_id != selected_polygon_id && !point_crop(polygon.node_id))) {
                     continue;
                 }
                 const float flash = std::clamp(polygon.data->flash_intensity, 0.0f, 1.0f);
+                const bool use_pending = gizmo.crop_polygon_active && polygon.node_id == selected_polygon_id && pending_belongs_to(polygon.node_id);
                 appendProjectedCropPolygon(params, panel, settings,
-                                           polygon.data->vertices,
-                                           polygon.data->half_depth,
-                                           gizmo.crop_polygon_active ? gizmo.crop_polygon_transform
-                                                                     : polygon.world_transform,
-                                           cropGuideColor(polygon.data->color, polygon.data->inverse, flash),
+                                           use_pending ? gizmo.crop_polygon_vertices : polygon.data->vertices,
+                                           use_pending ? gizmo.crop_polygon_half_depth : polygon.data->half_depth,
+                                           use_pending ? gizmo.crop_polygon_transform : polygon.world_transform,
+                                           cropGuideColor(crop_color(polygon.node_id, polygon.data->color), point_crop(polygon.node_id) ? false : polygon.data->inverse, flash),
                                            polygon.data->line_width + flash * 4.0f);
             }
         }
@@ -5398,9 +5437,7 @@ namespace lfs::vis::gui {
             if (viewer_) {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
-                // Polygons have no render setting; their outline follows the selection.
-                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid ||
-                                      scene_manager->getSelectedNodeCropPolygonId() != core::NULL_NODE)) {
+                if (scene_manager) {
                     overlay_scene_state =
                         scene_manager->buildRenderState({.metadata_only = true});
                 }

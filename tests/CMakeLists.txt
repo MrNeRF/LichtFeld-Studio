@@ -907,6 +907,7 @@ set(TEST_FILES
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_orthographic_zoom.cpp
     test_collision_project_open.cpp
     test_file_association.cpp
     test_panel_registry_animation_demand.cpp

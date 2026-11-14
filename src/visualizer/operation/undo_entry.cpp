@@ -41,7 +41,8 @@ namespace lfs::vis::op {
                    lhs.enabled == rhs.enabled &&
                    lhs.color == rhs.color &&
                    lhs.line_width == rhs.line_width &&
-                   lhs.flash_intensity == rhs.flash_intensity;
+                   lhs.flash_intensity == rhs.flash_intensity &&
+                   lhs.role == rhs.role;
         }
 
         bool ellipsoidsEqual(const lfs::core::EllipsoidData& lhs, const lfs::core::EllipsoidData& rhs) {
@@ -50,7 +51,8 @@ namespace lfs::vis::op {
                    lhs.enabled == rhs.enabled &&
                    lhs.color == rhs.color &&
                    lhs.line_width == rhs.line_width &&
-                   lhs.flash_intensity == rhs.flash_intensity;
+                   lhs.flash_intensity == rhs.flash_intensity &&
+                   lhs.role == rhs.role;
         }
 
         bool cropPolygonsEqual(const lfs::core::CropPolygonData& lhs, const lfs::core::CropPolygonData& rhs) {
@@ -60,7 +62,8 @@ namespace lfs::vis::op {
                    lhs.enabled == rhs.enabled &&
                    lhs.color == rhs.color &&
                    lhs.line_width == rhs.line_width &&
-                   lhs.flash_intensity == rhs.flash_intensity;
+                   lhs.flash_intensity == rhs.flash_intensity &&
+                   lhs.role == rhs.role;
         }
 
         std::string propertyUndoLabel(const std::string& property_path) {

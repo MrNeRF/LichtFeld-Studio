@@ -169,6 +169,9 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createSplatCrop(
         SceneManager& scene_manager, RenderingManager* rendering_manager,
         const core::Uuid& owner_uuid, core::NodeType type);
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createSplatCrop(
+        SceneManager& scene_manager, RenderingManager* rendering_manager,
+        const core::Uuid& owner_uuid, core::NodeType type, core::CropRole role);
 
     [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> duplicateSplatCrop(
         SceneManager& scene_manager, RenderingManager* rendering_manager,

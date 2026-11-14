@@ -7,10 +7,18 @@
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/core/services.hpp"
 
 #include <string_view>
 
 namespace lfs::vis {
+
+    bool isTrainingRoi(const core::Scene& scene, const core::SceneNode& node) {
+        const auto* owner = scene.getNodeById(node.parent_id);
+        return owner && !scene.getTrainingModelNodeUuid().is_nil() &&
+               owner->uuid == scene.getTrainingModelNodeUuid() &&
+               node.cropRole() == core::CropRole::Primary;
+    }
 
     namespace {
         [[nodiscard]] std::string formatTransformSelectionError(const bool has_editable,
@@ -279,7 +287,7 @@ namespace lfs::vis {
 
     void EditorContext::setActiveOperator(const std::string& id, const std::string& gizmo_type) {
         LOG_DEBUG("EditorContext::setActiveOperator: id='{}', gizmo_type='{}'", id, gizmo_type);
-        active_operator_id_ = id;
+        active_operator_id_ = id == "builtin.cropbox" && forcePointCloudMode() ? "builtin.roi" : id;
         gizmo_type_ = gizmo_type;
         app_store().active_tool.set(active_operator_id_);
         LOG_DEBUG("EditorContext::setActiveOperator: active_operator_id_='{}', hasActive={}",

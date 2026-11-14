@@ -122,6 +122,7 @@ namespace lfs::vis::gui {
             bool visible = true;
             bool camera_frustum_container = false;
             bool crop_volume = false;
+            bool roi_volume = false;
             core::NodeId crop_group_owner = core::NULL_NODE;
             bool crop_parent_enabled = true;
             bool has_children = false;

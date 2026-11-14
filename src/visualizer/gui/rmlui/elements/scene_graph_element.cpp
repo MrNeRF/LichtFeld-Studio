@@ -44,6 +44,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -1199,10 +1200,12 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
+            const auto* owner = scene.getNodeById(node->parent_id);
+            snapshot.roi_volume = node->cropRole() == core::CropRole::Primary &&
+                                  ((owner && owner->type == core::NodeType::POINTCLOUD) || isTrainingRoi(scene, *node));
             if (const auto* descriptor = core::splatOperationDescriptor(node->type);
                 descriptor && descriptor->category == core::SplatOperationCategory::CropVolume) {
-                const auto* owner = scene.getNodeById(node->parent_id);
-                if (owner) {
+                if (owner && !snapshot.roi_volume) {
                     const auto operation = core::readSplatOperation(*owner, *node);
                     if (operation && operation->enabled) {
                         snapshot.crop_volume = true;
@@ -1267,6 +1270,13 @@ namespace lfs::vis::gui {
                 snapshot.label = node->name;
                 break;
             }
+            if (const auto* descriptor = core::splatOperationDescriptor(node->type);
+                descriptor && descriptor->category == core::SplatOperationCategory::CropVolume) {
+                if ((owner && owner->type == core::NodeType::POINTCLOUD) || isTrainingRoi(scene, *node)) {
+                    snapshot.label = std::format("{} ({})", snapshot.label,
+                        LOC(node->cropRole() == core::CropRole::Primary ? "tool_defs.roi" : "tool_defs.crop"));
+                }
+            }
             switch (node->payload_hydration) {
             case core::PayloadHydrationState::Unloaded:
                 snapshot.label += "  [Unloaded]";
@@ -1299,7 +1309,8 @@ namespace lfs::vis::gui {
             std::vector<core::NodeId> crops;
             for (const auto id : owner->children) {
                 const auto it = snapshots.find(id);
-                if (it != snapshots.end() && it->second.crop_volume)
+                const auto* child = scene.getNodeById(id);
+                if (it != snapshots.end() && it->second.crop_volume && child && !isTrainingRoi(scene, *child))
                     crops.push_back(id);
             }
             if (crops.empty())
@@ -1327,7 +1338,8 @@ namespace lfs::vis::gui {
             std::vector<core::NodeId> organized;
             bool inserted = false;
             for (const auto id : children) {
-                if (const auto child = snapshots.find(id); child == snapshots.end() || !child->second.crop_volume)
+                if (const auto child = snapshots.find(id); child == snapshots.end() ||
+                    std::find(crops.begin(), crops.end(), id) == crops.end())
                     organized.push_back(id);
                 else if (!inserted) {
                     organized.push_back(group_id);
@@ -1846,7 +1858,9 @@ namespace lfs::vis::gui {
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
-            setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color);
+            setCachedOptionalProperty(slot.type_icon, "image-color", snapshot.roi_volume
+                                          ? std::optional<std::string>{"rgba(179, 77, 255, 255)"}
+                                          : row.camera_loss_icon_color);
             setCachedProperty(slot.type_icon, "display", "inline");
             setCachedProperty(slot.unicode_icon, "display", "none");
         } else if (!unicode.empty()) {
@@ -2175,7 +2189,8 @@ namespace lfs::vis::gui {
         } else if (action == "toggle-vis") {
             if (const auto* descriptor = core::splatOperationDescriptor(node->type);
                 descriptor && descriptor->category == core::SplatOperationCategory::CropVolume &&
-                scene->getNodeById(node->parent_id) && scene->getNodeById(node->parent_id)->type == core::NodeType::SPLAT) {
+                !isTrainingRoi(*scene, *node) && scene->getNodeById(node->parent_id) &&
+                scene->getNodeById(node->parent_id)->type == core::NodeType::SPLAT) {
                 const auto* owner = scene->getNodeById(node->parent_id);
                 const auto* editor = services().editorOrNull();
                 if (!owner || scene->isNodeEffectivelyLocked(node_id) ||
@@ -2416,12 +2431,25 @@ namespace lfs::vis::gui {
             }
             click_anchor_id_ = node_id;
         } else {
-            if (selected_ids_.size() == 1 && selected_ids_.contains(node_id))
+            const auto activate_point_crop = [&] {
+                const auto* node = scene->getNodeById(node_id);
+                const auto* owner = node ? scene->getNodeById(node->parent_id) : nullptr;
+                const auto* descriptor = node ? core::splatOperationDescriptor(node->type) : nullptr;
+                if (!node || !owner || owner->type != core::NodeType::POINTCLOUD || !descriptor ||
+                    descriptor->category != core::SplatOperationCategory::CropVolume)
+                    return;
+                if (auto* gui = services().guiOrNull())
+                    gui->gizmo().editCropTool(node->uuid, true);
+            };
+            if (selected_ids_.size() == 1 && selected_ids_.contains(node_id)) {
+                activate_point_crop();
                 return;
+            }
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
             click_anchor_id_ = node_id;
+            activate_point_crop();
         }
         markStateDirty();
     }
@@ -3347,7 +3375,8 @@ namespace lfs::vis::gui {
         const auto* crop_owner = scene->getNodeById(node->parent_id);
         const auto* crop_desc = core::splatOperationDescriptor(node->type);
         if (selected_ids_.size() <= 1 && crop_owner && crop_desc &&
-            crop_desc->category == core::SplatOperationCategory::CropVolume && core::validateSplatOperation(*crop_owner, *node)) {
+            crop_desc->category == core::SplatOperationCategory::CropVolume && !isTrainingRoi(*scene, *node) &&
+            core::validateSplatOperation(*crop_owner, *node)) {
             for (const auto& [action, key] : {std::pair{"edit", "splat_inspector.edit"}, {"duplicate", "splat_inspector.duplicate"}, {"bake", "splat_inspector.bake"}})
                 items.push_back(makeAction(tr(key), prefixedAction(std::format("crop_action:{}:{}", action, node->uuid.to_string()))));
         }
@@ -4149,7 +4178,8 @@ namespace lfs::vis::gui {
                 break;
             case Rml::Input::KI_RETURN: {
                 if (const auto* editor = services().editorOrNull();
-                    editor && editor->getActiveOperator() == "builtin.cropbox") {
+                    editor && (editor->getActiveOperator() == "builtin.cropbox" ||
+                               editor->getActiveOperator() == "builtin.crop" || editor->getActiveOperator() == "builtin.roi")) {
                     const auto* controller = InputController::instance();
                     const bool event_alt = event.GetParameter<int>("alt_key", 0) != 0;
                     const bool event_meta = event.GetParameter<int>("meta_key", 0) != 0;

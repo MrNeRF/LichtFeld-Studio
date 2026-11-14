@@ -4,6 +4,7 @@
 
 #include "gui/gizmo_manager.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
@@ -33,7 +34,9 @@
 #include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -52,6 +55,17 @@ namespace lfs::vis::gui {
     using ToolType = lfs::vis::ToolType;
 
     namespace {
+        bool preserveTrainingRoiVisibility(const VisualizerImpl* viewer, const core::Scene& scene,
+                                           const core::SceneNode& node) {
+            if (isTrainingRoi(scene, node))
+                return true;
+            const auto* owner = scene.getNodeById(node.parent_id);
+            const auto* trainer = viewer ? viewer->getTrainerManager() : nullptr;
+            return viewer && owner && owner->type == core::NodeType::POINTCLOUD &&
+                   node.cropRole() == core::CropRole::Primary &&
+                   (viewer->isTrainingStartPending() || (trainer && trainer->isTrainingActive()));
+        }
+
         void setPointPickToolsEnabled(ToolBase* align, ToolBase* scale_distance,
                                       const bool enable_align = false, const bool enable_scale_distance = false) {
             if (align && !enable_align)
@@ -86,6 +100,11 @@ namespace lfs::vis::gui {
             return type == core::NodeType::CROPBOX || type == core::NodeType::ELLIPSOID ||
                    type == core::NodeType::CROP_POLYGON;
         }
+        [[nodiscard]] bool isPointCloudRoi(const core::Scene& scene, const core::SceneNode* node) {
+            const auto* owner = node ? scene.getNodeById(node->parent_id) : nullptr;
+            return owner && owner->type == core::NodeType::POINTCLOUD &&
+                   node->cropRole() == core::CropRole::Primary;
+        }
 
         void emitCropPolygon(const core::Scene& scene, const core::SceneNode& node) {
             const auto& polygon = *node.crop_polygon;
@@ -94,7 +113,7 @@ namespace lfs::vis::gui {
                 .vertices = polygon.vertices,
                 .half_depth = polygon.half_depth,
                 .inverse = polygon.inverse,
-                .target_node_id = node.parent_id}
+                .target_node_id = node.id}
                 .emit();
         }
 
@@ -479,7 +498,8 @@ namespace lfs::vis::gui {
     }
 
     bool GizmoManager::isCropToolActive() const {
-        return UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox";
+        const auto& active = UnifiedToolRegistry::instance().getActiveTool();
+        return active == "builtin.cropbox" || active == "builtin.crop" || active == "builtin.roi";
     }
 
     bool GizmoManager::isSelectionVolumeMode() const {
@@ -562,35 +582,38 @@ namespace lfs::vis::gui {
         const auto& scene = sm->getScene();
         const auto selected = sm->getSelectedNodeIds();
         const auto* exact = selected.size() == 1 ? scene.getNodeById(selected.front()) : nullptr;
-        if (exact && isCropVolumeType(exact->type) && exact->parent_id == target_id)
+        const auto role = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
+                              ? core::CropRole::Secondary : core::CropRole::Primary;
+        if (exact && isCropVolumeType(exact->type) && exact->parent_id == target_id && exact->cropRole() == role)
             return exact->id;
-        core::NodeId selected_id = core::NULL_NODE;
-        core::NodeId attached_id = core::NULL_NODE;
-        switch (crop_tool_shape_) {
-        case CropToolShape::Box:
-            selected_id = sm->getSelectedNodeCropBoxId();
-            attached_id = scene.getCropBoxForSplat(target_id);
-            break;
-        case CropToolShape::Ellipsoid:
-            selected_id = sm->getSelectedNodeEllipsoidId();
-            attached_id = scene.getEllipsoidForSplat(target_id);
-            break;
-        case CropToolShape::Polygon:
-            selected_id = sm->getSelectedNodeCropPolygonId();
-            attached_id = scene.getCropPolygonForSplat(target_id);
-            break;
-        }
-        if (selected_id != core::NULL_NODE) {
-            const auto* const selected_node = scene.getNodeById(selected_id);
-            if (selected_node && selected_node->parent_id == target_id) {
-                return selected_id;
+        const auto* target = scene.getNodeById(target_id);
+        if (target && target->type == core::NodeType::SPLAT && role == core::CropRole::Primary) {
+            core::NodeId selected_id = core::NULL_NODE;
+            core::NodeId attached = core::NULL_NODE;
+            switch (crop_tool_shape_) {
+            case CropToolShape::Box:
+                selected_id = sm->getSelectedNodeCropBoxId();
+                attached = scene.getCropBoxForSplat(target_id);
+                break;
+            case CropToolShape::Ellipsoid:
+                selected_id = sm->getSelectedNodeEllipsoidId();
+                attached = scene.getEllipsoidForSplat(target_id);
+                break;
+            case CropToolShape::Polygon:
+                selected_id = sm->getSelectedNodeCropPolygonId();
+                attached = scene.getCropPolygonForSplat(target_id);
+                break;
             }
+            const auto* selected_node = scene.getNodeById(selected_id);
+            if (selected_node && selected_node->parent_id == target_id)
+                return selected_id;
+            return attached == core::NULL_NODE ? std::nullopt : std::optional<core::NodeId>(attached);
         }
-
-        if (attached_id != core::NULL_NODE) {
-            return attached_id;
+        for (const auto type : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+            const auto id = scene.getCropForRole(target_id, role, type);
+            if (id != core::NULL_NODE)
+                return id;
         }
-
         return std::nullopt;
     }
 
@@ -787,6 +810,12 @@ namespace lfs::vis::gui {
         const auto type = sm->getSelectedNodeType();
         if (!isCropVolumeType(type))
             return false;
+        const auto ids = sm->getSelectedNodeIds();
+        const auto* selected = ids.size() == 1 ? sm->getScene().getNodeById(ids.front()) : nullptr;
+        const auto role = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
+                              ? core::CropRole::Secondary : core::CropRole::Primary;
+        if (!selected || selected->cropRole() != role)
+            return false;
         const auto shape = type == core::NodeType::CROPBOX     ? CropToolShape::Box
                            : type == core::NodeType::ELLIPSOID ? CropToolShape::Ellipsoid
                                                                : CropToolShape::Polygon;
@@ -890,7 +919,7 @@ namespace lfs::vis::gui {
             if (node && (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
                          node->type == core::NodeType::CROP_POLYGON)) {
                 parent_node_id = node->parent_id;
-                if (hide_volume && node->visible) {
+                if (hide_volume && node->visible && !preserveTrainingRoiVisibility(viewer_, scene, *node)) {
                     sm->setNodeVisibilityTransient(volume_node_id, false);
                 }
             }
@@ -1097,6 +1126,14 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::setCropToolShape(const std::string& shape) {
+        if (shape == "ellipsoid" && UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") {
+            const auto* sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+            const auto selected = sm ? sm->getSelectedNodeIds() : std::vector<core::NodeId>{};
+            const auto* node = selected.size() == 1 ? sm->getScene().getNodeById(selected.front()) : nullptr;
+            if (node && (node->type == core::NodeType::POINTCLOUD ||
+                         (isPointCloudRoi(sm->getScene(), node) && node->type != core::NodeType::ELLIPSOID)))
+                return;
+        }
         if (isCropToolShapeLocked() && shape != cropToolShape())
             return;
         crop_tool_shape_ = shape == "ellipsoid" ? CropToolShape::Ellipsoid
@@ -1135,7 +1172,7 @@ namespace lfs::vis::gui {
         if (isCropToolActive() && viewer_) {
             auto& editor = viewer_->getEditorContext();
             if (editor.getGizmoType() != cropToolOperation())
-                editor.setActiveOperator("builtin.cropbox", cropToolOperation());
+                editor.setActiveOperator(UnifiedToolRegistry::instance().getActiveTool(), cropToolOperation());
         }
         if (isVolumeGizmoToolActive() && ensureCropToolState()) {
             updateCropToolOverlayState();
@@ -1168,6 +1205,10 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::editCropTool(const core::Uuid& uuid) {
+        editCropTool(uuid, false);
+    }
+
+    void GizmoManager::editCropTool(const core::Uuid& uuid, const bool allow_shape_change) {
         auto* sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!sm || viewer_->getEditorContext().isToolsDisabled() || op::operators().hasModalOperator())
             return;
@@ -1180,11 +1221,18 @@ namespace lfs::vis::gui {
         crop_tool_shape_locked_ = false;
         sm->selectNode(node->id);
         sm->setNodeVisibilityTransient(node->id, true);
-        viewer_->getEditorContext().setActiveOperator("builtin.cropbox", "translate");
-        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+        const char* tool_id = node->cropRole() == core::CropRole::Secondary ? "builtin.crop" : "builtin.cropbox";
+        viewer_->getEditorContext().setActiveOperator(tool_id, "translate");
+        UnifiedToolRegistry::instance().setActiveTool(tool_id);
         setCropToolShape(node->type == core::NodeType::ELLIPSOID ? "ellipsoid" : node->type == core::NodeType::CROP_POLYGON ? "polygon"
                                                                                                                             : "box");
-        crop_tool_shape_locked_ = true;
+        crop_tool_shape_locked_ = !allow_shape_change;
+        if (node->type == core::NodeType::ELLIPSOID && isPointCloudRoi(sm->getScene(), node)) {
+            if (auto* gui = viewer_->getGuiManager())
+                gui->enqueueToast({.title = LOC("tool_defs.roi"),
+                                   .message = LOC("toolbar.roi_ellipsoid_unsupported"),
+                                   .level = ErrorNoticeLevel::Warning});
+        }
         if (ensureCropToolState())
             updateCropToolOverlayState();
     }
@@ -1208,6 +1256,8 @@ namespace lfs::vis::gui {
         const auto selected = sm->getSelectedNodeIds();
         const auto* node = selected.size() == 1 ? sm->getScene().getNodeById(selected.front()) : nullptr;
         if (!node || !isCropVolumeType(node->type))
+            return false;
+        if (shape == "ellipsoid" && isPointCloudRoi(sm->getScene(), node))
             return false;
         const auto uuid = node->uuid;
         const auto operation = cropToolOperation();
@@ -1235,22 +1285,41 @@ namespace lfs::vis::gui {
         const auto* owner = selected.size() == 1 ? scene.getNodeById(selected[0]) : nullptr;
         if (owner && core::splatOperationDescriptor(owner->type))
             owner = scene.getNodeById(owner->parent_id);
-        if (!owner || owner->type != core::NodeType::SPLAT || scene.isNodeEffectivelyLocked(owner->id) ||
+        if (!owner || (owner->type != core::NodeType::SPLAT && owner->type != core::NodeType::POINTCLOUD)) {
+            const auto target = selectedCropTargetNodeId();
+            owner = target ? scene.getNodeById(*target) : nullptr;
+        }
+        if (!owner || (owner->type != core::NodeType::SPLAT && owner->type != core::NodeType::POINTCLOUD) || scene.isNodeEffectivelyLocked(owner->id) ||
             viewer_->getEditorContext().isToolsDisabled())
             return;
         if (shape != "box" && shape != "ellipsoid" && shape != "polygon")
             return;
+        const auto role = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop"
+                              ? core::CropRole::Secondary : core::CropRole::Primary;
+        if (owner->type == core::NodeType::POINTCLOUD && role == core::CropRole::Primary && shape == "ellipsoid")
+            return;
+        if (owner->type == core::NodeType::POINTCLOUD) {
+            for (const auto type : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+                const auto id = scene.getCropForRole(owner->id, role, type);
+                if (const auto* existing = scene.getNodeById(id)) {
+                    editCropTool(existing->uuid);
+                    crop_tool_shape_locked_ = false;
+                    return;
+                }
+            }
+        }
         finishCropTool();
         crop_tool_shape_locked_ = false;
         if (shape == "polygon") {
             op::OperatorProperties props;
             props.set("target_node_id", static_cast<int>(owner->id));
             props.set("new_instance", true);
+            props.set("secondary_crop", role == core::CropRole::Secondary);
             (void)op::operators().invoke(op::BuiltinOp::CropPolygonDraw, &props);
             return;
         }
         auto created = cap::createSplatCrop(*sm, viewer_->getRenderingManager(), owner->uuid,
-                                            shape == "box" ? core::NodeType::CROPBOX : core::NodeType::ELLIPSOID);
+                                            shape == "box" ? core::NodeType::CROPBOX : core::NodeType::ELLIPSOID, role);
         if (created) {
             editCropTool(scene.getNodeById(*created)->uuid);
             crop_tool_shape_locked_ = false;
@@ -1278,6 +1347,9 @@ namespace lfs::vis::gui {
         if (!sm)
             return;
 
+        if (isPointCloudRoi(sm->getScene(), sm->getScene().getNodeById(crop_tool_volume_node_id_)))
+            return;
+
         if (!sm->canApplyCropToNode(crop_tool_target_node_id_))
             return;
 
@@ -1301,7 +1373,7 @@ namespace lfs::vis::gui {
             lfs::geometry::BoundingBox crop_box;
             crop_box.setBounds(cropbox_node->cropbox->min, cropbox_node->cropbox->max);
             crop_box.setworld2BBox(glm::inverse(scene_coords::nodeDataWorldTransform(scene, cropbox_node->id)));
-            cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->parent_id}.emit();
+            cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->id}.emit();
         } else if (crop_tool_shape_ == CropToolShape::Polygon) {
             const auto* polygon_node = scene.getNodeById(crop_tool_volume_node_id_);
             if (!polygon_node || !polygon_node->crop_polygon) {
@@ -1612,8 +1684,18 @@ namespace lfs::vis::gui {
             auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
             const auto* const selected_node = sm ? sm->getScene().getNode(event.path) : nullptr;
             const bool selected_crop_volume = selected_node && isCropVolumeType(selected_node->type);
-            const bool active_crop_operator = UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox" ||
-                                              viewer_->getEditorContext().getActiveOperator() == "builtin.cropbox";
+            const auto editor_tool = viewer_->getEditorContext().getActiveOperator();
+            const bool active_crop_operator = isCropToolActive() || editor_tool == "builtin.cropbox" || editor_tool == "builtin.crop" || editor_tool == "builtin.roi";
+            if (op::undoHistory().isPlaybackActive() && active_crop_operator && selected_crop_volume) {
+                const auto* owner = sm->getScene().getNodeById(selected_node->parent_id);
+                if (owner && owner->type == core::NodeType::POINTCLOUD) {
+                    const auto operation = cropToolOperation();
+                    const bool allow_shape_change = !isCropToolShapeLocked();
+                    const auto uuid = selected_node->uuid;
+                    editCropTool(uuid, allow_shape_change);
+                    setCropToolOperation(operation);
+                }
+            }
             if (!op::undoHistory().isPlaybackActive()) {
                 if (active_crop_operator)
                     leaveCropTool(false, false, true);
@@ -1622,7 +1704,11 @@ namespace lfs::vis::gui {
                 // Helper visibility follows selection, independently of crop filtering.
                 if (sm)
                     for (const auto* volume : sm->getScene().getNodes())
-                        if (isCropVolumeType(volume->type)) {
+                        if (isCropVolumeType(volume->type) && !preserveTrainingRoiVisibility(viewer_, sm->getScene(), *volume)) {
+                            const auto* owner = sm->getScene().getNodeById(volume->parent_id);
+                            if (owner && owner->type == core::NodeType::POINTCLOUD &&
+                                (!selected_crop_volume || volume->id != selected_node->id))
+                                continue;
                             const bool show = selected_crop_volume && volume->id == selected_node->id;
                             if (static_cast<bool>(volume->visible) != show)
                                 sm->setNodeVisibilityTransient(volume->id, show);
@@ -1641,8 +1727,11 @@ namespace lfs::vis::gui {
             python::cancel_active_operator();
             if (auto* sm = viewer_ ? viewer_->getSceneManager() : nullptr)
                 for (const auto* node : sm->getScene().getNodes())
-                    if (isCropVolumeType(node->type) && node->visible)
-                        sm->setNodeVisibilityTransient(node->id, false);
+                    if (isCropVolumeType(node->type) && node->visible && !preserveTrainingRoiVisibility(viewer_, sm->getScene(), *node)) {
+                        const auto* owner = sm->getScene().getNodeById(node->parent_id);
+                        if (!owner || owner->type != core::NodeType::POINTCLOUD)
+                            sm->setNodeVisibilityTransient(node->id, false);
+                    }
             setPointPickToolsEnabled(viewer_->getAlignTool(), viewer_->getScaleDistanceTool());
             node_bounds_cache_valid_ = false;
             node_selection_bounds_cache_valid_ = false;
@@ -1661,7 +1750,7 @@ namespace lfs::vis::gui {
             const auto* const sm = viewer_->getSceneManager();
             const bool selected_crop_volume = sm && sm->hasSelectedNode() &&
                                               isCropVolumeType(sm->getSelectedNodeType());
-            if (registry.getActiveTool() == "builtin.cropbox" ||
+            if (isCropToolActive() ||
                 (tool != ToolType::None && selected_crop_volume)) {
                 leaveCropTool(true, true, true);
             } else if (editor.hasActiveOperator() && tool != ToolType::Selection) {
@@ -1754,7 +1843,7 @@ namespace lfs::vis::gui {
                 return;
 
             const auto* cropbox_node = sm->getScene().getNodeById(cropbox_id);
-            if (!cropbox_node || !cropbox_node->cropbox)
+            if (!cropbox_node || !cropbox_node->cropbox || isPointCloudRoi(sm->getScene(), cropbox_node))
                 return;
 
             if (!sm->canApplyCropToNode(cropbox_node->parent_id))
@@ -1784,7 +1873,7 @@ namespace lfs::vis::gui {
             lfs::geometry::BoundingBox crop_box;
             crop_box.setBounds(cropbox_node->cropbox->min, cropbox_node->cropbox->max);
             crop_box.setworld2BBox(glm::inverse(scene_coords::nodeDataWorldTransform(sm->getScene(), cropbox_id)));
-            cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->parent_id}.emit();
+            cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->id}.emit();
             triggerCropFlash();
             if (deleteCropVolumeAfterApply(cropbox_id))
                 transaction.commit();
@@ -1805,7 +1894,7 @@ namespace lfs::vis::gui {
                 return;
 
             const auto* ellipsoid_node = sm->getScene().getNodeById(ellipsoid_id);
-            if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+            if (!ellipsoid_node || !ellipsoid_node->ellipsoid || isPointCloudRoi(sm->getScene(), ellipsoid_node))
                 return;
 
             if (!sm->canApplyCropToNode(ellipsoid_node->parent_id))
@@ -1852,7 +1941,8 @@ namespace lfs::vis::gui {
             auto* const sm = viewer_->getSceneManager();
             const core::NodeId polygon_id = sm ? sm->getSelectedNodeCropPolygonId() : core::NULL_NODE;
             const auto* polygon_node = sm ? sm->getScene().getNodeById(polygon_id) : nullptr;
-            if (!polygon_node || !polygon_node->crop_polygon || !sm->canApplyCropToNode(polygon_node->parent_id))
+            if (!polygon_node || !polygon_node->crop_polygon || isPointCloudRoi(sm->getScene(), polygon_node) ||
+                !sm->canApplyCropToNode(polygon_node->parent_id))
                 return;
 
             op::TransactionGuard transaction("Crop Polygon");
@@ -1891,7 +1981,7 @@ namespace lfs::vis::gui {
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
         const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
-        const bool is_crop_tool = active_tool_id == "builtin.cropbox";
+        const bool is_crop_tool = active_tool_id == "builtin.cropbox" || active_tool_id == "builtin.crop" || active_tool_id == "builtin.roi";
         const bool is_selection_mode = active_tool_id == "builtin.select";
         const bool is_selection_volume_tool = is_selection_mode && isSelectionVolumeSubMode(selection_mode_);
         const bool selected_crop_volume = has_selected_node && scene_manager &&

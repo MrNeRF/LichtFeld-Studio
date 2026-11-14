@@ -697,7 +697,7 @@ namespace lfs::training {
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
         // Removes the splats outside the training crop box (inside it when inverse).
-        void crop_to_training_cropbox();
+        [[nodiscard]] lfs::Status crop_to_training_cropbox();
         // Whether the camera stands inside the crop box (host pose, no device read).
         [[nodiscard]] bool cropbox_contains_camera(const lfs::core::Camera& camera) const;
         [[nodiscard]] bool morton_reorder_due(int iter) const;

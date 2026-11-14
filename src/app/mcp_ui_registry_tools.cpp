@@ -14,6 +14,7 @@
 #include "visualizer/gui/rml_modal_overlay.hpp"
 #include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
@@ -896,7 +897,21 @@ namespace lfs::app {
                     }
 
                     const bool available_before = (*description)["tool"].value("poll", false);
+                    const bool is_crop = tool_id == "builtin.roi" || tool_id == "builtin.crop" || tool_id == "builtin.cropbox";
+                    if (is_crop && !available_before)
+                        return json{{"error", "Crop tool is unavailable for the current selection"}};
                     vis::UnifiedToolRegistry::instance().invoke(tool_id);
+                    if (is_crop && effective_active_tool_id(viewer) != tool_id &&
+                        !(tool_id == "builtin.cropbox" && effective_active_tool_id(viewer) == "builtin.roi"))
+                        return json{{"error", "Crop tool could not be activated"}};
+                    if (tool_id == "builtin.roi" || tool_id == "builtin.crop") {
+                        const auto* manager = viewer->getSceneManager();
+                        const auto ids = manager ? manager->getSelectedNodeIds() : std::vector<core::NodeId>{};
+                        const auto* volume = ids.size() == 1 ? manager->getScene().getNodeById(ids.front()) : nullptr;
+                        const auto expected = tool_id == "builtin.roi" ? core::CropRole::Primary : core::CropRole::Secondary;
+                        if (!volume || volume->cropRole() != expected)
+                            return json{{"error", "Crop tool could not select its volume"}};
+                    }
 
                     if (submode_id) {
                         if (auto result = set_selection_submode(*submode_id); !result) {

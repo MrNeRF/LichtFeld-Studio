@@ -23,6 +23,9 @@ namespace lfs::vis {
     class SceneManager;
     class TrainerManager;
 
+    // The bound training model retains the pre-training ROI while training is active.
+    [[nodiscard]] LFS_VIS_API bool isTrainingRoi(const core::Scene& scene, const core::SceneNode& node);
+
     // Application editing mode
     enum class EditorMode : uint8_t {
         EMPTY,

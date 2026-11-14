@@ -1339,6 +1339,7 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "crop": "Crop",
+    "roi": "ROI",
     "align": "Align",
     "scale_distance": "Scale Distance"
   },
@@ -1353,6 +1354,7 @@
     "enable_crop_box": "Enable Crop Box",
     "enable_crop_polygon": "Enable Crop Polygon",
     "invert_crop": "Invert Crop",
+    "roi_ellipsoid_unsupported": "Ellipsoid is not supported as a training ROI. Change it to a box or polygon.",
     "crop_roi_settings": "Crop ROI Settings",
     "rejected_splat_lr_scale": "Rejected splat LR scale",
     "outside_roi_loss_weight": "Outside ROI loss weight",

@@ -2552,8 +2552,18 @@ namespace lfs::vis {
                 return;
 
             case input::Action::APPLY_CROP_BOX: {
-                if (gui)
-                    gui->gizmo().finishCropTool();
+                if (gui) {
+                    const auto* manager = services().sceneOrNull();
+                    const auto* node = manager ? manager->getScene().getNodeById(gui->gizmo().cropToolVolumeNodeId()) : nullptr;
+                    const auto* owner = node ? manager->getScene().getNodeById(node->parent_id) : nullptr;
+                    const bool apply_point_crop = UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop" &&
+                                                  owner && owner->type == core::NodeType::POINTCLOUD &&
+                                                  node->cropRole() == core::CropRole::Secondary;
+                    if (apply_point_crop)
+                        gui->gizmo().applyActiveCropTool();
+                    else
+                        gui->gizmo().finishCropTool();
+                }
                 return;
             }
 
@@ -4456,7 +4466,9 @@ namespace lfs::vis {
     input::ToolMode InputController::getCurrentToolMode() const {
         if (vr_viewing_)
             return input::ToolMode::VR;
-        if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox")
+        if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox" ||
+            UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop" ||
+            UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi")
             return input::ToolMode::CROP_BOX;
         if (selection_tool_ && selection_tool_->isEnabled())
             return input::ToolMode::SELECTION;

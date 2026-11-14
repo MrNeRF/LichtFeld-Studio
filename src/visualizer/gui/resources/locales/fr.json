@@ -1328,6 +1328,7 @@
     "scale": "Mettre à l’échelle",
     "mirror": "Miroir",
     "crop": "Rogner",
+    "roi": "ROI",
     "align": "Aligner",
     "scale_distance": "Mettre à l’échelle par distance"
   },
@@ -1342,6 +1343,7 @@
     "enable_crop_box": "Activer la boîte de recadrage",
     "enable_crop_polygon": "Activer le polygone de recadrage",
     "invert_crop": "Inverser le recadrage",
+    "roi_ellipsoid_unsupported": "Les ellipsoïdes ne sont pas pris en charge comme ROI de formation. Choisissez une boîte ou un polygone.",
     "crop_roi_settings": "Paramètres de ROI de recadrage",
     "rejected_splat_lr_scale": "Échelle de LR des splats rejetés",
     "outside_roi_loss_weight": "Poids de perte hors ROI",

@@ -6,7 +6,11 @@
 #include "core/splat_data.hpp"
 #include "core/splat_operations.hpp"
 #include "gui/gizmo_manager.hpp"
+#include "gui/gui_manager.hpp"
+#include "visualizer/visualizer_impl.hpp"
 #include "gui/panel_registry.hpp"
+#include "input/input_controller.hpp"
+#include "input/key_codes.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/video_export_utils.hpp"
 #include "internal/viewport.hpp"
@@ -35,6 +39,7 @@
 namespace {
     using namespace lfs;
     using namespace lfs::vis;
+    namespace gui = lfs::vis::gui;
     std::unique_ptr<core::SplatData> groupTestSplat(core::Device device = core::Device::CPU) {
         using core::Device;
         using core::Tensor;
@@ -145,6 +150,109 @@ namespace {
         op::undoHistory().undo();
         EXPECT_EQ(scene.getNodeByUuid(new_uuid), nullptr);
         EXPECT_NE(scene.getNodeByUuid(source_uuid), nullptr);
+    }
+
+    TEST_F(SplatCropWorkflowTest, PointCloudCropInstancesRemainIndependentAcrossCreationOrdersAndUndo) {
+        for (const bool reverse : {false, true}) {
+            SCOPED_TRACE(reverse);
+            auto& scene = sm->getScene();
+            core::Scene::RestoreNodeDesc desc;
+            desc.uuid = core::generate_uuid_v4();
+            desc.name = reverse ? "Cloud reverse" : "Cloud forward";
+            desc.type = core::NodeType::POINTCLOUD;
+            const auto cloud = scene.restoreNodeWithUuid(std::move(desc));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto owner_uuid = scene.getNodeById(cloud)->uuid;
+            const auto first_type = reverse ? core::NodeType::ELLIPSOID : core::NodeType::CROPBOX;
+            const auto second_type = reverse ? core::NodeType::CROPBOX : core::NodeType::ELLIPSOID;
+            const auto first = cap::createSplatCrop(*sm, nullptr, owner_uuid, first_type);
+            ASSERT_TRUE(first);
+            const auto first_uuid = scene.getNodeById(*first)->uuid;
+            const auto second = cap::createSplatCrop(*sm, nullptr, owner_uuid, second_type);
+            ASSERT_TRUE(second);
+            const auto second_uuid = scene.getNodeById(*second)->uuid;
+            EXPECT_NE(first_uuid, second_uuid);
+            const auto converted = cap::convertSplatCrop(*sm, nullptr, second_uuid, first_type);
+            ASSERT_TRUE(converted);
+            EXPECT_EQ(scene.getNodeByUuid(first_uuid)->type, first_type);
+            EXPECT_NE(scene.getNodeByUuid(second_uuid), nullptr);
+            op::undoHistory().undo();
+            EXPECT_EQ(scene.getNodeByUuid(second_uuid)->type, second_type);
+            EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+            op::undoHistory().undo();
+            EXPECT_EQ(scene.getNodeByUuid(second_uuid), nullptr);
+            EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+        }
+    }
+
+    TEST_F(SplatCropWorkflowTest, DirectPolygonCreationUsesRequestedRoleInEitherOrder) {
+        for (const auto first_role : {core::CropRole::Primary, core::CropRole::Secondary}) {
+            SCOPED_TRACE(static_cast<int>(first_role));
+            auto& scene = sm->getScene();
+            core::Scene::RestoreNodeDesc owner_desc;
+            owner_desc.uuid = core::generate_uuid_v4();
+            owner_desc.name = first_role == core::CropRole::Primary ? "Polygon ROI first" : "Polygon Crop first";
+            owner_desc.type = core::NodeType::POINTCLOUD;
+            const auto cloud = scene.restoreNodeWithUuid(std::move(owner_desc));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            core::CropPolygonData data;
+            data.vertices = {{-1, -1}, {1, -1}, {0, 1}};
+            data.role = first_role;
+            const auto first = scene.addCropPolygon("First polygon", cloud, data);
+            ASSERT_NE(first, core::NULL_NODE);
+            data.role = first_role == core::CropRole::Primary ? core::CropRole::Secondary : core::CropRole::Primary;
+            const auto second = scene.addCropPolygon("Second polygon", cloud, data);
+            ASSERT_NE(second, core::NULL_NODE);
+            ASSERT_NE(first, second);
+            EXPECT_EQ(scene.getNodeById(first)->cropRole(), first_role);
+            EXPECT_EQ(scene.getNodeById(second)->cropRole(), data.role);
+            EXPECT_EQ(scene.addCropPolygon("Same role", cloud, data), second);
+        }
+    }
+
+    TEST_F(SplatCropWorkflowTest, CropRoleLookupIsIndependentOfCreationOrder) {
+        for (const auto first_role : {core::CropRole::Primary, core::CropRole::Secondary}) {
+            auto& scene = sm->getScene();
+            core::Scene::RestoreNodeDesc desc;
+            desc.uuid = core::generate_uuid_v4();
+            desc.name = first_role == core::CropRole::Primary ? "Primary first" : "Secondary first";
+            desc.type = core::NodeType::POINTCLOUD;
+            const auto cloud = scene.restoreNodeWithUuid(std::move(desc));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto owner_uuid = scene.getNodeById(cloud)->uuid;
+            const auto other_role = first_role == core::CropRole::Primary ? core::CropRole::Secondary : core::CropRole::Primary;
+            const auto first = cap::createSplatCrop(*sm, nullptr, owner_uuid, core::NodeType::CROPBOX, first_role);
+            const auto second = cap::createSplatCrop(*sm, nullptr, owner_uuid, core::NodeType::CROPBOX, other_role);
+            ASSERT_TRUE(first);
+            ASSERT_TRUE(second);
+            EXPECT_EQ(scene.getCropForRole(cloud, first_role, core::NodeType::CROPBOX), *first);
+            EXPECT_EQ(scene.getCropForRole(cloud, other_role, core::NodeType::CROPBOX), *second);
+        }
+    }
+
+    TEST_F(SplatCropWorkflowTest, CropRolesKeepTheirIdentityThroughConversionAndUndo) {
+        auto& scene = sm->getScene();
+        core::Scene::RestoreNodeDesc desc;
+        desc.uuid = core::generate_uuid_v4();
+        desc.name = "Role cloud";
+        desc.type = core::NodeType::POINTCLOUD;
+        const auto cloud = scene.restoreNodeWithUuid(std::move(desc));
+        ASSERT_NE(cloud, core::NULL_NODE);
+        const auto owner_uuid = scene.getNodeById(cloud)->uuid;
+        const auto secondary = cap::createSplatCrop(*sm, nullptr, owner_uuid, core::NodeType::CROPBOX, core::CropRole::Secondary);
+        const auto primary = cap::createSplatCrop(*sm, nullptr, owner_uuid, core::NodeType::CROPBOX, core::CropRole::Primary);
+        ASSERT_TRUE(secondary);
+        ASSERT_TRUE(primary);
+        EXPECT_NE(*primary, *secondary);
+        EXPECT_EQ(scene.getCropForRole(cloud, core::CropRole::Primary, core::NodeType::CROPBOX), *primary);
+        EXPECT_EQ(scene.getCropForRole(cloud, core::CropRole::Secondary, core::NodeType::CROPBOX), *secondary);
+        const auto secondary_uuid = scene.getNodeById(*secondary)->uuid;
+        ASSERT_TRUE(cap::convertSplatCrop(*sm, nullptr, secondary_uuid, core::NodeType::ELLIPSOID));
+        EXPECT_EQ(scene.getNodeByUuid(secondary_uuid)->cropRole(), core::CropRole::Secondary);
+        EXPECT_EQ(scene.getNodeById(*primary)->cropRole(), core::CropRole::Primary);
+        op::undoHistory().undo();
+        ASSERT_NE(scene.getNodeByUuid(secondary_uuid), nullptr);
+        EXPECT_EQ(scene.getNodeByUuid(secondary_uuid)->cropRole(), core::CropRole::Secondary);
     }
 
     TEST_F(SplatCropWorkflowTest, NewPolygonNeverReplacesExistingCropVolumes) {
@@ -473,6 +581,224 @@ namespace {
         }
     };
 
+    class RmlDefaultActionAccess : public Rml::Element {
+    public:
+        using Rml::Element::ProcessDefaultAction;
+    };
+
+    class PointCloudCropRowTest : public ::testing::Test {
+    protected:
+        TreeRenderer renderer;
+        TreeSystemInterface system;
+        Rml::ElementInstancerGeneric<gui::SceneGraphElement> tree_instancer;
+        std::unique_ptr<VisualizerImpl> viewer;
+        Rml::Context* context = nullptr;
+        gui::SceneGraphElement* tree = nullptr;
+        core::NodeId cloud = core::NULL_NODE;
+        core::NodeId primary = core::NULL_NODE;
+        core::NodeId secondary = core::NULL_NODE;
+        uint64_t generation = 1;
+
+        void SetUp() override {
+            event::EventBridge::instance().clear_all();
+            services().clear();
+            op::undoHistory().clear();
+            ViewerOptions options;
+            options.show_startup_overlay = false;
+            viewer = std::make_unique<VisualizerImpl>(options);
+            auto& scene = viewer->getScene();
+            core::Scene::RestoreNodeDesc owner;
+            owner.uuid = core::generate_uuid_v4();
+            owner.name = "Cloud";
+            owner.type = core::NodeType::POINTCLOUD;
+            cloud = scene.restoreNodeWithUuid(std::move(owner));
+            ASSERT_NE(cloud, core::NULL_NODE);
+            const auto uuid = scene.getNodeById(cloud)->uuid;
+            const auto first = cap::createSplatCrop(*viewer->getSceneManager(), nullptr, uuid, core::NodeType::CROPBOX, core::CropRole::Primary);
+            const auto second = cap::createSplatCrop(*viewer->getSceneManager(), nullptr, uuid, core::NodeType::CROPBOX, core::CropRole::Secondary);
+            ASSERT_TRUE(first);
+            ASSERT_TRUE(second);
+            primary = *first;
+            secondary = *second;
+            Rml::SetSystemInterface(&system);
+            ASSERT_TRUE(Rml::Initialise());
+            Rml::Factory::RegisterElementInstancer("scene-graph", &tree_instancer);
+            ASSERT_TRUE(Rml::LoadFontFace((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/fonts/Inter-Regular.ttf").generic_string()));
+            context = Rml::CreateContext("point-crop-row-test", {500, 700}, &renderer);
+            ASSERT_NE(context, nullptr);
+            auto* doc = context->LoadDocumentFromMemory("<rml><head><style>body{font-family:Inter;font-size:12px;} scene-graph{display:block;position:relative;overflow:auto;width:480px;height:600px;} .scene-graph-content{position:relative;width:100%;} .tree-row{display:block;position:absolute;left:0;right:0;height:20px;} .tree-insert-line,.tree-drag-ghost{pointer-events:none;}</style></head><body/></rml>");
+            ASSERT_NE(doc, nullptr);
+            auto element = doc->CreateElement("scene-graph");
+            ASSERT_NE(element, nullptr);
+            tree = static_cast<gui::SceneGraphElement*>(element.get());
+            doc->AppendChild(std::move(element));
+            doc->Show();
+            sync();
+        }
+        void sync() {
+            gui::PanelDrawContext ctx;
+            ctx.scene = &viewer->getScene();
+            ctx.scene_generation = generation++;
+            (void)tree->syncFromScene(ctx);
+            context->Update();
+        }
+        void TearDown() override {
+            if (context)
+                Rml::RemoveContext("point-crop-row-test");
+            Rml::Shutdown();
+            viewer.reset();
+            op::undoHistory().clear();
+            services().clear();
+            event::EventBridge::instance().clear_all();
+            UnifiedToolRegistry::instance().setActiveTool("");
+        }
+    };
+
+    TEST_F(PointCloudCropRowTest, RoiSceneIconIsPurpleWhileCropUsesItsExistingColor) {
+        sync();
+        auto* roi_row = tree->QuerySelector(".tree-row[data-node-id='" + std::to_string(primary) + "']");
+        auto* crop_row = tree->QuerySelector(".tree-row[data-node-id='" + std::to_string(secondary) + "']");
+        ASSERT_NE(roi_row, nullptr);
+        ASSERT_NE(crop_row, nullptr);
+        auto* roi_icon = roi_row->QuerySelector(".type-icon");
+        auto* crop_icon = crop_row->QuerySelector(".type-icon");
+        ASSERT_NE(roi_icon, nullptr);
+        ASSERT_NE(crop_icon, nullptr);
+        const auto* color = roi_icon->GetLocalProperty("image-color");
+        ASSERT_NE(color, nullptr);
+        EXPECT_EQ(color->Get<Rml::Colourb>(), Rml::Colourb(179, 77, 255, 255));
+        EXPECT_EQ(crop_icon->GetLocalProperty("image-color"), nullptr);
+    }
+
+    TEST_F(PointCloudCropRowTest, SingleClickActivatesEachExistingRoleWithEditableShape) {
+        auto& registry = UnifiedToolRegistry::instance();
+        auto& gizmo = viewer->getGuiManager()->gizmo();
+        for (const auto [id, tool] : {std::pair{primary, "builtin.cropbox"}, std::pair{secondary, "builtin.crop"}}) {
+            SCOPED_TRACE(tool);
+            auto* row = tree->QuerySelector(".tree-row[data-node-id='" + std::to_string(id) + "']");
+            ASSERT_NE(row, nullptr);
+            auto* name = row->QuerySelector(".node-name");
+            ASSERT_NE(name, nullptr);
+            Rml::Event click(name, Rml::EventId::Click, "click", {}, true);
+            const auto action = &RmlDefaultActionAccess::ProcessDefaultAction;
+            (tree->*action)(click);
+            sync();
+            EXPECT_EQ(viewer->getSceneManager()->getSelectedNodeIds(), (std::vector<core::NodeId>{id}));
+            EXPECT_EQ(services().guiOrNull(), viewer->getGuiManager());
+            EXPECT_FALSE(viewer->getEditorContext().isToolsDisabled());
+            EXPECT_FALSE(op::operators().hasModalOperator());
+            EXPECT_FALSE(viewer->getScene().isNodeEffectivelyLocked(id));
+            EXPECT_EQ(registry.getActiveTool(), tool);
+            EXPECT_FALSE(gizmo.isCropToolShapeLocked());
+            EXPECT_TRUE(viewer->getScene().getNodeById(primary)->visible);
+            EXPECT_TRUE(viewer->getScene().getNodeById(secondary)->visible);
+            const auto sibling = id == primary ? secondary : primary;
+            const auto sibling_type = viewer->getScene().getNodeById(sibling)->type;
+            EXPECT_TRUE(gizmo.changeCropToolShape(id == primary ? "polygon" : "ellipsoid"));
+            EXPECT_EQ(viewer->getScene().getNodeById(sibling)->type, sibling_type);
+            sync();
+        }
+        viewer->getEditorContext().clearActiveOperator();
+        registry.setActiveTool("");
+        auto* row = tree->QuerySelector(".tree-row[data-node-id='" + std::to_string(secondary) + "']");
+        ASSERT_NE(row, nullptr);
+        auto* name = row->QuerySelector(".node-name");
+        ASSERT_NE(name, nullptr);
+        Rml::Event click(name, Rml::EventId::Click, "click", {}, true);
+        const auto action = &RmlDefaultActionAccess::ProcessDefaultAction;
+        (tree->*action)(click);
+        EXPECT_EQ(registry.getActiveTool(), "builtin.crop");
+        EXPECT_FALSE(gizmo.isCropToolShapeLocked());
+    }
+
+    TEST_F(PointCloudCropRowTest, UndoDeleteRebindsTheRestoredCropAndItsOwnBounds) {
+        auto& scene = viewer->getScene();
+        auto* manager = viewer->getSceneManager();
+        auto& gizmo = viewer->getGuiManager()->gizmo();
+        auto& registry = UnifiedToolRegistry::instance();
+        const auto primary_uuid = scene.getNodeById(primary)->uuid;
+        const auto secondary_uuid = scene.getNodeById(secondary)->uuid;
+        auto primary_data = *scene.getNodeById(primary)->cropbox;
+        auto secondary_data = *scene.getNodeById(secondary)->cropbox;
+        primary_data.min = {-2.0f, -3.0f, -4.0f};
+        primary_data.max = {2.0f, 3.0f, 4.0f};
+        secondary_data.min = {-8.0f, -9.0f, -10.0f};
+        secondary_data.max = {8.0f, 9.0f, 10.0f};
+        scene.setCropBoxData(primary, primary_data);
+        scene.setCropBoxData(secondary, secondary_data);
+        gizmo.editCropTool(secondary_uuid, true);
+        op::undoHistory().clear();
+        gizmo.deleteActiveCropToolVolume();
+        ASSERT_EQ(scene.getNodeByUuid(secondary_uuid), nullptr);
+        gizmo.editCropTool(primary_uuid, true);
+        ASSERT_EQ(registry.getActiveTool(), "builtin.cropbox");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        const auto* restored = scene.getNodeByUuid(secondary_uuid);
+        ASSERT_NE(restored, nullptr);
+        EXPECT_EQ(restored->cropbox->min, secondary_data.min);
+        EXPECT_EQ(restored->cropbox->max, secondary_data.max);
+        EXPECT_EQ(scene.getNodeByUuid(primary_uuid)->cropbox->min, primary_data.min);
+        EXPECT_EQ(manager->getSelectedNodeIds(), (std::vector<core::NodeId>{restored->id}));
+        EXPECT_EQ(registry.getActiveTool(), "builtin.crop");
+        EXPECT_FALSE(gizmo.isCropToolShapeLocked());
+        const auto state = viewer->getRenderingManager()->getGizmoState();
+        EXPECT_EQ(state.cropbox_min, secondary_data.min);
+        EXPECT_EQ(state.cropbox_max, secondary_data.max);
+    }
+    TEST_F(PointCloudCropRowTest, EnterAppliesTheSelectedPointCloudCrop) {
+        auto& scene = viewer->getScene();
+        auto* cloud_node = scene.getMutableNode("Cloud");
+        ASSERT_NE(cloud_node, nullptr);
+        cloud_node->point_cloud = std::make_shared<core::PointCloud>(
+            core::Tensor::from_vector({-2.f, 0.f, 0.f, 0.f, 0.f, 0.f, 2.f, 0.f, 0.f}, {3, 3}, core::Device::CPU),
+            core::Tensor::ones({3, 3}, core::Device::CPU));
+        cloud_node->gaussian_count.store(3);
+        auto* volume = scene.getMutableNode(scene.getNodeById(secondary)->name);
+        volume->cropbox->min = {-1.f, -1.f, -1.f};
+        volume->cropbox->max = {1.f, 1.f, 1.f};
+        const auto crop_uuid = volume->uuid;
+        const auto roi_uuid = scene.getNodeById(primary)->uuid;
+        viewer->getSceneManager()->selectNode(secondary);
+        viewer->getGuiManager()->gizmo().editCropTool(crop_uuid, true);
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.crop");
+        InputController controller(nullptr, viewer->getViewport());
+        controller.getBindings().setBinding(input::ToolMode::CROP_BOX, input::Action::APPLY_CROP_BOX,
+                                            input::KeyTrigger{input::KEY_ENTER, input::MODIFIER_NONE});
+        controller.handleKey(input::KEY_ENTER, input::ACTION_PRESS, input::MODIFIER_NONE);
+        EXPECT_TRUE(UnifiedToolRegistry::instance().getActiveTool().empty());
+        EXPECT_EQ(scene.getNodeByUuid(crop_uuid), nullptr);
+        EXPECT_NE(scene.getNodeByUuid(roi_uuid), nullptr);
+        ASSERT_NE(scene.getNodeById(cloud)->point_cloud, nullptr);
+        EXPECT_EQ(scene.getNodeById(cloud)->point_cloud->size(), 1);
+    }
+
+    TEST_F(PointCloudCropRowTest, EnterFinishesTheSelectedPointCloudRoi) {
+        auto& scene = viewer->getScene();
+        const auto roi_uuid = scene.getNodeById(primary)->uuid;
+        const auto crop_uuid = scene.getNodeById(secondary)->uuid;
+        viewer->getSceneManager()->selectNode(primary);
+        viewer->getGuiManager()->gizmo().editCropTool(roi_uuid, true);
+        InputController controller(nullptr, viewer->getViewport());
+        controller.getBindings().setBinding(input::ToolMode::CROP_BOX, input::Action::APPLY_CROP_BOX,
+                                            input::KeyTrigger{input::KEY_ENTER, input::MODIFIER_NONE});
+        controller.handleKey(input::KEY_ENTER, input::ACTION_PRESS, input::MODIFIER_NONE);
+        EXPECT_TRUE(UnifiedToolRegistry::instance().getActiveTool().empty());
+        EXPECT_NE(scene.getNodeByUuid(roi_uuid), nullptr);
+        EXPECT_NE(scene.getNodeByUuid(crop_uuid), nullptr);
+    }
+
+    TEST_F(PointCloudCropRowTest, ApplyingPointCloudRoiDoesNotRemoveItOrItsSibling) {
+        auto& scene = viewer->getScene();
+        auto& gizmo = viewer->getGuiManager()->gizmo();
+        const auto primary_uuid = scene.getNodeById(primary)->uuid;
+        const auto secondary_uuid = scene.getNodeById(secondary)->uuid;
+        gizmo.editCropTool(primary_uuid, true);
+        op::undoHistory().clear();
+        gizmo.applyActiveCropTool();
+        EXPECT_NE(scene.getNodeByUuid(primary_uuid), nullptr);
+        EXPECT_NE(scene.getNodeByUuid(secondary_uuid), nullptr);
+        EXPECT_EQ(op::undoHistory().undoCount(), 0);
+    }
     class SplatCropTreeTest : public SplatCropWorkflowTest {
     protected:
         TreeRenderer renderer;
@@ -521,6 +847,30 @@ namespace {
             SplatCropWorkflowTest::TearDown();
         }
     };
+
+    TEST_F(SplatCropTreeTest, BoundTrainingRoiUsesPurpleIconAndVisibilityEye) {
+        auto& scene = sm->getScene();
+        scene.setTrainingModelNode(owner);
+        sync();
+        auto* row = tree->QuerySelector(".tree-row[data-node-id='" + std::to_string(box) + "']");
+        ASSERT_NE(row, nullptr);
+        auto* icon = row->QuerySelector(".type-icon");
+        ASSERT_NE(icon, nullptr);
+        const auto* color = icon->GetLocalProperty("image-color");
+        ASSERT_NE(color, nullptr);
+        EXPECT_EQ(color->Get<Rml::Colourb>(), Rml::Colourb(179, 77, 255, 255));
+        auto* eye = row->QuerySelector(".row-icon[data-action='toggle-vis']");
+        ASSERT_NE(eye, nullptr);
+        EXPECT_NE(eye->GetComputedValues().display(), Rml::Style::Display::None);
+        auto* control = toggle(box);
+        ASSERT_NE(control, nullptr);
+        EXPECT_EQ(control->GetComputedValues().display(), Rml::Style::Display::None);
+        const bool enabled = scene.getNodeById(box)->cropbox->enabled;
+        const bool visible = scene.getNodeById(box)->visible;
+        eye->DispatchEvent("click", {});
+        EXPECT_EQ(scene.getNodeById(box)->cropbox->enabled, enabled);
+        EXPECT_EQ(static_cast<bool>(scene.getNodeById(box)->visible), !visible);
+    }
 
     TEST_F(SplatCropTreeTest, RowSwitchTogglesEffectWithoutChangingHelperVisibilityAndSupportsUndo) {
         auto& scene = sm->getScene();
@@ -1008,6 +1358,41 @@ namespace {
         EXPECT_EQ(scene.getNodeByUuid(uuid)->model->visible_count(), 1);
         EXPECT_EQ(scene.getNodeByUuid(uuid)->children.size(), 1);
         EXPECT_FALSE(scene.getNodeByUuid(disabled_uuid)->cropbox->enabled);
+    }
+
+    TEST(CropGroupPersistenceTest, CropRolesRoundTripIndependently) {
+        namespace pj = lfs::io::project;
+        core::Scene scene;
+        const auto owner = scene.addSplat("Role persistence", groupTestSplat());
+        ASSERT_NE(owner, core::NULL_NODE);
+        const auto owner_uuid = scene.getNodeById(owner)->uuid;
+        const auto primary = scene.addCropBox("Primary", owner);
+        ASSERT_NE(primary, core::NULL_NODE);
+        core::Scene::RestoreNodeDesc desc;
+        desc.uuid = core::generate_uuid_v4();
+        desc.name = "Secondary";
+        desc.parent = owner;
+        desc.type = core::NodeType::CROPBOX;
+        desc.cropbox = std::make_unique<core::CropBoxData>();
+        desc.cropbox->role = core::CropRole::Secondary;
+        const auto secondary = scene.restoreNodeWithUuid(std::move(desc));
+        ASSERT_NE(secondary, core::NULL_NODE);
+        const auto secondary_uuid = scene.getNodeById(secondary)->uuid;
+        const pj::ScenePayloadBindings bindings{{owner_uuid, pj::PayloadBinding{.fourcc = "DSRC", .instance_uuid = owner_uuid, .reference_uuid = std::nullopt, .source_kind = "ply"}}};
+        const auto chapter = pj::capture_scene_graph(scene, bindings);
+        ASSERT_TRUE(chapter);
+        const auto decoded = pj::SceneGraphChapter::from_bytes(chapter->to_bytes());
+        ASSERT_TRUE(decoded);
+        core::Scene restored;
+        pj::ScenePayloadResolver resolver{.splat = [](const pj::PayloadBinding&) -> lfs::Result<std::unique_ptr<core::SplatData>> { return groupTestSplat(); }};
+        ASSERT_TRUE(pj::hydrate_scene_graph(*decoded, restored, resolver));
+        const auto* restored_owner = restored.getNodeByUuid(owner_uuid);
+        ASSERT_NE(restored_owner, nullptr);
+        const auto* restored_secondary = restored.getNodeByUuid(secondary_uuid);
+        ASSERT_NE(restored_secondary, nullptr);
+        EXPECT_EQ(restored_secondary->cropRole(), core::CropRole::Secondary);
+        EXPECT_EQ(restored.getCropForRole(restored_owner->id, core::CropRole::Primary, core::NodeType::CROPBOX), restored.getNodeIdByUuid(scene.getNodeById(primary)->uuid));
+        EXPECT_EQ(restored.getCropForRole(restored_owner->id, core::CropRole::Secondary, core::NodeType::CROPBOX), restored_secondary->id);
     }
 
     TEST(CropGroupPersistenceTest, OptionalGateRoundTripsAndOldProjectsDefaultEnabled) {

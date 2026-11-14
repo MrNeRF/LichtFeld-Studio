@@ -446,6 +446,7 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool crop_effects_enabled = true;
+        bool secondary_crop = false;
         bool payload_diverged = false;
         bool point_cloud_source = false;
         std::optional<GeorefPose> georef_pose = std::nullopt;

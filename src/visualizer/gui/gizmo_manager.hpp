@@ -95,8 +95,10 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void finishCropTool();
             LFS_VIS_API void editCropTool(const core::Uuid& uuid);
+            LFS_VIS_API void editCropTool(const core::Uuid& uuid, bool allow_shape_change);
             LFS_VIS_API bool changeCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API bool isCropToolShapeLocked() const;
+            [[nodiscard]] core::NodeId cropToolVolumeNodeId() const { return crop_tool_volume_node_id_; }
             LFS_VIS_API void newCropTool(const std::string& shape);
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();

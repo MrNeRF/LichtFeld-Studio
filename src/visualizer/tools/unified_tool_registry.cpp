@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "unified_tool_registry.hpp"
+#include "core/editor_context.hpp"
+#include "core/services.hpp"
 #include "visualizer/app_store.hpp"
 #include <algorithm>
 #include <cassert>
@@ -90,9 +92,11 @@ namespace lfs::vis {
     }
 
     void UnifiedToolRegistry::setActiveTool(const std::string& id) {
+        const auto* editor = services().editorOrNull();
+        const std::string resolved = id == "builtin.cropbox" && editor && editor->forcePointCloudMode() ? "builtin.roi" : id;
         std::lock_guard lock(mutex_);
-        if (id.empty() || tools_.contains(id)) {
-            active_tool_id_ = id;
+        if (resolved.empty() || tools_.contains(resolved)) {
+            active_tool_id_ = resolved;
         }
     }
 

@@ -1465,6 +1465,7 @@ namespace lfs::vis::cap {
             return node->id;
         glm::vec3 minimum(0.0f), maximum(0.0f), color(1.0f);
         bool enabled = false, inverse = false;
+        core::CropRole role = core::CropRole::Primary;
         float line_width = 2.0f, flash_intensity = 0.0f;
         const auto style = [&](const auto& data) {
             enabled = data.enabled;
@@ -1472,6 +1473,7 @@ namespace lfs::vis::cap {
             color = data.color;
             line_width = data.line_width;
             flash_intensity = data.flash_intensity;
+            role = data.role;
         };
         if (node->type == core::NodeType::CROPBOX && node->cropbox) {
             minimum = node->cropbox->min;
@@ -1507,6 +1509,7 @@ namespace lfs::vis::cap {
             data.color = color;
             data.line_width = line_width;
             data.flash_intensity = flash_intensity;
+            data.role = role;
         };
         auto box = target_type == core::NodeType::CROPBOX ? std::make_unique<core::CropBoxData>() : nullptr;
         auto ellipsoid = target_type == core::NodeType::ELLIPSOID ? std::make_unique<core::EllipsoidData>() : nullptr;
@@ -1547,19 +1550,28 @@ namespace lfs::vis::cap {
     lfs::Result<core::NodeId> createSplatCrop(SceneManager& scene_manager,
                                               RenderingManager* rendering_manager,
                                               const core::Uuid& owner_uuid, const core::NodeType type) {
+        return createSplatCrop(scene_manager, rendering_manager, owner_uuid, type, core::CropRole::Primary);
+    }
+
+    lfs::Result<core::NodeId> createSplatCrop(SceneManager& scene_manager,
+                                              RenderingManager* rendering_manager,
+                                              const core::Uuid& owner_uuid, const core::NodeType type,
+                                              const core::CropRole role) {
         auto& scene = scene_manager.getScene();
         const auto fail = [](lfs::ErrorCode code, std::string message) {
             return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
         };
         const auto* owner = scene.getNodeByUuid(owner_uuid);
-        if (!owner || owner->type != core::NodeType::SPLAT)
+        if (!owner || (owner->type != core::NodeType::SPLAT && owner->type != core::NodeType::POINTCLOUD))
             return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.select_owner"));
         if (type != core::NodeType::CROPBOX && type != core::NodeType::ELLIPSOID)
             return fail(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.unsupported_shape"));
         const auto* editor = services().editorOrNull();
         if (scene.isNodeEffectivelyLocked(owner->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
             return fail(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.editing_unavailable"));
-        const auto base = owner->name + (type == core::NodeType::CROPBOX ? "_cropbox" : "_ellipsoid");
+        const auto base = owner->name + (owner->type == core::NodeType::POINTCLOUD
+                                             ? (role == core::CropRole::Primary ? "_ROI" : "_Crop")
+                                             : (type == core::NodeType::CROPBOX ? "_cropbox" : "_ellipsoid"));
         std::string name = base;
         for (size_t suffix = 2; scene.getNode(name); ++suffix)
             name = base + "_" + std::to_string(suffix);
@@ -1578,10 +1590,12 @@ namespace lfs::vis::cap {
             desc.cropbox->min = -half;
             desc.cropbox->max = half;
             desc.cropbox->enabled = true;
+            desc.cropbox->role = role;
         } else {
             desc.ellipsoid = std::make_unique<core::EllipsoidData>();
             desc.ellipsoid->radii = half;
             desc.ellipsoid->enabled = true;
+            desc.ellipsoid->role = role;
         }
         const op::SceneGraphCaptureOptions options{.mode = op::SceneGraphCaptureMode::FULL, .include_selected_nodes = false, .include_scene_context = false};
         auto before = op::SceneGraphPatchEntry::captureState(scene_manager, {}, options);
@@ -2434,7 +2448,9 @@ namespace lfs::vis::cap {
         data.enabled = true;
         core::NodeId polygon_id = core::NULL_NODE;
         if (new_instance) {
-            const auto base = parent_name + "_crop_polygon";
+            const auto base = parent_name + (parent->type == core::NodeType::POINTCLOUD
+                                                 ? (data.role == core::CropRole::Primary ? "_ROI" : "_Crop")
+                                                 : "_crop_polygon");
             std::string name = base;
             for (size_t suffix = 2; scene.getNode(name); ++suffix)
                 name = base + "_" + std::to_string(suffix);

@@ -146,6 +146,14 @@ def _poll_can_cropbox(context) -> bool:
     return _selection_has_cropbox_target()
 
 
+def _poll_can_second_crop(context) -> bool:
+    try:
+        import lichtfeld as lf
+        return lf.ui.is_point_cloud_forced() and _poll_can_cropbox(context)
+    except Exception:
+        return False
+
+
 BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.select",
@@ -245,6 +253,17 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         poll=_poll_can_mirror,
     ),
     ToolDef(
+        id="builtin.roi",
+        label="ROI",
+        label_key="tool_defs.roi",
+        icon="roi",
+        group="utility",
+        order=70,
+        description="Training region of interest",
+        gizmo="translate",
+        poll=_poll_can_second_crop,
+    ),
+    ToolDef(
         id="builtin.cropbox",
         label="Crop",
         label_key="tool_defs.crop",
@@ -254,6 +273,17 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         description="Crop objects",
         gizmo="translate",
         poll=_poll_can_cropbox,
+    ),
+    ToolDef(
+        id="builtin.crop",
+        label="Crop",
+        label_key="tool_defs.crop",
+        icon="cropbox",
+        group="utility",
+        order=71,
+        description="Crop objects",
+        gizmo="translate",
+        poll=_poll_can_second_crop,
     ),
     ToolDef(
         id="builtin.align",

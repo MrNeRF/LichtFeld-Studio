@@ -49,6 +49,7 @@ namespace lfs::vis::op {
 
         core::NodeId target_node_id_ = core::NULL_NODE;
         bool new_instance_ = false;
+        bool secondary_crop_ = false;
         std::optional<core::crop_polygon::Plane> plane_;
         glm::vec3 camera_right_{1.0f, 0.0f, 0.0f};
         StartState start_;

@@ -194,6 +194,34 @@ namespace {
 
 } // namespace
 
+TEST(TrainingCropBoxMask, SecondaryCropNeverBecomesTheTrainingRegion) {
+    lfs::core::Scene scene;
+    const auto model = scene.addSplat("Model", make_crop_test_splat());
+    scene.setTrainingModelNode("Model");
+    lfs::core::Scene::RestoreNodeDesc desc;
+    desc.uuid = lfs::core::generate_uuid_v4();
+    desc.name = "Secondary";
+    desc.parent = model;
+    desc.type = lfs::core::NodeType::CROPBOX;
+    desc.cropbox = std::make_unique<lfs::core::CropBoxData>();
+    desc.cropbox->enabled = true;
+    desc.cropbox->role = lfs::core::CropRole::Secondary;
+    const auto secondary = scene.restoreNodeWithUuid(std::move(desc));
+    ASSERT_NE(secondary, lfs::core::NULL_NODE);
+    EXPECT_FALSE(lfs::training::resolve_training_cropbox_geom(scene));
+    const auto primary = scene.addCropBox("Primary", model);
+    ASSERT_NE(primary, lfs::core::NULL_NODE);
+    auto* data = scene.getCropBoxData(primary);
+    ASSERT_NE(data, nullptr);
+    data->enabled = true;
+    data->min = {-3.0f, -2.0f, -1.0f};
+    data->max = {3.0f, 2.0f, 1.0f};
+    const auto region = lfs::training::resolve_training_cropbox_geom(scene);
+    ASSERT_TRUE(region);
+    EXPECT_FLOAT_EQ(region->min.x, -3.0f);
+    EXPECT_FLOAT_EQ(region->max.x, 3.0f);
+}
+
 TEST(TrainingCropBoxMask, TranslatedCropBoxRemovesOnlyPointsOutsideBox) {
     lfs::core::Scene scene;
     auto* const model = add_training_model_with_translated_cropbox(scene, false);

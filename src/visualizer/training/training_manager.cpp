@@ -415,14 +415,10 @@ namespace lfs::vis {
                 if (!had_model) {
                     if (const auto* node = scene.getDatasetPointCloudNode()) {
                         point_cloud = makeRestoreNodeDesc(*node);
-                        const auto cropbox_id = scene.getCropBoxForSplat(node->id);
-                        if (const auto* cropbox_node = scene.getNodeById(cropbox_id);
-                            cropbox_node && cropbox_node->cropbox) {
-                            cropbox = makeRestoreNodeDesc(*cropbox_node);
-                        }
-                        if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(node->id));
-                            polygon_node && polygon_node->crop_polygon) {
-                            crop_polygon = makeRestoreNodeDesc(*polygon_node);
+                        for (const auto child_id : node->children) {
+                            const auto* child = scene.getNodeById(child_id);
+                            if (child && child->cropRole())
+                                crop_volumes.push_back(makeRestoreNodeDesc(*child));
                         }
                     }
                 }
@@ -476,6 +472,9 @@ namespace lfs::vis {
                 if (node.cropbox) {
                     result.cropbox = std::make_unique<lfs::core::CropBoxData>(*node.cropbox);
                 }
+                if (node.ellipsoid) {
+                    result.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*node.ellipsoid);
+                }
                 if (node.crop_polygon) {
                     result.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
                 }
@@ -502,15 +501,11 @@ namespace lfs::vis {
                             auto restored_point_cloud = std::move(*point_cloud);
                             const auto point_cloud_id =
                                 scene->restoreNodeWithUuid(std::move(restored_point_cloud));
-                            if (point_cloud_id != lfs::core::NULL_NODE && cropbox) {
-                                auto restored_cropbox = std::move(*cropbox);
-                                restored_cropbox.parent = point_cloud_id;
-                                static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_cropbox)));
-                            }
-                            if (point_cloud_id != lfs::core::NULL_NODE && crop_polygon) {
-                                auto restored_polygon = std::move(*crop_polygon);
-                                restored_polygon.parent = point_cloud_id;
-                                static_cast<void>(scene->restoreNodeWithUuid(std::move(restored_polygon)));
+                            if (point_cloud_id != lfs::core::NULL_NODE) {
+                                for (auto& volume : crop_volumes) {
+                                    volume.parent = point_cloud_id;
+                                    static_cast<void>(scene->restoreNodeWithUuid(std::move(volume)));
+                                }
                             }
                         }
                         scene->setTrainingModelNode(scene->getNodeByUuid(transient_model_uuid)
@@ -533,8 +528,7 @@ namespace lfs::vis {
             std::string model_name;
             std::unique_ptr<lfs::core::SplatData> original_model;
             std::optional<lfs::core::Scene::RestoreNodeDesc> point_cloud;
-            std::optional<lfs::core::Scene::RestoreNodeDesc> cropbox;
-            std::optional<lfs::core::Scene::RestoreNodeDesc> crop_polygon;
+            std::vector<lfs::core::Scene::RestoreNodeDesc> crop_volumes;
             std::shared_ptr<lfs::core::PointCloud> initial_point_cloud;
             bool point_cloud_modified = false;
             std::vector<std::pair<std::shared_ptr<lfs::core::Camera>, lfs::core::CameraSplit>> camera_splits;

@@ -217,6 +217,8 @@ class _GizmoToolbarController:
         "builtin.scale": "toolbar.scale",
         "builtin.mirror": "toolbar.mirror",
         "builtin.cropbox": "toolbar.crop_box",
+        "builtin.roi": "tool_defs.roi",
+        "builtin.crop": "tool_defs.crop",
         "builtin.align": "toolbar.align_3point",
         "builtin.scale_distance": "toolbar.scale_distance",
     }
@@ -278,7 +280,8 @@ class _GizmoToolbarController:
     _ALIGN_TOOL_ID = "builtin.align"
     _SCALE_DISTANCE_TOOL_ID = "builtin.scale_distance"
     _CROP_TOOL_ID = "builtin.cropbox"
-    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _SCALE_DISTANCE_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
+    _CROP_TOOL_IDS = {"builtin.cropbox", "builtin.crop", "builtin.roi"}
+    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _ALIGN_TOOL_ID, _SCALE_DISTANCE_TOOL_ID, *_CROP_TOOL_IDS, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
@@ -388,7 +391,8 @@ class _GizmoToolbarController:
         tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
         select_tool_def = ToolRegistry.get("builtin.select")
         mirror_tool_def = ToolRegistry.get(self._MIRROR_TOOL_ID)
-        crop_tool_def = ToolRegistry.get(self._CROP_TOOL_ID)
+        pre_training = getattr(lf.ui, "is_point_cloud_forced", lambda: False)()
+        crop_tool_def = ToolRegistry.get("builtin.roi" if pre_training else self._CROP_TOOL_ID)
 
         transform_tool_defs = [
             tool_def_item
@@ -401,7 +405,8 @@ class _GizmoToolbarController:
             if (
                 tool_def_item.id != "builtin.select" and
                 tool_def_item.id != self._MIRROR_TOOL_ID and
-                tool_def_item.id != self._CROP_TOOL_ID and
+                tool_def_item.id not in {self._CROP_TOOL_ID, "builtin.roi"} and
+                (tool_def_item.id != "builtin.crop" or pre_training) and
                 tool_def_item.id not in self._TRANSFORM_TOOL_IDS
             )
         ]
@@ -417,7 +422,7 @@ class _GizmoToolbarController:
         )
         mirror_group_buttons = self._build_mirror_records(mirror_tool_def, active_tool_id, context)
         crop_group_buttons = self._build_crop_group_records(crop_tool_def, active_tool_id, context)
-        crop_tool_active = active_tool_id == self._CROP_TOOL_ID
+        crop_tool_active = active_tool_id in self._CROP_TOOL_IDS
         crop_numeric_visible = numeric_overlay_available and crop_tool_active and self._crop_numeric_controls_visible(selected_nodes)
         selection_volume_active = self._selection_volume_active(active_tool_id)
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
@@ -591,11 +596,11 @@ class _GizmoToolbarController:
             _button_record(
                 "group-crop",
                 "tool",
-                self._CROP_TOOL_ID,
+                tool_def.id,
                 _tool_icon_src(tool_def),
-                tooltip_key=self._TOOL_LOCALE_KEYS.get(self._CROP_TOOL_ID, ""),
+                tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
                 tooltip_text=tool_def.label,
-                selected=active_tool_id == self._CROP_TOOL_ID,
+                selected=active_tool_id == tool_def.id,
                 enabled=tool_def.can_activate(context),
             )
         ]
@@ -614,10 +619,10 @@ class _GizmoToolbarController:
     def _build_crop_object_records(self, active_tool_id):
         import lichtfeld as lf
 
-        active = active_tool_id == self._CROP_TOOL_ID
+        active = active_tool_id in self._CROP_TOOL_IDS
         shape_locked = active and lf.ui.is_crop_tool_shape_locked()
         active_shape = self._active_crop_shape() if active else "box"
-        return [
+        records = [
             _button_record(
                 "crop-object-box",
                 "crop_object",
@@ -649,11 +654,12 @@ class _GizmoToolbarController:
                 enabled=active and (not shape_locked or active_shape == "polygon"),
             ),
         ]
+        return [record for record in records if active_tool_id != "builtin.roi" or record["value"] != "ellipsoid"]
 
     def _build_crop_transform_records(self, active_tool_id):
         import lichtfeld as lf
 
-        active = active_tool_id == self._CROP_TOOL_ID
+        active = active_tool_id in self._CROP_TOOL_IDS
         active_gizmo = ""
         if active:
             getter = getattr(lf.ui, "get_crop_tool_operation", None)
@@ -693,7 +699,7 @@ class _GizmoToolbarController:
             active_gizmo = lf.ui.get_crop_tool_operation()
         return self._build_gizmo_operation_records(True, active_gizmo or "scale")
 
-    def _resolve_selected_cropbox(self):
+    def _resolve_selected_cropbox(self, roi_only=False):
         import lichtfeld as lf
 
         try:
@@ -733,7 +739,7 @@ class _GizmoToolbarController:
                 if accessor:
                     get_volume = getattr(node, accessor, None)
                     volume = get_volume() if callable(get_volume) else None
-                    if volume is not None:
+                    if volume is not None and (not roi_only or getattr(volume, "role", "primary") == "primary"):
                         return node, volume
 
                 for child_id in getattr(node, "children", []) or []:
@@ -747,8 +753,8 @@ class _GizmoToolbarController:
         except Exception:
             return None
 
-    def cropbox_toolbar_signature(self):
-        resolved = self._resolve_selected_cropbox()
+    def cropbox_toolbar_signature(self, roi_only=False):
+        resolved = self._resolve_selected_cropbox(roi_only=roi_only)
         if resolved is None:
             return None
         node, cropbox = resolved
@@ -777,7 +783,7 @@ class _GizmoToolbarController:
         ]
 
     def _build_crop_settings_records(self, settings_open):
-        if self._resolve_selected_cropbox() is None:
+        if self._resolve_selected_cropbox(roi_only=True) is None:
             return []
         return [
             _button_record(
@@ -850,7 +856,8 @@ class _GizmoToolbarController:
     def _build_crop_action_records(self, active_tool_id):
         import lichtfeld as lf
 
-        active = active_tool_id == self._CROP_TOOL_ID
+        active = active_tool_id in self._CROP_TOOL_IDS
+        apply_point_crop = active_tool_id == "builtin.crop" and getattr(lf.ui, "is_point_cloud_forced", lambda: False)()
         get_inverse = getattr(lf.ui, "get_crop_tool_inverse", None)
         inverse = get_inverse() if active and callable(get_inverse) else None
         return [
@@ -896,8 +903,8 @@ class _GizmoToolbarController:
                 "crop_finish",
                 "",
                 _icon_src("check"),
-                tooltip_key="splat_inspector.finish",
-                tooltip_text="Finish crop editing",
+                tooltip_key="common.apply" if apply_point_crop else "splat_inspector.finish",
+                tooltip_text="Apply" if apply_point_crop else "Finish crop editing",
                 action_id="APPLY_CROP_BOX",
                 enabled=active,
             ),
@@ -1134,6 +1141,8 @@ class _GizmoToolbarController:
             return
 
         if action == "tool":
+            if value == self._CROP_TOOL_ID and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
+                value = "builtin.roi"
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
                 return
@@ -1143,7 +1152,10 @@ class _GizmoToolbarController:
                 if not selector_was_open:
                     ToolRegistry.clear_active()
             else:
-                if value == self._CROP_TOOL_ID:
+                if value in self._CROP_TOOL_IDS and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
+                    if ToolRegistry.set_active(value):
+                        lf.ui.new_crop_tool("box")
+                elif value == self._CROP_TOOL_ID:
                     self._activate_crop_tool("translate")
                 else:
                     ToolRegistry.set_active(value)
@@ -1178,7 +1190,10 @@ class _GizmoToolbarController:
             return
 
         if action == "crop_finish":
-            lf.ui.finish_crop_tool()
+            if lf.ui.get_active_tool() == "builtin.crop" and getattr(lf.ui, "is_point_cloud_forced", lambda: False)():
+                lf.ui.apply_crop_tool()
+            else:
+                lf.ui.finish_crop_tool()
             return
 
         if action == "align_toggle_preview":
@@ -1769,7 +1784,8 @@ class _ViewportToolbarController:
         if self._handle is None:
             return False
         cropbox_toolbar_signature = self._gizmo.cropbox_toolbar_signature()
-        signature = self._toolbar_signature(cropbox_toolbar_signature)
+        roi_toolbar_signature = self._gizmo.cropbox_toolbar_signature(roi_only=True)
+        signature = self._toolbar_signature((cropbox_toolbar_signature, roi_toolbar_signature))
         if signature == self._last_toolbar_signature:
             return False
         self._last_toolbar_signature = signature
@@ -1787,7 +1803,7 @@ class _ViewportToolbarController:
         dirty = False
         if not gizmo_state["crop_settings_buttons"]:
             dirty |= self._sync_flag("crop_roi_settings_open", False)
-        dirty |= self._sync_crop_roi_params(cropbox_toolbar_signature)
+        dirty |= self._sync_crop_roi_params(roi_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
@@ -1946,7 +1962,7 @@ class _ViewportToolbarController:
         return True
 
     def _set_crop_to_cropbox(self, value):
-        signature = self._gizmo.cropbox_toolbar_signature()
+        signature = self._gizmo.cropbox_toolbar_signature(roi_only=True)
         if signature is None or not signature[2]:
             return
         enabled = value if isinstance(value, bool) else str(value).lower() in ("1", "true", "on")
@@ -1972,7 +1988,7 @@ class _ViewportToolbarController:
     def _set_crop_roi_param(self, name, value):
         # Recheck live selection: an event may arrive before the next toolbar
         # poll has disabled its controls.
-        signature = self._gizmo.cropbox_toolbar_signature()
+        signature = self._gizmo.cropbox_toolbar_signature(roi_only=True)
         if signature is None or not signature[2]:
             return
         try:
@@ -2092,7 +2108,7 @@ class _ViewportToolbarController:
         crop_shape = call("box", getattr(lf.ui, "get_crop_tool_shape", None))
         crop_operation = call("translate", getattr(lf.ui, "get_crop_tool_operation", None))
         crop_inverse = None
-        if active_tool == _GizmoToolbarController._CROP_TOOL_ID:
+        if active_tool in _GizmoToolbarController._CROP_TOOL_IDS:
             crop_inverse = call(None, getattr(lf.ui, "get_crop_tool_inverse", None))
         transform_space = _native_store_value("transform_space", _MISSING)
         if transform_space is _MISSING:
@@ -2235,7 +2251,7 @@ class _ViewportToolbarController:
             self._sync_tool_overlays_now()
             return
         if action == "toggle_crop_roi_settings":
-            if self._gizmo.cropbox_toolbar_signature() is None:
+            if self._gizmo.cropbox_toolbar_signature(roi_only=True) is None:
                 return
             self._viewport_export_controls.close(notify=False)
             self._sync_flag(

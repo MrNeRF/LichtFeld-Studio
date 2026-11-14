@@ -44,6 +44,9 @@
 #include "sequencer/keyframe.hpp"
 #include "training/noise_infill.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
+#include "visualizer/core/services.hpp"
+#include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/editor/python_editor.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -619,6 +622,9 @@ namespace lfs::app {
             if (node.parent_id != core::NULL_NODE) {
                 if (const auto* const parent = scene.getNodeById(node.parent_id)) {
                     result["parent"] = parent->name;
+                    if (const auto role = node.cropRole(); role &&
+                        (parent->type == core::NodeType::POINTCLOUD || vis::isTrainingRoi(scene, node)))
+                        result["crop_role"] = *role == core::CropRole::Secondary ? "crop" : "roi";
                 }
             }
 
@@ -2449,6 +2455,186 @@ namespace lfs::app {
                 }
             }
         };
+
+
+        [[nodiscard]] lfs::Error crop_role_error(const lfs::ErrorCode code, std::string message) {
+            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core,
+                                    .user_message = message, .detail = std::move(message),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+
+        [[nodiscard]] lfs::Result<core::NodeId> resolve_role_volume(
+            const vis::SceneManager& manager, const json& args, const bool allow_training_roi = false) {
+            const auto role_name = args.value("role", std::string{});
+            if (role_name != "roi" && role_name != "crop")
+                return crop_role_error(lfs::ErrorCode::InvalidArgument, "Crop role must be roi or crop");
+            const auto& scene = manager.getScene();
+            const core::SceneNode* owner = nullptr;
+            if (args.contains("owner_uuid")) {
+                const auto uuid = core::Uuid::from_string(args.at("owner_uuid").get<std::string>());
+                owner = uuid ? scene.getNodeByUuid(*uuid) : nullptr;
+            } else if (args.contains("owner")) {
+                owner = scene.getNode(args.at("owner").get<std::string>());
+            } else {
+                const auto selected = manager.getSelectedNodeIds();
+                owner = selected.size() == 1 ? scene.getNodeById(selected.front()) : nullptr;
+                if (owner && owner->cropRole())
+                    owner = scene.getNodeById(owner->parent_id);
+            }
+            const bool training_owner = allow_training_roi && role_name == "roi" && owner &&
+                                        !scene.getTrainingModelNodeUuid().is_nil() &&
+                                        owner->uuid == scene.getTrainingModelNodeUuid();
+            if (!owner || (owner->type != core::NodeType::POINTCLOUD && !training_owner))
+                return crop_role_error(lfs::ErrorCode::NotFound, "A point cloud owner is required");
+            const auto role = role_name == "roi" ? core::CropRole::Primary : core::CropRole::Secondary;
+            core::NodeId result = core::NULL_NODE;
+            for (const auto child_id : owner->children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child || child->cropRole() != role)
+                    continue;
+                if (result != core::NULL_NODE)
+                    return crop_role_error(lfs::ErrorCode::InvalidArgument, "Crop role is ambiguous for this owner");
+                result = child_id;
+            }
+            if (result == core::NULL_NODE)
+                return crop_role_error(lfs::ErrorCode::NotFound, "The requested crop role does not exist");
+            return result;
+        }
+
+        json role_volume_json(const vis::SceneManager& manager, const core::NodeId id) {
+            const auto& scene = manager.getScene();
+            const auto* node = scene.getNodeById(id);
+            json volume = node_summary_json(scene, *node);
+            volume["shape"] = node->cropbox ? "box" : node->ellipsoid ? "ellipsoid" : "polygon";
+            const auto components = decompose_transform(vis::scene_coords::nodeVisualizerWorldTransform(scene, id));
+            volume["translation"] = vec3_to_json(components.translation);
+            volume["rotation"] = vec3_to_json(components.rotation);
+            volume["scale"] = vec3_to_json(components.scale);
+            if (node->cropbox) {
+                volume["min"] = vec3_to_json(node->cropbox->min);
+                volume["max"] = vec3_to_json(node->cropbox->max);
+                volume["enabled"] = node->cropbox->enabled;
+                volume["inverse"] = node->cropbox->inverse;
+            } else if (node->ellipsoid) {
+                volume["radii"] = vec3_to_json(node->ellipsoid->radii);
+                volume["enabled"] = node->ellipsoid->enabled;
+                volume["inverse"] = node->ellipsoid->inverse;
+            } else if (node->crop_polygon) {
+                volume["vertices"] = json::array();
+                for (const auto& v : node->crop_polygon->vertices)
+                    volume["vertices"].push_back(json::array({v.x, v.y}));
+                volume["half_depth"] = node->crop_polygon->half_depth;
+                volume["enabled"] = node->crop_polygon->enabled;
+                volume["inverse"] = node->crop_polygon->inverse;
+            }
+            return json{{"success", true}, {"volume", std::move(volume)}};
+        }
+
+        [[nodiscard]] lfs::LegacyErrorContext crop_role_legacy_context() {
+            return {.code = lfs::ErrorCode::InvalidArgument, .domain = lfs::ErrorDomain::Core,
+                    .operation = "Update crop volume", .source = LFS_SOURCE_SITE_CURRENT()};
+        }
+
+        [[nodiscard]] lfs::Status update_role_volume(
+            vis::SceneManager& manager, vis::RenderingManager* rendering, const core::NodeId id, const json& args) {
+            auto& scene = manager.getScene();
+            const auto* node = scene.getNodeById(id);
+            if (!node)
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::NotFound, "Crop volume not found"));
+            const auto* editor = vis::services().editorOrNull();
+            if (scene.isNodeEffectivelyLocked(id) || (editor && editor->isToolsDisabled()) || vis::op::operators().hasModalOperator())
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::PermissionDenied, "Crop volume editing is unavailable"));
+            if (!args.contains("shape") && !args.contains("min") && !args.contains("max") &&
+                !args.contains("radii") && !args.contains("translation") && !args.contains("rotation") &&
+                !args.contains("scale") && !args.contains("vertices") && !args.contains("half_depth") &&
+                !args.contains("enabled") && !args.contains("inverse"))
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "No crop volume fields were provided"));
+            const auto shape = args.value("shape", std::string{});
+            if (!shape.empty() && shape != "box" && shape != "ellipsoid" && shape != "polygon")
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Shape must be box, ellipsoid or polygon"));
+            if (shape == "ellipsoid" && node->cropRole() == core::CropRole::Primary)
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Ellipsoid is not supported for a training ROI"));
+            const auto minimum = lfs::from_legacy_expected(optional_vec3_arg(args, "min"), crop_role_legacy_context());
+            const auto maximum = lfs::from_legacy_expected(optional_vec3_arg(args, "max"), crop_role_legacy_context());
+            const auto radii = lfs::from_legacy_expected(optional_vec3_arg(args, "radii"), crop_role_legacy_context());
+            const auto translation = lfs::from_legacy_expected(optional_vec3_arg(args, "translation"), crop_role_legacy_context());
+            const auto rotation = lfs::from_legacy_expected(optional_vec3_arg(args, "rotation"), crop_role_legacy_context());
+            const auto scale = lfs::from_legacy_expected(optional_vec3_arg(args, "scale"), crop_role_legacy_context());
+            for (const auto* value : {&minimum, &maximum, &radii, &translation, &rotation, &scale})
+                if (!*value) return lfs::Status::failure((*value).error());
+            const auto target = shape.empty() ? node->type : shape == "box" ? core::NodeType::CROPBOX :
+                                shape == "ellipsoid" ? core::NodeType::ELLIPSOID : core::NodeType::CROP_POLYGON;
+            if ((target != core::NodeType::CROPBOX && (minimum->has_value() || maximum->has_value())) ||
+                (target != core::NodeType::ELLIPSOID && radii->has_value()) ||
+                (target != core::NodeType::CROP_POLYGON && (args.contains("vertices") || args.contains("half_depth"))))
+                return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Fields do not match the crop shape"));
+            std::vector<glm::vec2> vertices;
+            if (args.contains("vertices")) {
+                for (const auto& vertex : args.at("vertices"))
+                    vertices.emplace_back(vertex.at(0).get<float>(), vertex.at(1).get<float>());
+                if (!core::crop_polygon::isValidOutline(vertices))
+                    return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon outline"));
+            }
+            const auto uuid = node->uuid;
+            vis::op::TransactionGuard transaction(LOC("tool_defs.crop"));
+            if (target != node->type) {
+                if (auto converted = vis::cap::convertSplatCrop(manager, rendering, uuid, target); !converted)
+                    return lfs::Status::failure(converted.error());
+            }
+            if (target == core::NodeType::CROPBOX) {
+                const auto* box = scene.getCropBoxData(id);
+                if (!box)
+                    return lfs::Status::failure(crop_role_error(lfs::ErrorCode::Internal, "Crop box not found after conversion"));
+                const auto proposed_min = minimum->value_or(box->min);
+                const auto proposed_max = maximum->value_or(box->max);
+                if (glm::any(glm::lessThanEqual(proposed_max, proposed_min)))
+                    return lfs::Status::failure(crop_role_error(lfs::ErrorCode::InvalidArgument, "Each crop box minimum must be smaller than its maximum"));
+                vis::cap::CropBoxUpdate update;
+                update.min_bounds = *minimum;
+                update.max_bounds = *maximum;
+                update.has_inverse = args.contains("inverse");
+                update.inverse = args.value("inverse", false);
+                update.has_enabled = args.contains("enabled");
+                update.enabled = args.value("enabled", false);
+                if (update.min_bounds || update.max_bounds || update.has_inverse || update.has_enabled) {
+                    auto result = lfs::from_legacy_expected(vis::cap::updateCropBox(manager, rendering, id, update), crop_role_legacy_context());
+                    if (!result) return lfs::Status::failure(result.error());
+                }
+            } else if (target == core::NodeType::ELLIPSOID) {
+                vis::cap::EllipsoidUpdate update;
+                update.radii = *radii;
+                update.has_inverse = args.contains("inverse");
+                update.inverse = args.value("inverse", false);
+                update.has_enabled = args.contains("enabled");
+                update.enabled = args.value("enabled", false);
+                if (update.radii || update.has_inverse || update.has_enabled) {
+                    auto result = lfs::from_legacy_expected(vis::cap::updateEllipsoid(manager, rendering, id, update), crop_role_legacy_context());
+                    if (!result) return lfs::Status::failure(result.error());
+                }
+            } else {
+                vis::cap::CropPolygonUpdate update;
+                if (args.contains("half_depth")) update.half_depth = args.at("half_depth").get<float>();
+                update.has_inverse = args.contains("inverse");
+                update.inverse = args.value("inverse", false);
+                update.has_enabled = args.contains("enabled");
+                update.enabled = args.value("enabled", false);
+                if (update.half_depth || update.has_inverse || update.has_enabled) {
+                    if (auto result = vis::cap::updateCropPolygon(manager, rendering, id, update); !result)
+                        return lfs::Status::failure(result.error());
+                }
+                if (args.contains("vertices")) {
+                    if (auto result = vis::cap::setCropPolygonOutline(manager, rendering, id, std::move(vertices)); !result)
+                        return lfs::Status::failure(result.error());
+                }
+            }
+            if (*translation || *rotation || *scale) {
+                const auto* updated = scene.getNodeByUuid(uuid);
+                auto result = lfs::from_legacy_expected(vis::cap::setTransform(manager, {updated->name}, *translation, *rotation, *scale), crop_role_legacy_context());
+                if (!result) return lfs::Status::failure(result.error());
+            }
+            transaction.commit();
+            return {};
+        }
 
     } // namespace
 
@@ -4942,6 +5128,144 @@ namespace lfs::app {
                     });
                 });
         }
+
+        registry.register_tool(
+            McpTool{
+                .name = "crop_volume.get",
+                .description = "Inspect the pre-training ROI or Crop, or the ROI on the active training model, by owner and role",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"owner", json{{"type", "string"}, {"description", "Point cloud or active training model node name"}}},
+                        {"owner_uuid", json{{"type", "string"}, {"description", "Point cloud or active training model UUID; takes precedence over owner"}}},
+                        {"role", json{{"type", "string"}, {"enum", json::array({"roi", "crop"})}}}},
+                    .required = {"role"}},
+                .metadata = {.category = "scene", .kind = "query", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* manager = viewer_impl->getSceneManager();
+                    if (!manager) return json{{"error", "Scene manager not initialized"}};
+                    const auto id = resolve_role_volume(*manager, args, true);
+                    if (!id) return json{{"error", std::string(id.error().user_message())}};
+                    return role_volume_json(*manager, *id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "crop_volume.set",
+                .description = "Edit the pre-training ROI or Crop volume without changing the other role",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"owner", json{{"type", "string"}, {"description", "Point cloud node name"}}},
+                        {"owner_uuid", json{{"type", "string"}, {"description", "Point cloud UUID; takes precedence over owner"}}},
+                        {"role", json{{"type", "string"}, {"enum", json::array({"roi", "crop"})}}},
+                        {"shape", json{{"type", "string"}, {"enum", json::array({"box", "ellipsoid", "polygon"})}}},
+                        {"min", number_array_schema(3, "Box local minimum bounds")},
+                        {"max", number_array_schema(3, "Box local maximum bounds")},
+                        {"radii", number_array_schema(3, "Ellipsoid local radii")},
+                        {"translation", number_array_schema(3, "Visualizer-world translation")},
+                        {"rotation", number_array_schema(3, "Visualizer-world XYZ rotation in radians")},
+                        {"scale", number_array_schema(3, "Visualizer-world scale")},
+                        {"vertices", json{{"type", "array"}, {"items", number_array_schema(2, "Polygon local XY vertex")}}},
+                        {"half_depth", json{{"type", "number"}, {"description", "Polygon half extrusion depth"}}},
+                        {"inverse", json{{"type", "boolean"}}},
+                        {"enabled", json{{"type", "boolean"}}}},
+                    .required = {"role"}},
+                .metadata = {.category = "scene", .kind = "command", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* manager = viewer_impl->getSceneManager();
+                    if (!manager) return json{{"error", "Scene manager not initialized"}};
+                    const auto id = resolve_role_volume(*manager, args);
+                    if (!id) return json{{"error", std::string(id.error().user_message())}};
+                    const auto result = update_role_volume(*manager, viewer_impl->getRenderingManager(), *id, args);
+                    if (!result) return json{{"error", std::string(result.error().user_message())}};
+                    return role_volume_json(*manager, *id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "crop_volume.action",
+                .description = "Fit, reset, delete or apply a pre-training ROI or Crop volume by role",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"owner", json{{"type", "string"}, {"description", "Point cloud node name"}}},
+                        {"owner_uuid", json{{"type", "string"}, {"description", "Point cloud UUID; takes precedence over owner"}}},
+                        {"role", json{{"type", "string"}, {"enum", json::array({"roi", "crop"})}}},
+                        {"action", json{{"type", "string"}, {"enum", json::array({"fit", "reset", "delete", "apply"})}}},
+                        {"use_percentile", json{{"type", "boolean"}, {"description", "Fit to trimmed bounds"}}}},
+                    .required = {"role", "action"}},
+                .metadata = {.category = "scene", .kind = "command", .runtime = "gui", .thread_affinity = "gui_thread", .destructive = true}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* manager = viewer_impl->getSceneManager();
+                    if (!manager) return json{{"error", "Scene manager not initialized"}};
+                    const auto id = resolve_role_volume(*manager, args);
+                    if (!id) return json{{"error", std::string(id.error().user_message())}};
+                    auto& scene = manager->getScene();
+                    const auto* node = scene.getNodeById(*id);
+                    const auto uuid = node->uuid;
+                    const auto action = args.at("action").get<std::string>();
+                    auto* rendering = viewer_impl->getRenderingManager();
+                    if (action == "delete") {
+                        const auto result = lfs::from_legacy_expected(manager->removeNodeWithResult(*id), crop_role_legacy_context());
+                        if (!result) return json{{"error", std::string(result.error().user_message())}};
+                        return json{{"success", true}, {"uuid", uuid.to_string()}};
+                    }
+                    if (action == "apply") {
+                        if (node->cropRole() != core::CropRole::Secondary)
+                            return json{{"error", "The training ROI cannot be applied as a crop"}};
+                        auto* gui = viewer_impl->getGuiManager();
+                        if (!gui) return json{{"error", "GUI manager not initialized"}};
+                        std::vector<std::pair<core::Uuid, bool>> sibling_visibility;
+                        if (const auto* owner = scene.getNodeById(node->parent_id)) {
+                            for (const auto child_id : owner->children) {
+                                const auto* sibling = scene.getNodeById(child_id);
+                                if (sibling && sibling->uuid != uuid && sibling->cropRole())
+                                    sibling_visibility.emplace_back(sibling->uuid, static_cast<bool>(sibling->visible));
+                            }
+                        }
+                        const auto restore_siblings = [&] {
+                            for (const auto& [sibling_uuid, visible] : sibling_visibility)
+                                if (const auto* sibling = scene.getNodeByUuid(sibling_uuid))
+                                    manager->setNodeVisibilityTransient(sibling->id, visible);
+                        };
+                        gui->gizmo().editCropTool(uuid, true);
+                        const auto* active = scene.getNodeById(gui->gizmo().cropToolVolumeNodeId());
+                        if (!active || active->uuid != uuid) {
+                            restore_siblings();
+                            return json{{"error", "The requested crop could not be activated"}};
+                        }
+                        gui->gizmo().applyActiveCropTool();
+                        restore_siblings();
+                        if (scene.getNodeByUuid(uuid))
+                            return json{{"error", "Crop could not be applied"}};
+                        return json{{"success", true}, {"uuid", uuid.to_string()}};
+                    }
+                    if (action != "fit" && action != "reset")
+                        return json{{"error", "Unknown crop volume action"}};
+                    const bool trimmed = args.value("use_percentile", false);
+                    lfs::Status result;
+                    if (node->cropbox) {
+                        result = lfs::from_legacy_expected(action == "fit"
+                            ? vis::cap::fitCropBoxToParent(*manager, rendering, *id, trimmed)
+                            : vis::cap::resetCropBox(*manager, rendering, *id), crop_role_legacy_context());
+                    } else if (node->ellipsoid) {
+                        result = lfs::from_legacy_expected(action == "fit"
+                            ? vis::cap::fitEllipsoidToParent(*manager, rendering, *id, trimmed)
+                            : vis::cap::resetEllipsoid(*manager, rendering, *id), crop_role_legacy_context());
+                    } else {
+                        result = action == "fit" ? vis::cap::fitCropPolygonToParent(*manager, rendering, *id, trimmed)
+                                                  : vis::cap::resetCropPolygon(*manager, rendering, *id);
+                    }
+                    if (!result) return json{{"error", std::string(result.error().user_message())}};
+                    return role_volume_json(*manager, *id);
+                });
+            });
 
         registry.register_tool(
             McpTool{

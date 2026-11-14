@@ -19,7 +19,7 @@ namespace lfs::training {
         std::optional<TrainingCropBoxGeometry> resolve_training_crop_polygon_geom(
             const core::Scene& scene,
             const core::NodeId training_node_id) {
-            const core::NodeId polygon_id = scene.getCropPolygonForSplat(training_node_id);
+            const core::NodeId polygon_id = scene.getCropForRole(training_node_id, core::CropRole::Primary, core::NodeType::CROP_POLYGON);
             const auto* polygon = scene.getCropPolygonData(polygon_id);
             if (!polygon || !polygon->enabled || !core::crop_polygon::isValidOutline(polygon->vertices) ||
                 !core::crop_polygon::isValidHalfDepth(polygon->half_depth)) {
@@ -58,7 +58,7 @@ namespace lfs::training {
             return std::nullopt;
         }
 
-        const core::NodeId cropbox_id = scene.getCropBoxForSplat(training_node->id);
+        const core::NodeId cropbox_id = scene.getCropForRole(training_node->id, core::CropRole::Primary, core::NodeType::CROPBOX);
         if (cropbox_id == core::NULL_NODE) {
             return resolve_training_crop_polygon_geom(scene, training_node->id);
         }

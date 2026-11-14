@@ -95,7 +95,7 @@ namespace lfs::vis::op {
 
         [[nodiscard]] bool polygonCropToolActive() {
             const auto* const gui = services().guiOrNull();
-            return UnifiedToolRegistry::instance().getActiveTool() == kCropToolId && gui &&
+            return (UnifiedToolRegistry::instance().getActiveTool() == kCropToolId || UnifiedToolRegistry::instance().getActiveTool() == "builtin.crop" || UnifiedToolRegistry::instance().getActiveTool() == "builtin.roi") && gui &&
                    gui->gizmo().cropToolShape() == "polygon";
         }
 
@@ -118,15 +118,12 @@ namespace lfs::vis::op {
         const auto* const node = ctx.scene().getScene().getNodeById(static_cast<core::NodeId>(target));
         if (!node || !isCropPolygonTarget(node->type) || ctx.scene().getScene().isNodeEffectivelyLocked(node->id))
             return false;
-        if (props && props->get_or<bool>("new_instance", false)) {
-            if (node->type != core::NodeType::SPLAT)
-                return false;
-        }
         return true;
     }
 
     OperatorResult CropPolygonDrawOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         new_instance_ = props.get_or<bool>("new_instance", false);
+        secondary_crop_ = props.get_or<bool>("secondary_crop", false);
         target_node_id_ = static_cast<core::NodeId>(props.get_or<int>("target_node_id", -1));
         plane_.reset();
         points_.clear();
@@ -157,8 +154,8 @@ namespace lfs::vis::op {
         if (start_.selection != std::vector<core::NodeId>{target_node_id_})
             scene_manager.selectNode(target_node_id_);
         if (editor)
-            editor->setActiveOperator(kCropToolId, "translate");
-        UnifiedToolRegistry::instance().setActiveTool(kCropToolId);
+            editor->setActiveOperator(secondary_crop_ ? "builtin.crop" : kCropToolId, "translate");
+        UnifiedToolRegistry::instance().setActiveTool(secondary_crop_ ? "builtin.crop" : kCropToolId);
         if (auto* const gui = services().guiOrNull())
             gui->gizmo().setCropToolShape("polygon");
         return OperatorResult::RUNNING_MODAL;
@@ -345,6 +342,7 @@ namespace lfs::vis::op {
         core::CropPolygonData data;
         data.vertices = frame->vertices;
         data.half_depth = frame->half_depth;
+        data.role = secondary_crop_ ? core::CropRole::Secondary : core::CropRole::Primary;
         const auto polygon_id = cap::createCropPolygon(scene_manager, services().renderingOrNull(), target_node_id_,
                                                        std::move(data), *local_transform, new_instance_);
         if (!polygon_id) {
@@ -356,8 +354,8 @@ namespace lfs::vis::op {
         // Selecting the volume enters the crop tool; the bounds handles on the caps extrude it.
         scene_manager.selectNode(*polygon_id);
         if (auto* const editor = services().editorOrNull())
-            editor->setActiveOperator(kCropToolId, "scale");
-        UnifiedToolRegistry::instance().setActiveTool(kCropToolId);
+            editor->setActiveOperator(secondary_crop_ ? "builtin.crop" : kCropToolId, "scale");
+        UnifiedToolRegistry::instance().setActiveTool(secondary_crop_ ? "builtin.crop" : kCropToolId);
         if (auto* const gui = services().guiOrNull()) {
             gui->gizmo().setCropToolShape("polygon");
             gui->gizmo().setCropToolOperation("scale");

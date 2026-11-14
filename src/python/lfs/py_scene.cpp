@@ -1776,6 +1776,9 @@ namespace lfs::python {
             .def_ro("locked", &PySelectionGroup::locked, "Whether the group is locked from editing");
 
         nb::class_<PyCropBox>(m, "CropBox")
+            .def_prop_ro("role", [](const PyCropBox& self) {
+                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
+            }, "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyCropBox::property_group, "Property group name for introspection")
             .def("get", &PyCropBox::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyCropBox::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
@@ -1799,6 +1802,9 @@ namespace lfs::python {
             .def("__dir__", &PyCropBox::python_dir, "List available attributes");
 
         nb::class_<PyEllipsoid>(m, "Ellipsoid")
+            .def_prop_ro("role", [](const PyEllipsoid& self) {
+                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
+            }, "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyEllipsoid::property_group, "Property group name for introspection")
             .def("get", &PyEllipsoid::get, nb::arg("name"), "Get property value by name")
             .def("set", &PyEllipsoid::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
@@ -1822,6 +1828,9 @@ namespace lfs::python {
             .def("__dir__", &PyEllipsoid::python_dir, "List available attributes");
 
         nb::class_<PyCropPolygon>(m, "CropPolygon")
+            .def_prop_ro("role", [](const PyCropPolygon& self) {
+                return self.data()->role == core::CropRole::Secondary ? "secondary" : "primary";
+            }, "Stable crop role: primary or secondary")
             .def_prop_ro("__property_group__", &PyCropPolygon::property_group, "Property group name for introspection")
             .def_prop_ro("vertices", &PyCropPolygon::vertices, "Outline vertices (x, y) in the node's local XY plane")
             .def("get", &PyCropPolygon::get, nb::arg("name"), "Get property value by name")
@@ -1884,6 +1893,7 @@ namespace lfs::python {
             .def_prop_ro("id", &PySceneNode::id, "Unique node identifier")
             .def_prop_ro("uuid", &PySceneNode::uuid, "Durable node UUID")
             .def_prop_ro("parent_id", &PySceneNode::parent_id, "Parent node identifier (-1 for root)")
+            .def_prop_ro("crop_role", &PySceneNode::crop_role, "Point-cloud crop role: roi or crop, or None")
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
             .def_prop_ro("read_only", &PySceneNode::read_only, "Whether an external observer owns this transient node")

@@ -1341,6 +1341,7 @@
     "scale": "Scala",
     "mirror": "Specchia",
     "crop": "Ritaglia",
+    "roi": "ROI",
     "align": "Allinea",
     "scale_distance": "Scala distanza"
   },
@@ -1355,6 +1356,7 @@
     "enable_crop_box": "Attiva scatola di ritaglio",
     "enable_crop_polygon": "Attiva poligono di ritaglio",
     "invert_crop": "Inverti ritaglio",
+    "roi_ellipsoid_unsupported": "Gli ellissoidi non sono supportati come ROI di addestramento. Scegli una scatola o un poligono.",
     "crop_roi_settings": "Impostazioni ROI di ritaglio",
     "rejected_splat_lr_scale": "Scala LR degli splat esclusi",
     "outside_roi_loss_weight": "Peso della loss fuori dalla ROI",
