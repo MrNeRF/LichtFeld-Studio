@@ -91,7 +91,7 @@ TEST_F(MaskCacheEndpoints, EveryByteHasOneValueAcrossColdHotAndSpilledVisits) {
         lfs::io::PipelinedImageLoader loader(config());
         auto r = request();
         r.mask_params = {.invert = invert, .threshold = 0.f};
-        for (size_t visit = 0; visit < 3; ++visit) {
+        for (size_t visit = 0; visit < 5; ++visit) {
             SCOPED_TRACE(invert);
             SCOPED_TRACE(visit);
             if (visit == 2) {
@@ -99,10 +99,14 @@ TEST_F(MaskCacheEndpoints, EveryByteHasOneValueAcrossColdHotAndSpilledVisits) {
                 EXPECT_GT(loader.release_host_cache(stats.jpeg_cache_bytes), 0u);
                 EXPECT_GT(loader.get_stats().spill_cache_entries, 0u);
             }
+            // Bypass must preserve the mask with and without shared RGB-fill bytes.
+            r.params.skip_blob_cache = visit >= 3;
+            r.fill_masked_rgb = visit != 4;
             r.sequence_id = visit;
             loader.prefetch({r});
             const auto ready = loader.get();
             ASSERT_TRUE(ready.error.empty()) << ready.error;
+            ASSERT_TRUE(ready.tensor.is_valid());
             ASSERT_TRUE(ready.mask);
             const auto actual = ready.mask->cpu().to_vector();
             size_t mismatches = 0;
