@@ -70,6 +70,11 @@ class MRNFStrategyTest_NeedGrowthReceiverSplitsOnlyAtTheCap_Test;
 class MRNFStrategyTest_RefineErrorViewMeanOffKeepsTheMaxOverViews_Test;
 class MRNFStrategyTest_RefineErrorViewMeanAveragesVisibleViewsAndResetsAtRefine_Test;
 class MRNFStrategyTest_RefineErrorViewMeanRestartsTheCountOnResume_Test;
+class MRNFStrategyTest_RefineErrorCompressFoldsThePowerOfEachViewOverViewsWithError_Test;
+class MRNFStrategyTest_RefineErrorCompressCandidatesAreEveryScoredSplat_Test;
+class MRNFStrategyTest_RefineErrorCompressNeedHasNoSparsityFactor_Test;
+class MRNFStrategyTest_RefineErrorCompressRanksSmallIntenseOverLargeFaint_Test;
+class MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
 
 namespace lfs::training {
 
@@ -178,6 +183,11 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_RefineErrorViewMeanOffKeepsTheMaxOverViews_Test;
         friend class ::MRNFStrategyTest_RefineErrorViewMeanAveragesVisibleViewsAndResetsAtRefine_Test;
         friend class ::MRNFStrategyTest_RefineErrorViewMeanRestartsTheCountOnResume_Test;
+        friend class ::MRNFStrategyTest_RefineErrorCompressFoldsThePowerOfEachViewOverViewsWithError_Test;
+        friend class ::MRNFStrategyTest_RefineErrorCompressCandidatesAreEveryScoredSplat_Test;
+        friend class ::MRNFStrategyTest_RefineErrorCompressNeedHasNoSparsityFactor_Test;
+        friend class ::MRNFStrategyTest_RefineErrorCompressRanksSmallIntenseOverLargeFaint_Test;
+        friend class ::MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -192,6 +202,9 @@ namespace lfs::training {
         [[nodiscard]] bool need_guided_growth_on() const;
         // Growth ranks by the mean per-view error over the views that saw a splat, not the max.
         [[nodiscard]] bool refine_error_view_mean_on() const;
+        // Growth ranks by error intensity: squared error map, per-view sum ^0.2, mean over the
+        // views with error. Implies the view-mean accumulation.
+        [[nodiscard]] bool refine_error_compress_on() const;
         // The model is full enough for donors; with need-guided growth every split then uses
         // the receiver rule.
         [[nodiscard]] bool at_cap(size_t active) const;

@@ -53,6 +53,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
 #include "training/kernels/densification_kernels.hpp"
+#include "training/kernels/image_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
 #include "training/strategies/mrnf.hpp"
@@ -3347,4 +3348,226 @@ TEST(MRNFStrategyTest, RefineErrorViewMeanRestartsTheCountOnResume) {
     EXPECT_EQ(info_row(splat_copy, 2), info_row(splat_data, 2));
     EXPECT_EQ(info_row(splat_copy, 3), std::vector<float>(kViewMeanSplats, 0.0f));
     EXPECT_EQ(restored._refine_weight_max.cpu().to_vector(), std::vector<float>(kViewMeanSplats, 0.0f));
+}
+
+namespace {
+    param::OptimizationParameters compress_test_params() {
+        auto p = view_mean_test_params(false);
+        p.refine_error_compress = true;
+        return p;
+    }
+
+    std::vector<float> as_floats(const Tensor& mask) {
+        return mask.to(DataType::Float32).cpu().to_vector();
+    }
+} // namespace
+
+// The densification copy of the error map is squared, with negative values floored to 0.
+TEST(MRNFStrategyTest, RefineErrorCompressSquaresTheMapFlooredAtZero) {
+    const std::vector<float> map{-0.5f, 0.0f, 0.3f, 2.0f, 1.0f};
+    auto device_map = Tensor::from_vector(map, TensorShape({map.size()}), Device::CUDA);
+    kernels::launch_square_floored_inplace(device_map.ptr<float>(), map.size());
+    const auto squared = device_map.cpu().to_vector();
+    EXPECT_EQ(squared[0], 0.0f);
+    EXPECT_EQ(squared[1], 0.0f);
+    EXPECT_FLOAT_EQ(squared[2], 0.09f);
+    EXPECT_EQ(squared[3], 4.0f);
+    EXPECT_EQ(squared[4], 1.0f);
+}
+
+// Each view's error sum enters the window as s^0.2; the mean is over the views where s > 0, so a
+// view that saw the splat without error does not dilute it. Everything resets at the refine, and
+// every splat with a score is a candidate.
+TEST(MRNFStrategyTest, RefineErrorCompressFoldsThePowerOfEachViewOverViewsWithError) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    strategy.initialize(compress_test_params());
+    ASSERT_TRUE(strategy.refine_error_view_mean_on());
+    ASSERT_EQ(splat_data._densification_info.shape()[0], 4u);
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+
+    std::vector<float> sum(kViewMeanSplats, 0.0f), coverage(kViewMeanSplats, 0.0f), count(kViewMeanSplats, 0.0f);
+    for (size_t v = 0; v < kViewCoverage.size(); ++v)
+        for (size_t i = 0; i < kViewMeanSplats; ++i) {
+            const float s = kViewError[v][i] > 0.0f ? std::pow(kViewError[v][i], 0.2f) : 0.0f;
+            sum[i] += s;
+            coverage[i] += kViewCoverage[v][i];
+            count[i] += s > 0.0f ? 1.0f : 0.0f;
+        }
+    // Splat 4 is seen in four views with error in one: it counts one view, not four.
+    EXPECT_EQ(count, (std::vector<float>{4.0f, 1.0f, 2.0f, 0.0f, 1.0f, 2.0f}));
+    const auto weight = strategy._refine_weight_max.cpu().to_vector();
+    for (size_t i = 0; i < kViewMeanSplats; ++i)
+        EXPECT_NEAR(weight[i], sum[i], 1e-5f) << i;
+    EXPECT_EQ(info_row(splat_data, 0), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(info_row(splat_data, 1), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(info_row(splat_data, 2), coverage);
+    EXPECT_EQ(info_row(splat_data, 3), count);
+    EXPECT_EQ(strategy.visibility_accumulator().cpu().to_vector(), coverage);
+
+    auto mean = strategy._refine_weight_max.clone();
+    mrnf_strategy::launch_refine_error_view_mean(
+        mean.ptr<float>(), splat_data._densification_info.ptr<float>(), kViewMeanSplats);
+    const auto mean_host = mean.cpu().to_vector();
+    for (size_t i = 0; i < kViewMeanSplats; ++i)
+        EXPECT_NEAR(mean_host[i], sum[i] / std::fmax(count[i], 1.0f), 1e-5f) << i;
+    EXPECT_NEAR(mean_host[4], std::pow(0.6f, 0.2f), 1e-5f); // the view mean gives 0.15
+    EXPECT_EQ(mean_host[3], 0.0f);
+
+    // A 10^4 spread between two splats' view sums becomes 10^0.8, about 6.3x.
+    {
+        auto info = Tensor::zeros({4, 2}, Device::CUDA);
+        info.slice(0, 0, 1).fill_(1.0f);
+        info.slice(0, 1, 2).copy_(Tensor::from_vector(std::vector<float>{0.01f, 100.0f}, TensorShape({1, 2}), Device::CUDA));
+        auto w = Tensor::zeros({2}, Device::CUDA);
+        mrnf_strategy::launch_fold_densification_error_view_sum_and_zero(w.ptr<float>(), info.ptr<float>(), 2, true);
+        const auto folded = w.cpu().to_vector();
+        EXPECT_NEAR(folded[1] / folded[0], std::pow(10.0f, 0.8f), 1e-3f);
+    }
+
+    // The 0.28 threshold does not apply: splats 0, 1, 2, 4 and 5 all grow, against 2 with the view mean.
+    const size_t active = strategy.active_count();
+    RenderOutput refine_output;
+    strategy.post_backward(100, refine_output);
+    EXPECT_EQ(strategy.active_count(), active + 5);
+    const size_t grown = splat_data.size();
+    ASSERT_EQ(splat_data._densification_info.shape()[0], 4u);
+    for (size_t row = 0; row < 4; ++row)
+        EXPECT_EQ(info_row(splat_data, row), std::vector<float>(grown, 0.0f)) << row;
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), std::vector<float>(grown, 0.0f));
+}
+
+// Candidates: score > threshold today, score > 0 with compression; both need visibility.
+TEST(MRNFStrategyTest, RefineErrorCompressCandidatesAreEveryScoredSplat) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    auto params = view_mean_test_params(true);
+    params.growth_grad_threshold = 0.003f;
+    strategy.initialize(params);
+    const std::vector<float> score{0.0f, 1e-6f, 0.002f, 0.5f, 0.7f, 3.0f};
+    const auto set_window = [&] {
+        strategy._refine_weight_max = Tensor::from_vector(score, TensorShape({kViewMeanSplats}), Device::CUDA);
+        set_info_row(splat_data, 2, {1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f});
+    };
+    set_window();
+    EXPECT_EQ(as_floats(strategy.compute_refine_candidates()),
+              (std::vector<float>{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f}));
+
+    params.refine_error_compress = true;
+    strategy.set_optimization_params(params);
+    set_window();
+    EXPECT_EQ(as_floats(strategy.compute_refine_candidates()),
+              (std::vector<float>{0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f}));
+}
+
+// With compression NEED is the score over its mean among the active splats, without the
+// footprint (sparsity) factor; without it the large splats are boosted to the clamp.
+TEST(MRNFStrategyTest, RefineErrorCompressNeedHasNoSparsityFactor) {
+    constexpr size_t live = 120;
+    constexpr size_t large = 49;
+    constexpr size_t n = live + 20;
+    const auto need_of = [&](const bool compress) {
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(1000);
+        params.refine_error_compress = compress;
+        strategy.initialize(params);
+        std::vector<float> error(n, 0.0f), footprint(n, 0.0f);
+        for (size_t i = 0; i < live; ++i) {
+            error[i] = i % 2 == 0 ? 1.0f : 0.0f;
+            footprint[i] = i < large ? 0.1f : 0.001f;
+        }
+        set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy.soft_delete_rows(row_range(live, splat_data.size()));
+        strategy.fold_need_into_refine_weights();
+        return strategy._refine_weight_max.cpu().to_vector();
+    };
+
+    // Half of the 120 active splats have score 1: the active mean is 0.5, NEED 2 for large and small.
+    const auto compressed = need_of(true);
+    EXPECT_FLOAT_EQ(compressed[0], 2.0f);
+    EXPECT_FLOAT_EQ(compressed[large + 1], 2.0f);
+    EXPECT_EQ(compressed[1], 0.0f);
+    for (size_t i = live; i < n; ++i)
+        EXPECT_EQ(compressed[i], 0.0f) << i;
+
+    const auto today = need_of(false);
+    EXPECT_FLOAT_EQ(today[0], 16.0f);
+    EXPECT_FLOAT_EQ(today[large + 1], 1.0f);
+}
+
+// One view: a large splat covers 400 pixels at error 0.05, a small one 4 pixels at 0.9 (blend
+// weight 1). Today (view mean + NEED with sparsity) the large one ranks higher (sum 20 vs 3.6);
+// with compression the small one does (squared sums 1 vs 3.24, then ^0.2, no sparsity).
+TEST(MRNFStrategyTest, RefineErrorCompressRanksSmallIntenseOverLargeFaint) {
+    constexpr size_t large_px = 400;
+    constexpr size_t small_px = 4;
+    std::vector<float> map(large_px + small_px);
+    for (size_t p = 0; p < map.size(); ++p)
+        map[p] = p < large_px ? 0.05f : 0.9f;
+
+    const auto score = [&](const bool compress) {
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+        MRNF strategy(splat_data);
+        auto params = view_mean_test_params(true);
+        params.need_guided_growth = true;
+        params.refine_error_compress = compress;
+        strategy.initialize(params);
+
+        auto device_map = Tensor::from_vector(map, TensorShape({map.size()}), Device::CUDA);
+        if (compress)
+            kernels::launch_square_floored_inplace(device_map.ptr<float>(), map.size());
+        const auto e = device_map.cpu().to_vector();
+        std::vector<float> coverage(kViewMeanSplats, 0.0f), error(kViewMeanSplats, 0.0f);
+        for (size_t p = 0; p < e.size(); ++p) {
+            const size_t splat = p < large_px ? 0 : 1;
+            coverage[splat] += 1.0f;
+            error[splat] += 1.0f * e[p];
+        }
+        set_info_row(splat_data, 0, coverage);
+        set_info_row(splat_data, 1, error);
+        RenderOutput render_output;
+        strategy.post_backward(96, render_output);
+
+        std::vector<float> footprint(kViewMeanSplats, 0.0f);
+        footprint[0] = 0.2f;
+        footprint[1] = 0.01f;
+        splat_data._max_screen_share.copy_(Tensor::from_vector(footprint, TensorShape({kViewMeanSplats}), Device::CUDA));
+        mrnf_strategy::launch_refine_error_view_mean(
+            strategy._refine_weight_max.ptr<float>(), splat_data._densification_info.ptr<float>(), kViewMeanSplats);
+        strategy.fold_need_into_refine_weights();
+        return strategy._refine_weight_max.cpu().to_vector();
+    };
+
+    const auto today = score(false);
+    EXPECT_GT(today[0], today[1]);
+    const auto compressed = score(true);
+    EXPECT_GT(compressed[1], compressed[0]);
+    EXPECT_NEAR(compressed[1] / compressed[0], std::pow(3.24f, 0.2f), 1e-4f);
+}
+
+// Switching between the view mean and compression starts a fresh window: sum and view count.
+TEST(MRNFStrategyTest, RefineErrorCompressSwitchStartsAFreshWindow) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    auto params = view_mean_test_params(true);
+    strategy.initialize(params);
+    fold_views(strategy, splat_data, 2, 96);
+    ASSERT_NE(info_row(splat_data, 3), std::vector<float>(kViewMeanSplats, 0.0f));
+
+    params.refine_error_compress = true;
+    strategy.set_optimization_params(params);
+    EXPECT_EQ(info_row(splat_data, 3), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), std::vector<float>(kViewMeanSplats, 0.0f));
+
+    // A resume restarts the count in this mode too.
+    fold_views(strategy, splat_data, 2, 98);
+    std::stringstream ss;
+    strategy.serialize(ss);
+    auto splat_copy = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF restored(splat_copy);
+    restored.initialize(params);
+    splat_copy._densification_info = splat_data._densification_info.clone();
+    restored.deserialize(ss);
+    EXPECT_EQ(info_row(splat_copy, 3), std::vector<float>(kViewMeanSplats, 0.0f));
 }

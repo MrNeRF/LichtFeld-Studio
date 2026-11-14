@@ -8052,6 +8052,14 @@ namespace lfs::training {
                                 tile_error_map = tile_error_map.contiguous();
                             }
 
+                            // Compressed refine error: square the map so well-fit pixels add nothing and
+                            // strong structure errors dominate. The loss keeps its own maps.
+                            if (step_params.refine_error_compress &&
+                                core::param::is_mrnf_strategy(step_params.strategy) && tile_error_map.is_valid()) {
+                                lfs::training::kernels::launch_square_floored_inplace(
+                                    tile_error_map.ptr<float>(), tile_error_map.numel());
+                            }
+
                             if (use_mask &&
                                 step_params.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
                                 // The pipelined loader returns normalized Float32 masks;

@@ -459,17 +459,26 @@ namespace lfs::training::mrnf_strategy {
     __global__ void fold_densification_error_view_sum_and_zero_kernel(
         float* __restrict__ refine_weight,
         float* __restrict__ densification_info,
-        size_t N) {
+        size_t N,
+        bool compress) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
             return;
 
         const float coverage = densification_info[idx];
-        refine_weight[idx] += densification_info[N + idx];
+        const float error = densification_info[N + idx];
+        if (compress) {
+            const float s = error > 0.0f ? powf(error, REFINE_ERROR_COMPRESS_VIEW_POWER) : 0.0f;
+            refine_weight[idx] += s;
+            if (s > 0.0f)
+                densification_info[3 * N + idx] += 1.0f;
+        } else {
+            refine_weight[idx] += error;
+            if (coverage > 0.0f)
+                densification_info[3 * N + idx] += 1.0f;
+        }
         densification_info[2 * N + idx] += coverage;
-        if (coverage > 0.0f)
-            densification_info[3 * N + idx] += 1.0f;
         densification_info[idx] = 0.0f;
         densification_info[N + idx] = 0.0f;
     }
@@ -478,6 +487,7 @@ namespace lfs::training::mrnf_strategy {
         float* refine_weight,
         float* densification_info,
         size_t N,
+        bool compress,
         void* stream) {
         if (N == 0)
             return;
@@ -485,7 +495,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_error_view_sum_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            refine_weight, densification_info, N);
+            refine_weight, densification_info, N, compress);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_error_view_sum_and_zero");
     }
 

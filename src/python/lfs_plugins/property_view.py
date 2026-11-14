@@ -347,6 +347,7 @@ REGISTRY_PLACEMENT = {
         "growth_exchange",
         "need_guided_growth",
         "refine_error_view_mean",
+        "refine_error_compress",
         "cropbox_growth_inside",
         "opacity_decay",
         "opacity_decay_rendered_only",

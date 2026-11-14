@@ -694,6 +694,7 @@ EXPECTED_ADVANCED_IDS = (
     "growth_exchange",
     "need_guided_growth",
     "refine_error_view_mean",
+    "refine_error_compress",
     "opacity_decay",
     "scale_decay",
     "means_noise_weight",
@@ -742,7 +743,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 121
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 122
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -821,6 +822,7 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "growth_exchange",
         "need_guided_growth",
         "refine_error_view_mean",
+        "refine_error_compress",
         "opacity_decay",
         "scale_decay",
         "means_noise_weight",

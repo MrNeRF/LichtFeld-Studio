@@ -636,6 +636,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::refine_error_compress,
+                       "refine_error_compress", "Refine Error Compress", d.refine_error_compress,
+                       "Ranks growth by error intensity with the splat footprint flattened; implies the view mean (MRNF)")
+            .locale("training.advanced.refine_error_compress")
+            .tooltip("training.tooltip.refine_error_compress")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

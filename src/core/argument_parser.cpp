@@ -56,6 +56,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
             OptimizationCliBinding{"--need-guided-growth", "need_guided_growth", Bool},
             OptimizationCliBinding{"--refine-error-view-mean", "refine_error_view_mean", Bool},
+            OptimizationCliBinding{"--refine-error-compress", "refine_error_compress", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
@@ -819,6 +820,7 @@ namespace {
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::Flag need_guided_growth(training_group, "need_guided_growth", lfs::core::args::optimization_cli_help("--need-guided-growth"), {"need-guided-growth"});
             ::args::Flag refine_error_view_mean(training_group, "refine_error_view_mean", lfs::core::args::optimization_cli_help("--refine-error-view-mean"), {"refine-error-view-mean"});
+            ::args::Flag refine_error_compress(training_group, "refine_error_compress", lfs::core::args::optimization_cli_help("--refine-error-compress"), {"refine-error-compress"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
@@ -1695,6 +1697,7 @@ namespace {
                                         crop_flag = bool(crop),
                                         need_guided_growth_flag = bool(need_guided_growth),
                                         refine_error_view_mean_flag = bool(refine_error_view_mean),
+                                        refine_error_compress_flag = bool(refine_error_compress),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
                                         use_ppisp_flag = bool(use_ppisp),
@@ -1838,6 +1841,8 @@ namespace {
                     opt.need_guided_growth = true;
                 if (refine_error_view_mean_flag)
                     opt.refine_error_view_mean = true;
+                if (refine_error_compress_flag)
+                    opt.refine_error_compress = true;
                 if (no_opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = false;
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
@@ -2012,6 +2017,7 @@ namespace {
                 note_opt("crop_to_cropbox", crop_flag);
                 note_opt("need_guided_growth", need_guided_growth_flag);
                 note_opt("refine_error_view_mean", refine_error_view_mean_flag);
+                note_opt("refine_error_compress", refine_error_compress_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());

@@ -404,6 +404,10 @@ namespace lfs::core {
             // Ranks growth by the mean of each splat's per-view error over the views that saw it since
             // the last refine, instead of its single worst view.
             bool refine_error_view_mean = false;
+            // Ranks growth by error intensity: the densification error map is squared, each view's
+            // per-splat sum is compressed (^0.2) and averaged over the views with error. Implies
+            // refine_error_view_mean.
+            bool refine_error_compress = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

@@ -365,6 +365,27 @@ namespace lfs::training::kernels {
         launch_normalize_by_positive_median(edges.ptr<float>(), height * width, stream);
     }
 
+    namespace {
+        __global__ void square_floored_kernel(float* __restrict__ data, const std::size_t n) {
+            for (std::size_t i = blockIdx.x * static_cast<std::size_t>(blockDim.x) + threadIdx.x; i < n;
+                 i += static_cast<std::size_t>(gridDim.x) * blockDim.x) {
+                const float v = fmaxf(data[i], 0.0f);
+                data[i] = v * v;
+            }
+        }
+    } // namespace
+
+    void launch_square_floored_inplace(float* d_data, const std::size_t n, cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        if (n == 0) {
+            return;
+        }
+        constexpr int block_size = 256;
+        const int grid_size = static_cast<int>(std::min<std::size_t>((n + block_size - 1) / block_size, 4096));
+        square_floored_kernel<<<grid_size, block_size, 0, stream>>>(d_data, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.image.square_floored");
+    }
+
     void launch_normalize_by_device_scalar(
         float* d_data,
         const std::size_t n,

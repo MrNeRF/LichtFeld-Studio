@@ -209,14 +209,21 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // Compressed refine error: each view's per-splat error sum s is taken to this power before
+    // it enters the window, so a large footprint no longer outweighs a high error per pixel.
+    inline constexpr float REFINE_ERROR_COMPRESS_VIEW_POWER = 0.2f;
+
     // View-mean variant over a [4, N] densification_info. Rows 0 and 1 hold this view's
     // coverage and error; row 2 is the window coverage (row 0's role in the max fold) and
     // row 3 counts the views where the splat was visible (coverage > 0). Adds the error to
     // the window sum in refine_weight, moves the coverage to row 2, then clears rows 0 and 1.
+    // With compress, the error added is s^REFINE_ERROR_COMPRESS_VIEW_POWER and row 3 counts
+    // the views where that is > 0 instead.
     void launch_fold_densification_error_view_sum_and_zero(
         float* refine_weight,
         float* densification_info,
         size_t N,
+        bool compress = false,
         void* stream = nullptr);
 
     // refine_weight = refine_weight / max(view count, 1), with the count in row 3.

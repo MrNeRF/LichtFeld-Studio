@@ -25,6 +25,12 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream = nullptr);
+    // d_data = max(d_data, 0)^2 in place.
+    void launch_square_floored_inplace(
+        float* d_data,
+        const std::size_t n,
+        cudaStream_t stream = nullptr);
+
     // Divides d_data by *d_scalar in place; the whole kernel no-ops when
     // *d_scalar <= skip_below (device-side replacement for host mean/median
     // readback + branch).

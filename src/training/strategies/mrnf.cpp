@@ -738,7 +738,11 @@ namespace lfs::training {
     }
 
     bool MRNF::refine_error_view_mean_on() const {
-        return _params && _params->refine_error_view_mean;
+        return _params && (_params->refine_error_view_mean || _params->refine_error_compress);
+    }
+
+    bool MRNF::refine_error_compress_on() const {
+        return _params && _params->refine_error_compress;
     }
 
     void MRNF::ensure_densification_info_shape() {
@@ -904,7 +908,7 @@ namespace lfs::training {
                 mrnf_strategy::launch_fold_densification_error_view_sum_and_zero(
                     _refine_weight_max.ptr<float>(),
                     _splat_data->_densification_info.ptr<float>(),
-                    n);
+                    n, refine_error_compress_on());
             } else {
                 mrnf_strategy::launch_fold_densification_error_and_zero(
                     _refine_weight_max.ptr<float>(),
@@ -1164,6 +1168,19 @@ namespace lfs::training {
             return;
         }
         mrnf_strategy::NeedScales scales;
+        if (refine_error_compress_on()) {
+            // The compressed score over its mean among the active splats. No sparsity factor: it
+            // would bring back the footprint the compression flattened.
+            const size_t active = active_count();
+            scales.error_scale = std::max(
+                (_free_mask.is_valid() ? _refine_weight_max.masked_fill(_free_mask.slice(0, 0, n), 0.0f)
+                                       : _refine_weight_max)
+                        .sum_scalar() /
+                    static_cast<float>(std::max<size_t>(active, 1)),
+                std::numeric_limits<float>::min());
+            mrnf_strategy::launch_fold_need(_refine_weight_max.ptr<float>(), nullptr, scales, n);
+            return;
+        }
         scales.error_scale = std::max(
             _refine_weight_max.masked_fill(has_error.logical_not(), 0.0f).sum_scalar() /
                 static_cast<float>(with_error),
@@ -1989,7 +2006,10 @@ namespace lfs::training {
     lfs::core::Tensor MRNF::compute_refine_candidates() const {
         using namespace lfs::core;
         auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
-        return (candidate_weights > _params->growth_grad_threshold) &&
+        // The threshold is on the raw error scale; the compressed score draws in proportion, so
+        // every splat with any score is a candidate and zero-score splats never grow.
+        const float threshold = refine_error_compress_on() ? 0.0f : _params->growth_grad_threshold;
+        return (candidate_weights > threshold) &&
                (visibility_accumulator() > 0.0f);
     }
 
@@ -3169,10 +3189,18 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
-        // A max and a view sum do not mix: switching the error fold starts a fresh window.
-        if (_params && _params->refine_error_view_mean != params.refine_error_view_mean &&
-            _refine_weight_max.is_valid() && _refine_weight_max.numel() > 0)
-            _refine_weight_max.zero_();
+        // A max, a view sum and a compressed sum do not mix: switching the error fold starts a fresh window.
+        const auto error_fold = [](const lfs::core::param::OptimizationParameters& p) {
+            return p.refine_error_compress ? 2 : (p.refine_error_view_mean ? 1 : 0);
+        };
+        if (_params && error_fold(*_params) != error_fold(params)) {
+            if (_refine_weight_max.is_valid() && _refine_weight_max.numel() > 0)
+                _refine_weight_max.zero_();
+            // The view count of the old fold must not divide the new sum.
+            if (_splat_data && _splat_data->_densification_info.is_valid() &&
+                _splat_data->_densification_info.ndim() == 2 && _splat_data->_densification_info.shape()[0] >= 4)
+                _splat_data->_densification_info.slice(0, 3, 4).zero_();
+        }
         auto resolved_params = params;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(resolved_params, _splat_data));
