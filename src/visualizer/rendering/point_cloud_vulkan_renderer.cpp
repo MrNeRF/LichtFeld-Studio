@@ -6,6 +6,7 @@
 
 #include "core/crop_polygon.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -1623,9 +1624,13 @@ namespace lfs::vis {
                     "vulkan.point_cloud.buffer", dst.vram_label, dst.storage->bytes());
             }
             try {
+                // The trainer read epoch is installed on the current (render) stream.
+                lfs::core::waitForCUDAStream(upload_stream.stream(), lfs::core::getCurrentCUDAStream());
                 dst.tensor.copy_from(src);
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Point-cloud {} interop copy failed: {}", what, e.what()));
+                LOG_WARN("Point-cloud {} interop copy failed, using host staging: {}", what, e.what());
+                releaseInterop(dst);
+                return false;
             }
             interop_sync_pending = true;
             destroyBuffer(allocator, host_buffer);
@@ -1634,6 +1639,19 @@ namespace lfs::vis {
 
         std::expected<void, std::string> uploadIfChanged(VkCommandBuffer cb,
                                                          const RenderRequest& req) {
+            // Error returns must not leave copies in flight past the trainer read epoch.
+            struct PendingInteropDrain {
+                Impl& impl;
+                ~PendingInteropDrain() {
+                    if (impl.interop_sync_pending) {
+                        impl.interop_sync_pending = false;
+                        if (!impl.upload_stream.synchronize()) {
+                            LOG_WARN("Point-cloud interop upload stream synchronize failed: {}",
+                                     impl.upload_stream.lastError());
+                        }
+                    }
+                }
+            } const drain{*this};
             if (!req.positions || !req.colors) {
                 return std::unexpected<std::string>("RenderRequest is missing positions/colors");
             }
@@ -1849,12 +1867,17 @@ namespace lfs::vis {
                     cached_count != n_points ||
                     (cached_revision && *cached_revision != revision);
                 if (changed) {
-                    auto on_gpu = copyViaInterop(mask->flatten().to(lfs::core::DataType::UInt8),
-                                                 lfs::core::DataType::Int32,
-                                                 0,
-                                                 interop,
-                                                 buffer,
-                                                 what);
+                    std::expected<bool, std::string> on_gpu = false;
+                    if (interopAvailable()) {
+                        on_gpu = copyViaInterop(mask->flatten().to(lfs::core::DataType::UInt8),
+                                                lfs::core::DataType::Int32,
+                                                0,
+                                                interop,
+                                                buffer,
+                                                what);
+                    } else {
+                        releaseInterop(interop);
+                    }
                     if (!on_gpu) {
                         return std::unexpected(on_gpu.error());
                     }
