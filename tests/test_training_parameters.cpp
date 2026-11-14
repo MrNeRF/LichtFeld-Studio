@@ -139,6 +139,7 @@ namespace {
             {"grow_until_iter", {"mrnf"}},
             {"growth_exchange", {"mrnf"}},
             {"need_guided_growth", {"mrnf"}},
+            {"refine_error_view_mean", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},

@@ -401,6 +401,9 @@ namespace lfs::core {
             // (5 % per refine, tapering to 0 by grow_until_iter) and grows where the error of large, sparse
             // splats is highest; the refill of pruned slots draws by the same need.
             bool need_guided_growth = false;
+            // Ranks growth by the mean of each splat's per-view error over the views that saw it since
+            // the last refine, instead of its single worst view.
+            bool refine_error_view_mean = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

@@ -67,6 +67,9 @@ class MRNFStrategyTest_NeedGrowthDonorShareTapersToZero_Test;
 class MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
 class MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
 class MRNFStrategyTest_NeedGrowthReceiverSplitsOnlyAtTheCap_Test;
+class MRNFStrategyTest_RefineErrorViewMeanOffKeepsTheMaxOverViews_Test;
+class MRNFStrategyTest_RefineErrorViewMeanAveragesVisibleViewsAndResetsAtRefine_Test;
+class MRNFStrategyTest_RefineErrorViewMeanRestartsTheCountOnResume_Test;
 
 namespace lfs::training {
 
@@ -172,6 +175,9 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_NeedGrowthFreedSlotsGoToTheNeedDraw_Test;
         friend class ::MRNFStrategyTest_NeedGrowthResumeRebuildsDonorMemory_Test;
         friend class ::MRNFStrategyTest_NeedGrowthReceiverSplitsOnlyAtTheCap_Test;
+        friend class ::MRNFStrategyTest_RefineErrorViewMeanOffKeepsTheMaxOverViews_Test;
+        friend class ::MRNFStrategyTest_RefineErrorViewMeanAveragesVisibleViewsAndResetsAtRefine_Test;
+        friend class ::MRNFStrategyTest_RefineErrorViewMeanRestartsTheCountOnResume_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -184,6 +190,8 @@ namespace lfs::training {
         // over about one pass, on its own schedule.
         [[nodiscard]] bool growth_exchange_active(int iter) const;
         [[nodiscard]] bool need_guided_growth_on() const;
+        // Growth ranks by the mean per-view error over the views that saw a splat, not the max.
+        [[nodiscard]] bool refine_error_view_mean_on() const;
         // The model is full enough for donors; with need-guided growth every split then uses
         // the receiver rule.
         [[nodiscard]] bool at_cap(size_t active) const;
@@ -210,6 +218,7 @@ namespace lfs::training {
             int growth_count = 0;
             size_t exchange_victims = 0;
             int receiver_splits = 0;
+            int candidates = 0;
         };
         // refine_candidates defaults to compute_refine_candidates().
         GrowthResult grow_and_split(
@@ -295,6 +304,8 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> _views;
 
         lfs::core::Tensor _rendered_count;
+        // Window error per splat: the max over views, or with refine_error_view_mean the sum over
+        // views, turned into the mean at the start of refine().
         lfs::core::Tensor _refine_weight_max;
         lfs::core::Tensor _precomputed_edge_scores;
         bool _edge_precompute_valid = false;

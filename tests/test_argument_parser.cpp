@@ -1692,6 +1692,27 @@ TEST(ArgumentParserTest, TrainingParsesNeedGuidedGrowth) {
     EXPECT_FALSE((*off)->optimization.need_guided_growth);
 }
 
+// Catches --refine-error-view-mean not reaching the training parameters, or being on without the flag.
+TEST(ArgumentParserTest, TrainingParsesRefineErrorViewMean) {
+    const auto data_path = make_test_path("lfs_arg_parser_view_mean_data");
+    const auto output_path = make_test_path("lfs_arg_parser_view_mean_output");
+    const auto parse = [&](const bool on) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str()};
+        if (on)
+            argv.push_back("--refine-error-view-mean");
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse(true);
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_TRUE((*on)->optimization.refine_error_view_mean);
+
+    const auto off = parse(false);
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FALSE((*off)->optimization.refine_error_view_mean);
+}
+
 // Catches --crop accepted without a region of interest to crop to.
 TEST(ArgumentParserTest, TrainingRejectsCropWithoutCropBox) {
     const auto data_path = make_test_path("lfs_arg_parser_crop_without_box_data");

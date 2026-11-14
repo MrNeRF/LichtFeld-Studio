@@ -628,6 +628,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::refine_error_view_mean,
+                       "refine_error_view_mean", "Refine Error View Mean", d.refine_error_view_mean,
+                       "Ranks growth by each splat's mean error over the views that saw it, not its worst view (MRNF)")
+            .locale("training.advanced.refine_error_view_mean")
+            .tooltip("training.tooltip.refine_error_view_mean")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

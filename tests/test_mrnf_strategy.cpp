@@ -3195,3 +3195,156 @@ TEST(MRNFStrategyTest, NeedGrowthReceiverSplitsOnlyAtTheCap) {
         }
     }
 }
+
+namespace {
+    // Four views over six splats: coverage (row 0) and error (row 1) as the backward leaves them.
+    // 0: seen in every view; 1: one view; 2: two views with gaps; 3: never seen;
+    // 4: seen in every view, error in one; 5: two equal views.
+    constexpr size_t kViewMeanSplats = 6;
+    const std::vector<std::vector<float>> kViewCoverage{
+        {2.0f, 5.0f, 0.0f, 0.0f, 1.0f, 3.0f},
+        {2.0f, 0.0f, 0.5f, 0.0f, 1.0f, 3.0f},
+        {2.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f},
+        {2.0f, 0.0f, 0.25f, 0.0f, 1.0f, 0.0f}};
+    const std::vector<std::vector<float>> kViewError{
+        {0.1f, 0.8f, 0.0f, 0.0f, 0.0f, 0.2f},
+        {0.2f, 0.0f, 0.5f, 0.0f, 0.0f, 0.2f},
+        {0.3f, 0.0f, 0.0f, 0.0f, 0.6f, 0.0f},
+        {0.4f, 0.0f, 0.1f, 0.0f, 0.0f, 0.0f}};
+
+    param::OptimizationParameters view_mean_test_params(const bool view_mean) {
+        auto p = vanilla_mrnf_params();
+        p.iterations = 10'000;
+        p.sh_degree_interval = 10'000;
+        p.start_refine = 0;
+        p.refine_every = 100;
+        p.stop_refine = 5'000;
+        p.grow_until_iter = 5'000;
+        p.grow_fraction = 1.0f;
+        p.max_cap = 32;
+        // Between the window means and maxes: the mean keeps splats 1 and 2, the max 0, 1, 2 and 4.
+        p.growth_grad_threshold = 0.28f;
+        p.refine_error_view_mean = view_mean;
+        return p;
+    }
+
+    void set_info_row(SplatData& splat_data, const size_t row, const std::vector<float>& values) {
+        splat_data._densification_info.slice(0, row, row + 1).copy_(Tensor::from_vector(values, TensorShape({1, values.size()}), Device::CUDA));
+    }
+
+    std::vector<float> info_row(const SplatData& splat_data, const size_t row) {
+        return splat_data._densification_info.slice(0, row, row + 1).contiguous().cpu().to_vector();
+    }
+
+    // Adds each view to rows 0 and 1 as the backward does, then runs post_backward on a
+    // non-refining step.
+    void fold_views(MRNF& strategy, SplatData& splat_data, const size_t views, const int first_iter) {
+        RenderOutput render_output;
+        for (size_t v = 0; v < views; ++v) {
+            for (const size_t row : {size_t{0}, size_t{1}}) {
+                auto values = info_row(splat_data, row);
+                const auto& view = row == 0 ? kViewCoverage[v] : kViewError[v];
+                for (size_t i = 0; i < values.size(); ++i)
+                    values[i] += view[i];
+                set_info_row(splat_data, row, values);
+            }
+            strategy.post_backward(first_iter + static_cast<int>(v), render_output);
+        }
+    }
+} // namespace
+
+// Off, the window error is today's max over the views, and row 0 keeps summing the coverage.
+TEST(MRNFStrategyTest, RefineErrorViewMeanOffKeepsTheMaxOverViews) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    strategy.initialize(view_mean_test_params(false));
+    ASSERT_EQ(splat_data._densification_info.shape()[0], 2u);
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+
+    std::vector<float> max(kViewMeanSplats, 0.0f), coverage(kViewMeanSplats, 0.0f);
+    for (size_t v = 0; v < kViewCoverage.size(); ++v)
+        for (size_t i = 0; i < kViewMeanSplats; ++i) {
+            max[i] = std::fmax(max[i], kViewError[v][i]);
+            coverage[i] += kViewCoverage[v][i];
+        }
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), max);
+    EXPECT_EQ(info_row(splat_data, 0), coverage);
+    EXPECT_EQ(info_row(splat_data, 1), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(strategy.visibility_accumulator().cpu().to_vector(), coverage);
+
+    // The refine grows every splat whose max clears the threshold: 0, 1, 2 and 4.
+    const size_t active = strategy.active_count();
+    RenderOutput refine_output;
+    strategy.post_backward(100, refine_output);
+    EXPECT_EQ(strategy.active_count(), active + 4);
+}
+
+// On, the window error is the sum over views divided by the views that saw the splat (coverage
+// > 0, also with zero error); unseen views do not count. Everything resets at the refine.
+TEST(MRNFStrategyTest, RefineErrorViewMeanAveragesVisibleViewsAndResetsAtRefine) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    strategy.initialize(view_mean_test_params(true));
+    ASSERT_EQ(splat_data._densification_info.shape()[0], 4u);
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+
+    std::vector<float> sum(kViewMeanSplats, 0.0f), coverage(kViewMeanSplats, 0.0f), count(kViewMeanSplats, 0.0f);
+    for (size_t v = 0; v < kViewCoverage.size(); ++v)
+        for (size_t i = 0; i < kViewMeanSplats; ++i) {
+            sum[i] += kViewError[v][i];
+            coverage[i] += kViewCoverage[v][i];
+            count[i] += kViewCoverage[v][i] > 0.0f ? 1.0f : 0.0f;
+        }
+    EXPECT_EQ(count, (std::vector<float>{4.0f, 1.0f, 2.0f, 0.0f, 4.0f, 2.0f}));
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), sum);
+    EXPECT_EQ(info_row(splat_data, 0), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(info_row(splat_data, 1), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(info_row(splat_data, 2), coverage);
+    EXPECT_EQ(info_row(splat_data, 3), count);
+    EXPECT_EQ(strategy.visibility_accumulator().cpu().to_vector(), coverage);
+
+    // The mean as refine() takes it, on a copy so the window stays for the refine below.
+    auto mean = strategy._refine_weight_max.clone();
+    mrnf_strategy::launch_refine_error_view_mean(
+        mean.ptr<float>(), splat_data._densification_info.ptr<float>(), kViewMeanSplats);
+    const auto mean_host = mean.cpu().to_vector();
+    for (size_t i = 0; i < kViewMeanSplats; ++i)
+        EXPECT_FLOAT_EQ(mean_host[i], sum[i] / std::fmax(count[i], 1.0f)) << i;
+    EXPECT_NEAR(mean_host[0], 0.25f, 1e-6f);
+    EXPECT_NEAR(mean_host[2], 0.3f, 1e-6f);
+    EXPECT_NEAR(mean_host[4], 0.15f, 1e-6f);
+    EXPECT_EQ(mean_host[3], 0.0f);
+
+    // The refine draws from the mean: only splats 1 and 2 clear the threshold.
+    const size_t active = strategy.active_count();
+    RenderOutput refine_output;
+    strategy.post_backward(100, refine_output);
+    EXPECT_EQ(strategy.active_count(), active + 2);
+    const size_t grown = splat_data.size();
+    ASSERT_EQ(splat_data._densification_info.shape()[0], 4u);
+    ASSERT_EQ(splat_data._densification_info.shape()[1], grown);
+    for (size_t row = 0; row < 4; ++row)
+        EXPECT_EQ(info_row(splat_data, row), std::vector<float>(grown, 0.0f)) << row;
+    EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), std::vector<float>(grown, 0.0f));
+}
+
+// A resume restarts the error sum, so it restarts the view count with it; the coverage stays.
+TEST(MRNFStrategyTest, RefineErrorViewMeanRestartsTheCountOnResume) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    const auto params = view_mean_test_params(true);
+    strategy.initialize(params);
+    fold_views(strategy, splat_data, 2, 96);
+    std::stringstream ss;
+    strategy.serialize(ss);
+
+    auto splat_copy = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF restored(splat_copy);
+    restored.initialize(params);
+    splat_copy._densification_info = splat_data._densification_info.clone(); // as the checkpoint holds it
+    restored.deserialize(ss);
+
+    EXPECT_EQ(info_row(splat_copy, 2), info_row(splat_data, 2));
+    EXPECT_EQ(info_row(splat_copy, 3), std::vector<float>(kViewMeanSplats, 0.0f));
+    EXPECT_EQ(restored._refine_weight_max.cpu().to_vector(), std::vector<float>(kViewMeanSplats, 0.0f));
+}

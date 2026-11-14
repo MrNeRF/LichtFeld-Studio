@@ -209,6 +209,23 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // View-mean variant over a [4, N] densification_info. Rows 0 and 1 hold this view's
+    // coverage and error; row 2 is the window coverage (row 0's role in the max fold) and
+    // row 3 counts the views where the splat was visible (coverage > 0). Adds the error to
+    // the window sum in refine_weight, moves the coverage to row 2, then clears rows 0 and 1.
+    void launch_fold_densification_error_view_sum_and_zero(
+        float* refine_weight,
+        float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
+    // refine_weight = refine_weight / max(view count, 1), with the count in row 3.
+    void launch_refine_error_view_mean(
+        float* refine_weight,
+        const float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
     void launch_far_field_mask(
         const float* means,
         float centroid_x,

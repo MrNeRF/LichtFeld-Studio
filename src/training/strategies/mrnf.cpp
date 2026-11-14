@@ -732,7 +732,13 @@ namespace lfs::training {
     }
 
     size_t MRNF::densification_row_count() const {
-        return 2;
+        // The view mean needs this view's coverage on its own: row 0 then holds one view, row 2
+        // the window coverage and row 3 the visible-view count.
+        return refine_error_view_mean_on() ? 4 : 2;
+    }
+
+    bool MRNF::refine_error_view_mean_on() const {
+        return _params && _params->refine_error_view_mean;
     }
 
     void MRNF::ensure_densification_info_shape() {
@@ -894,12 +900,19 @@ namespace lfs::training {
         assert(info.shape()[1] == n);
 
         if (_refine_weight_max.numel() == n) {
-            mrnf_strategy::launch_fold_densification_error_and_zero(
-                _refine_weight_max.ptr<float>(),
-                _splat_data->_densification_info.ptr<float>(),
-                n);
+            if (refine_error_view_mean_on()) {
+                mrnf_strategy::launch_fold_densification_error_view_sum_and_zero(
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n);
+            } else {
+                mrnf_strategy::launch_fold_densification_error_and_zero(
+                    _refine_weight_max.ptr<float>(),
+                    _splat_data->_densification_info.ptr<float>(),
+                    n);
+            }
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
-            auto vis = _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+            auto vis = visibility_accumulator();
             zero_frozen_scores_inplace(*_splat_data, vis);
         } else if (info.is_valid() && info.numel() > 0) {
             _splat_data->_densification_info.zero_();
@@ -1008,6 +1021,11 @@ namespace lfs::training {
             LFS_COUNTER_ADD("strategy.mrnf.pruned", pruned_count);
         }
 
+        if (refine_error_view_mean_on() && _refine_weight_max.numel() == n) {
+            // Every reader below (candidates, growth draw, NEED, refill) sees the window mean.
+            mrnf_strategy::launch_refine_error_view_mean(
+                _refine_weight_max.ptr<float>(), _splat_data->_densification_info.ptr<float>(), n);
+        }
         const Tensor refine_candidates = compute_refine_candidates();
         const bool exchanging = growth_exchange_active(iter);
         bool exchange_ready = false;
@@ -1204,9 +1222,9 @@ namespace lfs::training {
             weight_p95 = kth(_refine_weight_max, weighted, count, 0.05);
         }
         const std::string line = std::format(
-            "MRNF refine {}: active {} / cap {}, pruned {}, refilled {}, grown {}, receiver splits {}, donors {} (quota {}), "
-            "{} median {:.4g} p95 {:.4g}, opacity <0.1 {:.1f}% <0.5 {:.1f}% median {:.3f}",
-            iter, n_active, _params->max_cap, pruned, growth.replacement_count, growth.growth_count,
+            "MRNF refine {}: active {} / cap {}, pruned {}, candidates {}, refilled {}, grown {}, receiver splits {}, "
+            "donors {} (quota {}), {} median {:.4g} p95 {:.4g}, opacity <0.1 {:.1f}% <0.5 {:.1f}% median {:.3f}",
+            iter, n_active, _params->max_cap, pruned, growth.candidates, growth.replacement_count, growth.growth_count,
             growth.receiver_splits, growth.exchange_victims, quota, need ? "need" : "error", weight_median, weight_p95,
             share_below(0.1f), share_below(0.5f), kth(opacity, active, n_active, 0.5));
         if (need) {
@@ -1421,7 +1439,8 @@ namespace lfs::training {
             _splat_data->_densification_info.shape()[0] < densification_row_count()) {
             return {};
         }
-        return _splat_data->_densification_info.slice(0, 0, 1).squeeze(0);
+        const size_t row = refine_error_view_mean_on() ? 2 : 0;
+        return _splat_data->_densification_info.slice(0, row, row + 1).squeeze(0);
     }
 
     void MRNF::refresh_camera_hull() {
@@ -1658,6 +1677,7 @@ namespace lfs::training {
             cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
                        4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
             "MRNF grow packed counts D2H");
+        result.candidates = static_cast<int>(host_counts[0]);
         const int desired_total = static_cast<int>(
             std::round(static_cast<float>(host_counts[0]) * _params->grow_fraction));
         const int selectable_replace = static_cast<int>(host_counts[2]);
@@ -3066,6 +3086,10 @@ namespace lfs::training {
         } else
             _rendered_count = lfs::core::Tensor();
         ensure_densification_info_shape();
+        if (refine_error_view_mean_on()) {
+            // The error sum restarts empty, so its view count must too.
+            _splat_data->_densification_info.slice(0, 3, 4).zero_();
+        }
         _precomputed_edge_scores = lfs::core::Tensor();
         _edge_precompute_valid = false;
 
@@ -3145,6 +3169,10 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool renderer_changed = _params && _params->gut != params.gut;
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
+        // A max and a view sum do not mix: switching the error fold starts a fresh window.
+        if (_params && _params->refine_error_view_mean != params.refine_error_view_mean &&
+            _refine_weight_max.is_valid() && _refine_weight_max.numel() > 0)
+            _refine_weight_max.zero_();
         auto resolved_params = params;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(resolved_params, _splat_data));
