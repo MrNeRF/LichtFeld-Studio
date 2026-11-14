@@ -53,6 +53,9 @@ namespace lfs::training {
             dst.n_attributes = src.n_attributes;
             dst.step_size = src.step_size;
             dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
+            dst.row_steps = src.row_steps;
+            dst.step = src.step;
+            dst.bias_correction1_rcp = src.bias_correction1_rcp;
             dst.enabled = src.enabled;
             dst.screen_share_max = src.screen_share_max;
             dst.screen_share_n = src.screen_share_n;
@@ -968,7 +971,7 @@ namespace lfs::training {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
         }
         if (fused_adam.enabled && !defer_optimizer_step) {
-            optimizer.commit_fastgs_fused_adam(iteration);
+            optimizer.commit_fastgs_fused_adam(iteration, backward_stream);
         }
     }
 

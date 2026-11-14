@@ -9,6 +9,7 @@
 #include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/ray_depth_step.cuh"
+#include "lfs/training/row_bias_correction.cuh"
 #include "lfs/training/screen_share.cuh"
 
 #include <cstdint>
@@ -45,11 +46,13 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float beta2,
         const float eps,
         const float bias_correction1_rcp,
-        const float bias_correction2_sqrt_rcp,
+        const float bias_correction2_sqrt_rcp_group,
         const float* screen_share_max,
         const int screen_share_n,
         const float screen_share_limit,
-        const float screen_share_penalty) {
+        const float screen_share_penalty,
+        const std::int32_t* row_steps,
+        const int step) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
         constexpr int kBS = lfs::training::joint_adam::kBlockSizeDevice;
@@ -84,7 +87,13 @@ namespace fast_lfs::optimizer::kernels::adam {
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
         const int row = in_range ? min(n_attr, kMaxAttr) : 0;
-        const float step_size = row_lr * bias_correction1_rcp;
+        float step_size = row_lr * bias_correction1_rcp;
+        float bias_correction2_sqrt_rcp = bias_correction2_sqrt_rcp_group;
+        if (in_range && row_steps != nullptr) {
+            lfs::training::apply_row_bias_correction(
+                row_steps[prim], step, bias_correction1_rcp, beta1, beta2,
+                step_size, bias_correction2_sqrt_rcp);
+        }
         const float beta1_comp = 1.0f - beta1;
         const float beta2_comp = 1.0f - beta2;
 
@@ -186,7 +195,6 @@ namespace fast_lfs::optimizer::kernels::adam {
         const int n_attr = ent.n_attr;
         const float lr = ent.lr;
         const float bias_correction1_rcp = ent.bias_correction1_rcp;
-        const float bias_correction2_sqrt_rcp = ent.bias_correction2_sqrt_rcp;
 
         const int prim = static_cast<int>(blockIdx.x) * kBS + static_cast<int>(threadIdx.x);
         const bool in_range = prim < n_prims && n_attr > 0;
@@ -231,7 +239,13 @@ namespace fast_lfs::optimizer::kernels::adam {
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
         const int row = in_range ? min(n_attr, kMaxAttr) : 0;
-        const float step_size = row_lr * bias_correction1_rcp;
+        float step_size = row_lr * bias_correction1_rcp;
+        float bias_correction2_sqrt_rcp = ent.bias_correction2_sqrt_rcp;
+        if (in_range && ent.row_steps != nullptr) {
+            lfs::training::apply_row_bias_correction(
+                ent.row_steps[prim], ent.step, bias_correction1_rcp, beta1, beta2,
+                step_size, bias_correction2_sqrt_rcp);
+        }
         const float beta1_comp = 1.0f - beta1;
         const float beta2_comp = 1.0f - beta2;
 
@@ -296,6 +310,40 @@ namespace fast_lfs::optimizer::kernels::adam {
                              us_u[i], us_s[i], new_mm.x, new_mm.z, inv_u, inv_s);
             }
         }
+    }
+
+    __global__ void row_steps_fill_cu(std::int32_t* steps, const int n, const std::int32_t value) {
+        const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (i < n)
+            steps[i] = value;
+    }
+
+    __global__ void row_steps_zero_at_indices_cu(std::int32_t* steps, const int n,
+                                                 const std::int64_t* indices, const int n_indices) {
+        const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (i >= n_indices)
+            return;
+        const std::int64_t row = indices[i];
+        if (row >= 0 && row < n)
+            steps[row] = 0;
+    }
+
+    __global__ void row_steps_advance_cu(std::int32_t* steps, const int n,
+                                         const bool* frozen_mask, const int frozen_mask_size,
+                                         const float frozen_lr_scale,
+                                         const bool* crop_damping_mask, const int crop_damping_mask_size,
+                                         const float cropbox_lr_scale) {
+        const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+        if (i >= n)
+            return;
+        if (frozen_lr_scale == 0.0f && frozen_mask != nullptr && i < frozen_mask_size && frozen_mask[i])
+            return;
+        if (cropbox_lr_scale == 0.0f && crop_damping_mask != nullptr && i < crop_damping_mask_size &&
+            crop_damping_mask[i])
+            return;
+        const std::int32_t value = steps[i];
+        if (value < lfs::training::kRowStepSaturation)
+            steps[i] = value + 1;
     }
 
     __global__ void ray_depth_propose_cu(const RayDepthStepArgs args) {

@@ -35,6 +35,12 @@ namespace fast_lfs::rasterization {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // Per-splat bias correction (lfs/training/row_bias_correction.cuh); null keeps the
+        // group's correction for every row. `step` is this update's group step count and
+        // bias_correction1_rcp the factor already folded into step_size.
+        const std::int32_t* row_steps = nullptr;
+        int step = 0;
+        float bias_correction1_rcp = 1.0f;
         bool enabled = false;
         const float* screen_share_max = nullptr;
         int screen_share_n = 0;

@@ -1068,6 +1068,7 @@ namespace lfs::training {
         // Zero residual grads so the post-densify Adam step does not use
         // previous-occupant / pre-split gradients on rewritten rows.
         zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
+        _optimizer->restart_row_steps_at(target_indices);
 
         // Merge: joint-codec state resets via optimizer API (fused scale-zero is a no-op
         // for joint state); legacy codec relies on the fused fill kernel having zeroed scales.

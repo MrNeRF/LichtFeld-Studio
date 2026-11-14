@@ -295,6 +295,9 @@ namespace lfs::training::morton {
                 permute_rows_in_place(crop, perm32, borrow);
                 optimizer.set_crop_damping_mask(std::move(crop));
             }
+            if (optimizer.row_steps().is_valid() && optimizer.row_steps().numel() >= n) {
+                permute_rows_in_place(optimizer.row_steps_mutable(), perm32, borrow);
+            }
 
             for (const auto type : AdamOptimizer::all_param_types()) {
                 if (type == ParamType::ShN) {
@@ -462,6 +465,7 @@ namespace lfs::training::morton {
             }
             visit(optimizer->frozen_mask(), false);
             visit(optimizer->crop_damping_mask(), false);
+            visit(optimizer->row_steps(), false);
             for (const auto type : AdamOptimizer::all_param_types()) {
                 const auto* state = optimizer->get_state(type);
                 if (state == nullptr) {

@@ -84,6 +84,7 @@
   "opacity_decay_rendered_only": false,
   "opacity_lr": 0.02500000037252903,
   "opacity_reg": 0.009999999776482582,
+  "per_splat_bias_correction": false,
   "popspa_erank_epsilon": 1.0000000116860974e-07,
   "popspa_erank_weight": 0.009999999776482582,
   "popspa_first_prune_count": 0,

@@ -609,6 +609,7 @@ namespace lfs::training {
 
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+        _optimizer->set_per_splat_bias_correction(_params->per_splat_bias_correction);
         _scheduler = create_scheduler(*_params, *_optimizer);
         _mean_lr_unscaled = _params->means_lr;
         _scale_lr_current = _params->scaling_lr;
@@ -2193,6 +2194,8 @@ namespace lfs::training {
             LFS_DEBUG_ASSERT_MSG(state->capacity >= state->size,
                                  "MRNF::compact_splats: state.capacity < state.size");
         }
+        // The zeroed bounds restarted every row's moments, so every per-splat step counter restarts.
+        _optimizer->restart_row_steps();
 
         const auto& info = _splat_data->_densification_info;
         if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
@@ -2538,6 +2541,8 @@ namespace lfs::training {
         // Zero residual grads so the post-densify Adam step does not use
         // previous-occupant / pre-split gradients on rewritten rows.
         zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
+        // The slot's moments were zeroed when it was freed; its counter kept running since.
+        _optimizer->restart_row_steps_at(target_indices);
         if (_ray_depth_state.is_valid())
             _ray_depth_state.index_put_(
                 target_indices,
@@ -3150,6 +3155,7 @@ namespace lfs::training {
         if (_optimizer && _params) {
             _optimizer->set_collect_projected_screen_share(
                 _params->gut && screen_share_cap_active(_params->max_screen_share));
+            _optimizer->set_per_splat_bias_correction(_params->per_splat_bias_correction);
         }
         std::swap(_refine_weight_max, source._refine_weight_max);
         std::swap(_rendered_count, source._rendered_count);
@@ -3234,6 +3240,8 @@ namespace lfs::training {
 
         if (_optimizer) {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
+            if (_optimizer->per_splat_bias_correction() != _params->per_splat_bias_correction)
+                _optimizer->set_per_splat_bias_correction(_params->per_splat_bias_correction);
             sync_mean_learning_rate();
         }
     }

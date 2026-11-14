@@ -1123,6 +1123,7 @@ namespace lfs::training {
                 state_sizes_.emplace_back(state, state->size);
             }
         }
+        record(optimizer.row_steps_mutable(), false);
         // The deleted mask and strategy buffers may be dropped or rebuilt
         // by a refine; one that did not exist before goes away again.
         record(splat.deleted(), true);

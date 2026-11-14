@@ -48,6 +48,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ray_depth_step.cuh"
+#include "lfs/training/row_bias_correction.cuh"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
@@ -1345,6 +1346,84 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(splat_data.size(), initial_size);
     EXPECT_EQ(strategy.active_count(), initial_size - 1);
     EXPECT_EQ(strategy.free_count(), 1u);
+}
+
+// With per-splat bias correction on, a row's step counter restarts wherever MRNF restarts its
+// moments: split parents and appended children, children placed in free slots, and every row
+// after a compaction. Other rows keep their counters.
+TEST(MRNFStrategyTest, PerSplatBiasCountersRestartWhereMomentsRestart) {
+    const auto counters = [](const AdamOptimizer& optimizer) {
+        const auto host = optimizer.row_steps().cpu().contiguous();
+        const auto* p = host.ptr<std::int32_t>();
+        return std::vector<std::int32_t>(p, p + host.numel());
+    };
+    const auto split_row_zero = [](MRNF& strategy, SplatData& splat_data) {
+        strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+        auto visibility = strategy.visibility_accumulator();
+        visibility.zero_();
+        const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+        strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+        visibility.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+        strategy.grow_and_split(1, 0);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    };
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+    opt_params.per_splat_bias_correction = true;
+
+    // Split with an appended child.
+    {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(opt_params);
+        auto& optimizer = strategy.get_optimizer();
+        ASSERT_TRUE(optimizer.per_splat_bias_correction());
+        const size_t initial_size = splat_data.size();
+        for (const auto steps : counters(optimizer))
+            EXPECT_EQ(steps, kRowStepSaturation);
+        split_row_zero(strategy, splat_data);
+        ASSERT_EQ(splat_data.size(), initial_size + 1);
+        const auto steps = counters(optimizer);
+        ASSERT_EQ(steps.size(), initial_size + 1);
+        for (size_t row = 0; row < steps.size(); ++row)
+            EXPECT_EQ(steps[row], row == 0 || row == initial_size ? 0 : kRowStepSaturation) << row;
+    }
+
+    // Split with the child in a free slot, then a compaction.
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto free_indices = Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy.mark_as_free(free_indices);
+    strategy._splat_data->deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::CUDA));
+    const size_t initial_size = splat_data.size();
+    split_row_zero(strategy, splat_data);
+    ASSERT_EQ(splat_data.size(), initial_size);
+    ASSERT_EQ(strategy.free_count(), 1u);
+    const auto deleted = strategy._splat_data->deleted().cpu().contiguous();
+    const size_t filled = deleted.ptr<bool>()[8] ? 9 : 8;
+    auto steps = counters(optimizer);
+    ASSERT_EQ(steps.size(), initial_size);
+    for (size_t row = 0; row < 8; ++row)
+        EXPECT_EQ(steps[row], row == 0 ? 0 : kRowStepSaturation) << row;
+    EXPECT_EQ(steps[filled], 0);
+
+    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    const auto mask = Tensor::from_vector(
+        std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
+        TensorShape({10}), Device::CUDA);
+    strategy.remove_gaussians(mask);
+    ASSERT_LE(splat_data.size(), 8u);
+    steps = counters(optimizer);
+    ASSERT_EQ(steps.size(), splat_data.size());
+    for (const auto s : steps)
+        EXPECT_EQ(s, 0);
 }
 
 // A refine that runs out of VRAM at any allocation must be undone to the rows

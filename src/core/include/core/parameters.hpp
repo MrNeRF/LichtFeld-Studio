@@ -408,6 +408,10 @@ namespace lfs::core {
             // per-splat sum is compressed (^0.2) and averaged over the views with error. Implies
             // refine_error_view_mean.
             bool refine_error_compress = false;
+            // Adam bias correction per splat: each splat counts the steps since its moments last
+            // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
+            // instead of the parameter group's step count. Rows that never restarted are unchanged.
+            bool per_splat_bias_correction = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

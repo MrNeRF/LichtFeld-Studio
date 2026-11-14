@@ -1734,6 +1734,27 @@ TEST(ArgumentParserTest, TrainingParsesRefineErrorCompress) {
     EXPECT_FALSE((*off)->optimization.refine_error_compress);
 }
 
+// Catches --per-splat-bias-correction not reaching the training parameters, or being on without the flag.
+TEST(ArgumentParserTest, TrainingParsesPerSplatBiasCorrection) {
+    const auto data_path = make_test_path("lfs_arg_parser_bias_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bias_output");
+    const auto parse = [&](const bool on) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str()};
+        if (on)
+            argv.push_back("--per-splat-bias-correction");
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse(true);
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_TRUE((*on)->optimization.per_splat_bias_correction);
+
+    const auto off = parse(false);
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FALSE((*off)->optimization.per_splat_bias_correction);
+}
+
 // Catches --crop accepted without a region of interest to crop to.
 TEST(ArgumentParserTest, TrainingRejectsCropWithoutCropBox) {
     const auto data_path = make_test_path("lfs_arg_parser_crop_without_box_data");

@@ -52,7 +52,10 @@ namespace fast_lfs::optimizer {
         const float beta2,
         const float eps,
         const float bias_correction2_sqrt_rcp,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const std::int32_t* row_steps,
+        const int step,
+        const float bias_correction1_rcp) {
         LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(packed, "joint_packed");
         LFS_VALIDATE_CUDA_DEVICE_POINTER(bounds, "joint_bounds");
@@ -90,6 +93,9 @@ namespace fast_lfs::optimizer {
         fused.shN.cropbox_lr_scale = cropbox_lr_scale;
         fused.shN.step_size = step_size;
         fused.shN.bias_correction2_sqrt_rcp = bias_correction2_sqrt_rcp;
+        fused.shN.row_steps = row_steps;
+        fused.shN.step = step;
+        fused.shN.bias_correction1_rcp = bias_correction1_rcp;
         fused.shN.enabled = true;
 
         constexpr int kBS = 256;

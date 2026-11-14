@@ -69,6 +69,7 @@ namespace lfs::training {
                 // these empty — matches the "0 persistent world grads" claim.
                 ledger.gradients_or_helpers_bytes += tensor_logical_bytes(state->grad);
             }
+            ledger.optimizer_bytes += tensor_logical_bytes(optimizer->row_steps());
         }
 
         ledger.total_bytes = ledger.params_bytes + ledger.optimizer_bytes +
@@ -103,6 +104,7 @@ namespace lfs::training {
                 bytes += tensor_reserved_bytes(state->joint_bounds);
                 bytes += tensor_reserved_bytes(state->grad);
             }
+            bytes += tensor_reserved_bytes(optimizer->row_steps());
         }
         return bytes;
     }

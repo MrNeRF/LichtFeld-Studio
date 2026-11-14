@@ -31,6 +31,7 @@ class MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
 class MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
 class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 class MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
+class MRNFStrategyTest_PerSplatBiasCountersRestartWhereMomentsRestart_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -163,6 +164,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
         friend class ::MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
+        friend class ::MRNFStrategyTest_PerSplatBiasCountersRestartWhereMomentsRestart_Test;
         friend class ::MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;

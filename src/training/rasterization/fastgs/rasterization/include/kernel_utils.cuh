@@ -10,6 +10,7 @@
 #include "helper_math.h"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/joint_adam_codec.cuh"
+#include "lfs/training/row_bias_correction.cuh"
 #include "lfs/training/screen_share.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -347,9 +348,16 @@ namespace fast_lfs::rasterization::kernels {
         constexpr float kInf = 1e30f;
 
         float row_step_size = param.step_size;
+        float bias_correction2_sqrt_rcp = param.bias_correction2_sqrt_rcp;
         bool apply_step = true;
         bool touch = param.enabled && param.n_attributes > 0 &&
                      param.joint_packed != nullptr && param.joint_bounds != nullptr;
+        if (touch && param.row_steps != nullptr &&
+            primitive_idx < static_cast<uint>(param.n_primitives)) {
+            lfs::training::apply_row_bias_correction(
+                param.row_steps[primitive_idx], param.step, param.bias_correction1_rcp,
+                beta1, beta2, row_step_size, bias_correction2_sqrt_rcp);
+        }
         if (touch && param.frozen_mask != nullptr &&
             primitive_idx < static_cast<uint>(param.frozen_mask_size) &&
             param.frozen_mask[primitive_idx]) {
@@ -401,13 +409,13 @@ namespace fast_lfs::rasterization::kernels {
                             param.screen_share_limit,
                             param.screen_share_penalty,
                             mv.y,
-                            param.bias_correction2_sqrt_rcp,
+                            bias_correction2_sqrt_rcp,
                             eps);
                     }
                     m = beta1 * mv.x + (1.0f - beta1) * (grad + hinge);
                     v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
                     if (i < active) {
-                        const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;
+                        const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
                         param.param[base + i] -= row_step_size * m / denom;
                     }
                 }
@@ -871,6 +879,7 @@ namespace fast_lfs::rasterization::kernels {
         const uint n_value_cells = value_q16 ? static_cast<uint>(p.sh_value_n_cells) : 0u;
 
         float row_step_size = p.step_size;
+        float bias_correction2_sqrt_rcp = p.bias_correction2_sqrt_rcp;
         bool apply_step = true;
         bool touch = p.enabled && sh_layout_slots > 0u &&
                      p.joint_packed != nullptr && p.joint_bounds != nullptr;
@@ -879,6 +888,12 @@ namespace fast_lfs::rasterization::kernels {
         if (touch && p.n_primitives > 0 &&
             primitive_idx >= static_cast<uint>(p.n_primitives)) {
             touch = false;
+        }
+        if (touch && p.row_steps != nullptr &&
+            primitive_idx < static_cast<uint>(p.n_primitives)) {
+            lfs::training::apply_row_bias_correction(
+                p.row_steps[primitive_idx], p.step, p.bias_correction1_rcp,
+                fused_adam.beta1, fused_adam.beta2, row_step_size, bias_correction2_sqrt_rcp);
         }
         if (touch && p.frozen_mask != nullptr &&
             primitive_idx < static_cast<uint>(p.frozen_mask_size) &&
@@ -942,7 +957,7 @@ namespace fast_lfs::rasterization::kernels {
                             fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
-                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                        beta1, beta2, row_step_size, eps, bias_correction2_sqrt_rcp, pci);
                     if (c == 0)
                         pc.x = pci;
                     else if (c == 1)
@@ -1045,7 +1060,7 @@ namespace fast_lfs::rasterization::kernels {
                             fused_adam, p.n_primitives, k * 4u + static_cast<uint>(c), colour_reg_mask, pci, gci);
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
-                        beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
+                        beta1, beta2, row_step_size, eps, bias_correction2_sqrt_rcp, pci);
                     C::encode_us(p.joint_packed, cell, prim.x, prim.y,
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
                     // Always re-encode under new block bounds (frozen/crop-damped too),

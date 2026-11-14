@@ -644,6 +644,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::per_splat_bias_correction,
+                       "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
+                       "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")
+            .locale("training.advanced.per_splat_bias_correction")
+            .tooltip("training.tooltip.per_splat_bias_correction")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

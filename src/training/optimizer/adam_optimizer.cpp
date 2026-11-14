@@ -17,6 +17,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/ray_depth_step.cuh"
+#include "lfs/training/row_bias_correction.cuh"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
@@ -394,6 +395,11 @@ namespace lfs::training {
 
         fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
         int n_entries = 0;
+        sync_row_steps();
+        const std::int32_t* const row_steps =
+            per_splat_bias_correction_ && row_steps_.is_valid() && row_steps_.numel() > 0
+                ? row_steps_.ptr<std::int32_t>()
+                : nullptr;
         cudaStream_t batch_stream = nullptr;
         const float* batch_mean_step_scale_raw = nullptr;
         int batch_mean_step_scale_n = 0;
@@ -452,6 +458,8 @@ namespace lfs::training {
             e.lr = param_lr;
             e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
             e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            e.row_steps = row_steps;
+            e.step = static_cast<int>(std::min<int64_t>(state.step_count, std::numeric_limits<int>::max()));
             if (type == ParamType::Means && per_splat_mean_step_) {
                 auto& scaling = splat_data_.scaling_raw();
                 if (scaling.is_valid() && scaling.numel() > 0) {
@@ -482,6 +490,10 @@ namespace lfs::training {
             }
             if (crop_damping_mask_.is_valid()) {
                 crop_damping_mask_.sync_to_stream(batch_stream);
+            }
+            if (row_steps != nullptr) {
+                lfs::core::waitForCUDAStream(batch_stream, row_steps_.stream());
+                row_steps_.set_stream(batch_stream);
             }
             fast_lfs::optimizer::RayDepthStepArgs ray_depth;
             bool ray_depth_proposed = false;
@@ -535,7 +547,11 @@ namespace lfs::training {
             if (ray_depth_proposed)
                 fast_lfs::optimizer::ray_depth_commit(ray_depth, batch_stream);
         }
-        step_param(ParamType::ShN, iteration, apply_sh_warmup);
+        const bool shN_stepped = step_param(ParamType::ShN, iteration, apply_sh_warmup);
+        // The counters advance once per step, after every group has read them.
+        if (row_steps != nullptr && (n_entries > 0 || shN_stepped)) {
+            advance_row_steps(row_steps_.stream());
+        }
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -851,14 +867,14 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_param(ParamType type, const int iteration, const bool apply_sh_warmup) {
+    bool AdamOptimizer::step_param(ParamType type, const int iteration, const bool apply_sh_warmup) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
-            return;
+            return false;
         }
         if (type == ParamType::ShN &&
             ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0)) {
-            return;
+            return false;
         }
 
         const auto name = param_name(type);
@@ -869,7 +885,7 @@ namespace lfs::training {
         auto& state = states_[name];
         if (!state.grad.is_valid() || state.grad.numel() == 0 ||
             !state.exp_avg.is_valid() || state.exp_avg.numel() == 0) {
-            return;
+            return false;
         }
 
         state.step_count++;
@@ -898,6 +914,13 @@ namespace lfs::training {
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
+        const std::int32_t* row_steps = nullptr;
+        if (per_splat_bias_correction_ && row_steps_.is_valid() && row_steps_.numel() > 0) {
+            lfs::core::waitForCUDAStream(execution_stream, row_steps_.stream());
+            row_steps_.set_stream(execution_stream);
+            row_steps = row_steps_.ptr<std::int32_t>();
+        }
+        const int row_step = static_cast<int>(std::min<int64_t>(state.step_count, std::numeric_limits<int>::max()));
 
         // Contiguous params use adam_step_joint_contiguous_raw. shN uses the
         // standalone joint kernel that shares apply_shN_grads_packed_joint with FastGS.
@@ -962,12 +985,15 @@ namespace lfs::training {
                     static_cast<float>(config_.beta2),
                     static_cast<float>(config_.eps),
                     static_cast<float>(bias_correction2_sqrt_rcp),
-                    execution_stream);
+                    execution_stream,
+                    row_steps,
+                    row_step,
+                    static_cast<float>(bias_correction1_rcp));
                 param_live.set_stream(execution_stream);
                 state.exp_avg.set_stream(execution_stream);
                 state.joint_bounds.set_stream(execution_stream);
                 state.grad.set_stream(execution_stream);
-                return;
+                return true;
             }
             if (!state.joint_bounds.is_valid()) {
                 throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
@@ -1011,12 +1037,14 @@ namespace lfs::training {
                 share_max,
                 share_n,
                 share_limit,
-                share_penalty);
+                share_penalty,
+                row_steps,
+                row_step);
             param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
             state.grad.set_stream(execution_stream);
-            return;
+            return true;
         }
 
         throw std::runtime_error(
@@ -1033,6 +1061,16 @@ namespace lfs::training {
         }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
+        }
+
+        sync_row_steps();
+        const std::int32_t* row_steps = nullptr;
+        if (per_splat_bias_correction_ && row_steps_.is_valid() && row_steps_.numel() > 0) {
+            if (execution_stream != nullptr) {
+                lfs::core::waitForCUDAStream(execution_stream, row_steps_.stream());
+                row_steps_.set_stream(execution_stream);
+            }
+            row_steps = row_steps_.ptr<std::int32_t>();
         }
 
         FastGSFusedAdamState fused;
@@ -1194,6 +1232,9 @@ namespace lfs::training {
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
             out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            out.row_steps = row_steps;
+            out.step = static_cast<int>(std::min<int64_t>(next_step, std::numeric_limits<int>::max()));
+            out.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
             out.enabled = true;
             return out;
         };
@@ -1249,7 +1290,7 @@ namespace lfs::training {
         return fused;
     }
 
-    void AdamOptimizer::commit_fastgs_fused_adam(const int iteration) {
+    void AdamOptimizer::commit_fastgs_fused_adam(const int iteration, const cudaStream_t stream) {
         // Only bump step_count for parameters that prepare_fastgs_fused_adam
         // actually enabled this iteration. During SH warmup prepare disables shN
         // but the old commit still advanced its counter → first real shN update
@@ -1272,6 +1313,9 @@ namespace lfs::training {
                 state.step_count++;
             }
         }
+        if (per_splat_bias_correction_ && row_steps_.is_valid() && row_steps_.numel() > 0) {
+            advance_row_steps(stream != nullptr ? stream : row_steps_.stream());
+        }
         fused_step_iteration_ = iteration;
         last_step_zeroed_gradients_ = true;
     }
@@ -1279,6 +1323,16 @@ namespace lfs::training {
     void AdamOptimizer::reset_state_at_indices(ParamType type, const std::vector<int64_t>& indices) {
         if (indices.empty())
             return;
+
+        if (per_splat_bias_correction_) {
+            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            int64_t* d_rows = nullptr;
+            const size_t bytes = indices.size() * sizeof(int64_t);
+            LFS_CUDA_CHECK(cudaMallocAsync(&d_rows, bytes, stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(d_rows, indices.data(), bytes, cudaMemcpyHostToDevice, stream));
+            zero_row_steps_at(d_rows, indices.size(), stream);
+            LFS_CUDA_CHECK(cudaFreeAsync(d_rows, stream));
+        }
 
         const auto name = param_name(type);
         if (!states_.contains(name))
@@ -1388,6 +1442,14 @@ namespace lfs::training {
         if (n_new == 0)
             return;
 
+        // The gathered rows copy their sources' moments, so they copy the counters too.
+        if (per_splat_bias_correction_ && row_steps_.is_valid() &&
+            row_steps_.numel() + n_new == static_cast<size_t>(splat_data_.size())) {
+            if (row_steps_.capacity() < row_steps_.numel() + n_new)
+                reserve_tensor_rows(row_steps_, std::max(row_steps_.numel() + n_new, config_.initial_capacity));
+            row_steps_.append_gather(indices);
+        }
+
         auto& param = get_param(type);
         auto& state = states_[name];
         const size_t new_size = state.size + n_new;
@@ -1489,6 +1551,8 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::extend_state_for_new_params(ParamType type, const size_t n_new) {
+        // Appended rows start with zero moments: their counters start at 0.
+        sync_row_steps();
         const auto name = param_name(type);
         if (!states_.contains(name)) {
             LOG_DEBUG("extend_state_for_new_params({}): state not found, skipping", name);
@@ -1652,6 +1716,99 @@ namespace lfs::training {
         throw std::runtime_error(
             "extend_state_for_new_params: non-joint Adam state is unsupported "
             "(joint (u,log_s) is the only codec)");
+    }
+
+    void AdamOptimizer::set_per_splat_bias_correction(const bool enabled) {
+        per_splat_bias_correction_ = enabled;
+        if (!enabled) {
+            row_steps_ = {};
+            return;
+        }
+        sync_row_steps();
+    }
+
+    void AdamOptimizer::sync_row_steps() {
+        if (!per_splat_bias_correction_)
+            return;
+        const auto& means = splat_data_.means();
+        const size_t n = means.is_valid() && means.ndim() > 0 ? means.shape()[0] : 0;
+        const bool usable = row_steps_.is_valid() && row_steps_.ndim() == 1 &&
+                            row_steps_.dtype() == lfs::core::DataType::Int32 &&
+                            row_steps_.device() == lfs::core::Device::CUDA;
+        if (usable && row_steps_.numel() == n)
+            return;
+        if (usable && row_steps_.numel() < n) {
+            if (row_steps_.capacity() < n)
+                reserve_tensor_rows(row_steps_, std::max(n, config_.initial_capacity));
+            row_steps_.append_zeros(n - row_steps_.numel());
+            return;
+        }
+        if (usable)
+            LOG_DEBUG("AdamOptimizer: {} per-splat step counters for {} rows; restarting them saturated",
+                      row_steps_.numel(), n);
+        row_steps_ = {};
+        if (n == 0)
+            return;
+        row_steps_ = lfs::core::Tensor::zeros_direct(lfs::core::TensorShape({n}), std::max(n, config_.initial_capacity),
+                                                     lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+        row_steps_.set_name("adam.row_steps");
+        fast_lfs::optimizer::row_steps_fill(row_steps_.ptr<std::int32_t>(), static_cast<int>(n),
+                                            kRowStepSaturation, row_steps_.stream());
+    }
+
+    void AdamOptimizer::zero_row_steps_at(const int64_t* indices_device, const size_t n_indices,
+                                          const cudaStream_t stream) {
+        if (!per_splat_bias_correction_ || n_indices == 0)
+            return;
+        sync_row_steps();
+        if (!row_steps_.is_valid() || row_steps_.numel() == 0)
+            return;
+        lfs::core::waitForCUDAStream(stream, row_steps_.stream());
+        fast_lfs::optimizer::row_steps_zero_at_indices(
+            row_steps_.ptr<std::int32_t>(), static_cast<int>(row_steps_.numel()),
+            indices_device, static_cast<int>(n_indices), stream);
+        row_steps_.set_stream(stream);
+    }
+
+    void AdamOptimizer::advance_row_steps(const cudaStream_t stream) {
+        if (!row_steps_.is_valid() || row_steps_.numel() == 0)
+            return;
+        lfs::core::waitForCUDAStream(stream, row_steps_.stream());
+        if (frozen_mask_.is_valid())
+            lfs::core::waitForCUDAStream(stream, frozen_mask_.stream());
+        if (crop_damping_mask_.is_valid())
+            crop_damping_mask_.sync_to_stream(stream);
+        fast_lfs::optimizer::row_steps_advance(
+            row_steps_.ptr<std::int32_t>(), static_cast<int>(row_steps_.numel()),
+            frozen_mask_ptr(), frozen_mask_size(), frozen_lr_scale_,
+            crop_damping_mask_ptr(), crop_damping_mask_size(), cropbox_lr_scale_, stream);
+        row_steps_.set_stream(stream);
+    }
+
+    void AdamOptimizer::restart_row_steps() {
+        if (!per_splat_bias_correction_)
+            return;
+        row_steps_ = {};
+        const size_t n = static_cast<size_t>(splat_data_.size());
+        if (n == 0)
+            return;
+        row_steps_ = lfs::core::Tensor::zeros_direct(lfs::core::TensorShape({n}), std::max(n, config_.initial_capacity),
+                                                     lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+        row_steps_.set_name("adam.row_steps");
+    }
+
+    void AdamOptimizer::restart_row_steps_at(const lfs::core::Tensor& indices) {
+        if (!per_splat_bias_correction_ || !indices.is_valid() || indices.numel() == 0)
+            return;
+        LFS_ASSERT_MSG(indices.ndim() == 1 && indices.device() == lfs::core::Device::CUDA,
+                       "restart_row_steps_at: indices must be a 1D CUDA tensor");
+        auto rows = indices.dtype() == lfs::core::DataType::Int64 ? indices : indices.to(lfs::core::DataType::Int64);
+        if (!rows.is_contiguous())
+            rows = rows.contiguous();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::waitForCUDAStream(stream, rows.stream());
+        zero_row_steps_at(rows.ptr<int64_t>(), rows.numel(), stream);
+        rows.set_stream(stream);
     }
 
     size_t AdamOptimizer::compute_new_capacity(const size_t current_capacity, const size_t required_size) const {
@@ -1989,6 +2146,7 @@ namespace lfs::training {
     void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, const size_t n_indices) {
         if (n_indices == 0)
             return;
+        zero_row_steps_at(indices_device, n_indices, lfs::core::getCurrentCUDAStream());
 
         const auto name = param_name(type);
         if (!states_.contains(name))
@@ -2058,11 +2216,15 @@ namespace lfs::training {
         // v2: uint8 quantised moments + per-primitive fp32 scales (legacy codec only).
         // v3: per-state joint_bits marker; joint packs (exp_avg + joint_bounds), legacy keeps v2 tensors.
         constexpr uint32_t ADAM_STATE_VERSION = 3;
+        // v4: v3 followed by the per-splat step counters; written only when they are on.
+        constexpr uint32_t ADAM_STATE_VERSION_ROW_STEPS = 4;
     } // namespace
 
     void AdamOptimizer::serialize(std::ostream& os) const {
+        const bool with_row_steps = per_splat_bias_correction_;
+        const uint32_t version = with_row_steps ? ADAM_STATE_VERSION_ROW_STEPS : ADAM_STATE_VERSION;
         os.write(reinterpret_cast<const char*>(&ADAM_STATE_MAGIC), sizeof(ADAM_STATE_MAGIC));
-        os.write(reinterpret_cast<const char*>(&ADAM_STATE_VERSION), sizeof(ADAM_STATE_VERSION));
+        os.write(reinterpret_cast<const char*>(&version), sizeof(version));
 
         os.write(reinterpret_cast<const char*>(&config_.lr), sizeof(config_.lr));
         os.write(reinterpret_cast<const char*>(&config_.beta1), sizeof(config_.beta1));
@@ -2106,6 +2268,13 @@ namespace lfs::training {
             os.write(reinterpret_cast<const char*>(&joint_bits), sizeof(joint_bits));
             os << state.exp_avg << state.joint_bounds;
         }
+        if (with_row_steps) {
+            const uint8_t has_row_steps =
+                row_steps_.is_valid() && row_steps_.numel() == static_cast<size_t>(splat_data_.size()) ? 1 : 0;
+            os.write(reinterpret_cast<const char*>(&has_row_steps), sizeof(has_row_steps));
+            if (has_row_steps)
+                os << row_steps_;
+        }
         LOG_DEBUG("Serialized AdamOptimizer: {} states", num_states);
     }
 
@@ -2118,7 +2287,7 @@ namespace lfs::training {
         if (magic != ADAM_STATE_MAGIC) {
             throw std::runtime_error("Invalid AdamOptimizer checkpoint");
         }
-        if (version < 1 || version > ADAM_STATE_VERSION) {
+        if (version < 1 || version > ADAM_STATE_VERSION_ROW_STEPS) {
             throw std::runtime_error("Unsupported checkpoint version");
         }
 
@@ -2287,6 +2456,23 @@ namespace lfs::training {
             loaded_states.emplace(std::move(name), std::move(state));
         }
 
+        lfs::core::Tensor loaded_row_steps;
+        if (version >= ADAM_STATE_VERSION_ROW_STEPS) {
+            uint8_t has_row_steps = 0;
+            lfs::core::serialization_detail::read_exact(
+                is, &has_row_steps, sizeof(has_row_steps), "Adam per-splat step counter flag");
+            if (has_row_steps > 1)
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: step counter flag must be boolean");
+            if (has_row_steps) {
+                is >> loaded_row_steps;
+                if (!loaded_row_steps.is_valid() || loaded_row_steps.dtype() != lfs::core::DataType::Int32 ||
+                    loaded_row_steps.ndim() != 1 ||
+                    loaded_row_steps.numel() != static_cast<size_t>(splat_data_.size())) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: step counters do not match model");
+                }
+            }
+        }
+
         const auto cpu_decode_finished = std::chrono::steady_clock::now();
         // Tensor::to(CUDA, stream) rehomes onto that handle; do not destroy it.
         cudaStream_t upload_stream = lfs::core::getCurrentCUDAStream();
@@ -2307,6 +2493,10 @@ namespace lfs::training {
             upload(state.exp_avg);
             upload(state.joint_bounds);
         }
+        if (loaded_row_steps.is_valid() && loaded_row_steps.device() != lfs::core::Device::CUDA) {
+            loaded_row_steps = upload_stream != nullptr ? loaded_row_steps.to(lfs::core::Device::CUDA, upload_stream)
+                                                        : loaded_row_steps.to(lfs::core::Device::CUDA);
+        }
         if (upload_stream != nullptr) {
             LFS_CUDA_CHECK(cudaStreamSynchronize(upload_stream));
         }
@@ -2314,6 +2504,10 @@ namespace lfs::training {
 
         config_ = std::move(loaded_config);
         states_ = std::move(loaded_states);
+        // Without saved counters the rows restart saturated (group correction) on the next sync.
+        row_steps_ = std::move(loaded_row_steps);
+        if (row_steps_.is_valid())
+            row_steps_.set_name("adam.row_steps");
 
         // Gradient buffers are transient and allocated lazily by get_grad().
         const auto milliseconds = [](const auto begin, const auto end) {
@@ -2334,6 +2528,7 @@ namespace lfs::training {
         config_ = std::move(loaded.config_);
         states_ = std::move(loaded.states_);
         frozen_lr_scale_ = loaded.frozen_lr_scale_;
+        row_steps_ = std::move(loaded.row_steps_);
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
@@ -2376,6 +2571,8 @@ namespace lfs::training {
                     reserve_tensor_rows(state.joint_bounds, bounds_cap);
             }
         }
+        if (row_steps_.is_valid() && capacity > 0)
+            reserve_tensor_rows(row_steps_, capacity);
     }
 
     void AdamOptimizer::reset_state(const ParamType type) {

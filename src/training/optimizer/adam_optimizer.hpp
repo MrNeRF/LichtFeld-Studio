@@ -94,6 +94,10 @@ namespace lfs::training {
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
+        // Per-splat bias correction; null when off (see AdamOptimizer::row_steps).
+        const std::int32_t* row_steps = nullptr;
+        int step = 0;
+        float bias_correction1_rcp = 1.0f;
         bool enabled = false;
         const float* screen_share_max = nullptr;
         int screen_share_n = 0;
@@ -132,7 +136,27 @@ namespace lfs::training {
         // Post-training refinement can update resident SH coefficients immediately.
         void step(int iteration, bool apply_sh_warmup = true);
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
-        void commit_fastgs_fused_adam(int iteration);
+        // `stream` is where the fused step ran; the per-splat step counters advance there.
+        void commit_fastgs_fused_adam(int iteration, cudaStream_t stream = nullptr);
+
+        // Per-splat bias correction (experiment, off by default). Adam bias-corrects with one step
+        // count per parameter group, so a row whose moments restart (densify reset, growth append,
+        // compaction) late in training takes steps of several times the learning rate for hundreds
+        // of steps. When on, every splat counts the steps since its moments last restarted
+        // (row_steps: CUDA int32 [N], saturating at kRowStepSaturation) and is corrected with
+        // 1 - beta^t for its own t; rows that never restarted keep the group correction exactly.
+        // One counter serves all six groups: every strategy restarts a row's six groups together.
+        // Rows present when it is switched on, and rows of a checkpoint without counters, start
+        // saturated (group correction).
+        void set_per_splat_bias_correction(bool enabled);
+        [[nodiscard]] bool per_splat_bias_correction() const noexcept { return per_splat_bias_correction_; }
+        [[nodiscard]] const lfs::core::Tensor& row_steps() const noexcept { return row_steps_; }
+        // Morton reorder permutes the counters with the rows.
+        [[nodiscard]] lfs::core::Tensor& row_steps_mutable() noexcept { return row_steps_; }
+        // The moments of every row were zeroed (MRNF compaction): all counters restart.
+        void restart_row_steps();
+        // The rows at `indices` (CUDA int64) hold restarted moments, e.g. children placed in free slots.
+        void restart_row_steps_at(const lfs::core::Tensor& indices);
         void set_frozen_mask(lfs::core::Tensor mask);
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
         void set_frozen_lr_scale(float scale);
@@ -268,12 +292,20 @@ namespace lfs::training {
         bool collect_projected_screen_share_ = false;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
+        bool per_splat_bias_correction_ = false;
+        lfs::core::Tensor row_steps_;
+
+        // Sizes row_steps_ to the splat count: rows appended since the last call start at 0
+        // (their moments are fresh), a missing or longer table restarts saturated.
+        void sync_row_steps();
+        void zero_row_steps_at(const int64_t* indices_device, size_t n_indices, cudaStream_t stream);
+        void advance_row_steps(cudaStream_t stream);
 
         lfs::core::Tensor& get_param(ParamType type);
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_param(ParamType type, int iteration, bool apply_sh_warmup);
+        bool step_param(ParamType type, int iteration, bool apply_sh_warmup);
         void validate_mean_step_far_mask();
         [[nodiscard]] bool ray_depth_bound();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;

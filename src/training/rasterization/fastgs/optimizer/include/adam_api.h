@@ -23,6 +23,10 @@ namespace fast_lfs::optimizer {
         int apply_mean_step = 0;
         // screen-share hinge applies to this entry (Scaling only)
         int apply_screen_share = 0;
+        // Per-splat bias correction (lfs/training/row_bias_correction.cuh): steps since each
+        // row's moments restarted and this update's group step; null when off.
+        const std::int32_t* row_steps = nullptr;
+        int step = 0;
     };
 
     // Ray-depth coordinate around the unfused Adam step (lfs/training/ray_depth_step.cuh).
@@ -85,7 +89,9 @@ namespace fast_lfs::optimizer {
         const float* screen_share_max = nullptr,
         int screen_share_n = 0,
         float screen_share_limit = 0.0f,
-        float screen_share_penalty = 0.0f);
+        float screen_share_penalty = 0.0f,
+        const std::int32_t* row_steps = nullptr,
+        int step = 0);
 
     // One launch over a fixed-size value batch of contiguous joint params
     // (means/sh0/scale/rot/opa).
@@ -139,7 +145,23 @@ namespace fast_lfs::optimizer {
         float beta2,
         float eps,
         float bias_correction2_sqrt_rcp,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const std::int32_t* row_steps = nullptr,
+        int step = 0,
+        float bias_correction1_rcp = 1.0f);
+
+    // Per-splat step counters for the per-splat bias correction (int32 [n]).
+    void row_steps_fill(std::int32_t* steps, int n, std::int32_t value, cudaStream_t stream = nullptr);
+    // Restart the rows at `indices` (int64, device): their moments were zeroed.
+    void row_steps_zero_at_indices(std::int32_t* steps, int n, const std::int64_t* indices, int n_indices,
+                                   cudaStream_t stream = nullptr);
+    // One optimizer step: every row whose moments were updated advances, saturating at
+    // kRowStepSaturation. Rows held at zero learning rate by the frozen or crop masks keep
+    // their moments and their count.
+    void row_steps_advance(std::int32_t* steps, int n,
+                           const bool* frozen_mask, int frozen_mask_size, float frozen_lr_scale,
+                           const bool* crop_damping_mask, int crop_damping_mask_size, float cropbox_lr_scale,
+                           cudaStream_t stream = nullptr);
 
     // Joint (u,log_s) densify reset: encode true (m,v)=(0,0). Widens block
     // bounds to include 0 when needed and re-encodes the block.
