@@ -1430,6 +1430,7 @@ namespace lfs::io {
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::load_cached_jpeg_blob(
         const std::string& cache_key, const LoadParams& params) {
+        relieve_host_memory_pressure();
         return params.skip_blob_cache ? nullptr : get_from_jpeg_cache(cache_key);
     }
 
@@ -1724,7 +1725,6 @@ namespace lfs::io {
     }
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::get_from_jpeg_cache(const std::string& cache_key) {
-        relieve_host_memory_pressure();
         std::filesystem::path spill_path;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
@@ -3279,12 +3279,13 @@ namespace lfs::io {
                     }
 
                     // The first visit must use the same bytes as every cache visit.
+                    const bool cache_mask = item.is_mask && !item.params.skip_blob_cache && is_nvcodec_available();
                     auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(
-                                                         aux_tensor, is_nvcodec_available() || share_processed_mask_source)
+                                                         aux_tensor, cache_mask || share_processed_mask_source)
                                                    : lfs::core::Tensor{};
                     if (share_processed_mask_source)
                         item.mask_source_promise->set_value(mask_bytes);
-                    if (item.is_mask && !item.params.skip_blob_cache && is_nvcodec_available()) {
+                    if (cache_mask) {
                         try {
                             auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(mask_bytes, nullptr, true, true);
                             put_in_jpeg_cache(item.cache_key,
