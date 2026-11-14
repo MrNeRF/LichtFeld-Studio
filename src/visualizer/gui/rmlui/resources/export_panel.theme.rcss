@@ -1,7 +1,8 @@
 /* Export panel theme overrides. */
 
 .ep-section-title {
-    color: @{primary};
+    color: @{text};
+    background-color: @{alpha(text,0.04)};
 }
 
 .ep-format-option:hover {
@@ -27,7 +28,8 @@
 }
 
 .ep-model-count,
-.ep-no-models,
+.ep-format-description,
+.ep-empty-hint,
 .ep-stage-text {
     color: @{text_dim};
 }
@@ -40,4 +42,21 @@
 
 .ep-error {
     color: @{error};
+}
+
+.ep-model-header {
+    background-color: @{alpha(text,0.04)};
+}
+
+.ep-model-list,
+.export-panel .ep-buttons {
+    border-color: @{border};
+}
+
+.ep-empty-title {
+    color: @{text};
+}
+
+.ep-model-header .ep-section-title {
+    background-color: transparent;
 }
