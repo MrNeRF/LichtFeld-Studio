@@ -22,16 +22,18 @@ namespace lfs::python {
     };
 } // namespace lfs::python
 
-namespace nanobind {
+// nanobind >= 2.2 (the nb::ndarray_traits<T> interface was removed in nanobind 3).
+namespace nanobind::detail {
     template <>
-    struct ndarray_traits<lfs::python::NumpyFloat16> {
-        static constexpr bool is_complex = false;
-        static constexpr bool is_float = true;
-        static constexpr bool is_bool = false;
-        static constexpr bool is_int = false;
-        static constexpr bool is_signed = false;
+    struct dtype_traits<lfs::python::NumpyFloat16> {
+        static constexpr dlpack::dtype value{
+            static_cast<uint8_t>(dlpack::dtype_code::Float),
+            16, // bits
+            1   // lanes
+        };
+        static constexpr auto name = const_name("float16");
     };
-} // namespace nanobind
+} // namespace nanobind::detail
 
 namespace nb = nanobind;
 

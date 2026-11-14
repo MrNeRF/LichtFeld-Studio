@@ -1,0 +1,8 @@
+module(
+    name = "taywee_args",
+    version = "6.4.8",
+    bazel_compatibility = [">=7.2.1"],
+    compatibility_level = 6,
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.28")

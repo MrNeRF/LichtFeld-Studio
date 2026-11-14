@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.3.0.tar.gz",
+    "integrity": "sha256-xPa75rWkXC62EMqdIxFY4xMIbVsaQMmSLLQrWXQZsU4=",
+    "strip_prefix": "VulkanMemoryAllocator-3.3.0",
+    "overlay": {
+        "BUILD.bazel": "sha256-y3b9rdHViX5cCWsdwe9cb3ezFq62gteZrefC+JZewdk="
+    }
+}

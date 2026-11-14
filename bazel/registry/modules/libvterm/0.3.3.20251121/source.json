@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/neovim/libvterm/archive/934bc2fbf21800ac3458a499df8820ca5fb45fd3.tar.gz",
+    "integrity": "sha256-8JUl6yoCZ5vg61C8HClFaejLqktZ+4Z9YGI23igwBF8=",
+    "strip_prefix": "libvterm-934bc2fbf21800ac3458a499df8820ca5fb45fd3",
+    "overlay": {
+        "BUILD.bazel": "sha256-rj7vuwHTB/jmQL+Yd7zehVkIrhojDXi9z/QN8DiDsm8="
+    }
+}

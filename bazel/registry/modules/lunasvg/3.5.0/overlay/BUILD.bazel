@@ -1,0 +1,59 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+# Mirrors the upstream CMake option LUNASVG_DISABLE_LOAD_SYSTEM_FONTS (meson: load-system-fonts).
+# Upstream default: enabled (system fonts are loaded through plutovg's font face cache, see
+# @plutovg//:font_face_cache_load).
+bool_flag(
+    name = "load_system_fonts",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "load_system_fonts_disabled",
+    flag_values = {":load_system_fonts": "False"},
+    visibility = ["//visibility:private"],
+)
+
+# lunasvg requires C++17 or newer (the default of rules_cc's auto-configured toolchains).
+# The plutovg copy bundled in the source archive is not used; @plutovg is used instead
+# (upstream CMake: USE_SYSTEM_PLUTOVG=ON, as in vcpkg).
+cc_library(
+    name = "lunasvg",
+    srcs = [
+        "source/graphics.cpp",
+        "source/graphics.h",
+        "source/lunasvg.cpp",
+        "source/svgelement.cpp",
+        "source/svgelement.h",
+        "source/svggeometryelement.cpp",
+        "source/svggeometryelement.h",
+        "source/svglayoutstate.cpp",
+        "source/svglayoutstate.h",
+        "source/svgpaintelement.cpp",
+        "source/svgpaintelement.h",
+        "source/svgparser.cpp",
+        "source/svgparserutils.h",
+        "source/svgproperty.cpp",
+        "source/svgproperty.h",
+        "source/svgrenderstate.cpp",
+        "source/svgrenderstate.h",
+        "source/svgtextelement.cpp",
+        "source/svgtextelement.h",
+    ],
+    hdrs = ["include/lunasvg.h"],
+    # Static library: LUNASVG_BUILD_STATIC turns LUNASVG_API into nothing for the library and its users.
+    defines = ["LUNASVG_BUILD_STATIC"],
+    includes = ["include"],
+    local_defines = ["LUNASVG_BUILD"] + select({
+        ":load_system_fonts_disabled": ["LUNASVG_DISABLE_LOAD_SYSTEM_FONTS"],
+        "//conditions:default": [],
+    }),
+    deps = ["@plutovg"],
+)

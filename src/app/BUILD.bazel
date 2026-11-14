@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The LichtFeld Studio executable (CMake: add_executable(${PROJECT_NAME} ...)).
+# The runnable application with all runtime files is //:LichtFeld-Studio.
+
+load("//bazel:lfs.bzl", "lfs_cc_binary", "lfs_cuda_min_sm")
+load("//bazel/windows:resources.bzl", "lfs_windows_version_resource")
+
+package(default_visibility = ["//:__subpackages__"])
+
+lfs_cuda_min_sm(name = "cuda_min_sm")
+
+lfs_windows_version_resource(
+    name = "version",
+    description = "LichtFeld Studio",
+    executable = True,
+    filename = "LichtFeld-Studio.exe",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+lfs_cc_binary(
+    name = "LichtFeld-Studio",
+    srcs = glob([
+        "*.cpp",
+        "*.hpp",
+        "include/app/*.hpp",
+    ]),
+    additional_linker_inputs = ["//resources:lichtfeld-studio.manifest"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:windows": [
+            "/MANIFEST:EMBED",
+            "/MANIFESTINPUT:$(execpath //resources:lichtfeld-studio.manifest)",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":cuda_min_sm",
+        ":version",
+        "//bazel/deps:sdl3",
+        "//bazel/deps:vulkan",
+        "//resources:app_icon",
+        "//src:generated_headers",
+        "//src/core:core_abi_stamp",
+        "//src/core:lfs_core",
+        "//src/geometry:lfs_geometry",
+        "//src/io:lfs_io",
+        "//src/io:lfs_video",
+        "//src/mcp:lfs_mcp",
+        "//src/preprocessing:lfs_preprocessing",
+        "//src/python:lfs_python_runtime",
+        "//src/rendering:lfs_rendering",
+        "//src/sequencer:lfs_sequencer",
+        "//src/tcp:lfs_tcp",
+        "//src/training:fastlfs_backend",
+        "//src/training:lfs_training",
+        "//src/visualizer:lfs_visualizer",
+        "@cuda//:cuda_runtime",
+        "@cuda//:curand",
+        "@spdlog",
+        "@taywee_args//:args",
+        "@vulkan_memory_allocator",
+    ],
+)

@@ -1,0 +1,48 @@
+Build apriltag with MSVC: GCC/Clang-only warning flags, -std=gnu99 and -pthread
+are not understood by cl.exe (the BCR presubmit does not cover Windows).
+Also expose the headers in the installed layout (<apriltag/apriltag.h>).
+
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -34,14 +34,20 @@
+     srcs = glob(["includes/common/*.c", "srcs/*.c"], exclude=["srcs/apriltag_pywrap.c"]),
+     includes = ["includes"],
+     copts = select({
++        "@rules_cc//cc/compiler:msvc-cl": [],
+         "@rules_cc//cc/compiler:clang": COMMON_WARNINGS + CLANG_ONLY_WARNINGS + ["-Werror", "-std=gnu99"],
+         "//conditions:default": COMMON_WARNINGS + ["-Werror", "-std=gnu99"],
+     }),
+     linkopts =  select({
+-        "@rules_cc//cc/compiler:clang": ["-Wl,-z,relro,-z,now,-z,defs"],
+-        "//conditions:default": [],
+-    }) + ["-pthread"],
++        "@rules_cc//cc/compiler:msvc-cl": [],
++        "@rules_cc//cc/compiler:clang": ["-Wl,-z,relro,-z,now,-z,defs", "-pthread"],
++        "//conditions:default": ["-pthread"],
++    }),
+     local_defines = select({
++        "@rules_cc//cc/compiler:msvc-cl": [
++            "_CRT_SECURE_NO_WARNINGS",
++            "_CRT_NONSTDC_NO_DEPRECATE",
++        ],
+         "@rules_cc//cc/compiler:clang": [
+             "_CRT_SECURE_NO_WARNINGS",
+             "_CRT_NONSTDC_NO_DEPRECATE",
+@@ -49,6 +55,17 @@
+         "//conditions:default": [],
+     }),
+     visibility = ["//visibility:public"],
++)
++
++# Headers in the layout of an installed apriltag (CMake/vcpkg): <apriltag/apriltag.h>,
++# <apriltag/common/matd.h>, ...
++cc_library(
++    name = "apriltag_installed_layout",
++    hdrs = glob(["includes/**/*.h"]),
++    include_prefix = "apriltag",
++    strip_include_prefix = "includes",
++    visibility = ["//visibility:public"],
++    deps = [":apriltag"],
+ )
+ 
+ _TEST_SRCS = ["test/test_detection.c", "test/getline.h", "test/getline.c"]

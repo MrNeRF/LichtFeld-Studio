@@ -10,12 +10,28 @@
 
 #include <nanobind/nanobind.h>
 
+#include <type_traits>
+
 namespace nb = nanobind;
 
 namespace lfs::python::openmesh_bindings {
 
+    // Plain handle type of a (deprecated) circulator: ValueHandle in current
+    // OpenMesh (value_type is the smart handle there), value_type in OpenMesh 11.0.
+    template <class Circulator, class = void>
+    struct CirculatorValueHandle {
+        using type = typename Circulator::value_type;
+    };
+
+    template <class Circulator>
+    struct CirculatorValueHandle<Circulator, std::void_t<typename Circulator::ValueHandle>> {
+        using type = typename Circulator::ValueHandle;
+    };
+
     template <class Circulator, class CenterEntityHandle>
     class CirculatorWrapperT {
+        using ValueHandle = typename CirculatorValueHandle<Circulator>::type;
+
     public:
         CirculatorWrapperT(PolyMesh& _mesh, CenterEntityHandle _center)
             : circulator_(_mesh, _center) {}
@@ -25,9 +41,9 @@ namespace lfs::python::openmesh_bindings {
 
         CirculatorWrapperT iter() const { return *this; }
 
-        typename Circulator::ValueHandle next() {
+        ValueHandle next() {
             if (circulator_.is_valid()) {
-                typename Circulator::ValueHandle res((*circulator_).idx());
+                ValueHandle res((*circulator_).idx());
                 ++circulator_;
                 return res;
             }

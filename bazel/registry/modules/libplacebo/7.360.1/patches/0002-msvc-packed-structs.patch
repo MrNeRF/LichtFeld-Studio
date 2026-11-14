@@ -1,0 +1,43 @@
+MSVC: use PL_PACKED* instead of __attribute__((__packed__)).
+
+Packing matters: pl_cache's on-disk headers must stay unpadded, and the GLSL
+preprocessor's argument structs are hashed byte-wise by pl_str_builder_hash(),
+so padding bytes would make shader signatures nondeterministic. The macros
+expand to the original attribute on GCC/Clang and to #pragma pack on MSVC.
+
+diff --git a/src/cache.c b/src/cache.c
+--- a/src/cache.c
++++ b/src/cache.c
+@@ -284,17 +284,19 @@
+ #define CACHE_VERSION 1
+ #define PAD_ALIGN(x)  PL_ALIGN2(x, sizeof(uint32_t))
+ 
+-struct __attribute__((__packed__)) cache_header {
++PL_PACKED_BEGIN
++struct PL_PACKED cache_header {
+     char     magic[8] PL_NONSTRING;
+     uint32_t version;
+     uint32_t num_entries;
+ };
+ 
+-struct __attribute__((__packed__)) cache_entry {
++struct PL_PACKED cache_entry {
+     uint64_t key;
+     uint64_t size;
+     uint64_t hash;
+ };
++PL_PACKED_END
+ 
+ pl_static_assert(sizeof(struct cache_header) % alignof(struct cache_entry) == 0);
+ 
+diff --git a/tools/glsl_preproc/templates/struct.c.j2 b/tools/glsl_preproc/templates/struct.c.j2
+--- a/tools/glsl_preproc/templates/struct.c.j2
++++ b/tools/glsl_preproc/templates/struct.c.j2
+@@ -1,5 +1,5 @@
+-struct __attribute__((__packed__)) {
++PL_PACKED_BEGIN struct PL_PACKED {
+ {% for var in macro.vars %}
+     {{ var.ctype }} {{ var.name }};
+ {% endfor %}
+-}
++} PL_PACKED_END

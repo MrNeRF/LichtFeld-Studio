@@ -1,0 +1,20 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # MIT
+
+exports_files(["LICENSE.txt"])
+
+# Header-only, like CMake's GPUOpen::VulkanMemoryAllocator. Exactly one translation
+# unit of the consumer defines VMA_IMPLEMENTATION before including <vk_mem_alloc.h>.
+# How VMA fetches Vulkan functions is chosen by the consumer as well, e.g.
+#   VMA_STATIC_VULKAN_FUNCTIONS=1: call the Vulkan prototypes (link the Vulkan loader),
+#   VMA_STATIC_VULKAN_FUNCTIONS=0 + VMA_DYNAMIC_VULKAN_FUNCTIONS=1: resolve them through
+#   VmaVulkanFunctions::vkGetInstanceProcAddr/vkGetDeviceProcAddr (e.g. from volk).
+cc_library(
+    name = "vulkan_memory_allocator",
+    hdrs = ["include/vk_mem_alloc.h"],
+    includes = ["include"],
+    deps = ["@vulkan_headers"],
+)

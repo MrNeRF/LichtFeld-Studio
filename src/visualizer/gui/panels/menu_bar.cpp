@@ -54,10 +54,7 @@ namespace lfs::vis::gui {
 
         thumb.download_future = std::async(std::launch::async, [video_id]() -> std::vector<uint8_t> {
             httplib::Client cli("https://img.youtube.com");
-            cli.set_server_certificate_verifier([](SSL* ssl) {
-                return lfs::core::peer_chain_has_distrusted_ca(ssl) ? httplib::SSLVerifierResponse::CertificateRejected
-                                                                    : httplib::SSLVerifierResponse::NoDecisionMade;
-            });
+            lfs::core::reject_distrusted_ca_peers<httplib::SSLVerifierResponse>(cli);
             cli.set_connection_timeout(5);
             cli.set_read_timeout(5);
 

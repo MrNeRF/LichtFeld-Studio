@@ -1,0 +1,80 @@
+MSVC: avoid non-constant expressions in static initializers.
+
+GCC accepts compound literals and `static const` variables (the 64-bit
+VK_*_2_* flags in vulkan_core.h) in static initializers as an extension; MSVC
+does not (C2099). Use plain braced initializers for the static pl_fmt
+templates and make the two Vulkan flag lookup tables automatic arrays.
+
+diff --git a/src/vulkan/formats.c b/src/vulkan/formats.c
+--- a/src/vulkan/formats.c
++++ b/src/vulkan/formats.c
+@@ -17,8 +17,10 @@
+ 
+ #include "formats.h"
+ 
++// Plain braced initializers instead of compound literals: these are only used
++// to initialize static objects, which MSVC does not allow compound literals for.
+ #define FMT(_name, num, size, ftype, bits, idx) \
+-    (struct pl_fmt_t) {                         \
++    {                                           \
+         .name = _name,                          \
+         .type = PL_FMT_##ftype,                 \
+         .num_components  = num,                 \
+@@ -40,7 +42,7 @@
+         IDX(0, 1, 2, 3))
+ 
+ #define EMUFMT(_name, in, en, ib, eb, ftype)    \
+-    (struct pl_fmt_t) {                         \
++    {                                           \
+         .name = _name,                          \
+         .type = PL_FMT_##ftype,                 \
+         .num_components  = en,                  \
+@@ -55,7 +57,7 @@
+     }
+ 
+ #define PACKED16FMT(_name, num, b)              \
+-    (struct pl_fmt_t) {                         \
++    {                                           \
+         .name            = _name,               \
+         .type            = PL_FMT_UNORM,        \
+         .num_components  = num,                 \
+@@ -68,7 +70,7 @@
+     }
+ 
+ #define PLANARFMT(_name, planes, size, bits)    \
+-    (struct pl_fmt_t) {                         \
++    {                                           \
+         .name            = _name,               \
+         .type            = PL_FMT_UNORM,        \
+         .num_planes      = planes,              \
+diff --git a/src/vulkan/gpu_pass.c b/src/vulkan/gpu_pass.c
+--- a/src/vulkan/gpu_pass.c
++++ b/src/vulkan/gpu_pass.c
+@@ -612,11 +612,6 @@
+     return pass;
+ }
+ 
+-static const VkPipelineStageFlags2 shaderStages[] = {
+-    [PL_PASS_RASTER]  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+-    [PL_PASS_COMPUTE] = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+-};
+-
+ static void vk_update_descriptor(pl_gpu gpu, struct vk_cmd *cmd, pl_pass pass,
+                                  struct pl_desc_binding db,
+                                  VkDescriptorSet ds, int idx)
+@@ -634,7 +629,14 @@
+         .descriptorType = dsType[desc->type],
+     };
+ 
+-    static const VkAccessFlags2 storageAccess[PL_DESC_ACCESS_COUNT] = {
++    // Not `static`: the VK_*_2_* flags are `static const` variables rather than
++    // constant expressions, so MSVC rejects them in static initializers.
++    const VkPipelineStageFlags2 shaderStages[] = {
++        [PL_PASS_RASTER]  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
++        [PL_PASS_COMPUTE] = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
++    };
++
++    const VkAccessFlags2 storageAccess[PL_DESC_ACCESS_COUNT] = {
+         [PL_DESC_ACCESS_READONLY]   = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+         [PL_DESC_ACCESS_WRITEONLY]  = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+         [PL_DESC_ACCESS_READWRITE]  = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |

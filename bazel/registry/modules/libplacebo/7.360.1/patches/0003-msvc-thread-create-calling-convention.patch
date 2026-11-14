@@ -1,0 +1,17 @@
+MSVC: put __stdcall inside the declarator of pl_thread_create's callback.
+
+MSVC rejects `unsigned __stdcall (*fun)(void *)`; `unsigned (__stdcall *fun)(void *)`
+is accepted by MSVC, clang and MinGW GCC alike.
+
+diff --git a/src/pl_thread_win32.h b/src/pl_thread_win32.h
+--- a/src/pl_thread_win32.h
++++ b/src/pl_thread_win32.h
+@@ -124,7 +124,7 @@
+ #define PL_THREAD_RETURN() return 0
+ 
+ static inline int pl_thread_create(pl_thread *thread,
+-                                   PL_THREAD_VOID (*fun)(void *),
++                                   unsigned (__stdcall *fun)(void *),
+                                    void *__restrict arg)
+ {
+     *thread = (HANDLE) _beginthreadex(NULL, 0, fun, arg, 0, NULL);

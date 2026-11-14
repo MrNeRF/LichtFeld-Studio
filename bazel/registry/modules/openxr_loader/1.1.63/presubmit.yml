@@ -1,0 +1,36 @@
+matrix:
+  unix_platform:
+    - debian11
+    - ubuntu2204
+    - macos_arm64
+  bazel:
+    - 8.x
+    - 9.x
+tasks:
+  verify_targets:
+    name: Verify build targets
+    platform: ${{ unix_platform }}
+    bazel: ${{ bazel }}
+    build_flags:
+      - "--cxxopt=-std=c++17"
+    build_targets:
+      - "@openxr_loader//:headers"
+      - "@openxr_loader//:openxr_loader"
+  verify_targets_windows:
+    name: Verify build targets (Windows)
+    platform: windows
+    bazel: ${{ bazel }}
+    build_flags:
+      - "--cxxopt=/std:c++17"
+    build_targets:
+      - "@openxr_loader//:headers"
+      - "@openxr_loader//:openxr_loader"
+  verify_targets_bundled_jsoncpp:
+    name: Verify build targets (bundled jsoncpp)
+    platform: windows
+    bazel: ${{ bazel }}
+    build_flags:
+      - "--cxxopt=/std:c++17"
+      - "--@openxr_loader//:bundled_jsoncpp=True"
+    build_targets:
+      - "@openxr_loader//:openxr_loader"

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# tcp module (CMake: src/tcp/CMakeLists.txt): ZMQ-based event server (responder + publisher).
+
+load("//bazel:lfs.bzl", "lfs_cc_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+lfs_cc_library(
+    name = "lfs_tcp",
+    srcs = [
+        "tcp_publisher.cpp",
+        "tcp_responder.cpp",
+        "tcp_server.cpp",
+    ],
+    hdrs = glob(["include/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        "//src:generated_headers",
+        "//src/core:lfs_core",
+        "//src/io:headers",
+        "//src/training:headers",
+        "//src/visualizer:lfs_visualizer",
+        # BCR cppzmq only carries libzmq's headers; libzmq (static) defines ZMQ_STATIC.
+        "@cppzmq",
+        "@libzmq",
+        "@nlohmann_json//:json",
+    ],
+)

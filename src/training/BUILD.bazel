@@ -1,0 +1,272 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# training module (CMake: src/training/CMakeLists.txt and subdirectories)
+#
+#   training_kernels   LibTorch-free CUDA kernels (losses, densification, ...)
+#   fastlfs_backend    FastGS rasterizer + optimizer kernels (rasterization/fastgs)
+#   gsplat_backend     gsplat rasterizer (rasterization/gsplat)
+#   depth_anchor       depth-anchor fit + sidecar cache (shared with preprocessing)
+#   lfs_training       trainer, strategies, optimizer, metrics
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library", "lfs_cuda_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.cuh",
+        ],
+        allow_empty = True,
+    ),
+    includes = [
+        ".",
+        "depth_anchor",
+        "include",
+        "rasterization",
+        "rasterization/fastgs/optimizer/include",
+        "rasterization/fastgs/rasterization/include",
+        "rasterization/fastgs/utils",
+    ],
+    deps = [
+        "//src/core:headers",
+        "//src/diagnostics:headers",
+        "//src/io:headers",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# CMake: lfs_training_kernels
+#-------------------------------------------------------------------------------------
+
+lfs_cuda_library(
+    name = "training_kernels_cuda",
+    srcs = [
+        "kernels/bilateral_grid_backward.cu",
+        "kernels/bilateral_grid_forward.cu",
+        "kernels/bilateral_grid_tv.cu",
+        "kernels/blob_seeding.cu",
+        "kernels/camera_loss_heatmap.cu",
+        "kernels/camera_pose.cu",
+        "kernels/densification_kernels.cu",
+        "kernels/depth_loss.cu",
+        "kernels/effective_rank_regularization.cu",
+        "kernels/grad_alpha.cu",
+        "kernels/gradient_residual.cu",
+        "kernels/image_kernels.cu",
+        "kernels/l1_loss.cu",
+        "kernels/mask_preprocess.cu",
+        "kernels/mcmc_kernels.cu",
+        "kernels/morton_reorder_kernels.cu",
+        "kernels/mrnf_kernels.cu",
+        "kernels/normal_consistency_loss.cu",
+        "kernels/normal_loss.cu",
+        "kernels/popspa.cu",
+        "kernels/ppisp.cu",
+        "kernels/pruning_kernels.cu",
+        "kernels/regularization.cu",
+        "kernels/roi_weight_map.cu",
+        "kernels/ssim.cu",
+        "kernels/ssim_reduction.cu",
+        "kernels/thin_structure.cu",
+    ],
+    deps = [
+        ":headers",
+        "//src/core:core_cuda",
+        "//src/core:lfs_core",
+    ],
+)
+
+lfs_cc_library(
+    name = "training_kernels",
+    srcs = ["kernels/loss_tensor_contract.cpp"],
+    deps = [
+        ":headers",
+        ":training_kernels_cuda",
+        "//src/core:core_cuda",
+        "//src/core:lfs_core",
+        "@cuda//:cuda_runtime",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Rasterization backends
+#-------------------------------------------------------------------------------------
+
+# CMake: fastlfs_backend. The memory arena resolves from lfs_core.dll.
+lfs_cuda_library(
+    name = "fastlfs_backend",
+    srcs = [
+        "rasterization/fastgs/optimizer/src/adam_api.cu",
+        "rasterization/fastgs/optimizer/src/adam_shN_joint.cu",
+        "rasterization/fastgs/rasterization/src/backward.cu",
+        "rasterization/fastgs/rasterization/src/forward.cu",
+        "rasterization/fastgs/rasterization/src/pop_scores.cu",
+        "rasterization/fastgs/rasterization/src/rasterization_api.cu",
+    ],
+    copts = ["--diag-suppress=20012,186,221"],
+    deps = [
+        ":headers",
+        "//src/core:core_cuda",
+        "//src/core:lfs_core",
+        "@cuda//:cuda",
+        "@cuda//:curand",
+    ],
+)
+
+# CMake: gsplat_backend_lfs (C++ and CUDA sources, GLM in CUDA mode for both).
+lfs_cuda_library(
+    name = "gsplat_backend_cuda",
+    srcs = [
+        "rasterization/gsplat/GeometryFeatures.cu",
+        "rasterization/gsplat/IntersectTile.cu",
+        "rasterization/gsplat/PopScores.cu",
+        "rasterization/gsplat/ProjectionUT3DGSFused.cu",
+        "rasterization/gsplat/QuatToRotmatCUDA.cu",
+        "rasterization/gsplat/RasterizeToPixelsFromWorld3DGSBwd.cu",
+        "rasterization/gsplat/RasterizeToPixelsFromWorld3DGSFwd.cu",
+        "rasterization/gsplat/RelocationCUDA.cu",
+        "rasterization/gsplat/SphericalHarmonicsCUDA.cu",
+    ],
+    copts = ["--diag-suppress=20012,186,221"],
+    local_defines = ["GLM_FORCE_CUDA"],
+    deps = [
+        ":headers",
+        "@cuda//:curand",
+        "@glm",
+    ],
+)
+
+lfs_cc_library(
+    name = "gsplat_backend",
+    srcs = [
+        "rasterization/gsplat/Common.cpp",
+        "rasterization/gsplat/Intersect.cpp",
+        "rasterization/gsplat/Projection.cpp",
+        "rasterization/gsplat/QuatToRotmat.cpp",
+        "rasterization/gsplat/Rasterization.cpp",
+        "rasterization/gsplat/Relocation.cpp",
+        "rasterization/gsplat/SphericalHarmonics.cpp",
+    ],
+    local_defines = ["GLM_FORCE_CUDA"],
+    deps = [
+        ":gsplat_backend_cuda",
+        ":headers",
+        "@cuda//:cuda_runtime",
+        "@cuda//:curand",
+        "@glm",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# CMake: lfs_depth_anchor
+#-------------------------------------------------------------------------------------
+
+lfs_cc_library(
+    name = "depth_anchor",
+    srcs = ["depth_anchor/depth_anchor_cache.cpp"],
+    deps = [
+        ":headers",
+        ":training_kernels",
+        "//src/core:lfs_core",
+        "//src/io:lfs_io",
+        "@nlohmann_json//:json",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# CMake: lfs_training
+#-------------------------------------------------------------------------------------
+
+# CUDA sources of lfs_training itself use the global CUDA flags (-O3, no fast math).
+lfs_cuda_library(
+    name = "training_cuda",
+    srcs = [
+        "components/ppisp_controller.cu",
+        "components/ppisp_controller_pool.cu",
+        "metrics/eval_mask_kernels.cu",
+        "metrics/flip.cu",
+        "metrics/mesh_mask_kernels.cu",
+    ],
+    fast_math = False,
+    deps = [
+        ":headers",
+        "//src/core:lfs_core",
+    ],
+)
+
+lfs_cc_library(
+    name = "lfs_training",
+    srcs = [
+        "checkpoint.cpp",
+        "components/bilateral_grid.cpp",
+        "components/camera_pose_refinement.cpp",
+        "components/config_serialization.cpp",
+        "components/popspa_controller.cpp",
+        "components/ppisp.cpp",
+        "components/ppisp_file.cpp",
+        "control/command_api.cpp",
+        "live_model_mutation_guard.cpp",
+        "losses/effective_rank_regularization.cpp",
+        "losses/mask_loss.cpp",
+        "losses/photometric_loss.cpp",
+        "losses/regularization.cpp",
+        "metrics/compare_images.cpp",
+        "metrics/eval_image_labels.cpp",
+        "metrics/eval_mask.cpp",
+        "metrics/metrics.cpp",
+        "morton_reorder.cpp",
+        "noise_infill.cpp",
+        "normal_auto_generate.cpp",
+        "optimizer/adam_optimizer.cpp",
+        "optimizer/scheduler.cpp",
+        "perf_bench.cpp",
+        "progress.cpp",
+        "project_snapshot_chapters.cpp",
+        "rasterization/fast_rasterizer.cpp",
+        "rasterization/gsplat_rasterizer.cpp",
+        "rasterization/pop_scores.cpp",
+        "sh_value_codec.cpp",
+        "sh_value_storage.cpp",
+        "strategies/blob_seeding.cpp",
+        "strategies/improved_gs_plus.cpp",
+        "strategies/mcmc.cpp",
+        "strategies/mrnf.cpp",
+        "strategies/postprocess_compaction.cpp",
+        "strategies/strategy_factory.cpp",
+        "strategies/strategy_utils.cpp",
+        "trainer.cpp",
+        "trainer_popspa.cpp",
+        "training_cropbox_mask.cpp",
+        "training_setup.cpp",
+        "training_snapshot_service.cpp",
+        "vram_ledger.cpp",
+    ],
+    deps = [
+        ":depth_anchor",
+        ":fastlfs_backend",
+        ":gsplat_backend",
+        ":headers",
+        ":training_cuda",
+        ":training_kernels",
+        "//bazel/compat:nanoflann",
+        "//src/core:lfs_core",
+        "//src/core:lfs_event_bridge",
+        "//src/diagnostics:lfs_diagnostics",
+        "//src/io:lfs_io",
+        "//src/preprocessing:lfs_preprocessing",
+        "//src/python:lfs_python_runtime",
+        "//src/rendering:lfs_rendering",
+        "@cuda//:cuda_runtime",
+        "@cuda//:nvtx3",
+        "@lfs_external//:indicators",
+        "@nlohmann_json//:json",
+        "@spdlog",
+    ],
+)

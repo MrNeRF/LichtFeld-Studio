@@ -1,0 +1,67 @@
+module(
+    name = "libplacebo",
+    version = "7.360.1",
+    bazel_compatibility = [">=8.0.0"],
+    compatibility_level = 7,
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "rules_python", version = "2.5.0")
+bazel_dep(name = "shaderc", version = "2026.2")
+bazel_dep(name = "vulkan_headers", version = "1.4.349")
+
+# libplacebo's code generators (tools/glsl_preproc, src/vulkan/utils_gen.py)
+# need Jinja2 + MarkupSafe. Upstream vendors them as the git submodules
+# 3rdparty/{jinja,markupsafe}, which GitHub archives do not contain; these are
+# the submodule commits pinned by v7.360.1 (Jinja2 3.1.6, MarkupSafe 3.0.3).
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "libplacebo_jinja2",
+    build_file_content = """\
+load("@rules_python//python:py_library.bzl", "py_library")
+
+py_library(
+    name = "jinja2",
+    srcs = glob(["src/jinja2/**/*.py"]),
+    imports = ["src"],
+    visibility = ["//visibility:public"],
+    deps = ["@libplacebo_markupsafe//:markupsafe"],
+)
+""",
+    integrity = "sha256-uIog3MLjQHL89BWTJbxsNM1LKagai4PRXS8oulYdopY=",
+    strip_prefix = "jinja-15206881c006c79667fe5154fe80c01c65410679",
+    urls = ["https://github.com/pallets/jinja/archive/15206881c006c79667fe5154fe80c01c65410679.tar.gz"],
+)
+
+http_archive(
+    name = "libplacebo_markupsafe",
+    build_file_content = """\
+load("@rules_python//python:py_library.bzl", "py_library")
+
+# Pure-Python build: markupsafe falls back to _native when _speedups is absent.
+py_library(
+    name = "markupsafe",
+    srcs = glob(["src/markupsafe/*.py"]),
+    imports = ["src"],
+    visibility = ["//visibility:public"],
+)
+""",
+    integrity = "sha256-2nwBDJyBpmrHMDZVjB/LYhK1BIL0MhHNElQDW5T4JBQ=",
+    strip_prefix = "markupsafe-297fc8e356e6836a62087949245d09a28e9f1b13",
+    urls = ["https://github.com/pallets/markupsafe/archive/297fc8e356e6836a62087949245d09a28e9f1b13.tar.gz"],
+)
+
+# The Vulkan registry (vk.xml) for src/vulkan/utils_gen.py. The BCR
+# vulkan_headers module does not export registry/vk.xml, so fetch the very same
+# archive again (served from the repository cache) and export it here. It must
+# not be newer than the @vulkan_headers headers, which MVS guarantees.
+http_archive(
+    name = "libplacebo_vulkan_registry",
+    build_file_content = """exports_files(["registry/vk.xml"])\n""",
+    integrity = "sha256-17hHEvhGlle6o3pDbRoj778KY1T8iDW2dY7wNuFdzBQ=",
+    strip_prefix = "Vulkan-Headers-1.4.349",
+    urls = ["https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.349.tar.gz"],
+)

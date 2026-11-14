@@ -1,0 +1,42 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # MIT
+
+exports_files(["LICENSE"])
+
+# neovim/libvterm at 934bc2fbf21800ac3458a499df8820ca5fb45fd3 (2025-11-21): libvterm
+# 0.3.3 plus Neovim's changes (e.g. VTermScreenCallbacks::sb_pushline4), the
+# revision LichtFeld Studio pins as external/libvterm submodule. Unlike the
+# release tag, the repository contains the generated src/encoding/*.inc.
+cc_library(
+    name = "vterm",
+    srcs = [
+        "src/encoding.c",
+        "src/encoding/DECdrawing.inc",
+        "src/encoding/uk.inc",
+        "src/fullwidth.inc",
+        "src/keyboard.c",
+        "src/mouse.c",
+        "src/parser.c",
+        "src/pen.c",
+        "src/rect.h",
+        "src/screen.c",
+        "src/state.c",
+        "src/unicode.c",
+        "src/utf8.h",
+        "src/vterm.c",
+        "src/vterm_internal.h",
+    ],
+    hdrs = [
+        "include/vterm.h",
+        "include/vterm_keycodes.h",
+    ],
+    includes = ["include"],
+)
+
+alias(
+    name = "libvterm",
+    actual = ":vterm",
+)

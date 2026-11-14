@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# CMake: src/geometry/CMakeLists.txt -> lfs_geometry (STATIC)
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/**/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        "//src:root_includes",
+        "//src/core:camera_types",
+        "@glm",
+        "@nlohmann_json//:json",
+    ],
+)
+
+lfs_cc_library(
+    name = "lfs_geometry",
+    srcs = [
+        "apriltag_detector.cpp",
+        "apriltag_scaling.cpp",
+        "bounding_box.cpp",
+        "euclidean_transform.cpp",
+        "geometry_misc.cpp",
+    ],
+    deps = [
+        ":headers",
+        "//src/core:headers",
+        "@apriltag//:apriltag_installed_layout",
+    ],
+)

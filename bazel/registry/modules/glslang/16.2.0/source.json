@@ -1,0 +1,15 @@
+{
+    "url": "https://github.com/KhronosGroup/glslang/archive/refs/tags/16.2.0.tar.gz",
+    "integrity": "sha256-AZhTNXhcl5Bqka/jy17gFZl2lhgexsElurVVVgK6COI=",
+    "strip_prefix": "glslang-16.2.0",
+    "overlay": {
+        "BUILD.bazel": "sha256-EnFaPSUsWMuCHwK2YolD556VX1czt3AkrQKwFw7cX98=",
+        "glslang/build_info.h": "sha256-XNnkiV1SY3n6b/uihSFWHkyhaJz/VprmPgWFnoJm2Dc=",
+        "glslang/glsl_intrinsic_header.h": "sha256-PTqG1Q5Ym65ScDdsVJmnfOES190jDhT4OPWyQlaFu5U=",
+        "glslang/SPIRV/disassemble.h": "sha256-Fq1ClZWhbH7MLNoLOrHF3p9S608gSpmtLMtNk+kJTQo=",
+        "glslang/SPIRV/GlslangToSpv.h": "sha256-v5vQSr8Ka2u9udjIJpZ6tbs0sqM6i+y7dNM9ajjHF0Q=",
+        "glslang/SPIRV/Logger.h": "sha256-2XHmBauneI3ndnnvtE+RXMVjoqbiiKBqhzHGGhhszLQ=",
+        "glslang/SPIRV/spirv.hpp11": "sha256-LEugFxy1gdq9C647uoX+wK+eXETkambjp9a1Til4Ek8=",
+        "glslang/SPIRV/SpvTools.h": "sha256-fKw7fr4MhMY+xqQAf30HtrGlcHxshjjFKXieroSaicw="
+    }
+}

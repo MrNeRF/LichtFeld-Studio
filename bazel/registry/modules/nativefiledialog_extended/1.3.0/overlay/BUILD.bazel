@@ -1,0 +1,162 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:objc_library.bzl", "objc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # Zlib
+
+exports_files(["LICENSE"])
+
+# ---------------------------------------------------------------------------
+# Options (CMake option() equivalents, same defaults as upstream)
+# ---------------------------------------------------------------------------
+
+# NFD_OVERRIDE_RECENT_WITH_DEFAULT (Windows only, default OFF): open dialogs in
+# the caller's defaultPath (IFileDialog::SetFolder) instead of letting Windows
+# prefer the most recently used folder (IFileDialog::SetDefaultFolder).
+#   --@nativefiledialog_extended//:override_recent_with_default=True
+bool_flag(
+    name = "override_recent_with_default",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "override_recent_with_default_enabled",
+    flag_values = {":override_recent_with_default": "True"},
+)
+
+# NFD_PORTAL (Linux only, default OFF): use xdg-desktop-portal over D-Bus
+# instead of GTK3.
+#   --@nativefiledialog_extended//:portal=True
+bool_flag(
+    name = "portal",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "linux_gtk",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {":portal": "False"},
+)
+
+config_setting(
+    name = "linux_portal",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {":portal": "True"},
+)
+
+# GTK3 and D-Bus are system libraries without a Bazel module. On Linux, point
+# these flags at cc_library targets providing the headers and link flags of
+# `pkg-config gtk+-3.0` (GTK3 backend, the default) or `pkg-config dbus-1`
+# (portal backend), e.g. --@nativefiledialog_extended//:gtk3=//third_party:gtk3.
+label_flag(
+    name = "gtk3",
+    build_setting_default = ":gtk3_not_configured",
+)
+
+label_flag(
+    name = "dbus",
+    build_setting_default = ":dbus_not_configured",
+)
+
+cc_library(
+    name = "gtk3_not_configured",
+    target_compatible_with = ["@platforms//:incompatible"],
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "dbus_not_configured",
+    target_compatible_with = ["@platforms//:incompatible"],
+    visibility = ["//visibility:private"],
+)
+
+# ---------------------------------------------------------------------------
+# Library (CMake: nfd::nfd)
+# ---------------------------------------------------------------------------
+
+cc_library(
+    name = "nfd_headers",
+    hdrs = [
+        "src/include/nfd.h",
+        "src/include/nfd.hpp",
+    ],
+    defines = select({
+        ":linux_portal": ["NFD_PORTAL"],
+        "//conditions:default": [],
+    }),
+    includes = ["src/include"],
+    # Optional window-handle helpers; they need the consumer's SDL2 / GLFW headers.
+    textual_hdrs = [
+        "src/include/nfd_glfw3.h",
+        "src/include/nfd_sdl2.h",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "nfd_win",
+    srcs = ["src/nfd_win.cpp"],
+    linkopts = [
+        "-DEFAULTLIB:ole32.lib",
+        "-DEFAULTLIB:shell32.lib",
+        "-DEFAULTLIB:uuid.lib",
+    ],
+    local_defines = select({
+        ":override_recent_with_default_enabled": ["NFD_OVERRIDE_RECENT_WITH_DEFAULT"],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:private"],
+    deps = [":nfd_headers"],
+)
+
+objc_library(
+    name = "nfd_cocoa",
+    linkopts = [
+        "-framework AppKit",
+        "-framework UniformTypeIdentifiers",
+    ],
+    non_arc_srcs = ["src/nfd_cocoa.m"],
+    target_compatible_with = ["@platforms//os:macos"],
+    visibility = ["//visibility:private"],
+    deps = [":nfd_headers"],
+)
+
+cc_library(
+    name = "nfd_gtk",
+    srcs = ["src/nfd_gtk.cpp"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":gtk3",
+        ":nfd_headers",
+    ],
+)
+
+cc_library(
+    name = "nfd_portal",
+    srcs = ["src/nfd_portal.cpp"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":dbus",
+        ":nfd_headers",
+    ],
+)
+
+cc_library(
+    name = "nfd",
+    deps = [":nfd_headers"] + select({
+        "@platforms//os:windows": [":nfd_win"],
+        "@platforms//os:macos": [":nfd_cocoa"],
+        ":linux_gtk": [":nfd_gtk"],
+        ":linux_portal": [":nfd_portal"],
+    }),
+)
+
+alias(
+    name = "nativefiledialog_extended",
+    actual = ":nfd",
+)

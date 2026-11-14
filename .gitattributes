@@ -8,3 +8,7 @@ tools/ci_format_push.sh text eol=lf
 
 # Unified-diff prefixes are not source indentation.
 .github/overlays/rmlui/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+
+# Bazel registry overlays and patches are hashed (source.json); keep their bytes as committed.
+bazel/registry/** -text
+bazel/patches/** -text

@@ -1,0 +1,9 @@
+module(
+    name = "vulkan_memory_allocator",
+    version = "3.3.0",
+    bazel_compatibility = [">=7.2.1"],
+    compatibility_level = 3,
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "vulkan_headers", version = "1.4.349")

@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# preprocessing module (CMake: src/preprocessing/CMakeLists.txt)
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library", "lfs_cuda_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["**/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        "//src/core:headers",
+        "//src/io:headers",
+        "//src/training:headers",
+    ],
+)
+
+# The lens views include the rasterizer's camera models; -O3 without fast math.
+lfs_cuda_library(
+    name = "preprocessing_cuda",
+    srcs = [
+        "lens_views.cu",
+        "operator_view.cu",
+    ],
+    fast_math = False,
+    deps = [
+        ":headers",
+        "//src/core:lfs_core",
+    ],
+)
+
+lfs_cc_library(
+    name = "lfs_preprocessing",
+    srcs = [
+        "lens_priors.cpp",
+        "preprocess.cpp",
+        "video_mask_cells.cpp",
+        "video_mask_command.cpp",
+        "video_mask_extraction.cpp",
+        "video_masking.cpp",
+    ],
+    deps = [
+        ":headers",
+        ":preprocessing_cuda",
+        "//src/core:lfs_core",
+        "//src/io:lfs_io",
+        "//src/io:lfs_video",
+        "//src/training:depth_anchor",
+        "@cuda//:cuda_runtime",
+        "@curl",
+        "@lfs_external//:indicators",
+        "@openssl//:crypto",
+    ],
+)

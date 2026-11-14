@@ -1,0 +1,17 @@
+{
+    "url": "https://github.com/haasn/libplacebo/archive/refs/tags/v7.360.1.tar.gz",
+    "integrity": "sha256-0F/fkL6i9inqotEV6Qn9NWOIrGOeVPd7h6AYptdiJL0=",
+    "strip_prefix": "libplacebo-7.360.1",
+    "overlay": {
+        "BUILD.bazel": "sha256-Q24zHmbe7dn85wFUq9lizNgu1IkPKveEQeU0tLong9k="
+    },
+    "patches": {
+        "0001-msvc-gcc-builtins-and-attributes.patch": "sha256-lHlhIsrvI29gYVKJ/VKQl3sJ9zm3zbDEt0NUojhCMdo=",
+        "0002-msvc-packed-structs.patch": "sha256-Geq1T4w+VKezpfT/kOMLIMvsfot+bHFa4+NL3oXma7U=",
+        "0003-msvc-thread-create-calling-convention.patch": "sha256-6g/EQy8lbCFr7a2uaoZZXa6+K2WuWgYPhoycJ4UyL/0=",
+        "0004-msvc-static-initializers.patch": "sha256-dAcch5sUZ6CQms2UprTqadZbhFFsxjSytwrlGfdcDE8=",
+        "0005-msvc-convert-cc-compound-literal.patch": "sha256-4+Y+kHfUsMgEZndUwusVZ2Y2rvrgGr6FauP1RynwSZI=",
+        "0006-msvc-config-h-gcc-pragma.patch": "sha256-g0v1Dk+ATLq1uQg1oE+Kowb/TCUjVrtFGiUWI3atDHw="
+    },
+    "patch_strip": 1
+}

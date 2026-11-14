@@ -1,0 +1,54 @@
+Add the OpenMeshTools library (Decimater, Smoother, Subdivider, Utils, VDPM)
+and LichtFeld's local Timer::as_string buffer fix (CodeQL
+cpp/overrunning-write-with-float, see external/OpenMesh/LOCAL_PATCHES.md).
+
+Bazel's native patcher needs the "diff --git" lines to separate the files.
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -30,3 +30,32 @@
+     }),
+     includes = ["src"],
+ )
++
++# OpenMeshTools (CMake: src/OpenMesh/Tools/CMakeLists.txt). Kernel_OSG needs
++# OpenSceneGraph and is not part of it.
++cc_library(
++    name = "openmesh_tools",
++    srcs = [
++        "src/OpenMesh/Tools/Decimater/Observer.cc",
++        "src/OpenMesh/Tools/Utils/Gnuplot.cc",
++        "src/OpenMesh/Tools/Utils/Timer.cc",
++        "src/OpenMesh/Tools/Utils/conio.cc",
++        "src/OpenMesh/Tools/VDPM/VFront.cc",
++        "src/OpenMesh/Tools/VDPM/VHierarchy.cc",
++        "src/OpenMesh/Tools/VDPM/VHierarchyNodeIndex.cc",
++        "src/OpenMesh/Tools/VDPM/VHierarchyWindow.cc",
++        "src/OpenMesh/Tools/VDPM/ViewingParameters.cc",
++    ] + select({
++        "@platforms//os:windows": ["src/OpenMesh/Tools/Utils/getopt.c"],
++        "//conditions:default": [],
++    }),
++    hdrs = glob(
++        [
++            "src/OpenMesh/Tools/**/*.hh",
++            "src/OpenMesh/Tools/**/*.h",
++        ],
++        exclude = ["src/OpenMesh/Tools/Kernel_OSG/**"],
++    ),
++    includes = ["src"],
++    deps = [":openmesh"],
++)
+diff --git a/src/OpenMesh/Tools/Utils/Timer.cc b/src/OpenMesh/Tools/Utils/Timer.cc
+--- a/src/OpenMesh/Tools/Utils/Timer.cc
++++ b/src/OpenMesh/Tools/Utils/Timer.cc
+@@ -325,7 +325,7 @@
+ 
+ std::string Timer::as_string(double seconds, Timer::Format format)
+ {
+-   char string[32];
++   char string[512];
+ 
+    double fraction;
+    double integer;

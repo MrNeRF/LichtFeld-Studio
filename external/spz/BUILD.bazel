@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Niantic SPZ (MIT), vendored with LichtFeld extensions (CMake: spz_lib in src/io).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+cc_library(
+    name = "spz",
+    srcs = [
+        "coordinate-system-adobe.cc",
+        "load-spz.cc",
+        "provenance-lichtfeld.cc",
+        "safe-orbit-camera-adobe.cc",
+        "splat-c-types.cc",
+        "splat-extensions.cc",
+        "splat-types.cc",
+    ],
+    hdrs = glob(["*.h"]),
+    defines = ["SPZ_BUILD_EXTENSIONS"],
+    includes = ["."],
+    deps = [
+        "@onetbb//:tbb",
+        "@zlib",
+        "@zstd",
+    ],
+)

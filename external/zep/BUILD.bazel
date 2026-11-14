@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Zep embeddable editor core (MIT), vendored (CMake: external/zep/CMakeLists.txt).
+
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+# CMake: configure_file(cmake/config_app.h.cmake) with the absolute source path.
+write_file(
+    name = "config_app",
+    out = "generated/config_app.h",
+    content = [
+        "#define ZEP_ROOT \"external/zep\"",
+        "",
+    ],
+)
+
+cc_library(
+    name = "zep",
+    srcs = [
+        "src/buffer.cpp",
+        "src/commands.cpp",
+        "src/display.cpp",
+        "src/editor.cpp",
+        "src/filesystem.cpp",
+        "src/glyph_iterator.cpp",
+        "src/indexer.cpp",
+        "src/keymap.cpp",
+        "src/line_widgets.cpp",
+        "src/mcommon/animation/timer.cpp",
+        "src/mcommon/file/path.cpp",
+        "src/mcommon/string/stringutils.cpp",
+        "src/mode.cpp",
+        "src/mode_repl.cpp",
+        "src/mode_search.cpp",
+        "src/mode_standard.cpp",
+        "src/mode_tree.cpp",
+        "src/mode_vim.cpp",
+        "src/range_markers.cpp",
+        "src/regress.cpp",
+        "src/scroller.cpp",
+        "src/splits.cpp",
+        "src/syntax.cpp",
+        "src/syntax_markdown.cpp",
+        "src/syntax_providers.cpp",
+        "src/syntax_python.cpp",
+        "src/syntax_rainbow_brackets.cpp",
+        "src/syntax_tree.cpp",
+        "src/tab_window.cpp",
+        "src/theme.cpp",
+        "src/window.cpp",
+        ":config_app",
+    ],
+    hdrs = glob([
+        "include/**/*.h",
+        "include/**/*.hpp",
+    ]),
+    # CMake: CXX_STANDARD 17.
+    copts = select({
+        "@platforms//os:windows": ["/std:c++17"],
+        "//conditions:default": ["-std=c++17"],
+    }),
+    defines = ["ZEP_FEATURE_CPP_FILE_SYSTEM"],
+    includes = [
+        "generated",
+        "include",
+    ],
+)

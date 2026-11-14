@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# TinyUSDZ USDA parser subset (Apache-2.0), vendored (CMake: lfs_tinyusdz in src/io).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+cc_library(
+    name = "tinyusdz",
+    srcs = [
+        "src/ascii-parser.cc",
+        "src/ascii-parser-basetype.cc",
+        "src/ascii-parser-timesamples.cc",
+        "src/ascii-parser-timesamples-array.cc",
+        "src/asset-resolution.cc",
+        "src/crate-format.cc",
+        "src/crate-reader.cc",
+        "src/integerCoding.cpp",
+        "src/io-util.cc",
+        "src/linear-algebra.cc",
+        "src/lz4/lz4.c",
+        "src/lz4-compression.cc",
+        "src/path-util.cc",
+        "src/pprinter.cc",
+        "src/prim-reconstruct.cc",
+        "src/prim-types.cc",
+        "src/stage.cc",
+        "src/str-util.cc",
+        "src/tiny-format.cc",
+        "src/usda-reader.cc",
+        "src/value-pprint.cc",
+        "src/value-types.cc",
+        "src/xform.cc",
+    ],
+    hdrs = glob(
+        [
+            "src/**/*.h",
+            "src/**/*.hh",
+            "src/**/*.hpp",
+            "src/**/*.inc",
+        ],
+        allow_empty = True,
+    ),
+    # CMake: CXX_STANDARD 14, CXX_EXTENSIONS OFF, /bigobj.
+    copts = select({
+        "@platforms//os:windows": ["/bigobj"],
+        "//conditions:default": ["-fno-exceptions"],
+    }),
+    cxxopts = select({
+        "@platforms//os:windows": ["/std:c++14"],
+        "//conditions:default": ["-std=c++14"],
+    }),
+    includes = ["src"],
+    local_defines = [
+        "TINYUSDZ_NO_BUILTIN_IMAGE_LOADER",
+        "nsel_CONFIG_SELECT_EXPECTED=1",
+    ],
+)

@@ -209,10 +209,7 @@ namespace lfs::mcp {
             }
 
             httplib::Client client(url);
-            client.set_server_certificate_verifier([](SSL* ssl) {
-                return lfs::core::peer_chain_has_distrusted_ca(ssl) ? httplib::SSLVerifierResponse::CertificateRejected
-                                                                    : httplib::SSLVerifierResponse::NoDecisionMade;
-            });
+            lfs::core::reject_distrusted_ca_peers<httplib::SSLVerifierResponse>(client);
             client.set_connection_timeout(30);
             client.set_read_timeout(120);
 

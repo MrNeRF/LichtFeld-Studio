@@ -1,0 +1,11 @@
+module(
+    name = "shaderc",
+    version = "2026.2",
+    bazel_compatibility = [">=7.4.0"],
+    compatibility_level = 1,
+)
+
+bazel_dep(name = "glslang", version = "16.2.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "spirv_headers", version = "1.4.357.0")
+bazel_dep(name = "spirv_tools", version = "2026.3")

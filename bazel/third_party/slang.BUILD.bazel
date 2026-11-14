@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Prebuilt Slang shader compiler (https://github.com/shader-slang/slang), Windows x64 release.
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+# DLLs loaded by slang.dll at runtime (SPIR-V/GLSL backends). slang-llvm.dll (CPU
+# targets) and gfx.dll are intentionally not shipped, like the CMake install.
+RUNTIME_DLLS = [
+    "bin/slang.dll",
+    "bin/slang-compiler.dll",
+    "bin/slang-glsl-module.dll",
+    "bin/slang-glslang.dll",
+    "bin/slang-rt.dll",
+]
+
+cc_import(
+    name = "slang_import",
+    interface_library = "lib/slang.lib",
+    shared_library = "bin/slang.dll",
+)
+
+cc_library(
+    name = "slang",
+    hdrs = glob(["include/**/*.h"]),
+    data = RUNTIME_DLLS,
+    includes = ["include"],
+    deps = [":slang_import"],
+)
+
+filegroup(
+    name = "runtime_dlls",
+    srcs = RUNTIME_DLLS,
+)
+
+# slangc.exe plus the DLLs it loads from its own directory.
+filegroup(
+    name = "slangc_files",
+    srcs = RUNTIME_DLLS,
+)
+
+exports_files(["bin/slangc.exe"])

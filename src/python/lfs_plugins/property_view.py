@@ -361,7 +361,6 @@ REGISTRY_PLACEMENT = {
     ),
     "learning_rates_registry": (
         "means_lr_end",
-        "ray_depth_lr",
         "scaling_lr_end",
         "late_lr_anneal",
         "cropbox_lr_scale",

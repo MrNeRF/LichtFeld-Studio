@@ -1,0 +1,382 @@
+# Bazel build for libplacebo 7.360.1 (https://code.videolan.org/videolan/libplacebo),
+# a translation of its meson build for the configuration used by LichtFeld
+# Studio's vcpkg port:
+#
+#   -Dvulkan=enabled -Dvk-proc-addr=enabled -Dshaderc=enabled -Dglslang=disabled
+#   -Ddovi=enabled -Dlibdovi=disabled -Dopengl=disabled -Dd3d11=disabled
+#   -Dlcms=disabled -Dxxhash=disabled -Dunwind=disabled
+#   -Ddemos=false -Dtests=false -Dbench=false -Dfuzz=false
+#
+# The patches in the registry make the sources compile with plain MSVC cl.exe
+# (no clang-cl needed). Code generation (GLSL preprocessor, Vulkan utils_gen.c)
+# runs at build time on the hermetic rules_python interpreter.
+#
+# Public target: @libplacebo//:libplacebo (shorthand: @libplacebo), a static
+# library; consumers get PL_STATIC and `#include <libplacebo/...>`. The FFmpeg
+# helpers (<libplacebo/utils/libav.h>) are header-only and need FFmpeg headers
+# from the consumer.
+#
+# Vulkan loader: libplacebo calls vkGetInstanceProcAddr directly
+# (-Dvk-proc-addr). The library providing that symbol is chosen by the
+# label_flag `@libplacebo//:vulkan_loader`. Its default,
+# `@libplacebo//:system_vulkan_loader`, links the system loader: `vulkan-1.lib`
+# on Windows (link.exe must find it, e.g. via the Vulkan SDK's Lib directory on
+# LIB or `--linkopt=/LIBPATH:...`), `-lvulkan` elsewhere. Point it at your own
+# cc_library/cc_import (it must define vkGetInstanceProcAddr as a function,
+# e.g. an import library for vulkan-1.dll) with
+#   build --@libplacebo//:vulkan_loader=//third_party/vulkan:loader
+
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["restricted"])  # LGPL-2.1-or-later
+
+exports_files(["LICENSE"])
+
+_MAJOR_VER = "7"
+
+_API_VER = "360"
+
+_FIX_VER = "1"
+
+# --- Vulkan loader ----------------------------------------------------------
+
+label_flag(
+    name = "vulkan_loader",
+    build_setting_default = ":system_vulkan_loader",
+)
+
+cc_library(
+    name = "system_vulkan_loader",
+    linkopts = select({
+        "@platforms//os:windows": ["vulkan-1.lib"],
+        "//conditions:default": ["-lvulkan"],
+    }),
+)
+
+# --- Code generation --------------------------------------------------------
+
+config_setting(
+    name = "opt",
+    values = {"compilation_mode": "opt"},
+    visibility = ["//visibility:private"],
+)
+
+py_binary(
+    name = "glsl_preproc",
+    srcs = glob(["tools/glsl_preproc/*.py"]),
+    data = glob(["tools/glsl_preproc/templates/*.j2"]),
+    imports = ["tools/glsl_preproc"],
+    legacy_create_init = 0,
+    main = "tools/glsl_preproc/main.py",
+    visibility = ["//visibility:private"],
+    deps = ["@libplacebo_jinja2//:jinja2"],
+)
+
+py_binary(
+    name = "vulkan_utils_gen",
+    srcs = ["src/vulkan/utils_gen.py"],
+    data = ["src/vulkan/utils_gen.c.j2"],
+    legacy_create_init = 0,
+    main = "src/vulkan/utils_gen.py",
+    visibility = ["//visibility:private"],
+    deps = ["@libplacebo_jinja2//:jinja2"],
+)
+
+# Sources containing `#pragma GLSL` blocks (src/meson.build, src/shaders/meson.build).
+_GLSL_SRCS = [
+    "src/renderer.c",
+    "src/shaders.c",
+    "src/shaders/colorspace.c",
+    "src/shaders/custom.c",
+    "src/shaders/custom_mpv.c",
+    "src/shaders/deinterlacing.c",
+    "src/shaders/dithering.c",
+    "src/shaders/film_grain.c",
+    "src/shaders/film_grain_av1.c",
+    "src/shaders/film_grain_h274.c",
+    "src/shaders/icc.c",
+    "src/shaders/lut.c",
+    "src/shaders/sampling.c",
+]
+
+[run_binary(
+    name = "glsl_preproc_" + src[len("src/"):-len(".c")].replace("/", "_"),
+    srcs = [src],
+    outs = ["generated/" + src],
+    # meson passes --strip (drop GLSL indentation/comments) unless debug=true.
+    args = select({
+        ":opt": ["--strip"],
+        "//conditions:default": [],
+    }) + [
+        "$(execpath %s)" % src,
+        "$(execpath generated/%s)" % src,
+    ],
+    tool = ":glsl_preproc",
+    visibility = ["//visibility:private"],
+) for src in _GLSL_SRCS]
+
+run_binary(
+    name = "vulkan_utils_gen_c",
+    srcs = ["@libplacebo_vulkan_registry//:registry/vk.xml"],
+    outs = ["generated/src/vulkan/utils_gen.c"],
+    args = [
+        "unused-datadir",
+        "$(execpath @libplacebo_vulkan_registry//:registry/vk.xml)",
+        "$(execpath generated/src/vulkan/utils_gen.c)",
+    ],
+    tool = ":vulkan_utils_gen",
+    visibility = ["//visibility:private"],
+)
+
+# --- Configuration headers --------------------------------------------------
+
+# src/include/libplacebo/meson.build (`components`, sorted as meson does).
+expand_template(
+    name = "config_h",
+    out = "src/include/libplacebo/config.h",
+    substitutions = {
+        "@majorver@": _MAJOR_VER,
+        "@apiver@": _API_VER,
+        "@extra_defs@": "".join([
+            "#undef PL_HAVE_D3D11\n",
+            "#define PL_HAVE_DOVI 1\n",
+            "#define PL_HAVE_GL_PROC_ADDR 1\n",
+            "#undef PL_HAVE_GLSLANG\n",
+            "#undef PL_HAVE_LCMS\n",
+            "#undef PL_HAVE_LIBDOVI\n",
+            "#undef PL_HAVE_OPENGL\n",
+            "#define PL_HAVE_SHADERC 1\n",
+            "#define PL_HAVE_VK_PROC_ADDR 1\n",
+            "#define PL_HAVE_VULKAN 1\n",
+            "#undef PL_HAVE_XXHASH\n",
+        ]),
+    },
+    template = "src/include/libplacebo/config.h.in",
+    visibility = ["//visibility:private"],
+)
+
+# `conf_internal` from meson.build, src/meson.build and src/glsl/meson.build.
+write_file(
+    name = "config_internal_h",
+    out = "src/config_internal.h",
+    content = [
+        "#pragma once",
+        "",
+        "#define BUILD_API_VER " + _API_VER,
+        "#define BUILD_FIX_VER " + _FIX_VER,
+        "#undef PL_DEBUG_ABORT",
+        "#undef PL_HAVE_UNWIND",
+        # shaderc >= 2023.8 knows Vulkan 1.3 and 1.4 target environments.
+        "#define PL_HAVE_SHADERC_VK_1_4",
+        "#define PL_HAVE_SHADERC_VK_1_3",
+    ] + select({
+        "@platforms//os:windows": [
+            "#define PL_HAVE_DBGHELP",
+            "#undef PL_HAVE_EXECINFO",
+        ],
+        "@platforms//os:linux": [
+            "#undef PL_HAVE_DBGHELP",
+            "#define PL_HAVE_EXECINFO",
+        ],
+        "@platforms//os:macos": [
+            "#undef PL_HAVE_DBGHELP",
+            "#define PL_HAVE_EXECINFO",
+        ],
+        "//conditions:default": [
+            "#undef PL_HAVE_DBGHELP",
+            "#undef PL_HAVE_EXECINFO",
+        ],
+    }) + [""],
+    newline = "unix",
+    visibility = ["//visibility:private"],
+)
+
+# src/version.py without git: the pretty project version.
+write_file(
+    name = "version_h",
+    out = "src/version.h",
+    content = [
+        "#define BUILD_VERSION \"v%s.%s.%s\"" % (_MAJOR_VER, _API_VER, _FIX_VER),
+        "",
+    ],
+    newline = "unix",
+    visibility = ["//visibility:private"],
+)
+
+# --- Library ----------------------------------------------------------------
+
+# Public headers that need third-party headers only consumers provide (FFmpeg,
+# dav1d, Direct3D 11); never compiled on their own.
+_TEXTUAL_PUBLIC_HDRS = [
+    "src/include/libplacebo/d3d11.h",
+    "src/include/libplacebo/utils/dav1d.h",
+    "src/include/libplacebo/utils/dav1d_internal.h",
+    "src/include/libplacebo/utils/libav.h",
+    "src/include/libplacebo/utils/libav_internal.h",
+]
+
+# Internal headers, visible to libplacebo's own sources only.
+cc_library(
+    name = "internal_headers",
+    includes = ["src"],
+    textual_hdrs = glob(
+        ["src/**/*.h"],
+        exclude = ["src/include/**"],
+    ) + [
+        ":src/config_internal.h",
+        ":src/version.h",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+_MSVC_COPTS = [
+    # Conforming preprocessor (__VA_OPT__ in convert.cc; C files get it from /std:c17).
+    "/Zc:preprocessor",
+    # Benign implicit conversions all over the code base; GCC/Clang do not
+    # warn about these with libplacebo's flags either.
+    "/wd4018",
+    "/wd4244",
+    "/wd4267",
+    "/wd4305",
+    # 64-bit enumerator constants are truncated to int (MSVC ABI, like clang-cl).
+    "/wd4309",
+    # Benign constructs GNU C accepts silently: memset() on arrays of pointers
+    # to const (C4090), returning a void expression (C4098), mixed enum
+    # arithmetic (C5287).
+    "/wd4090",
+    "/wd4098",
+    "/wd5287",
+]
+
+_GNU_COPTS = [
+    "-fno-math-errno",
+    "-fno-signed-zeros",
+    "-fno-trapping-math",
+    "-Wno-sign-compare",
+    "-Wno-unused-parameter",
+    "-Wno-missing-field-initializers",
+    "-Wno-type-limits",
+]
+
+cc_library(
+    name = "libplacebo",
+    srcs = [
+        "src/cache.c",
+        "src/colorspace.c",
+        "src/common.c",
+        "src/convert.cc",
+        "src/dispatch.c",
+        "src/dither.c",
+        "src/dummy.c",
+        "src/filters.c",
+        "src/format.c",
+        "src/gamut_mapping.c",
+        "src/glsl/spirv.c",
+        "src/gpu.c",
+        "src/gpu/utils.c",
+        "src/log.c",
+        "src/options.c",
+        "src/pl_alloc.c",
+        "src/pl_string.c",
+        "src/swapchain.c",
+        "src/tone_mapping.c",
+        "src/utils/dolbyvision.c",
+        "src/utils/frame_queue.c",
+        "src/utils/upload.c",
+        # -Dshaderc=enabled
+        "src/glsl/spirv_shaderc.c",
+        # -Dopengl=disabled
+        "src/opengl/stubs.c",
+        # -Dvulkan=enabled
+        "src/vulkan/command.c",
+        "src/vulkan/context.c",
+        "src/vulkan/formats.c",
+        "src/vulkan/gpu.c",
+        "src/vulkan/gpu_buf.c",
+        "src/vulkan/gpu_pass.c",
+        "src/vulkan/gpu_tex.c",
+        "src/vulkan/malloc.c",
+        "src/vulkan/swapchain.c",
+        "src/vulkan/utils.c",
+        ":generated/src/vulkan/utils_gen.c",
+    ] + [":generated/" + src for src in _GLSL_SRCS] + select({
+        # -Dd3d11=disabled still builds the stubs where <d3d11.h> exists.
+        "@platforms//os:windows": ["src/d3d11/stubs.c"],
+        "//conditions:default": [],
+    }),
+    hdrs = glob(
+        ["src/include/libplacebo/**/*.h"],
+        exclude = _TEXTUAL_PUBLIC_HDRS,
+    ) + [":src/include/libplacebo/config.h"],
+    # meson: c_std=c11 (C17 only fixes defects; it is rules_cc's MSVC default).
+    conlyopts = select({
+        "@rules_cc//cc/compiler:msvc-cl": [
+            "/std:c17",
+            # <stdatomic.h>
+            "/experimental:c11atomics",
+        ],
+        "@rules_cc//cc/compiler:clang-cl": ["/std:c17"],
+        "//conditions:default": [
+            "-std=c11",
+            "-U__STRICT_ANSI__",
+        ],
+    }),
+    copts = select({
+        "@rules_cc//cc/compiler:msvc-cl": _MSVC_COPTS,
+        "@rules_cc//cc/compiler:clang-cl": [],
+        "//conditions:default": _GNU_COPTS,
+    }),
+    cxxopts = select({
+        "@rules_cc//cc/compiler:msvc-cl": [
+            "/std:c++20",
+            # convert.cc includes C headers that use compound literals.
+            "/wd4576",
+        ],
+        "@rules_cc//cc/compiler:clang-cl": ["/std:c++20"],
+        "//conditions:default": ["-std=c++20"],
+    }),
+    defines = ["PL_STATIC"],
+    implementation_deps = [
+        ":internal_headers",
+        "@shaderc",
+    ],
+    includes = ["src/include"],
+    linkopts = select({
+        "@platforms//os:windows": ["shlwapi.lib"],
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-lm",
+            "-pthread",
+        ],
+    }),
+    linkstatic = True,
+    local_defines = [
+        "_ISOC99_SOURCE",
+        "_ISOC11_SOURCE",
+        "_GNU_SOURCE",
+    ] + select({
+        "@platforms//os:windows": [
+            "_WIN32_WINNT=0x0601",
+            "_USE_MATH_DEFINES",
+            "WIN32_LEAN_AND_MEAN",
+            "NOMINMAX",
+            "_CRT_SECURE_NO_WARNINGS",
+        ],
+        "@platforms//os:linux": [
+            "PL_HAVE_PTHREAD",
+            "PTHREAD_HAS_SETCLOCK",
+        ],
+        "//conditions:default": ["PL_HAVE_PTHREAD"],
+    }),
+    textual_hdrs = _TEXTUAL_PUBLIC_HDRS,
+    deps = [
+        ":vulkan_loader",
+        "@vulkan_headers",
+    ],
+)

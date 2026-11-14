@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Prebuilt nvJPEG2000 redistributable (Windows x64, CUDA 13). nvImageCodec loads
+# nvjpeg2k_0.dll dynamically, so consumers only need the headers at build time.
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["LICENSE"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/*.h"]),
+    includes = ["include"],
+)
+
+filegroup(
+    name = "runtime_dlls",
+    srcs = ["lib/13/nvjpeg2k_0.dll"],
+)

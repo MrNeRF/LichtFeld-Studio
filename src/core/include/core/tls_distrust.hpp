@@ -81,4 +81,22 @@ namespace lfs::core {
                contains_distrusted_ca(SSL_get0_verified_chain(ssl));
     }
 
+    // Makes a cpp-httplib client (OpenSSL backend) reject peers with a distrusted CA.
+    // cpp-httplib 0.30+ passes the TLS session (the SSL*) to set_session_verifier;
+    // older releases pass the SSL* to set_server_certificate_verifier.
+    // VerifierResponse is httplib::SSLVerifierResponse.
+    template <class VerifierResponse, class Client>
+    void reject_distrusted_ca_peers(Client& client) {
+        const auto verifier = [](auto session) {
+            return peer_chain_has_distrusted_ca(static_cast<const SSL*>(session))
+                       ? VerifierResponse::CertificateRejected
+                       : VerifierResponse::NoDecisionMade;
+        };
+        if constexpr (requires { client.set_session_verifier(verifier); }) {
+            client.set_session_verifier(verifier);
+        } else {
+            client.set_server_certificate_verifier(verifier);
+        }
+    }
+
 } // namespace lfs::core

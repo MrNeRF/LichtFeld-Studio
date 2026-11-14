@@ -1,0 +1,20 @@
+matrix:
+  bazel:
+    - 8.x
+    - 9.x
+tasks:
+  verify_targets_windows:
+    name: Verify build targets (Windows)
+    platform: windows
+    bazel: ${{ bazel }}
+    build_targets:
+      - "@nativefiledialog_extended//:nfd"
+  verify_targets_macos:
+    name: Verify build targets (macOS)
+    platform: macos_arm64
+    bazel: ${{ bazel }}
+    build_targets:
+      - "@nativefiledialog_extended//:nfd"
+# Linux needs GTK3 (or D-Bus with --@nativefiledialog_extended//:portal=True)
+# from the system via --@nativefiledialog_extended//:gtk3 (:dbus), so it is not
+# covered here.

@@ -111,6 +111,20 @@ cmake --install build --prefix ./dist
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 ```
 
+### 3. Bazel Build (Windows, experimental)
+
+Builds the portable layout with [Bazel](https://bazel.build) instead of CMake and
+vcpkg. Dependencies come from the Bazel Central Registry; CUDA, the Vulkan SDK
+and Python 3.12 are downloaded by Bazel. Requires [Bazelisk](https://github.com/bazelbuild/bazelisk),
+Visual Studio 2026 (MSVC) and an NVIDIA driver for CUDA 13.5.
+
+```powershell
+bazelisk run //:LichtFeld-Studio            # build and start the application
+bazelisk build //:LichtFeld-Studio          # application directory: bazel-bin/LichtFeld-Studio
+```
+
+See [bazel/README.md](../bazel/README.md) for details and the differences to the CMake build.
+
 ## Tests
 
 The tensor comparison tests validate the built-in tensor library against LibTorch as an

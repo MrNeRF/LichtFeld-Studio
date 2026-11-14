@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/sammycage/plutovg/archive/refs/tags/v1.3.3.tar.gz",
+    "integrity": "sha256-Kw0XpuAW9HuG+cAOLLgmAAQbHqH30qAMLUauVCy/7Tw=",
+    "strip_prefix": "plutovg-1.3.3",
+    "overlay": {
+        "BUILD.bazel": "sha256-EJjbOF/dXutowxDUNQYVvCYXK+Ul48+gcPZeHbnHbAA="
+    }
+}

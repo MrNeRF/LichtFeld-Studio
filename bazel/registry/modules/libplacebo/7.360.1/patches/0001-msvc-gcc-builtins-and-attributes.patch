@@ -1,0 +1,93 @@
+MSVC: provide equivalents for the GCC builtins/attributes used internally.
+
+cl.exe knows neither __attribute__ nor __builtin_*. When compiling with plain
+MSVC (not clang-cl), map PL_NOINLINE to __declspec(noinline), implement
+__builtin_{ctz,clzll,ffsll,popcount,popcountl,popcountll,unreachable} with
+MSVC intrinsics/portable code, add PL_PACKED{,_BEGIN,_END} helpers (GCC
+attribute vs. MSVC pack pragmas) and supply C11 max_align_t, which MSVC's C
+<stddef.h> lacks (double, as in MSVC's C++ <cstddef> and clang-cl).
+GCC/Clang/clang-cl builds are unchanged.
+
+diff --git a/src/common.h b/src/common.h
+--- a/src/common.h
++++ b/src/common.h
+@@ -46,7 +46,79 @@
+ #define PL_PRINTF(fmt, va)
+ #endif
+ 
++#if defined(_MSC_VER) && !defined(__clang__)
++
++// MSVC (cl.exe) understands neither GNU attributes nor GCC builtins. Provide
++// equivalents for the few that libplacebo relies on.
++#include <intrin.h>
++
++#define PL_NOINLINE __declspec(noinline)
++#define PL_PACKED_BEGIN __pragma(pack(push, 1))
++#define PL_PACKED_END __pragma(pack(pop))
++#define PL_PACKED
++
++// MSVC's C <stddef.h> lacks C11's max_align_t; match MSVC's C++ and clang-cl.
++#ifndef __cplusplus
++typedef double max_align_t;
++#endif
++
++static inline int pl_msvc_ctz(unsigned long long x)
++{
++    unsigned long idx = 0;
++#ifdef _WIN64
++    _BitScanForward64(&idx, x);
++#else
++    if (!_BitScanForward(&idx, (unsigned long) x)) {
++        _BitScanForward(&idx, (unsigned long) (x >> 32));
++        idx += 32;
++    }
++#endif
++    return (int) idx;
++}
++
++static inline int pl_msvc_clzll(unsigned long long x)
++{
++    unsigned long idx = 0;
++#ifdef _WIN64
++    _BitScanReverse64(&idx, x);
++#else
++    if (_BitScanReverse(&idx, (unsigned long) (x >> 32)))
++        idx += 32;
++    else
++        _BitScanReverse(&idx, (unsigned long) x);
++#endif
++    return 63 - (int) idx;
++}
++
++static inline int pl_msvc_ffsll(unsigned long long x)
++{
++    return x ? pl_msvc_ctz(x) + 1 : 0;
++}
++
++static inline int pl_msvc_popcountll(unsigned long long x)
++{
++    x = x - ((x >> 1) & 0x5555555555555555ULL);
++    x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
++    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
++    return (int) ((x * 0x0101010101010101ULL) >> 56);
++}
++
++#define __builtin_ctz(x)        pl_msvc_ctz((unsigned) (x))
++#define __builtin_clzll(x)      pl_msvc_clzll(x)
++#define __builtin_ffsll(x)      pl_msvc_ffsll(x)
++#define __builtin_popcount(x)   pl_msvc_popcountll((unsigned) (x))
++#define __builtin_popcountl(x)  pl_msvc_popcountll((unsigned long) (x))
++#define __builtin_popcountll(x) pl_msvc_popcountll(x)
++#define __builtin_unreachable() __assume(0)
++
++#else
++
+ #define PL_NOINLINE __attribute__((noinline))
++#define PL_PACKED_BEGIN
++#define PL_PACKED_END
++#define PL_PACKED __attribute__((__packed__))
++
++#endif
+ 
+ #ifndef __has_attribute
+ #define __has_attribute(x) 0

@@ -1,0 +1,10 @@
+module(
+    name = "glslang",
+    version = "16.2.0",
+    bazel_compatibility = [">=7.4.0"],
+    compatibility_level = 16,
+)
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "spirv_tools", version = "2026.3")

@@ -1,0 +1,11 @@
+{
+    "homepage": "https://github.com/google/shaderc",
+    "maintainers": [],
+    "repository": [
+        "github:google/shaderc"
+    ],
+    "versions": [
+        "2026.2"
+    ],
+    "yanked_versions": {}
+}

@@ -1,0 +1,233 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# io module (CMake: src/io/CMakeLists.txt)
+#
+#   io_cuda          IO CUDA kernels (morton, k-means, image formats, ...)
+#   io_rad_quant     RAD encode quantization (IEEE arithmetic, no fast math)
+#   lfs_video        video encode/decode (FFmpeg, libplacebo HDR, CUDA)
+#   lfs_io           loaders/exporters/.licht project container
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "cc_headers_only", "lfs_cc_library", "lfs_cuda_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+#-------------------------------------------------------------------------------------
+# Headers
+#-------------------------------------------------------------------------------------
+
+cc_headers_only(
+    name = "third_party_headers",
+    deps = [
+        "@libarchive//libarchive:archive",
+        "@openmesh",
+    ],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.cuh",
+        ],
+        allow_empty = True,
+    ),
+    includes = ["include"],
+    deps = [
+        ":third_party_headers",
+        "//bazel/deps:ffmpeg_headers",
+        "//src/core:headers",
+    ],
+)
+
+# CMake: lfs_io_cuda (PUBLIC), lfs_video and lfs_io add src/io as include
+# directory ("cuda/kmeans.hpp", "formats/...", "video/...").
+cc_library(
+    name = "io_includes",
+    includes = ["."],
+    visibility = ["//visibility:private"],
+    deps = [":headers"],
+)
+
+#-------------------------------------------------------------------------------------
+# CUDA
+#-------------------------------------------------------------------------------------
+
+# CMake: lfs_io_cuda
+lfs_cuda_library(
+    name = "io_cuda",
+    srcs = [
+        "cuda/image_format_kernels.cu",
+        "cuda/image_sharpen.cu",
+        "cuda/kmeans.cu",
+        "cuda/masked_image_fill.cu",
+        "cuda/morton_encoding.cu",
+    ],
+    deps = [
+        ":io_includes",
+        ":io_splat_decimate_cuda",
+        "//src/diagnostics:lfs_diagnostics",
+    ],
+)
+
+# Reference decimation needs IEEE arithmetic despite the IO CUDA fast-math defaults.
+lfs_cuda_library(
+    name = "io_splat_decimate_cuda",
+    srcs = ["cuda/splat_decimate.cu"],
+    copts = [
+        "--fmad=false",
+        "--ftz=false",
+        "--prec-div=true",
+        "--prec-sqrt=true",
+    ],
+    deps = [
+        ":io_includes",
+        "//src/diagnostics:lfs_diagnostics",
+    ],
+)
+
+# CMake: lfs_io_rad_quant_cuda. Bit-parity with the CPU PropertyEncoder requires
+# IEEE arithmetic: no -use_fast_math, no FMA contraction.
+lfs_cuda_library(
+    name = "io_rad_quant",
+    srcs = ["cuda/rad_encode_quant.cu"],
+    copts = ["--fmad=false"],
+    fast_math = False,
+    deps = [
+        ":io_includes",
+        "//src/diagnostics:lfs_diagnostics",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_video (FFmpeg + CUDA + libplacebo)
+#-------------------------------------------------------------------------------------
+
+lfs_cuda_library(
+    name = "video_cuda",
+    srcs = ["video/color_convert.cu"],
+    deps = [":io_includes"],
+)
+
+lfs_cc_library(
+    name = "lfs_video",
+    srcs = [
+        "hdr_libplacebo.cpp",
+        "hdr_libplacebo_av.c",
+        "hdr_tonemap.cpp",
+        "video/cuda_frame_handoff.cpp",
+        "video/video_encoder.cpp",
+        "video/video_metadata.cpp",
+        "video_frame_extractor.cpp",
+        "video_player.cpp",
+    ],
+    deps = [
+        ":io_includes",
+        ":video_cuda",
+        "//bazel/deps:ffmpeg",
+        "//src/core:lfs_core",
+        "@cuda//:cuda",
+        "@cuda//:cuda_runtime",
+        "@libplacebo",
+        "@spdlog",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_io
+#-------------------------------------------------------------------------------------
+
+lfs_cc_library(
+    name = "lfs_io",
+    srcs = [
+        "cache_image_loader.cpp",
+        "collision_export.cpp",
+        "formats/colmap.cpp",
+        "formats/html.cpp",
+        "formats/nurec_usdz.cpp",
+        "formats/ply.cpp",
+        "formats/rad.cpp",
+        "formats/sogs.cpp",
+        "formats/spz.cpp",
+        "formats/ssog.cpp",
+        "formats/transforms.cpp",
+        "formats/usd.cpp",
+        "formats/usd_flat/crate.cpp",
+        "formats/usd_flat/usda_read.cpp",
+        "formats/usd_flat/usda_write.cpp",
+        "formats/usd_flat/usdz.cpp",
+        "json_chapter_dom.cpp",
+        "loader.cpp",
+        "loader_service.cpp",
+        "loaders/blender_loader.cpp",
+        "loaders/checkpoint_loader.cpp",
+        "loaders/colmap_loader.cpp",
+        "loaders/mesh_loader.cpp",
+        "loaders/ply_loader.cpp",
+        "loaders/rad_loader.cpp",
+        "loaders/sogs_loader.cpp",
+        "loaders/spz_loader.cpp",
+        "loaders/ssog_loader.cpp",
+        "loaders/usd_loader.cpp",
+        "mesh/openmesh_bridge.cpp",
+        "mesh/texture_loader.cpp",
+        "nvcodec_image_loader.cpp",
+        "pipelined_image_loader.cpp",
+        "ply_to_rad_lod.cpp",
+        "project/crc32c.cpp",
+        "project/embedded_dataset.cpp",
+        "project/geometry_payload.cpp",
+        "project/project_chapters.cpp",
+        "project/project_container.cpp",
+        "project/project_document.cpp",
+        "project/project_file.cpp",
+        "project/project_inspector.cpp",
+        "project/project_operations.cpp",
+        "project/project_preview.cpp",
+        "project/project_recovery.cpp",
+        "project/project_writer.cpp",
+        "project/scene_chapter_adapter.cpp",
+        "project/selection_chapter.cpp",
+        "project/session_chapters.cpp",
+        "project/sfm_observation_chapter.cpp",
+        "project/splat_chapter.cpp",
+        "splat_decimate.cpp",
+        "stb_image_impl.cpp",
+        "tinyply.cpp",
+    ],
+    copts = select({
+        "@platforms//os:windows": ["/W4"],
+        "//conditions:default": [],
+    }),
+    local_defines = ["nsel_CONFIG_SELECT_EXPECTED=1"],
+    deps = [
+        ":io_includes",
+        ":io_cuda",
+        ":io_rad_quant",
+        "//bazel/compat:tinyply",
+        "//src/core:core_cuda",
+        "//src/core:lfs_core",
+        "//src/geometry:lfs_geometry",
+        "//src/rendering:headers",
+        "@assimp",
+        "@cuda//:cuda_runtime",
+        "@lfs_external//nvImageCodec:nvimgcodec",
+        "@lfs_external//spz",
+        "@lfs_external//tinyusdz",
+        "@libarchive//libarchive:archive",
+        "@libdeflate",
+        "@libwebp",
+        "@nlohmann_json//:json",
+        "@onetbb//:tbb",
+        "@openmesh",
+        "@openssl//:crypto",
+        "@spdlog",
+        "@xxhash",
+        "@zlib",
+        "@zstd",
+    ],
+)

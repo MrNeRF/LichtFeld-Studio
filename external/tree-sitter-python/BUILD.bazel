@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# tree-sitter Python grammar (MIT), vendored (CMake: lfs_tree_sitter_python).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+cc_library(
+    name = "tree_sitter_python",
+    srcs = [
+        "src/parser.c",
+        "src/scanner.c",
+    ] + glob(["src/tree_sitter/*.h"]),
+    hdrs = ["bindings/c/tree_sitter/tree-sitter-python.h"],
+    copts = select({
+        "@platforms//os:windows": ["/std:c11"],
+        "//conditions:default": ["-std=c11"],
+    }),
+    includes = ["bindings/c"],
+)

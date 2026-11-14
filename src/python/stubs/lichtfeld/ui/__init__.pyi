@@ -2370,37 +2370,6 @@ def set_crop_tool_operation(operation: str) -> None:
 def get_crop_tool_operation() -> str:
     """Get the active crop or selection-volume gizmo operation"""
 
-def crop_group_enabled(owner_uuid: str) -> bool:
-    """Read the collective crop gate on an exact splat owner"""
-
-def set_crop_group_enabled(owner_uuid: str, enabled: bool) -> bool:
-    """Toggle the collective crop gate without changing individual flags"""
-
-def delete_crop_group(owner_uuid: str) -> bool:
-    """Remove all crop volumes as one undoable action"""
-
-def bake_crop_group(owner_uuid: str) -> bool:
-    """Apply enabled crop volumes as one undoable action"""
-
-def finish_crop_tool() -> None:
-    """
-    Finish crop editing while retaining the editable volume and original geometry
-    """
-
-def is_crop_tool_shape_locked() -> bool:
-    """Whether editing an existing crop keeps its saved shape type"""
-
-def change_crop_tool_shape(shape: str) -> bool:
-    """
-    Change only the crop being edited, preserving its identity and siblings
-    """
-
-def edit_crop_tool(uuid: str) -> None:
-    """Edit an existing crop volume without creating another"""
-
-def new_crop_tool(shape: str) -> None:
-    """Create another independent crop on the selected splat"""
-
 def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
@@ -2527,9 +2496,9 @@ def on_open_image_preview(callback: object, include_sequence: bool = False) -> N
     Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.
     """
 
-def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None, semantic: object | None = None) -> int:
+def sam_preview_submit(path: str, revision: str, mtime_ns: int, size_bytes: int, points: Sequence[Sequence[float]], box: Sequence[float] | None = None, refine_request: int = 0, refine_candidate: int = -1, weights: str = '', export_candidate: int = -1, exclude: bool = False, sequence: object | None = None) -> int:
     """
-    UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.
+    UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.
     """
 
 def sam_preview_sequence_frames(run: str, first: int = 0, count: int = 64) -> list:

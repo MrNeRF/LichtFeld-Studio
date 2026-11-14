@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Viewport GLSL shaders compiled to C++ headers (CMake: the compile_shader()
+# calls in src/visualizer/CMakeLists.txt).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_binary")
+load("//bazel/shaders:compile_shader.bzl", "compile_shader")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Build-time GLSL -> SPIR-V header compiler (CMake: lfs_shader_compiler).
+lfs_cc_binary(
+    name = "lfs_shader_compiler",
+    srcs = ["//src/visualizer:tools/shader_compiler.cpp"],
+    deps = [
+        "//src/core:headers",
+        "@glslang",
+        "@glslang//:SPIRV",
+        "@glslang//:glslang-default-resource-limits",
+    ],
+)
+
+_SLANG_DIR = "//src/rendering/rasterizer/vulkan/shader:src/slang/"
+
+_EQUIRECT_PROJECTION = _SLANG_DIR + "equirect_projection.inc"
+
+# (source, C++ symbol, files it includes), in CMake order.
+VIEWPORT_SHADERS = [
+    ("screen_quad.vert", "kScreenQuadVertSpv", []),
+    ("scene.frag", "kSceneFragSpv", []),
+    ("scene_spatial.frag", "kSceneSpatialFragSpv", []),
+    ("vignette.frag", "kVignetteFragSpv", []),
+    ("grid.vert", "kGridVertSpv", []),
+    ("grid.frag", "kGridFragSpv", []),
+    ("overlay.vert", "kOverlayVertSpv", []),
+    ("overlay.frag", "kOverlayFragSpv", []),
+    ("shape_overlay.vert", "kShapeOverlayVertSpv", []),
+    ("shape_overlay.frag", "kShapeOverlayFragSpv", []),
+    ("textured_overlay.vert", "kTexturedOverlayVertSpv", []),
+    ("textured_overlay.frag", "kTexturedOverlayFragSpv", []),
+    ("pivot.vert", "kPivotVertSpv", []),
+    ("pivot.frag", "kPivotFragSpv", []),
+    ("frustum.vert", "kFrustumVertSpv", [_EQUIRECT_PROJECTION]),
+    ("mesh.vert", "kMeshVertSpv", [_EQUIRECT_PROJECTION]),
+    ("mesh.geom", "kMeshGeomSpv", []),
+    ("mesh.frag", "kMeshFragSpv", []),
+    ("collision_overlay.vert", "kCollisionOverlayVertSpv", []),
+    ("collision_overlay.frag", "kCollisionOverlayFragSpv", [_EQUIRECT_PROJECTION]),
+    ("mesh_shadow.vert", "kMeshShadowVertSpv", []),
+    ("mesh_shadow.frag", "kMeshShadowFragSpv", []),
+    ("mesh_wireframe.vert", "kMeshWireframeVertSpv", []),
+    ("mesh_wireframe.frag", "kMeshWireframeFragSpv", []),
+    ("environment.frag", "kEnvironmentFragSpv", [_EQUIRECT_PROJECTION]),
+    ("depth_blit.frag", "kDepthBlitFragSpv", []),
+    ("split_view.frag", "kSplitViewFragSpv", [_SLANG_DIR + "gt_loss_heatmap.inc"]),
+    ("vksplat_compose.comp", "kVkSplatComposeCompSpv", [
+        _SLANG_DIR + "display_color.inc",
+        _EQUIRECT_PROJECTION,
+    ]),
+    ("point_cloud.vert", "kPointCloudVertSpv", [_EQUIRECT_PROJECTION]),
+    ("point_cloud.frag", "kPointCloudFragSpv", []),
+]
+
+# <source>.spv.h, e.g. target screen_quad_vert_spv -> screen_quad.vert.spv.h.
+[compile_shader(
+    name = src.replace(".", "_") + "_spv",
+    src = src,
+    out = src + ".spv.h",
+    hdrs = hdrs,
+    symbol = symbol,
+) for src, symbol, hdrs in VIEWPORT_SHADERS]
+
+# #include "viewport/<source>.spv.h"
+cc_library(
+    name = "viewport_shaders",
+    hdrs = [src + ".spv.h" for src, _, _ in VIEWPORT_SHADERS],
+    strip_include_prefix = "/src/visualizer/rendering/resources",
+)

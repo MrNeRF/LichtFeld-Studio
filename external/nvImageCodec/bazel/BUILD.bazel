@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Starlark helpers for ../BUILD.bazel (vendored nvImageCodec).
+exports_files(["defs.bzl"])

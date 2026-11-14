@@ -1,0 +1,143 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# python module (CMake: src/python/CMakeLists.txt)
+#
+#   lfs_python_runtime.dll  embedded-Python state shared by the app and the module;
+#                           on Windows it also contains the Python utils (runner,
+#                           package manager, plugin runner, uv runner, ...)
+#   lichtfeld.pyd           the nanobind extension module (CMake: lfs_py)
+
+load("@nanobind_bazel//:build_defs.bzl", "nanobind_extension")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "LFS_COPTS", "LFS_DEFINES", "lfs_dll")
+load("//bazel/windows:resources.bzl", "lfs_windows_version_resource")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Compiled into lfs_visualizer.dll (Python hook invoker, DLL boundary singleton).
+exports_files(["ui_hooks.cpp"])
+
+# Headers of the runtime/utils. Only depends on core and two plain visualizer
+# enums, so that //src/visualizer:headers (gui/panels/menu_bar.hpp includes
+# python_runtime.hpp) can depend on it.
+cc_library(
+    name = "runtime_headers",
+    hdrs = glob(["*.hpp"]),
+    includes = ["."],
+    deps = [
+        "//src:root_includes",
+        "//src/core:headers",
+        "//src/visualizer:panel_types",
+        "@glm",
+        "@rules_python//python/cc:current_py_cc_headers",
+    ],
+)
+
+lfs_dll(
+    name = "lfs_python_runtime",
+    srcs = [
+        "package_manager.cpp",
+        "plugin_runner.cpp",
+        "python_buffer_analysis.cpp",
+        "python_runtime.cpp",
+        "runner.cpp",
+        "subprocess.cpp",
+        "uv_runner.cpp",
+    ],
+    description = "LichtFeld Studio Python runtime",
+    dll_name = "lfs_python_runtime.dll",
+    export_define = "LFS_PYTHON_RUNTIME_EXPORTS",
+    interface_deps = [
+        ":runtime_headers",
+        "//src/core:lfs_core",
+        "@glm",
+        "@rules_python//python/cc:current_py_cc_libs",
+    ],
+    deps = [
+        "//src/core:lfs_logger",
+        "//src/training:headers",
+        "//src/visualizer:headers",
+        "@lfs_external//tree-sitter:tree_sitter",
+        "@lfs_external//tree-sitter-python:tree_sitter_python",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# lichtfeld.pyd (CMake: nanobind_add_module(lfs_py NB_STATIC ...), OUTPUT_NAME lichtfeld)
+# Not built against the stable ABI: the app embeds python312.dll, and loading
+# python3.dll next to it would initialize Python twice.
+#-------------------------------------------------------------------------------------
+
+lfs_windows_version_resource(
+    name = "lichtfeld_version",
+    description = "LichtFeld Studio Python module",
+    filename = "lichtfeld.pyd",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+nanobind_extension(
+    name = "lichtfeld",
+    srcs = glob([
+        "lfs/**/*.cpp",
+        "lfs/**/*.hpp",
+    ]) + [
+        "viewport_overlay.cpp",
+        "viewport_overlay.hpp",
+    ],
+    copts = LFS_COPTS,
+    local_defines = LFS_DEFINES,
+    deps = [
+        ":lfs_python_runtime",
+        ":lichtfeld_version",
+        "//bazel/deps:sdl3",
+        "//src:generated_headers",
+        "//src/core:lfs_core",
+        "//src/core:lfs_event_bridge",
+        "//src/diagnostics:lfs_diagnostics",
+        "//src/geometry:lfs_geometry",
+        "//src/io:lfs_io",
+        "//src/mcp:lfs_mcp",
+        "//src/rendering:lfs_rendering",
+        "//src/sequencer:lfs_sequencer",
+        "//src/training:lfs_training",
+        "//src/visualizer:lfs_visualizer",
+        "@cuda//:cuda_runtime",
+        "@cuda//:curand",
+        "@dlpack",
+        "@openmesh",
+        "@openmesh//:openmesh_tools",
+        "@rmlui//:rmlui_shared",
+        "@vulkan_memory_allocator",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Python files installed to lib/python/ (CMake install(DIRECTORY lfs_plugins ...))
+#-------------------------------------------------------------------------------------
+
+filegroup(
+    name = "python_packages",
+    srcs = glob(
+        [
+            "lfs_plugins/**/*.py",
+            "lfs_plugins/**/*.pem",
+            "lichtfeld_sessions/**/*.py",
+            "lichtfeld_sessions/**/*.pem",
+        ],
+        allow_empty = True,
+    ) + [
+        "_lfs_panel_contract.py",
+        "_lfs_path_io.py",
+    ],
+)
+
+# Committed type stubs (lichtfeld/*.pyi), installed next to the module.
+filegroup(
+    name = "stubs",
+    srcs = glob(
+        ["stubs/**"],
+        allow_empty = True,
+    ),
+)

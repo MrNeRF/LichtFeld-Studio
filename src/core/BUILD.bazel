@@ -1,0 +1,411 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# core module (CMake: src/core/CMakeLists.txt and its subdirectories)
+#
+#   lfs_logger.dll        logger + environment            (src/core/logger)
+#   lfs_event_bridge.dll  cross-module singletons         (src/core/event_bridge)
+#   lfs_core.dll          core + tensor library
+#   core_cuda, tensor_kernels, nn_kernels: static CUDA libraries linked into lfs_core.dll
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library", "lfs_cuda_library", "lfs_dll")
+load("//bazel/gen:defs.bzl", "LFS_VERSION", "lfs_core_abi_stamp")
+
+package(default_visibility = ["//:__subpackages__"])
+
+#-------------------------------------------------------------------------------------
+# Headers
+#-------------------------------------------------------------------------------------
+
+# Standalone so that //src/geometry:headers can use it without depending on all
+# of core (core/events.hpp in turn includes geometry/bounding_box.hpp).
+cc_library(
+    name = "camera_types",
+    hdrs = ["include/core/camera_types.h"],
+    includes = ["include"],
+)
+
+# All headers of the core module (public include/ tree and internal headers of
+# core/, core/cuda, core/tensor, core/nn, core/logger, core/event_bridge).
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.cuh",
+        ],
+        exclude = ["include/core/camera_types.h"],
+    ),
+    # CMake: target_compile_definitions(lfs_core PUBLIC LFS_ALLOCATION_PROFILING_ENABLED=...)
+    defines = ["LFS_ALLOCATION_PROFILING_ENABLED=0"],
+    includes = [
+        "event_bridge",
+        "include",
+        "nn",
+        "tensor",
+        "tensor/internal",
+    ],
+    deps = [
+        ":camera_types",
+        "//bazel/deps:cuda_headers",
+        "//bazel/deps:openssl_headers",
+        "//bazel/deps:spdlog_headers",
+        "//bazel/deps:stb_headers",
+        "//bazel/deps:xxhash_headers",
+        "//src:generated_headers",
+        "//src:root_includes",
+        "//src/diagnostics:headers",
+        "//src/geometry:headers",
+        "@glm",
+        "@nlohmann_json//:json",
+    ],
+)
+
+# CMake: lfs_core_abi_stamp.h (cmake/GenerateCoreAbiStamp.cmake). The app refuses
+# to start when the loaded lfs_core.dll was built from different core sources.
+lfs_core_abi_stamp(
+    name = "core_abi_stamp_h",
+    srcs = glob([
+        "**/*.cpp",
+        "**/*.cu",
+        "**/*.cuh",
+        "**/*.hpp",
+    ]) + ["BUILD.bazel"],
+    out = "abi/lfs_core_abi_stamp.h",
+    material = [
+        LFS_VERSION,
+        "Windows",
+        "8",
+        "MSVC",
+        "NVIDIA",
+    ] + select({
+        "//bazel/config:dbg": ["Debug"],
+        "//conditions:default": ["Release"],
+    }),
+    template = "//:cmake/lfs_core_abi_stamp.h.in",
+)
+
+cc_library(
+    name = "core_abi_stamp",
+    hdrs = [":core_abi_stamp_h"],
+    includes = ["abi"],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_logger.dll (leaf: breaks the lfs_core <-> lfs_event_bridge cycle)
+#-------------------------------------------------------------------------------------
+
+lfs_dll(
+    name = "lfs_logger",
+    srcs = [
+        "environment.cpp",
+        "logger.cpp",
+    ],
+    dll_name = "lfs_logger.dll",
+    description = "LichtFeld Studio logging",
+    export_define = "LFS_LOGGER_EXPORTS",
+    interface_deps = [":headers"],
+    deps = [
+        "//src/diagnostics:lfs_diagnostics",
+        "@spdlog",
+        "@xxhash",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_event_bridge.dll (solves singleton duplication between exe and Python module)
+#-------------------------------------------------------------------------------------
+
+lfs_dll(
+    name = "lfs_event_bridge",
+    srcs = [
+        "event_bridge/command_center.cpp",
+        "event_bridge/command_center_bridge.cpp",
+        "event_bridge/control_boundary.cpp",
+        "event_bridge/event_bridge.cpp",
+        "event_bridge/localization_manager.cpp",
+        "event_bridge/scoped_handler.cpp",
+    ],
+    dll_name = "lfs_event_bridge.dll",
+    description = "LichtFeld Studio event bridge",
+    export_define = "LFS_EVENT_BRIDGE_EXPORTS",
+    interface_deps = [
+        ":headers",
+        "@cuda//:cuda_runtime",
+    ],
+    deps = [
+        ":lfs_logger",
+        "//src/geometry:lfs_geometry",
+        "//src/training:headers",
+        "@nlohmann_json//:json",
+        "@spdlog",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Static CUDA libraries, linked privately into lfs_core.dll
+#-------------------------------------------------------------------------------------
+
+# CMake: lfs_core_cuda (memory arena, lanczos resize, core kernels)
+lfs_cuda_library(
+    name = "core_cuda_kernels",
+    srcs = [
+        "cuda/collision_voxelization.cu",
+        "cuda/kernels/image_quantize.cu",
+        "cuda/kernels/initial_scales.cu",
+        "cuda/kernels/mask_normalization.cu",
+        "cuda/kernels/selection_ops.cu",
+        "cuda/kernels/sh_layout.cu",
+        "cuda/kernels/splat_transform.cu",
+        "cuda/lanczos_resize/lanczos_resize.cu",
+        "cuda/memory_arena.cu",
+        "cuda/sh_value_quant_kernels.cu",
+        "cuda/tensor_debug.cu",
+        "cuda/undistort/undistort.cu",
+    ],
+    includes = ["cuda"],
+    deps = [
+        ":headers",
+        "@cuda//:cuda",
+        "@cuda//:curand",
+    ],
+)
+
+lfs_cc_library(
+    name = "core_cuda",
+    srcs = ["cuda/exportable_storage.cpp"],
+    deps = [
+        ":core_cuda_kernels",
+        ":headers",
+        "//src/diagnostics:lfs_diagnostics",
+        "@cuda//:cuda",
+        "@cuda//:curand",
+        "@glm",
+        "@spdlog",
+    ],
+)
+
+_TENSOR_KERNEL_SRCS = [
+    "tensor/tensor_dot_optimized.cu",
+    "tensor/tensor_fused_pointwise.cu",
+    "tensor/tensor_mask_compaction.cu",
+    "tensor/tensor_masking_ops.cu",
+    "tensor/tensor_matrix_ops.cu",
+    "tensor/tensor_nn_ops.cu",
+    "tensor/tensor_ops.cu",
+    "tensor/tensor_random_ops.cu",
+    "tensor/tensor_strided_ops.cu",
+    "tensor/tensor_warp_reduce.cu",
+]
+
+# CMake: lfs_tensor_kernels (compiled with LFS_CORE_EXPORTS: linked into lfs_core.dll)
+lfs_cuda_library(
+    name = "tensor_kernels",
+    srcs = _TENSOR_KERNEL_SRCS,
+    host_copts = ["/bigobj"],
+    includes = ["tensor"],
+    local_defines = ["LFS_CORE_EXPORTS"],
+    deps = [
+        ":headers",
+        ":tensor_kernels_o0",
+        "//src/diagnostics:lfs_diagnostics",
+        "@cuda//:curand",
+    ],
+)
+
+# Windows nvcc ICE workaround of the CMake build: tensor_broadcast_ops.cu at -O0.
+lfs_cuda_library(
+    name = "tensor_kernels_o0",
+    srcs = ["tensor/tensor_broadcast_ops.cu"],
+    copts = ["-O0"],
+    host_copts = ["/bigobj"],
+    includes = ["tensor"],
+    local_defines = ["LFS_CORE_EXPORTS"],
+    deps = [
+        ":headers",
+        "@cuda//:curand",
+    ],
+)
+
+# CMake: lfs_nn_kernels
+lfs_cuda_library(
+    name = "nn_kernels",
+    srcs = [
+        "nn/attention.cu",
+        "nn/conv.cu",
+        "nn/conv3x3_mma.cu",
+        "nn/elementwise.cu",
+        "nn/gemm.cu",
+        "nn/lpips_kernels.cu",
+    ],
+    includes = ["nn"],
+    local_defines = ["LFS_CORE_EXPORTS"],
+    deps = [
+        ":headers",
+        "//src/diagnostics:lfs_diagnostics",
+    ],
+)
+
+# CUDA sources that are part of lfs_core itself.
+lfs_cuda_library(
+    name = "core_dll_cuda",
+    srcs = [
+        "splat_data_mirror_centroid.cu",
+        "tensor/tensor_exports.cu",
+    ],
+    alwayslink = True,
+    host_copts = ["/bigobj"],
+    includes = ["tensor"],
+    local_defines = [
+        "LFS_CORE_EXPORTS",
+        "_USE_MATH_DEFINES",
+    ],
+    deps = [":headers"],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_core.dll
+#-------------------------------------------------------------------------------------
+
+lfs_dll(
+    name = "lfs_core",
+    srcs = [
+        # Core module sources
+        "abi.cpp",
+        "alloc_counter.cpp",
+        "animatable_property.cpp",
+        "argument_parser.cpp",
+        "bhatt_lod.cpp",
+        "camera.cpp",
+        "checkpoint_format.cpp",
+        "collision_volume.cpp",
+        "collision_voxelization.cpp",
+        "collision_walk.cpp",
+        "crash_handler.cpp",
+        "crop_polygon.cpp",
+        "cuda/memory_arena_owner.cpp",
+        "cuda/vmm_device_buffer.cpp",
+        "cuda_error.cpp",
+        "cuda_error_typed.cpp",
+        "cuda_version.cpp",
+        "device_fault.cpp",
+        "error.cpp",
+        "error_bus.cpp",
+        "error_envelope.cpp",
+        "error_latch.cpp",
+        "error_reporter.cpp",
+        "exif.cpp",
+        "failure_report.cpp",
+        "guarded_task.cpp",
+        "host_metrics.cpp",
+        "image_codecs.cpp",
+        "image_exr.cpp",
+        "image_io.cpp",
+        "image_loader.cpp",
+        "legacy_settings_migration.cpp",
+        "mapped_file.cpp",
+        "memory_domain.cpp",
+        "memory_pressure.cpp",
+        "mesh_data.cpp",
+        "octree_lod.cpp",
+        "operator_callbacks.cpp",
+        "optimization_properties.cpp",
+        "parameters.cpp",
+        "persisted_settings.cpp",
+        "property_registry.cpp",
+        "provenance.cpp",
+        "reactive_store.cpp",
+        "scene.cpp",
+        "session_breadcrumb.cpp",
+        "sh_value_quant.cpp",
+        "shareable_allocation_limit.cpp",
+        "splat_data.cpp",
+        "splat_data_mirror.cpp",
+        "splat_data_transform.cpp",
+        "splat_exportable_storage.cpp",
+        "splat_simplify.cpp",
+        "system_info.cpp",
+        "tensor_debug.cpp",
+        "training_snapshot.cpp",
+        "user_paths.cpp",
+        "uuid.cpp",
+        # Tensor C++ sources
+        "nn/activation_arena.cpp",
+        "nn/models/lpips.cpp",
+        "nn/models/moge2.cpp",
+        "nn/models/sam2.cpp",
+        "nn/models/sam2_video.cpp",
+        "nn/ops.cpp",
+        "nn/weight_file.cpp",
+        "nn/weight_file_open.cpp",
+        "tensor/cuda_event_pool.cpp",
+        "tensor/cuda_stream_context.cpp",
+        "tensor/gpu_slab_allocator.cpp",
+        "tensor/lazy_config.cpp",
+        "tensor/lazy_device_storage.cpp",
+        "tensor/lazy_executor.cpp",
+        "tensor/lazy_ir.cpp",
+        "tensor/pinned_memory_allocator.cpp",
+        "tensor/size_bucketed_pool.cpp",
+        "tensor/stream_lifetime.cpp",
+        "tensor/tensor.cpp",
+        "tensor/tensor_advanced_ops.cpp",
+        "tensor/tensor_broadcast.cpp",
+        "tensor/tensor_factory.cpp",
+        "tensor/tensor_masking_ops.cpp",
+        "tensor/tensor_matrix_ops.cpp",
+        "tensor/tensor_movement_ops.cpp",
+        "tensor/tensor_nn_ops.cpp",
+        "tensor/tensor_random_ops.cpp",
+        "tensor/tensor_row_proxy.cpp",
+        "tensor/tensor_serialization.cpp",
+        "tensor/tensor_shape_ops.cpp",
+        "tensor/tensor_unified_ops.cpp",
+        "tensor/tensor_utils.cpp",
+    ],
+    # CMake: OpenMP::OpenMP_CXX (tensor ops, splat transforms, EXIF parsing).
+    copts = select({
+        "@platforms//os:windows": ["/openmp"],
+        "//conditions:default": ["-fopenmp"],
+    }),
+    description = "LichtFeld Studio core and tensor runtime",
+    dll_name = "lfs_core.dll",
+    export_define = "LFS_CORE_EXPORTS",
+    interface_deps = [
+        ":headers",
+        ":lfs_event_bridge",
+        ":lfs_logger",
+        "//src/diagnostics:lfs_diagnostics",
+        "//src/geometry:lfs_geometry",
+        "@cuda//:cuda_runtime",
+        "@cuda//:curand",
+        "@glm",
+        "@nlohmann_json//:json",
+        "@onetbb//:tbb",
+        "@spdlog",
+    ],
+    linkopts = [
+        "bcrypt.lib",
+        "/ignore:4217",
+    ],
+    local_defines = ["_USE_MATH_DEFINES"],
+    deps = [
+        ":core_abi_stamp",
+        ":core_cuda",
+        ":core_dll_cuda",
+        ":nn_kernels",
+        ":tensor_kernels",
+        "//bazel/compat:nanoflann",
+        "//src/io:headers",
+        "@libjpeg_turbo//:jpeg",
+        "@libpng//:png",
+        "@libtiff//:tiff",
+        "@libwebp",
+        "//bazel/compat:openexr_core",
+        "@openmesh",
+        "@taywee_args//:args",
+    ],
+)

@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Forwarding headers that map LichtFeld's include paths for formerly vendored
+# libraries (external/) onto the include paths of the corresponding BCR modules.
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "cc_clean_headers")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# BCR cpp-httplib depends on BoringSSL. LichtFeld uses OpenSSL (and defines
+# CPPHTTPLIB_OPENSSL_SUPPORT itself), and two OpenSSL implementations must not
+# meet in one binary: take only httplib.h from the module.
+cc_clean_headers(
+    name = "httplib_header",
+    prefixes = [""],
+    suffixes = ["httplib.h"],
+    deps = ["@cpp-httplib//:httplib"],
+)
+
+cc_library(
+    name = "httplib",
+    hdrs = ["httplib/httplib.h"],
+    includes = ["."],
+    deps = [
+        ":httplib_header",
+        "@openssl//:crypto",
+        "@openssl//:ssl",
+    ],
+)
+
+cc_library(
+    name = "nanoflann",
+    hdrs = ["nanoflann.hpp"],
+    includes = ["."],
+    deps = ["@nanoflann"],
+)
+
+cc_library(
+    name = "openexr_core",
+    hdrs = ["OpenEXR/openexr.h"],
+    includes = ["."],
+    deps = ["@openexr//:OpenEXRCore"],
+)
+
+cc_library(
+    name = "tinyply",
+    hdrs = ["tinyply.hpp"],
+    includes = ["."],
+    deps = ["@tinyply"],
+)

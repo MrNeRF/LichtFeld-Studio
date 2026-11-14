@@ -1,0 +1,125 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+#-------------------------------------------------------------------------------------
+# Common
+#-------------------------------------------------------------------------------------
+
+common --enable_platform_specific_config
+
+# Libraries that are not (yet) on the BCR live in a BCR-format registry inside
+# this repository. It is consulted first, then the BCR.
+common --registry=file:///%workspace%/bazel/registry
+common --registry=https://bcr.bazel.build
+
+# Do not create bazel-* convenience symlinks (keeps `git status` clean).
+build --symlink_prefix=/
+
+# git_version.h (see bazel/gen/workspace_status.py)
+build --workspace_status_command="python bazel/gen/workspace_status.py"
+
+# LichtFeld Studio is performance critical; build optimized by default (CMake: Release).
+build --compilation_mode=opt
+
+#-------------------------------------------------------------------------------------
+# Windows / MSVC
+#-------------------------------------------------------------------------------------
+
+build:windows --cxxopt=/std:c++latest
+build:windows --host_cxxopt=/std:c++latest
+# The MSVC toolchain's own /std:c++17 would precede /std:c++latest on every
+# command line (warning D9025).
+build:windows --features=-default_cpp_std
+build:windows --host_features=-default_cpp_std
+build:windows --copt=/utf-8
+build:windows --host_copt=/utf-8
+# CMake's MSVC defaults (CMAKE_<LANG>_FLAGS_INIT) for every C/C++ target; code
+# checks WIN32 rather than _WIN32 (OpenMesh, parts of LichtFeld).
+build:windows --copt=/DWIN32
+build:windows --host_copt=/DWIN32
+build:windows --copt=/D_WINDOWS
+build:windows --host_copt=/D_WINDOWS
+build:windows --cxxopt=/Zc:__cplusplus
+build:windows --host_cxxopt=/Zc:__cplusplus
+# CMake links these into every MSVC binary (CMAKE_<LANG>_STANDARD_LIBRARIES_INIT);
+# LichtFeld relies on them (e.g. GDI for drag images).
+build:windows --linkopt=kernel32.lib
+build:windows --linkopt=user32.lib
+build:windows --linkopt=gdi32.lib
+build:windows --linkopt=winspool.lib
+build:windows --linkopt=shell32.lib
+build:windows --linkopt=ole32.lib
+build:windows --linkopt=oleaut32.lib
+build:windows --linkopt=uuid.lib
+build:windows --linkopt=comdlg32.lib
+build:windows --linkopt=advapi32.lib
+
+# CUDA: nvcc with MSVC as host compiler
+build:windows --@rules_cuda//cuda:archs=sm_89
+build:windows --@rules_cuda//cuda:copts=-std=c++20
+build:windows --@rules_cuda//cuda:copts=--extended-lambda
+build:windows --@rules_cuda//cuda:copts=--expt-relaxed-constexpr
+build:windows --@rules_cuda//cuda:copts=--static-global-template-stub=true
+build:windows --@rules_cuda//cuda:copts=--diag-suppress=221,1394,1388
+build:windows --@rules_cuda//cuda:host_copts=/utf-8
+build:windows --@rules_cuda//cuda:host_copts=/Zc:preprocessor
+build:windows --@rules_cuda//cuda:host_copts=/wd4267
+
+#-------------------------------------------------------------------------------------
+# FFmpeg (BCR): like vcpkg's ffmpeg[avcodec,avfilter,avformat,nvcodec,swscale,x264].
+# LichtFeld depends on the @ffmpeg//:with_defaults/* libraries (all native codecs and
+# formats); NVENC, the CUVID decoders (LichtFeld decodes with *_cuvid, not with
+# nvdec hwaccels) and libx264 are enabled on top of that.
+#-------------------------------------------------------------------------------------
+
+build --@ffmpeg//:enable_libx264_encoder=True
+build --@ffmpeg//:enable_golomb=True
+build --@ffmpeg//:enable_atsc_a53=True
+build --@ffmpeg//:enable_h264_nvenc_encoder=True
+build --@ffmpeg//:enable_hevc_nvenc_encoder=True
+build --@ffmpeg//:enable_av1_nvenc_encoder=True
+build --@ffmpeg//:enable_av1_cuvid_decoder=True
+build --@ffmpeg//:enable_h264_cuvid_decoder=True
+build --@ffmpeg//:enable_hevc_cuvid_decoder=True
+build --@ffmpeg//:enable_mjpeg_cuvid_decoder=True
+build --@ffmpeg//:enable_mpeg1_cuvid_decoder=True
+build --@ffmpeg//:enable_mpeg2_cuvid_decoder=True
+build --@ffmpeg//:enable_mpeg4_cuvid_decoder=True
+build --@ffmpeg//:enable_vc1_cuvid_decoder=True
+build --@ffmpeg//:enable_vp8_cuvid_decoder=True
+build --@ffmpeg//:enable_vp9_cuvid_decoder=True
+
+#-------------------------------------------------------------------------------------
+# curl (BCR): its OpenSSL-API backend defaults to BoringSSL, which would put a
+# second OpenSSL implementation (and its headers) next to OpenSSL. Use OpenSSL,
+# and keep Schannel (Windows certificate store) as the default TLS backend like
+# vcpkg's curl on Windows; LichtFeld does not configure CA certificates.
+#-------------------------------------------------------------------------------------
+
+common --@curl//:ssl_lib=openssl
+build:windows '--per_file_copt=external/curl.*/lib/vtls/vtls\.c@/DCURL_DEFAULT_SSL_BACKEND=\"schannel\"'
+
+#-------------------------------------------------------------------------------------
+# Local-registry modules
+#-------------------------------------------------------------------------------------
+
+# Project save dialogs start in the intended directory (vcpkg port option).
+common --@nativefiledialog_extended//:override_recent_with_default=True
+# OpenXR's bundled jsoncpp is built with exceptions: a malformed runtime/layer
+# manifest yields XR_ERROR_RUNTIME_FAILURE instead of terminating the process.
+common --@openxr_loader//:bundled_jsoncpp=True
+# Like vcpkg's plutovg: do not scan all system fonts when an SVG needs one.
+common --@plutovg//:font_face_cache_load=false
+# libplacebo calls vkGetInstanceProcAddr from the Vulkan loader (vk-proc-addr=enabled).
+common --@libplacebo//:vulkan_loader=//bazel/deps:vulkan
+
+#-------------------------------------------------------------------------------------
+# Configurations
+#-------------------------------------------------------------------------------------
+
+# Debug build (CMake: Debug)
+build:dbg --compilation_mode=dbg
+
+# Allow local, untracked overrides (e.g. --disk_cache, different --@rules_cuda//cuda:archs)
+try-import %workspace%/user.bazelrc

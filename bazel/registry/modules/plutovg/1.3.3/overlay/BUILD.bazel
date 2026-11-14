@@ -1,0 +1,77 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files([
+    "LICENSE",
+    "source/FTL.TXT",
+])
+
+# Mirrors the upstream CMake option PLUTOVG_DISABLE_FONT_FACE_CACHE_LOAD (meson: font-face-cache-load).
+# Upstream default: enabled. Note: vcpkg's plutovg port disables it unless its "font-face-cache" feature is
+# requested; use --@plutovg//:font_face_cache_load=false for the same behaviour.
+bool_flag(
+    name = "font_face_cache_load",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "font_face_cache_load_disabled",
+    flag_values = {":font_face_cache_load": "False"},
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "plutovg",
+    srcs = [
+        "source/plutovg-blend.c",
+        "source/plutovg-canvas.c",
+        "source/plutovg-font.c",
+        "source/plutovg-ft-math.c",
+        "source/plutovg-ft-math.h",
+        "source/plutovg-ft-raster.c",
+        "source/plutovg-ft-raster.h",
+        "source/plutovg-ft-stroker.c",
+        "source/plutovg-ft-stroker.h",
+        "source/plutovg-ft-types.h",
+        "source/plutovg-matrix.c",
+        "source/plutovg-paint.c",
+        "source/plutovg-path.c",
+        "source/plutovg-private.h",
+        "source/plutovg-rasterize.c",
+        "source/plutovg-stb-image.h",
+        "source/plutovg-stb-image-write.h",
+        "source/plutovg-stb-truetype.h",
+        "source/plutovg-surface.c",
+        "source/plutovg-utils.h",
+    ],
+    hdrs = ["include/plutovg.h"],
+    copts = select({
+        "@rules_cc//cc/compiler:msvc-cl": [],
+        "//conditions:default": [
+            "-Wno-sign-compare",
+            "-Wno-unused-function",
+        ],
+    }),
+    # Static library: PLUTOVG_BUILD_STATIC turns PLUTOVG_API into nothing for the library and its users.
+    defines = ["PLUTOVG_BUILD_STATIC"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:linux": [
+            "-lm",
+            "-lpthread",
+        ],
+        "//conditions:default": [],
+    }),
+    local_defines = ["PLUTOVG_BUILD"] + select({
+        # C11 <threads.h> (glibc >= 2.28, musl). Windows uses Win32 primitives instead.
+        "@platforms//os:linux": ["HAVE_THREADS_H"],
+        "//conditions:default": [],
+    }) + select({
+        ":font_face_cache_load_disabled": ["PLUTOVG_DISABLE_FONT_FACE_CACHE_LOAD"],
+        "//conditions:default": [],
+    }),
+)

@@ -1,0 +1,11 @@
+{
+    "homepage": "https://www.khronos.org/openxr/",
+    "maintainers": [],
+    "repository": [
+        "github:KhronosGroup/OpenXR-SDK"
+    ],
+    "versions": [
+        "1.1.63"
+    ],
+    "yanked_versions": {}
+}

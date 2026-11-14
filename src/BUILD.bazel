@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/gen:defs.bzl", "LFS_VERSION", "lfs_configure_file", "lfs_git_version_header")
+
+# CMake gives (nearly) every target ${CMAKE_SOURCE_DIR}/src as include directory,
+# so headers are included as "core/...", "io/...", "training/...", etc.
+cc_library(
+    name = "root_includes",
+    includes = ["."],
+    visibility = ["//:__subpackages__"],
+)
+
+# CMake: ${CMAKE_BINARY_DIR}/include/{config.h,git_version.h}
+lfs_configure_file(
+    name = "config_h",
+    out = "generated/config.h",
+    substitutions = {
+        "PROJECT_VERSION": LFS_VERSION,
+        "PROJECT_VERSION_MAJOR": LFS_VERSION.split(".")[0],
+        "PROJECT_VERSION_MINOR": LFS_VERSION.split(".")[1],
+        "PROJECT_VERSION_PATCH": LFS_VERSION.split(".")[2],
+    },
+    template = "//:cmake/config.h.in",
+)
+
+lfs_git_version_header(
+    name = "git_version_h",
+    out = "generated/git_version.h",
+)
+
+cc_library(
+    name = "generated_headers",
+    hdrs = [
+        ":config_h",
+        ":git_version_h",
+    ],
+    includes = ["generated"],
+    visibility = ["//:__subpackages__"],
+)

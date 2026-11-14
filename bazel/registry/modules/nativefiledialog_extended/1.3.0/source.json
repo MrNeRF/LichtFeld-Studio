@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/btzy/nativefiledialog-extended/archive/refs/tags/v1.3.0.tar.gz",
+    "integrity": "sha256-L+oZECz01Sg6gPuHp4R5IWaYjoW7krqpYtNPcrItzBo=",
+    "strip_prefix": "nativefiledialog-extended-1.3.0",
+    "overlay": {
+        "BUILD.bazel": "sha256-43ZX9WMzm0v6kvM1l1qSNh0l3/iTUulQ8F+FZD3oJPA="
+    }
+}

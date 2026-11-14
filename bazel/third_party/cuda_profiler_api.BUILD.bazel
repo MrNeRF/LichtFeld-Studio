@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# CUDA profiler API headers (separate NVIDIA redist component, not part of the
+# rules_cuda component registry). The functions themselves live in cudart.
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["LICENSE"])
+
+cc_library(
+    name = "cuda_profiler_api",
+    hdrs = glob(["include/*.h"]),
+    includes = ["include"],
+)

@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Header-only views of third-party libraries. First-party *header* targets depend
+# on these so that including a header does not force a consumer to link the
+# library; implementation targets depend on the real libraries.
+
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "cc_clean_headers", "cc_headers_only", "cc_link_only")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_headers_only(
+    name = "cuda_headers",
+    deps = [
+        "@cuda//:cccl_headers",
+        "@cuda//:crt_headers",
+        "@cuda//:cudart_headers",
+        "@cuda//:curand_headers",
+        "@cuda//:nvjpeg_headers",
+        "@cuda//:nvml_headers",
+        "@cuda//:nvtx_headers",
+        "@cuda_profiler_api",
+    ],
+)
+
+cc_headers_only(
+    name = "openssl_headers",
+    deps = ["@openssl//:crypto"],
+)
+
+cc_headers_only(
+    name = "spdlog_headers",
+    deps = ["@spdlog"],
+)
+
+cc_headers_only(
+    name = "stb_headers",
+    # @stb//:stb_image publishes STB_IMAGE_IMPLEMENTATION; LichtFeld has its own
+    # implementation TU (src/io/stb_image_impl.cpp).
+    strip_defines = True,
+    deps = [
+        "@stb//:stb_image",
+        "@stb//:stb_image_write",
+        "@stb//:stb_truetype",
+    ],
+)
+
+cc_headers_only(
+    name = "xxhash_headers",
+    deps = ["@xxhash"],
+)
+
+#-------------------------------------------------------------------------------------
+# FFmpeg (BCR). @ffmpeg//:avutil puts the FFmpeg source root on the include path;
+# its VERSION file then shadows the C++20 <version> header on Windows
+# (case-insensitive file system). Expose the headers in an installed layout
+# instead and link the libraries without their include paths.
+#-------------------------------------------------------------------------------------
+
+_FFMPEG_LIBS = [
+    "@ffmpeg//:with_defaults/avcodec",
+    "@ffmpeg//:with_defaults/avfilter",
+    "@ffmpeg//:with_defaults/avformat",
+    "@ffmpeg//:with_defaults/avutil",
+    "@ffmpeg//:with_defaults/swresample",
+    "@ffmpeg//:with_defaults/swscale",
+]
+
+cc_clean_headers(
+    name = "ffmpeg_headers",
+    prefixes = [
+        "libavcodec/",
+        "libavfilter/",
+        "libavformat/",
+        "libavutil/",
+        "libswresample/",
+        "libswscale/",
+    ],
+    deps = _FFMPEG_LIBS,
+)
+
+cc_link_only(
+    name = "ffmpeg_libs",
+    deps = _FFMPEG_LIBS,
+)
+
+cc_library(
+    name = "ffmpeg",
+    deps = [
+        ":ffmpeg_headers",
+        ":ffmpeg_libs",
+    ],
+)
+#-------------------------------------------------------------------------------------
+# Vulkan: headers from the BCR, the loader's import library from the LunarG SDK.
+# vulkan-1.dll itself is provided by the GPU driver (system_provided).
+#-------------------------------------------------------------------------------------
+
+cc_import(
+    name = "vulkan_loader_import",
+    interface_library = "@vulkan_sdk//:sdk/Lib/vulkan-1.lib",
+    system_provided = True,
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_library(
+    name = "vulkan",
+    deps = [
+        ":vulkan_loader_import",
+        "@vulkan_headers",
+    ],
+)
+
+cc_headers_only(
+    name = "vulkan_headers",
+    deps = [
+        "@vulkan_headers",
+        "@vulkan_memory_allocator",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# SDL3: the app, lfs_visualizer.dll and lichtfeld.pyd share one SDL instance, so
+# SDL has to be a DLL (like vcpkg's SDL3.dll). The BCR module builds a static
+# library; link it into a DLL that exports all of its symbols.
+#-------------------------------------------------------------------------------------
+
+cc_binary(
+    name = "SDL3.dll",
+    features = ["windows_export_all_symbols"],
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = ["@sdl3"],
+)
+
+filegroup(
+    name = "sdl3_import_lib",
+    srcs = [":SDL3.dll"],
+    output_group = "interface_library",
+    visibility = ["//visibility:private"],
+)
+
+cc_import(
+    name = "sdl3_import",
+    interface_library = ":sdl3_import_lib",
+    shared_library = ":SDL3.dll",
+    visibility = ["//visibility:private"],
+)
+
+cc_headers_only(
+    name = "sdl3_headers",
+    deps = ["@sdl3//:sdl3_headers"],
+)
+
+cc_library(
+    name = "sdl3",
+    deps = [
+        ":sdl3_headers",
+        ":sdl3_import",
+    ],
+)

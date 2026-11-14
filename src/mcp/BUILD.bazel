@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# mcp module (CMake: src/mcp/CMakeLists.txt). lfs_mcp.dll is shared so that the
+# embedded Python module and the app observe the same tool/resource registries.
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_dll")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["*.hpp"]),
+    deps = [
+        "//src:root_includes",
+        "//src/core:headers",
+        "//src/rendering:headers",
+        "//src/training:headers",
+        "@nlohmann_json//:json",
+    ],
+)
+
+lfs_dll(
+    name = "lfs_mcp",
+    srcs = [
+        "llm_client.cpp",
+        "mcp_http_server.cpp",
+        "mcp_protocol.cpp",
+        "mcp_server.cpp",
+        "mcp_tools.cpp",
+        "shared_scene_tools.cpp",
+    ],
+    description = "LichtFeld Studio MCP server",
+    dll_name = "lfs_mcp.dll",
+    export_define = "LFS_MCP_EXPORTS",
+    interface_deps = [
+        ":headers",
+        "@nlohmann_json//:json",
+    ],
+    linkopts = [
+        "iphlpapi.lib",
+        "ws2_32.lib",
+    ],
+    deps = [
+        "//bazel/compat:httplib",
+        "//bazel/deps:stb_headers",
+        "//src:generated_headers",
+        "//src/core:lfs_core",
+        "//src/core:lfs_event_bridge",
+        "//src/io:lfs_io",
+        "//src/python:lfs_python_runtime",
+        "//src/rendering:lfs_rendering",
+        "//src/training:lfs_training",
+        "@openssl//:crypto",
+        "@openssl//:ssl",
+    ],
+)

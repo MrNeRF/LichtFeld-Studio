@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# CMake: src/diagnostics/CMakeLists.txt -> lfs_diagnostics (SHARED)
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_dll")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/**/*.hpp"]),
+    includes = ["include"],
+    deps = ["//bazel/deps:cuda_headers"],
+)
+
+# NVML is loaded at runtime (dlsym/GetProcAddress); only its header is needed.
+lfs_dll(
+    name = "lfs_diagnostics",
+    srcs = [
+        "vram_ledger_model.cpp",
+        "vram_owner_model.cpp",
+        "vram_profiler.cpp",
+        "vram_timeline.cpp",
+    ],
+    description = "LichtFeld Studio diagnostics",
+    dll_name = "lfs_diagnostics.dll",
+    export_define = "LFS_DIAGNOSTICS_EXPORTS",
+    interface_deps = [
+        ":headers",
+        "@cuda//:cuda_runtime",
+    ],
+)

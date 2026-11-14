@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Build settings and tools of the shader pipeline (see shaders.bzl).
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+package(default_visibility = ["//visibility:public"])
+
+# CMake: LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO. Compiles the Vulkan rasterizer
+# shaders with debug info (slangc -g3, glslang -gVS).
+#   --//bazel/shaders:debug_info
+bool_flag(
+    name = "debug_info",
+    build_setting_default = False,
+)
+
+# CMake: LFS_ENABLE_VULKAN_VALIDATION (its build-time part). Runs spirv-val on
+# every compiled SPIR-V module (as Bazel validation actions).
+#   --//bazel/shaders:spirv_validation
+bool_flag(
+    name = "spirv_validation",
+    build_setting_default = False,
+)
+
+# Shader tools. Every rule refers to these labels, so a tool is switched here.
+
+alias(
+    name = "slangc",
+    actual = "@slang//:bin/slangc.exe",
+)
+
+# The DLLs slangc.exe loads from its own directory.
+alias(
+    name = "slangc_runtime",
+    actual = "@slang//:slangc_files",
+)
+
+# GLSL -> SPIR-V compiler of the radix sort .comp shaders, built from source.
+# The Vulkan SDK binary would be "@vulkan_sdk//:sdk/Bin/glslangValidator.exe".
+alias(
+    name = "glslang_validator",
+    actual = "@glslang//:glslang_validator",
+)
+
+alias(
+    name = "spirv_val",
+    actual = "@vulkan_sdk//:sdk/Bin/spirv-val.exe",
+)

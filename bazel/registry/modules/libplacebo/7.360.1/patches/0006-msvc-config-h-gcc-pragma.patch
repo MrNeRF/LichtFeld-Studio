@@ -1,0 +1,18 @@
+MSVC: do not emit `#pragma GCC diagnostic` from the public config.h.
+
+MSVC cl.exe warns (C4068) about the unknown pragma in every C translation
+unit including libplacebo headers; it is only meaningful for GCC/Clang.
+
+diff --git a/src/include/libplacebo/config.h.in b/src/include/libplacebo/config.h.in
+--- a/src/include/libplacebo/config.h.in
++++ b/src/include/libplacebo/config.h.in
+@@ -80,7 +80,8 @@
+ # define PL_API_END
+ #endif
+ 
+-#ifndef __cplusplus
++// (Not for MSVC cl.exe, which does not know this pragma and warns about it.)
++#if !defined(__cplusplus) && !(defined(_MSC_VER) && !defined(__clang__))
+ // Disable this warning because libplacebo's params macros override fields
+ # pragma GCC diagnostic ignored "-Woverride-init"
+ #endif

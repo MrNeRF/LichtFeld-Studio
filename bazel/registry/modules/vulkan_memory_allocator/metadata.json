@@ -1,0 +1,11 @@
+{
+    "homepage": "https://gpuopen.com/vulkan-memory-allocator/",
+    "maintainers": [],
+    "repository": [
+        "github:GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator"
+    ],
+    "versions": [
+        "3.3.0"
+    ],
+    "yanked_versions": {}
+}

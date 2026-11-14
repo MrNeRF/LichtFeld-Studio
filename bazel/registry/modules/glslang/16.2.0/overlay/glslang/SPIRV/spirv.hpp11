@@ -1,0 +1,5 @@
+// Forwarding header added by the Bazel overlay of glslang.
+// The CMake install tree ships SPIRV/spirv.hpp11 as <glslang/SPIRV/spirv.hpp11>;
+// forwarding (instead of copying) keeps a single physical header, so
+// <SPIRV/spirv.hpp11> and <glslang/SPIRV/spirv.hpp11> can be mixed safely.
+#include "../../SPIRV/spirv.hpp11"

@@ -265,18 +265,10 @@ namespace lfs::vis::gui::rml_input {
                                       event.modifiers & SDL_KMOD_ALT,
                                       event.modifiers & SDL_KMOD_GUI);
         if (event.kind == FrameInputEventKind::KeyDown) {
-            if (!editable || !handler || !handler->handleKeyDown(key, mods)) {
-                const bool line_break = (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER) &&
-                                        focused && focused->GetTagName() == "textarea" &&
-                                        !(event.modifiers & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI));
+            if (!editable || !handler || !handler->handleKeyDown(key, mods))
                 consumed(!context.ProcessKeyDown(key, mods));
-                // SDL does not emit a text event for Enter. RmlUi expects the
-                // newline separately, after key handlers and outside IME composition.
-                if (line_break && context.GetFocusElement() == focused)
-                    consumed(!context.ProcessTextInput('\n'));
-            } else {
+            else
                 consumed(true);
-            }
         } else {
             consumed(!context.ProcessKeyUp(key, mods));
         }

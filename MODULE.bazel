@@ -1,0 +1,218 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""LichtFeld Studio - Bazel build (Windows x64 / MSVC)."""
+
+module(
+    name = "lichtfeld_studio",
+    version = "0.5.5",
+)
+
+#-------------------------------------------------------------------------------------
+# Rules
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+
+#-------------------------------------------------------------------------------------
+# CUDA (hermetic, downloaded from NVIDIA's redistributable archives)
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "rules_cuda", version = "0.4.0")
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+cuda.redist_json(
+    name = "cuda_redist",
+    components = [
+        "cccl",
+        "crt",
+        "cudart",
+        "curand",
+        "nvcc",
+        "nvjpeg",
+        "nvml",
+        "nvtx",
+        "nvvm",
+    ],
+    platforms = ["windows-x86_64"],
+    version = "13.5.0",
+)
+cuda.toolkit(name = "cuda")
+use_repo(cuda, "cuda")
+
+#-------------------------------------------------------------------------------------
+# Vulkan SDK (LunarG): Vulkan loader import library, validation layers, SDK tools.
+# The Vulkan runtime (vulkan-1.dll) itself is provided by the GPU driver.
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "rules_vulkan", version = "0.9.0")
+
+# rules_vulkan 0.9.0 does not know the newest Windows SDK yet.
+single_version_override(
+    module_name = "rules_vulkan",
+    patch_strip = 1,
+    patches = ["//bazel/patches/rules_vulkan:add_vulkan_sdk_1.4.363.1.patch"],
+)
+
+vulkan_sdk = use_extension("@rules_vulkan//vulkan:extensions.bzl", "vulkan_sdk")
+vulkan_sdk.toolchain(
+    name = "vulkan_sdk",
+    version = "1.4.363.1",
+    windows_skip_runtime = True,
+)
+use_repo(vulkan_sdk, "vulkan_sdk")
+
+register_toolchains("@vulkan_sdk//:all")
+
+#-------------------------------------------------------------------------------------
+# Python (embedded interpreter + nanobind extension module)
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "rules_python", version = "2.5.0")
+
+# Python packages are declared explicitly (no implicit __init__.py creation).
+rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
+rules_python_config.explicit_init_py(default = True)
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.12",
+)
+
+bazel_dep(name = "nanobind_bazel", version = "3.1.0.bcr.1")
+
+#-------------------------------------------------------------------------------------
+# Third-party C/C++ libraries from the Bazel Central Registry
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "apriltag", version = "3.4.5")
+
+# The BCR overlay only knows GCC/Clang flags; teach it MSVC.
+single_version_override(
+    module_name = "apriltag",
+    patch_strip = 1,
+    patches = ["//bazel/patches/apriltag:msvc_support.patch"],
+)
+
+bazel_dep(name = "assimp", version = "6.0.6")
+bazel_dep(name = "bzip2", version = "1.0.8.bcr.4")
+bazel_dep(name = "cpp-httplib", version = "0.46.0")
+bazel_dep(name = "cppzmq", version = "4.10.0.bcr.3")
+bazel_dep(name = "curl", version = "8.23.0")
+bazel_dep(name = "dlpack", version = "1.3.bcr.1")
+bazel_dep(name = "ffmpeg", version = "9.0.1.beta.bcr.6")
+bazel_dep(name = "ffnvcodec", version = "13.1.15.0")
+bazel_dep(name = "fmt", version = "12.2.0.bcr.1")
+bazel_dep(name = "freetype", version = "2.14.1.bcr.1")
+bazel_dep(name = "glm", version = "1.0.3.bcr.1")
+bazel_dep(name = "libarchive", version = "3.8.1.bcr.3")
+bazel_dep(name = "libdeflate", version = "1.26")
+bazel_dep(name = "libjpeg_turbo", version = "3.1.3.bcr.6")
+bazel_dep(name = "libpng", version = "1.6.58.bcr.1")
+bazel_dep(name = "libtiff", version = "4.7.2.bcr.2")
+bazel_dep(name = "libwebp", version = "1.6.0.bcr.1")
+bazel_dep(name = "libzmq", version = "4.3.5.bcr.7")
+bazel_dep(name = "nanoflann", version = "2.0.1")
+bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2")
+bazel_dep(name = "onetbb", version = "2023.1.0")
+bazel_dep(name = "openexr", version = "3.5.3")
+bazel_dep(name = "openmesh", version = "11.0")
+
+# Adds OpenMeshTools (Decimater etc.) next to OpenMeshCore.
+single_version_override(
+    module_name = "openmesh",
+    patch_strip = 1,
+    patches = ["//bazel/patches/openmesh:tools_target.patch"],
+)
+
+bazel_dep(name = "openssl", version = "4.0.3.bcr.1")
+bazel_dep(name = "sdl3", version = "3.4.20")
+bazel_dep(name = "spdlog", version = "1.17.0")
+bazel_dep(name = "stb", version = "0.0.0-20251026-f1c79c0")
+bazel_dep(name = "tinyply", version = "3.0")
+bazel_dep(name = "vulkan_headers", version = "1.4.349")
+bazel_dep(name = "x264", version = "2023.10.1.bcr.8")
+bazel_dep(name = "xxhash", version = "0.8.3.bcr.1")
+bazel_dep(name = "xz", version = "5.4.5.bcr.9")
+bazel_dep(name = "zlib", version = "1.3.2.bcr.3")
+bazel_dep(name = "zstd", version = "1.5.7.bcr.3")
+
+#-------------------------------------------------------------------------------------
+# Third-party C/C++ libraries from the local registry (bazel/registry, BCR format)
+#-------------------------------------------------------------------------------------
+
+bazel_dep(name = "glslang", version = "16.2.0")
+bazel_dep(name = "libplacebo", version = "7.360.1")
+bazel_dep(name = "libvterm", version = "0.3.3.20251121")
+bazel_dep(name = "nativefiledialog_extended", version = "1.3.0")
+bazel_dep(name = "openxr_loader", version = "1.1.63")
+
+# Transitive dependency of rmlui (via lunasvg); direct so .bazelrc can set its flags.
+bazel_dep(name = "plutovg", version = "1.3.3")
+bazel_dep(name = "rmlui", version = "6.3")
+bazel_dep(name = "shaderc", version = "2026.2")
+bazel_dep(name = "taywee_args", version = "6.4.8")
+bazel_dep(name = "vulkan_memory_allocator", version = "3.3.0")
+
+#-------------------------------------------------------------------------------------
+# Vendored third-party code (external/): tree-sitter, Zep, spz, tinyusdz,
+# nvImageCodec, indicators (see //bazel:repositories.bzl).
+#-------------------------------------------------------------------------------------
+
+lfs_vendored = use_repo_rule("//bazel:repositories.bzl", "lfs_vendored")
+
+lfs_vendored(
+    name = "lfs_external",
+    dirs = [
+        "nvImageCodec",
+        "spz",
+        "tinyusdz",
+        "tree-sitter",
+        "tree-sitter-python",
+        "zep",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Prebuilt third-party binaries
+#-------------------------------------------------------------------------------------
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# cuda_profiler_api.h (CUDA 13.5.0 redist component not covered by rules_cuda).
+http_archive(
+    name = "cuda_profiler_api",
+    build_file = "//bazel/third_party:cuda_profiler_api.BUILD.bazel",
+    sha256 = "af57c44ed06758ae8767dd6a0ff4ceaa85da2a037894981a59c1a9a18e81dfe6",
+    strip_prefix = "cuda_profiler_api-windows-x86_64-13.5.25-archive",
+    url = "https://developer.download.nvidia.com/compute/cuda/redist/cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.5.25-archive.zip",
+)
+
+# Slang shader compiler (runtime library + slangc). LichtFeld pins 2026.5.
+http_archive(
+    name = "slang",
+    build_file = "//bazel/third_party:slang.BUILD.bazel",
+    sha256 = "7817d1350b2dd099bb125347091d00c7a1bdaf90894d46a436a62fb5ee58d3cd",
+    url = "https://github.com/shader-slang/slang/releases/download/v2026.5/slang-2026.5-windows-x86_64.zip",
+)
+
+# nvJPEG2000 (loaded dynamically by nvImageCodec).
+http_archive(
+    name = "nvjpeg2k",
+    build_file = "//bazel/third_party:nvjpeg2k.BUILD.bazel",
+    sha256 = "272d409945cd1c00beaa7f5d4c8197139aa32394358ea76d83f2cd2b51faf0c7",
+    strip_prefix = "libnvjpeg_2k-windows-x86_64-0.9.0.43-archive",
+    url = "https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/windows-x86_64/libnvjpeg_2k-windows-x86_64-0.9.0.43-archive.zip",
+)
+
+# uv (Python package manager used by the plugin system).
+http_archive(
+    name = "uv",
+    build_file = "//bazel/third_party:uv.BUILD.bazel",
+    sha256 = "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a",
+    url = "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-pc-windows-msvc.zip",
+)

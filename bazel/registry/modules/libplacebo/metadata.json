@@ -1,0 +1,11 @@
+{
+    "homepage": "https://libplacebo.org/",
+    "maintainers": [],
+    "repository": [
+        "github:haasn/libplacebo"
+    ],
+    "versions": [
+        "7.360.1"
+    ],
+    "yanked_versions": {}
+}

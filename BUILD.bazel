@@ -1,0 +1,173 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+load("//bazel:bundle.bzl", "lfs_bundle", "lfs_files", "lfs_python_runtime")
+
+# Templates used by the Bazel build (//src:config_h, //src/core:core_abi_stamp,
+# //bazel/windows:resources.bzl).
+exports_files([
+    "cmake/config.h.in",
+    "cmake/lfs_core_abi_stamp.h.in",
+    "cmake/windows_version.rc.in",
+])
+
+#-------------------------------------------------------------------------------------
+# The application: `bazel run //:LichtFeld-Studio`, or copy the directory
+# bazel-bin/LichtFeld-Studio (CMake: cmake --install with BUILD_PORTABLE).
+#-------------------------------------------------------------------------------------
+
+lfs_bundle(
+    name = "LichtFeld-Studio",
+    # Binaries whose runtime DLLs (LichtFeld's, SDL3, RmlUi, nvImageCodec, Python,
+    # Slang, ...) are installed to bin/ as well.
+    binaries = [
+        "//bazel/deps:SDL3.dll",
+        "//src/core:lfs_core.dll",
+        "//src/core:lfs_event_bridge.dll",
+        "//src/core:lfs_logger.dll",
+        "//src/diagnostics:lfs_diagnostics.dll",
+        "//src/mcp:lfs_mcp.dll",
+        "//src/python:lfs_python_runtime.dll",
+        "//src/python:lichtfeld.so",
+        "//src/visualizer:lfs_visualizer.dll",
+        "@lfs_external//nvImageCodec:nvimgcodec.dll",
+    ],
+    executable = "//src/app:LichtFeld-Studio",
+    srcs = [
+        ":bundle_assets",
+        ":bundle_cuda_dlls",
+        ":bundle_docs",
+        ":bundle_fonts",
+        ":bundle_gui_resources",
+        ":bundle_licenses",
+        ":bundle_nvimgcodec_extensions",
+        ":bundle_python",
+        ":bundle_python_module",
+        ":bundle_python_stubs",
+        ":bundle_rmlui",
+        ":bundle_shaders",
+        ":bundle_third_party_licenses",
+        ":bundle_uv",
+    ],
+    # Isolates the embedded interpreter from other Python installations.
+    text_files = {"bin/python312._pth": ".\n../Lib\n../DLLs\nimport site\n"},
+    visibility = ["//visibility:public"],
+)
+
+lfs_files(
+    name = "bundle_licenses",
+    srcs = [
+        "LICENSE",
+        "LICENSE-EXCEPTION.txt",
+    ],
+    flatten = True,
+)
+
+lfs_files(
+    name = "bundle_third_party_licenses",
+    srcs = ["//resources:licenses"],
+    prefix = "share/LichtFeld-Studio/licenses",
+    strip_prefix = "licenses",
+)
+
+# Plugin development documentation
+lfs_files(
+    name = "bundle_docs",
+    srcs = glob(
+        [
+            "docs/PYTHON_API.md",
+            "docs/plugin-dev-workflow.md",
+            "docs/plugin-system.md",
+            "docs/plugin-use-cases.md",
+        ],
+        allow_empty = True,
+    ),
+    flatten = True,
+    prefix = "share/doc/LichtFeld-Studio",
+)
+
+lfs_files(
+    name = "bundle_assets",
+    srcs = ["//src/visualizer:assets"],
+    prefix = "share/LichtFeld-Studio/assets",
+    strip_prefix = "gui/assets",
+)
+
+lfs_files(
+    name = "bundle_fonts",
+    srcs = ["//src/rendering:resources/assets/JetBrainsMono-Regular.ttf"],
+    flatten = True,
+    prefix = "share/LichtFeld-Studio/assets/fonts",
+)
+
+lfs_files(
+    name = "bundle_rmlui",
+    srcs = ["//src/visualizer:rmlui_resources"],
+    prefix = "share/LichtFeld-Studio/assets/rmlui",
+    strip_prefix = "gui/rmlui/resources",
+)
+
+lfs_files(
+    name = "bundle_gui_resources",
+    srcs = ["//src/visualizer:gui_resources"],
+    prefix = "share/LichtFeld-Studio",
+    strip_prefix = "gui/resources",
+)
+
+# SPIR-V and the user-shader package of the Vulkan rasterizer.
+lfs_files(
+    name = "bundle_shaders",
+    srcs = ["//src/rendering/rasterizer/vulkan/shader:vulkan_rasterizer"],
+    flatten = True,
+    prefix = "share/LichtFeld-Studio/shaders/vulkan_rasterizer",
+)
+
+lfs_files(
+    name = "bundle_python_module",
+    srcs = [
+        "//src/python:lichtfeld.pyd",
+        "//src/python:python_packages",
+    ],
+    prefix = "lib/python",
+)
+
+lfs_files(
+    name = "bundle_python_stubs",
+    srcs = ["//src/python:stubs"],
+    prefix = "lib/python",
+    strip_prefix = "stubs",
+)
+
+lfs_python_runtime(name = "bundle_python")
+
+# rules_cuda links the CUDA runtime libraries as system libraries; ship their DLLs
+# (cudart64_13, curand64_10, nvjpeg64_13), nvJPEG2000 and the Slang compiler DLLs.
+lfs_files(
+    name = "bundle_cuda_dlls",
+    srcs = [
+        "@cuda//:cudart_all_files",
+        "@cuda//:curand_all_files",
+        "@cuda//:nvjpeg_all_files",
+        "@nvjpeg2k//:runtime_dlls",
+        "@slang//:runtime_dlls",
+    ],
+    flatten = True,
+    prefix = "bin",
+    suffixes = [".dll"],
+)
+
+lfs_files(
+    name = "bundle_uv",
+    srcs = ["@uv//:uv.exe"],
+    flatten = True,
+    prefix = "bin",
+)
+
+# nvImageCodec loads every DLL of this directory.
+lfs_files(
+    name = "bundle_nvimgcodec_extensions",
+    srcs = ["@lfs_external//nvImageCodec:extensions"],
+    flatten = True,
+    prefix = "extensions",
+)

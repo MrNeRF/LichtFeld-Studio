@@ -1,0 +1,131 @@
+# Bazel build for glslang, modelled on the upstream CMake build configured with
+# ENABLE_SPIRV=ON, ENABLE_HLSL=ON, ENABLE_OPT=ON (SPIR-V optimizer from
+# @spirv_tools) and static libraries.
+#
+# Include layout:
+#   * The source root is an include directory (CMake build-tree layout), so
+#     <glslang/Public/ShaderLang.h>, <glslang/Include/...> and <SPIRV/...> work.
+#   * glslang/SPIRV/*.h are overlay forwarding headers providing the CMake
+#     install-tree spelling, e.g. <glslang/SPIRV/GlslangToSpv.h>.
+#   * glslang/build_info.h and glslang/glsl_intrinsic_header.h are pre-generated
+#     overlay files (see the comment at the top of each file).
+
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE.txt"])
+
+# Private compile definitions of the CMake/GN builds. ENABLE_HLSL is public
+# (as in GN) because it changes inline code in the public headers.
+_LOCAL_DEFINES = [
+    "ENABLE_SPIRV=1",
+    "ENABLE_OPT=1",
+] + select({
+    "@platforms//os:windows": ["GLSLANG_OSINCLUDE_WIN32"],
+    "//conditions:default": ["GLSLANG_OSINCLUDE_UNIX"],
+})
+
+# SPIRV headers that CMake installs to include/glslang/SPIRV.
+_SPIRV_INSTALL_HEADERS = [
+    "GlslangToSpv.h",
+    "Logger.h",
+    "SpvTools.h",
+    "disassemble.h",
+    "spirv.hpp11",
+]
+
+# CMake: glslang::glslang. Since glslang 15 the SPIR-V backend (formerly the
+# SPIRV library) is compiled into this library.
+cc_library(
+    name = "glslang",
+    srcs = glob([
+        "SPIRV/**/*.cpp",
+        "glslang/CInterface/*.cpp",
+        "glslang/GenericCodeGen/*.cpp",
+        "glslang/HLSL/*.cpp",
+        "glslang/MachineIndependent/**/*.cpp",
+    ]) + [
+        # Included by glslang/CInterface/glslang_c_interface.cpp.
+        "StandAlone/DirStackFileIncluder.h",
+    ] + select({
+        "@platforms//os:windows": ["glslang/OSDependent/Windows/ossource.cpp"],
+        "//conditions:default": ["glslang/OSDependent/Unix/ossource.cpp"],
+    }),
+    hdrs = glob(
+        [
+            "SPIRV/*.h",
+            "glslang/HLSL/*.h",
+            "glslang/Include/*.h",
+            "glslang/MachineIndependent/**/*.h",
+            "glslang/Public/*.h",
+        ],
+        # Only used as CMake precompiled headers.
+        exclude = ["**/pch.h"],
+    ) + [
+        "SPIRV/spirv.hpp11",
+        "glslang/OSDependent/osinclude.h",
+        "glslang/build_info.h",
+    ] + ["glslang/SPIRV/" + header for header in _SPIRV_INSTALL_HEADERS],
+    defines = ["ENABLE_HLSL=1"],
+    includes = ["."],
+    linkopts = select({
+        "@platforms//os:linux": ["-lpthread"],
+        "//conditions:default": [],
+    }),
+    local_defines = _LOCAL_DEFINES,
+    deps = [
+        "@spirv_tools",
+        "@spirv_tools//:spirv_tools_opt",
+    ],
+)
+
+# CMake: glslang::SPIRV, kept upstream as an empty compatibility library that
+# links glslang.
+alias(
+    name = "SPIRV",
+    actual = ":glslang",
+)
+
+# CMake: glslang::glslang-default-resource-limits (GetDefaultResources() etc.).
+cc_library(
+    name = "glslang-default-resource-limits",
+    srcs = [
+        "glslang/ResourceLimits/ResourceLimits.cpp",
+        "glslang/ResourceLimits/resource_limits_c.cpp",
+    ],
+    hdrs = [
+        "glslang/Public/ResourceLimits.h",
+        "glslang/Public/resource_limits_c.h",
+    ],
+    deps = [":glslang"],
+)
+
+alias(
+    name = "glslang_default_resource_limits",
+    actual = ":glslang-default-resource-limits",
+)
+
+# CMake: glslang-standalone, installed as glslang and glslangValidator.
+cc_binary(
+    name = "glslang_validator",
+    srcs = [
+        "StandAlone/DirStackFileIncluder.h",
+        "StandAlone/StandAlone.cpp",
+        "StandAlone/Worklist.h",
+        "glslang/glsl_intrinsic_header.h",
+    ],
+    local_defines = _LOCAL_DEFINES,
+    deps = [
+        ":glslang",
+        ":glslang-default-resource-limits",
+    ],
+)
+
+alias(
+    name = "glslangValidator",
+    actual = ":glslang_validator",
+)

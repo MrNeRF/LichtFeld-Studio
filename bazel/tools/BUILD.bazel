@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Build-time helper tools.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Port of cmake/GenerateUserShaderIR.cmake: manifest.json of a user-shader
+# package and lfs_shader_abi.hpp.
+py_binary(
+    name = "generate_user_shader_ir",
+    srcs = ["generate_user_shader_ir.py"],
+    legacy_create_init = 0,
+)
+
+# Copies files into a tree artifact (//bazel/shaders:shaders.bzl shader_directory).
+py_binary(
+    name = "copy_to_directory",
+    srcs = ["copy_to_directory.py"],
+    legacy_create_init = 0,
+)
+
+# Assembles the application directory (//bazel:bundle.bzl lfs_bundle).
+py_binary(
+    name = "assemble_bundle",
+    srcs = ["assemble_bundle.py"],
+)
+
+# Runs a validator and writes a stamp file (Bazel validation actions).
+py_binary(
+    name = "run_and_stamp",
+    srcs = ["run_and_stamp.py"],
+    legacy_create_init = 0,
+)

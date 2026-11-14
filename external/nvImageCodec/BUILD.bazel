@@ -1,0 +1,426 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# NVIDIA nvImageCodec 0.9.0 (Apache-2.0), vendored. Windows x64 / MSVC only.
+#
+# Mirrors LichtFeld's CMake build (external/CMakeLists.txt adds the upstream
+# CMakeLists.txt with BUILD_NVJPEG_EXT=ON, BUILD_NVJPEG2K_EXT=ON,
+# WITH_DYNAMIC_NVJPEG=OFF, WITH_DYNAMIC_NVJPEG2K=ON and -w; upstream defaults
+# otherwise: WITH_DYNAMIC_CUDA=ON, static cudart). Same output names as CMake:
+#
+#   nvimgcodec_0.dll    CMake target nvimgcodec (OUTPUT_NAME nvimgcodec_<major>)
+#   nvjpeg_ext_0.dll    CMake target nvjpeg_ext   } extension modules: loaded at runtime
+#   nvjpeg2k_ext_0.dll  CMake target nvjpeg2k_ext } from the extensions/ directory
+#
+# Public targets:
+#   :nvimgcodec      #include <nvimgcodec.h> + import library; nvimgcodec_0.dll is a runtime
+#                    library of it (copied next to dependent binaries, in their runfiles)
+#   :nvimgcodec.dll  the DLL (file name nvimgcodec_0.dll, as referenced by the import library)
+#   :extensions      exactly the extension module DLLs (for <app>/extensions/)
+#   :headers         public headers only
+#
+# Runtime requirements beyond these files (all of them next to the executable):
+#   nvjpeg64_13.dll  imported by nvjpeg_ext_0.dll (@cuda//:nvjpeg_all_files)
+#   nvjpeg2k_0.dll   loaded by nvjpeg2k_ext_0.dll via LoadLibrary (@nvjpeg2k//:runtime_dlls)
+#   nvcuda.dll       CUDA driver (GPU driver), loaded at runtime
+# cudart is linked statically into every DLL (no cudart64_13.dll needed by them).
+
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load("//nvImageCodec/bazel:defs.bzl", "file_from")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files([
+    "Acknowledgements.txt",
+    "LICENSE.txt",
+])
+
+# Keep in sync with VERSION.txt (CMake: project(nvimgcodec VERSION ...)).
+_VERSION = "0.9.0"
+
+_MAJOR, _MINOR, _PATCH = _VERSION.split(".")
+
+# CMake: add_definitions() / expose_via_preprocessor_macro() in the top-level CMakeLists.txt.
+_DEFINES = [
+    # parse_cuda_version() reports CUDA >= 11.1 as <major>.0.0; CUDA 13 (MODULE.bazel).
+    "CUDA_VERSION_MAJOR=13",
+    "CUDA_VERSION_MINOR=0",
+    "CUDA_VERSION_PATCH=0",
+    "SKIP_NVTIFF_WITH_NVCOMP_TESTS_ENABLED=1",
+    "WITH_DYNAMIC_CUDA_ENABLED=1",
+    "WITH_DYNAMIC_NVJPEG2K_ENABLED=1",
+    "WITH_DYNAMIC_NVJPEG_ENABLED=0",
+    "WITH_DYNAMIC_NVTIFF_ENABLED=0",
+]
+
+# CMake builds with the Windows SDK's default target version. Bazel's MSVC toolchain
+# defines _WIN32_WINNT=0x0601, which hides SetThreadDescription (src/thread_pool.cpp).
+_CC_DEFINES = _DEFINES + [
+    "_WIN32_WINNT=0x0A00",
+    "WINVER=0x0A00",
+]
+
+# external/CMakeLists.txt compiles the vendored nvImageCodec targets with -w (applied
+# here to all of them, including the small dynlink_* stub libraries that its list omits).
+_COPTS = ["/w"]
+
+#-------------------------------------------------------------------------------------
+# Headers
+#-------------------------------------------------------------------------------------
+
+# CMake configures include/nvimgcodec_version.h into the source tree (it is gitignored).
+# Both public headers are placed in a generated include directory instead, so a copy
+# left behind by a CMake build is never picked up.
+copy_file(
+    name = "nvimgcodec_h",
+    src = "include/nvimgcodec.h",
+    out = "gen/include/nvimgcodec.h",
+    visibility = ["//visibility:private"],
+)
+
+expand_template(
+    name = "nvimgcodec_version_h",
+    out = "gen/include/nvimgcodec_version.h",
+    substitutions = {
+        "@PROJECT_VERSION_MAJOR@": _MAJOR,
+        "@PROJECT_VERSION_MINOR@": _MINOR,
+        "@PROJECT_VERSION_PATCH@": _PATCH,
+        # project(VERSION 0.9.0) has no tweak component.
+        "@PROJECT_VERSION_TWEAK@": "",
+    },
+    template = "include/nvimgcodec_version.h.in",
+    visibility = ["//visibility:private"],
+)
+
+# Headers of the CUDA runtime API (no linking), as included by nvimgcodec.h.
+cc_library(
+    name = "cuda_headers",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@cuda//:cccl_headers",
+        "@cuda//:crt_headers",
+        "@cuda//:cudart_headers",
+        "@cuda//:nvcc_headers",
+    ],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = [
+        ":nvimgcodec_h",
+        ":nvimgcodec_version_h",
+    ],
+    includes = ["gen/include"],
+    deps = [":cuda_headers"],
+)
+
+# CMake: include_directories(src) (+ the CUDA toolkit's NVTX v3 headers).
+cc_library(
+    name = "internal_headers",
+    hdrs = glob(["src/**/*.h"]),
+    includes = ["src"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":headers",
+        "@cuda//:nvtx_headers",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Static libraries linked into the DLLs
+#-------------------------------------------------------------------------------------
+
+# CMake: CUDA::cudart_static (WITH_SHARED_CUDA_LIBS=OFF). LichtFeld's
+# CMAKE_CUDA_RUNTIME_LIBRARY=Shared at most appends cudart.lib behind it, so the CMake
+# DLLs embed the static runtime as well.
+file_from(
+    name = "cudart_static_lib",
+    srcs = ["@cuda//:cudart_all_files"],
+    basename = "cudart_static.lib",
+    visibility = ["//visibility:private"],
+)
+
+cc_import(
+    name = "cudart_static",
+    static_library = ":cudart_static_lib",
+    visibility = ["//visibility:private"],
+)
+
+# CMake: dynlink_cuda (WITH_DYNAMIC_CUDA): CUDA driver API stubs that load nvcuda.dll.
+cc_library(
+    name = "dynlink_cuda",
+    srcs = [
+        "src/dynlink/dynlink_cuda.cpp",
+        "src/dynlink/dynlink_cuda_gen.cpp",
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES,
+    visibility = ["//visibility:private"],
+    deps = [":internal_headers"],
+)
+
+# CMake: dynlink_nvjpeg2k (WITH_DYNAMIC_NVJPEG2K): nvJPEG2000 stubs that load nvjpeg2k_0.dll.
+cc_library(
+    name = "dynlink_nvjpeg2k",
+    srcs = [
+        "src/dynlink/dynlink_nvjpeg2k.cpp",
+        "src/dynlink/dynlink_nvjpeg2k_gen.cpp",
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":internal_headers",
+        "@nvjpeg2k//:headers",
+    ],
+)
+
+# CMake: nvimgcodec_imgproc_static (object library linked into all three DLLs).
+cuda_library(
+    name = "imgproc_cuda",
+    srcs = ["src/imgproc/convert_kernel_gpu.cu"],
+    copts = [
+        "-w",
+        # nvImageCodec CMakeLists.txt (WIN32): CMAKE_CUDA_FLAGS
+        "--Wno-deprecated-gpu-targets",
+        "-Xfatbin=-compress-all",
+        # src/io/CMakeLists.txt
+        "--diag-suppress=860,3004",
+    ],
+    host_copts = ["/wd4834"],
+    local_defines = _DEFINES,
+    visibility = ["//visibility:private"],
+    deps = [":internal_headers"],
+)
+
+# Only the archive of imgproc_cuda: cuda_library also links rules_cuda's default runtime
+# (@cuda//:cuda_runtime, i.e. cudart.lib), which would compete with cudart_static.lib.
+filegroup(
+    name = "imgproc_cuda_archive",
+    srcs = [":imgproc_cuda"],
+    output_group = "lib",
+    visibility = ["//visibility:private"],
+)
+
+cc_import(
+    name = "imgproc_cuda_objs",
+    static_library = ":imgproc_cuda_archive",
+    visibility = ["//visibility:private"],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "imgproc",
+    srcs = [
+        "src/imgproc/device_buffer.cpp",
+        "src/imgproc/exception.cpp",
+        "src/imgproc/out_of_bound_roi_fill.cpp",
+        "src/imgproc/pageable_host_buffer.cpp",
+        "src/imgproc/pinned_buffer.cpp",
+        "src/imgproc/stream_device.cpp",
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":imgproc_cuda_objs",
+        ":internal_headers",
+    ],
+    alwayslink = True,
+)
+
+#-------------------------------------------------------------------------------------
+# nvimgcodec_0.dll (CMake: nvimgcodec_obj + nvimgcodec)
+#-------------------------------------------------------------------------------------
+
+cc_library(
+    name = "nvimgcodec_objs",
+    srcs = [
+        "src/builtin_modules.cpp",
+        "src/code_stream.cpp",
+        "src/codec.cpp",
+        "src/codec_registry.cpp",
+        "src/decode_state_batch.cpp",
+        "src/default_executor.cpp",
+        "src/encode_state_batch.cpp",
+        "src/file_io_stream.cpp",
+        "src/image.cpp",
+        "src/image_decoder.cpp",
+        "src/image_decoder_factory.cpp",
+        "src/image_encoder.cpp",
+        "src/image_encoder_factory.cpp",
+        "src/image_generic_decoder.cpp",
+        "src/image_generic_encoder.cpp",
+        "src/image_parser.cpp",
+        "src/image_parser_factory.cpp",
+        "src/nvimgcodec_capi.cpp",
+        "src/nvimgcodec_director.cpp",
+        "src/parsers/exif.cpp",
+        "src/parsers/jpeg.cpp",
+        "src/parsers/jpeg2k.cpp",
+        "src/parsers/parsers_ext_module.cpp",
+        "src/plugin_framework.cpp",
+        "src/processing_results.cpp",
+        "src/std_file_io_stream.cpp",
+        "src/thread_pool.cpp",
+        # src/mmaped_file_io_stream.cpp is UNIX-only.
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES + [
+        # Upstream default install location (<prefix>/bin/<cuda major>/extensions). Only a
+        # fallback: the DLL searches next to itself first, and LichtFeld passes its
+        # extensions/ directory explicitly. (Defines are Bourne-shell tokenized, hence the
+        # single quotes around the C string literal.)
+        "'NVIMGCODEC_DEFAULT_EXTENSIONS_PATH=\"C:/Program Files/NVIDIA nvImageCodec/bin/13/extensions\"'",
+    ],
+    # Bazel writes MSVC compile params files with gcc-style escaping ("\ " for spaces),
+    # which cl.exe splits at the spaces of the define above. Pass arguments directly.
+    features = ["-compiler_param_file"],
+    visibility = ["//visibility:private"],
+    deps = [":internal_headers"],
+    alwayslink = True,
+)
+
+# The C API is __declspec(dllexport)'ed by nvimgcodec.h (NVIMGCODECAPI).
+cc_binary(
+    name = "nvimgcodec_%s.dll" % _MAJOR,
+    linkshared = True,
+    deps = [
+        ":cudart_static",
+        ":dynlink_cuda",
+        ":imgproc",
+        ":nvimgcodec_objs",
+    ],
+)
+
+alias(
+    name = "nvimgcodec.dll",
+    actual = ":nvimgcodec_%s.dll" % _MAJOR,
+)
+
+filegroup(
+    name = "nvimgcodec_import_lib",
+    srcs = [":nvimgcodec_%s.dll" % _MAJOR],
+    output_group = "interface_library",
+    visibility = ["//visibility:private"],
+)
+
+cc_import(
+    name = "nvimgcodec_import",
+    interface_library = ":nvimgcodec_import_lib",
+    shared_library = ":nvimgcodec_%s.dll" % _MAJOR,
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "nvimgcodec",
+    deps = [
+        ":headers",
+        ":nvimgcodec_import",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# Extension modules. Each exports nvimgcodecExtensionModuleEntry (ext_module.cpp).
+#-------------------------------------------------------------------------------------
+
+# CMake: include_directories(extensions) in extensions/*/CMakeLists.txt.
+cc_library(
+    name = "extension_utils",
+    hdrs = glob(["extensions/utils/*.h"]),
+    includes = ["extensions"],
+    visibility = ["//visibility:private"],
+)
+
+# CMake: nvjpeg_ext_obj + ext_module.cpp of nvjpeg_ext.
+cc_library(
+    name = "nvjpeg_ext_objs",
+    srcs = glob(["extensions/nvjpeg/*.h"]) + [
+        "extensions/nvjpeg/cuda_decoder.cpp",
+        "extensions/nvjpeg/cuda_encoder.cpp",
+        "extensions/nvjpeg/exception.cpp",
+        "extensions/nvjpeg/ext_module.cpp",
+        "extensions/nvjpeg/hw_decoder.cpp",
+        "extensions/nvjpeg/hw_encoder.cpp",
+        "extensions/nvjpeg/lossless_decoder.cpp",
+        "extensions/nvjpeg/nvjpeg_ext.cpp",
+        "extensions/nvjpeg/nvjpeg_utils.cpp",
+        "extensions/nvjpeg/type_convert.cpp",
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES + [
+        # Results of the feature checks in extensions/nvjpeg/CMakeLists.txt for CUDA 13.
+        # NVJPEG_BUFFER_RESIZE_API stays undefined: its check_cxx_symbol_exists() links
+        # without nvjpeg and therefore fails in the CMake build as well.
+        "NVJPEG_HW_ENCODER_SUPPORTED=1",
+        "NVJPEG_LOSSLESS_SUPPORTED=1",
+    ],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":extension_utils",
+        ":internal_headers",
+        "@cuda//:nvjpeg",
+    ],
+    alwayslink = True,
+)
+
+cc_binary(
+    name = "nvjpeg_ext_%s.dll" % _MAJOR,
+    linkshared = True,
+    deps = [
+        ":cudart_static",
+        ":dynlink_cuda",
+        ":imgproc",
+        ":nvjpeg_ext_objs",
+    ],
+)
+
+# CMake: nvjpeg2k_ext_obj + ext_module.cpp of nvjpeg2k_ext.
+cc_library(
+    name = "nvjpeg2k_ext_objs",
+    srcs = glob(["extensions/nvjpeg2k/*.h"]) + [
+        "extensions/nvjpeg2k/cuda_decoder.cpp",
+        "extensions/nvjpeg2k/cuda_encoder.cpp",
+        "extensions/nvjpeg2k/exception.cpp",
+        "extensions/nvjpeg2k/ext_module.cpp",
+        "extensions/nvjpeg2k/nvjpeg2k_ext.cpp",
+        "extensions/nvjpeg2k/nvjpeg2k_utils.cpp",
+    ],
+    copts = _COPTS,
+    local_defines = _CC_DEFINES,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":extension_utils",
+        ":internal_headers",
+        "@nvjpeg2k//:headers",
+    ],
+    alwayslink = True,
+)
+
+cc_binary(
+    name = "nvjpeg2k_ext_%s.dll" % _MAJOR,
+    linkshared = True,
+    deps = [
+        ":cudart_static",
+        ":dynlink_cuda",
+        ":dynlink_nvjpeg2k",
+        ":imgproc",
+        ":nvjpeg2k_ext_objs",
+    ],
+)
+
+filegroup(
+    name = "extensions",
+    srcs = [
+        ":nvjpeg2k_ext_%s.dll" % _MAJOR,
+        ":nvjpeg_ext_%s.dll" % _MAJOR,
+    ],
+)

@@ -1,0 +1,26 @@
+MSVC: do not use C compound literals in C++ (convert.cc).
+
+`(char *){}` is a GNU extension in C++ that MSVC cannot parse; use
+std::declval in the (unevaluated) decltype expressions instead.
+
+diff --git a/src/convert.cc b/src/convert.cc
+--- a/src/convert.cc
++++ b/src/convert.cc
+@@ -35,7 +35,7 @@
+     template <typename CT>
+     static auto _(CT s) -> decltype(std::to_chars(s, s, std::declval<T>()), std::true_type{});
+     static auto _(...) -> std::false_type;
+-    static constexpr bool value = decltype(_((char *){}))::value;
++    static constexpr bool value = decltype(_(std::declval<char *>()))::value;
+ };
+ 
+ template <typename T>
+@@ -69,7 +69,7 @@
+     template <typename CT>
+     static auto _(CT s) -> decltype(std::from_chars(s, s, std::declval<T&>()), std::true_type{});
+     static auto _(...) -> std::false_type;
+-    static constexpr bool value = decltype(_((const char *){}))::value;
++    static constexpr bool value = decltype(_(std::declval<const char *>()))::value;
+ };
+ 
+ template <typename T>

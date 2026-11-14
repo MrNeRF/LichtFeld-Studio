@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# visualizer module (CMake: src/visualizer/CMakeLists.txt)
+#
+#   lfs_visualizer.dll   GUI (SDL3 + Vulkan + RmlUi), viewport rendering, tools,
+#                        operators, Python console/editor, OpenXR
+#
+# GLSL viewport shaders: ./rendering/resources/viewport (separate package).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "cc_headers_only", "lfs_cuda_library", "lfs_dll")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Build-time GLSL -> SPIR-V header compiler (CMake: lfs_shader_compiler), built
+# in //src/visualizer/rendering/resources/viewport.
+exports_files(["tools/shader_compiler.cpp"])
+
+#-------------------------------------------------------------------------------------
+# Runtime resources (installed by //:LichtFeld-Studio to share/LichtFeld-Studio)
+#-------------------------------------------------------------------------------------
+
+# assets/{icon,fonts,themes,environments} and the logos/splash images.
+filegroup(
+    name = "assets",
+    srcs = glob([
+        "gui/assets/*.png",
+        "gui/assets/environments/**",
+        "gui/assets/fonts/**",
+        "gui/assets/icon/**",
+        "gui/assets/themes/**",
+    ]),
+)
+
+# assets/rmlui
+filegroup(
+    name = "rmlui_resources",
+    srcs = glob(["gui/rmlui/resources/**"]),
+)
+
+# locales/, locale_index.json and the HTML viewer export resources (viewer/).
+filegroup(
+    name = "gui_resources",
+    srcs = glob([
+        "gui/resources/locales/**",
+        "gui/resources/viewer/**",
+    ]) + ["gui/resources/locale_index.json"],
+)
+
+#-------------------------------------------------------------------------------------
+# Headers
+#-------------------------------------------------------------------------------------
+
+# Plain enums used by python/python_runtime.hpp; separate from :headers so that
+# the Python runtime headers do not depend on the whole visualizer.
+cc_library(
+    name = "panel_types",
+    hdrs = [
+        "gui/panel_height_mode.hpp",
+        "gui/panel_space.hpp",
+    ],
+    deps = ["//src:root_includes"],
+)
+
+# Third-party headers included by visualizer headers (no linking).
+cc_headers_only(
+    name = "third_party_headers",
+    deps = [
+        "//bazel/deps:sdl3_headers",
+        "@cuda//:nvtx3",
+        "@lfs_external//zep",
+        "@rmlui//:rmlui_shared",
+    ],
+)
+
+# The public include/ tree and the visualizer's internal headers (CMake adds
+# src/visualizer as include directory to the visualizer, the app, tcp and lfs_py).
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.cuh",
+        ],
+        allow_empty = True,
+        exclude = [
+            "gui/panel_height_mode.hpp",
+            "gui/panel_space.hpp",
+        ],
+    ),
+    includes = [
+        ".",
+        "include",
+    ],
+    deps = [
+        ":panel_types",
+        ":third_party_headers",
+        "//bazel/deps:vulkan_headers",
+        "//src/core:headers",
+        "//src/geometry:headers",
+        "//src/io:headers",
+        "//src/preprocessing:headers",
+        "//src/python:runtime_headers",
+        "//src/rendering:headers",
+        "//src/sequencer:headers",
+        "//src/training:headers",
+        "@glm",
+        "@nlohmann_json//:json",
+    ],
+)
+
+#-------------------------------------------------------------------------------------
+# CUDA (global CUDA flags: -O3 without fast math)
+#-------------------------------------------------------------------------------------
+
+lfs_cuda_library(
+    name = "visualizer_cuda",
+    srcs = ["rendering/vksplat_input_packer_cuda.cu"],
+    fast_math = False,
+    deps = [":headers"],
+)
+
+# The CPU chunk decoders round multiplies and adds separately; FMA contraction in
+# the dequant kernel would break CPU/GPU bit-parity.
+lfs_cuda_library(
+    name = "lod_page_dequant_cuda",
+    srcs = ["rendering/lod_page_dequant_cuda.cu"],
+    copts = ["--fmad=false"],
+    fast_math = False,
+    deps = [":headers"],
+)
+
+#-------------------------------------------------------------------------------------
+# lfs_visualizer.dll
+#-------------------------------------------------------------------------------------
+
+lfs_dll(
+    name = "lfs_visualizer",
+    srcs = glob(
+        ["**/*.cpp"],
+        exclude = ["tools/shader_compiler.cpp"],
+    ) + ["//src/python:ui_hooks.cpp"],
+    copts = select({
+        "@platforms//os:windows": ["/W4"],
+        "//conditions:default": [],
+    }),
+    description = "LichtFeld Studio visualizer",
+    dll_name = "lfs_visualizer.dll",
+    export_define = "LFS_VIS_EXPORTS",
+    interface_deps = [
+        ":headers",
+        "//src/preprocessing:lfs_preprocessing",
+        "@rmlui//:rmlui_shared",
+    ],
+    linkopts = [
+        "advapi32.lib",  # Windows application light/dark preference
+        "dxgi.lib",  # DXGI per-process VRAM query
+        "ole32.lib",  # OLE drag-drop (IDropTarget)
+        "shell32.lib",  # SHChangeNotify (file association)
+        "uuid.lib",
+    ],
+    local_defines = [
+        # fmt::fmt-header-only in CMake
+        "FMT_HEADER_ONLY=1",
+        # Development fallback for the Python LSP venv, Zep config and shaders;
+        # an absolute source path would make the build non-hermetic.
+        'PROJECT_ROOT_PATH=\\".\\"',
+        "VK_USE_PLATFORM_WIN32_KHR",
+        "_USE_MATH_DEFINES",
+    ],
+    deps = [
+        ":lod_page_dequant_cuda",
+        ":visualizer_cuda",
+        "//bazel/compat:httplib",
+        "//bazel/compat:nanoflann",
+        "//bazel/deps:sdl3",
+        "//bazel/deps:stb_headers",
+        "//bazel/deps:vulkan",
+        "//src:generated_headers",
+        "//src/core:lfs_core",
+        "//src/core:lfs_event_bridge",
+        "//src/diagnostics:lfs_diagnostics",
+        "//src/geometry:lfs_geometry",
+        "//src/io:lfs_io",
+        "//src/io:lfs_video",
+        "//src/python:lfs_python_runtime",
+        "//src/rendering:lfs_rendering",
+        "//src/rendering:lfs_vulkan_rasterizer",
+        "//src/rendering/rasterizer/vulkan/shader:lfs_shader_abi",
+        "//src/sequencer:lfs_sequencer",
+        "//src/training:lfs_training",
+        "//src/visualizer/rendering/resources/viewport:viewport_shaders",
+        "@apriltag//:apriltag_installed_layout",
+        "@cuda//:cuda_runtime",
+        "@fmt",
+        "@freetype",
+        "@glm",
+        "@lfs_external//zep",
+        "@libvterm//:vterm",
+        "@nativefiledialog_extended//:nfd",
+        "@nlohmann_json//:json",
+        "@onetbb//:tbb",
+        "@openssl//:crypto",
+        "@openssl//:ssl",
+        "@openxr_loader//:openxr_loader",
+        "@slang",
+        "@spdlog",
+        "@vulkan_memory_allocator",
+        "@zlib",
+    ],
+)

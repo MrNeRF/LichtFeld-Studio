@@ -1,0 +1,9 @@
+{
+    "url": "https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.63.tar.gz",
+    "integrity": "sha256-W42sBgj0lJj+jpX1Yv5rzwvHgeVh8Tc0iowlHQaoi28=",
+    "strip_prefix": "OpenXR-SDK-release-1.1.63",
+    "overlay": {
+        "BUILD.bazel": "sha256-6/QqE2fv0l3BbWCaTvRiDQ5gy/ChUeP7Kankv908qd0=",
+        "src/external/jsoncpp/BUILD.bazel": "sha256-hnk1gkQpt9kjZj9UK300EJ3lqzvu9mCYoAsekp+VwSc="
+    }
+}

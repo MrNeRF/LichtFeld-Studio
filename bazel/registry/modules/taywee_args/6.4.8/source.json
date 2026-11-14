@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/Taywee/args/archive/refs/tags/6.4.8.tar.gz",
+    "integrity": "sha256-Uuys65LDhlyKIQCR8oi0kC4KCCgDJ6gMS42K7F16O74=",
+    "strip_prefix": "args-6.4.8",
+    "overlay": {
+        "BUILD.bazel": "sha256-zTZ2+BtPNNZ5VFMp6FD99kxoXvXQUf5JH3sDrfbG1fY="
+    }
+}

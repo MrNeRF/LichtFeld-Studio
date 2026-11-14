@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_binary")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Generator of the SteadySplats STBN volume (CMake: lfs_generate_stbn).
+lfs_cc_binary(
+    name = "lfs_generate_stbn",
+    srcs = ["generate_stbn.cpp"],
+    deps = ["//src/core:headers"],
+)
+
+# The 128x128x64 STBN volume (1 MiB) is generated at build time instead of
+# being checked in: about 10 s with optimization, deterministic, cached.
+run_binary(
+    name = "generate_stbn_data",
+    outs = ["stbn_data.inc"],
+    args = ["$(execpath stbn_data.inc)"],
+    tool = ":lfs_generate_stbn",
+)
+
+# #include "stbn_data.inc" (src/rendering/rasterizer/vulkan/src/stochastic.cpp).
+cc_library(
+    name = "stbn_data",
+    includes = ["."],
+    textual_hdrs = ["stbn_data.inc"],
+)

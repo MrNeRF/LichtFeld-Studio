@@ -1,0 +1,142 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])  # Apache-2.0 OR MIT
+
+exports_files(["LICENSE"])
+
+# OpenXR-SDK (unlike OpenXR-SDK-Source) ships every file generated from xr.xml:
+# include/openxr/*.h, src/xr_generated_dispatch_table_core.{c,h} and
+# src/loader/xr_generated_loader.{cpp,hpp}. No code generation is needed.
+
+# By default the loader uses jsoncpp from the BCR (@jsoncpp), which is compiled
+# with JSON_USE_EXCEPTION=0: a manifest with a wrong JSON type then aborts the
+# process inside jsoncpp. With --@openxr_loader//:bundled_jsoncpp=True the copy
+# in src/external/jsoncpp is used instead, built with exceptions enabled as in
+# upstream's default CMake build, and such manifests make the loader return an
+# XrResult error. That copy defines the same Json:: symbols, so do not link
+# @jsoncpp into the same binary when using it.
+bool_flag(
+    name = "bundled_jsoncpp",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "use_bundled_jsoncpp",
+    flag_values = {":bundled_jsoncpp": "True"},
+)
+
+# CMake: OpenXR::headers. Consumers of <openxr/openxr_platform.h> define the
+# XR_USE_PLATFORM_* / XR_USE_GRAPHICS_API_* macros they need and include the
+# matching platform headers first (e.g. <windows.h>, <vulkan/vulkan.h> from
+# @vulkan_headers).
+cc_library(
+    name = "headers",
+    hdrs = [
+        "include/openxr/openxr.h",
+        "include/openxr/openxr_loader_negotiation.h",
+        "include/openxr/openxr_platform.h",
+        "include/openxr/openxr_platform_defines.h",
+        "include/openxr/openxr_reflection.h",
+        "include/openxr/openxr_reflection_parent_structs.h",
+        "include/openxr/openxr_reflection_structs.h",
+    ],
+    includes = ["include"],
+)
+
+# Headers the loader finds through the private include directories src and
+# src/common. Like jsoncpp they are implementation_deps of :openxr_loader, so
+# these directories never reach the include path of consumers.
+cc_library(
+    name = "loader_internal_headers",
+    hdrs = [
+        "src/common/extra_algorithms.h",
+        "src/common/filesystem_utils.hpp",
+        "src/common/hex_and_handles.h",
+        "src/common/object_info.h",
+        "src/common/platform_utils.hpp",
+        "src/common/stdfs_conditions.h",
+        "src/common/unique_asset.h",
+        "src/common/xr_dependencies.h",
+        "src/xr_generated_dispatch_table_core.h",
+    ],
+    includes = [
+        "src",
+        "src/common",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+# CMake: OpenXR::openxr_loader as a static library (DYNAMIC_LOADER=OFF).
+cc_library(
+    name = "openxr_loader",
+    srcs = [
+        "src/common/filesystem_utils.cpp",
+        "src/common/object_info.cpp",
+        "src/loader/api_layer_interface.cpp",
+        "src/loader/api_layer_interface.hpp",
+        "src/loader/exception_handling.hpp",
+        "src/loader/loader_core.cpp",
+        "src/loader/loader_init_data.cpp",
+        "src/loader/loader_init_data.hpp",
+        "src/loader/loader_instance.cpp",
+        "src/loader/loader_instance.hpp",
+        "src/loader/loader_logger.cpp",
+        "src/loader/loader_logger.hpp",
+        "src/loader/loader_logger_recorders.cpp",
+        "src/loader/loader_logger_recorders.hpp",
+        "src/loader/loader_platform.hpp",
+        "src/loader/loader_properties.cpp",
+        "src/loader/loader_properties.hpp",
+        "src/loader/manifest_file.cpp",
+        "src/loader/manifest_file.hpp",
+        "src/loader/runtime_interface.cpp",
+        "src/loader/runtime_interface.hpp",
+        "src/loader/xr_generated_loader.cpp",
+        "src/loader/xr_generated_loader.hpp",
+        "src/xr_generated_dispatch_table_core.c",
+    ],
+    implementation_deps = [":loader_internal_headers"] + select({
+        ":use_bundled_jsoncpp": ["//src/external/jsoncpp"],
+        "//conditions:default": ["@jsoncpp"],
+    }),
+    linkopts = select({
+        "@platforms//os:windows": ["-DEFAULTLIB:advapi32.lib"],
+        "@platforms//os:linux": [
+            "-ldl",
+            "-lpthread",
+        ],
+        "//conditions:default": [],
+    }),
+    # Platform definitions of upstream's CMake build (src/CMakeLists.txt). Its
+    # XR_USE_GRAPHICS_API_* definitions are left out: in the loader they only pull
+    # in the graphics API headers and change no code. Without
+    # OPENXR_HAVE_COMMON_CONFIG no generated common_config.h is needed; its only
+    # content, HAVE_SECURE_GETENV, is defined directly. The Linux manifest search
+    # paths are the defaults in manifest_file.cpp (/etc/xdg,
+    # /usr/local/share:/usr/share and /etc).
+    local_defines = select({
+        "@platforms//os:windows": [
+            "XR_OS_WINDOWS",
+            "XR_USE_PLATFORM_WIN32",
+            "XR_USE_TIMESPEC",
+        ],
+        "@platforms//os:linux": [
+            "HAVE_SECURE_GETENV",
+            "XR_OS_LINUX",
+            "XR_USE_TIMESPEC",
+        ],
+        "@platforms//os:macos": [
+            "XR_OS_APPLE",
+            "XR_USE_PLATFORM_MACOS",
+            "XR_USE_TIMESPEC",
+        ],
+    }) + select({
+        ":use_bundled_jsoncpp": [],
+        # Same as @jsoncpp itself is compiled with.
+        "//conditions:default": ["JSON_USE_EXCEPTION=0"],
+    }),
+    deps = [":headers"],
+)

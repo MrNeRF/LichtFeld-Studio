@@ -1,0 +1,11 @@
+{
+    "homepage": "https://www.leonerd.org.uk/code/libvterm/",
+    "maintainers": [],
+    "repository": [
+        "github:neovim/libvterm"
+    ],
+    "versions": [
+        "0.3.3.20251121"
+    ],
+    "yanked_versions": {}
+}

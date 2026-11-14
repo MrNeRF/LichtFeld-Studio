@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# tree-sitter runtime (MIT), vendored (CMake: lfs_tree_sitter in external/CMakeLists.txt).
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+cc_library(
+    name = "tree_sitter",
+    srcs = [
+        "lib/src/alloc.c",
+        "lib/src/get_changed_ranges.c",
+        "lib/src/language.c",
+        "lib/src/lexer.c",
+        "lib/src/node.c",
+        "lib/src/parser.c",
+        "lib/src/point.c",
+        "lib/src/query.c",
+        "lib/src/stack.c",
+        "lib/src/subtree.c",
+        "lib/src/tree.c",
+        "lib/src/tree_cursor.c",
+        "lib/src/wasm_store.c",
+    ] + glob([
+        "lib/src/**/*.h",
+        "lib/src/**/*.c",
+    ], exclude = [
+        "lib/src/lib.c",
+        "lib/src/alloc.c",
+        "lib/src/get_changed_ranges.c",
+        "lib/src/language.c",
+        "lib/src/lexer.c",
+        "lib/src/node.c",
+        "lib/src/parser.c",
+        "lib/src/point.c",
+        "lib/src/query.c",
+        "lib/src/stack.c",
+        "lib/src/subtree.c",
+        "lib/src/tree.c",
+        "lib/src/tree_cursor.c",
+        "lib/src/wasm_store.c",
+    ], allow_empty = True),
+    hdrs = ["lib/include/tree_sitter/api.h"],
+    copts = select({
+        "@platforms//os:windows": ["/std:c11"],
+        "//conditions:default": ["-std=c11"],
+    }),
+    includes = ["lib/include"],
+    local_defines = [
+        "_BSD_SOURCE",
+        "_DARWIN_C_SOURCE",
+        "_DEFAULT_SOURCE",
+        "_POSIX_C_SOURCE=200112L",
+    ],
+)

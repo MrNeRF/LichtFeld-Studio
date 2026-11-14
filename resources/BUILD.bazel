@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+load("//bazel/windows:resources.bzl", "windows_resources")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# UTF-8 active code page and long path awareness, embedded into the exe.
+exports_files(["lichtfeld-studio.manifest"])
+
+# The application icon (IDI_ICON1).
+windows_resources(
+    name = "app_icon",
+    srcs = ["icon.ico"],
+    rc = "lichtfeld-studio.rc",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+# Third-party license texts installed to share/LichtFeld-Studio/licenses.
+filegroup(
+    name = "licenses",
+    srcs = glob(["licenses/**"]),
+)

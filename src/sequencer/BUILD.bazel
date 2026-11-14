@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# sequencer module (CMake: src/sequencer/CMakeLists.txt): camera animation timeline.
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["*.hpp"]),
+    deps = [
+        "//src:root_includes",
+        "//src/core:headers",
+        "//src/rendering:headers",
+        "@glm",
+        "@nlohmann_json//:json",
+    ],
+)
+
+lfs_cc_library(
+    name = "lfs_sequencer",
+    srcs = [
+        "animation_clip.cpp",
+        "animation_track.cpp",
+        "animation_value.cpp",
+        "interpolation.cpp",
+        "timeline.cpp",
+    ],
+    deps = [
+        ":headers",
+        "//src/core:lfs_core",
+        "//src/io:headers",
+        "@glm",
+        "@nlohmann_json//:json",
+    ],
+)

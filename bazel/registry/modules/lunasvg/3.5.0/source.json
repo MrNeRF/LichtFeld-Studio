@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/sammycage/lunasvg/archive/refs/tags/v3.5.0.tar.gz",
+    "integrity": "sha256-Gr8Ucu5sTRl5eRbozDwuS2KODYEXj/rGC9sNRX4yxpA=",
+    "strip_prefix": "lunasvg-3.5.0",
+    "overlay": {
+        "BUILD.bazel": "sha256-CaKoVKApqhJTGcWivm3C2qebeC2YfjawjoPes0hsZBM="
+    }
+}

@@ -1,0 +1,11 @@
+module(
+    name = "rmlui",
+    version = "6.3",
+    bazel_compatibility = [">=7.2.1"],
+    compatibility_level = 6,
+)
+
+bazel_dep(name = "freetype", version = "2.14.1.bcr.1")
+bazel_dep(name = "lunasvg", version = "3.5.0")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")

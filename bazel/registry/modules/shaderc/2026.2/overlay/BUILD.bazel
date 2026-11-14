@@ -1,0 +1,78 @@
+# Bazel build for shaderc, modelled on the upstream CMake build: static
+# libshaderc (+ libshaderc_util) and the glslc compiler. glslang, SPIRV-Tools
+# and SPIRV-Headers come from their Bazel modules.
+#
+# glslc/src/build-version.inc is a pre-generated overlay file (see the comment
+# at the top of that file).
+
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+# CMake: shaderc_util, the internal glslang/SPIRV-Tools wrapper of libshaderc.
+cc_library(
+    name = "shaderc_util",
+    srcs = glob(
+        ["libshaderc_util/src/*.cc"],
+        exclude = ["libshaderc_util/src/*_test.cc"],
+    ),
+    hdrs = glob([
+        "libshaderc_util/include/libshaderc_util/*.h",
+        "libshaderc_util/include/libshaderc_util/*.inc",
+    ]),
+    includes = ["libshaderc_util/include"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "@glslang",
+        "@spirv_tools",
+        "@spirv_tools//:spirv_tools_opt",
+    ],
+)
+
+# CMake: shaderc (static libshaderc). Headers: <shaderc/shaderc.h>,
+# <shaderc/shaderc.hpp>, <shaderc/env.h>, <shaderc/status.h>.
+cc_library(
+    name = "shaderc",
+    srcs = [
+        "libshaderc/src/shaderc.cc",
+        "libshaderc/src/shaderc_private.h",
+    ],
+    hdrs = [
+        "libshaderc/include/shaderc/env.h",
+        "libshaderc/include/shaderc/shaderc.h",
+        "libshaderc/include/shaderc/shaderc.hpp",
+        "libshaderc/include/shaderc/status.h",
+        "libshaderc/include/shaderc/visibility.h",
+    ],
+    # The public headers only need the C/C++ standard library.
+    implementation_deps = [
+        ":shaderc_util",
+        "@glslang",
+        "@spirv_headers//:spirv_cpp_headers",
+        "@spirv_tools",
+    ],
+    includes = ["libshaderc/include"],
+)
+
+# CMake: glslc_exe, installed as glslc.
+cc_binary(
+    name = "glslc",
+    srcs = glob(
+        [
+            "glslc/src/*.cc",
+            "glslc/src/*.h",
+        ],
+        exclude = ["glslc/src/*_test.cc"],
+    ) + ["glslc/src/build-version.inc"],
+    deps = [
+        ":shaderc",
+        ":shaderc_util",
+        "@glslang",
+        "@spirv_tools",
+    ],
+)

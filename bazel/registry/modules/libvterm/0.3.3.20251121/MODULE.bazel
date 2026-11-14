@@ -1,0 +1,8 @@
+module(
+    name = "libvterm",
+    version = "0.3.3.20251121",
+    bazel_compatibility = [">=7.2.1"],
+    compatibility_level = 0,
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.28")

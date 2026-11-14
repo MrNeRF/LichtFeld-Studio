@@ -1,0 +1,151 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files([
+    "Include/RmlUi/Core/Containers/LICENSE.txt",
+    "LICENSE.txt",
+    "Source/Debugger/LICENSE.txt",
+])
+
+# RmlUi configured like LichtFeld Studio's vcpkg port (features "freetype" and "svg"):
+#   RMLUI_FONT_ENGINE=freetype, RMLUI_SVG_PLUGIN=ON (lunasvg 3.x), Debugger library,
+#   no Lua bindings, no Lottie plugin, no samples/backends/tests.
+# The bundled third-party containers (Include/RmlUi/Core/Containers: itlib, robin_hood) are used.
+# LichtFeld Studio patches (patches/): context-mouse-button-cancel, observer-ptr-header-only,
+# scroll-layout-compatibility.
+#
+# Public targets (use exactly one of them in a binary):
+#   :rmlui         static library (Core + FreeType font engine + SVG plugin + Debugger), defines RMLUI_STATIC_LIB.
+#   :rmlui_shared  the same as a shared library (Windows: RmlUi.dll + import library RmlUi.dll.if.lib), compiled with
+#                  RMLUI_CORE_EXPORTS/RMLUI_DEBUGGER_EXPORTS; consumers do not get RMLUI_STATIC_LIB, i.e. they use
+#                  __declspec(dllimport). FreeType, lunasvg and plutovg are linked statically into the shared library.
+#                  The DLL is part of the runfiles of dependent binaries and is copied next to them on Windows
+#                  (copy_dynamic_libraries_to_binary, enabled by default in the MSVC toolchain).
+#
+# RmlUi requires C++17 or newer (the default of rules_cc's auto-configured toolchains).
+
+_PUBLIC_HDRS = glob(
+    [
+        "Include/RmlUi/*.h",
+        "Include/RmlUi/Config/**/*.h",
+        "Include/RmlUi/Core/**/*.h",
+        "Include/RmlUi/Core/**/*.hpp",
+        "Include/RmlUi/Core/**/*.inl",
+        "Include/RmlUi/Debugger/**/*.h",
+        "Include/RmlUi/SVG/**/*.h",
+    ],
+    exclude = ["Include/RmlUi/Lua.h"],
+)
+
+# Source/Core/** includes Elements, Layout and FontEngineDefault (RMLUI_FONT_ENGINE=freetype).
+_SRCS = glob([
+    "Source/Core/**/*.cpp",
+    "Source/Core/**/*.h",
+    "Source/Core/**/*.inl",
+    "Source/Debugger/*.cpp",
+    "Source/Debugger/*.h",
+    "Source/SVG/*.cpp",
+    "Source/SVG/*.h",
+])
+
+_LOCAL_DEFINES = [
+    'RMLUI_VERSION=\\"6.3\\"',
+    "RMLUI_FONT_ENGINE_FREETYPE",
+    "RMLUI_SVG_PLUGIN",
+]
+
+_DEPS = [
+    "@freetype",
+    "@lunasvg",
+]
+
+# LogDefault.cpp uses MessageBoxA (user32) on Windows.
+_LINKOPTS = select({
+    "@rules_cc//cc/compiler:clang-cl": ["-DEFAULTLIB:user32.lib"],
+    "@rules_cc//cc/compiler:mingw-gcc": ["-luser32"],
+    "@rules_cc//cc/compiler:msvc-cl": ["-DEFAULTLIB:user32.lib"],
+    "//conditions:default": [],
+})
+
+cc_library(
+    name = "rmlui",
+    srcs = _SRCS,
+    hdrs = _PUBLIC_HDRS,
+    defines = ["RMLUI_STATIC_LIB"],
+    includes = ["Include"],
+    linkopts = _LINKOPTS,
+    local_defines = _LOCAL_DEFINES,
+    deps = _DEPS,
+)
+
+# Objects of the shared library: Core and Debugger compiled with their export macros (and without
+# RMLUI_STATIC_LIB). Core and Debugger end up in the same shared library, so both are exported here.
+cc_library(
+    name = "rmlui_shared_objects",
+    srcs = _SRCS,
+    hdrs = _PUBLIC_HDRS,
+    includes = ["Include"],
+    linkopts = _LINKOPTS,
+    local_defines = _LOCAL_DEFINES + [
+        "RMLUI_CORE_EXPORTS",
+        "RMLUI_DEBUGGER_EXPORTS",
+    ],
+    visibility = ["//visibility:private"],
+    deps = _DEPS,
+    alwayslink = True,
+)
+
+cc_binary(
+    name = "RmlUi.dll",
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [":rmlui_shared_objects"],
+)
+
+filegroup(
+    name = "rmlui_dll_interface_library",
+    srcs = [":RmlUi.dll"],
+    output_group = "interface_library",
+    target_compatible_with = ["@platforms//os:windows"],
+    visibility = ["//visibility:private"],
+)
+
+cc_binary(
+    name = "librmlui.so",
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [":rmlui_shared_objects"],
+)
+
+cc_binary(
+    name = "librmlui.dylib",
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":rmlui_shared_objects"],
+)
+
+cc_import(
+    name = "rmlui_shared_import",
+    interface_library = select({
+        "@platforms//os:windows": ":rmlui_dll_interface_library",
+        "//conditions:default": None,
+    }),
+    shared_library = select({
+        "@platforms//os:windows": ":RmlUi.dll",
+        "@platforms//os:macos": ":librmlui.dylib",
+        "//conditions:default": ":librmlui.so",
+    }),
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "rmlui_shared",
+    hdrs = _PUBLIC_HDRS,
+    includes = ["Include"],
+    deps = [":rmlui_shared_import"],
+)

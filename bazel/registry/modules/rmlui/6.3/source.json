@@ -1,0 +1,14 @@
+{
+    "url": "https://github.com/mikke89/RmlUi/archive/refs/tags/6.3.tar.gz",
+    "integrity": "sha256-2Xcpi7YUdhDlmE1duF3fKEAg1lWocTkT9pggdPHb3t4=",
+    "strip_prefix": "RmlUi-6.3",
+    "overlay": {
+        "BUILD.bazel": "sha256-msEPUu5RvpSfpVGkgWkB+YENyCOkClEhyxUY1JbieF4="
+    },
+    "patches": {
+        "context-mouse-button-cancel.patch": "sha256-u1swyOoPw2THX5WDj/rP0puNvMPaLuGYUwsnhz9dM34=",
+        "observer-ptr-header-only.patch": "sha256-kUbT/hWkm5e/0QwPApVSb523Gj3ajwp14D0PGpdT7Rg=",
+        "scroll-layout-compatibility.patch": "sha256-xp7X66H+6rWXLe7wSS0l0GOQznLoH2GBG8YfO82yaxI="
+    },
+    "patch_strip": 1
+}

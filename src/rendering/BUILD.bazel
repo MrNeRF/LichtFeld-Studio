@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# rendering module (CMake: src/rendering/CMakeLists.txt, rasterizer/vulkan/CMakeLists.txt)
+#
+#   lfs_vulkan_rasterizer   Vulkan Gaussian-splat rasterizer (shaders: ./rasterizer/vulkan/shader)
+#   lfs_rendering_tensor    CUDA/Vulkan interop, export post-processing, mesh2splat
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel:lfs.bzl", "lfs_cc_library", "lfs_cuda_library")
+
+package(default_visibility = ["//:__subpackages__"])
+
+# Monospace font of the Python console/editor (installed to assets/fonts).
+exports_files(["resources/assets/JetBrainsMono-Regular.ttf"])
+
+# Rasterizer headers are included either relative to each other or by their full
+# path ("rendering/rasterizer/vulkan/src/..."); its private config.h therefore
+# never needs to be on a public include path.
+cc_library(
+    name = "headers",
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.cuh",
+        ],
+        allow_empty = True,
+    ),
+    includes = [
+        ".",
+        "include",
+    ],
+    deps = [
+        "//bazel/deps:vulkan_headers",
+        "//src/core:headers",
+        # Rasterizer headers include ../shader/src/slang/*.inc (shared with the shaders).
+        "//src/rendering/rasterizer/vulkan/shader:slang_inc",
+    ],
+)
+
+lfs_cc_library(
+    name = "lfs_vulkan_rasterizer",
+    srcs = [
+        "rasterizer/vulkan/src/barrier_planner.cpp",
+        "rasterizer/vulkan/src/buffer.cpp",
+        "rasterizer/vulkan/src/compute_program_sets.cpp",
+        "rasterizer/vulkan/src/gs_pipeline.cpp",
+        "rasterizer/vulkan/src/gs_renderer.cpp",
+        "rasterizer/vulkan/src/perf_timer.cpp",
+        "rasterizer/vulkan/src/stochastic.cpp",
+        "rasterizer/vulkan/src/vma_implementation.cpp",
+        "vulkan_wait.cpp",
+    ],
+    deps = [
+        ":headers",
+        "//bazel/deps:vulkan",
+        "//src/core:lfs_core",
+        "//src/diagnostics:lfs_diagnostics",
+        "//src/rendering/rasterizer/vulkan/shader:shader_variants",
+        "//src/rendering/rasterizer/vulkan/tools:stbn_data",
+        "@vulkan_memory_allocator",
+    ],
+)
+
+lfs_cuda_library(
+    name = "rendering_cuda",
+    srcs = [
+        "cuda_vulkan_interop.cu",
+        "export_post_process.cu",
+        "point_cloud_raster.cu",
+        "selection_ops.cu",
+    ],
+    fast_math = False,
+    deps = [":headers"],
+)
+
+lfs_cc_library(
+    name = "lfs_rendering_tensor",
+    srcs = [
+        "cuda_vulkan_interop.cpp",
+        "export_post_process.cpp",
+        "mesh2splat.cpp",
+        "raster_rendering_engine.cpp",
+        "screen_overlay_renderer.cpp",
+    ],
+    deps = [
+        ":headers",
+        ":lfs_vulkan_rasterizer",
+        ":rendering_cuda",
+        "//bazel/deps:vulkan",
+        "//src/core:lfs_core",
+        "@cuda//:cuda_runtime",
+        "@glm",
+        "@glslang",
+        "@glslang//:glslang-default-resource-limits",
+        "@onetbb//:tbb",
+        "@spdlog",
+    ],
+)
+
+# CMake: INTERFACE library lfs_rendering -> lfs_rendering_tensor
+alias(
+    name = "lfs_rendering",
+    actual = ":lfs_rendering_tensor",
+)

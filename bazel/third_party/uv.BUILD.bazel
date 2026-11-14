@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Prebuilt uv (https://github.com/astral-sh/uv), bundled for plugin package management.
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "uv.exe",
+    "uvw.exe",
+    "uvx.exe",
+])
+
+filegroup(
+    name = "uv",
+    srcs = ["uv.exe"],
+)

@@ -1,0 +1,11 @@
+{
+    "homepage": "https://github.com/KhronosGroup/glslang",
+    "maintainers": [],
+    "repository": [
+        "github:KhronosGroup/glslang"
+    ],
+    "versions": [
+        "16.2.0"
+    ],
+    "yanked_versions": {}
+}

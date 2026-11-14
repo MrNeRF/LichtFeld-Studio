@@ -1,0 +1,4 @@
+# Vendored code: repository @lfs_external (see bazel/repositories.bzl).
+external
+# BCR-format registry; its overlay BUILD files belong to the modules.
+bazel/registry

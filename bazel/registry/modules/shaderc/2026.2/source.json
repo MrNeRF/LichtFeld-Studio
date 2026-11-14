@@ -1,0 +1,9 @@
+{
+    "url": "https://github.com/google/shaderc/archive/refs/tags/v2026.2.tar.gz",
+    "integrity": "sha256-+SQXjnXjKTCCSBsl7WTV5Ip5W0edrDvTyD0jBwhV30I=",
+    "strip_prefix": "shaderc-2026.2",
+    "overlay": {
+        "BUILD.bazel": "sha256-SWXdbNjRVyU6O1Mr+G5HNW0B12JP75xl+KDG/Dh93a4=",
+        "glslc/src/build-version.inc": "sha256-3NPpws8TFME7/CwldEVKir49bTUhuHBdK7Gc2984ggo="
+    }
+}
