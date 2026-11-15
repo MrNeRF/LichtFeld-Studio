@@ -695,6 +695,25 @@ namespace {
         EXPECT_NE(params.validate().find("explore_scout_opacity"), std::string::npos);
         params.explore_scout_opacity = std::numeric_limits<float>::quiet_NaN();
         EXPECT_NE(params.validate().find("explore_scout_opacity"), std::string::npos);
+        params = {};
+        params.receiver_opacity_scale = 0.5f;
+        params.receiver_opacity_scale_end = 0.55f;
+        params.receiver_cross_scale = 1.0f;
+        EXPECT_TRUE(params.validate().empty());
+        params.receiver_opacity_scale = 0.0f;
+        EXPECT_NE(params.validate().find("receiver_opacity_scale"), std::string::npos);
+        params.receiver_opacity_scale = 1.01f;
+        EXPECT_NE(params.validate().find("receiver_opacity_scale"), std::string::npos);
+        params = {};
+        params.receiver_opacity_scale_end = -0.1f;
+        EXPECT_NE(params.validate().find("receiver_opacity_scale_end"), std::string::npos);
+        params.receiver_opacity_scale_end = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("receiver_opacity_scale_end"), std::string::npos);
+        params = {};
+        params.receiver_cross_scale = 0.0f;
+        EXPECT_NE(params.validate().find("receiver_cross_scale"), std::string::npos);
+        params.receiver_cross_scale = 1.5f;
+        EXPECT_NE(params.validate().find("receiver_cross_scale"), std::string::npos);
     }
 
     // Catches a short schedule (e.g. --iter 30) rounding an interval to zero, which validation rejects.

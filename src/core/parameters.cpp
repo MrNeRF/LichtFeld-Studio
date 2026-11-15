@@ -1047,6 +1047,14 @@ namespace lfs::core {
                 return std::format("explore_scout_share must be finite and within [0, 1] (got {})", explore_scout_share);
             if (!std::isfinite(explore_scout_opacity) || explore_scout_opacity <= 0.0f || explore_scout_opacity >= 1.0f)
                 return std::format("explore_scout_opacity must be finite and within (0, 1) (got {})", explore_scout_opacity);
+            if (!std::isfinite(receiver_opacity_scale) || receiver_opacity_scale <= 0.0f || receiver_opacity_scale > 1.0f)
+                return std::format("receiver_opacity_scale must be finite and within (0, 1] (got {})", receiver_opacity_scale);
+            if (!std::isfinite(receiver_opacity_scale_end) || receiver_opacity_scale_end < 0.0f ||
+                receiver_opacity_scale_end > 1.0f)
+                return std::format("receiver_opacity_scale_end must be finite and within [0, 1] (got {})",
+                                   receiver_opacity_scale_end);
+            if (!std::isfinite(receiver_cross_scale) || receiver_cross_scale <= 0.0f || receiver_cross_scale > 1.0f)
+                return std::format("receiver_cross_scale must be finite and within (0, 1] (got {})", receiver_cross_scale);
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (perf_bench_warmup < 0)

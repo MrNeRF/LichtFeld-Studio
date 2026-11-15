@@ -740,6 +740,36 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::receiver_opacity_scale,
+                        "receiver_opacity_scale", "Receiver Opacity Scale", d.receiver_opacity_scale, 0.05f, 1.0f,
+                        "At the cap, both halves of a need-guided split get this factor times the parent's opacity (MRNF)")
+            .locale("training.advanced.receiver_opacity_scale")
+            .tooltip("training.tooltip.receiver_opacity_scale")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::receiver_opacity_scale_end,
+                        "receiver_opacity_scale_end", "Receiver Opacity Scale End", d.receiver_opacity_scale_end, 0.0f, 1.0f,
+                        "Receiver opacity factor reached by the end of growth on a linear ramp; 0 keeps the factor constant (MRNF)")
+            .locale("training.advanced.receiver_opacity_scale_end")
+            .tooltip("training.tooltip.receiver_opacity_scale_end")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::receiver_cross_scale,
+                        "receiver_cross_scale", "Receiver Cross Scale", d.receiver_cross_scale, 0.05f, 1.0f,
+                        "At the cap, need-guided splits shrink the two short axes of both halves by this factor (MRNF)")
+            .locale("training.advanced.receiver_cross_scale")
+            .tooltip("training.tooltip.receiver_cross_scale")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

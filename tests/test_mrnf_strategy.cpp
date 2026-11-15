@@ -4880,3 +4880,79 @@ TEST(MRNFStrategyTest, ExploreRowsFollowTheirSplats) {
     reorder.ensure_explore_rows();
     EXPECT_EQ(reorder._explore_rendered.cpu().to_vector(), (std::vector<float>{1.0f, 2.0f, 0.0f, 0.0f}));
 }
+
+// Both halves of a receiver split get receiver_opacity_scale x the parent's opacity and
+// receiver_cross_scale on the two short axes; the defaults (1, 0.7) keep the raw opacity bit for bit.
+// With receiver_opacity_scale_end > 0 the factor ramps linearly to it over [0, grow_until_iter] and
+// then stays; 0 keeps the start factor.
+TEST(MRNFStrategyTest, ReceiverSplitTakesTheOpacityAndCrossScale) {
+    struct ReceiverRun {
+        std::vector<float> opacity;
+        std::vector<float> scales;
+        std::vector<bool> free;
+        int receivers = 0;
+    };
+    // Two refills at the cap with need-guided growth: the receiver rule splits two parents.
+    const auto run_refill = [](const param::OptimizationParameters& params, const int iter) {
+        constexpr size_t m = 200;
+        auto data = create_mrnf_test_splat_data(static_cast<int>(m));
+        MRNF strategy(data);
+        strategy.initialize(params);
+        std::vector<float> error(m, 1.0f), footprint(m, 0.01f);
+        set_need_window(data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy.soft_delete_rows(row_range(m - 2, m));
+        const auto result = strategy.grow_and_split(iter, 2, strategy.compute_refine_candidates(), 0);
+        ReceiverRun run{data.opacity_raw().cpu().to_vector(), data.scaling_raw().cpu().to_vector(), {}, result.receiver_splits};
+        const auto free_cpu = strategy._free_mask.cpu();
+        for (size_t row = 0; row < run.opacity.size(); ++row)
+            run.free.push_back(free_cpu.ptr<bool>()[row]);
+        return run;
+    };
+    const auto check = [](const ReceiverRun& run, const float opacity_scale, const float cross_scale) {
+        ASSERT_GT(run.receivers, 0);
+        size_t children = 0;
+        for (size_t row = 0; row < run.opacity.size(); ++row) {
+            SCOPED_TRACE(row);
+            if (run.free[row])
+                continue;
+            if (run.scales[3 * row] == 0.0f) { // untouched: parents start at log scale 0, raw opacity 0
+                EXPECT_EQ(run.opacity[row], 0.0f);
+                continue;
+            }
+            ++children;
+            EXPECT_NEAR(run.scales[3 * row + 0], std::log(0.5f), 1e-6f);
+            EXPECT_NEAR(run.scales[3 * row + 1], std::log(cross_scale), 1e-6f);
+            EXPECT_NEAR(run.scales[3 * row + 2], std::log(cross_scale), 1e-6f);
+            if (opacity_scale == 1.0f)
+                EXPECT_EQ(run.opacity[row], 0.0f); // the parent's raw value, exactly
+            else
+                EXPECT_NEAR(run.opacity[row], raw_of(0.5f * opacity_scale), 1e-5f);
+        }
+        EXPECT_EQ(children, 2u * static_cast<size_t>(run.receivers));
+    };
+
+    auto params = need_growth_test_params(200); // grow_until_iter 10'000
+    EXPECT_EQ(params.receiver_opacity_scale, 1.0f);
+    EXPECT_EQ(params.receiver_opacity_scale_end, 0.0f);
+    EXPECT_EQ(params.receiver_cross_scale, 0.7f);
+    check(run_refill(params, 0), 1.0f, 0.7f);
+
+    params.receiver_opacity_scale = 0.5f;
+    params.receiver_cross_scale = 0.85f;
+    check(run_refill(params, 0), 0.5f, 0.85f);
+
+    {
+        auto data = create_mrnf_test_splat_data(4, 0);
+        MRNF strategy(data);
+        strategy.initialize(params);
+        EXPECT_EQ(strategy.receiver_opacity_scale_at(0), 0.5f);
+        EXPECT_EQ(strategy.receiver_opacity_scale_at(20'000), 0.5f);
+        params.receiver_opacity_scale_end = 0.55f;
+        strategy.set_optimization_params(params);
+        EXPECT_FLOAT_EQ(strategy.receiver_opacity_scale_at(0), 0.5f);
+        EXPECT_FLOAT_EQ(strategy.receiver_opacity_scale_at(5'000), 0.525f);
+        EXPECT_FLOAT_EQ(strategy.receiver_opacity_scale_at(10'000), 0.55f);
+        EXPECT_FLOAT_EQ(strategy.receiver_opacity_scale_at(15'000), 0.55f);
+    }
+    check(run_refill(params, 5'000), 0.525f, 0.85f);
+}

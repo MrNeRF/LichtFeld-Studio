@@ -1818,6 +1818,43 @@ TEST(ArgumentParserTest, TrainingParsesExploreOptions) {
     }
 }
 
+// Catches a receiver split factor not reaching the training parameters, a default changing, or an
+// out-of-range factor accepted.
+TEST(ArgumentParserTest, TrainingParsesReceiverSplitScales) {
+    const auto data_path = make_test_path("lfs_arg_parser_receiver_data");
+    const auto output_path = make_test_path("lfs_arg_parser_receiver_output");
+    const auto parse = [&](std::vector<const char*> extra) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--need-guided-growth"};
+        argv.insert(argv.end(), extra.begin(), extra.end());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse({"--receiver-opacity-scale", "0.5", "--receiver-opacity-scale-end", "0.55",
+                           "--receiver-cross-scale", "0.85"});
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_FLOAT_EQ((*on)->optimization.receiver_opacity_scale, 0.5f);
+    EXPECT_FLOAT_EQ((*on)->optimization.receiver_opacity_scale_end, 0.55f);
+    EXPECT_FLOAT_EQ((*on)->optimization.receiver_cross_scale, 0.85f);
+
+    const auto off = parse({});
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_EQ((*off)->optimization.receiver_opacity_scale, 1.0f);
+    EXPECT_EQ((*off)->optimization.receiver_opacity_scale_end, 0.0f);
+    EXPECT_EQ((*off)->optimization.receiver_cross_scale, 0.7f);
+
+    for (const auto& [flag, value, field] : {std::tuple{"--receiver-opacity-scale", "0", "receiver_opacity_scale"},
+                                             std::tuple{"--receiver-opacity-scale", "1.1", "receiver_opacity_scale"},
+                                             std::tuple{"--receiver-opacity-scale-end", "-0.1", "receiver_opacity_scale_end"},
+                                             std::tuple{"--receiver-opacity-scale-end", "1.5", "receiver_opacity_scale_end"},
+                                             std::tuple{"--receiver-cross-scale", "0", "receiver_cross_scale"},
+                                             std::tuple{"--receiver-cross-scale", "1.2", "receiver_cross_scale"}}) {
+        const auto bad = parse({flag, value});
+        ASSERT_FALSE(bad.has_value()) << flag << " " << value;
+        EXPECT_NE(bad.error().find(field), std::string::npos) << bad.error();
+    }
+}
+
 // Catches --donor-rank-impact not reaching the training parameters, or being on without the flag.
 TEST(ArgumentParserTest, TrainingParsesDonorRankImpact) {
     const auto data_path = make_test_path("lfs_arg_parser_donor_impact_data");

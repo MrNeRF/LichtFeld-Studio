@@ -66,6 +66,9 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--explore-scouts", "explore_scouts", Bool},
             OptimizationCliBinding{"--explore-scout-share", "explore_scout_share", Float},
             OptimizationCliBinding{"--explore-scout-opacity", "explore_scout_opacity", Float},
+            OptimizationCliBinding{"--receiver-opacity-scale", "receiver_opacity_scale", Float},
+            OptimizationCliBinding{"--receiver-opacity-scale-end", "receiver_opacity_scale_end", Float},
+            OptimizationCliBinding{"--receiver-cross-scale", "receiver_cross_scale", Float},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -848,6 +851,9 @@ namespace {
             ::args::ValueFlag<float> explore_walk_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--explore-walk-scale"), {"explore-walk-scale"});
             ::args::ValueFlag<float> explore_scout_share(training_group, "share", lfs::core::args::optimization_cli_help("--explore-scout-share"), {"explore-scout-share"});
             ::args::ValueFlag<float> explore_scout_opacity(training_group, "opacity", lfs::core::args::optimization_cli_help("--explore-scout-opacity"), {"explore-scout-opacity"});
+            ::args::ValueFlag<float> receiver_opacity_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-opacity-scale"), {"receiver-opacity-scale"});
+            ::args::ValueFlag<float> receiver_opacity_scale_end(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-opacity-scale-end"), {"receiver-opacity-scale-end"});
+            ::args::ValueFlag<float> receiver_cross_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-cross-scale"), {"receiver-cross-scale"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1673,6 +1679,9 @@ namespace {
                                         explore_walk_scale_val = cli_option_present({"--explore-walk-scale"}) ? std::optional<float>(::args::get(explore_walk_scale)) : std::optional<float>(),
                                         explore_scout_share_val = cli_option_present({"--explore-scout-share"}) ? std::optional<float>(::args::get(explore_scout_share)) : std::optional<float>(),
                                         explore_scout_opacity_val = cli_option_present({"--explore-scout-opacity"}) ? std::optional<float>(::args::get(explore_scout_opacity)) : std::optional<float>(),
+                                        receiver_opacity_scale_val = cli_option_present({"--receiver-opacity-scale"}) ? std::optional<float>(::args::get(receiver_opacity_scale)) : std::optional<float>(),
+                                        receiver_opacity_scale_end_val = cli_option_present({"--receiver-opacity-scale-end"}) ? std::optional<float>(::args::get(receiver_opacity_scale_end)) : std::optional<float>(),
+                                        receiver_cross_scale_val = cli_option_present({"--receiver-cross-scale"}) ? std::optional<float>(::args::get(receiver_cross_scale)) : std::optional<float>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
@@ -1866,6 +1875,9 @@ namespace {
                 setVal(explore_walk_scale_val, opt.explore_walk_scale);
                 setVal(explore_scout_share_val, opt.explore_scout_share);
                 setVal(explore_scout_opacity_val, opt.explore_scout_opacity);
+                setVal(receiver_opacity_scale_val, opt.receiver_opacity_scale);
+                setVal(receiver_opacity_scale_end_val, opt.receiver_opacity_scale_end);
+                setVal(receiver_cross_scale_val, opt.receiver_cross_scale);
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -2059,6 +2071,9 @@ namespace {
                 note_opt("explore_walk_scale", explore_walk_scale_val.has_value());
                 note_opt("explore_scout_share", explore_scout_share_val.has_value());
                 note_opt("explore_scout_opacity", explore_scout_opacity_val.has_value());
+                note_opt("receiver_opacity_scale", receiver_opacity_scale_val.has_value());
+                note_opt("receiver_opacity_scale_end", receiver_opacity_scale_end_val.has_value());
+                note_opt("receiver_cross_scale", receiver_cross_scale_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());

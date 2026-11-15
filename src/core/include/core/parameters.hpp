@@ -444,6 +444,13 @@ namespace lfs::core {
             bool explore_scouts = false;
             float explore_scout_share = 0.3f;
             float explore_scout_opacity = 0.012f;
+            // At the cap, need-guided growth splits into receivers: the long axis halves, the other two
+            // axes take receiver_cross_scale and both halves get receiver_opacity_scale x the parent's
+            // opacity. With receiver_opacity_scale_end > 0 the opacity factor ramps linearly from
+            // receiver_opacity_scale to it over [0, grow_until_iter]; 0 keeps it constant.
+            float receiver_opacity_scale = 1.0f;
+            float receiver_opacity_scale_end = 0.0f;
+            float receiver_cross_scale = 0.7f;
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

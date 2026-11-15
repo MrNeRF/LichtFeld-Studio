@@ -98,6 +98,7 @@ class MRNFStrategyTest_ExploreBackwardWritesVisibilityAndPeakBlendWeight_Test;
 class MRNFStrategyTest_ExploreScoutsShareOpacityTaperAndSeed_Test;
 class MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
 class MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
+class MRNFStrategyTest_ReceiverSplitTakesTheOpacityAndCrossScale_Test;
 
 namespace lfs::training {
 
@@ -235,6 +236,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_ExploreScoutsShareOpacityTaperAndSeed_Test;
         friend class ::MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
         friend class ::MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
+        friend class ::MRNFStrategyTest_ReceiverSplitTakesTheOpacityAndCrossScale_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -278,6 +280,9 @@ namespace lfs::training {
         [[nodiscard]] float explore_walk_amplitude(int iter) const;
         // The scout share at iter: explore_scout_share on the donor quota's cosine to grow_until_iter.
         [[nodiscard]] float explore_scout_share_at(int iter) const;
+        // The receiver split's opacity factor at iter: receiver_opacity_scale, or with
+        // receiver_opacity_scale_end > 0 the linear ramp to it over [0, grow_until_iter].
+        [[nodiscard]] float receiver_opacity_scale_at(int iter) const;
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
         // After the backward: walks the splats rendered in this step and clears the step's marks.
@@ -320,11 +325,13 @@ namespace lfs::training {
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}. The receiver rule makes
-        // children smaller on every axis that keep the parent's opacity.
+        // children smaller on every axis (cross axes x receiver_cross_scale) with
+        // receiver_opacity_scale x the parent's opacity.
         // With scout_share > 0 a seeded share of the children become scouts (explore_scouts).
         std::pair<size_t, size_t> split_parents_into_children(const lfs::core::Tensor& split_indices,
                                                               size_t chunk_rows, bool receiver = false,
-                                                              float scout_share = 0.0f, uint64_t scout_seed = 0);
+                                                              float scout_share = 0.0f, uint64_t scout_seed = 0,
+                                                              float receiver_opacity_scale = 1.0f);
         [[nodiscard]] bool screen_share_shrink_active(int iter) const;
         [[nodiscard]] lfs::core::Tensor compute_refine_candidates() const;
         void apply_decay(int iter);

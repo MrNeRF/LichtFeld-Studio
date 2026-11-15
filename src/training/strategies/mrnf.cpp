@@ -58,11 +58,6 @@ namespace lfs::training {
         // Need-guided growth frees this share of the active splats per refine at the cap; it
         // tapers on a cosine over [0, grow_until_iter] to 0, so the last children can settle.
         constexpr double MRNF_NEED_DONOR_SHARE = 0.05;
-        // At the cap, need-guided growth splits into receivers: the long axis halves, the other
-        // two shrink to 0.7 and both children keep the parent's opacity, so the turnover does
-        // not leave a faint cohort.
-        constexpr float MRNF_RECEIVER_CROSS_AXIS_SCALE = 0.7f;
-        constexpr float MRNF_RECEIVER_OPACITY_SCALE = 1.0f;
         // Exploration walk: A(t) = scale x 8 x 0.01^(t / iterations); the peak blend weight halves
         // every 800 steps; a scout skips the opacity decay until it has been rendered 20 times.
         constexpr float MRNF_EXPLORE_WALK_START = 8.0f;
@@ -1544,6 +1539,16 @@ namespace lfs::training {
         return static_cast<float>(static_cast<double>(_params->explore_scout_share) * 0.5 * (1.0 + std::cos(pi * u)));
     }
 
+    float MRNF::receiver_opacity_scale_at(const int iter) const {
+        const float start = _params->receiver_opacity_scale;
+        const float stop = _params->receiver_opacity_scale_end;
+        if (stop <= 0.0f || stop == start)
+            return start;
+        const double end = static_cast<double>(_params->grow_until_iter);
+        const double u = end > 0.0 ? std::clamp(static_cast<double>(iter) / end, 0.0, 1.0) : 1.0;
+        return static_cast<float>(static_cast<double>(start) + (static_cast<double>(stop) - start) * u);
+    }
+
     void MRNF::ensure_explore_rows() {
         using namespace lfs::core;
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
@@ -2089,9 +2094,10 @@ namespace lfs::training {
         // Scouts: a seeded share of the receiver children, tapering with the donor quota.
         const float scout_share = receiver && explore_scouts_on() ? explore_scout_share_at(iter) : 0.0f;
         const uint64_t scout_seed = 0x5C0A7F00D5EEDull ^ (static_cast<uint64_t>(iter) * 0xD1B54A32D192ED03ull);
+        const float receiver_opacity = receiver ? receiver_opacity_scale_at(iter) : 1.0f;
         const auto [reused, n_append] = split_parents_into_children(
             split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes), receiver,
-            scout_share, scout_seed);
+            scout_share, scout_seed, receiver_opacity);
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, reused, n_append, active_count(), _splat_data->size());
@@ -2105,7 +2111,7 @@ namespace lfs::training {
 
     std::pair<size_t, size_t> MRNF::split_parents_into_children(
         const lfs::core::Tensor& split_indices, const size_t chunk_rows, const bool receiver,
-        const float scout_share, const uint64_t scout_seed) {
+        const float scout_share, const uint64_t scout_seed, const float receiver_opacity_scale) {
         using namespace lfs::core;
         assert(split_indices.ndim() == 1 && split_indices.dtype() == DataType::Int64 && chunk_rows > 0);
         const size_t K = split_indices.numel();
@@ -2113,6 +2119,10 @@ namespace lfs::training {
         const bool use_shN = sh_rest > 0 &&
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
+        // The receiver rule: the long axis halves, the cross axes take receiver_cross_scale and both
+        // halves get receiver_opacity_scale x the parent's opacity.
+        const float cross_scale = receiver ? _params->receiver_cross_scale : kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE;
+        const float opacity_scale = receiver ? receiver_opacity_scale : kernels::LONG_AXIS_SPLIT_OPACITY_SCALE;
 
         // Parents and child destinations are disjoint rows, so each chunk splits
         // its own parents and places its own children.
@@ -2157,8 +2167,8 @@ namespace lfs::training {
                 chunk_indices.ptr<int64_t>(),
                 static_cast<int>(count),
                 0,
-                receiver ? MRNF_RECEIVER_CROSS_AXIS_SCALE : kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
-                receiver ? MRNF_RECEIVER_OPACITY_SCALE : kernels::LONG_AXIS_SPLIT_OPACITY_SCALE,
+                cross_scale,
+                opacity_scale,
                 nullptr);
 
             if (use_shN) {
