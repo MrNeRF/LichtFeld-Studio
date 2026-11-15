@@ -432,11 +432,13 @@ namespace {
                       32, 0);
     }
 
+    // About 9-11 px wide on the 32 px image: every pixel stays above the 1/255 alpha threshold without the cut and
+    // with cut 4, so a finite difference never switches a pixel on or off (the backward has no term for that).
     std::unique_ptr<SplatData> make_cut_splat() {
         return std::make_unique<SplatData>(
             0, Tensor::from_vector({0.05f, -0.03f, 0.0f}, {1, 3}, Device::CUDA),
             Tensor::full({1, 1, 3}, 0.5f, Device::CUDA), Tensor::zeros({1, 0, 3}, Device::CUDA),
-            Tensor::from_vector({-1.4f, -1.9f, -1.7f}, {1, 3}, Device::CUDA),
+            Tensor::from_vector({0.0f, -0.2f, -0.1f}, {1, 3}, Device::CUDA),
             Tensor::from_vector({0.95f, 0.05f, 0.1f, 0.3f}, {1, 4}, Device::CUDA),
             Tensor::full({1}, 0.5f, Device::CUDA), 1.f);
     }
@@ -519,7 +521,8 @@ TEST_F(MatchCutKernelTest, CutKernelDrawsLessThanTheFullGaussian) {
 // backward must still match the forward, with and without the cut.
 TEST_F(MatchCutKernelTest, GradientsMatchFiniteDifferences) {
     auto camera = make_cut_camera();
-    for (const float cut : {0.0f, 4.0f, 1.5f}) {
+    // Cut 3 reaches into the image corners only.
+    for (const float cut : {0.0f, 4.0f, 3.0f}) {
         SCOPED_TRACE(cut);
         struct Case {
             const char* name;
