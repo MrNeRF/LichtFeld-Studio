@@ -335,6 +335,7 @@
     "view.split_view": "Split View",
     "view.home_view": "Home View",
     "view.enter_vr": "Enter VR",
+    "view.detect_vr": "Detect VR Headset",
     "file.splat_file": "Splat File…",
     "file.ssog_folder": "SSOG Folder…",
     "file.configuration": "Configuration…",

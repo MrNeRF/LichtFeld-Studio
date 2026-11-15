@@ -326,6 +326,7 @@
     "view.split_view": "분할 보기",
     "view.home_view": "홈 보기",
     "view.enter_vr": "VR 시작",
+    "view.detect_vr": "VR 헤드셋 감지",
     "file.splat_file": "스플랫 파일…",
     "file.ssog_folder": "SSOG 폴더…",
     "file.configuration": "설정…",

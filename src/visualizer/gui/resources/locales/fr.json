@@ -326,6 +326,7 @@
     "view.split_view": "Vue divisée",
     "view.home_view": "Vue d'accueil",
     "view.enter_vr": "Passer en VR",
+    "view.detect_vr": "Détecter le casque VR",
     "file.splat_file": "Fichier splat…",
     "file.ssog_folder": "Dossier SSOG…",
     "file.configuration": "Configuration…",

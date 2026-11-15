@@ -326,6 +326,7 @@
     "view.split_view": "分屏视图",
     "view.home_view": "主页视图",
     "view.enter_vr": "进入 VR",
+    "view.detect_vr": "检测 VR 头显",
     "file.splat_file": "Splat 文件…",
     "file.ssog_folder": "SSOG 文件夹…",
     "file.configuration": "配置…",

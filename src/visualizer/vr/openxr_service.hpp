@@ -27,8 +27,15 @@ namespace lfs::vis::vr {
 
         // Finds the runtime and headset; the status explains a failure.
         bool prepare();
+        // The same for a headset connected after startup: it is joined on the
+        // Vulkan device the app already runs on, when that device has what the
+        // runtime asks for.
+        bool prepareOn(const VulkanContext& context);
         // Vulkan instance and device creation through the runtime; valid while available().
         [[nodiscard]] VulkanDeviceHooks deviceHooks();
+        // For an app that starts without a headset: the Vulkan extensions that let
+        // prepareOn() join one later.
+        [[nodiscard]] static VulkanDeviceHooks lateJoinHooks();
         void setUnavailable(std::string reason);
         [[nodiscard]] bool available() const;
         [[nodiscard]] bool active() const;

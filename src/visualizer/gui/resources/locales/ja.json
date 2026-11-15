@@ -326,6 +326,7 @@
     "view.split_view": "分割表示",
     "view.home_view": "ホームビュー",
     "view.enter_vr": "VR を開始",
+    "view.detect_vr": "VR ヘッドセットを検出",
     "file.splat_file": "スプラットファイル…",
     "file.ssog_folder": "SSOGフォルダー…",
     "file.configuration": "設定…",

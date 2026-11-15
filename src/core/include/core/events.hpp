@@ -109,6 +109,7 @@ namespace lfs::core {
             EVENT(ResetCamera, );
             EVENT(SetVrActive, bool active;);
             EVENT(RecenterVr, );
+            EVENT(DetectVr, );                 // look again for a headset connected after startup
             EVENT(SnapTurnVr, int direction;); // -1 left, +1 right
             EVENT(SetVrPreferences, bool enabled; float resolution_scale; float scene_units_per_meter; float move_speed; bool show_hands; bool persist;);
             EVENT(ShowWindow, std::string window_name; bool show;);

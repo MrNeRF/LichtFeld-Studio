@@ -3178,6 +3178,9 @@ NB_MODULE(lichtfeld, m) {
         "set_vr_active", [](const bool active) { lfs::core::events::cmd::SetVrActive{.active = active}.emit(); },
         nb::arg("active"), "Enter or exit VR viewing");
     m.def(
+        "detect_vr", []() { lfs::core::events::cmd::DetectVr{}.emit(); },
+        "Look again for a VR headset that was connected after startup");
+    m.def(
         "recenter_vr", []() { lfs::core::events::cmd::RecenterVr{}.emit(); },
         "Put the VR view back at the desktop camera");
     m.def(

@@ -208,7 +208,11 @@ namespace lfs::vis::vr {
             return s.context->withGraphicsQueue(std::forward<Call>(call));
         }
 
-        lfs::Status prepare() {
+        // Finds the runtime and the headset. At startup the runtime then creates
+        // the Vulkan instance and device itself, through deviceHooks(). An app
+        // that already runs passes its context: its device is kept, when it has
+        // what the runtime asks for.
+        lfs::Status prepare(const VulkanContext* const running = nullptr) {
             std::uint32_t count = 0;
             if (auto st = check(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr),
                                 "No OpenXR runtime found");
@@ -224,10 +228,14 @@ namespace lfs::vis::vr {
                     return std::strcmp(extension.extensionName, name) == 0;
                 });
             };
-            if (!offered(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME))
-                return lfs::Status::failure(vrError("Your OpenXR runtime does not support Vulkan rendering."));
+            const char* const vulkan = running ? XR_KHR_VULKAN_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
+            if (!offered(vulkan)) {
+                return lfs::Status::failure(vrError(
+                    running ? "Your OpenXR runtime can only be joined when LichtFeld Studio starts. Restart it with the headset connected."
+                            : "Your OpenXR runtime does not support Vulkan rendering."));
+            }
 
-            std::vector<const char*> enabled{XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+            std::vector<const char*> enabled{vulkan};
             // Optional: the hands are drawn when the runtime tracks them.
             const bool hands = offered(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
             const bool hand_data_sources = hands && offered(XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
@@ -245,29 +253,42 @@ namespace lfs::vis::vr {
             XrSystemGetInfo system_info{XR_TYPE_SYSTEM_GET_INFO};
             system_info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
             if (auto st = check(xrGetSystem(instance, &system_info, &system),
-                                "No headset found; connect it before starting LichtFeld Studio");
+                                running ? "No headset found; connect it and try again"
+                                        : "No headset found; connect it before starting LichtFeld Studio");
                 !st)
                 return st;
 
             const auto load = [this](auto& function, const char* name) {
                 return check(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&function)), name);
             };
-            for (auto st : {load(vk.create_instance, "xrCreateVulkanInstanceKHR"),
-                            load(vk.create_device, "xrCreateVulkanDeviceKHR"),
-                            load(vk.graphics_device, "xrGetVulkanGraphicsDevice2KHR"),
-                            load(vk.graphics_requirements, "xrGetVulkanGraphicsRequirements2KHR")}) {
-                if (!st)
+            XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
+            if (running) {
+                PFN_xrGetVulkanGraphicsRequirementsKHR requirements_of = nullptr;
+                if (auto st = load(requirements_of, "xrGetVulkanGraphicsRequirementsKHR"); !st)
+                    return st;
+                if (auto st = check(requirements_of(instance, system, &requirements),
+                                    "Could not read the headset's Vulkan requirements");
+                    !st)
+                    return st;
+                if (auto st = checkRunningDevice(*running); !st)
+                    return st;
+            } else {
+                for (auto st : {load(vk.create_instance, "xrCreateVulkanInstanceKHR"),
+                                load(vk.create_device, "xrCreateVulkanDeviceKHR"),
+                                load(vk.graphics_device, "xrGetVulkanGraphicsDevice2KHR"),
+                                load(vk.graphics_requirements, "xrGetVulkanGraphicsRequirements2KHR")}) {
+                    if (!st)
+                        return st;
+                }
+                if (auto st = check(vk.graphics_requirements(instance, system, &requirements),
+                                    "Could not read the headset's Vulkan requirements");
+                    !st)
                     return st;
             }
-            XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
-            if (auto st = check(vk.graphics_requirements(instance, system, &requirements),
-                                "Could not read the headset's Vulkan requirements");
-                !st)
-                return st;
-            constexpr XrVersion vulkan = XR_MAKE_VERSION(1, 3, 0);
-            if (vulkan < requirements.minApiVersionSupported)
+            constexpr XrVersion vulkan_version = XR_MAKE_VERSION(1, 3, 0);
+            if (vulkan_version < requirements.minApiVersionSupported)
                 return lfs::Status::failure(vrError("Your OpenXR runtime requires a Vulkan version newer than 1.3."));
-            if (vulkan > requirements.maxApiVersionSupported)
+            if (vulkan_version > requirements.maxApiVersionSupported)
                 LOG_WARN("The OpenXR runtime was tested with a Vulkan version below 1.3; using Vulkan 1.3");
 
             XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
@@ -293,6 +314,85 @@ namespace lfs::vis::vr {
                 }
             }
             return {};
+        }
+
+        // XR_KHR_vulkan_enable lets an app keep the Vulkan device it runs on, as
+        // long as it is the headset's GPU and has the extensions the runtime
+        // lists. Anything else can only be set up when the app starts.
+        [[nodiscard]] lfs::Status checkRunningDevice(const VulkanContext& context) const {
+            PFN_xrGetVulkanGraphicsDeviceKHR device_of = nullptr;
+            PFN_xrGetVulkanInstanceExtensionsKHR instance_extensions_of = nullptr;
+            PFN_xrGetVulkanDeviceExtensionsKHR device_extensions_of = nullptr;
+            const auto load = [this](auto& function, const char* name) {
+                return check(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&function)), name);
+            };
+            for (auto st : {load(device_of, "xrGetVulkanGraphicsDeviceKHR"),
+                            load(instance_extensions_of, "xrGetVulkanInstanceExtensionsKHR"),
+                            load(device_extensions_of, "xrGetVulkanDeviceExtensionsKHR")}) {
+                if (!st)
+                    return st;
+            }
+            std::string missing;
+            // The runtime lists the names in one string, separated by spaces.
+            const auto collect = [&](const auto list, const char* const what, const auto enabled) -> lfs::Status {
+                std::uint32_t size = 0;
+                if (auto st = check(list(instance, system, 0, &size, nullptr), what); !st)
+                    return st;
+                std::string names(size, '\0');
+                if (auto st = check(list(instance, system, size, &size, names.data()), what); !st)
+                    return st;
+                std::string_view rest(names.c_str());
+                while (!rest.empty()) {
+                    const std::size_t end = std::min(rest.find(' '), rest.size());
+                    const std::string_view name = rest.substr(0, end);
+                    rest.remove_prefix(std::min(end + 1, rest.size()));
+                    if (name.empty() || enabled(name))
+                        continue;
+                    missing += missing.empty() ? "" : ", ";
+                    missing += name;
+                }
+                return {};
+            };
+            // In the order the extension sets: the runtime uses the instance's
+            // extensions to find the device, and the device to list its own.
+            if (auto st = collect(instance_extensions_of, "xrGetVulkanInstanceExtensionsKHR",
+                                  [&](const std::string_view name) { return context.instanceExtensionEnabled(name); });
+                !st)
+                return st;
+            const auto restart = [&missing] {
+                return lfs::Status::failure(vrError(std::format(
+                    "The headset needs graphics features that are only set up when LichtFeld Studio starts ({}). Restart it with the headset connected.",
+                    missing)));
+            };
+            if (!missing.empty())
+                return restart();
+            VkPhysicalDevice physical = VK_NULL_HANDLE;
+            if (auto st = check(device_of(instance, system, context.instance(), &physical), "xrGetVulkanGraphicsDeviceKHR"); !st)
+                return st;
+            if (physical != context.physicalDevice())
+                return lfs::Status::failure(vrError("The headset is on another GPU than the one LichtFeld Studio renders on."));
+            if (auto st = collect(device_extensions_of, "xrGetVulkanDeviceExtensionsKHR",
+                                  [&](const std::string_view name) { return context.deviceExtensionEnabled(name); });
+                !st)
+                return st;
+            if (!missing.empty())
+                return restart();
+            return {};
+        }
+
+        // prepare(), with the outcome as the status line.
+        bool prepareReported(const VulkanContext* const running) {
+            if (auto prepared = prepare(running); !prepared) {
+                setStatus("vr.status_unavailable", std::string(prepared.error().user_message()));
+                if (instance)
+                    xrDestroyInstance(instance);
+                instance = XR_NULL_HANDLE;
+                system = XR_NULL_SYSTEM_ID;
+                return false;
+            }
+            setStatus("vr.status_ready", runtime_name);
+            LOG_INFO("OpenXR runtime ready: {}{}", runtime_name, running ? ", joined after startup" : "");
+            return true;
         }
 
         [[nodiscard]] lfs::Result<XrPath> path(const std::string& value) const {
@@ -1152,17 +1252,12 @@ namespace lfs::vis::vr {
         if (const std::string runtime = UserPreferences::instance().vrRuntime();
             !runtime.empty() && !useOpenXrRuntime(runtime))
             LOG_WARN("The OpenXR runtime chosen for VR is gone ({}); using the system's active runtime", runtime);
-        if (auto prepared = p.prepare(); !prepared) {
-            p.setStatus("vr.status_unavailable", std::string(prepared.error().user_message()));
-            if (p.instance)
-                xrDestroyInstance(p.instance);
-            p.instance = XR_NULL_HANDLE;
-            p.system = XR_NULL_SYSTEM_ID;
-            return false;
-        }
-        p.setStatus("vr.status_ready", p.runtime_name);
-        LOG_INFO("OpenXR runtime ready: {}", p.runtime_name);
-        return true;
+        return p.prepareReported(nullptr);
+    }
+
+    bool OpenXrService::prepareOn(const VulkanContext& context) {
+        auto& p = *impl_;
+        return available() || (!p.lost && p.prepareReported(&context));
     }
 
     VulkanDeviceHooks OpenXrService::deviceHooks() {
@@ -1193,6 +1288,44 @@ namespace lfs::vis::vr {
             VkResult result = VK_ERROR_INITIALIZATION_FAILED;
             const XrResult created = p->vk.create_device(p->instance, &create, &device, &result);
             return XR_SUCCEEDED(created) ? result : VK_ERROR_INITIALIZATION_FAILED;
+        };
+        return hooks;
+    }
+
+    VulkanDeviceHooks OpenXrService::lateJoinHooks() {
+        // What OpenXR runtimes list for XR_KHR_vulkan_enable: sharing images
+        // with their compositor. Runtimes look these up under their extension
+        // names, so being part of Vulkan 1.3 does not stand in for enabling
+        // them. Enabling one that goes unused costs nothing.
+        VulkanDeviceHooks hooks;
+        hooks.wanted_instance_extensions = {
+            "VK_KHR_get_physical_device_properties2",
+            "VK_KHR_external_memory_capabilities",
+            "VK_KHR_external_semaphore_capabilities",
+            "VK_KHR_external_fence_capabilities",
+            "VK_NV_external_memory_capabilities",
+        };
+        hooks.wanted_device_extensions = {
+            "VK_KHR_dedicated_allocation",
+            "VK_KHR_get_memory_requirements2",
+            "VK_KHR_bind_memory2",
+            "VK_KHR_maintenance1",
+            "VK_KHR_image_format_list",
+            "VK_KHR_timeline_semaphore",
+            "VK_KHR_external_memory",
+            "VK_KHR_external_semaphore",
+            "VK_KHR_external_fence",
+            "VK_KHR_external_memory_win32",
+            "VK_KHR_external_semaphore_win32",
+            "VK_KHR_external_fence_win32",
+            "VK_KHR_win32_keyed_mutex",
+            "VK_KHR_external_memory_fd",
+            "VK_KHR_external_semaphore_fd",
+            "VK_KHR_external_fence_fd",
+            "VK_NV_dedicated_allocation",
+            "VK_NV_external_memory",
+            "VK_NV_external_memory_win32",
+            "VK_NV_win32_keyed_mutex",
         };
         return hooks;
     }
