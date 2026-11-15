@@ -52,8 +52,21 @@ namespace lfs::training::losses {
             lfs::core::Tensor loss_tensor_gpu;
 
             LFS_TRACE("loss.photometric.forward");
+            const int pyramid_levels =
+                params.loss_pyramid
+                    ? lfs::training::kernels::loss_pyramid_levels(static_cast<int>(rendered_4d.shape()[2]),
+                                                                  static_cast<int>(rendered_4d.shape()[3]))
+                    : 1;
+            last_forward_pure_ssim_ = false;
             // Optimize: only compute what's needed based on lambda_dssim
-            if (params.lambda_dssim == 0.0f) {
+            if (params.blur_tolerant || pyramid_levels > 1) {
+                LFS_TRACE("loss.photometric_pyramid");
+                auto result = lfs::training::kernels::photometric_pyramid_loss(
+                    rendered_4d, gt_4d, lfs::core::Tensor{}, params.lambda_dssim, pyramid_levels,
+                    params.blur_tolerant, arena_, pyramid_);
+                grad_combined = result.grad;
+                loss_tensor_gpu = result.loss;
+            } else if (params.lambda_dssim == 0.0f) {
                 LFS_TRACE("loss.l1.forward");
                 // Pure L1 loss
                 size_t N = rendered_4d.numel();
@@ -79,6 +92,7 @@ namespace lfs::training::losses {
 
             } else if (params.lambda_dssim == 1.0f) {
                 LFS_TRACE("loss.ssim.forward");
+                last_forward_pure_ssim_ = true;
                 // Pure SSIM loss (arena-backed workspace; mode switch rebinds views)
                 auto& ssim_ws = arena_.ensure_pure_ssim(rendered_4d.shape().dims());
                 auto [ssim_value_tensor, ssim_ctx] = lfs::training::kernels::ssim_forward(

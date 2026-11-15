@@ -1839,6 +1839,31 @@ TEST(ArgumentParserTest, TrainingParsesDonorRankImpact) {
     EXPECT_FALSE((*off)->optimization.donor_rank_impact);
 }
 
+// Catches --ssim-blur-tolerant or --loss-pyramid not reaching the training parameters, or either on
+// without its flag.
+TEST(ArgumentParserTest, TrainingParsesBlurTolerantSsimAndLossPyramid) {
+    const auto data_path = make_test_path("lfs_arg_parser_blur_ssim_data");
+    const auto output_path = make_test_path("lfs_arg_parser_blur_ssim_output");
+    const auto parse = [&](const bool blur, const bool pyramid) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str()};
+        if (blur)
+            argv.push_back("--ssim-blur-tolerant");
+        if (pyramid)
+            argv.push_back("--loss-pyramid");
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    for (const bool blur : {false, true}) {
+        for (const bool pyramid : {false, true}) {
+            const auto parsed = parse(blur, pyramid);
+            ASSERT_TRUE(parsed.has_value()) << parsed.error();
+            EXPECT_EQ((*parsed)->optimization.ssim_blur_tolerant, blur);
+            EXPECT_EQ((*parsed)->optimization.loss_pyramid, pyramid);
+        }
+    }
+}
+
 // Catches --refine-need-power not reaching the training parameters, or a non-positive power accepted.
 TEST(ArgumentParserTest, TrainingParsesRefineNeedPower) {
     const auto data_path = make_test_path("lfs_arg_parser_need_power_data");

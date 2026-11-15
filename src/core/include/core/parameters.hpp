@@ -290,6 +290,12 @@ namespace lfs::core {
             float sh_rest_reg = 0.0f;
             float thin_structure_weight = 0.0f;
             float gradient_loss_weight = 0.0f;
+            // SSIM term is the soft maximum of SSIM(render, photo) and SSIM(blurred render, photo), so a
+            // render sharper than a slightly soft photo is not pulled towards the photo's blur.
+            bool ssim_blur_tolerant = false;
+            // Photometric loss averaged over 2x2-pooled scales of the image (more than one scale only
+            // from 1920 px on the short side).
+            bool loss_pyramid = false;
             bool opacity_decay_rendered_only = false;
             float densify_structure_weight = 0.0f;
             float init_opacity = 0.5f;

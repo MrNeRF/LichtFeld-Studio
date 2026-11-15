@@ -685,6 +685,8 @@ EXPECTED_ADVANCED_IDS = (
     "sh_rest_reg",
     "thin_structure_weight",
     "gradient_loss_weight",
+    "ssim_blur_tolerant",
+    "loss_pyramid",
     "opacity_decay_rendered_only",
     "densify_structure_weight",
     "morton_reorder_interval",
@@ -774,7 +776,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 153
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 155
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

@@ -1424,6 +1424,8 @@ namespace lfs::core {
             p.opacity_lr = 0.025f;
             p.shs_lr = 0.005f; // the SH rest takes 1/20 of it
             p.lambda_dssim = 0.2f;
+            p.ssim_blur_tolerant = true;
+            p.loss_pyramid = true;
             p.use_error_map = true;
             p.densify_error_map = DensifyErrorMap::SsimCs;
             p.use_edge_map = false;

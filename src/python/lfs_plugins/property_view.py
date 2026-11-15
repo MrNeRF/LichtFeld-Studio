@@ -409,6 +409,8 @@ REGISTRY_PLACEMENT = {
         "sh_rest_reg",
         "thin_structure_weight",
         "gradient_loss_weight",
+        "ssim_blur_tolerant",
+        "loss_pyramid",
         "cropbox_loss_weight",
     ),
 }

@@ -70,6 +70,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
+            OptimizationCliBinding{"--ssim-blur-tolerant", "ssim_blur_tolerant", Bool},
+            OptimizationCliBinding{"--loss-pyramid", "loss_pyramid", Bool},
             OptimizationCliBinding{"--densify-structure-weight", "densify_structure_weight", Float},
             OptimizationCliBinding{"--color-variance-weight", "color_variance_weight", Float},
             OptimizationCliBinding{"--color-variance-warmup-iters", "color_variance_warmup_iters", Integer},
@@ -836,6 +838,8 @@ namespace {
             ::args::Flag explore_walk(training_group, "explore_walk", lfs::core::args::optimization_cli_help("--explore-walk"), {"explore-walk"});
             ::args::Flag explore_gate_peak(training_group, "explore_gate_peak", lfs::core::args::optimization_cli_help("--explore-gate-peak"), {"explore-gate-peak"});
             ::args::Flag explore_scouts(training_group, "explore_scouts", lfs::core::args::optimization_cli_help("--explore-scouts"), {"explore-scouts"});
+            ::args::Flag ssim_blur_tolerant(training_group, "ssim_blur_tolerant", lfs::core::args::optimization_cli_help("--ssim-blur-tolerant"), {"ssim-blur-tolerant"});
+            ::args::Flag loss_pyramid(training_group, "loss_pyramid", lfs::core::args::optimization_cli_help("--loss-pyramid"), {"loss-pyramid"});
             ::args::Flag per_splat_bias_correction(training_group, "per_splat_bias_correction", lfs::core::args::optimization_cli_help("--per-splat-bias-correction"), {"per-splat-bias-correction"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -1727,6 +1731,8 @@ namespace {
                                         explore_walk_flag = bool(explore_walk),
                                         explore_gate_peak_flag = bool(explore_gate_peak),
                                         explore_scouts_flag = bool(explore_scouts),
+                                        ssim_blur_tolerant_flag = bool(ssim_blur_tolerant),
+                                        loss_pyramid_flag = bool(loss_pyramid),
                                         per_splat_bias_correction_flag = bool(per_splat_bias_correction),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
@@ -1887,6 +1893,10 @@ namespace {
                     opt.explore_gate_peak = true;
                 if (explore_scouts_flag)
                     opt.explore_scouts = true;
+                if (ssim_blur_tolerant_flag)
+                    opt.ssim_blur_tolerant = true;
+                if (loss_pyramid_flag)
+                    opt.loss_pyramid = true;
                 if (per_splat_bias_correction_flag)
                     opt.per_splat_bias_correction = true;
                 if (no_opacity_decay_rendered_only_flag)
@@ -2073,6 +2083,8 @@ namespace {
                 note_opt("explore_walk", explore_walk_flag);
                 note_opt("explore_gate_peak", explore_gate_peak_flag);
                 note_opt("explore_scouts", explore_scouts_flag);
+                note_opt("ssim_blur_tolerant", ssim_blur_tolerant_flag);
+                note_opt("loss_pyramid", loss_pyramid_flag);
                 note_opt("per_splat_bias_correction", per_splat_bias_correction_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
