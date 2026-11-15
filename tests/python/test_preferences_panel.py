@@ -90,7 +90,12 @@ def preferences_panel_module(monkeypatch):
         camera_browse_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
-        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5},
+        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5,
+                        "show_hands": True},
+        vr_runtimes={"active": "SteamVR", "selected": "", "installed": [
+            {"name": "Oculus OpenXR", "manifest": "C:/oculus/oculus_openxr_64.json"},
+            {"name": "SteamVR", "manifest": "C:/steam/steamxr_win64.json"},
+        ]},
         vr_writes=[],
         project_location="",
         embed_dataset_by_default=False,
@@ -181,6 +186,8 @@ def preferences_panel_module(monkeypatch):
             state.vr_preferences.update(zip(state.vr_preferences, values)),
             state.vr_writes.append(persist)),
         get_vr_state=lambda: {"available": False, "active": False, "status": "VR support is off."},
+        get_vr_runtimes=lambda: {**state.vr_runtimes, "installed": list(state.vr_runtimes["installed"])},
+        set_vr_runtime=lambda manifest: state.vr_runtimes.update(selected=manifest),
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: state.project_location,
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
@@ -1472,11 +1479,47 @@ def test_vr_page_edits_all_preferences_and_resets_only_vr(preferences_panel_modu
     assert panel._get_scrub_value("vr_move_speed") == 3.0
     panel._commit_scrub_value("vr_move_speed", 3)
     assert state.vr_writes == [True, False, True]
-    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0}
+    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0,
+                                    "show_hands": True}
+    panel._set_vr_preference("show_hands", 0)
+    assert state.vr_preferences["show_hands"] is False
     panel._set_zoom_speed(42)
     panel._reset_section("input_vr")
     assert state.vr_preferences == module.PreferencesPanel.VR_PREFERENCE_DEFAULTS
     assert state.zoom_speed == 42
+
+
+def test_vr_page_lists_the_installed_runtimes_after_automatic(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._load_vr_runtimes()
+    # Automatic comes first and names the runtime the system has active.
+    assert [manifest for manifest, _name in panel._vr_runtime_catalog] == [
+        "", "C:/oculus/oculus_openxr_64.json", "C:/steam/steamxr_win64.json"]
+    assert panel._vr_runtime_catalog[0][1] == "preferences.vr_runtime_automatic_named"
+    assert panel._vr_runtime_index() == "0"
+
+    panel._set_vr_runtime_index("1")
+    assert state.vr_runtimes["selected"] == "C:/oculus/oculus_openxr_64.json"
+    assert panel._vr_runtime_index() == "1"
+    panel._set_vr_runtime_index("7")
+    assert state.vr_runtimes["selected"] == "C:/oculus/oculus_openxr_64.json"
+
+    # A chosen runtime that is no longer installed stays visible as the choice.
+    state.vr_runtimes["selected"] = "C:/gone/runtime.json"
+    panel._load_vr_runtimes()
+    assert panel._vr_runtime_catalog[-1] == ("C:/gone/runtime.json", "C:/gone/runtime.json")
+    assert panel._vr_runtime_index() == "3"
+
+    panel._reset_section("input_vr")
+    assert state.vr_runtimes["selected"] == ""
+    assert panel._vr_runtime_index() == "0"
+
+    # Without an active runtime, Automatic has no name to show.
+    state.vr_runtimes["active"] = ""
+    panel._load_vr_runtimes()
+    assert panel._vr_runtime_catalog[0] == ("", "preferences.vr_runtime_automatic")
 
 
 def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):

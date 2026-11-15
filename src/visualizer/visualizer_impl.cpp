@@ -1521,9 +1521,12 @@ namespace lfs::vis {
             preferences.setVrPreferences({.enabled = command.enabled,
                                           .resolution_scale = command.resolution_scale,
                                           .scene_units_per_meter = command.scene_units_per_meter,
-                                          .move_speed = command.move_speed},
+                                          .move_speed = command.move_speed,
+                                          .show_hands = command.show_hands},
                                          command.persist);
-            vr_->setMoveSpeed(preferences.vrPreferences().move_speed);
+            const auto applied = preferences.vrPreferences();
+            vr_->setMoveSpeed(applied.move_speed);
+            vr_->setShowHands(applied.show_hands);
         });
 
         cmd::ResetTraining::when([this](const auto&) {
@@ -3202,6 +3205,8 @@ namespace lfs::vis {
             }
             {
                 auto& interop = rendering_manager_->viewportInterop();
+                // The mirrored eye has the headset's aspect ratio, not the viewport's.
+                interop.setSceneImageCropToFill(vr_active_);
                 if (vulkan_frame.external_image != VK_NULL_HANDLE) {
                     interop.setExternalSceneImage(vulkan_frame.external_image,
                                                   vulkan_frame.external_image_view,

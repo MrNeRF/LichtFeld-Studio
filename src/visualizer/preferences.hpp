@@ -32,6 +32,7 @@ namespace lfs::vis {
         float resolution_scale = 0.7f;      // 0.25 .. 1.5 of the headset's recommended size
         float scene_units_per_meter = 1.0f; // 0.001 .. 1000
         float move_speed = 1.5f;            // 0.1 .. 10 meters per second
+        bool show_hands = true;             // when the runtime tracks them
     };
 
     /** Process-local, atomically persisted user preferences. */
@@ -63,6 +64,10 @@ namespace lfs::vis {
         [[nodiscard]] bool nativeFloatingWindows();
         void setVrPreferences(const VrPreferences& preferences, bool persist = true);
         [[nodiscard]] VrPreferences vrPreferences();
+        // Manifest of the OpenXR runtime VR uses; empty follows the system's
+        // active runtime. Read at startup.
+        void setVrRuntime(const std::string& manifest);
+        [[nodiscard]] std::string vrRuntime();
         void setFloatingWindowGeometry(const std::string& value);
         [[nodiscard]] std::string floatingWindowGeometry();
         void setZoomSpeed(float value, bool persist = true);

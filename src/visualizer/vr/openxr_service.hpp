@@ -44,6 +44,7 @@ namespace lfs::vis::vr {
         void recenter();
         void snapTurn(int direction);
         void setMoveSpeed(float meters_per_second);
+        void setShowHands(bool show);
         // move: keyboard axes (+x right, +y up, +z back). Returns false once the
         // runtime ends the session; a failure stops it.
         lfs::Result<bool> frame(glm::vec3 move, const RenderEyes& render);
