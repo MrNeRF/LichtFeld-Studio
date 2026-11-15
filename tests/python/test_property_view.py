@@ -724,6 +724,8 @@ EXPECTED_ADVANCED_IDS = (
     "match_walk_gate_peak",
     "match_angular_mean_step",
     "match_reg_rendered_only",
+    "match_cut_share",
+    "match_cut",
     "opacity_decay",
     "scale_decay",
     "means_noise_weight",
@@ -772,7 +774,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 151
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 153
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

@@ -464,6 +464,8 @@ namespace lfs::core {
             bool match_walk_gate_peak = true;      // the walk gate also uses the peak blend weight while it is tracked
             bool match_angular_mean_step = true;   // position step in units of the camera distance, shaped by the splat
             bool match_reg_rendered_only = true;   // scale and rank regularisers only on splats rendered in the step
+            float match_cut_share = 0.3f;          // share of steps (by step hash) trained with the truncated kernel
+            float match_cut = 4.0f;                // ... cut where half the squared Mahalanobis distance reaches this
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;

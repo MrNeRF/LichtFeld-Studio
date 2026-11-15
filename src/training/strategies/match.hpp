@@ -87,6 +87,15 @@ namespace lfs::training {
             size_t oversize_born = 0;
             size_t born = 0;
         };
+        // Refine counts: the split budget max(1, (int)(share x N)) of revivals and births together; the births
+        // min(target - N, budget - revived), target = max(N, min(cap, (int)(growth x N))); the oversize share
+        // of the births round(share x births).
+        [[nodiscard]] static size_t split_budget(const lfs::core::param::OptimizationParameters& params, size_t n);
+        [[nodiscard]] static size_t growth_births(const lfs::core::param::OptimizationParameters& params, size_t n,
+                                                  size_t budget, size_t revived);
+        [[nodiscard]] static size_t oversize_births(const lfs::core::param::OptimizationParameters& params,
+                                                    size_t added);
+
         // One refine at step `step` (exposed for tests).
         RefineCounts refine(int step);
         [[nodiscard]] const RefineCounts& last_refine() const noexcept { return _last_refine; }

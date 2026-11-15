@@ -430,7 +430,8 @@ namespace lfs::training {
         bool render_normal,
         bool render_depth,
         float dilation_scale,
-        bool update_screen_share) {
+        bool update_screen_share,
+        float kernel_cut) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -605,7 +606,8 @@ namespace lfs::training {
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()
                     : nullptr,
-                dilation_scale);
+                dilation_scale,
+                kernel_cut);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

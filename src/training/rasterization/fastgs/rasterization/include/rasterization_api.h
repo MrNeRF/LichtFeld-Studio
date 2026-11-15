@@ -53,6 +53,8 @@ namespace fast_lfs::rasterization {
         int sh_layout_bases = 1;
         // The forward's dilation factor; the backward differentiates the same kernel.
         float dilation_scale = 1.0f;
+        // The forward's truncated kernel (0 = full Gaussian); the backward differentiates the same kernel.
+        float kernel_cut = 0.0f;
         uint64_t frame_id = 0;
         // The stream all of this context's kernels/allocations are ordered on;
         // releases (sorted indices, arena frame, helper buffers) must use it.
@@ -110,7 +112,8 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_n_cells = 0,
         unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
         float* max_screen_share_ptr = nullptr,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        float kernel_cut = 0.0f);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 

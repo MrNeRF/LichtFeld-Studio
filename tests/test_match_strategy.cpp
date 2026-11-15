@@ -1,16 +1,22 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/training/match_geometry.cuh"
 #include "training/kernels/match_kernels.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/strategies/match.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <filesystem>
 #include <gtest/gtest.h>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -304,21 +310,23 @@ TEST(MatchStrategyTest, DeadSplatsAreRevivedWithinTheBudget) {
     std::vector<float> score(20, 1.0f);
     set_rows(strategy.score_rows(), score);
 
-    // Budget max(1, floor(0.1 x 20)) = 2 revivals; growth to floor(1.05 x 20) = 21 finds no budget left.
+    // Budget max(1, floor(0.1 x 20)) = 2 revivals; growth to (int)(1.05f x 20.0f) = 20 adds none.
     const auto counts = strategy.refine(600);
+    const float k = strategy.split_opacity_share(600); // 0.502
     EXPECT_EQ(counts.dead, 5u);
     EXPECT_EQ(counts.revived, 2u);
     EXPECT_EQ(counts.born + counts.oversize_born, 0u);
     EXPECT_EQ(splats.size(), 20);
     const auto after = host(splats.opacity_raw());
-    // The two lowest dead slots took half a live opacity (0.5 x 0.5); the rest stay dead and untouched.
-    EXPECT_NEAR(sigmoid(after[0]), 0.25f, 1e-5f);
-    EXPECT_NEAR(sigmoid(after[1]), 0.25f, 1e-5f);
+    // The two lowest dead slots took k x a live opacity (0.5); the rest stay dead and untouched.
+    EXPECT_NEAR(k, 0.502f, 1e-6f);
+    EXPECT_NEAR(sigmoid(after[0]), k * 0.5f, 1e-5f);
+    EXPECT_NEAR(sigmoid(after[1]), k * 0.5f, 1e-5f);
     for (int i = 2; i < 5; ++i)
         EXPECT_FLOAT_EQ(after[i], op[i]);
     int dimmed = 0;
     for (int i = 5; i < 20; ++i)
-        dimmed += std::abs(sigmoid(after[i]) - 0.25f) < 1e-5f;
+        dimmed += std::abs(sigmoid(after[i]) - k * 0.5f) < 1e-5f;
     EXPECT_EQ(dimmed, 2);
     // Scores reset after the refine.
     for (const float v : host(strategy.score_rows()))
@@ -335,21 +343,23 @@ TEST(MatchStrategyTest, GrowthAppendsSplitChildrenUpToTheGrowthFactor) {
     set_rows(strategy.oversize_rows(), over);
 
     const auto counts = strategy.refine(600);
+    const float k = strategy.split_opacity_share(600);
+    // Float arithmetic: (int)(1.05f x 100.0f) = (int)104.99999 = 104, so 4 births; round(0.15 x 4) = 1 oversize.
     EXPECT_EQ(counts.dead, 0u);
-    EXPECT_EQ(counts.oversize_born, 1u); // round(0.15 x 5)
-    EXPECT_EQ(counts.born, 4u);
-    EXPECT_EQ(splats.size(), 105);
+    EXPECT_EQ(counts.oversize_born, 1u);
+    EXPECT_EQ(counts.born, 3u);
+    EXPECT_EQ(splats.size(), 104);
     // The oversize draw (weight 50 x 1 against 99 x 0.001) took splat 7: the first child is its copy. Every
-    // child has half its donor's opacity; the regular draw may pick a fresh child, which halves it again.
+    // child has k x its donor's opacity; the regular draw may pick a fresh child, which dims it again.
     EXPECT_FLOAT_EQ(host(splats.sh0())[100 * 3], 7.0f);
     const auto op = host(splats.opacity_raw());
-    for (int i = 100; i < 105; ++i) {
+    for (int i = 100; i < 104; ++i) {
         const float o = sigmoid(op[i]);
-        EXPECT_TRUE(std::abs(o - 0.25f) < 1e-5f || std::abs(o - 0.125f) < 1e-5f) << i << ": " << o;
+        EXPECT_TRUE(std::abs(o - 0.5f * k) < 1e-5f || std::abs(o - 0.5f * k * k) < 1e-5f) << i << ": " << o;
     }
-    EXPECT_LT(sigmoid(op[7]), 0.25f + 1e-5f);
-    EXPECT_EQ(strategy.score_rows().numel(), 105u);
-    EXPECT_EQ(strategy.get_optimizer().get_state(ParamType::Means)->size, 105u);
+    EXPECT_LT(sigmoid(op[7]), 0.5f * k + 1e-5f);
+    EXPECT_EQ(strategy.score_rows().numel(), 104u);
+    EXPECT_EQ(strategy.get_optimizer().get_state(ParamType::Means)->size, 104u);
 }
 
 TEST(MatchStrategyTest, GrowthStopsAtTheCap) {
@@ -360,6 +370,25 @@ TEST(MatchStrategyTest, GrowthStopsAtTheCap) {
     const auto counts = strategy.refine(600);
     EXPECT_EQ(counts.born + counts.oversize_born, 2u);
     EXPECT_EQ(splats.size(), 102);
+}
+
+// Counts of the reference run's refines: the first adds 46,599 to 931,987; at 4,619,712 splats with 244,667 revived
+// the budget (461,971) binds before the growth target (230,985 more).
+TEST(MatchStrategyTest, RefineCountsMatchTheReferenceLog) {
+    const auto params = param::OptimizationParameters::match_defaults();
+    EXPECT_EQ(Match::split_budget(params, 931'987), 93'198u);
+    EXPECT_EQ(Match::growth_births(params, 931'987, 93'198, 0), 46'599u);
+    EXPECT_EQ(Match::oversize_births(params, 46'599), 6'990u);
+
+    const size_t n = 4'619'712;
+    const size_t budget = Match::split_budget(params, n);
+    EXPECT_EQ(budget, 461'971u);
+    EXPECT_EQ(Match::growth_births(params, n, budget, 0), 230'985u);
+    EXPECT_EQ(Match::growth_births(params, n, budget, 244'667), 217'304u);
+    EXPECT_EQ(244'667u + 217'304u, budget);
+    // The cap ends growth.
+    EXPECT_EQ(Match::growth_births(params, 4'990'000, Match::split_budget(params, 4'990'000), 0), 10'000u);
+    EXPECT_EQ(Match::growth_births(params, 5'000'000, Match::split_budget(params, 5'000'000), 0), 0u);
 }
 
 // The position step is a share of the camera distance, shaped by the splat: two splats of different size at
@@ -392,4 +421,124 @@ TEST(MatchGeometryTest, AngularMeanStepScalesWithDistanceNotSize) {
     // Hinge: one learning-rate step per octave over the limit.
     EXPECT_FLOAT_EQ(mg::hinge_push(0.6f, 0.3f, 1.0f), 1.0f);
     EXPECT_FLOAT_EQ(mg::hinge_push(0.2f, 0.3f, 1.0f), 0.0f);
+}
+
+namespace {
+
+    Camera make_cut_camera() {
+        return Camera(Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA),
+                      Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::CUDA), 32.f, 32.f, 16.f, 16.f, Tensor(),
+                      Tensor(), lfs::core::CameraModelType::PINHOLE, "cut-kernel", "", std::filesystem::path{}, 32,
+                      32, 0);
+    }
+
+    std::unique_ptr<SplatData> make_cut_splat() {
+        return std::make_unique<SplatData>(
+            0, Tensor::from_vector({0.05f, -0.03f, 0.0f}, {1, 3}, Device::CUDA),
+            Tensor::full({1, 1, 3}, 0.5f, Device::CUDA), Tensor::zeros({1, 0, 3}, Device::CUDA),
+            Tensor::from_vector({-1.4f, -1.9f, -1.7f}, {1, 3}, Device::CUDA),
+            Tensor::from_vector({0.95f, 0.05f, 0.1f, 0.3f}, {1, 4}, Device::CUDA),
+            Tensor::full({1}, 0.5f, Device::CUDA), 1.f);
+    }
+
+    // Pixel weights of the test loss sum(w x image): a ramp in x and y, different per channel.
+    Tensor ramp_weights() {
+        std::vector<float> w(3 * 32 * 32);
+        for (int c = 0; c < 3; ++c)
+            for (int y = 0; y < 32; ++y)
+                for (int x = 0; x < 32; ++x)
+                    w[(c * 32 + y) * 32 + x] = 0.2f + (x + 1) / 32.0f + 0.5f * (c + 1) * y / 32.0f;
+        return Tensor::from_vector(w, {3, 32, 32}, Device::CUDA);
+    }
+
+    double weighted_render(Camera& camera, SplatData& model, const float cut, const Tensor& weights) {
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        auto fwd = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, false, false, 1.0f, false, cut);
+        EXPECT_TRUE(fwd.has_value());
+        const auto image = fwd->first.image.cpu().contiguous().to_vector();
+        const auto w = weights.cpu().to_vector();
+        double sum = 0.0;
+        for (size_t i = 0; i < image.size(); ++i)
+            sum += static_cast<double>(image[i]) * w[i];
+        return sum;
+    }
+
+    // The backward's gradient of sum(w x image) w.r.t. param[index] next to its central difference.
+    std::pair<double, double> cut_gradient(Camera& camera, SplatData& model, const float cut, const ParamType type,
+                                           Tensor& param, const size_t index, const float eps) {
+        const auto weights = ramp_weights();
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        AdamOptimizer optimizer(model, {.lr = 0.f});
+        optimizer.allocate_gradients();
+        optimizer.zero_grad(1);
+        {
+            auto fwd = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false, {}, false, false, 1.0f, false, cut);
+            EXPECT_TRUE(fwd.has_value());
+            fast_rasterize_backward(fwd->second, weights, model, optimizer, {}, {}, DensificationType::None, 1, {}, {},
+                                    {}, true);
+        }
+        const double analytic = optimizer.get_grad(type).cpu().contiguous().to_vector()[index];
+        auto values = param.cpu().contiguous().to_vector();
+        const float original = values[index];
+        auto loss = [&](const float value) {
+            values[index] = value;
+            EXPECT_EQ(cudaMemcpy(param.ptr<float>(), values.data(), values.size() * sizeof(float),
+                                 cudaMemcpyHostToDevice),
+                      cudaSuccess);
+            return weighted_render(camera, model, cut, weights);
+        };
+        const double numeric = (loss(original + eps) - loss(original - eps)) / (2.0 * eps);
+        loss(original);
+        return {analytic, numeric};
+    }
+
+    class MatchCutKernelTest : public ::testing::Test {
+        void TearDown() override {
+            release_fast_rasterizer_thread_local_caches();
+            GlobalArenaManager::instance().get_arena().full_reset();
+        }
+    };
+
+} // namespace
+
+// The truncated kernel (G - e^-cut) / (1 - e^-cut) is below the Gaussian everywhere and zero past the cut.
+TEST_F(MatchCutKernelTest, CutKernelDrawsLessThanTheFullGaussian) {
+    auto camera = make_cut_camera();
+    auto model = make_cut_splat();
+    const auto ones = Tensor::ones({3, 32, 32}, Device::CUDA);
+    const double full = weighted_render(camera, *model, 0.0f, ones);
+    const double cut = weighted_render(camera, *model, 4.0f, ones);
+    const double tight = weighted_render(camera, *model, 1.0f, ones);
+    EXPECT_GT(full, 0.0);
+    EXPECT_LT(cut, full);
+    EXPECT_GT(cut, 0.8 * full);
+    EXPECT_LT(tight, cut);
+}
+
+// The cut changes dalpha/dsigma (no longer proportional to alpha) but not dalpha/dopacity: every gradient of the
+// backward must still match the forward, with and without the cut.
+TEST_F(MatchCutKernelTest, GradientsMatchFiniteDifferences) {
+    auto camera = make_cut_camera();
+    for (const float cut : {0.0f, 4.0f, 1.5f}) {
+        SCOPED_TRACE(cut);
+        struct Case {
+            const char* name;
+            ParamType type;
+            size_t index;
+            float eps;
+        };
+        for (const auto& c : {Case{"mean x", ParamType::Means, 0, 1e-3f}, Case{"mean y", ParamType::Means, 1, 1e-3f},
+                              Case{"scale 0", ParamType::Scaling, 0, 1e-3f},
+                              Case{"scale 1", ParamType::Scaling, 1, 1e-3f},
+                              Case{"opacity", ParamType::Opacity, 0, 1e-3f}}) {
+            SCOPED_TRACE(c.name);
+            auto model = make_cut_splat();
+            Tensor& param = c.type == ParamType::Means     ? model->means()
+                            : c.type == ParamType::Scaling ? model->scaling_raw()
+                                                           : model->opacity_raw();
+            const auto [analytic, numeric] = cut_gradient(camera, *model, cut, c.type, param, c.index, c.eps);
+            EXPECT_GT(std::abs(numeric), 1e-2);
+            EXPECT_NEAR(analytic, numeric, 3e-2 * std::abs(numeric) + 1e-3);
+        }
+    }
 }

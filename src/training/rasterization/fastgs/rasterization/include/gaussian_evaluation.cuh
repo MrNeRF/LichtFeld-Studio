@@ -3,6 +3,7 @@
 #pragma once
 
 #include "rasterization_config.h"
+#include <cmath>
 #include <cuda_runtime.h>
 
 namespace fast_lfs::rasterization::kernels {
@@ -45,6 +46,28 @@ namespace fast_lfs::rasterization::kernels {
 
         __device__ __forceinline__ float alpha(const float c, const float dy) const {
             return __fmul_rn(opacity, exp2_approx(__fmaf_rn(__fmaf_rn(c, dy, slope), dy, constant)));
+        }
+
+        // Cut kernel (see KernelCut), the column built with opacity x gain: o gain (G - floor), negative past
+        // the cut.
+        __device__ __forceinline__ float alpha_cut(const float c, const float dy, const float floor) const {
+            return __fmul_rn(opacity, exp2_approx(__fmaf_rn(__fmaf_rn(c, dy, slope), dy, constant)) - floor);
+        }
+    };
+
+    // Truncated kernel: G = exp(-sigma), sigma = half the squared Mahalanobis distance, is cut at sigma = cut and
+    // its tail rescaled to reach zero there: (G - e^-cut) / (1 - e^-cut). cut <= 0 is the full Gaussian.
+    struct KernelCut {
+        float floor = 0.0f; // e^-cut
+        float gain = 1.0f;  // 1 / (1 - e^-cut)
+
+        __host__ __device__ static KernelCut at(const float cut) {
+            KernelCut k;
+            if (cut > 0.0f) {
+                k.floor = expf(-cut);
+                k.gain = 1.0f / (1.0f - k.floor);
+            }
+            return k;
         }
     };
 

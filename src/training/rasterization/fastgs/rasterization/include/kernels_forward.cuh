@@ -541,7 +541,8 @@ namespace fast_lfs::rasterization::kernels::forward {
     // warp_cull_mode: 0 = enabled (production), 1 = disabled (mask all-1s, reference),
     //                 2 = deliberately incorrect empty mask for negative coverage.
     // blend_batch_size_runtime: multiple of 32 in [32, block_size_blend_forward]; 0 → config default.
-    template <bool kRenderNormal, bool kRenderDepth>
+    // kKernelCut: every fragment uses the truncated kernel `cut` (KernelCut) instead of the full Gaussian.
+    template <bool kRenderNormal, bool kRenderDepth, bool kKernelCut = false>
     __global__ void __launch_bounds__(config::block_size_blend_forward) blend_cu(
         uint2* __restrict__ tile_instance_ranges,
         uint* __restrict__ instance_primitive_indices,
@@ -563,7 +564,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint height,
         const uint grid_width,
         const int warp_cull_mode,
-        const int blend_batch_size_runtime) {
+        const int blend_batch_size_runtime,
+        const KernelCut cut = {}) {
         auto block = cg::this_thread_block();
         static_assert(config::tile_width == 16 && config::tile_height == 16, "quadrant layout assumes 16x16 tiles");
         static_assert(config::block_size_blend_forward == 128, "four warps, one 8x8 quadrant each");
@@ -686,13 +688,18 @@ namespace fast_lfs::rasterization::kernels::forward {
                     float3 splat_normal = make_float3(0.0f);
                     if constexpr (kRenderNormal)
                         splat_normal = collected_normal[j];
-                    const AlphaColumn column = AlphaColumn::at(conic, conic_opacity.w, mean2d.x - center_x);
+                    const AlphaColumn column = AlphaColumn::at(
+                        conic, kKernelCut ? conic_opacity.w * cut.gain : conic_opacity.w, mean2d.x - center_x);
                     const float dy0 = mean2d.y - center_y0;
                     bool accepted_any = false;
 #pragma unroll
                     for (int row = 0; row < 2; ++row) {
                         const bool live = reaches && !transmittance_complete(transmittance[row]);
-                        const float unclamped = live ? column.alpha(conic.z, dy0 - static_cast<float>(row)) : 0.0f;
+                        float unclamped = 0.0f;
+                        if constexpr (kKernelCut)
+                            unclamped = live ? column.alpha_cut(conic.z, dy0 - static_cast<float>(row), cut.floor) : 0.0f;
+                        else
+                            unclamped = live ? column.alpha(conic.z, dy0 - static_cast<float>(row)) : 0.0f;
                         const bool accepted = live && alpha_accepted(unclamped);
                         const float alpha = accepted ? clamped_alpha(unclamped) : 0.0f;
                         const float magnitude = transmittance_magnitude(transmittance[row]);

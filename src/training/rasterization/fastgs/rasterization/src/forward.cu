@@ -219,7 +219,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     bool mip_filter,
     cudaStream_t stream,
     float* max_screen_share,
-    float dilation_scale) {
+    float dilation_scale,
+    float kernel_cut) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -667,8 +668,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
-    auto launch_blend = [&]<bool RENDER_NORMAL, bool RENDER_DEPTH>() {
-        kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
+    const kernels::KernelCut cut = kernels::KernelCut::at(kernel_cut);
+    auto launch_blend = [&]<bool RENDER_NORMAL, bool RENDER_DEPTH, bool KERNEL_CUT = false>() {
+        kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH, KERNEL_CUT><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
             contributor_masks,
@@ -689,10 +691,19 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             height,
             grid.x,
             warp_cull_mode,
-            blend_batch_override);
+            blend_batch_override,
+            cut);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
-    if (normal != nullptr) {
+    if (kernel_cut > 0.0f) {
+        // Training renders only: no normal channel.
+        if (normal != nullptr)
+            throw std::invalid_argument("FastGS: the cut kernel does not render normals");
+        if (depth != nullptr)
+            launch_blend.template operator()<false, true, true>();
+        else
+            launch_blend.template operator()<false, false, true>();
+    } else if (normal != nullptr) {
         if (depth != nullptr)
             launch_blend.template operator()<true, true>();
         else

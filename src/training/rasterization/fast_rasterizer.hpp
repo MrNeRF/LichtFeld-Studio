@@ -207,7 +207,8 @@ namespace lfs::training {
         bool render_normal = false,
         bool render_depth = true,
         float dilation_scale = 1.0f,
-        bool update_screen_share = true);
+        bool update_screen_share = true,
+        float kernel_cut = 0.0f); // > 0: train with the kernel truncated at sigma = kernel_cut
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(

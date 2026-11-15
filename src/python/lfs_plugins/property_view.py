@@ -377,6 +377,8 @@ REGISTRY_PLACEMENT = {
         "match_walk_gate_peak",
         "match_angular_mean_step",
         "match_reg_rendered_only",
+        "match_cut_share",
+        "match_cut",
         "cropbox_growth_inside",
         "opacity_decay",
         "opacity_decay_rendered_only",

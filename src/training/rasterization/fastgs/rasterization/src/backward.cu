@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <stdexcept>
 
 namespace {
     std::atomic_bool g_force_generic_preprocess_for_testing{false};
@@ -73,6 +74,7 @@ void fast_lfs::rasterization::backward(
     const float cy,
     bool mip_filter,
     float dilation_scale,
+    float kernel_cut,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
     // model-truth shN-rest decode binds (independent of fused Adam
@@ -102,9 +104,11 @@ void fast_lfs::rasterization::backward(
         // tests can set it after forward returns.
         const int warp_cull_mode = warp_cull_mode_for_testing();
 
+        const kernels::KernelCut cut = kernels::KernelCut::at(kernel_cut);
         auto launch_blend_backward_typed =
-            [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE, bool COLOR_VARIANCE>() {
-                kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, COLOR_VARIANCE>
+            [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE, bool COLOR_VARIANCE,
+                bool KERNEL_CUT = false>() {
+                kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, COLOR_VARIANCE, KERNEL_CUT>
                     <<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
                         per_tile_buffers.instance_ranges,
                         sorted_primitive_indices,
@@ -143,7 +147,8 @@ void fast_lfs::rasterization::backward(
                         width,
                         height,
                         grid.x,
-                        color_variance);
+                        color_variance,
+                        cut);
                 LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
             };
         auto launch_blend = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE>() {
@@ -154,6 +159,13 @@ void fast_lfs::rasterization::backward(
         };
         auto launch_production = [&]<DensificationType DENS_TYPE>() {
             const bool impact_score = impact_sum_out != nullptr;
+            if (kernel_cut > 0.0f) {
+                // Training renders of the match strategy only.
+                if ((grad_normal != nullptr && grad_normal_helper != nullptr) || impact_score || color_variance.weight > 0.0f)
+                    throw std::invalid_argument("FastGS: the cut kernel supports no normal, impact or color variance pass");
+                launch_blend_backward_typed.template operator()<DENS_TYPE, false, false, 0, false, true>();
+                return;
+            }
             if (grad_normal != nullptr && grad_normal_helper != nullptr) {
                 if (impact_score)
                     launch_blend.template operator()<DENS_TYPE, true, true, 0>();
@@ -166,7 +178,9 @@ void fast_lfs::rasterization::backward(
                     launch_blend.template operator()<DENS_TYPE, false, false, 0>();
             }
         };
-        if (warp_cull_mode == 1) {
+        if (warp_cull_mode != 0 && kernel_cut > 0.0f) {
+            throw std::invalid_argument("FastGS: the cut kernel needs the production warp cull");
+        } else if (warp_cull_mode == 1) {
             if (impact_sum_out != nullptr)
                 launch_blend.template operator()<DensificationType::None, false, true, 1>();
             else

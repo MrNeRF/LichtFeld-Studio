@@ -107,6 +107,7 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         cudaStream_t stream,
         float* max_screen_share = nullptr,
-        float dilation_scale = 1.0f);
+        float dilation_scale = 1.0f,
+        float kernel_cut = 0.0f); // > 0: truncated kernel (KernelCut)
 
 } // namespace fast_lfs::rasterization

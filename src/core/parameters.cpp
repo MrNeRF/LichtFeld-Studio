@@ -1030,6 +1030,10 @@ namespace lfs::core {
                 return "match_split_opacity and match_split_opacity_end must be within (0, 1], the steps not negative";
             if (!std::isfinite(match_walk) || match_walk < 0.0f || !std::isfinite(match_walk_end) || match_walk_end < 0.0f)
                 return "match_walk and match_walk_end must be finite and not negative";
+            if (!std::isfinite(match_cut_share) || match_cut_share < 0.0f || match_cut_share > 1.0f)
+                return "match_cut_share must be in [0, 1]";
+            if (!std::isfinite(match_cut) || match_cut <= 0.0f)
+                return "match_cut must be positive";
             if (!std::isfinite(explore_walk_scale) || explore_walk_scale <= 0.0f)
                 return std::format("explore_walk_scale must be finite and positive (got {})", explore_walk_scale);
             if (!std::isfinite(explore_scout_share) || explore_scout_share < 0.0f || explore_scout_share > 1.0f)

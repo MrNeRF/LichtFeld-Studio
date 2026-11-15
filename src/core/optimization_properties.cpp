@@ -860,6 +860,20 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"match"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::match_cut_share,
+                        "match_cut_share", "Match Cut Kernel Share", d.match_cut_share, 0.0f, 1.0f,
+                        "Share of match strategy steps trained with the truncated kernel, picked by a hash of the step")
+            .precision(3)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_cut, "match_cut", "Match Kernel Cut", d.match_cut, 0.5f, 20.0f,
+                        "Truncated kernel of the match strategy: the Gaussian ends where half its squared "
+                        "Mahalanobis distance reaches this, its tail rescaled to reach zero there")
+            .precision(3)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

@@ -73,6 +73,8 @@
   "mask_threshold": 0.5,
   "match_angular_mean_step": true,
   "match_clip_factor": 1.5,
+  "match_cut": 4.0,
+  "match_cut_share": 0.30000001192092896,
   "match_dead_epochs": 2,
   "match_dead_peak": 0.004999999888241291,
   "match_growth": 1.0499999523162842,

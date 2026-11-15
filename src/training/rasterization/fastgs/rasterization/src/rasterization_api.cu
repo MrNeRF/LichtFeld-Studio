@@ -231,7 +231,8 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_n_cells,
         unsigned int sh_value_bits,
         float* max_screen_share_ptr,
-        float dilation_scale) {
+        float dilation_scale,
+        float kernel_cut) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -330,7 +331,7 @@ namespace fast_lfs::rasterization {
 
             // Call the actual forward implementation
             ForwardResult forward_result = forward(per_primitive_buffers_func, [phase_arena](size_t size) { phase_arena->begin_phase(
-                                                                                                                FastGSPhaseArena::Phase::Forward, size); }, phase_forward_allocator, [phase_arena](const void* source, size_t size) { return phase_arena->retain_prefix(source, size); }, per_tile_buffers_func, reinterpret_cast<const float3*>(means_ptr), reinterpret_cast<const float3*>(scales_raw_ptr), reinterpret_cast<const float4*>(rotations_raw_ptr), opacities_raw_ptr, reinterpret_cast<const float3*>(sh_coefficients_0_ptr), reinterpret_cast<const float4*>(sh_coefficients_rest_ptr), reinterpret_cast<const float2*>(sh_value_bounds_ptr), sh_value_n_cells, sh_value_bits, reinterpret_cast<const float4*>(w2c_ptr), reinterpret_cast<const float3*>(cam_position_ptr), image_ptr, alpha_ptr, depth_ptr, normal_ptr, bg_color_ptr, bg_image_ptr, n_primitives, active_sh_bases, sh_layout_bases, width, height, focal_x, focal_y, center_x, center_y, near_plane, far_plane, mip_filter, stream, max_screen_share_ptr, dilation_scale);
+                                                                                                                FastGSPhaseArena::Phase::Forward, size); }, phase_forward_allocator, [phase_arena](const void* source, size_t size) { return phase_arena->retain_prefix(source, size); }, per_tile_buffers_func, reinterpret_cast<const float3*>(means_ptr), reinterpret_cast<const float3*>(scales_raw_ptr), reinterpret_cast<const float4*>(rotations_raw_ptr), opacities_raw_ptr, reinterpret_cast<const float3*>(sh_coefficients_0_ptr), reinterpret_cast<const float4*>(sh_coefficients_rest_ptr), reinterpret_cast<const float2*>(sh_value_bounds_ptr), sh_value_n_cells, sh_value_bits, reinterpret_cast<const float4*>(w2c_ptr), reinterpret_cast<const float3*>(cam_position_ptr), image_ptr, alpha_ptr, depth_ptr, normal_ptr, bg_color_ptr, bg_image_ptr, n_primitives, active_sh_bases, sh_layout_bases, width, height, focal_x, focal_y, center_x, center_y, near_plane, far_plane, mip_filter, stream, max_screen_share_ptr, dilation_scale, kernel_cut);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
@@ -390,6 +391,7 @@ namespace fast_lfs::rasterization {
             ctx.n_visible = forward_result.n_visible;
             ctx.sh_layout_bases = sh_layout_bases;
             ctx.dilation_scale = dilation_scale;
+            ctx.kernel_cut = kernel_cut;
             ctx.frame_id = frame_id;
             ctx.stream = stream;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
@@ -707,6 +709,7 @@ namespace fast_lfs::rasterization {
                 center_y,
                 mip_filter,
                 forward_ctx.dilation_scale,
+                forward_ctx.kernel_cut,
                 densification_type,
                 *fused_adam,
                 reinterpret_cast<const float2*>(shN_value_bounds_ptr),

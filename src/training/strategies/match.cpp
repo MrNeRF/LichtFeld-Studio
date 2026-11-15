@@ -263,6 +263,24 @@ namespace lfs::training {
         return count;
     }
 
+    // Counts in float arithmetic, as in the configuration they reproduce: (int)(0.1f x (float)N) etc.
+    size_t Match::split_budget(const lfs::core::param::OptimizationParameters& params, const size_t n) {
+        return std::max<size_t>(1, static_cast<size_t>(params.match_split_budget * static_cast<float>(n)));
+    }
+
+    size_t Match::growth_births(const lfs::core::param::OptimizationParameters& params, const size_t n,
+                                const size_t budget, const size_t revived) {
+        const auto grown = static_cast<size_t>(params.match_growth * static_cast<float>(n));
+        const size_t cap = params.max_cap > 0 ? static_cast<size_t>(params.max_cap) : grown;
+        const size_t target = std::max(n, std::min(cap, grown));
+        return std::min(target - n, budget > revived ? budget - revived : 0);
+    }
+
+    size_t Match::oversize_births(const lfs::core::param::OptimizationParameters& params, const size_t added) {
+        const long drawn = std::lround(params.match_oversize_share * static_cast<float>(added));
+        return std::min(added, static_cast<size_t>(std::max(0L, drawn)));
+    }
+
     Match::RefineCounts Match::refine(const int step) {
         using namespace lfs::core;
         RefineCounts counts;
@@ -275,8 +293,7 @@ namespace lfs::training {
             return counts;
         const auto device = _splat_data->means().device();
         const float share = split_opacity_share(step);
-        const size_t budget = std::max<size_t>(1, static_cast<size_t>(std::floor(
-                                                      static_cast<double>(_params->match_split_budget) * n)));
+        const size_t budget = split_budget(*_params, n);
 
         // Dead pool.
         auto dead = Tensor::empty({n}, device, DataType::UInt8);
@@ -312,14 +329,10 @@ namespace lfs::training {
         }
 
         // Growth.
-        const double grown = std::floor(static_cast<double>(_params->match_growth) * static_cast<double>(n));
-        const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : static_cast<size_t>(grown);
-        const size_t target = std::max(n, std::min(cap, static_cast<size_t>(grown)));
-        size_t added = std::min(target - n, budget > counts.revived ? budget - counts.revived : 0);
+        size_t added = growth_births(*_params, n, budget, counts.revived);
         added = clamp_growth_to_vram(added, *_splat_data, _optimizer.get());
         if (added > 0) {
-            const auto oversize_count =
-                static_cast<size_t>(std::lround(static_cast<double>(_params->match_oversize_share) * added));
+            const size_t oversize_count = oversize_births(*_params, added);
             if (oversize_count > 0) {
                 auto donors = Tensor::empty({oversize_count}, device, DataType::Int64);
                 const size_t drawn = match::draw_without_replacement(

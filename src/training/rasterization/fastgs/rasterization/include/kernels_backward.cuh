@@ -735,7 +735,11 @@ namespace fast_lfs::rasterization::kernels::backward {
     // splats share the first exchange: the lower half-warp keeps one, the upper
     // half-warp the other.
     // ---------------------------------------------------------------------------
-    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0, bool COLOR_VARIANCE = false>
+    // KERNEL_CUT: the forward used the truncated kernel `cut` (KernelCut). There alpha = o g (G - f) is no longer
+    // proportional to the falloff G, so the geometry terms take -o g G dL/dalpha = h - o g f dL/dalpha while the
+    // opacity keeps dalpha/do = alpha / o: one more column sum carries -g f dL/dalpha to the opacity.
+    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0, bool COLOR_VARIANCE = false,
+              bool KERNEL_CUT = false>
     __global__ void __launch_bounds__(config::block_size_blend_backward, 4) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
@@ -774,7 +778,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint width,
         const uint height,
         const uint grid_width,
-        const ColorVarianceLoss color_variance = {}) {
+        const ColorVarianceLoss color_variance = {},
+        const KernelCut cut = {}) {
         static_assert(config::tile_width == 16 && config::tile_height == 16, "quadrant layout assumes 16x16 tiles");
         static_assert(config::block_size_blend_backward == 128, "four warps, one 8x8 quadrant each");
         static_assert(config::warp_subtile_width == 8 && config::warp_subtile_height == 4,
@@ -903,7 +908,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         constexpr int kUDensification = kUNormal + (NORMAL_CHANNEL ? 3 : 0);
         constexpr int kUEdge = kUDensification + kDensificationFields;
         constexpr int kUImpact = kUEdge + 1;
-        constexpr int kU = kUImpact + (IMPACT_SCORE ? 1 : 0);
+        constexpr int kUCut = kUImpact + (IMPACT_SCORE ? 1 : 0);
+        constexpr int kU = kUCut + (KERNEL_CUT ? 1 : 0);
         // Output field ids of the accumulation targets.
         constexpr int kFieldMeanX = 0, kFieldMeanY = 1, kFieldConicX = 2, kFieldConicY = 3, kFieldConicZ = 4;
         constexpr int kFieldDepth = 5, kFieldOpacity = 6, kFieldColor = 7, kFieldNormal = 10;
@@ -923,6 +929,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                 return kFieldDensification + u - kUDensification;
             if (u == kUEdge)
                 return kFieldEdge;
+            if (KERNEL_CUT && u == kUCut)
+                return kFieldOpacity;
             return kFieldImpact;
         };
         auto store_field = [&](const int field, const float value, const uint primitive, const uint work) {
@@ -991,7 +999,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             float3 normal = make_float3(0.0f);
             if constexpr (NORMAL_CHANNEL)
                 normal = s_normal[slot];
-            const AlphaColumn column = AlphaColumn::at(conic_base2, s_opacity[slot].x, mean2d.x - center_x);
+            const AlphaColumn column = AlphaColumn::at(
+                conic_base2, KERNEL_CUT ? s_opacity[slot].x * cut.gain : s_opacity[slot].x, mean2d.x - center_x);
             const float dy0 = mean2d.y - center_y0;
 
             SplatSums sums{};
@@ -999,7 +1008,11 @@ namespace fast_lfs::rasterization::kernels::backward {
 #pragma unroll
             for (int k = 0; k < 2; ++k) {
                 const bool eligible = inside[k] && position < last[k];
-                const float unclamped = eligible ? column.alpha(conic_base2.z, dy0 - static_cast<float>(k)) : 0.0f;
+                float unclamped = 0.0f;
+                if constexpr (KERNEL_CUT)
+                    unclamped = eligible ? column.alpha_cut(conic_base2.z, dy0 - static_cast<float>(k), cut.floor) : 0.0f;
+                else
+                    unclamped = eligible ? column.alpha(conic_base2.z, dy0 - static_cast<float>(k)) : 0.0f;
                 const bool accepted = eligible && alpha_accepted(unclamped);
                 const float alpha = accepted ? clamped_alpha(unclamped) : 0.0f;
                 const bool saturated = unclamped >= config::max_fragment_alpha;
@@ -1026,6 +1039,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const float dL_dalpha = T_before * (dot(color, pixel_grad_color) + depth * pixel_grad_depth +
                                                     normal_dot_grad + variance_cost - grad_T_after);
                 h[k] = accepted && !saturated ? -alpha * dL_dalpha : 0.0f;
+                if constexpr (KERNEL_CUT) {
+                    const float tail = accepted && !saturated ? cut.floor * dL_dalpha : 0.0f;
+                    h[k] -= column.opacity * tail;
+                    sums.u[kUCut] -= cut.gain * tail;
+                }
                 sums.u[kUColor] += dL_dcolor.x;
                 sums.u[kUColor + 1] += dL_dcolor.y;
                 sums.u[kUColor + 2] += dL_dcolor.z;

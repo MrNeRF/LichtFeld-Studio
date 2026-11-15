@@ -6988,6 +6988,14 @@ namespace lfs::training {
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
+                            // Match strategy: a hash of the rendered step picks the share of steps trained with
+                            // the truncated kernel.
+                            float kernel_cut = 0.0f;
+                            if (match_strategy && step_params.match_cut_share > 0.0f && !render_normal) {
+                                const auto hashed = static_cast<uint32_t>(iter - 1) * 2654435761u;
+                                if (static_cast<float>(hashed) < step_params.match_cut_share * 4294967296.0f)
+                                    kernel_cut = step_params.match_cut;
+                            }
                             unsigned forward_attempts = 0;
                             for (;;) {
                                 ++forward_attempts;
@@ -6995,7 +7003,7 @@ namespace lfs::training {
                                     *cam, strategy_->get_model(), bg,
                                     0, 0, 0, 0,
                                     step_params.mip_filter, bg_tile,
-                                    render_normal, render_depth);
+                                    render_normal, render_depth, 1.0f, true, kernel_cut);
                                 if (rasterize_result) {
                                     output = std::move(rasterize_result->first);
                                     fast_ctx.emplace(std::move(rasterize_result->second));

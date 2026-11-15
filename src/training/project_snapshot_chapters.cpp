@@ -87,6 +87,17 @@ namespace lfs::training {
                     checkpoint_params.optimization;
                 parameters.mrnf_current =
                     checkpoint_params.optimization;
+            } else if (
+                parameters.active_strategy ==
+                lfs::core::param::kStrategyMatch) {
+                // The project parameters have no match preset yet: the snapshot keeps the match run's
+                // values under the MRNF role, so its splats and checkpoint save and convert exactly;
+                // reopening it for training resumes with the MRNF strategy.
+                auto as_mrnf = checkpoint_params.optimization;
+                as_mrnf.strategy = std::string(lfs::core::param::kStrategyMRNF);
+                parameters.active_strategy = as_mrnf.strategy;
+                parameters.mrnf_session = as_mrnf;
+                parameters.mrnf_current = as_mrnf;
             } else {
                 return capture_error(
                     lfs::ErrorCode::Unsupported,

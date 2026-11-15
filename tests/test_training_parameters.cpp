@@ -170,6 +170,8 @@ namespace {
             {"match_walk_gate_peak", {"match"}},
             {"match_angular_mean_step", {"match"}},
             {"match_reg_rendered_only", {"match"}},
+            {"match_cut_share", {"match"}},
+            {"match_cut", {"match"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},
@@ -239,8 +241,10 @@ namespace {
         bad.match_growth = 0.5f;
         EXPECT_NE(bad.validate().find("match_growth"), std::string::npos);
 
-        const auto from_json = OptimizationParameters::from_json(
-            nlohmann::json{{"strategy", "match"}, {"match_walk", 0.0}, {"match_dead_epochs", 3}});
+        auto json = defaults.to_json();
+        json["match_walk"] = 0.0;
+        json["match_dead_epochs"] = 3;
+        const auto from_json = OptimizationParameters::from_json(json);
         EXPECT_EQ(from_json.strategy, "match");
         EXPECT_FLOAT_EQ(from_json.match_walk, 0.0f);
         EXPECT_EQ(from_json.match_dead_epochs, 3);
