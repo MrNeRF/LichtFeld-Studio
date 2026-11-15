@@ -58,6 +58,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--refine-error-view-mean", "refine_error_view_mean", Bool},
             OptimizationCliBinding{"--refine-error-compress", "refine_error_compress", Bool},
             OptimizationCliBinding{"--refine-need-power", "refine_need_power", Float},
+            OptimizationCliBinding{"--donor-rank-per-view", "donor_rank_per_view", Bool},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -823,6 +824,7 @@ namespace {
             ::args::Flag need_guided_growth(training_group, "need_guided_growth", lfs::core::args::optimization_cli_help("--need-guided-growth"), {"need-guided-growth"});
             ::args::Flag refine_error_view_mean(training_group, "refine_error_view_mean", lfs::core::args::optimization_cli_help("--refine-error-view-mean"), {"refine-error-view-mean"});
             ::args::Flag refine_error_compress(training_group, "refine_error_compress", lfs::core::args::optimization_cli_help("--refine-error-compress"), {"refine-error-compress"});
+            ::args::Flag donor_rank_per_view(training_group, "donor_rank_per_view", lfs::core::args::optimization_cli_help("--donor-rank-per-view"), {"donor-rank-per-view"});
             ::args::Flag per_splat_bias_correction(training_group, "per_splat_bias_correction", lfs::core::args::optimization_cli_help("--per-splat-bias-correction"), {"per-splat-bias-correction"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -1703,6 +1705,7 @@ namespace {
                                         need_guided_growth_flag = bool(need_guided_growth),
                                         refine_error_view_mean_flag = bool(refine_error_view_mean),
                                         refine_error_compress_flag = bool(refine_error_compress),
+                                        donor_rank_per_view_flag = bool(donor_rank_per_view),
                                         per_splat_bias_correction_flag = bool(per_splat_bias_correction),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
@@ -1850,6 +1853,8 @@ namespace {
                     opt.refine_error_view_mean = true;
                 if (refine_error_compress_flag)
                     opt.refine_error_compress = true;
+                if (donor_rank_per_view_flag)
+                    opt.donor_rank_per_view = true;
                 if (per_splat_bias_correction_flag)
                     opt.per_splat_bias_correction = true;
                 if (no_opacity_decay_rendered_only_flag)
@@ -2028,6 +2033,7 @@ namespace {
                 note_opt("need_guided_growth", need_guided_growth_flag);
                 note_opt("refine_error_view_mean", refine_error_view_mean_flag);
                 note_opt("refine_error_compress", refine_error_compress_flag);
+                note_opt("donor_rank_per_view", donor_rank_per_view_flag);
                 note_opt("per_splat_bias_correction", per_splat_bias_correction_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());

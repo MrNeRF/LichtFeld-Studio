@@ -349,6 +349,7 @@ REGISTRY_PLACEMENT = {
         "refine_error_view_mean",
         "refine_error_compress",
         "refine_need_power",
+        "donor_rank_per_view",
         "per_splat_bias_correction",
         "cropbox_growth_inside",
         "opacity_decay",

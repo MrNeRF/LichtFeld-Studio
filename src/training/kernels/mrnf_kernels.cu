@@ -454,7 +454,9 @@ namespace lfs::training::mrnf_strategy {
     __global__ void fold_densification_error_and_zero_kernel(
         float* __restrict__ refine_weight_max,
         float* __restrict__ densification_info,
-        size_t N) {
+        size_t N,
+        float* __restrict__ coverage_views,
+        float* __restrict__ coverage_seen) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -462,20 +464,30 @@ namespace lfs::training::mrnf_strategy {
 
         refine_weight_max[idx] = fmaxf(refine_weight_max[idx], densification_info[N + idx]);
         densification_info[N + idx] = 0.0f;
+        if (coverage_views != nullptr) {
+            const float coverage = densification_info[idx];
+            if (coverage > coverage_seen[idx])
+                coverage_views[idx] += 1.0f;
+            coverage_seen[idx] = coverage;
+        }
     }
 
     void launch_fold_densification_error_and_zero(
         float* refine_weight_max,
         float* densification_info,
         size_t N,
+        float* coverage_views,
+        float* coverage_seen,
         void* stream) {
         if (N == 0)
             return;
+        LFS_ASSERT_MSG((coverage_views == nullptr) == (coverage_seen == nullptr),
+                       "MRNF fold: the view count needs the coverage it last saw");
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_error_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            refine_weight_max, densification_info, N);
+            refine_weight_max, densification_info, N, coverage_views, coverage_seen);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_error_and_zero");
     }
 
@@ -483,13 +495,16 @@ namespace lfs::training::mrnf_strategy {
         float* __restrict__ refine_weight,
         float* __restrict__ densification_info,
         size_t N,
-        bool compress) {
+        bool compress,
+        float* __restrict__ coverage_views) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
             return;
 
         const float coverage = densification_info[idx];
+        if (coverage_views != nullptr && coverage > 0.0f)
+            coverage_views[idx] += 1.0f;
         const float error = densification_info[N + idx];
         if (compress) {
             const float s = error > 0.0f ? powf(error, REFINE_ERROR_COMPRESS_VIEW_POWER) : 0.0f;
@@ -511,6 +526,7 @@ namespace lfs::training::mrnf_strategy {
         float* densification_info,
         size_t N,
         bool compress,
+        float* coverage_views,
         void* stream) {
         if (N == 0)
             return;
@@ -518,7 +534,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         fold_densification_error_view_sum_and_zero_kernel<<<blocks, threads, 0, s>>>(
-            refine_weight, densification_info, N, compress);
+            refine_weight, densification_info, N, compress, coverage_views);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_densification_error_view_sum_and_zero");
     }
 

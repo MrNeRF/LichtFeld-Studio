@@ -1755,6 +1755,27 @@ TEST(ArgumentParserTest, TrainingParsesPerSplatBiasCorrection) {
     EXPECT_FALSE((*off)->optimization.per_splat_bias_correction);
 }
 
+// Catches --donor-rank-per-view not reaching the training parameters, or being on without the flag.
+TEST(ArgumentParserTest, TrainingParsesDonorRankPerView) {
+    const auto data_path = make_test_path("lfs_arg_parser_donor_view_data");
+    const auto output_path = make_test_path("lfs_arg_parser_donor_view_output");
+    const auto parse = [&](const bool on) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--need-guided-growth"};
+        if (on)
+            argv.push_back("--donor-rank-per-view");
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse(true);
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_TRUE((*on)->optimization.donor_rank_per_view);
+
+    const auto off = parse(false);
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FALSE((*off)->optimization.donor_rank_per_view);
+}
+
 // Catches --refine-need-power not reaching the training parameters, or a non-positive power accepted.
 TEST(ArgumentParserTest, TrainingParsesRefineNeedPower) {
     const auto data_path = make_test_path("lfs_arg_parser_need_power_data");

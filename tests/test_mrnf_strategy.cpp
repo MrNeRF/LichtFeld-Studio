@@ -3768,3 +3768,281 @@ TEST(MRNFStrategyTest, RefineNeedPowerSharpensTheReceiverDraws) {
     ASSERT_EQ(result.replacement_count, 20);
     EXPECT_GE(rows_below(result.split_indices, high), 18u);
 }
+
+namespace {
+    param::OptimizationParameters donor_per_view_fold_params(const int fold, const bool per_view) {
+        auto p = view_mean_test_params(fold == 1);
+        p.refine_error_compress = fold == 2;
+        p.need_guided_growth = true;
+        p.donor_rank_per_view = per_view;
+        return p;
+    }
+
+    std::shared_ptr<CameraDataset> make_view_dataset(const int views) {
+        std::vector<std::shared_ptr<Camera>> cams;
+        for (int i = 0; i < views; ++i)
+            cams.push_back(make_hull_camera(static_cast<float>(i % 2 == 0 ? -1 : 1), 0.0f, 0.1f * static_cast<float>(i), i));
+        DatasetConfig cfg;
+        cfg.test_every = 100'000;
+        return std::make_shared<CameraDataset>(std::move(cams), cfg, CameraDataset::Split::ALL);
+    }
+
+    // Views that covered each splat (coverage > 0) in kViewCoverage, whatever the error did.
+    const std::vector<float> kCoveringViews{4.0f, 1.0f, 2.0f, 0.0f, 4.0f, 2.0f};
+} // namespace
+
+// The window counts the views with coverage > 0 in all three error folds: the max fold (from the
+// growth of the summed coverage in row 0), the view mean (its row 3) and compression (a count of
+// its own, since its row 3 counts views with error). The error folds themselves are unchanged.
+TEST(MRNFStrategyTest, DonorRankPerViewCountsCoveringViewsInEveryFold) {
+    for (const int fold : {0, 1, 2}) {
+        SCOPED_TRACE(testing::Message() << "fold " << fold);
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+        MRNF strategy(splat_data);
+        strategy.initialize(donor_per_view_fold_params(fold, true));
+        ASSERT_TRUE(strategy.donor_rank_per_view_on());
+        ASSERT_TRUE(strategy.growth_exchange_active(99));
+        fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+
+        EXPECT_EQ(strategy.donor_window_views().cpu().to_vector(), kCoveringViews);
+        EXPECT_EQ(strategy._exchange_window_views.is_valid(), fold != 1);
+        EXPECT_EQ(strategy._exchange_window_coverage.is_valid(), fold == 0);
+        if (fold == 0) {
+            std::vector<float> max(kViewMeanSplats, 0.0f);
+            for (size_t v = 0; v < kViewCoverage.size(); ++v)
+                for (size_t i = 0; i < kViewMeanSplats; ++i)
+                    max[i] = std::fmax(max[i], kViewError[v][i]);
+            EXPECT_EQ(strategy._refine_weight_max.cpu().to_vector(), max);
+        } else {
+            EXPECT_EQ(info_row(splat_data, 3), fold == 1 ? kCoveringViews
+                                                         : (std::vector<float>{4.0f, 1.0f, 2.0f, 0.0f, 1.0f, 2.0f}));
+        }
+
+        strategy.update_exchange_importance();
+        EXPECT_EQ(strategy._exchange_view_count.cpu().to_vector(), kCoveringViews);
+        EXPECT_FALSE(strategy._exchange_window_views.is_valid());
+        EXPECT_FALSE(strategy._exchange_window_coverage.is_valid());
+    }
+
+    // Off: no count is kept anywhere.
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    strategy.initialize(donor_per_view_fold_params(2, false));
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+    EXPECT_FALSE(strategy._exchange_window_views.is_valid());
+    strategy.update_exchange_importance();
+    EXPECT_TRUE(strategy._exchange_importance_sum.is_valid());
+    EXPECT_FALSE(strategy._exchange_view_count.is_valid());
+}
+
+// The view count fades with the same keep as the summed contribution (two views, refine every
+// step: older windows keep half), so both cover the same pass.
+TEST(MRNFStrategyTest, DonorRankPerViewFadesTheCountWithTheSum) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(32);
+    params.refine_every = 1;
+    params.donor_rank_per_view = true;
+    strategy.initialize(params);
+    strategy.set_training_dataset(make_hull_dataset());
+    const size_t n = splat_data.size();
+
+    const std::vector<float> first{1.0f, 4.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f};
+    const std::vector<float> second{1.0f, 0.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 0.5f};
+    const std::vector<float> first_views{1.0f, 2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> second_views{1.0f, 0.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 1.0f};
+    for (const auto* window : {&first, &second}) {
+        strategy.visibility_accumulator().copy_(Tensor::from_vector(*window, TensorShape({n}), Device::CUDA));
+        strategy._exchange_window_views =
+            Tensor::from_vector(window == &first ? first_views : second_views, TensorShape({n}), Device::CUDA);
+        strategy.update_exchange_importance();
+    }
+
+    const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
+    const auto views = strategy._exchange_view_count.cpu().to_vector();
+    for (size_t i = 0; i < n; ++i) {
+        EXPECT_FLOAT_EQ(sum[i], 0.5f * first[i] + second[i]) << i;
+        EXPECT_FLOAT_EQ(views[i], 0.5f * first_views[i] + second_views[i]) << i;
+    }
+}
+
+// Off, the donors are exactly the rows the summed contribution ranks lowest, as before, even
+// with a view count present.
+TEST(MRNFStrategyTest, DonorRankPerViewOffKeepsTheSummedRanking) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(need_growth_test_params(32));
+    strategy.set_training_dataset(make_view_dataset(100));
+    ASSERT_FALSE(strategy.donor_rank_per_view_on());
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_view_count = Tensor::from_vector(
+        std::vector<float>{1000.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f}, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto chosen = strategy.select_exchange_victims(4);
+    auto reference = Tensor::empty({4}, Device::CUDA, DataType::Int64);
+    const auto eligible = Tensor::ones_bool({n}, Device::CUDA);
+    mrnf_strategy::launch_rank_exchange_rows(strategy._exchange_importance_sum.ptr<float>(), nullptr,
+                                             eligible.ptr<bool>(), n, 4, reference.ptr<int64_t>());
+    EXPECT_EQ(chosen.cpu().to_vector_int64(), reference.cpu().to_vector_int64());
+    EXPECT_EQ(selected_rows(chosen), (std::vector<int64_t>{1, 2, 3, 4}));
+}
+
+// On, a splat ranks by sum / max(views, floor), floor = max(1, round(5 % of the training views)).
+// Sum 10 over 40 views (0.25) is kept over sum 20 over 200 views (0.1); sum 1 seen by one view
+// ranks as 1 / floor (0.2), not 1.
+TEST(MRNFStrategyTest, DonorRankPerViewRanksBySumPerViewWithAFloor) {
+    const std::vector<float> sum{10.0f, 20.0f, 1.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f, 100.0f};
+    const std::vector<float> views{40.0f, 200.0f, 1.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f, 10.0f};
+    const auto run = [&](const bool per_view, const size_t count) {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(32);
+        params.donor_rank_per_view = per_view;
+        strategy.initialize(params);
+        strategy.set_training_dataset(make_view_dataset(100));
+        EXPECT_EQ(strategy.donor_view_floor(), 5.0f);
+        const size_t n = splat_data.size();
+        strategy._exchange_importance_sum = Tensor::from_vector(sum, TensorShape({n}), Device::CUDA);
+        strategy._exchange_view_count = Tensor::from_vector(views, TensorShape({n}), Device::CUDA);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        return selected_rows(strategy.select_exchange_victims(count));
+    };
+
+    EXPECT_EQ(run(false, 1), (std::vector<int64_t>{2}));
+    EXPECT_EQ(run(false, 2), (std::vector<int64_t>{0, 2}));
+    EXPECT_EQ(run(true, 1), (std::vector<int64_t>{1}));
+    // Without the floor splat 2 would rank at 1.0, above splat 0 (0.25): the pair would be {0, 1}.
+    EXPECT_EQ(run(true, 2), (std::vector<int64_t>{1, 2}));
+
+    // The floor: 5 % of the training views, rounded, at least 1.
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(32);
+    params.donor_rank_per_view = true;
+    strategy.initialize(params);
+    EXPECT_EQ(strategy.donor_view_floor(), 1.0f);
+    strategy.set_training_dataset(make_hull_dataset());
+    EXPECT_EQ(strategy.donor_view_floor(), 1.0f);
+    strategy.set_training_dataset(make_view_dataset(315));
+    EXPECT_EQ(strategy.donor_view_floor(), 16.0f);
+}
+
+// The view count stays with its splat: newborns (filled slots, split parents, appended rows)
+// restart at 0, and compaction and a Morton reorder carry the count and the window rows.
+TEST(MRNFStrategyTest, DonorRankPerViewCountFollowsItsSplats) {
+    std::vector<float> iota10(10);
+    std::iota(iota10.begin(), iota10.end(), 1.0f);
+    {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(32);
+        params.donor_rank_per_view = true;
+        strategy.initialize(params);
+        const size_t n = splat_data.size();
+        strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+        strategy._exchange_view_count = Tensor::from_vector(iota10, TensorShape({n}), Device::CUDA);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 3;
+        strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::CUDA);
+        const auto children = Tensor::from_vector(std::vector<int>{2, 3}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+        strategy._exchange_free_before_growth.index_put_(children, Tensor::ones_bool({2}, Device::CUDA));
+        const auto parents = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+        strategy.record_exchange_births(parents);
+        const auto views = strategy._exchange_view_count.cpu().to_vector();
+        ASSERT_EQ(views.size(), n);
+        for (size_t row = 0; row < n; ++row)
+            EXPECT_EQ(views[row], row == 0 || row == 2 || row == 3 ? 0.0f : iota10[row]) << row;
+    }
+    {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(32);
+        params.donor_rank_per_view = true;
+        strategy.initialize(params);
+        splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+        const size_t n = splat_data.size();
+        strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+        strategy._exchange_view_count = Tensor::from_vector(iota10, TensorShape({n}), Device::CUDA);
+        strategy._exchange_window_views = Tensor::from_vector(iota10, TensorShape({n}), Device::CUDA).mul(2.0f);
+        strategy._exchange_window_coverage = Tensor::from_vector(iota10, TensorShape({n}), Device::CUDA).mul(3.0f);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        const auto mask = Tensor::from_vector(
+            std::vector<bool>{true, false, false, false, false, false, false, false, false, true},
+            TensorShape({10}), Device::CUDA);
+        strategy.remove_gaussians(mask);
+        ASSERT_EQ(splat_data.size(), 8u);
+        std::vector<float> kept(iota10.begin() + 1, iota10.end() - 1);
+        EXPECT_EQ(strategy._exchange_view_count.cpu().to_vector(), kept);
+        for (auto& v : kept)
+            v *= 2.0f;
+        EXPECT_EQ(strategy._exchange_window_views.cpu().to_vector(), kept);
+        for (auto& v : kept)
+            v *= 1.5f;
+        EXPECT_EQ(strategy._exchange_window_coverage.cpu().to_vector(), kept);
+    }
+    {
+        auto splat = create_mrnf_test_splat_data(4, 0);
+        {
+            const std::vector<float> means{3.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+            splat.means().copy_from(Tensor::from_vector(means, TensorShape({4, 3}), Device::CUDA));
+        }
+        auto params = vanilla_mrnf_params();
+        params.max_cap = 8;
+        MRNF strategy(splat);
+        strategy.initialize(params);
+        const std::vector<float> count{10.0f, 20.0f, 30.0f, 40.0f};
+        strategy._exchange_view_count = Tensor::from_vector(count, TensorShape({4}), Device::CUDA);
+        strategy._exchange_window_views = Tensor::from_vector(count, TensorShape({4}), Device::CUDA).mul(2.0f);
+        strategy._exchange_window_coverage = Tensor::from_vector(count, TensorShape({4}), Device::CUDA).mul(3.0f);
+        const auto result = morton::apply_morton_reorder(
+            splat, &strategy.get_optimizer(), nullptr,
+            [&](const morton::RowVisitor& visit) { strategy.for_each_gaussian_row(visit); });
+        ASSERT_TRUE(result.applied);
+        const auto permutation = result.permutation.cpu();
+        const auto views = strategy._exchange_view_count.cpu().to_vector();
+        const auto window = strategy._exchange_window_views.cpu().to_vector();
+        const auto coverage = strategy._exchange_window_coverage.cpu().to_vector();
+        bool moved = false;
+        for (size_t i = 0; i < 4; ++i) {
+            const auto from = static_cast<size_t>(permutation.ptr<int64_t>()[i]);
+            moved = moved || from != i;
+            EXPECT_EQ(views[i], count[from]) << i;
+            EXPECT_EQ(window[i], 2.0f * count[from]) << i;
+            EXPECT_EQ(coverage[i], 3.0f * count[from]) << i;
+        }
+        EXPECT_TRUE(moved);
+    }
+}
+
+// The view count is transient like the summed contribution: a resume drops it and the next
+// windows rebuild it from the folds.
+TEST(MRNFStrategyTest, DonorRankPerViewResumeRebuildsTheCount) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    const auto params = donor_per_view_fold_params(2, true);
+    strategy.initialize(params);
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+    strategy.update_exchange_importance();
+    ASSERT_TRUE(strategy._exchange_view_count.is_valid());
+    fold_views(strategy, splat_data, 2, 96);
+    ASSERT_TRUE(strategy._exchange_window_views.is_valid());
+    std::stringstream ss;
+    strategy.serialize(ss);
+
+    auto splat_copy = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF restored(splat_copy);
+    restored.initialize(params);
+    restored.deserialize(ss);
+    EXPECT_FALSE(restored._exchange_view_count.is_valid());
+    EXPECT_FALSE(restored._exchange_window_views.is_valid());
+    EXPECT_FALSE(restored._exchange_importance_sum.is_valid());
+
+    fold_views(restored, splat_copy, kViewCoverage.size(), 96);
+    restored.update_exchange_importance();
+    EXPECT_EQ(restored._exchange_view_count.cpu().to_vector(), kCoveringViews);
+}

@@ -212,10 +212,15 @@ namespace lfs::training::mrnf_strategy {
     // Row 0 is MRNF's persistent visibility count and must not be cleared.
     // Fold row 1 into the persistent error maximum and clear only the row-1
     // per-iteration scratch.
+    // With coverage_views (and coverage_seen, both [N]), also counts this view: row 0 sums the
+    // window coverage, so a view saw the splat when row 0 grew past coverage_seen, which then
+    // takes row 0's value.
     void launch_fold_densification_error_and_zero(
         float* refine_weight_max,
         float* densification_info,
         size_t N,
+        float* coverage_views = nullptr,
+        float* coverage_seen = nullptr,
         void* stream = nullptr);
 
     // Compressed refine error: each view's per-splat error sum s is taken to this power before
@@ -227,12 +232,14 @@ namespace lfs::training::mrnf_strategy {
     // row 3 counts the views where the splat was visible (coverage > 0). Adds the error to
     // the window sum in refine_weight, moves the coverage to row 2, then clears rows 0 and 1.
     // With compress, the error added is s^REFINE_ERROR_COMPRESS_VIEW_POWER and row 3 counts
-    // the views where that is > 0 instead.
+    // the views where that is > 0 instead. With coverage_views ([N]), it also counts the views
+    // with coverage > 0 there, in either mode.
     void launch_fold_densification_error_view_sum_and_zero(
         float* refine_weight,
         float* densification_info,
         size_t N,
         bool compress = false,
+        float* coverage_views = nullptr,
         void* stream = nullptr);
 
     // refine_weight = refine_weight / max(view count, 1), with the count in row 3.

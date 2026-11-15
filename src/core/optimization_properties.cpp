@@ -654,6 +654,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::donor_rank_per_view,
+                       "donor_rank_per_view", "Donor Rank Per View", d.donor_rank_per_view,
+                       "Need-guided growth frees the splats with the least blend weight per view that saw them, not summed over the views (MRNF)")
+            .locale("training.advanced.donor_rank_per_view")
+            .tooltip("training.tooltip.donor_rank_per_view")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

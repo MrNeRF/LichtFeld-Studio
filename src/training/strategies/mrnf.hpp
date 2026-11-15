@@ -78,6 +78,12 @@ class MRNFStrategyTest_RefineErrorCompressRanksSmallIntenseOverLargeFaint_Test;
 class MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
 class MRNFStrategyTest_RefineNeedPowerRaisesTheFoldedNeed_Test;
 class MRNFStrategyTest_RefineNeedPowerSharpensTheReceiverDraws_Test;
+class MRNFStrategyTest_DonorRankPerViewCountsCoveringViewsInEveryFold_Test;
+class MRNFStrategyTest_DonorRankPerViewFadesTheCountWithTheSum_Test;
+class MRNFStrategyTest_DonorRankPerViewOffKeepsTheSummedRanking_Test;
+class MRNFStrategyTest_DonorRankPerViewRanksBySumPerViewWithAFloor_Test;
+class MRNFStrategyTest_DonorRankPerViewCountFollowsItsSplats_Test;
+class MRNFStrategyTest_DonorRankPerViewResumeRebuildsTheCount_Test;
 
 namespace lfs::training {
 
@@ -194,6 +200,12 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
         friend class ::MRNFStrategyTest_RefineNeedPowerRaisesTheFoldedNeed_Test;
         friend class ::MRNFStrategyTest_RefineNeedPowerSharpensTheReceiverDraws_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewCountsCoveringViewsInEveryFold_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewFadesTheCountWithTheSum_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewOffKeepsTheSummedRanking_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewRanksBySumPerViewWithAFloor_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewCountFollowsItsSplats_Test;
+        friend class ::MRNFStrategyTest_DonorRankPerViewResumeRebuildsTheCount_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -219,6 +231,14 @@ namespace lfs::training {
         // for the rest of the refine.
         void fold_need_into_refine_weights();
         void apply_refine_need_power();
+        // Need-guided donors rank by summed blend weight per view that saw the splat, the view
+        // count floored at donor_view_floor(), instead of by the summed blend weight.
+        [[nodiscard]] bool donor_rank_per_view_on() const;
+        [[nodiscard]] float donor_view_floor() const;
+        // This window's count of views that covered each splat, or zeros. Read before the
+        // window outputs are reset.
+        [[nodiscard]] lfs::core::Tensor donor_window_views() const;
+        void log_donor_view_counts(const lfs::core::Tensor& donors) const;
         [[nodiscard]] float exchange_importance_decay() const;
         [[nodiscard]] int exchange_warmup_windows() const;
         [[nodiscard]] size_t exchange_quota(int iter, size_t active) const;
@@ -352,6 +372,9 @@ namespace lfs::training {
         lfs::core::Tensor _exchange_birth;              // [N] window in which the row was last filled
         lfs::core::Tensor _exchange_window_impact_sum;  // [N] window removal-impact sum
         lfs::core::Tensor _exchange_window_impact_peak; // [N] window removal-impact peak
+        lfs::core::Tensor _exchange_view_count;         // [N] faded count of covering views (donor_rank_per_view)
+        lfs::core::Tensor _exchange_window_views;       // [N] window count of covering views, when no row holds it
+        lfs::core::Tensor _exchange_window_coverage;    // [N] window coverage at the last fold (max fold only)
         lfs::core::Tensor _exchange_free_before_growth; // free slots right before growth
         int _exchange_windows = 0;                      // windows in the current importance memory
         bool _exchange_impact_written = false;

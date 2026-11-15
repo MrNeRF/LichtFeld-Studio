@@ -411,6 +411,10 @@ namespace lfs::core {
             // Need-guided growth raises the folded NEED to this power before the receiver draws, so
             // high-need splats are drawn much more often than their linear share. 1 leaves NEED as is.
             float refine_need_power = 1.0f;
+            // Need-guided growth ranks its donors by blend weight per view that saw the splat (with a
+            // floor of 5% of the training views) instead of the blend weight summed over the views, so
+            // structure seen by few views is not drained for being seen by few views.
+            bool donor_rank_per_view = false;
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

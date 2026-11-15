@@ -905,16 +905,34 @@ namespace lfs::training {
         assert(info.shape()[1] == n);
 
         if (_refine_weight_max.numel() == n) {
+            // Donors ranked per view count the views that covered each splat in the window. The
+            // view-mean fold without compression already counts them in row 3; otherwise the fold
+            // counts them here (the max fold from the growth of the summed coverage in row 0).
+            float* coverage_views = nullptr;
+            float* coverage_seen = nullptr;
+            if (donor_rank_per_view_on() && growth_exchange_active(iter) &&
+                (!refine_error_view_mean_on() || refine_error_compress_on())) {
+                const auto ensure_window_row = [&](Tensor& row) {
+                    if (!row.is_valid() || row.numel() != n)
+                        row = Tensor::zeros({n}, _splat_data->means().device());
+                };
+                ensure_window_row(_exchange_window_views);
+                coverage_views = _exchange_window_views.ptr<float>();
+                if (!refine_error_view_mean_on()) {
+                    ensure_window_row(_exchange_window_coverage);
+                    coverage_seen = _exchange_window_coverage.ptr<float>();
+                }
+            }
             if (refine_error_view_mean_on()) {
                 mrnf_strategy::launch_fold_densification_error_view_sum_and_zero(
                     _refine_weight_max.ptr<float>(),
                     _splat_data->_densification_info.ptr<float>(),
-                    n, refine_error_compress_on());
+                    n, refine_error_compress_on(), coverage_views);
             } else {
                 mrnf_strategy::launch_fold_densification_error_and_zero(
                     _refine_weight_max.ptr<float>(),
                     _splat_data->_densification_info.ptr<float>(),
-                    n);
+                    n, coverage_views, coverage_seen);
             }
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             auto vis = visibility_accumulator();
@@ -941,7 +959,8 @@ namespace lfs::training {
     void MRNF::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
         for (auto* rows : {&_refine_weight_max, &_rendered_count, &_precomputed_edge_scores, &_edge_score_sum,
                            &_free_mask, &_exchange_importance_sum, &_exchange_importance_peak, &_exchange_birth,
-                           &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_far_field_mask,
+                           &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_exchange_view_count,
+                           &_exchange_window_views, &_exchange_window_coverage, &_far_field_mask,
                            &_ray_depth_state}) {
             visit(*rows);
         }
@@ -1044,7 +1063,9 @@ namespace lfs::training {
             }
         } else if (_exchange_importance_sum.is_valid() || _exchange_importance_peak.is_valid() ||
                    _exchange_birth.is_valid() || _exchange_window_impact_sum.is_valid() ||
-                   _exchange_window_impact_peak.is_valid() || _exchange_impact_written) {
+                   _exchange_window_impact_peak.is_valid() || _exchange_impact_written ||
+                   _exchange_view_count.is_valid() || _exchange_window_views.is_valid() ||
+                   _exchange_window_coverage.is_valid()) {
             reset_exchange_state();
         }
 
@@ -1330,11 +1351,14 @@ namespace lfs::training {
         _exchange_window_impact_sum = lfs::core::Tensor();
         _exchange_window_impact_peak = lfs::core::Tensor();
         _exchange_impact_written = false;
+        _exchange_window_views = lfs::core::Tensor();
+        _exchange_window_coverage = lfs::core::Tensor();
     }
 
     void MRNF::reset_exchange_state() {
         _exchange_importance_sum = lfs::core::Tensor();
         _exchange_importance_peak = lfs::core::Tensor();
+        _exchange_view_count = lfs::core::Tensor();
         _exchange_birth = lfs::core::Tensor();
         reset_exchange_window_outputs();
         _exchange_free_before_growth = lfs::core::Tensor();
@@ -1357,10 +1381,12 @@ namespace lfs::training {
             primary = _exchange_window_impact_sum.clone();
             secondary = _exchange_window_impact_peak.clone();
         }
+        const Tensor window_views = donor_rank_per_view_on() ? donor_window_views() : Tensor();
         reset_exchange_window_outputs();
         if (!_exchange_importance_sum.is_valid()) {
             _exchange_importance_sum = primary.clone();
             _exchange_importance_peak = secondary;
+            _exchange_view_count = window_views;
             _exchange_birth = Tensor::zeros({n}, Device::CUDA);
             _exchange_windows = 1;
             return;
@@ -1377,6 +1403,14 @@ namespace lfs::training {
                                                                       static_cast<float>(views));
             _exchange_importance_sum = _exchange_importance_sum.mul(keep).add(primary);
             _exchange_importance_peak = Tensor();
+            // The covering views fade the same way, so they count the views of the same pass.
+            if (!window_views.is_valid()) {
+                _exchange_view_count = Tensor();
+            } else if (_exchange_view_count.is_valid() && _exchange_view_count.numel() == n) {
+                _exchange_view_count = _exchange_view_count.mul(keep).add(window_views);
+            } else {
+                _exchange_view_count = window_views;
+            }
             ++_exchange_windows;
             return;
         }
@@ -1422,11 +1456,72 @@ namespace lfs::training {
             return {};
         }
         Tensor victims = Tensor::empty({count}, Device::CUDA, DataType::Int64);
+        const bool per_view = donor_rank_per_view_on();
+        Tensor ranked = _exchange_importance_sum;
+        if (per_view) {
+            // Contribution per view that saw the splat: structure seen by few views is not
+            // drained for that alone. The floor keeps a splat seen once from ranking on noise.
+            const Tensor views = _exchange_view_count.is_valid() && _exchange_view_count.numel() == n
+                                     ? _exchange_view_count
+                                     : Tensor::zeros({n}, Device::CUDA);
+            ranked = _exchange_importance_sum.div(views.clamp_min(donor_view_floor())).contiguous();
+        }
         mrnf_strategy::launch_rank_exchange_rows(
-            _exchange_importance_sum.ptr<float>(),
+            ranked.ptr<float>(),
             _exchange_importance_peak.is_valid() ? _exchange_importance_peak.ptr<float>() : nullptr,
             eligible.ptr<bool>(), n, count, victims.ptr<int64_t>());
+        if (per_view) {
+            log_donor_view_counts(victims);
+        }
         return victims;
+    }
+
+    bool MRNF::donor_rank_per_view_on() const {
+        return need_guided_growth_on() && _params->donor_rank_per_view;
+    }
+
+    float MRNF::donor_view_floor() const {
+        constexpr double DONOR_VIEW_FLOOR_SHARE = 0.05;
+        const size_t views = _views ? _views->size() : 0;
+        return static_cast<float>(
+            std::max(1.0, std::round(DONOR_VIEW_FLOOR_SHARE * static_cast<double>(views))));
+    }
+
+    lfs::core::Tensor MRNF::donor_window_views() const {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (refine_error_view_mean_on() && !refine_error_compress_on()) {
+            const auto& info = _splat_data->_densification_info;
+            if (info.is_valid() && info.ndim() == 2 && info.shape()[0] >= 4 && info.shape()[1] == n) {
+                return info.slice(0, 3, 4).squeeze(0).clone();
+            }
+        } else if (_exchange_window_views.is_valid() && _exchange_window_views.numel() == n) {
+            return _exchange_window_views;
+        }
+        return Tensor::zeros({n}, Device::CUDA);
+    }
+
+    void MRNF::log_donor_view_counts(const lfs::core::Tensor& donors) const {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!Logger::get().is_enabled(LogLevel::Debug) || !donors.is_valid() || donors.numel() == 0 ||
+            !_exchange_view_count.is_valid() || _exchange_view_count.numel() != n) {
+            return;
+        }
+        const Tensor active = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not().contiguous()
+                                                    : Tensor::ones_bool({n}, Device::CUDA);
+        Tensor chosen = Tensor::zeros_bool({n}, Device::CUDA);
+        mrnf_strategy::launch_fill_index_mask(donors.ptr<int64_t>(), donors.numel(), chosen.ptr<bool>());
+        const auto median = [n](const Tensor& values, const Tensor& include) {
+            const size_t count = include.count_nonzero();
+            return count == 0 ? 0.0f
+                              : mrnf_strategy::launch_kth_largest(values.ptr<float>(), include.ptr<bool>(), n,
+                                                                  (count + 1) / 2);
+        };
+        LOG_DEBUG("MRNF donors per view: floor {:.0f}, view count median donors {:.1f} active {:.1f}, "
+                  "summed contribution median donors {:.4g} active {:.4g}",
+                  donor_view_floor(), median(_exchange_view_count, chosen), median(_exchange_view_count, active),
+                  median(_exchange_importance_sum, chosen), median(_exchange_importance_sum, active));
     }
 
     void MRNF::record_exchange_births(const lfs::core::Tensor& split_parents) {
@@ -1435,7 +1530,8 @@ namespace lfs::training {
         const size_t n = static_cast<size_t>(_splat_data->size());
         LFS_ASSERT_MSG(_exchange_free_before_growth.is_valid() && n >= before &&
                            _exchange_importance_sum.numel() == before && _exchange_birth.numel() == before &&
-                           (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == before),
+                           (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == before) &&
+                           (!_exchange_view_count.is_valid() || _exchange_view_count.numel() == before),
                        "MRNF growth exchange: importance does not match the splat count");
         // Children landed in previously free slots or in appended rows. They start without
         // importance and are ranked once a full pass has scored them.
@@ -1456,10 +1552,14 @@ namespace lfs::training {
         }
         extend(_exchange_importance_sum);
         extend(_exchange_importance_peak);
+        extend(_exchange_view_count);
         extend(_exchange_birth);
         _exchange_importance_sum = _exchange_importance_sum.masked_fill(born, 0.0f);
         if (_exchange_importance_peak.is_valid()) {
             _exchange_importance_peak = _exchange_importance_peak.masked_fill(born, 0.0f);
+        }
+        if (_exchange_view_count.is_valid()) {
+            _exchange_view_count = _exchange_view_count.masked_fill(born, 0.0f);
         }
         _exchange_birth = _exchange_birth.masked_fill(born, static_cast<float>(_exchange_windows));
         _exchange_free_before_growth = Tensor();
@@ -2280,13 +2380,16 @@ namespace lfs::training {
              _exchange_importance_sum.numel() == old_size &&
              _exchange_birth.is_valid() && _exchange_birth.numel() == old_size &&
              (!_exchange_importance_peak.is_valid() ||
-              _exchange_importance_peak.numel() == old_size));
+              _exchange_importance_peak.numel() == old_size) &&
+             (!_exchange_view_count.is_valid() || _exchange_view_count.numel() == old_size));
         if (!exchange_state_aligned) {
             reset_exchange_state();
         } else if (has_exchange_state) {
             compact(_exchange_importance_sum);
             if (_exchange_importance_peak.is_valid())
                 compact(_exchange_importance_peak);
+            if (_exchange_view_count.is_valid())
+                compact(_exchange_view_count);
             compact(_exchange_birth);
         }
         const bool impact_pair_consistent =
@@ -2309,6 +2412,10 @@ namespace lfs::training {
             _exchange_window_impact_sum = Tensor();
             _exchange_window_impact_peak = Tensor();
             _exchange_impact_written = false;
+        }
+        if (!compact_exchange_output(_exchange_window_views) || !compact_exchange_output(_exchange_window_coverage)) {
+            _exchange_window_views = Tensor();
+            _exchange_window_coverage = Tensor();
         }
         _edge_view_scores = Tensor();
 

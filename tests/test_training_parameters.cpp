@@ -142,6 +142,7 @@ namespace {
             {"refine_error_view_mean", {"mrnf"}},
             {"refine_error_compress", {"mrnf"}},
             {"refine_need_power", {"mrnf"}},
+            {"donor_rank_per_view", {"mrnf"}},
             {"per_splat_bias_correction", {"mrnf"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
