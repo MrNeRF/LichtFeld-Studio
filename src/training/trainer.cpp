@@ -6677,6 +6677,23 @@ namespace lfs::training {
                     assert(support.ndim() == 1 && support.numel() == strategy_->get_model().size());
                     fused_extra_gradients.rendered_count = support.ptr<float>();
                 }
+                lfs::core::Tensor explore_rendered_rows;
+                lfs::core::Tensor explore_peak_rows;
+                if (fastgs_path && !in_popspa) {
+                    auto explore = strategy_->explore_scratch(iter);
+                    const auto rows = static_cast<size_t>(strategy_->get_model().size());
+                    const auto usable = [rows](const lfs::core::Tensor& t) {
+                        return t.is_valid() && t.dtype() == lfs::core::DataType::Float32 && t.numel() == rows;
+                    };
+                    if (usable(explore.first)) {
+                        explore_rendered_rows = std::move(explore.first);
+                        fused_extra_gradients.explore_rendered = explore_rendered_rows.ptr<float>();
+                    }
+                    if (usable(explore.second)) {
+                        explore_peak_rows = std::move(explore.second);
+                        fused_extra_gradients.explore_blend_peak = explore_peak_rows.ptr<float>();
+                    }
+                }
                 if (pose_refinement_ && run_fastgs_gaussian_backward)
                     pose_refinement_->bind_gradients(fused_extra_gradients, iter);
                 lfs::core::Tensor edge_score_scratch;

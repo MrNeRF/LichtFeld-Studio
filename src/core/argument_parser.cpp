@@ -60,6 +60,12 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--refine-need-power", "refine_need_power", Float},
             OptimizationCliBinding{"--donor-rank-per-view", "donor_rank_per_view", Bool},
             OptimizationCliBinding{"--donor-rank-impact", "donor_rank_impact", Bool},
+            OptimizationCliBinding{"--explore-walk", "explore_walk", Bool},
+            OptimizationCliBinding{"--explore-walk-scale", "explore_walk_scale", Float},
+            OptimizationCliBinding{"--explore-gate-peak", "explore_gate_peak", Bool},
+            OptimizationCliBinding{"--explore-scouts", "explore_scouts", Bool},
+            OptimizationCliBinding{"--explore-scout-share", "explore_scout_share", Float},
+            OptimizationCliBinding{"--explore-scout-opacity", "explore_scout_opacity", Float},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -827,11 +833,17 @@ namespace {
             ::args::Flag refine_error_compress(training_group, "refine_error_compress", lfs::core::args::optimization_cli_help("--refine-error-compress"), {"refine-error-compress"});
             ::args::Flag donor_rank_per_view(training_group, "donor_rank_per_view", lfs::core::args::optimization_cli_help("--donor-rank-per-view"), {"donor-rank-per-view"});
             ::args::Flag donor_rank_impact(training_group, "donor_rank_impact", lfs::core::args::optimization_cli_help("--donor-rank-impact"), {"donor-rank-impact"});
+            ::args::Flag explore_walk(training_group, "explore_walk", lfs::core::args::optimization_cli_help("--explore-walk"), {"explore-walk"});
+            ::args::Flag explore_gate_peak(training_group, "explore_gate_peak", lfs::core::args::optimization_cli_help("--explore-gate-peak"), {"explore-gate-peak"});
+            ::args::Flag explore_scouts(training_group, "explore_scouts", lfs::core::args::optimization_cli_help("--explore-scouts"), {"explore-scouts"});
             ::args::Flag per_splat_bias_correction(training_group, "per_splat_bias_correction", lfs::core::args::optimization_cli_help("--per-splat-bias-correction"), {"per-splat-bias-correction"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
             ::args::ValueFlag<float> refine_need_power(training_group, "power", lfs::core::args::optimization_cli_help("--refine-need-power"), {"refine-need-power"});
+            ::args::ValueFlag<float> explore_walk_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--explore-walk-scale"), {"explore-walk-scale"});
+            ::args::ValueFlag<float> explore_scout_share(training_group, "share", lfs::core::args::optimization_cli_help("--explore-scout-share"), {"explore-scout-share"});
+            ::args::ValueFlag<float> explore_scout_opacity(training_group, "opacity", lfs::core::args::optimization_cli_help("--explore-scout-opacity"), {"explore-scout-opacity"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1654,6 +1666,9 @@ namespace {
                                         images_folder_val = cli_option_present({"--images"}) ? std::optional<std::string>(::args::get(images_folder)) : std::optional<std::string>(),
                                         test_every_val = cli_option_present({"--test-every"}) ? std::optional<int>(::args::get(test_every)) : std::optional<int>(),
                                         refine_need_power_val = cli_option_present({"--refine-need-power"}) ? std::optional<float>(::args::get(refine_need_power)) : std::optional<float>(),
+                                        explore_walk_scale_val = cli_option_present({"--explore-walk-scale"}) ? std::optional<float>(::args::get(explore_walk_scale)) : std::optional<float>(),
+                                        explore_scout_share_val = cli_option_present({"--explore-scout-share"}) ? std::optional<float>(::args::get(explore_scout_share)) : std::optional<float>(),
+                                        explore_scout_opacity_val = cli_option_present({"--explore-scout-opacity"}) ? std::optional<float>(::args::get(explore_scout_opacity)) : std::optional<float>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
@@ -1709,6 +1724,9 @@ namespace {
                                         refine_error_compress_flag = bool(refine_error_compress),
                                         donor_rank_per_view_flag = bool(donor_rank_per_view),
                                         donor_rank_impact_flag = bool(donor_rank_impact),
+                                        explore_walk_flag = bool(explore_walk),
+                                        explore_gate_peak_flag = bool(explore_gate_peak),
+                                        explore_scouts_flag = bool(explore_scouts),
                                         per_splat_bias_correction_flag = bool(per_splat_bias_correction),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
@@ -1839,6 +1857,9 @@ namespace {
                 setVal(images_folder_val, ds.images);
                 setVal(test_every_val, ds.test_every);
                 setVal(refine_need_power_val, opt.refine_need_power);
+                setVal(explore_walk_scale_val, opt.explore_walk_scale);
+                setVal(explore_scout_share_val, opt.explore_scout_share);
+                setVal(explore_scout_opacity_val, opt.explore_scout_opacity);
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -1860,6 +1881,12 @@ namespace {
                     opt.donor_rank_per_view = true;
                 if (donor_rank_impact_flag)
                     opt.donor_rank_impact = true;
+                if (explore_walk_flag)
+                    opt.explore_walk = true;
+                if (explore_gate_peak_flag)
+                    opt.explore_gate_peak = true;
+                if (explore_scouts_flag)
+                    opt.explore_scouts = true;
                 if (per_splat_bias_correction_flag)
                     opt.per_splat_bias_correction = true;
                 if (no_opacity_decay_rendered_only_flag)
@@ -2019,6 +2046,9 @@ namespace {
                 note_ds("centralize_dataset", centralize_val.has_value());
                 note_opt("max_cap", max_cap_val.has_value());
                 note_opt("refine_need_power", refine_need_power_val.has_value());
+                note_opt("explore_walk_scale", explore_walk_scale_val.has_value());
+                note_opt("explore_scout_share", explore_scout_share_val.has_value());
+                note_opt("explore_scout_opacity", explore_scout_opacity_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
@@ -2040,6 +2070,9 @@ namespace {
                 note_opt("refine_error_compress", refine_error_compress_flag);
                 note_opt("donor_rank_per_view", donor_rank_per_view_flag);
                 note_opt("donor_rank_impact", donor_rank_impact_flag);
+                note_opt("explore_walk", explore_walk_flag);
+                note_opt("explore_gate_peak", explore_gate_peak_flag);
+                note_opt("explore_scouts", explore_scouts_flag);
                 note_opt("per_splat_bias_correction", per_splat_bias_correction_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());

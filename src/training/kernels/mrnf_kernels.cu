@@ -384,6 +384,148 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.noise_injection");
     }
 
+    __global__ void explore_walk_kernel(
+        float* __restrict__ means,
+        const float* __restrict__ raw_opacities,
+        const bool* __restrict__ frozen_mask,
+        const size_t frozen_mask_size,
+        const ExploreWalk walk,
+        const size_t N,
+        const uint64_t seed) {
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= N)
+            return;
+        const float renders = walk.rendered[idx];
+        walk.rendered[idx] = 0.0f;
+        float peak = INFINITY;
+        if (walk.blend_peak != nullptr) {
+            peak = walk.blend_peak[idx];
+            walk.blend_peak[idx] = peak * walk.peak_decay;
+        }
+        if (!(renders > 0.0f))
+            return;
+        if (walk.scout_renders != nullptr && walk.scout_renders[idx] > 0.0f)
+            walk.scout_renders[idx] = fmaxf(walk.scout_renders[idx] - renders, 0.0f);
+        if (!(walk.amplitude > 0.0f))
+            return;
+        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
+            return;
+
+        const float opacity = d_sigmoid(raw_opacities[idx]);
+        const float lifted = 255.0f * opacity;
+        if (!(lifted > 1.0f))
+            return;
+        const float lift = sqrtf(2.0f * logf(lifted));
+        const float gate = fminf(opacity, peak);
+        const float k = fminf(walk.amplitude * lift * powf(fmaxf(1.0f - gate, 0.0f), 150.0f), 1.0f);
+        if (!(k > 1e-12f))
+            return;
+
+        float w = walk.rotations[idx * 4 + 0], x = walk.rotations[idx * 4 + 1];
+        float y = walk.rotations[idx * 4 + 2], z = walk.rotations[idx * 4 + 3];
+        const float norm2 = w * w + x * x + y * y + z * z;
+        if (!(norm2 > 0.0f))
+            return;
+        const float inv = rsqrtf(norm2);
+        w *= inv;
+        x *= inv;
+        y *= inv;
+        z *= inv;
+        const float R[9] = {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y),
+                            2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x),
+                            2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)};
+
+        curandStatePhilox4_32_10_t rng;
+        curand_init(seed, idx, 0, &rng);
+        const float4 n = curand_normal4(&rng);
+        const float local[3] = {k * expf(walk.log_scales[idx * 3 + 0]) * n.x,
+                                k * expf(walk.log_scales[idx * 3 + 1]) * n.y,
+                                k * expf(walk.log_scales[idx * 3 + 2]) * n.z};
+        for (int d = 0; d < 3; ++d) {
+            const float step = R[3 * d + 0] * local[0] + R[3 * d + 1] * local[1] + R[3 * d + 2] * local[2];
+            if (isfinite(step))
+                means[idx * 3 + d] += step;
+        }
+    }
+
+    void launch_explore_walk(
+        float* means,
+        const float* raw_opacities,
+        const bool* frozen_mask,
+        const size_t frozen_mask_size,
+        const ExploreWalk& walk,
+        const size_t N,
+        const uint64_t seed,
+        void* stream) {
+        if (N == 0)
+            return;
+        LFS_ASSERT_MSG(walk.rendered != nullptr, "explore walk needs the rendered rows");
+        LFS_ASSERT_MSG(walk.amplitude <= 0.0f || (walk.rotations != nullptr && walk.log_scales != nullptr),
+                       "explore walk needs rotations and scales");
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        explore_walk_kernel<<<blocks, threads, 0, s>>>(means, raw_opacities, frozen_mask, frozen_mask_size,
+                                                       walk, N, seed);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_walk");
+    }
+
+    __device__ __forceinline__ float explore_uniform(const uint64_t seed, const uint64_t child) {
+        // splitmix64 of the seed and the child number, top 24 bits.
+        uint64_t h = seed ^ (child * 0x9E3779B97F4A7C15ull);
+        h += 0x9E3779B97F4A7C15ull;
+        h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ull;
+        h = (h ^ (h >> 27)) * 0x94D049BB133111EBull;
+        h ^= h >> 31;
+        return static_cast<float>(h >> 40) * (1.0f / 16777216.0f);
+    }
+
+    __global__ void explore_scouts_kernel(
+        float* __restrict__ raw_opacities,
+        float* __restrict__ scout_renders,
+        const int64_t* __restrict__ first_rows,
+        const int64_t* __restrict__ second_rows,
+        const size_t count,
+        const uint64_t seed,
+        const uint64_t offset,
+        const float share,
+        const float raw_scout,
+        const float renders) {
+        const size_t j = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (j >= count)
+            return;
+        const int64_t rows[2] = {first_rows[j], second_rows[j]};
+        for (int c = 0; c < 2; ++c) {
+            if (explore_uniform(seed, 2 * (offset + j) + static_cast<uint64_t>(c)) < share) {
+                raw_opacities[rows[c]] = raw_scout;
+                if (scout_renders != nullptr)
+                    scout_renders[rows[c]] = renders;
+            }
+        }
+    }
+
+    void launch_explore_scouts(
+        float* raw_opacities,
+        float* scout_renders,
+        const int64_t* first_rows,
+        const int64_t* second_rows,
+        const size_t count,
+        const uint64_t seed,
+        const uint64_t offset,
+        const float share,
+        const float raw_scout,
+        const float renders,
+        void* stream) {
+        if (count == 0 || !(share > 0.0f))
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((count + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        explore_scouts_kernel<<<blocks, threads, 0, s>>>(raw_opacities, scout_renders, first_rows, second_rows,
+                                                         count, seed, offset, share, raw_scout, renders);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_scouts");
+    }
+
     template <bool RenderedOnly>
     __global__ void mrnf_decay_kernel(
         float* __restrict__ raw_opacities,
@@ -394,7 +536,8 @@ namespace lfs::training::mrnf_strategy {
         float scale_decay,
         float train_t,
         size_t N,
-        const float* __restrict__ rendered_count) {
+        const float* __restrict__ rendered_count,
+        const float* __restrict__ opacity_hold) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -407,7 +550,8 @@ namespace lfs::training::mrnf_strategy {
         const float opacity_delta = opacity_decay * t_shrink;
         // A sigmoid/logit round trip loses finite saturated logits even when
         // decay is disabled. Still repair infinities from older checkpoints.
-        if ((!RenderedOnly || rendered_count[idx] > 0.0f) &&
+        const bool held = opacity_hold != nullptr && opacity_hold[idx] > 0.0f;
+        if ((!RenderedOnly || rendered_count[idx] > 0.0f) && !held &&
             (opacity_delta != 0.0f || isinf(raw_opacities[idx]))) {
             raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - opacity_delta);
         }
@@ -429,7 +573,8 @@ namespace lfs::training::mrnf_strategy {
         float train_t,
         size_t N,
         void* stream,
-        const float* rendered_count) {
+        const float* rendered_count,
+        const float* opacity_hold) {
 
         if (N == 0)
             return;
@@ -441,12 +586,12 @@ namespace lfs::training::mrnf_strategy {
         if (rendered_count != nullptr) {
             mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, rendered_count);
+                opacity_decay, scale_decay, train_t, N, rendered_count, opacity_hold);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
         } else {
             mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
                 raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, nullptr);
+                opacity_decay, scale_decay, train_t, N, nullptr, opacity_hold);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
         }
     }

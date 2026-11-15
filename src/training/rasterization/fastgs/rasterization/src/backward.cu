@@ -134,6 +134,7 @@ void fast_lfs::rasterization::backward(
                         edge_score_out,
                         impact_sum_out,
                         impact_peak_out,
+                        fused_adam.explore_blend_peak,
                         primitive_touched,
                         fastgs_status,
                         static_cast<uint>(n_instances),
@@ -245,7 +246,8 @@ void fast_lfs::rasterization::backward(
                                        !fused_adam.scale_reg_log &&
                                        !fused_adam.per_splat_mean_step &&
                                        fused_adam.ray_depth_state == nullptr &&
-                                       fused_adam.rendered_count == nullptr;
+                                       fused_adam.rendered_count == nullptr &&
+                                       fused_adam.explore_rendered == nullptr;
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES, bool DISABLED_FEATURES, bool CAMERA_GRAD>() {
             if (mip_filter) {
                 launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES, DISABLED_FEATURES, CAMERA_GRAD>();

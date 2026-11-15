@@ -1006,6 +1006,12 @@ namespace lfs::core {
                 return std::format("late_lr_anneal must be finite and within (0, 1] (got {})", late_lr_anneal);
             if (!std::isfinite(refine_need_power) || refine_need_power <= 0.0f)
                 return std::format("refine_need_power must be finite and positive (got {})", refine_need_power);
+            if (!std::isfinite(explore_walk_scale) || explore_walk_scale <= 0.0f)
+                return std::format("explore_walk_scale must be finite and positive (got {})", explore_walk_scale);
+            if (!std::isfinite(explore_scout_share) || explore_scout_share < 0.0f || explore_scout_share > 1.0f)
+                return std::format("explore_scout_share must be finite and within [0, 1] (got {})", explore_scout_share);
+            if (!std::isfinite(explore_scout_opacity) || explore_scout_opacity <= 0.0f || explore_scout_opacity >= 1.0f)
+                return std::format("explore_scout_opacity must be finite and within (0, 1) (got {})", explore_scout_opacity);
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (perf_bench_warmup < 0)

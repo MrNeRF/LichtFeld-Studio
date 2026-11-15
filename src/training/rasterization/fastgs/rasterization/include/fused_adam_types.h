@@ -62,6 +62,11 @@ namespace fast_lfs::rasterization {
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
         float* rendered_count = nullptr;
+        // Optional [N] rows for the MRNF exploration walk: +1 for every primitive visible in this
+        // view (preprocess backward), and the running max of the primitive's peak blend weight
+        // alpha * T over its pixels (blend backward, atomic max).
+        float* explore_rendered = nullptr;
+        float* explore_blend_peak = nullptr;
         // Optional persistent device scalars (caller zeros). Filled by preprocess_backward
         // via block-reduce + atomicAdd so the trainer can skip loss-only reg kernels.
         float* scale_reg_loss_out = nullptr;

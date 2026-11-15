@@ -4409,3 +4409,474 @@ TEST(MRNFStrategyTest, DonorRankImpactResumeAndSwitchStartAfresh) {
     EXPECT_FALSE(strategy._exchange_window_impact_sum.is_valid());
     EXPECT_EQ(strategy._exchange_windows, 0);
 }
+
+namespace {
+    param::OptimizationParameters explore_test_params(const bool walk, const bool gate, const bool scouts) {
+        auto p = need_growth_test_params(32);
+        p.grow_until_iter = 5'000;
+        p.explore_walk = walk;
+        p.explore_gate_peak = gate;
+        p.explore_scouts = scouts;
+        return p;
+    }
+
+    float raw_of(const float opacity) { return std::log(opacity / (1.0f - opacity)); }
+
+    std::array<float, 9> host_rotation(float w, float x, float y, float z) {
+        const float inv = 1.0f / std::sqrt(w * w + x * x + y * y + z * z);
+        w *= inv, x *= inv, y *= inv, z *= inv;
+        return {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y),
+                2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x),
+                2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)};
+    }
+
+    // n identical splats at the origin; returns the displacements of one walk launch.
+    struct WalkRun {
+        std::vector<float> step; // [n, 3]
+        std::vector<float> rendered_after;
+        std::vector<float> peak_after;
+    };
+    WalkRun run_walk(const size_t n, const float opacity, const std::array<float, 4>& quat,
+                     const std::array<float, 3>& log_scales, const float amplitude,
+                     const std::vector<float>& rendered, const std::vector<float>* peak, const uint64_t seed) {
+        std::vector<float> q(4 * n), s(3 * n), o(n, raw_of(opacity));
+        for (size_t i = 0; i < n; ++i) {
+            std::copy(quat.begin(), quat.end(), q.begin() + 4 * i);
+            std::copy(log_scales.begin(), log_scales.end(), s.begin() + 3 * i);
+        }
+        auto means = Tensor::zeros({n, 3}, Device::CUDA);
+        auto rot = Tensor::from_vector(q, TensorShape({n, 4}), Device::CUDA);
+        auto scl = Tensor::from_vector(s, TensorShape({n, 3}), Device::CUDA);
+        auto raw = Tensor::from_vector(o, TensorShape({n}), Device::CUDA);
+        auto marks = Tensor::from_vector(rendered, TensorShape({n}), Device::CUDA);
+        Tensor peaks = peak ? Tensor::from_vector(*peak, TensorShape({n}), Device::CUDA) : Tensor();
+        mrnf_strategy::ExploreWalk walk;
+        walk.rotations = rot.ptr<float>();
+        walk.log_scales = scl.ptr<float>();
+        walk.rendered = marks.ptr<float>();
+        walk.blend_peak = peak ? peaks.ptr<float>() : nullptr;
+        walk.amplitude = amplitude;
+        walk.peak_decay = 0.5f;
+        mrnf_strategy::launch_explore_walk(means.ptr<float>(), raw.ptr<float>(), nullptr, 0, walk, n, seed);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return {means.cpu().to_vector(), marks.cpu().to_vector(), peak ? peaks.cpu().to_vector() : std::vector<float>{}};
+    }
+
+    // Sample covariance of the [n, 3] steps (mean zero by construction).
+    std::array<double, 9> step_covariance(const std::vector<float>& step) {
+        std::array<double, 9> c{};
+        const size_t n = step.size() / 3;
+        for (size_t i = 0; i < n; ++i)
+            for (int a = 0; a < 3; ++a)
+                for (int b = 0; b < 3; ++b)
+                    c[3 * a + b] += static_cast<double>(step[3 * i + a]) * step[3 * i + b];
+        for (auto& v : c)
+            v /= static_cast<double>(n);
+        return c;
+    }
+
+    double moved_rows(const std::vector<float>& step) {
+        size_t moved = 0;
+        for (size_t i = 0; i < step.size() / 3; ++i)
+            moved += (step[3 * i] != 0.0f || step[3 * i + 1] != 0.0f || step[3 * i + 2] != 0.0f) ? 1 : 0;
+        return static_cast<double>(moved);
+    }
+} // namespace
+
+// Off (the default), MRNF asks the backward for no exploration rows, keeps the position noise
+// (isotropic in world units whatever the splat's shape, opaque splats still) and the receiver
+// children keep the parent's opacity.
+TEST(MRNFStrategyTest, ExploreOffKeepsTheNoiseAndTheChildren) {
+    constexpr size_t n = 4000;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    {
+        std::vector<float> scales(3 * n), opacity(n);
+        for (size_t i = 0; i < n; ++i) {
+            scales[3 * i] = std::log(0.3f), scales[3 * i + 1] = std::log(0.01f), scales[3 * i + 2] = std::log(0.002f);
+            opacity[i] = raw_of(i % 2 == 0 ? 0.001f : 0.9f);
+        }
+        splat_data.scaling_raw().copy_from(Tensor::from_vector(scales, TensorShape({n, 3}), Device::CUDA));
+        splat_data.opacity_raw().copy_from(Tensor::from_vector(opacity, TensorShape({n, 1}), Device::CUDA));
+    }
+    MRNF strategy(splat_data);
+    auto params = explore_test_params(false, false, false);
+    params.max_cap = 0;
+    strategy.initialize(params);
+    EXPECT_FALSE(strategy.explore_walk_on());
+    const auto scratch = strategy.explore_scratch(100);
+    EXPECT_FALSE(scratch.first.is_valid());
+    EXPECT_FALSE(scratch.second.is_valid());
+    ASSERT_TRUE(strategy._bounds_valid);
+
+    strategy.visibility_accumulator().fill_(1.0f);
+    const auto before = splat_data.means().cpu().to_vector();
+    strategy.inject_noise(100);
+    const auto after = splat_data.means().cpu().to_vector();
+    std::array<double, 3> var{};
+    for (size_t i = 0; i < n; ++i) {
+        for (int d = 0; d < 3; ++d) {
+            const double step = after[3 * i + d] - before[3 * i + d];
+            if (i % 2 == 1)
+                EXPECT_EQ(step, 0.0) << i; // opaque
+            else
+                var[d] += step * step;
+        }
+    }
+    ASSERT_GT(var[0], 0.0);
+    EXPECT_NEAR(var[1] / var[0], 1.0, 0.15);
+    EXPECT_NEAR(var[2] / var[0], 1.0, 0.15);
+    EXPECT_FALSE(strategy._explore_rendered.is_valid());
+
+    // Receiver children at the cap keep the parent's opacity and no scout rows exist.
+    constexpr size_t m = 200;
+    auto cap_data = create_mrnf_test_splat_data(static_cast<int>(m));
+    MRNF capped(cap_data);
+    capped.initialize(need_growth_test_params(static_cast<int>(m)));
+    std::vector<float> error(m, 1.0f), footprint(m, 0.01f);
+    set_need_window(cap_data, capped._refine_weight_max, capped.visibility_accumulator(), error, footprint);
+    capped._exchange_importance_sum = Tensor::full({m}, 10.0f, Device::CUDA);
+    capped._exchange_birth = Tensor::zeros({m}, Device::CUDA);
+    capped._exchange_windows = capped.exchange_warmup_windows() + 1;
+    capped.soft_delete_rows(row_range(m - 2, m));
+    const auto result = capped.grow_and_split(0, 2, capped.compute_refine_candidates(), 3);
+    ASSERT_GT(result.receiver_splits, 0);
+    const auto opacity = cap_data.opacity_raw().cpu().to_vector();
+    const auto free_cpu = capped._free_mask.cpu();
+    for (size_t row = 0; row < m; ++row)
+        if (!free_cpu.ptr<bool>()[row])
+            EXPECT_EQ(opacity[row], 0.0f) << row;
+    EXPECT_FALSE(capped._explore_scout_renders.is_valid());
+}
+
+// The walk is a step in units of the splat's own sigma along its own axes: over many draws the
+// displacement covariance is k^2 R diag(s^2) R^T with k = min(A E(o) (1 - o)^150, 1).
+TEST(MRNFStrategyTest, ExploreWalkCovarianceFollowsTheSplatShape) {
+    constexpr size_t n = 40'000;
+    const std::array<float, 4> quat{0.9f, 0.3f, -0.2f, 0.25f};
+    const std::array<float, 3> log_s{std::log(0.1f), std::log(0.02f), std::log(0.005f)};
+    const auto R = host_rotation(quat[0], quat[1], quat[2], quat[3]);
+    const std::vector<float> rendered(n, 1.0f);
+    const float o = 0.01f;
+    const float lift = std::sqrt(2.0f * std::log(255.0f * o));
+    const float gate = std::pow(1.0f - o, 150.0f);
+    for (const float amplitude : {1.0f, 8.0f}) {
+        SCOPED_TRACE(amplitude);
+        const double k = std::min(amplitude * lift * gate, 1.0f);
+        if (amplitude == 8.0f)
+            ASSERT_EQ(k, 1.0); // capped at one sigma per step
+        const auto run = run_walk(n, o, quat, log_s, amplitude, rendered, nullptr, 1234);
+        const auto cov = step_covariance(run.step);
+        double scale = 0.0;
+        for (int a = 0; a < 3; ++a) {
+            for (int b = 0; b < 3; ++b) {
+                double expected = 0.0;
+                for (int j = 0; j < 3; ++j)
+                    expected += R[3 * a + j] * R[3 * b + j] * std::exp(2.0 * log_s[j]);
+                expected *= k * k;
+                scale = std::max(scale, std::abs(expected));
+                EXPECT_NEAR(cov[3 * a + b], expected, 0.03 * k * k * 0.01) << a << "," << b;
+            }
+        }
+        EXPECT_GT(scale, 0.0);
+    }
+    // At or below 1/255 opacity nothing moves.
+    const auto faint = run_walk(64, 1.0f / 300.0f, quat, log_s, 8.0f, std::vector<float>(64, 1.0f), nullptr, 7);
+    EXPECT_EQ(moved_rows(faint.step), 0.0);
+}
+
+// A(t) = 8 x 0.01^(t / iterations), not stopping at grow_until_iter; only the splats the backward
+// marked as rendered in this step walk, and the step clears the marks.
+TEST(MRNFStrategyTest, ExploreWalkAmplitudeFollowsTheRunAndOnlyRenderedSplatsWalk) {
+    constexpr size_t n = 10;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    splat_data.opacity_raw().fill_(raw_of(0.01f));
+    splat_data.scaling_raw().fill_(std::log(0.05f));
+    MRNF strategy(splat_data);
+    auto params = explore_test_params(true, false, false);
+    strategy.initialize(params);
+    ASSERT_TRUE(strategy.explore_walk_on());
+    EXPECT_NEAR(strategy.explore_walk_amplitude(0), 8.0f, 1e-5f);
+    EXPECT_NEAR(strategy.explore_walk_amplitude(5'000), 0.8f, 1e-5f);
+    EXPECT_NEAR(strategy.explore_walk_amplitude(10'000), 0.08f, 1e-6f);
+    params.explore_walk_scale = 0.5f;
+    strategy.set_optimization_params(params);
+    EXPECT_NEAR(strategy.explore_walk_amplitude(0), 4.0f, 1e-5f);
+
+    auto [rendered, peak] = strategy.explore_scratch(7'000);
+    ASSERT_TRUE(rendered.is_valid());
+    EXPECT_FALSE(peak.is_valid()); // no peak row without explore_gate_peak
+    ASSERT_EQ(rendered.numel(), n);
+    std::vector<float> marks(n, 0.0f);
+    marks[2] = marks[5] = 1.0f;
+    rendered.copy_(Tensor::from_vector(marks, TensorShape({n}), Device::CUDA));
+    const auto before = splat_data.means().cpu().to_vector();
+    strategy.explore_step(7'000); // past grow_until_iter: the walk goes on
+    const auto after = splat_data.means().cpu().to_vector();
+    for (size_t i = 0; i < n; ++i) {
+        const bool moved = after[3 * i] != before[3 * i] || after[3 * i + 1] != before[3 * i + 1] ||
+                           after[3 * i + 2] != before[3 * i + 2];
+        EXPECT_EQ(moved, marks[i] > 0.0f) << i;
+    }
+    EXPECT_EQ(strategy._explore_rendered.cpu().to_vector(), std::vector<float>(n, 0.0f));
+
+    // Opaque splats stay put.
+    splat_data.opacity_raw().fill_(raw_of(0.9f));
+    strategy.explore_scratch(7'001).first.fill_(1.0f);
+    const auto opaque_before = splat_data.means().cpu().to_vector();
+    strategy.explore_step(7'001);
+    EXPECT_EQ(splat_data.means().cpu().to_vector(), opaque_before);
+}
+
+// With the peak gate an opaque splat hidden behind others (low peak blend weight) walks and a
+// visible opaque one does not; without it neither walks. The peak fades by the given factor.
+TEST(MRNFStrategyTest, ExploreGatePeakWalksHiddenOpaqueSplatsOnly) {
+    constexpr size_t n = 400;
+    const std::array<float, 4> quat{1.0f, 0.0f, 0.0f, 0.0f};
+    const std::array<float, 3> log_s{std::log(0.05f), std::log(0.05f), std::log(0.05f)};
+    std::vector<float> peak(n);
+    for (size_t i = 0; i < n; ++i)
+        peak[i] = i < n / 2 ? 0.001f : 0.85f; // hidden, then visible
+    const std::vector<float> rendered(n, 1.0f);
+    const auto gated = run_walk(n, 0.9f, quat, log_s, 8.0f, rendered, &peak, 99);
+    for (size_t i = 0; i < n; ++i) {
+        const bool moved = gated.step[3 * i] != 0.0f || gated.step[3 * i + 1] != 0.0f || gated.step[3 * i + 2] != 0.0f;
+        EXPECT_EQ(moved, i < n / 2) << i;
+        EXPECT_FLOAT_EQ(gated.peak_after[i], 0.5f * peak[i]) << i;
+    }
+    const auto plain = run_walk(n, 0.9f, quat, log_s, 8.0f, rendered, nullptr, 99);
+    EXPECT_EQ(moved_rows(plain.step), 0.0);
+
+    // The strategy keeps the peak row only with the gate on, and fades it to half in 800 steps.
+    auto splat_data = create_mrnf_test_splat_data(4, 0);
+    MRNF strategy(splat_data);
+    strategy.initialize(explore_test_params(true, true, false));
+    ASSERT_TRUE(strategy.explore_gate_peak_on());
+    auto [marks, peaks] = strategy.explore_scratch(100);
+    ASSERT_TRUE(peaks.is_valid());
+    peaks.fill_(1.0f);
+    for (int step = 0; step < 800; ++step)
+        strategy.explore_step(100 + step);
+    for (const float v : strategy._explore_peak.cpu().to_vector())
+        EXPECT_NEAR(v, 0.5f, 1e-3f);
+}
+
+// The real backward marks every splat visible in the view and writes each splat's peak blend
+// weight: high for the front splat, low for the one mostly hidden behind it.
+TEST(MRNFStrategyTest, ExploreBackwardWritesVisibilityAndPeakBlendWeight) {
+    constexpr int width = 64, height = 48;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    auto R = Tensor::eye(3, Device::CUDA);
+    auto T = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 4.0f}, TensorShape({3}), Device::CUDA);
+    Camera camera(R, T, 60.0f, 60.0f, width / 2.0f, height / 2.0f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "explore", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+    const std::vector<float> means{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    const std::vector<float> rotations{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    const std::vector<float> opacities{raw_of(0.95f), raw_of(0.8f)};
+    const std::vector<float> sh0{0.4f / sh_c0, -0.4f / sh_c0, 0.0f, 0.0f, 0.0f, 0.0f};
+    SplatData splat_data(0, Tensor::from_vector(means, TensorShape({2, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({2, 1, 3}), Device::CUDA),
+                         Tensor::zeros({2, 0, 3}, Device::CUDA),
+                         Tensor::full({2, 3}, -1.6f, Device::CUDA),
+                         Tensor::from_vector(rotations, TensorShape({2, 4}), Device::CUDA),
+                         Tensor::from_vector(opacities, TensorShape({2, 1}), Device::CUDA), 1.0f);
+
+    MRNF strategy(splat_data);
+    strategy.initialize(explore_test_params(true, true, false));
+    auto [rendered, peak] = strategy.explore_scratch(100);
+    ASSERT_TRUE(rendered.is_valid());
+    ASSERT_TRUE(peak.is_valid());
+
+    auto forward = fast_rasterize_forward(camera, splat_data, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    strategy.get_optimizer().zero_grad(0);
+    FastGSFusedExtraGradients fused;
+    fused.explore_rendered = rendered.ptr<float>();
+    fused.explore_blend_peak = peak.ptr<float>();
+    fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image), splat_data,
+                            strategy.get_optimizer(), {}, {}, DensificationType::None, 1, fused);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(rendered.cpu().to_vector(), (std::vector<float>{1.0f, 1.0f}));
+    const auto w = peak.cpu().to_vector();
+    EXPECT_GT(w[0], 0.8f);
+    EXPECT_LE(w[0], 1.0f);
+    EXPECT_GT(w[1], 0.0f);
+    EXPECT_LT(w[1], 0.5f * w[0]);
+
+    // Without the options the backward gets no rows.
+    MRNF off(splat_data);
+    off.initialize(explore_test_params(false, false, false));
+    EXPECT_FALSE(off.explore_scratch(100).first.is_valid());
+}
+
+// Scouts: a seeded share of the children (each child of a split draws) gets the scout opacity and a
+// render count; the same seed gives the same children, the share tapers to 0 by grow_until_iter, and
+// at the cap every other property is the receiver rule's.
+TEST(MRNFStrategyTest, ExploreScoutsShareOpacityTaperAndSeed) {
+    constexpr size_t pairs = 20'000;
+    const auto draw = [&](const uint64_t seed, const float share) {
+        auto opacity = Tensor::zeros({2 * pairs}, Device::CUDA);
+        auto renders = Tensor::zeros({2 * pairs}, Device::CUDA);
+        const auto first = row_range(0, pairs);
+        const auto second = row_range(pairs, 2 * pairs);
+        mrnf_strategy::launch_explore_scouts(opacity.ptr<float>(), renders.ptr<float>(), first.ptr<int64_t>(),
+                                             second.ptr<int64_t>(), pairs, seed, 0, share, raw_of(0.012f), 20.0f);
+        return std::pair{opacity.cpu().to_vector(), renders.cpu().to_vector()};
+    };
+    const auto [opacity, renders] = draw(42, 0.3f);
+    size_t scouts = 0;
+    for (size_t i = 0; i < 2 * pairs; ++i) {
+        const bool scout = opacity[i] != 0.0f;
+        scouts += scout ? 1 : 0;
+        if (scout) {
+            EXPECT_FLOAT_EQ(opacity[i], raw_of(0.012f));
+            EXPECT_EQ(renders[i], 20.0f);
+        } else {
+            EXPECT_EQ(renders[i], 0.0f);
+        }
+    }
+    EXPECT_NEAR(static_cast<double>(scouts) / (2.0 * pairs), 0.3, 0.01);
+    EXPECT_EQ(draw(42, 0.3f).first, opacity);
+    EXPECT_NE(draw(43, 0.3f).first, opacity);
+
+    constexpr size_t m = 200;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(m));
+    MRNF strategy(splat_data);
+    auto params = explore_test_params(false, false, true);
+    params.max_cap = static_cast<int>(m);
+    params.explore_scout_share = 1.0f;
+    strategy.initialize(params);
+    EXPECT_FLOAT_EQ(strategy.explore_scout_share_at(0), 1.0f);
+    EXPECT_NEAR(strategy.explore_scout_share_at(2'500), 0.5f, 1e-6f);
+    EXPECT_FLOAT_EQ(strategy.explore_scout_share_at(5'000), 0.0f);
+    EXPECT_FLOAT_EQ(strategy.explore_scout_share_at(7'000), 0.0f);
+
+    std::vector<float> error(m, 1.0f), footprint(m, 0.01f);
+    set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+    strategy._exchange_importance_sum = Tensor::full({m}, 10.0f, Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({m}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    strategy.soft_delete_rows(row_range(m - 2, m));
+    const auto result = strategy.grow_and_split(0, 2, strategy.compute_refine_candidates(), 3);
+    ASSERT_EQ(result.receiver_splits, 5);
+    const auto split_opacity = splat_data.opacity_raw().cpu().to_vector();
+    const auto scales = splat_data.scaling_raw().cpu().to_vector();
+    ASSERT_TRUE(strategy._explore_scout_renders.is_valid());
+    const auto held = strategy._explore_scout_renders.cpu().to_vector();
+    size_t scout_rows = 0;
+    for (size_t row = 0; row < splat_data.size(); ++row) {
+        if (held[row] > 0.0f) {
+            ++scout_rows;
+            EXPECT_FLOAT_EQ(split_opacity[row], raw_of(0.012f)) << row;
+            EXPECT_NEAR(scales[3 * row + 0], std::log(0.5f), 1e-6f) << row;
+            EXPECT_NEAR(scales[3 * row + 1], std::log(0.7f), 1e-6f) << row;
+        } else {
+            EXPECT_EQ(split_opacity[row], 0.0f) << row;
+        }
+    }
+    EXPECT_EQ(scout_rows, 10u); // both children of each of the 5 splits at share 1
+
+    // At grow_until_iter the share is 0: the refills are plain receivers.
+    auto late_data = create_mrnf_test_splat_data(static_cast<int>(m));
+    MRNF late(late_data);
+    late.initialize(params);
+    set_need_window(late_data, late._refine_weight_max, late.visibility_accumulator(), error, footprint);
+    late.soft_delete_rows(row_range(m - 2, m));
+    const auto late_result = late.grow_and_split(5'000, 2, late.compute_refine_candidates(), 0);
+    ASSERT_GT(late_result.receiver_splits, 0);
+    for (const float v : late_data.opacity_raw().cpu().to_vector())
+        EXPECT_EQ(v, 0.0f);
+}
+
+// A scout skips the opacity decay until the backward has rendered it 20 times; then the normal
+// rules apply. Other splats decay as before.
+TEST(MRNFStrategyTest, ExploreScoutsSkipOpacityDecayUntilRendered) {
+    auto splat_data = create_mrnf_test_splat_data(4, 0);
+    splat_data.opacity_raw().fill_(raw_of(0.012f));
+    MRNF strategy(splat_data);
+    auto params = explore_test_params(false, false, true);
+    params.opacity_decay = 0.004f;
+    strategy.initialize(params);
+    auto [rendered, peak] = strategy.explore_scratch(100);
+    ASSERT_TRUE(rendered.is_valid());
+    EXPECT_FALSE(peak.is_valid());
+    strategy._explore_scout_renders.copy_(Tensor::from_vector(std::vector<float>{20.0f, 0.0f, 20.0f, 0.0f},
+                                                              TensorShape({4}), Device::CUDA));
+    strategy.apply_decay(100);
+    auto opacity = splat_data.opacity_raw().cpu().to_vector();
+    EXPECT_FLOAT_EQ(opacity[0], raw_of(0.012f));
+    EXPECT_FLOAT_EQ(opacity[2], raw_of(0.012f));
+    EXPECT_LT(opacity[1], raw_of(0.012f) - 0.1f);
+
+    // Row 0 is rendered every step, row 2 never: after 19 renders row 0 is still held, after 20 not.
+    for (int step = 0; step < 20; ++step) {
+        auto marks = strategy.explore_scratch(100 + step).first;
+        marks.copy_(Tensor::from_vector(std::vector<float>{1.0f, 1.0f, 0.0f, 0.0f}, TensorShape({4}), Device::CUDA));
+        strategy.explore_step(100 + step);
+        if (step == 18)
+            EXPECT_EQ(strategy._explore_scout_renders.cpu().to_vector()[0], 1.0f);
+    }
+    EXPECT_EQ(strategy._explore_scout_renders.cpu().to_vector(), (std::vector<float>{0.0f, 0.0f, 20.0f, 0.0f}));
+    strategy.apply_decay(200);
+    opacity = splat_data.opacity_raw().cpu().to_vector();
+    EXPECT_LT(opacity[0], raw_of(0.012f) - 0.1f);
+    EXPECT_FLOAT_EQ(opacity[2], raw_of(0.012f));
+}
+
+// The exploration rows follow their splats: freed slots start afresh, compaction and the Morton
+// reorder carry them, appended rows start at zero.
+TEST(MRNFStrategyTest, ExploreRowsFollowTheirSplats) {
+    const std::vector<float> values{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f};
+    auto splat_data = create_mrnf_test_splat_data(10, 0);
+    MRNF strategy(splat_data);
+    strategy.initialize(explore_test_params(true, true, true));
+    strategy.explore_scratch(100);
+    const auto fill = [&](const size_t n) {
+        const std::vector<float> v(values.begin(), values.begin() + n);
+        strategy._explore_rendered.copy_(Tensor::from_vector(v, TensorShape({n}), Device::CUDA));
+        strategy._explore_peak.copy_(Tensor::from_vector(v, TensorShape({n}), Device::CUDA).mul(2.0f));
+        strategy._explore_scout_renders.copy_(Tensor::from_vector(v, TensorShape({n}), Device::CUDA).mul(3.0f));
+    };
+    fill(10);
+    strategy.soft_delete_rows(row_range(4, 5));
+    for (const auto* row : {&strategy._explore_rendered, &strategy._explore_peak, &strategy._explore_scout_renders})
+        EXPECT_EQ(row->cpu().to_vector()[4], 0.0f);
+
+    fill(10);
+    const auto mask = Tensor::from_vector(
+        std::vector<bool>{true, false, false, false, false, false, false, false, false, true}, TensorShape({10}),
+        Device::CUDA);
+    strategy.remove_gaussians(mask);
+    ASSERT_EQ(splat_data.size(), 8u);
+    const std::vector<float> kept(values.begin() + 1, values.end() - 1);
+    EXPECT_EQ(strategy._explore_rendered.cpu().to_vector(), kept);
+    EXPECT_EQ(strategy._explore_peak.cpu().to_vector().front(), 2.0f * kept.front());
+    EXPECT_EQ(strategy._explore_scout_renders.cpu().to_vector().back(), 3.0f * kept.back());
+
+    // Two appended rows start at zero; the prefix is kept.
+    auto bigger = create_mrnf_test_splat_data(4, 0);
+    {
+        const std::vector<float> means{3.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+        bigger.means().copy_from(Tensor::from_vector(means, TensorShape({4, 3}), Device::CUDA));
+    }
+    auto params = explore_test_params(true, true, true);
+    params.max_cap = 8;
+    MRNF reorder(bigger);
+    reorder.initialize(params);
+    reorder.explore_scratch(100);
+    reorder._explore_rendered.copy_(Tensor::from_vector(std::vector<float>{10.0f, 20.0f, 30.0f, 40.0f},
+                                                        TensorShape({4}), Device::CUDA));
+    const auto result = morton::apply_morton_reorder(
+        bigger, &reorder.get_optimizer(), nullptr,
+        [&](const morton::RowVisitor& visit) { reorder.for_each_gaussian_row(visit); });
+    ASSERT_TRUE(result.applied);
+    const auto permutation = result.permutation.cpu();
+    const auto got = reorder._explore_rendered.cpu().to_vector();
+    for (size_t i = 0; i < 4; ++i)
+        EXPECT_EQ(got[i], 10.0f * static_cast<float>(permutation.ptr<int64_t>()[i] + 1)) << i;
+
+    reorder._explore_rendered = Tensor::from_vector(std::vector<float>{1.0f, 2.0f}, TensorShape({2}), Device::CUDA);
+    reorder.ensure_explore_rows();
+    EXPECT_EQ(reorder._explore_rendered.cpu().to_vector(), (std::vector<float>{1.0f, 2.0f, 0.0f, 0.0f}));
+}

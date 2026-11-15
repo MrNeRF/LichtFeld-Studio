@@ -183,6 +183,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         if constexpr (!DISABLED_FEATURES) {
             if (visible && fused_adam.rendered_count != nullptr)
                 fused_adam.rendered_count[primitive_idx] += 1.0f;
+            if (visible && fused_adam.explore_rendered != nullptr)
+                fused_adam.explore_rendered[primitive_idx] += 1.0f;
         }
 
         // Gate the accumulated image derivative. Negative colour may recover
@@ -717,6 +719,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* __restrict__ edge_score_out,
         float* __restrict__ impact_sum_out,
         float* __restrict__ impact_peak_out,
+        float* __restrict__ blend_peak_out,
         uint* __restrict__ primitive_touched,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
@@ -924,6 +927,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             float h_dy;
             float u[kU];
             float peak;
+            float weight_peak;
             bool contributed;
         };
         // Walks one staged splat over the thread's two pixels, back to front.
@@ -955,6 +959,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 const bool saturated = unclamped >= config::max_fragment_alpha;
                 const float T_before = accepted ? T[k] * rcp_approx(1.0f - alpha) : T[k];
                 const float w = alpha * T_before;
+                sums.weight_peak = fmaxf(sums.weight_peak, w);
                 const float3 pixel_grad_color = accepted ? grad_c[k] : make_float3(0.0f);
                 const float pixel_grad_depth = accepted ? grad_d[k] : 0.0f;
                 const float normal_dot_grad = NORMAL_CHANNEL && accepted ? dot(normal, grad_n[k]) : 0.0f;
@@ -1176,6 +1181,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                     if ((lane & 15u) == 0u && peak > 0.0f)
                         atomicMax(reinterpret_cast<int*>(impact_peak_out + s_primitive[slot]), __float_as_int(peak));
                 }
+                if (blend_peak_out != nullptr) {
+                    float weight_peak = fmaxf(upper ? second.weight_peak : first.weight_peak,
+                                              __shfl_xor_sync(0xffffffffu, upper ? first.weight_peak : second.weight_peak, 16));
+                    weight_peak = reduce_max<8>(weight_peak);
+                    if ((lane & 15u) == 0u && weight_peak > 0.0f)
+                        atomicMax(reinterpret_cast<int*>(blend_peak_out + s_primitive[slot]), __float_as_int(weight_peak));
+                }
             }
             while (mask != 0u) {
                 const uint slot = warp_base + (__ffs(mask) - 1);
@@ -1214,6 +1226,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float peak = reduce_max<16>(sums.peak);
                         if (lane == 0u && peak > 0.0f)
                             atomicMax(reinterpret_cast<int*>(impact_peak_out + s_primitive[slot]), __float_as_int(peak));
+                    }
+                    if (blend_peak_out != nullptr) {
+                        const float weight_peak = reduce_max<16>(sums.weight_peak);
+                        if (lane == 0u && weight_peak > 0.0f)
+                            atomicMax(reinterpret_cast<int*>(blend_peak_out + s_primitive[slot]), __float_as_int(weight_peak));
                     }
                 }
             }

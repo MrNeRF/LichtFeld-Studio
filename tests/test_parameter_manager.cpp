@@ -674,6 +674,27 @@ namespace {
         EXPECT_NE(params.validate().find("refine_need_power"), std::string::npos);
         params.refine_need_power = std::numeric_limits<float>::quiet_NaN();
         EXPECT_NE(params.validate().find("refine_need_power"), std::string::npos);
+        params = {};
+        params.explore_walk_scale = 2.0f;
+        params.explore_scout_share = 1.0f;
+        params.explore_scout_opacity = 0.5f;
+        EXPECT_TRUE(params.validate().empty());
+        params.explore_scout_share = 0.0f;
+        EXPECT_TRUE(params.validate().empty());
+        params.explore_walk_scale = 0.0f;
+        EXPECT_NE(params.validate().find("explore_walk_scale"), std::string::npos);
+        params = {};
+        params.explore_scout_share = 1.5f;
+        EXPECT_NE(params.validate().find("explore_scout_share"), std::string::npos);
+        params.explore_scout_share = -0.1f;
+        EXPECT_NE(params.validate().find("explore_scout_share"), std::string::npos);
+        params = {};
+        params.explore_scout_opacity = 0.0f;
+        EXPECT_NE(params.validate().find("explore_scout_opacity"), std::string::npos);
+        params.explore_scout_opacity = 1.0f;
+        EXPECT_NE(params.validate().find("explore_scout_opacity"), std::string::npos);
+        params.explore_scout_opacity = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("explore_scout_opacity"), std::string::npos);
     }
 
     // Catches a short schedule (e.g. --iter 30) rounding an interval to zero, which validation rejects.

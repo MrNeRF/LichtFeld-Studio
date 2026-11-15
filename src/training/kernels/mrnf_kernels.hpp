@@ -146,7 +146,51 @@ namespace lfs::training::mrnf_strategy {
         float train_t,
         size_t N,
         void* stream = nullptr,
-        const float* rendered_count = nullptr);
+        const float* rendered_count = nullptr,
+        const float* opacity_hold = nullptr);
+
+    // Exploration walk for need-guided growth, one launch per training step after the backward.
+    // For every row the backward marked as visible in this view (rendered > 0):
+    //   mean += k * R diag(exp(log_scale)) z,  z ~ N(0, 1)^3,  R from the row's quaternion,
+    //   k = min(amplitude * E(o) * (1 - g)^150, 1),  E(o) = sqrt(2 ln(255 o)) (0 at o <= 1/255),
+    //   g = o, or min(o, blend_peak) when blend_peak is given.
+    // The launch also clears rendered, multiplies blend_peak by peak_decay (a running maximum the
+    // backward raises with atomic max) and counts renders off scout_renders (floored at 0).
+    // amplitude <= 0 moves nothing. Frozen rows do not move.
+    struct ExploreWalk {
+        const float* rotations = nullptr;  // [N, 4] raw quaternions (w, x, y, z)
+        const float* log_scales = nullptr; // [N, 3]
+        float* rendered = nullptr;         // [N] visible-view count of this step, cleared here
+        float* blend_peak = nullptr;       // [N] optional running peak blend weight
+        float* scout_renders = nullptr;    // [N] optional renders a scout still needs
+        float amplitude = 0.0f;
+        float peak_decay = 1.0f;
+    };
+    void launch_explore_walk(
+        float* means,
+        const float* raw_opacities,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        const ExploreWalk& walk,
+        size_t N,
+        uint64_t seed,
+        void* stream = nullptr);
+
+    // Deterministic scout draw: child j of the chunk (first child at first_rows[j], second at
+    // second_rows[j]) becomes a scout when hash(seed, 2 (offset + j) + c) < share; a scout gets
+    // raw opacity raw_scout and scout_renders = renders (when scout_renders is given).
+    void launch_explore_scouts(
+        float* raw_opacities,
+        float* scout_renders,
+        const int64_t* first_rows,
+        const int64_t* second_rows,
+        size_t count,
+        uint64_t seed,
+        uint64_t offset,
+        float share,
+        float raw_scout,
+        float renders,
+        void* stream = nullptr);
 
     /**
      * Compute percentile-based bounding box on GPU.

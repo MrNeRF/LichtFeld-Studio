@@ -65,6 +65,8 @@ namespace lfs::training {
         };
         fused_adam.enabled = optimizer_fused.enabled;
         fused_adam.rendered_count = fused_extra_gradients.rendered_count;
+        fused_adam.explore_rendered = fused_extra_gradients.explore_rendered;
+        fused_adam.explore_blend_peak = fused_extra_gradients.explore_blend_peak;
         fused_adam.beta1 = optimizer_fused.beta1;
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;

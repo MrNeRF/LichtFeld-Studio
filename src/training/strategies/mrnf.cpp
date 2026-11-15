@@ -63,6 +63,12 @@ namespace lfs::training {
         // not leave a faint cohort.
         constexpr float MRNF_RECEIVER_CROSS_AXIS_SCALE = 0.7f;
         constexpr float MRNF_RECEIVER_OPACITY_SCALE = 1.0f;
+        // Exploration walk: A(t) = scale x 8 x 0.01^(t / iterations); the peak blend weight halves
+        // every 800 steps; a scout skips the opacity decay until it has been rendered 20 times.
+        constexpr float MRNF_EXPLORE_WALK_START = 8.0f;
+        constexpr float MRNF_EXPLORE_WALK_END_RATIO = 0.01f;
+        constexpr float MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS = 800.0f;
+        constexpr float MRNF_EXPLORE_SCOUT_RENDERS = 20.0f;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -885,6 +891,8 @@ namespace lfs::training {
         }
 
         if (iter >= static_cast<int>(_params->stop_refine)) {
+            // The exploration walk follows its schedule over the whole run.
+            explore_step(iter);
             // Still honor a late degree schedule after topology freeze (no-op
             // once at max). Metadata-only on q16.
             if (degree_bump_due) {
@@ -941,8 +949,15 @@ namespace lfs::training {
             _splat_data->_densification_info.zero_();
         }
 
-        if (_bounds_valid) {
-            inject_noise(iter);
+        if (explore_walk_on()) {
+            explore_step(iter); // replaces the position noise
+        } else {
+            if (_bounds_valid) {
+                inject_noise(iter);
+            }
+            if (explore_scouts_on()) {
+                explore_step(iter); // counts the scouts' renders
+            }
         }
 
         if (refining_this_iter) {
@@ -961,7 +976,7 @@ namespace lfs::training {
                            &_free_mask, &_exchange_importance_sum, &_exchange_importance_peak, &_exchange_birth,
                            &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_exchange_view_count,
                            &_exchange_window_views, &_exchange_window_coverage, &_far_field_mask,
-                           &_ray_depth_state}) {
+                           &_ray_depth_state, &_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
             visit(*rows);
         }
     }
@@ -1148,6 +1163,12 @@ namespace lfs::training {
         mark_as_free(indices);
         set_deleted_mask_rows(*_splat_data, _free_mask, indices, true);
 
+        // A freed slot starts its exploration rows afresh for the child that fills it.
+        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
+            if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
+                rows->index_put_(indices, Tensor::zeros({static_cast<size_t>(indices.numel())}, rows->device()));
+        }
+
         // Zero quaternion so deleted rows exit early in preprocessing.
         auto zero_rotation = Tensor::zeros({static_cast<size_t>(indices.numel()), 4}, _splat_data->rotation_raw().device());
         _splat_data->rotation_raw().index_put_(indices, zero_rotation);
@@ -1280,10 +1301,18 @@ namespace lfs::training {
             iter, n_active, _params->max_cap, pruned, growth.candidates, growth.replacement_count, growth.growth_count,
             growth.receiver_splits, growth.exchange_victims, quota, need ? "need" : "error", weight_median, weight_p95,
             share_below(0.1f), share_below(0.5f), kth(opacity, active, n_active, 0.5));
+        std::string explore;
+        if (explore_scouts_on() && _explore_scout_renders.is_valid() && _explore_scout_renders.numel() == n) {
+            explore = std::format(", scouts held {}",
+                                  (_explore_scout_renders > 0.0f).logical_and(active).count_nonzero());
+        }
+        if (explore_walk_on()) {
+            explore += std::format(", walk amplitude {:.3g}", explore_walk_amplitude(iter));
+        }
         if (need) {
-            LOG_INFO("{}", line);
+            LOG_INFO("{}{}", line, explore);
         } else {
-            LOG_DEBUG("{}", line);
+            LOG_DEBUG("{}{}", line, explore);
         }
     }
 
@@ -1486,6 +1515,92 @@ namespace lfs::training {
 
     bool MRNF::donor_rank_impact_on() const {
         return need_guided_growth_on() && _params->donor_rank_impact;
+    }
+
+    bool MRNF::explore_walk_on() const {
+        // Not tied to the topology freeze: the walk follows its schedule over the whole run.
+        return _params && _params->need_guided_growth && _params->explore_walk && !_params->gut;
+    }
+
+    bool MRNF::explore_gate_peak_on() const {
+        return explore_walk_on() && _params->explore_gate_peak;
+    }
+
+    bool MRNF::explore_scouts_on() const {
+        return need_guided_growth_on() && _params->explore_scouts;
+    }
+
+    float MRNF::explore_walk_amplitude(const int iter) const {
+        const double total = static_cast<double>(std::max<size_t>(_params->iterations, 1));
+        const double t = std::clamp(static_cast<double>(iter) / total, 0.0, 1.0);
+        return static_cast<float>(static_cast<double>(_params->explore_walk_scale) * MRNF_EXPLORE_WALK_START *
+                                  std::pow(static_cast<double>(MRNF_EXPLORE_WALK_END_RATIO), t));
+    }
+
+    float MRNF::explore_scout_share_at(const int iter) const {
+        constexpr double pi = 3.14159265358979323846;
+        const double end = static_cast<double>(_params->grow_until_iter);
+        const double u = end > 0.0 ? std::clamp(static_cast<double>(iter) / end, 0.0, 1.0) : 1.0;
+        return static_cast<float>(static_cast<double>(_params->explore_scout_share) * 0.5 * (1.0 + std::cos(pi * u)));
+    }
+
+    void MRNF::ensure_explore_rows() {
+        using namespace lfs::core;
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        // The renders feed the walk and the scouts' count; FastGS writes them, GUT does not.
+        const bool scouts = explore_scouts_on() && !_params->gut;
+        const auto size_row = [&](Tensor& row, const bool wanted) {
+            if (!wanted) {
+                row = Tensor();
+                return;
+            }
+            if (!row.is_valid() || row.ndim() != 1 || row.numel() > n) {
+                row = zero_splat_vector(n, _splat_data->means().device());
+            } else if (const size_t rows = row.numel(); rows < n) {
+                row = Tensor::cat(std::vector<Tensor>{row, zero_splat_vector(n - rows, row.device())}, 0);
+            }
+        };
+        size_row(_explore_rendered, explore_walk_on() || scouts);
+        size_row(_explore_peak, explore_gate_peak_on());
+        size_row(_explore_scout_renders, scouts);
+    }
+
+    std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::explore_scratch(const int /*iter*/) {
+        if (!_params || !_splat_data || _splat_data->size() == 0) {
+            return {};
+        }
+        ensure_explore_rows();
+        return {_explore_rendered, _explore_peak};
+    }
+
+    void MRNF::explore_step(const int iter) {
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0 || !_explore_rendered.is_valid() || _explore_rendered.numel() != n) {
+            return;
+        }
+        mrnf_strategy::ExploreWalk walk;
+        walk.rendered = _explore_rendered.ptr<float>();
+        if (explore_walk_on()) {
+            walk.rotations = _splat_data->rotation_raw().ptr<float>();
+            walk.log_scales = _splat_data->scaling_raw().ptr<float>();
+            walk.amplitude = explore_walk_amplitude(iter);
+        }
+        if (_explore_peak.is_valid() && _explore_peak.numel() == n) {
+            walk.blend_peak = _explore_peak.ptr<float>();
+            walk.peak_decay = std::pow(0.5f, 1.0f / MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS);
+        }
+        if (_explore_scout_renders.is_valid() && _explore_scout_renders.numel() == n) {
+            walk.scout_renders = _explore_scout_renders.ptr<float>();
+        }
+        const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
+        const auto seed = static_cast<uint64_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        mrnf_strategy::launch_explore_walk(
+            _splat_data->means().ptr<float>(),
+            _splat_data->opacity_raw().ptr<float>(),
+            frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+            frozen_mask.is_valid() ? frozen_mask.numel() : 0,
+            walk, n, seed);
     }
 
     float MRNF::donor_view_floor() const {
@@ -1971,8 +2086,12 @@ namespace lfs::training {
         // One rule per refine: refills and growth alike are receivers once need-guided growth is at the cap.
         const bool receiver = need_guided && at_cap(current_active);
         result.receiver_splits = receiver ? static_cast<int>(K) : 0;
+        // Scouts: a seeded share of the receiver children, tapering with the donor quota.
+        const float scout_share = receiver && explore_scouts_on() ? explore_scout_share_at(iter) : 0.0f;
+        const uint64_t scout_seed = 0x5C0A7F00D5EEDull ^ (static_cast<uint64_t>(iter) * 0xD1B54A32D192ED03ull);
         const auto [reused, n_append] = split_parents_into_children(
-            split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes), receiver);
+            split_indices, std::max<std::size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes), receiver,
+            scout_share, scout_seed);
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, reused, n_append, active_count(), _splat_data->size());
@@ -1985,7 +2104,8 @@ namespace lfs::training {
     }
 
     std::pair<size_t, size_t> MRNF::split_parents_into_children(
-        const lfs::core::Tensor& split_indices, const size_t chunk_rows, const bool receiver) {
+        const lfs::core::Tensor& split_indices, const size_t chunk_rows, const bool receiver,
+        const float scout_share, const uint64_t scout_seed) {
         using namespace lfs::core;
         assert(split_indices.ndim() == 1 && split_indices.dtype() == DataType::Int64 && chunk_rows > 0);
         const size_t K = split_indices.numel();
@@ -2075,7 +2195,8 @@ namespace lfs::training {
                 count,
                 &shn_batch);
             n_append += appended;
-            if (_ray_depth_state.is_valid() && append_start + appended > 0) {
+            const bool scouts = scout_share > 0.0f;
+            if ((_ray_depth_state.is_valid() || scouts) && append_start + appended > 0) {
                 std::vector<Tensor> children;
                 if (append_start > 0)
                     children.push_back(filled);
@@ -2087,9 +2208,22 @@ namespace lfs::training {
                 const Tensor child_rows =
                     (children.size() == 1 ? children[0] : Tensor::cat(children, 0)).contiguous();
                 const Tensor parents = chunk_indices.slice(0, 0, append_start + appended).contiguous();
-                mrnf_strategy::launch_ray_depth_inherit(
-                    _ray_depth_state.ptr<float>(), parents.ptr<int64_t>(), child_rows.ptr<int64_t>(),
-                    append_start + appended);
+                if (_ray_depth_state.is_valid()) {
+                    mrnf_strategy::launch_ray_depth_inherit(
+                        _ray_depth_state.ptr<float>(), parents.ptr<int64_t>(), child_rows.ptr<int64_t>(),
+                        append_start + appended);
+                }
+                if (scouts) {
+                    // Both children of a split draw: the parent's row keeps the first, the new row
+                    // the second. Only the opacity differs from the other children.
+                    ensure_explore_rows();
+                    mrnf_strategy::launch_explore_scouts(
+                        _splat_data->opacity_raw().ptr<float>(),
+                        _explore_scout_renders.is_valid() ? _explore_scout_renders.ptr<float>() : nullptr,
+                        parents.ptr<int64_t>(), child_rows.ptr<int64_t>(), append_start + appended,
+                        scout_seed, first, scout_share, logit_clamped(_params->explore_scout_opacity),
+                        MRNF_EXPLORE_SCOUT_RENDERS);
+                }
             }
             clear_rendered_support(chunk_indices);
             shn_batch.flush();
@@ -2375,6 +2509,12 @@ namespace lfs::training {
             _ray_depth_state = Tensor();
         if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
             compact(_rendered_count);
+        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
+            if (rows->is_valid() && rows->numel() == old_size)
+                compact(*rows);
+            else
+                *rows = Tensor();
+        }
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
             compact(_precomputed_edge_scores);
         if (_edge_score_sum.is_valid() && _edge_score_sum.numel() > new_size)
@@ -2479,7 +2619,10 @@ namespace lfs::training {
             _params->scale_decay,
             train_t,
             n, nullptr,
-            _params->opacity_decay_rendered_only && !_params->gut ? _rendered_count.ptr<float>() : nullptr);
+            _params->opacity_decay_rendered_only && !_params->gut ? _rendered_count.ptr<float>() : nullptr,
+            explore_scouts_on() && _explore_scout_renders.is_valid() && _explore_scout_renders.numel() == n
+                ? _explore_scout_renders.ptr<float>()
+                : nullptr);
     }
 
     void MRNF::enforce_max_cap() {
@@ -3288,6 +3431,9 @@ namespace lfs::training {
         }
         std::swap(_refine_weight_max, source._refine_weight_max);
         std::swap(_rendered_count, source._rendered_count);
+        _explore_rendered = lfs::core::Tensor();
+        _explore_peak = lfs::core::Tensor();
+        _explore_scout_renders = lfs::core::Tensor();
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);

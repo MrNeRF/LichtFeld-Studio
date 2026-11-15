@@ -420,6 +420,21 @@ namespace lfs::core {
             // so small splats that are right where they are are not drained for being small. Takes
             // precedence over donor_rank_per_view.
             bool donor_rank_impact = false;
+            // Need-guided growth: every splat rendered in a step takes a random step along its own axes,
+            // k x its sigma per axis with k = min(A(t) E(o) (1 - g)^150, 1), A(t) = explore_walk_scale x 8 x
+            // 0.01^(t / iterations), E(o) = sqrt(2 ln(255 o)) (0 at o <= 1/255) and g the opacity (or, with
+            // explore_gate_peak, min(opacity, peak blend weight)). Replaces the position noise.
+            bool explore_walk = false;
+            float explore_walk_scale = 1.0f;
+            // The walk gate uses min(opacity, the splat's decaying peak blend weight), so an opaque splat
+            // hidden behind others also walks.
+            bool explore_gate_peak = false;
+            // At the cap, this share of the receiver children (tapering to 0 by grow_until_iter on a
+            // cosine) is born at explore_scout_opacity instead of the parent's opacity; a scout skips
+            // the opacity decay until it has been rendered 20 times.
+            bool explore_scouts = false;
+            float explore_scout_share = 0.3f;
+            float explore_scout_opacity = 0.012f;
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

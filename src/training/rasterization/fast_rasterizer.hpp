@@ -143,6 +143,9 @@ namespace lfs::training {
         float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
         float* rendered_count = nullptr;
+        // Optional [N] exploration rows (see FusedAdamSettings): visible-view count and peak blend weight.
+        float* explore_rendered = nullptr;
+        float* explore_blend_peak = nullptr;
         // Optional persistent device scalars (caller zeros each step). Accumulated in
         // preprocess_backward so loss-only reg kernels can be skipped on the FastGS path.
         float* scale_reg_loss_out = nullptr;

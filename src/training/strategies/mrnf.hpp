@@ -90,6 +90,14 @@ class MRNFStrategyTest_DonorRankImpactFadesTheMaximaLikeThePlainExchange_Test;
 class MRNFStrategyTest_DonorRankImpactKeepsASmallHighPeakSplat_Test;
 class MRNFStrategyTest_DonorRankImpactStateFollowsItsSplats_Test;
 class MRNFStrategyTest_DonorRankImpactResumeAndSwitchStartAfresh_Test;
+class MRNFStrategyTest_ExploreOffKeepsTheNoiseAndTheChildren_Test;
+class MRNFStrategyTest_ExploreWalkCovarianceFollowsTheSplatShape_Test;
+class MRNFStrategyTest_ExploreWalkAmplitudeFollowsTheRunAndOnlyRenderedSplatsWalk_Test;
+class MRNFStrategyTest_ExploreGatePeakWalksHiddenOpaqueSplatsOnly_Test;
+class MRNFStrategyTest_ExploreBackwardWritesVisibilityAndPeakBlendWeight_Test;
+class MRNFStrategyTest_ExploreScoutsShareOpacityTaperAndSeed_Test;
+class MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
+class MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
 
 namespace lfs::training {
 
@@ -147,6 +155,7 @@ namespace lfs::training {
         void on_edge_score_accumulated(int iter) override;
         std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int iter) override;
         void on_impact_accumulated(int iter) override;
+        std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
@@ -218,6 +227,14 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DonorRankImpactKeepsASmallHighPeakSplat_Test;
         friend class ::MRNFStrategyTest_DonorRankImpactStateFollowsItsSplats_Test;
         friend class ::MRNFStrategyTest_DonorRankImpactResumeAndSwitchStartAfresh_Test;
+        friend class ::MRNFStrategyTest_ExploreOffKeepsTheNoiseAndTheChildren_Test;
+        friend class ::MRNFStrategyTest_ExploreWalkCovarianceFollowsTheSplatShape_Test;
+        friend class ::MRNFStrategyTest_ExploreWalkAmplitudeFollowsTheRunAndOnlyRenderedSplatsWalk_Test;
+        friend class ::MRNFStrategyTest_ExploreGatePeakWalksHiddenOpaqueSplatsOnly_Test;
+        friend class ::MRNFStrategyTest_ExploreBackwardWritesVisibilityAndPeakBlendWeight_Test;
+        friend class ::MRNFStrategyTest_ExploreScoutsShareOpacityTaperAndSeed_Test;
+        friend class ::MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
+        friend class ::MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -251,6 +268,20 @@ namespace lfs::training {
         // by the later of its two positions. Takes precedence over the per-view rank.
         [[nodiscard]] bool donor_rank_impact_on() const;
         [[nodiscard]] float donor_view_floor() const;
+        // Exploration (need-guided growth only): a per-render random walk in units of each splat's
+        // own sigma (replaces the position noise), its gate on the peak blend weight, and faint
+        // scout children at the cap that skip the opacity decay until rendered a few times.
+        [[nodiscard]] bool explore_walk_on() const;
+        [[nodiscard]] bool explore_gate_peak_on() const;
+        [[nodiscard]] bool explore_scouts_on() const;
+        // A(t) = explore_walk_scale x 8 x 0.01^(iter / iterations).
+        [[nodiscard]] float explore_walk_amplitude(int iter) const;
+        // The scout share at iter: explore_scout_share on the donor quota's cosine to grow_until_iter.
+        [[nodiscard]] float explore_scout_share_at(int iter) const;
+        // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
+        void ensure_explore_rows();
+        // After the backward: walks the splats rendered in this step and clears the step's marks.
+        void explore_step(int iter);
         // This window's count of views that covered each splat, or zeros. Read before the
         // window outputs are reset.
         [[nodiscard]] lfs::core::Tensor donor_window_views() const;
@@ -290,8 +321,10 @@ namespace lfs::training {
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}. The receiver rule makes
         // children smaller on every axis that keep the parent's opacity.
+        // With scout_share > 0 a seeded share of the children become scouts (explore_scouts).
         std::pair<size_t, size_t> split_parents_into_children(const lfs::core::Tensor& split_indices,
-                                                              size_t chunk_rows, bool receiver = false);
+                                                              size_t chunk_rows, bool receiver = false,
+                                                              float scout_share = 0.0f, uint64_t scout_seed = 0);
         [[nodiscard]] bool screen_share_shrink_active(int iter) const;
         [[nodiscard]] lfs::core::Tensor compute_refine_candidates() const;
         void apply_decay(int iter);
@@ -392,7 +425,12 @@ namespace lfs::training {
         lfs::core::Tensor _exchange_window_views;       // [N] window count of covering views, when no row holds it
         lfs::core::Tensor _exchange_window_coverage;    // [N] window coverage at the last fold (max fold only)
         lfs::core::Tensor _exchange_free_before_growth; // free slots right before growth
-        int _exchange_windows = 0;                      // windows in the current importance memory
+
+        // Exploration rows; transient (fresh after a resume).
+        lfs::core::Tensor _explore_rendered;      // [N] views that rendered the splat this step
+        lfs::core::Tensor _explore_peak;          // [N] running peak blend weight, halves in ~800 steps
+        lfs::core::Tensor _explore_scout_renders; // [N] renders a scout needs before its opacity decays
+        int _exchange_windows = 0;                // windows in the current importance memory
         bool _exchange_impact_written = false;
         int _exchange_first_iter = -1;
 

@@ -93,6 +93,13 @@ namespace lfs::training {
             return {};
         }
         virtual void on_impact_accumulated(int /*iter*/) {}
+
+        // Optional FastGS exploration rows, [N] each: the backward adds 1 to the first for every
+        // splat visible in the view and raises the second to the splat's peak blend weight (only
+        // when valid). Either may be empty.
+        virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int /*iter*/) {
+            return {};
+        }
     };
 
     class ICheckpointStateAdopter {

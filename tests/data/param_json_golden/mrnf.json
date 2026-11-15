@@ -41,6 +41,12 @@
     7000,
     30000
   ],
+  "explore_gate_peak": false,
+  "explore_scout_opacity": 0.012000000104308128,
+  "explore_scout_share": 0.30000001192092896,
+  "explore_scouts": false,
+  "explore_walk": false,
+  "explore_walk_scale": 1.0,
   "exposure_correction_grid_start_iter": 1000,
   "gradient_loss_weight": 1.7999999523162842,
   "grow_fraction": -1.0,

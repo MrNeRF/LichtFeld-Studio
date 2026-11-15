@@ -23,6 +23,7 @@ using lfs::core::param::apply_explicit_training_overrides;
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1774,6 +1775,47 @@ TEST(ArgumentParserTest, TrainingParsesDonorRankPerView) {
     const auto off = parse(false);
     ASSERT_TRUE(off.has_value()) << off.error();
     EXPECT_FALSE((*off)->optimization.donor_rank_per_view);
+}
+
+// Catches an exploration flag or value not reaching the training parameters, a default changing, or
+// an out-of-range share, opacity or scale accepted.
+TEST(ArgumentParserTest, TrainingParsesExploreOptions) {
+    const auto data_path = make_test_path("lfs_arg_parser_explore_data");
+    const auto output_path = make_test_path("lfs_arg_parser_explore_output");
+    const auto parse = [&](std::vector<const char*> extra) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--need-guided-growth"};
+        argv.insert(argv.end(), extra.begin(), extra.end());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse({"--explore-walk", "--explore-walk-scale", "2", "--explore-gate-peak", "--explore-scouts",
+                           "--explore-scout-share", "0.5", "--explore-scout-opacity", "0.02"});
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_TRUE((*on)->optimization.explore_walk);
+    EXPECT_FLOAT_EQ((*on)->optimization.explore_walk_scale, 2.0f);
+    EXPECT_TRUE((*on)->optimization.explore_gate_peak);
+    EXPECT_TRUE((*on)->optimization.explore_scouts);
+    EXPECT_FLOAT_EQ((*on)->optimization.explore_scout_share, 0.5f);
+    EXPECT_FLOAT_EQ((*on)->optimization.explore_scout_opacity, 0.02f);
+
+    const auto off = parse({});
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FALSE((*off)->optimization.explore_walk);
+    EXPECT_FLOAT_EQ((*off)->optimization.explore_walk_scale, 1.0f);
+    EXPECT_FALSE((*off)->optimization.explore_gate_peak);
+    EXPECT_FALSE((*off)->optimization.explore_scouts);
+    EXPECT_FLOAT_EQ((*off)->optimization.explore_scout_share, 0.3f);
+    EXPECT_FLOAT_EQ((*off)->optimization.explore_scout_opacity, 0.012f);
+
+    for (const auto& [flag, value, field] : {std::tuple{"--explore-scout-share", "1.5", "explore_scout_share"},
+                                             std::tuple{"--explore-scout-opacity", "0", "explore_scout_opacity"},
+                                             std::tuple{"--explore-scout-opacity", "1", "explore_scout_opacity"},
+                                             std::tuple{"--explore-walk-scale", "0", "explore_walk_scale"}}) {
+        const auto bad = parse({flag, value});
+        ASSERT_FALSE(bad.has_value()) << flag << " " << value;
+        EXPECT_NE(bad.error().find(field), std::string::npos) << bad.error();
+    }
 }
 
 // Catches --donor-rank-impact not reaching the training parameters, or being on without the flag.

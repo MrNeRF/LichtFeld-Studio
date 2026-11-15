@@ -670,6 +670,60 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::explore_walk,
+                       "explore_walk", "Explore Walk", d.explore_walk,
+                       "Need-guided growth moves faint rendered splats by random steps along their own axes, in units of their own size, shrinking over the run (MRNF)")
+            .locale("training.advanced.explore_walk")
+            .tooltip("training.tooltip.explore_walk")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::explore_walk_scale,
+                        "explore_walk_scale", "Explore Walk Scale", d.explore_walk_scale, 0.01f, 8.0f,
+                        "Multiplier on the exploration walk's step size (MRNF)")
+            .locale("training.advanced.explore_walk_scale")
+            .tooltip("training.tooltip.explore_walk_scale")
+            .precision(2)
+            .ui_step(0.25)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::explore_gate_peak,
+                       "explore_gate_peak", "Explore Gate Peak", d.explore_gate_peak,
+                       "The exploration walk also moves opaque splats whose peak blend weight is low, such as splats hidden behind others (MRNF)")
+            .locale("training.advanced.explore_gate_peak")
+            .tooltip("training.tooltip.explore_gate_peak")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::explore_scouts,
+                       "explore_scouts", "Explore Scouts", d.explore_scouts,
+                       "At the cap, need-guided growth gives a share of the new children a faint opacity so the fit decides where they become visible (MRNF)")
+            .locale("training.advanced.explore_scouts")
+            .tooltip("training.tooltip.explore_scouts")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::explore_scout_share,
+                        "explore_scout_share", "Explore Scout Share", d.explore_scout_share, 0.0f, 1.0f,
+                        "Share of the need-guided children born faint at the cap; tapers to zero by the end of growth (MRNF)")
+            .locale("training.advanced.explore_scout_share")
+            .tooltip("training.tooltip.explore_scout_share")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::explore_scout_opacity,
+                        "explore_scout_opacity", "Explore Scout Opacity", d.explore_scout_opacity, 0.005f, 0.5f,
+                        "Opacity of the faint children born by Explore Scouts (MRNF)")
+            .locale("training.advanced.explore_scout_opacity")
+            .tooltip("training.tooltip.explore_scout_opacity")
+            .precision(3)
+            .ui_step(0.002)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")
