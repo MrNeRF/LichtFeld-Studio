@@ -119,6 +119,8 @@ namespace lfs::training {
         opt.sh_rest_reg = 0.0f;
         opt.thin_structure_weight = 0.0f;
         opt.gradient_loss_weight = 0.0f;
+        opt.ssim_blur_tolerant = false;
+        opt.loss_pyramid = false;
         opt.use_depth_loss = false;
         opt.normal_loss_weight = 0.0f;
         opt.normal_consistency_weight = 0.0f;

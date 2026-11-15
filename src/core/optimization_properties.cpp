@@ -270,6 +270,22 @@ namespace lfs::core::param {
             .ui_step(0.1)
 
             .all_strategies()
+            .bool_prop(&OptimizationParameters::ssim_blur_tolerant,
+                       "ssim_blur_tolerant", "Blur-Tolerant SSIM", d.ssim_blur_tolerant,
+                       "The SSIM term also compares a slightly blurred render and keeps the better match, so a render sharper than a soft photo is not pulled towards its blur")
+            .locale("training.losses.ssim_blur_tolerant")
+            .tooltip("training.tooltip.ssim_blur_tolerant")
+            .flags(PROP_ADVANCED)
+
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::loss_pyramid,
+                       "loss_pyramid", "Multi-Scale Loss", d.loss_pyramid,
+                       "Averages the photometric loss over the image at full and at halved resolutions (from 1920 px on the short side)")
+            .locale("training.losses.loss_pyramid")
+            .tooltip("training.tooltip.loss_pyramid")
+            .flags(PROP_ADVANCED)
+
+            .all_strategies()
             .bool_prop(&OptimizationParameters::opacity_decay_rendered_only,
                        "opacity_decay_rendered_only", "Fade Only Visible Splats", d.opacity_decay_rendered_only,
                        "Fades the opacity only of splats drawn since the last refinement, so splats out of view are not lost; no effect with GUT")

@@ -21,7 +21,9 @@ namespace lfs::training::losses {
      */
     struct PhotometricLoss {
         struct Params {
-            float lambda_dssim; ///< Weight for D-SSIM term (0.0 = pure L1, 1.0 = pure SSIM)
+            float lambda_dssim;         ///< Weight for D-SSIM term (0.0 = pure L1, 1.0 = pure SSIM)
+            bool blur_tolerant = false; ///< Blur-tolerant SSIM term (soft maximum with the blurred render)
+            bool loss_pyramid = false;  ///< Average the loss over the scales of loss_pyramid_levels()
         };
 
         struct Context {
@@ -48,9 +50,18 @@ namespace lfs::training::losses {
         const kernels::FusedL1SSIMWorkspace& fused_workspace() const { return arena_.fused(); }
         const kernels::SSIMWorkspace& ssim_workspace() const { return arena_.pure_ssim(); }
 
+        // Buffers of the blur-tolerant / multi-scale loss; empty while both switches are off.
+        [[nodiscard]] kernels::PhotometricPyramidWorkspace& pyramid_workspace() { return pyramid_; }
+
+        // True when the last forward took the pure-SSIM path (lambda_dssim == 1, both switches off),
+        // so its SSIM map is in ssim_workspace() rather than fused_workspace().
+        [[nodiscard]] bool last_forward_used_pure_ssim() const { return last_forward_pure_ssim_; }
+
     private:
         // Shared grow-only storage for mutually-exclusive L1+SSIM workspaces.
         lfs::training::kernels::LossWorkspaceArena arena_;
+        kernels::PhotometricPyramidWorkspace pyramid_;
+        bool last_forward_pure_ssim_ = false;
 
         // Pre-allocated buffers for pure-L1 path (lambda_dssim == 0)
         lfs::core::Tensor grad_buffer_;         // Reusable gradient buffer [N, C, H, W]

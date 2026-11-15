@@ -344,6 +344,27 @@ namespace {
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
     }
 
+    // Catches the blur-tolerant SSIM or the loss pyramid accepted with appearance correction, whose
+    // decoupled loss does not honour them, or either switch failing a JSON round trip.
+    TEST_F(TrainingParametersTest, BlurTolerantSsimAndLossPyramidRoundTripWithEveryAppearanceModel) {
+        for (const bool blur : {false, true}) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.ssim_blur_tolerant = blur;
+            params.loss_pyramid = !blur;
+            const auto restored = OptimizationParameters::from_json(params.to_json());
+            EXPECT_EQ(restored.ssim_blur_tolerant, blur);
+            EXPECT_EQ(restored.loss_pyramid, !blur);
+
+            for (const int mode : {0, 1, 2, 3}) {
+                auto variant = params;
+                variant.use_ppisp = mode == 0;
+                variant.use_bilateral_grid = mode == 1;
+                variant.use_exposure_correction = mode == 2;
+                EXPECT_TRUE(variant.validate().empty()) << "mode " << mode << ": " << variant.validate();
+            }
+        }
+    }
+
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
         auto params = OptimizationParameters::mcmc_defaults();
         EXPECT_FALSE(params.use_exposure_correction);

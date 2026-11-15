@@ -206,6 +206,7 @@ namespace lfs::training::kernels {
         int H = 0;
         int W = 0;
         bool apply_valid_padding = true;
+        lfs::core::Tensor precomputed; // when valid: the gradient itself, added as is (pyramid losses)
     };
 
     struct DecoupledFusedL1SSIMWorkspace {
@@ -493,6 +494,109 @@ namespace lfs::training::kernels {
     [[nodiscard]] DecoupledRawGradient decoupled_raw_gradient(const MaskedDecoupledFusedL1SSIMContext& ctx);
     // grad_image += the raw-render gradient; grad_image has the raw render's element count.
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image);
+
+    // ============================================================================
+    // Blur-tolerant SSIM and multi-scale photometric loss
+    // ============================================================================
+    //
+    // Blur-tolerant SSIM, per channel and window: S0 = ssim(x, y), S1 = ssim(G x, y) with G a
+    // normalised Gaussian blur of the render only, and S the soft maximum of the two with
+    // temperature 50 (S = S0 when the branches are equal). A render sharper than the photo is not
+    // pulled towards the photo's blur; where the render is the blurrier one S is plain SSIM.
+    //
+    // The pyramid averages the photometric loss over K scales; scale s halves render, photo and
+    // weight map s times by 2x2 averaging (an odd last row or column averages the pixels it has, so
+    // a pixel is kept when any of its pixels is kept):
+    //   loss = (1 / K) sum_s [(1 - w) mean|x_s - y_s| + w (1 - mean S_s)]
+    // with S_s plain SSIM, or blur-tolerant SSIM with blur sigma 1.5 / 2^s.
+    //
+    // With appearance correction (decoupled loss: luminance from the corrected image, contrast and
+    // structure from the raw render) the blurred branch blurs both images, and the pyramid pools both.
+
+    inline constexpr float BLUR_TOLERANT_SSIM_TEMPERATURE = 50.0f;
+    inline constexpr float BLUR_TOLERANT_SSIM_SIGMA = 1.5f;
+
+    // K = 1 when min(H, W) < 1920, else min(4, floor(log2(min(H, W) / 1920)) + 2).
+    [[nodiscard]] int loss_pyramid_levels(int height, int width);
+
+    // Grow-only buffers of the pyramid losses; empty while they are never called. Scale 0 keeps its
+    // SSIM partials and maps in the loss arena (the workspace today's loss uses), so the
+    // densification error map still reads the plain full-resolution SSIM of the unblurred render.
+    struct PhotometricPyramidWorkspace {
+        struct Level {
+            lfs::core::Tensor prediction;      // [N, C, h, w] pooled render (scales >= 1)
+            lfs::core::Tensor target;          // [N, C, h, w] pooled photo, Float32 (scales >= 1)
+            lfs::core::Tensor mask;            // [h, w] pooled weight (scales >= 1, weighted loss)
+            FusedL1SSIMWorkspace fused;        // scales >= 1, unweighted loss
+            MaskedFusedL1SSIMWorkspace masked; // scales >= 1, weighted loss
+            // Decoupled loss
+            lfs::core::Tensor raw;                                // [N, C, h, w] pooled raw render (scales >= 1)
+            lfs::core::Tensor grad_raw;                           // [N, C, h, w] raw-render gradient
+            DecoupledFusedL1SSIMWorkspace decoupled;              // scales >= 1, unweighted loss
+            MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled; // scales >= 1, weighted loss
+            // Blur-tolerant branch
+            lfs::core::Tensor blurred;         // [N, C, h, w] blurred render
+            lfs::core::Tensor ssim_sharp;      // [N, C, h, w] SSIM of the render, then the blurred-branch gradient
+            lfs::core::Tensor ssim_blurred;    // [N, C, h, w] SSIM of the blurred render, also blur scratch
+            lfs::core::Tensor inv_support;     // [h, w] 1 / blurred keep mask, 0 where nothing is kept
+            lfs::core::Tensor support_scratch; // [h, w]
+            lfs::core::Tensor blend_map;       // [N, 1, h, w] channel-mean blended SSIM
+            lfs::core::Tensor dm_dmu1;         // [N, C, h, w] fp16 blurred-branch partials
+            lfs::core::Tensor dm_dsigma1_sq;
+            lfs::core::Tensor dm_dsigma12;
+            lfs::core::Tensor blurred_raw; // [N, C, h, w] blurred raw render (decoupled loss)
+            lfs::core::Tensor app_dm_dmu1; // [N, C, h, w] fp16 blurred-branch corrected-image partial (decoupled)
+        };
+        std::vector<Level> levels;
+        lfs::core::Tensor loss; // [1]
+    };
+
+    struct PhotometricPyramidResult {
+        lfs::core::Tensor loss;      // [1] device scalar; aliases the workspace or the arena
+        lfs::core::Tensor grad;      // [N, C, H, W] gradient w.r.t. the render (corrected image); aliases the arena
+        lfs::core::Tensor grad_raw;  // [N, C, H, W] decoupled loss only: gradient w.r.t. the raw render
+        float mask_sum_value = 0.0f; // scale-0 normalization of a weighted loss, 0 without weights
+    };
+
+    // L1+SSIM loss and its gradient over `levels` scales, plain or blur-tolerant SSIM. Without a
+    // weight map it is the fused loss (valid padding at every scale); with one it is the masked fused
+    // loss, the weight map pooled with the images and `denominator` (when positive) scaled by the
+    // pixel count of each scale. levels == 1 without the blur-tolerant term is exactly the fused or
+    // masked fused loss.
+    PhotometricPyramidResult photometric_pyramid_loss(
+        const lfs::core::Tensor& prediction,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& weight, // empty, or [H, W] / [1, H, W]
+        float ssim_weight,
+        int levels,
+        bool blur_tolerant,
+        LossWorkspaceArena& arena,
+        PhotometricPyramidWorkspace& workspace,
+        float denominator = 0.0f);
+
+    // The same for the decoupled appearance loss (as decoupled_fused_l1_ssim_forward without a
+    // weight map, masked_decoupled_fused_l1_ssim_forward with one). The raw-render gradient is
+    // computed eagerly into grad_raw; carry it with decoupled_raw_gradient(result, raw).
+    PhotometricPyramidResult decoupled_photometric_pyramid_loss(
+        const lfs::core::Tensor& corrected,
+        const lfs::core::Tensor& raw,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& weight,
+        float ssim_weight,
+        int levels,
+        bool blur_tolerant,
+        LossWorkspaceArena& arena,
+        PhotometricPyramidWorkspace& workspace,
+        float denominator = 0.0f);
+    [[nodiscard]] DecoupledRawGradient decoupled_raw_gradient(const PhotometricPyramidResult& result,
+                                                              const lfs::core::Tensor& raw);
+
+    // Normalised Gaussian blur over kept pixels (weight > 0, or every pixel of the image without a
+    // weight map) and its adjoint, for [N, C, H, W] images. Taps: sigma, radius min(6, ceil(3 sigma)).
+    [[nodiscard]] lfs::core::Tensor normalized_gaussian_blur(
+        const lfs::core::Tensor& image, const lfs::core::Tensor& weight, float sigma);
+    [[nodiscard]] lfs::core::Tensor normalized_gaussian_blur_adjoint(
+        const lfs::core::Tensor& grad, const lfs::core::Tensor& weight, float sigma);
 
     // Fused SSIM map → error map: error_map[i] = max(0, 1 - mean_c(ssim_map[c, i]))
     // Replaces .neg().add(1).mean({1}).squeeze(0).clamp_min(0).contiguous() chain

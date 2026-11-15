@@ -9,6 +9,7 @@
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
 #include <algorithm>
+#include <cmath>
 #include <cooperative_groups.h>
 #include <cstdint>
 #include <cuda_fp16.h>
@@ -472,7 +473,8 @@ namespace {
         __half* __restrict__ dm_dsigma1_sq,
         __half* __restrict__ dm_dsigma12,
         float* __restrict__ ssim_map,
-        float* __restrict__ cs_map) {
+        float* __restrict__ cs_map,
+        float* __restrict__ ssim_channels) { // optional [N, C, H, W] per-channel SSIM
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -644,6 +646,8 @@ namespace {
 
                     ssim_sum += ssim_val;
                     cs_sum += D_ / B;
+                    if (ssim_channels)
+                        ssim_channels[global_idx] = ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -1018,7 +1022,8 @@ namespace {
         __half* __restrict__ dm_dsigma1_sq,
         __half* __restrict__ dm_dsigma12,
         float* __restrict__ ssim_map,
-        float* __restrict__ cs_map) {
+        float* __restrict__ cs_map,
+        float* __restrict__ ssim_channels) { // optional [N, C, H, W] per-channel SSIM
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -1040,6 +1045,8 @@ namespace {
             if (pix_x < W && pix_y < H) {
                 for (int c = 0; c < CH; ++c) {
                     const int index = bIdx * CH * num_pix + c * num_pix + pix_id;
+                    if (ssim_channels)
+                        ssim_channels[index] = 1.0f;
                     if (dm_dmu1)
                         dm_dmu1[index] = __float2half(0.0f);
                     if (dm_dsigma1_sq)
@@ -1140,6 +1147,8 @@ namespace {
 
                     ssim_sum += ssim_val;
                     cs_sum += D_ / B;
+                    if (ssim_channels)
+                        ssim_channels[global_idx] = ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -1182,7 +1191,8 @@ namespace {
         __half* __restrict__ raw_dm_dsigma1_sq,
         __half* __restrict__ raw_dm_dsigma12,
         float* __restrict__ ssim_map,
-        float* __restrict__ cs_map) {
+        float* __restrict__ cs_map,
+        float* __restrict__ ssim_channels) { // optional [N, C, H, W] per-channel SSIM
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -1213,6 +1223,8 @@ namespace {
                         raw_dm_dsigma1_sq[index] = __float2half(0.0f);
                     if (raw_dm_dsigma12)
                         raw_dm_dsigma12[index] = __float2half(0.0f);
+                    if (ssim_channels)
+                        ssim_channels[index] = 1.0f;
                 }
                 if (ssim_map)
                     ssim_map[bIdx * num_pix + pix_id] = 1.0f;
@@ -1415,6 +1427,8 @@ namespace {
                     const int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
                     const float ssim_val = luminance * contrast_structure;
                     ssim_sum += ssim_val;
+                    if (ssim_channels)
+                        ssim_channels[global_idx] = ssim_val;
                     cs_sum += contrast_structure;
 
                     if (app_dm_dmu1) {
@@ -1626,7 +1640,8 @@ namespace {
         __half* __restrict__ raw_dm_dsigma1_sq,
         __half* __restrict__ raw_dm_dsigma12,
         float* __restrict__ ssim_map,
-        float* __restrict__ cs_map) {
+        float* __restrict__ cs_map,
+        float* __restrict__ ssim_channels) { // optional [N, C, H, W] per-channel SSIM
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -1828,6 +1843,8 @@ namespace {
                     const int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
                     const float ssim_val = luminance * contrast_structure;
                     ssim_sum += ssim_val;
+                    if (ssim_channels)
+                        ssim_channels[global_idx] = ssim_val;
                     cs_sum += contrast_structure;
 
                     if (app_dm_dmu1) {
@@ -2531,7 +2548,8 @@ namespace lfs::training::kernels {
                 workspace.dm_dsigma1_sq.ptr<__half>(),
                 workspace.dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>(),
-                workspace.cs_map.ptr<float>());
+                workspace.cs_map.ptr<float>(),
+                /*ssim_channels=*/nullptr);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.fused_l1_forward");
 
             launch_fused_l1_ssim_mean_device(
@@ -2647,7 +2665,7 @@ namespace lfs::training::kernels {
                 workspace.raw_dm_dsigma1_sq.ptr<__half>(),
                 workspace.raw_dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>(),
-                workspace.cs_map.ptr<float>());
+                workspace.cs_map.ptr<float>(), nullptr);
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_forward");
 
             launch_fused_l1_ssim_mean_device(
@@ -2748,10 +2766,28 @@ namespace lfs::training::kernels {
             .W = ctx.W};
     }
 
+    namespace {
+        __global__ void add_gradient_kernel(float* __restrict__ dst, const float* __restrict__ src, const size_t n) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx < n)
+                dst[idx] += src[idx];
+        }
+    } // namespace
+
     void accumulate_decoupled_raw_gradient(const DecoupledRawGradient& raw, lfs::core::Tensor& grad_image) {
-        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
         LFS_ASSERT(grad_image.is_contiguous() && grad_image.dtype() == lfs::core::DataType::Float32 &&
                    grad_image.numel() == raw.raw_img.numel());
+        if (raw.precomputed.is_valid()) {
+            LFS_ASSERT(raw.precomputed.is_contiguous() && raw.precomputed.dtype() == lfs::core::DataType::Float32 &&
+                       raw.precomputed.numel() == grad_image.numel());
+            const size_t n = grad_image.numel();
+            const auto stream = lfs::core::getCurrentCUDAStream();
+            add_gradient_kernel<<<static_cast<unsigned>((n + 255) / 256), 256, 0, stream>>>(
+                grad_image.ptr<float>(), raw.precomputed.ptr<float>(), n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.decoupled_raw_precomputed");
+            return;
+        }
+        validate_loss_context_images(raw.raw_img, raw.gt_img, raw.H, raw.W);
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -2851,7 +2887,8 @@ namespace lfs::training::kernels {
                     workspace.dm_dsigma1_sq.ptr<__half>(),
                     workspace.dm_dsigma12.ptr<__half>(),
                     workspace.ssim_map.ptr<float>(),
-                    workspace.cs_map.ptr<float>());
+                    workspace.cs_map.ptr<float>(),
+                    /*ssim_channels=*/nullptr);
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_forward");
 
                 launch_masked_fused_l1_ssim_mean_device(
@@ -2938,7 +2975,7 @@ namespace lfs::training::kernels {
                         corrected.ptr<float>(), raw.ptr<float>(), target_ptr, mask_ptr,
                         nullptr, nullptr, nullptr, nullptr,
                         workspace.ssim_map.ptr<float>(),
-                        nullptr);
+                        nullptr, nullptr);
                     LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.masked_decoupled_fused_l1_value");
                 } else {
                     maskedFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
@@ -2946,7 +2983,7 @@ namespace lfs::training::kernels {
                         corrected.ptr<float>(), target_ptr, mask_ptr,
                         nullptr, nullptr, nullptr,
                         workspace.ssim_map.ptr<float>(),
-                        nullptr);
+                        nullptr, nullptr);
                     LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.masked_fused_l1_value");
                 }
 
@@ -3053,7 +3090,7 @@ namespace lfs::training::kernels {
                     workspace.raw_dm_dsigma1_sq.ptr<__half>(),
                     workspace.raw_dm_dsigma12.ptr<__half>(),
                     workspace.ssim_map.ptr<float>(),
-                    workspace.cs_map.ptr<float>());
+                    workspace.cs_map.ptr<float>(), nullptr);
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_forward");
 
                 launch_masked_fused_l1_ssim_mean_device(
@@ -3191,6 +3228,817 @@ namespace lfs::training::kernels {
             error_map.ptr<float>(),
             C, H, W);
         LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.to_error_map");
+    }
+
+    // =========================================================================
+    // Blur-tolerant SSIM and multi-scale photometric loss
+    // =========================================================================
+    namespace {
+        constexpr int PYRAMID_THREADS = 256;
+        constexpr int MAX_BLUR_RADIUS = 6;
+        constexpr int MAX_PYRAMID_LEVELS = 4;
+        constexpr int PYRAMID_BASE_SIZE = 1920;
+        constexpr float LN2 = 0.69314718055994531f;
+
+        struct BlurTaps {
+            float weight[MAX_BLUR_RADIUS + 1];
+            int radius;
+        };
+
+        BlurTaps make_blur_taps(const float sigma) {
+            LFS_ASSERT_MSG(std::isfinite(sigma) && sigma > 0.0f, "Blur sigma must be finite and positive");
+            BlurTaps taps{};
+            taps.radius = std::min(MAX_BLUR_RADIUS, static_cast<int>(std::ceil(3.0 * sigma)));
+            double raw[MAX_BLUR_RADIUS + 1] = {};
+            double sum = 0.0;
+            for (int d = 0; d <= taps.radius; ++d) {
+                raw[d] = std::exp(-0.5 * d * d / (static_cast<double>(sigma) * sigma));
+                sum += d == 0 ? raw[d] : 2.0 * raw[d];
+            }
+            for (int d = 0; d <= taps.radius; ++d)
+                taps.weight[d] = static_cast<float>(raw[d] / sum);
+            return taps;
+        }
+
+        unsigned pyramid_blocks(const size_t items) {
+            return static_cast<unsigned>((items + PYRAMID_THREADS - 1) / PYRAMID_THREADS);
+        }
+
+        // A pixel enters the blur when it is inside the image and, with a weight map, weighted.
+        template <typename MaskT>
+        __device__ __forceinline__ float keep_value(const MaskT* mask, const int index) {
+            return mask == nullptr || mask_value(mask, index) > 0.0f ? 1.0f : 0.0f;
+        }
+
+        template <typename MaskT>
+        __global__ void blur_support_rows_kernel(const MaskT* __restrict__ mask, float* __restrict__ rows,
+                                                 const int H, const int W, const BlurTaps taps) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= H * W)
+                return;
+            const int y = idx / W;
+            const int x = idx - y * W;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int xx = x + d;
+                if (xx >= 0 && xx < W)
+                    sum += taps.weight[d < 0 ? -d : d] * keep_value(mask, y * W + xx);
+            }
+            rows[idx] = sum;
+        }
+
+        __global__ void blur_support_cols_kernel(const float* __restrict__ rows, float* __restrict__ inv_support,
+                                                 const int H, const int W, const BlurTaps taps) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= H * W)
+                return;
+            const int y = idx / W;
+            const int x = idx - y * W;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int yy = y + d;
+                if (yy >= 0 && yy < H)
+                    sum += taps.weight[d < 0 ? -d : d] * rows[yy * W + x];
+            }
+            inv_support[idx] = sum > 1.0e-30f ? 1.0f / sum : 0.0f;
+        }
+
+        // Horizontal taps over the kept pixels of each plane.
+        template <typename MaskT>
+        __global__ void blur_rows_kernel(const float* __restrict__ in, const MaskT* __restrict__ mask,
+                                         float* __restrict__ out, const int planes, const int H, const int W,
+                                         const BlurTaps taps) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t plane_pixels = static_cast<size_t>(H) * W;
+            if (idx >= plane_pixels * planes)
+                return;
+            const size_t plane = idx / plane_pixels;
+            const int p = static_cast<int>(idx - plane * plane_pixels);
+            const int y = p / W;
+            const int x = p - y * W;
+            const float* row = in + plane * plane_pixels + static_cast<size_t>(y) * W;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int xx = x + d;
+                if (xx >= 0 && xx < W)
+                    sum += taps.weight[d < 0 ? -d : d] * keep_value(mask, y * W + xx) * row[xx];
+            }
+            out[idx] = sum;
+        }
+
+        // Vertical taps, then the division by the blurred keep mask.
+        __global__ void blur_cols_kernel(const float* __restrict__ in, const float* __restrict__ inv_support,
+                                         float* __restrict__ out, const int planes, const int H, const int W,
+                                         const BlurTaps taps) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t plane_pixels = static_cast<size_t>(H) * W;
+            if (idx >= plane_pixels * planes)
+                return;
+            const size_t plane = idx / plane_pixels;
+            const int p = static_cast<int>(idx - plane * plane_pixels);
+            const int y = p / W;
+            const int x = p - y * W;
+            const float* column = in + plane * plane_pixels + x;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int yy = y + d;
+                if (yy >= 0 && yy < H)
+                    sum += taps.weight[d < 0 ? -d : d] * column[static_cast<size_t>(yy) * W];
+            }
+            out[idx] = sum * inv_support[p];
+        }
+
+        // Adjoint, first half: divide by the blurred keep mask, then the vertical taps.
+        __global__ void blur_adjoint_cols_kernel(const float* __restrict__ grad, const float* __restrict__ inv_support,
+                                                 float* __restrict__ out, const int planes, const int H, const int W,
+                                                 const BlurTaps taps) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t plane_pixels = static_cast<size_t>(H) * W;
+            if (idx >= plane_pixels * planes)
+                return;
+            const size_t plane = idx / plane_pixels;
+            const int p = static_cast<int>(idx - plane * plane_pixels);
+            const int y = p / W;
+            const int x = p - y * W;
+            const float* column = grad + plane * plane_pixels + x;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int yy = y + d;
+                if (yy >= 0 && yy < H)
+                    sum += taps.weight[d < 0 ? -d : d] * column[static_cast<size_t>(yy) * W] * inv_support[yy * W + x];
+            }
+            out[idx] = sum;
+        }
+
+        // Adjoint, second half: horizontal taps; only kept pixels receive gradient.
+        template <typename MaskT>
+        __global__ void blur_adjoint_rows_kernel(const float* __restrict__ in, const MaskT* __restrict__ mask,
+                                                 float* __restrict__ out, const bool accumulate, const int planes,
+                                                 const int H, const int W, const BlurTaps taps) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t plane_pixels = static_cast<size_t>(H) * W;
+            if (idx >= plane_pixels * planes)
+                return;
+            const size_t plane = idx / plane_pixels;
+            const int p = static_cast<int>(idx - plane * plane_pixels);
+            const int y = p / W;
+            const int x = p - y * W;
+            const float* row = in + plane * plane_pixels + static_cast<size_t>(y) * W;
+            float sum = 0.0f;
+            for (int d = -taps.radius; d <= taps.radius; ++d) {
+                const int xx = x + d;
+                if (xx >= 0 && xx < W)
+                    sum += taps.weight[d < 0 ? -d : d] * row[xx];
+            }
+            const float value = keep_value(mask, p) * sum;
+            out[idx] = accumulate ? out[idx] + value : value;
+        }
+
+        // 2x2 average; an odd last row or column averages the pixels it has.
+        template <typename T, bool IsMask>
+        __global__ void pool2x2_kernel(const T* __restrict__ in, float* __restrict__ out, const int planes,
+                                       const int H, const int W, const int h, const int w) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t coarse_pixels = static_cast<size_t>(h) * w;
+            if (idx >= coarse_pixels * planes)
+                return;
+            const size_t plane = idx / coarse_pixels;
+            const int p = static_cast<int>(idx - plane * coarse_pixels);
+            const int Y = p / w;
+            const int X = p - Y * w;
+            const size_t base = plane * static_cast<size_t>(H) * W;
+            float sum = 0.0f;
+            int count = 0;
+            for (int a = 0; a < 2; ++a) {
+                const int y = 2 * Y + a;
+                if (y >= H)
+                    continue;
+                for (int b = 0; b < 2; ++b) {
+                    const int x = 2 * X + b;
+                    if (x >= W)
+                        continue;
+                    const int index = static_cast<int>(base + static_cast<size_t>(y) * W + x);
+                    if constexpr (IsMask)
+                        sum += mask_value(in, index);
+                    else
+                        sum += pixel_value(in, index);
+                    ++count;
+                }
+            }
+            out[idx] = sum / static_cast<float>(count);
+        }
+
+        __global__ void unpool2x2_adjoint_accumulate_kernel(const float* __restrict__ coarse, float* __restrict__ fine,
+                                                            const int planes, const int H, const int W,
+                                                            const int h, const int w) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            const size_t fine_pixels = static_cast<size_t>(H) * W;
+            if (idx >= fine_pixels * planes)
+                return;
+            const size_t plane = idx / fine_pixels;
+            const int p = static_cast<int>(idx - plane * fine_pixels);
+            const int Y = (p / W) >> 1;
+            const int X = (p % W) >> 1;
+            const int count = min(2, H - 2 * Y) * min(2, W - 2 * X);
+            fine[idx] += coarse[plane * static_cast<size_t>(h) * w + static_cast<size_t>(Y) * w + X] /
+                         static_cast<float>(count);
+        }
+
+        // SSIM partials of one branch: mu, sigma1^2 and sigma12 of the render (decoupled loss: of the
+        // raw render), and the corrected image's mu partial of the decoupled loss (null otherwise).
+        struct BranchPartials {
+            __half* p[4] = {nullptr, nullptr, nullptr, nullptr};
+        };
+
+        // Soft maximum of the two SSIM branches per channel and pixel. The partials of each branch are
+        // scaled in place by its softmax weight, the blurred branch's also by blurred_scale[k], so that
+        // its backward runs with SSIM weight 1 (no L1 term) and the SSIM weight inside its partials;
+        // the channel mean of the blend goes to the loss.
+        __global__ void blend_blur_tolerant_kernel(const float* __restrict__ ssim_sharp,
+                                                   const float* __restrict__ ssim_blurred,
+                                                   const BranchPartials sharp,
+                                                   const BranchPartials blurred,
+                                                   const float4 blurred_scale,
+                                                   float* __restrict__ blend_map,
+                                                   const int N, const int C, const int HW,
+                                                   const float temperature) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= N * HW)
+                return;
+            const int n = idx / HW;
+            const int p = idx - n * HW;
+            const float scales[4] = {blurred_scale.x, blurred_scale.y, blurred_scale.z, blurred_scale.w};
+            float sum = 0.0f;
+            for (int c = 0; c < C; ++c) {
+                const size_t i = (static_cast<size_t>(n) * C + c) * HW + p;
+                const float s0 = ssim_sharp[i];
+                const float s1 = ssim_blurred[i];
+                const float d = temperature * (s0 - s1);
+                sum += fmaxf(s0, s1) + (log1pf(expf(-fabsf(d))) - LN2) / temperature;
+                const float w0 = 1.0f / (1.0f + expf(-d));
+                const float w1 = 1.0f / (1.0f + expf(d));
+#pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    if (sharp.p[k])
+                        sharp.p[k][i] = __float2half(__half2float(sharp.p[k][i]) * w0);
+                    if (blurred.p[k])
+                        blurred.p[k][i] = __float2half(__half2float(blurred.p[k][i]) * (w1 * scales[k]));
+                }
+            }
+            blend_map[idx] = sum / static_cast<float>(C);
+        }
+
+        __global__ void accumulate_scaled_scalar_kernel(float* __restrict__ dst, const float* __restrict__ src,
+                                                        const float scale, const bool overwrite) {
+            if (blockIdx.x == 0 && threadIdx.x == 0)
+                dst[0] = (overwrite ? 0.0f : dst[0]) + scale * src[0];
+        }
+
+        __global__ void scale_kernel(float* __restrict__ data, const size_t n, const float scale) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx < n)
+                data[idx] *= scale;
+        }
+
+        void ensure_tensor(lfs::core::Tensor& tensor, const lfs::core::TensorShape& shape,
+                           const lfs::core::DataType dtype = lfs::core::DataType::Float32) {
+            if (!tensor.is_valid() || tensor.shape() != shape || tensor.dtype() != dtype)
+                tensor = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA, dtype);
+        }
+
+        template <typename MaskT>
+        void launch_blur_support(const MaskT* mask, float* rows, float* inv_support, const int H, const int W,
+                                 const BlurTaps& taps, const cudaStream_t stream) {
+            const unsigned blocks = pyramid_blocks(static_cast<size_t>(H) * W);
+            blur_support_rows_kernel<MaskT><<<blocks, PYRAMID_THREADS, 0, stream>>>(mask, rows, H, W, taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_support_rows");
+            blur_support_cols_kernel<<<blocks, PYRAMID_THREADS, 0, stream>>>(rows, inv_support, H, W, taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_support_cols");
+        }
+
+        template <typename MaskT>
+        void launch_blur(const float* in, const MaskT* mask, const float* inv_support, float* scratch, float* out,
+                         const int planes, const int H, const int W, const BlurTaps& taps,
+                         const cudaStream_t stream) {
+            const unsigned blocks = pyramid_blocks(static_cast<size_t>(planes) * H * W);
+            blur_rows_kernel<MaskT><<<blocks, PYRAMID_THREADS, 0, stream>>>(in, mask, scratch, planes, H, W, taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_rows");
+            blur_cols_kernel<<<blocks, PYRAMID_THREADS, 0, stream>>>(scratch, inv_support, out, planes, H, W, taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_cols");
+        }
+
+        template <typename MaskT>
+        void launch_blur_adjoint(const float* grad, const MaskT* mask, const float* inv_support, float* scratch,
+                                 float* out, const bool accumulate, const int planes, const int H, const int W,
+                                 const BlurTaps& taps, const cudaStream_t stream) {
+            const unsigned blocks = pyramid_blocks(static_cast<size_t>(planes) * H * W);
+            blur_adjoint_cols_kernel<<<blocks, PYRAMID_THREADS, 0, stream>>>(grad, inv_support, scratch, planes, H, W,
+                                                                             taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_adjoint_cols");
+            blur_adjoint_rows_kernel<MaskT><<<blocks, PYRAMID_THREADS, 0, stream>>>(scratch, mask, out, accumulate,
+                                                                                    planes, H, W, taps);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_adjoint_rows");
+        }
+
+        struct PyramidLevelResult {
+            lfs::core::Tensor loss;
+            float mask_sum = 0.0f;
+        };
+
+        template <typename Workspace>
+        inline constexpr bool is_masked_workspace = std::is_same_v<Workspace, MaskedFusedL1SSIMWorkspace> ||
+                                                    std::is_same_v<Workspace, MaskedDecoupledFusedL1SSIMWorkspace>;
+        template <typename Workspace>
+        inline constexpr bool is_decoupled_workspace =
+            std::is_same_v<Workspace, DecoupledFusedL1SSIMWorkspace> ||
+            std::is_same_v<Workspace, MaskedDecoupledFusedL1SSIMWorkspace>;
+
+        template <typename Workspace>
+        lfs::core::Tensor& level_gradient(Workspace& ws) {
+            if constexpr (is_decoupled_workspace<Workspace>)
+                return ws.grad_corrected;
+            else
+                return ws.grad_img;
+        }
+
+        // One scale: today's loss forward and backward on (x, y), x the render (decoupled loss: the
+        // corrected image, raw the raw render); with the blur-tolerant term also the blurred branch, the
+        // blend and the blur adjoint. The render gradient lands in level_gradient(ws), the raw-render
+        // gradient of the decoupled loss in grad_raw.
+        template <typename TargetT, typename MaskT, typename Workspace>
+        PyramidLevelResult run_pyramid_level(const float* x, const float* raw, const TargetT* y, const MaskT* mask,
+                                             float* grad_raw, const int N, const int C, const int H, const int W,
+                                             const float ssim_weight, const bool blur_tolerant, const float sigma,
+                                             const float denominator, Workspace& ws,
+                                             PhotometricPyramidWorkspace::Level& level,
+                                             const cudaStream_t stream) {
+            constexpr float C1 = 0.01f * 0.01f;
+            constexpr float C2 = 0.03f * 0.03f;
+            constexpr bool masked = is_masked_workspace<Workspace>;
+            constexpr bool decoupled = is_decoupled_workspace<Workspace>;
+            const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
+            const dim3 block(BLOCK_X, BLOCK_Y);
+            const lfs::core::TensorShape image_shape{static_cast<size_t>(N), static_cast<size_t>(C),
+                                                     static_cast<size_t>(H), static_cast<size_t>(W)};
+            const lfs::core::TensorShape plane_shape{static_cast<size_t>(H), static_cast<size_t>(W)};
+            const int planes = N * C;
+
+            BranchPartials sharp;
+            if constexpr (decoupled) {
+                sharp.p[0] = ws.raw_dm_dmu1.template ptr<__half>();
+                sharp.p[1] = ws.raw_dm_dsigma1_sq.template ptr<__half>();
+                sharp.p[2] = ws.raw_dm_dsigma12.template ptr<__half>();
+                sharp.p[3] = ws.app_dm_dmu1.template ptr<__half>();
+            } else {
+                sharp.p[0] = ws.dm_dmu1.template ptr<__half>();
+                sharp.p[1] = ws.dm_dsigma1_sq.template ptr<__half>();
+                sharp.p[2] = ws.dm_dsigma12.template ptr<__half>();
+            }
+            BranchPartials blurred;
+            float* ssim_sharp = nullptr;
+            if (blur_tolerant) {
+                ensure_tensor(level.blurred, image_shape);
+                ensure_tensor(level.ssim_sharp, image_shape);
+                ensure_tensor(level.ssim_blurred, image_shape);
+                ensure_tensor(level.inv_support, plane_shape);
+                ensure_tensor(level.support_scratch, plane_shape);
+                ensure_tensor(level.blend_map, {static_cast<size_t>(N), 1, static_cast<size_t>(H), static_cast<size_t>(W)});
+                ensure_tensor(level.dm_dmu1, image_shape, lfs::core::DataType::Float16);
+                ensure_tensor(level.dm_dsigma1_sq, image_shape, lfs::core::DataType::Float16);
+                ensure_tensor(level.dm_dsigma12, image_shape, lfs::core::DataType::Float16);
+                blurred.p[0] = level.dm_dmu1.template ptr<__half>();
+                blurred.p[1] = level.dm_dsigma1_sq.template ptr<__half>();
+                blurred.p[2] = level.dm_dsigma12.template ptr<__half>();
+                if constexpr (decoupled) {
+                    ensure_tensor(level.blurred_raw, image_shape);
+                    ensure_tensor(level.app_dm_dmu1, image_shape, lfs::core::DataType::Float16);
+                    blurred.p[3] = level.app_dm_dmu1.template ptr<__half>();
+                }
+                ssim_sharp = level.ssim_sharp.template ptr<float>();
+            }
+
+            const auto forward = [&](const float* image, const float* raw_image, const BranchPartials& partials,
+                                     float* ssim_map, float* cs_map, float* ssim_channels) {
+                const auto& p = partials.p;
+                if constexpr (decoupled && masked) {
+                    maskedDecoupledFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2, ssim_weight, image, raw_image, y, mask, p[3], p[0], p[1], p[2], ssim_map,
+                        cs_map, ssim_channels);
+                } else if constexpr (decoupled) {
+                    decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2, ssim_weight, image, raw_image, y, p[3], p[0], p[1], p[2], ssim_map, cs_map,
+                        ssim_channels);
+                } else if constexpr (masked) {
+                    maskedFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2, image, y, mask, p[0], p[1], p[2], ssim_map, cs_map, ssim_channels);
+                } else {
+                    fusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, stream>>>(
+                        H, W, C, C1, C2, image, y, p[0], p[1], p[2], ssim_map, cs_map, ssim_channels);
+                }
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
+            };
+
+            forward(x, raw, sharp, ws.ssim_map.template ptr<float>(), ws.cs_map.template ptr<float>(), ssim_sharp);
+
+            const float* loss_map = ws.ssim_map.template ptr<float>();
+            BlurTaps taps{};
+            if (blur_tolerant) {
+                taps = make_blur_taps(sigma);
+                launch_blur_support(mask, level.support_scratch.template ptr<float>(),
+                                    level.inv_support.template ptr<float>(), H, W, taps, stream);
+                launch_blur(x, mask, level.inv_support.template ptr<float>(), level.ssim_blurred.template ptr<float>(),
+                            level.blurred.template ptr<float>(), planes, H, W, taps, stream);
+                const float* blurred_raw = nullptr;
+                if constexpr (decoupled) {
+                    launch_blur(raw, mask, level.inv_support.template ptr<float>(),
+                                level.ssim_blurred.template ptr<float>(), level.blurred_raw.template ptr<float>(),
+                                planes, H, W, taps, stream);
+                    blurred_raw = level.blurred_raw.template ptr<float>();
+                }
+                forward(level.blurred.template ptr<float>(), blurred_raw, blurred, nullptr, nullptr,
+                        level.ssim_blurred.template ptr<float>());
+                // The fused partials carry no SSIM weight; the decoupled raw-render partials do, its
+                // corrected-image partial does not.
+                const float4 blurred_scale = decoupled ? make_float4(1.0f, 1.0f, 1.0f, ssim_weight)
+                                                       : make_float4(ssim_weight, ssim_weight, ssim_weight, 0.0f);
+                blend_blur_tolerant_kernel<<<pyramid_blocks(static_cast<size_t>(N) * H * W), PYRAMID_THREADS, 0,
+                                             stream>>>(ssim_sharp, level.ssim_blurred.template ptr<float>(), sharp,
+                                                       blurred, blurred_scale, level.blend_map.template ptr<float>(),
+                                                       N, C, H * W, BLUR_TOLERANT_SSIM_TEMPERATURE);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.blur_tolerant_blend");
+                loss_map = level.blend_map.template ptr<float>();
+            }
+
+            PyramidLevelResult result;
+            float inv_mask_sum = 0.0f;
+            float grad_per_pixel = 0.0f;
+            if constexpr (masked) {
+                launch_masked_fused_l1_ssim_mean_device(
+                    x, y, loss_map, mask, ssim_weight, ws.reduction_temp.template ptr<float>(),
+                    ws.masked_loss.template ptr<float>(), ws.mask_sum.template ptr<float>(), N, C, H, W, stream,
+                    denominator);
+                result.loss = ws.masked_loss;
+                result.mask_sum = denominator > 0.0f ? denominator : ws.mask_sum.template item<float>();
+                LFS_ASSERT_MSG(std::isfinite(result.mask_sum) && result.mask_sum > 0.0f,
+                               "Masked loss normalization must be positive and finite");
+                inv_mask_sum = 1.0f / result.mask_sum;
+            } else {
+                launch_fused_l1_ssim_mean_device(
+                    x, y, loss_map, ssim_weight, ws.reduction_temp.template ptr<float>(),
+                    ws.reduction_result.template ptr<float>(), N, C, H, W, /*apply_valid_padding=*/true, stream);
+                result.loss = ws.reduction_result;
+                const int valid_h = H > 10 ? H - 10 : H;
+                const int valid_w = W > 10 ? W - 10 : W;
+                grad_per_pixel = 1.0f / static_cast<float>(static_cast<size_t>(N) * C * valid_h * valid_w);
+            }
+
+            // Backward. The blurred branch runs with SSIM weight 1, which drops its L1 term; its
+            // softmax weight and the SSIM weight are already in its partials.
+            const auto render_backward = [&](const float* image, const float weight, float* out,
+                                             const BranchPartials& partials) {
+                const auto& p = partials.p;
+                if constexpr (decoupled && masked) {
+                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/false>
+                        <<<grid, block, 0, stream>>>(weight, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[3],
+                                                     nullptr, nullptr);
+                } else if constexpr (decoupled) {
+                    fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/false><<<grid, block, 0, stream>>>(
+                        weight, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[3],
+                        nullptr, nullptr);
+                } else if constexpr (masked) {
+                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
+                        <<<grid, block, 0, stream>>>(weight, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[0],
+                                                     p[1], p[2]);
+                } else {
+                    fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, stream>>>(
+                        weight, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[0],
+                        p[1], p[2]);
+                }
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
+            };
+            // Decoupled loss: contrast and structure of the raw render (its partials carry the SSIM weight).
+            const auto raw_backward = [&](const float* image, float* out, const BranchPartials& partials) {
+                const auto& p = partials.p;
+                if constexpr (masked) {
+                    maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true, /*Accumulate=*/false,
+                                                  /*ScaledMeanPartial=*/true>
+                        <<<grid, block, 0, stream>>>(1.0f, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[0],
+                                                     p[1], p[2]);
+                } else {
+                    fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, stream>>>(
+                        1.0f, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[0], p[1],
+                        p[2]);
+                }
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_raw_backward");
+            };
+
+            float* grad = level_gradient(ws).template ptr<float>();
+            render_backward(x, ssim_weight, grad, sharp);
+            if constexpr (decoupled)
+                raw_backward(raw, grad_raw, sharp);
+            if (blur_tolerant) {
+                // The render's SSIM is consumed by the blend; its buffer takes the blurred-branch gradient.
+                float* blurred_grad = level.ssim_sharp.template ptr<float>();
+                render_backward(level.blurred.template ptr<float>(), 1.0f, blurred_grad, blurred);
+                launch_blur_adjoint(blurred_grad, mask, level.inv_support.template ptr<float>(),
+                                    level.ssim_blurred.template ptr<float>(), grad, /*accumulate=*/true, planes, H, W,
+                                    taps, stream);
+                if constexpr (decoupled) {
+                    raw_backward(level.blurred_raw.template ptr<float>(), blurred_grad, blurred);
+                    launch_blur_adjoint(blurred_grad, mask, level.inv_support.template ptr<float>(),
+                                        level.ssim_blurred.template ptr<float>(), grad_raw, /*accumulate=*/true,
+                                        planes, H, W, taps, stream);
+                }
+            }
+            return result;
+        }
+
+        PhotometricPyramidResult pyramid_loss(const lfs::core::Tensor& prediction, const lfs::core::Tensor& raw_input,
+                                              const lfs::core::Tensor& target, const lfs::core::Tensor& weight,
+                                              const float ssim_weight, const int levels, const bool blur_tolerant,
+                                              LossWorkspaceArena& arena, PhotometricPyramidWorkspace& workspace,
+                                              const float denominator) {
+            using lfs::core::Tensor;
+            using lfs::core::TensorShape;
+            LFS_ASSERT_MSG(std::isfinite(denominator) && denominator >= 0.0f,
+                           "Loss denominator must be finite and nonnegative");
+            LFS_ASSERT_MSG(levels >= 1 && levels <= MAX_PYRAMID_LEVELS,
+                           lfs::core::detail::format_cuda_safe("Loss pyramid levels must be within [1, {}] (got {})",
+                                                               MAX_PYRAMID_LEVELS, levels));
+            validate_loss_weight(ssim_weight);
+            const bool weighted = weight.is_valid() && weight.numel() > 0;
+            const bool decoupled = raw_input.is_valid();
+
+            auto prepared = prepare_loss_images(prediction, target);
+            const Tensor& x0 = prepared.prediction;
+            const Tensor& y0 = prepared.target;
+            Tensor r0;
+            if (decoupled) {
+                r0 = prepare_loss_prediction(raw_input, "Raw loss image");
+                LFS_ASSERT_MSG(r0.shape() == x0.shape(),
+                               lfs::core::detail::format_cuda_safe(
+                                   "Decoupled loss image shapes must match (corrected={}, raw={})", x0.shape().str(),
+                                   r0.shape().str()));
+            }
+            const Tensor m0 = weighted ? prepare_loss_mask(weight, x0) : Tensor{};
+            const int N = static_cast<int>(x0.shape()[0]);
+            const int C = static_cast<int>(x0.shape()[1]);
+            const auto stream = lfs::core::getCurrentCUDAStream();
+
+            if (workspace.levels.size() < static_cast<size_t>(levels))
+                workspace.levels.resize(static_cast<size_t>(levels));
+            std::vector<int> heights(levels), widths(levels);
+            heights[0] = static_cast<int>(x0.shape()[2]);
+            widths[0] = static_cast<int>(x0.shape()[3]);
+
+            // Pool render (and raw render), photo and weights, scale by scale.
+            for (int s = 1; s < levels; ++s) {
+                const int H = heights[s - 1], W = widths[s - 1];
+                const int h = (H + 1) / 2, w = (W + 1) / 2;
+                heights[s] = h;
+                widths[s] = w;
+                auto& level = workspace.levels[s];
+                const auto& finer = workspace.levels[s - 1];
+                const TensorShape shape{static_cast<size_t>(N), static_cast<size_t>(C), static_cast<size_t>(h),
+                                        static_cast<size_t>(w)};
+                const unsigned blocks = pyramid_blocks(static_cast<size_t>(N) * C * h * w);
+                const auto pool_image = [&](const float* in, Tensor& out) {
+                    ensure_tensor(out, shape);
+                    pool2x2_kernel<float, false><<<blocks, PYRAMID_THREADS, 0, stream>>>(in, out.ptr<float>(), N * C,
+                                                                                         H, W, h, w);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_pool_image");
+                };
+                pool_image(s == 1 ? x0.ptr<float>() : finer.prediction.ptr<float>(), level.prediction);
+                if (decoupled)
+                    pool_image(s == 1 ? r0.ptr<float>() : finer.raw.ptr<float>(), level.raw);
+                ensure_tensor(level.target, shape);
+                const auto pool_target = [&](const auto* in) {
+                    using T = std::remove_cv_t<std::remove_pointer_t<decltype(in)>>;
+                    pool2x2_kernel<T, false><<<blocks, PYRAMID_THREADS, 0, stream>>>(
+                        in, level.target.ptr<float>(), N * C, H, W, h, w);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_pool_target");
+                };
+                if (s == 1)
+                    dispatch_target_ptr(y0, pool_target);
+                else
+                    pool_target(finer.target.ptr<float>());
+                if (weighted) {
+                    ensure_tensor(level.mask, {static_cast<size_t>(h), static_cast<size_t>(w)});
+                    const unsigned mask_blocks = pyramid_blocks(static_cast<size_t>(h) * w);
+                    const auto pool_mask = [&](const auto* in) {
+                        using T = std::remove_cv_t<std::remove_pointer_t<decltype(in)>>;
+                        pool2x2_kernel<T, true><<<mask_blocks, PYRAMID_THREADS, 0, stream>>>(
+                            in, level.mask.ptr<float>(), 1, H, W, h, w);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_pool_weight");
+                    };
+                    if (s == 1)
+                        dispatch_mask_ptr(m0, pool_mask);
+                    else
+                        pool_mask(finer.mask.ptr<float>());
+                }
+            }
+
+            // Coarse to fine, so the finer scale can take the coarser gradient through the pooling and
+            // scale 0 (in the arena) is computed last.
+            const float level_scale = 1.0f / static_cast<float>(levels);
+            const double full_pixels = static_cast<double>(heights[0]) * widths[0];
+            Tensor coarser_grad, coarser_grad_raw;
+            Tensor loss;
+            float mask_sum_value = 0.0f;
+            for (int s = levels - 1; s >= 0; --s) {
+                const int H = heights[s], W = widths[s];
+                auto& level = workspace.levels[s];
+                const std::vector<size_t> dims{static_cast<size_t>(N), static_cast<size_t>(C), static_cast<size_t>(H),
+                                               static_cast<size_t>(W)};
+                const float sigma = BLUR_TOLERANT_SSIM_SIGMA / static_cast<float>(1 << s);
+                const float level_denominator =
+                    denominator > 0.0f ? static_cast<float>(denominator * (static_cast<double>(H) * W / full_pixels))
+                                       : 0.0f;
+                const float* x = s == 0 ? x0.ptr<float>() : level.prediction.ptr<float>();
+                const float* r = nullptr;
+                float* grad_raw = nullptr;
+                if (decoupled) {
+                    r = s == 0 ? r0.ptr<float>() : level.raw.ptr<float>();
+                    ensure_tensor(level.grad_raw, TensorShape(dims));
+                    grad_raw = level.grad_raw.ptr<float>();
+                }
+                Tensor grad;
+                PyramidLevelResult level_result;
+                const auto run = [&](auto& ws, const auto* y, const auto* mask) {
+                    ws.ensure_size(dims);
+                    level_result = run_pyramid_level(x, r, y, mask, grad_raw, N, C, H, W, ssim_weight, blur_tolerant,
+                                                     sigma, level_denominator, ws, level, stream);
+                    grad = level_gradient(ws);
+                };
+                const auto run_on = [&](auto& ws) {
+                    using Ws = std::remove_reference_t<decltype(ws)>;
+                    if constexpr (is_masked_workspace<Ws>) {
+                        if (s == 0)
+                            dispatch_target_ptr(y0, [&](auto* y) { dispatch_mask_ptr(m0, [&](auto* m) { run(ws, y, m); }); });
+                        else
+                            run(ws, level.target.ptr<float>(), level.mask.ptr<float>());
+                    } else {
+                        if (s == 0)
+                            dispatch_target_ptr(y0, [&](auto* y) { run(ws, y, static_cast<const float*>(nullptr)); });
+                        else
+                            run(ws, level.target.ptr<float>(), static_cast<const float*>(nullptr));
+                    }
+                };
+                if (decoupled && weighted)
+                    run_on(s == 0 ? arena.masked_decoupled() : level.masked_decoupled);
+                else if (decoupled)
+                    run_on(s == 0 ? arena.decoupled() : level.decoupled);
+                else if (weighted)
+                    run_on(s == 0 ? arena.masked_fused() : level.masked);
+                else
+                    run_on(s == 0 ? arena.fused() : level.fused);
+                if (s == 0)
+                    mask_sum_value = level_result.mask_sum;
+
+                if (coarser_grad.is_valid()) {
+                    const int h = heights[s + 1], w = widths[s + 1];
+                    const unsigned blocks = pyramid_blocks(static_cast<size_t>(N) * C * H * W);
+                    unpool2x2_adjoint_accumulate_kernel<<<blocks, PYRAMID_THREADS, 0, stream>>>(
+                        coarser_grad.ptr<float>(), grad.ptr<float>(), N * C, H, W, h, w);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_unpool_adjoint");
+                    if (decoupled) {
+                        unpool2x2_adjoint_accumulate_kernel<<<blocks, PYRAMID_THREADS, 0, stream>>>(
+                            coarser_grad_raw.ptr<float>(), level.grad_raw.ptr<float>(), N * C, H, W, h, w);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_unpool_adjoint_raw");
+                    }
+                }
+                coarser_grad = grad;
+                if (decoupled)
+                    coarser_grad_raw = level.grad_raw;
+
+                if (levels == 1) {
+                    loss = level_result.loss;
+                } else {
+                    ensure_tensor(workspace.loss, {1});
+                    accumulate_scaled_scalar_kernel<<<1, 1, 0, stream>>>(
+                        workspace.loss.ptr<float>(), level_result.loss.ptr<float>(), level_scale, s == levels - 1);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_loss_sum");
+                    loss = workspace.loss;
+                }
+            }
+
+            if (levels > 1) {
+                for (Tensor* g : {&coarser_grad, &coarser_grad_raw}) {
+                    if (!g->is_valid())
+                        continue;
+                    scale_kernel<<<pyramid_blocks(g->numel()), PYRAMID_THREADS, 0, stream>>>(g->ptr<float>(),
+                                                                                             g->numel(), level_scale);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_scale_gradient");
+                }
+            }
+            return {.loss = loss, .grad = coarser_grad, .grad_raw = coarser_grad_raw, .mask_sum_value = mask_sum_value};
+        }
+    } // namespace
+
+    int loss_pyramid_levels(const int height, const int width) {
+        LFS_ASSERT_MSG(height > 0 && width > 0, "Loss pyramid dimensions must be positive");
+        const int short_side = std::min(height, width);
+        if (short_side < PYRAMID_BASE_SIZE)
+            return 1;
+        const int octaves = static_cast<int>(
+            std::floor(std::log2(static_cast<double>(short_side) / static_cast<double>(PYRAMID_BASE_SIZE))));
+        return std::min(MAX_PYRAMID_LEVELS, octaves + 2);
+    }
+
+    PhotometricPyramidResult photometric_pyramid_loss(
+        const lfs::core::Tensor& prediction,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& weight,
+        const float ssim_weight,
+        const int levels,
+        const bool blur_tolerant,
+        LossWorkspaceArena& arena,
+        PhotometricPyramidWorkspace& workspace,
+        const float denominator) {
+        const bool weighted = weight.is_valid() && weight.numel() > 0;
+        if (levels == 1 && !blur_tolerant) {
+            validate_loss_weight(ssim_weight);
+            if (weighted) {
+                auto& ws = arena.masked_fused();
+                auto [loss, ctx] = masked_fused_l1_ssim_forward(prediction, target, weight, ssim_weight, ws,
+                                                                denominator);
+                auto grad = masked_fused_l1_ssim_backward(ctx, ws);
+                return {.loss = loss, .grad = grad, .mask_sum_value = ctx.mask_sum_value};
+            }
+            auto& ws = arena.fused();
+            auto [loss, ctx] = fused_l1_ssim_forward(prediction, target, ssim_weight, ws, /*apply_valid_padding=*/true);
+            auto grad = fused_l1_ssim_backward(ctx, ws);
+            return {.loss = loss, .grad = grad};
+        }
+        return pyramid_loss(prediction, lfs::core::Tensor{}, target, weight, ssim_weight, levels, blur_tolerant, arena,
+                            workspace, denominator);
+    }
+
+    PhotometricPyramidResult decoupled_photometric_pyramid_loss(
+        const lfs::core::Tensor& corrected,
+        const lfs::core::Tensor& raw,
+        const lfs::core::Tensor& target,
+        const lfs::core::Tensor& weight,
+        const float ssim_weight,
+        const int levels,
+        const bool blur_tolerant,
+        LossWorkspaceArena& arena,
+        PhotometricPyramidWorkspace& workspace,
+        const float denominator) {
+        LFS_ASSERT_MSG(raw.is_valid() && raw.numel() > 0, "Decoupled pyramid loss needs the raw render");
+        return pyramid_loss(corrected, raw, target, weight, ssim_weight, levels, blur_tolerant, arena, workspace,
+                            denominator);
+    }
+
+    DecoupledRawGradient decoupled_raw_gradient(const PhotometricPyramidResult& result, const lfs::core::Tensor& raw) {
+        LFS_ASSERT_MSG(result.grad_raw.is_valid(), "Pyramid loss result has no raw-render gradient");
+        return DecoupledRawGradient{.raw_img = raw, .precomputed = result.grad_raw};
+    }
+
+    namespace {
+        template <typename Fn>
+        void dispatch_optional_mask(const lfs::core::Tensor& mask, Fn&& fn) {
+            if (mask.is_valid())
+                dispatch_mask_ptr(mask, fn);
+            else
+                fn(static_cast<const float*>(nullptr));
+        }
+
+        lfs::core::Tensor blur_or_adjoint(const lfs::core::Tensor& input, const lfs::core::Tensor& weight,
+                                          const float sigma, const bool adjoint) {
+            auto image = prepare_loss_prediction(input, adjoint ? "Blur adjoint gradient" : "Blur image");
+            const lfs::core::Tensor mask =
+                weight.is_valid() && weight.numel() > 0 ? prepare_loss_mask(weight, image) : lfs::core::Tensor{};
+            const int planes = static_cast<int>(image.shape()[0] * image.shape()[1]);
+            const int H = static_cast<int>(image.shape()[2]);
+            const int W = static_cast<int>(image.shape()[3]);
+            const auto taps = make_blur_taps(sigma);
+            const auto stream = lfs::core::getCurrentCUDAStream();
+            auto rows = lfs::core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, lfs::core::Device::CUDA);
+            auto inv_support = lfs::core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, lfs::core::Device::CUDA);
+            auto scratch = lfs::core::Tensor::empty(image.shape(), lfs::core::Device::CUDA);
+            auto out = lfs::core::Tensor::empty(image.shape(), lfs::core::Device::CUDA);
+            dispatch_optional_mask(mask, [&](const auto* mask_ptr) {
+                launch_blur_support(mask_ptr, rows.ptr<float>(), inv_support.ptr<float>(), H, W, taps, stream);
+                if (adjoint)
+                    launch_blur_adjoint(image.ptr<float>(), mask_ptr, inv_support.ptr<float>(), scratch.ptr<float>(),
+                                        out.ptr<float>(), /*accumulate=*/false, planes, H, W, taps, stream);
+                else
+                    launch_blur(image.ptr<float>(), mask_ptr, inv_support.ptr<float>(), scratch.ptr<float>(),
+                                out.ptr<float>(), planes, H, W, taps, stream);
+            });
+            return out;
+        }
+    } // namespace
+
+    lfs::core::Tensor normalized_gaussian_blur(const lfs::core::Tensor& image, const lfs::core::Tensor& weight,
+                                               const float sigma) {
+        return blur_or_adjoint(image, weight, sigma, /*adjoint=*/false);
+    }
+
+    lfs::core::Tensor normalized_gaussian_blur_adjoint(const lfs::core::Tensor& grad, const lfs::core::Tensor& weight,
+                                                       const float sigma) {
+        return blur_or_adjoint(grad, weight, sigma, /*adjoint=*/true);
     }
 
     // =========================================================================

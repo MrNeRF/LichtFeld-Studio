@@ -1719,6 +1719,27 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
+        const int pyramid_levels =
+            opt_params.loss_pyramid
+                ? kernels::loss_pyramid_levels(static_cast<int>(gt_image.shape()[gt_image.ndim() - 2]),
+                                               static_cast<int>(gt_image.shape()[gt_image.ndim() - 1]))
+                : 1;
+        if (use_decoupled_appearance_loss && (opt_params.ssim_blur_tolerant || pyramid_levels > 1)) {
+            auto result = kernels::decoupled_photometric_pyramid_loss(
+                corrected, raw_rendered, gt_image, core::Tensor{}, opt_params.lambda_dssim, pyramid_levels,
+                opt_params.ssim_blur_tolerant, photometric_loss_.arena(), photometric_loss_.pyramid_workspace());
+            auto grad_corrected = result.grad;
+            if (corrected.ndim() == 3)
+                grad_corrected = grad_corrected.squeeze(0);
+            std::optional<RawGradientResidual> raw_residual;
+            add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration, result.loss,
+                                  grad_corrected, raw_residual);
+            return PhotometricLossResult{
+                .loss = result.loss,
+                .grad_corrected = grad_corrected,
+                .raw_gradient = kernels::decoupled_raw_gradient(result, raw_rendered),
+                .raw_residual = raw_residual};
+        }
         if (use_decoupled_appearance_loss) {
             auto& decoupled_ws = photometric_loss_.arena().decoupled();
             auto [loss_tensor, ctx] = lfs::training::kernels::decoupled_fused_l1_ssim_forward(
@@ -1740,7 +1761,9 @@ namespace lfs::training {
                 .raw_residual = raw_residual};
         }
 
-        lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
+        lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim,
+                                                              .blur_tolerant = opt_params.ssim_blur_tolerant,
+                                                              .loss_pyramid = opt_params.loss_pyramid};
         auto result = photometric_loss_.forward(corrected, gt_image, params);
         if (!result) {
             return std::unexpected(result.error());
@@ -1888,9 +1911,29 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
+        const int pyramid_levels =
+            opt_params.loss_pyramid
+                ? kernels::loss_pyramid_levels(static_cast<int>(gt_image.shape()[gt_image.ndim() - 2]),
+                                               static_cast<int>(gt_image.shape()[gt_image.ndim() - 1]))
+                : 1;
+        const bool pyramid_loss = opt_params.ssim_blur_tolerant || pyramid_levels > 1;
+
         if (photometric_weight.is_valid()) {
             float mask_normalization = 0.0f;
-            if (use_decoupled_appearance_loss) {
+            if (use_decoupled_appearance_loss && pyramid_loss) {
+                auto result = kernels::decoupled_photometric_pyramid_loss(
+                    corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim, pyramid_levels,
+                    opt_params.ssim_blur_tolerant, photometric_loss_.arena(), photometric_loss_.pyramid_workspace(),
+                    base_denominator);
+                mask_normalization = result.mask_sum_value;
+                grad_corrected = result.grad;
+                raw_gradient = kernels::decoupled_raw_gradient(result, raw_rendered);
+                loss = result.loss;
+
+                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                    grad_corrected = grad_corrected.squeeze(0);
+                }
+            } else if (use_decoupled_appearance_loss) {
                 auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
@@ -1907,12 +1950,22 @@ namespace lfs::training {
                     grad_corrected = grad_corrected.squeeze(0);
                 }
             } else {
-                auto& masked_ws = photometric_loss_.arena().masked_fused();
-                auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws, base_denominator);
-                mask_normalization = ctx.mask_sum_value;
-                grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
-                loss = loss_tensor;
+                if (pyramid_loss) {
+                    auto result = kernels::photometric_pyramid_loss(
+                        corrected, gt_image, photometric_weight, opt_params.lambda_dssim, pyramid_levels,
+                        opt_params.ssim_blur_tolerant, photometric_loss_.arena(),
+                        photometric_loss_.pyramid_workspace(), base_denominator);
+                    mask_normalization = result.mask_sum_value;
+                    grad_corrected = result.grad;
+                    loss = result.loss;
+                } else {
+                    auto& masked_ws = photometric_loss_.arena().masked_fused();
+                    auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
+                        corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws, base_denominator);
+                    mask_normalization = ctx.mask_sum_value;
+                    grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
+                    loss = loss_tensor;
+                }
 
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
@@ -7990,7 +8043,8 @@ namespace lfs::training {
                                 } else if (raw_loss_input.is_valid()) {
                                     ssim_map = photometric_loss_.arena().decoupled().ssim_map;
                                     cs_map = photometric_loss_.arena().decoupled().cs_map;
-                                } else if (step_params.lambda_dssim < 1.0f) {
+                                } else if (step_params.lambda_dssim < 1.0f ||
+                                           !photometric_loss_.last_forward_used_pure_ssim()) {
                                     ssim_map = photometric_loss_.fused_workspace().ssim_map;
                                     cs_map = photometric_loss_.fused_workspace().cs_map;
                                 } else {
