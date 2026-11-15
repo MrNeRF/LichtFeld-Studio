@@ -6580,6 +6580,15 @@ namespace lfs::training {
                                                                           (core::param::is_mrnf_strategy(step_params.strategy) &&
                                                                            step_params.use_error_map));
                 const bool use_ssim_error = use_pixel_error_densification;
+                // Match strategy: the contrast-structure error map comes from the loss itself when the loss
+                // is blur-tolerant or multi-scale (blended branches, averaged scales); see the error map below.
+                {
+                    auto& pyramid_ws = photometric_loss_.pyramid_workspace();
+                    pyramid_ws.want_cs_error_map =
+                        match_strategy && use_ssim_error &&
+                        step_params.densify_error_map == lfs::core::param::DensifyErrorMap::SsimCs;
+                    pyramid_ws.cs_error_map_ready = false;
+                }
                 DensificationType densification_type = DensificationType::None;
                 if (!in_popspa && (step_params.strategy == "mcmc" || match_strategy))
                     densification_type = DensificationType::MCMC;
@@ -8073,7 +8082,9 @@ namespace lfs::training {
                         if (use_pixel_error_densification) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
-                            if (use_ssim_error && step_params.lambda_dssim > 0.0f) {
+                            if (photometric_loss_.pyramid_workspace().cs_error_map_ready) {
+                                tile_error_map = photometric_loss_.pyramid_workspace().cs_error_map;
+                            } else if (use_ssim_error && step_params.lambda_dssim > 0.0f) {
                                 lfs::core::Tensor ssim_map;
                                 lfs::core::Tensor cs_map;
                                 if (used_masked_fused && raw_loss_input.is_valid()) {

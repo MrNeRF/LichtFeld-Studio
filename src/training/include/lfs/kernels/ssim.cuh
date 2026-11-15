@@ -546,9 +546,19 @@ namespace lfs::training::kernels {
             lfs::core::Tensor dm_dsigma12;
             lfs::core::Tensor blurred_raw; // [N, C, h, w] blurred raw render (decoupled loss)
             lfs::core::Tensor app_dm_dmu1; // [N, C, h, w] fp16 blurred-branch corrected-image partial (decoupled)
+            lfs::core::Tensor cs_error;    // [h, w] contrast-structure error of this scale (scales >= 1)
         };
         std::vector<Level> levels;
         lfs::core::Tensor loss; // [1]
+
+        // Contrast-structure error map of the loss, filled when want_cs_error_map is set (single image):
+        // per pixel 1 - mean_c(w0 cs(x, y) + w1 cs(G x, y)) with w0, w1 the soft-maximum weights of the
+        // two branches (w0 = 1 without the blur-tolerant term), averaged over the scales, each coarse
+        // map repeated over the pixels it pools. cs_error_map_ready tells whether the last pyramid loss
+        // call wrote it.
+        bool want_cs_error_map = false;
+        bool cs_error_map_ready = false;
+        lfs::core::Tensor cs_error_map; // [H, W]
     };
 
     struct PhotometricPyramidResult {

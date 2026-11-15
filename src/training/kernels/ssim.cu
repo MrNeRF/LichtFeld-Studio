@@ -3500,6 +3500,114 @@ namespace lfs::training::kernels {
                 data[idx] *= scale;
         }
 
+        // Contrast-structure error of one scale (one image): per pixel 1 - mean_c(w0 cs0 + w1 cs1),
+        // cs0 = cs(x, y), cs1 = cs(G x, y) and w0, w1 the soft-maximum weights of the two SSIM branches
+        // (the loss's blend); without the blurred render (blurred == nullptr) it is 1 - mean_c cs0.
+        // Written as scale * value, or added to out when accumulate is set. Same windows and zero
+        // padding as the loss kernels.
+        template <typename TargetT>
+        __global__ void blend_cs_error_kernel(const int H, const int W, const int CH, const float* __restrict__ x,
+                                              const float* __restrict__ blurred, const TargetT* __restrict__ y,
+                                              float* __restrict__ out, const float scale, const float temperature) {
+            constexpr float C1 = 0.01f * 0.01f;
+            constexpr float C2 = 0.03f * 0.03f;
+            constexpr int SUMS = 8; // x, x^2, xy, b, b^2, by, y, y^2
+            auto block = cg::this_thread_block();
+            const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
+            const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
+            __shared__ float tile[SHARED_Y][SHARED_X][3];
+            __shared__ float xconv[CONV_Y][CONV_X][SUMS];
+            const bool blur = blurred != nullptr;
+            float cs_sum = 0.0f;
+
+            for (int c = 0; c < CH; ++c) {
+                const int tile_size = SHARED_Y * SHARED_X;
+                const int threads = BLOCK_X * BLOCK_Y;
+                const int tile_y0 = block.group_index().y * BLOCK_Y;
+                const int tile_x0 = block.group_index().x * BLOCK_X;
+                for (int t = block.thread_rank(); t < tile_size; t += threads) {
+                    const int ly = t / SHARED_X, lx = t % SHARED_X;
+                    const int gy = tile_y0 + ly - HALO, gx = tile_x0 + lx - HALO;
+                    tile[ly][lx][0] = get_pix_value(x, 0, c, gy, gx, CH, H, W);
+                    tile[ly][lx][1] = blur ? get_pix_value(blurred, 0, c, gy, gx, CH, H, W) : 0.0f;
+                    tile[ly][lx][2] = get_pix_value(y, 0, c, gy, gx, CH, H, W);
+                }
+                block.sync();
+
+                for (int ly = threadIdx.y; ly < CONV_Y; ly += BLOCK_Y) {
+                    const int lx = threadIdx.x + HALO;
+                    float s[SUMS] = {};
+#pragma unroll
+                    for (int d = -HALO; d <= HALO; ++d) {
+                        const float w = cGauss[HALO + d];
+                        const float X = tile[ly][lx + d][0], B = tile[ly][lx + d][1], Y = tile[ly][lx + d][2];
+                        s[0] += X * w;
+                        s[1] += X * X * w;
+                        s[2] += X * Y * w;
+                        s[3] += B * w;
+                        s[4] += B * B * w;
+                        s[5] += B * Y * w;
+                        s[6] += Y * w;
+                        s[7] += Y * Y * w;
+                    }
+#pragma unroll
+                    for (int k = 0; k < SUMS; ++k)
+                        xconv[ly][threadIdx.x][k] = s[k];
+                }
+                block.sync();
+
+                {
+                    const int ly = threadIdx.y + HALO;
+                    const int lx = threadIdx.x;
+                    float s[SUMS] = {};
+#pragma unroll
+                    for (int d = -HALO; d <= HALO; ++d) {
+                        const float w = cGauss[HALO + d];
+#pragma unroll
+                        for (int k = 0; k < SUMS; ++k)
+                            s[k] += xconv[ly + d][lx][k] * w;
+                    }
+                    const float mu_y = s[6];
+                    const float var_y = s[7] - mu_y * mu_y;
+                    const auto branch = [&](const float mu, const float sq, const float cross, float& cs) {
+                        const float var = sq - mu * mu;
+                        const float cov = cross - mu * mu_y;
+                        const float A = mu * mu + mu_y * mu_y + C1;
+                        const float B = var + var_y + C2;
+                        cs = (2.0f * cov + C2) / B;
+                        return (2.0f * mu * mu_y + C1) / A * cs;
+                    };
+                    float cs0, cs1 = 0.0f;
+                    const float S0 = branch(s[0], s[1], s[2], cs0);
+                    float blend = cs0;
+                    if (blur) {
+                        const float S1 = branch(s[3], s[4], s[5], cs1);
+                        const float w0 = 1.0f / (1.0f + expf(-temperature * (S0 - S1)));
+                        blend = w0 * cs0 + (1.0f - w0) * cs1;
+                    }
+                    cs_sum += blend;
+                }
+                block.sync();
+            }
+
+            if (pix_x < W && pix_y < H) {
+                const int idx = pix_y * W + pix_x;
+                const float value = scale * fmaxf(1.0f - cs_sum / static_cast<float>(CH), 0.0f);
+                out[idx] = value;
+            }
+        }
+
+        // fine[p] += scale * coarse[pixel pooling p], the coarse map `shift` halvings below the fine one.
+        __global__ void add_upsampled_error_kernel(const float* __restrict__ coarse, float* __restrict__ fine,
+                                                   const int H, const int W, const int w, const int shift,
+                                                   const float scale) {
+            const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (idx >= static_cast<size_t>(H) * W)
+                return;
+            const int py = static_cast<int>(idx / W), px = static_cast<int>(idx % W);
+            fine[idx] += scale * coarse[static_cast<size_t>(py >> shift) * w + (px >> shift)];
+        }
+
         void ensure_tensor(lfs::core::Tensor& tensor, const lfs::core::TensorShape& shape,
                            const lfs::core::DataType dtype = lfs::core::DataType::Float32) {
             if (!tensor.is_valid() || tensor.shape() != shape || tensor.dtype() != dtype)
@@ -3922,6 +4030,42 @@ namespace lfs::training::kernels {
                 }
             }
 
+            // The densification error map of the same loss, scale 0 written, coarser scales added.
+            if (workspace.want_cs_error_map && N == 1) {
+                const dim3 block(BLOCK_X, BLOCK_Y);
+                ensure_tensor(workspace.cs_error_map,
+                              {static_cast<size_t>(heights[0]), static_cast<size_t>(widths[0])});
+                for (int s = 0; s < levels; ++s) {
+                    const int H = heights[s], W = widths[s];
+                    auto& level = workspace.levels[s];
+                    const float* x = s == 0 ? x0.ptr<float>() : level.prediction.ptr<float>();
+                    const float* blurred = blur_tolerant ? level.blurred.ptr<float>() : nullptr;
+                    float* out = workspace.cs_error_map.ptr<float>();
+                    if (s > 0) {
+                        ensure_tensor(level.cs_error, {static_cast<size_t>(H), static_cast<size_t>(W)});
+                        out = level.cs_error.ptr<float>();
+                    }
+                    const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1);
+                    const auto launch = [&](const auto* y) {
+                        blend_cs_error_kernel<<<grid, block, 0, stream>>>(H, W, C, x, blurred, y, out,
+                                                                          s == 0 ? level_scale : 1.0f,
+                                                                          BLUR_TOLERANT_SSIM_TEMPERATURE);
+                    };
+                    if (s == 0)
+                        dispatch_target_ptr(y0, launch);
+                    else
+                        launch(level.target.ptr<float>());
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_cs_error");
+                    if (s > 0) {
+                        add_upsampled_error_kernel<<<pyramid_blocks(static_cast<size_t>(heights[0]) * widths[0]),
+                                                     PYRAMID_THREADS, 0, stream>>>(
+                            out, workspace.cs_error_map.ptr<float>(), heights[0], widths[0], W, s, level_scale);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_cs_error_upsample");
+                    }
+                }
+                workspace.cs_error_map_ready = true;
+            }
+
             if (levels > 1) {
                 for (Tensor* g : {&coarser_grad, &coarser_grad_raw}) {
                     if (!g->is_valid())
@@ -3955,6 +4099,7 @@ namespace lfs::training::kernels {
         LossWorkspaceArena& arena,
         PhotometricPyramidWorkspace& workspace,
         const float denominator) {
+        workspace.cs_error_map_ready = false;
         const bool weighted = weight.is_valid() && weight.numel() > 0;
         if (levels == 1 && !blur_tolerant) {
             validate_loss_weight(ssim_weight);
@@ -3986,6 +4131,7 @@ namespace lfs::training::kernels {
         PhotometricPyramidWorkspace& workspace,
         const float denominator) {
         LFS_ASSERT_MSG(raw.is_valid() && raw.numel() > 0, "Decoupled pyramid loss needs the raw render");
+        workspace.cs_error_map_ready = false;
         return pyramid_loss(corrected, raw, target, weight, ssim_weight, levels, blur_tolerant, arena, workspace,
                             denominator);
     }

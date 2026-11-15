@@ -664,3 +664,118 @@ TEST_F(BlurTolerantSSIMTest, DecoupledGradientMatchesFiniteDifferences) {
         }
     }
 }
+
+namespace {
+
+    // CPU contrast-structure error of one scale: 1 - mean_c(w0 cs(x, y) + w1 cs(b, y)), 11-tap Gaussian
+    // windows (sigma 1.5) with zero padding, w0 the soft-maximum weight of the sharp branch; b empty: cs(x, y).
+    std::vector<double> cs_error_cpu(const std::vector<float>& x, const std::vector<float>& b,
+                                     const std::vector<float>& y, const int C, const int H, const int W) {
+        double g[11];
+        double gsum = 0.0;
+        for (int d = -5; d <= 5; ++d)
+            gsum += g[d + 5] = std::exp(-0.5 * d * d / (1.5 * 1.5));
+        for (double& v : g)
+            v /= gsum;
+        constexpr double C1 = 0.01 * 0.01, C2 = 0.03 * 0.03;
+        std::vector<double> out(static_cast<size_t>(H) * W, 0.0);
+        for (int ch = 0; ch < C; ++ch)
+            for (int py = 0; py < H; ++py)
+                for (int px = 0; px < W; ++px) {
+                    double s[8] = {};
+                    for (int dy = -5; dy <= 5; ++dy)
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int yy = py + dy, xx = px + dx;
+                            if (yy < 0 || yy >= H || xx < 0 || xx >= W)
+                                continue;
+                            const size_t i = (static_cast<size_t>(ch) * H + yy) * W + xx;
+                            const double w = g[dy + 5] * g[dx + 5];
+                            const double X = x[i], B = b.empty() ? 0.0 : b[i], Y = y[i];
+                            s[0] += w * X, s[1] += w * X * X, s[2] += w * X * Y;
+                            s[3] += w * B, s[4] += w * B * B, s[5] += w * B * Y;
+                            s[6] += w * Y, s[7] += w * Y * Y;
+                        }
+                    const double my = s[6], vy = s[7] - my * my;
+                    const auto branch = [&](const double m, const double sq, const double cross, double& cs) {
+                        cs = (2.0 * (cross - m * my) + C2) / (sq - m * m + vy + C2);
+                        return (2.0 * m * my + C1) / (m * m + my * my + C1) * cs;
+                    };
+                    double cs0 = 0.0, cs1 = 0.0;
+                    const double S0 = branch(s[0], s[1], s[2], cs0);
+                    double blend = cs0;
+                    if (!b.empty()) {
+                        const double S1 = branch(s[3], s[4], s[5], cs1);
+                        const double w0 = 1.0 / (1.0 + std::exp(-BLUR_TOLERANT_SSIM_TEMPERATURE * (S0 - S1)));
+                        blend = w0 * cs0 + (1.0 - w0) * cs1;
+                    }
+                    out[static_cast<size_t>(py) * W + px] += blend / C;
+                }
+        for (auto& v : out)
+            v = std::max(1.0 - v, 0.0);
+        return out;
+    }
+
+} // namespace
+
+// Catches a densification error map that is not the loss's own: per scale the soft-maximum blend of
+// the two branches' contrast-structure terms, averaged over the scales with each coarse value
+// repeated over the pixels it pools; none without either switch.
+TEST_F(BlurTolerantSSIMTest, ErrorMapBlendsTheBranchesOverTheScales) {
+    std::vector<float> x;
+    const LossCase c = two_region_case(x);
+    for (const int levels : {1, 2}) {
+        for (const bool blur : {false, true}) {
+            const std::string label = "levels " + std::to_string(levels) + (blur ? " blur" : " plain");
+            LossWorkspaceArena arena;
+            PhotometricPyramidWorkspace workspace;
+            workspace.want_cs_error_map = true;
+            (void)photometric_pyramid_loss(image_tensor(x, c.C, c.H, c.W), image_tensor(c.target, c.C, c.H, c.W),
+                                           Tensor{}, 0.2f, levels, blur, arena, workspace);
+            if (levels == 1 && !blur) {
+                EXPECT_FALSE(workspace.cs_error_map_ready) << label;
+                continue;
+            }
+            ASSERT_TRUE(workspace.cs_error_map_ready) << label;
+            const auto map = workspace.cs_error_map.cpu().to_vector();
+            ASSERT_EQ(map.size(), static_cast<size_t>(c.H) * c.W) << label;
+
+            std::vector<double> expected(map.size(), 0.0);
+            auto xs = x, ys = c.target;
+            int H = c.H, W = c.W;
+            for (int s = 0; s < levels; ++s) {
+                if (s > 0) {
+                    xs = pool_cpu(xs, c.C, H, W);
+                    ys = pool_cpu(ys, c.C, H, W);
+                    H = (H + 1) / 2, W = (W + 1) / 2;
+                }
+                const auto bs = blur ? blurred(xs, c.C, H, W, BLUR_TOLERANT_SSIM_SIGMA / static_cast<float>(1 << s))
+                                     : std::vector<float>{};
+                const auto level = cs_error_cpu(xs, bs, ys, c.C, H, W);
+                for (int py = 0; py < c.H; ++py)
+                    for (int px = 0; px < c.W; ++px)
+                        expected[static_cast<size_t>(py) * c.W + px] +=
+                            level[static_cast<size_t>(py >> s) * W + (px >> s)] / levels;
+            }
+            double max_err = 0.0;
+            for (size_t i = 0; i < map.size(); ++i)
+                max_err = std::max(max_err, std::abs(map[i] - expected[i]));
+            EXPECT_LT(max_err, 2.0e-4) << label;
+        }
+    }
+
+    // The blend differs from the sharp branch alone where the photo is the blurred render.
+    LossWorkspaceArena arena;
+    PhotometricPyramidWorkspace workspace;
+    workspace.want_cs_error_map = true;
+    (void)photometric_pyramid_loss(image_tensor(x, c.C, c.H, c.W), image_tensor(c.target, c.C, c.H, c.W), Tensor{},
+                                   0.2f, 1, true, arena, workspace);
+    const auto tolerant = workspace.cs_error_map.cpu().to_vector();
+    const auto plain = cs_error_cpu(x, {}, c.target, c.C, c.H, c.W);
+    double left_tolerant = 0.0, left_plain = 0.0;
+    for (int py = 0; py < c.H; ++py)
+        for (int px = 8; px < c.W / 2 - 8; ++px) {
+            left_tolerant += tolerant[static_cast<size_t>(py) * c.W + px];
+            left_plain += plain[static_cast<size_t>(py) * c.W + px];
+        }
+    EXPECT_LT(left_tolerant, 0.5 * left_plain);
+}
