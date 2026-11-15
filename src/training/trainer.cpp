@@ -6520,13 +6520,15 @@ namespace lfs::training {
                                                         step_params.ppisp_use_controller &&
                                                         step_params.ppisp_freeze_gaussians_on_distill &&
                                                         iter >= ppisp_activation_step;
+                const bool match_strategy = step_params.strategy == core::param::kStrategyMatch;
                 const bool use_pixel_error_densification = !in_popspa && ((step_params.strategy == "mcmc") ||
                                                                           (step_params.strategy == "igs+") ||
+                                                                          match_strategy ||
                                                                           (core::param::is_mrnf_strategy(step_params.strategy) &&
                                                                            step_params.use_error_map));
                 const bool use_ssim_error = use_pixel_error_densification;
                 DensificationType densification_type = DensificationType::None;
-                if (!in_popspa && step_params.strategy == "mcmc")
+                if (!in_popspa && (step_params.strategy == "mcmc" || match_strategy))
                     densification_type = DensificationType::MCMC;
                 else if (!in_popspa && core::param::is_mrnf_strategy(step_params.strategy))
                     densification_type = DensificationType::MRNF;
@@ -6694,6 +6696,20 @@ namespace lfs::training {
                         fused_extra_gradients.explore_blend_peak = explore_peak_rows.ptr<float>();
                     }
                 }
+                lfs::core::Tensor view_radius_rows;
+                if (fastgs_path && !in_popspa && run_fastgs_gaussian_backward) {
+                    auto hooks = strategy_->fused_geometry_hooks(iter);
+                    if (hooks.view_radius.is_valid() &&
+                        hooks.view_radius.dtype() == lfs::core::DataType::Float32 &&
+                        hooks.view_radius.numel() == static_cast<size_t>(strategy_->get_model().size())) {
+                        view_radius_rows = std::move(hooks.view_radius);
+                        fused_extra_gradients.view_radius_out = view_radius_rows.ptr<float>();
+                    }
+                    fused_extra_gradients.angular_mean_step = hooks.angular_mean_step;
+                    fused_extra_gradients.screen_hinge_limit = hooks.screen_hinge_limit;
+                    fused_extra_gradients.screen_hinge_weight = hooks.screen_hinge_weight;
+                    fused_extra_gradients.reg_rendered_only = hooks.reg_rendered_only;
+                }
                 if (pose_refinement_ && run_fastgs_gaussian_backward)
                     pose_refinement_->bind_gradients(fused_extra_gradients, iter);
                 lfs::core::Tensor edge_score_scratch;
@@ -6763,7 +6779,8 @@ namespace lfs::training {
                             }
                         }
                         const float scale_weight = step_params.scale_reg_at(iter);
-                        const bool log_scale_reg = core::param::is_mrnf_strategy(step_params.strategy);
+                        const bool log_scale_reg = core::param::is_mrnf_strategy(step_params.strategy) ||
+                                                   step_params.strategy == core::param::kStrategyMatch;
                         fused_extra_gradients.scale_reg_weight = scale_weight;
                         fused_extra_gradients.scale_reg_log = log_scale_reg;
                         fused_extra_gradients.scale_reg_normalizer =
@@ -8071,8 +8088,10 @@ namespace lfs::training {
 
                             // Compressed refine error: square the map so well-fit pixels add nothing and
                             // strong structure errors dominate. The loss keeps its own maps.
-                            if (step_params.refine_error_compress &&
-                                core::param::is_mrnf_strategy(step_params.strategy) && tile_error_map.is_valid()) {
+                            const bool square_error_map =
+                                (step_params.refine_error_compress && core::param::is_mrnf_strategy(step_params.strategy)) ||
+                                (step_params.strategy == core::param::kStrategyMatch && step_params.match_map_power == 2.0f);
+                            if (square_error_map && tile_error_map.is_valid()) {
                                 lfs::training::kernels::launch_square_floored_inplace(
                                     tile_error_map.ptr<float>(), tile_error_map.numel());
                             }

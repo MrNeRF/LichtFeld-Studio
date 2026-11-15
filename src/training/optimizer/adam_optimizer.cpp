@@ -34,7 +34,6 @@
 namespace lfs::training {
 
     namespace {
-        constexpr int SH_WARMUP_ITERATIONS = 1000;
         constexpr float DEFAULT_GROWTH_MULTIPLIER = 1.5f;
 
         std::atomic<uint64_t> g_adam_slow_path_grow_count{0};
@@ -873,7 +872,7 @@ namespace lfs::training {
             return false;
         }
         if (type == ParamType::ShN &&
-            ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0)) {
+            ((apply_sh_warmup && iteration <= sh_warmup_iterations_) || splat_data_.active_sh_coeffs_rest() == 0)) {
             return false;
         }
 
@@ -1248,7 +1247,7 @@ namespace lfs::training {
         const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
         fused.shN = prepare_param(ParamType::ShN,
                                   static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
-                                  active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
+                                  active_rest > 0 && iteration > sh_warmup_iterations_);
         // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
@@ -1301,7 +1300,7 @@ namespace lfs::training {
             if (!param.is_valid() || param.numel() == 0)
                 continue;
             if (type == ParamType::ShN &&
-                (iteration <= SH_WARMUP_ITERATIONS || active_rest == 0)) {
+                (iteration <= sh_warmup_iterations_ || active_rest == 0)) {
                 continue;
             }
             const auto name = param_name(type);

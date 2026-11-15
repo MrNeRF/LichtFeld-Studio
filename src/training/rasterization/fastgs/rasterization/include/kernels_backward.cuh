@@ -10,6 +10,7 @@
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/effective_rank.cuh"
+#include "lfs/training/match_geometry.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/ray_depth_step.cuh"
 #include "rasterization_config.h"
@@ -225,7 +226,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         }
 
         // Compute SH backward gradients before entering the geometry path.
-        if (in_range && !contributed) {
+        bool skip_shape_reg = false;
+        if constexpr (!DISABLED_FEATURES)
+            skip_shape_reg = fused_adam.reg_rendered_only;
+        if (in_range && !contributed && skip_shape_reg) {
+            // Match strategy: the shape regularizers act on rendered splats only; momentum decay elsewhere.
+            opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
+        } else if (in_range && !contributed) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
             scale_grads[0] = scale_regularization_grad<!DISABLED_FEATURES>(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
@@ -581,6 +588,41 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                     fused_adam.scaling.param != nullptr &&
                                                     fused_adam.rotation.param != nullptr &&
                                                     primitive_idx < static_cast<uint>(fused_adam.ray_depth_n);
+        // Match strategy geometry step (see FusedAdamSettings::angular_mean_step).
+        [[maybe_unused]] AdamRowInputs mean_inputs;
+        [[maybe_unused]] AdamRowInputs scale_inputs;
+        [[maybe_unused]] float angular_first_moment[3] = {0.0f, 0.0f, 0.0f};
+        if constexpr (!DISABLED_FEATURES) {
+            const bool needs_radius = fused_adam.view_radius_out != nullptr || fused_adam.angular_mean_step ||
+                                      fused_adam.screen_hinge_weight > 0.0f;
+            if (in_range && needs_radius) {
+                namespace mg = lfs::training::match_geometry;
+                float radius = 0.0f;
+                const uint b3 = static_cast<uint>(primitive_idx) * 3u;
+                const float log_scales[3] = {fused_adam.scaling.param[b3], fused_adam.scaling.param[b3 + 1u],
+                                             fused_adam.scaling.param[b3 + 2u]};
+                const float opacity = sigmoid(fused_adam.opacity.param[primitive_idx]);
+                if (visible) {
+                    const float3 mean3d = means[primitive_idx];
+                    const float3 cam = cam_position[0];
+                    const float3 diff = make_float3(mean3d.x - cam.x, mean3d.y - cam.y, mean3d.z - cam.z);
+                    radius = mg::view_radius(fmaxf(fmaxf(log_scales[0], log_scales[1]), log_scales[2]), opacity,
+                                             sqrtf(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z));
+                }
+                if (fused_adam.view_radius_out != nullptr)
+                    fused_adam.view_radius_out[primitive_idx] = radius;
+                if (fused_adam.angular_mean_step) {
+                    const float* q = fused_adam.rotation.param + primitive_idx * 4u;
+                    const float quat[4] = {q[0], q[1], q[2], q[3]};
+                    mg::angular_first_moment(quat, log_scales, opacity, mean_grads, angular_first_moment);
+                    mean_inputs.first_moment_grads = angular_first_moment;
+                    mean_inputs.second_moment_scale = mg::angular_second_moment_scale(radius);
+                }
+                if (contributed || !fused_adam.reg_rendered_only)
+                    scale_inputs.hinge_push =
+                        mg::hinge_push(radius, fused_adam.screen_hinge_limit, fused_adam.screen_hinge_weight);
+            }
+        }
         if constexpr (DISABLED_FEATURES) {
             adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3,
                           fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
@@ -620,10 +662,14 @@ namespace fast_lfs::rasterization::kernels::backward {
                         mean_step_ratio);
             }
             adam_step_row(mean_grads, means_p, primitive_idx, 3,
-                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps, mean_inputs);
         }
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (DISABLED_FEATURES)
+            adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        else
+            adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps,
+                          scale_inputs);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         if constexpr (!DISABLED_FEATURES) {
             if (ray_depth_row) {

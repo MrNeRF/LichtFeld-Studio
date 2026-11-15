@@ -705,6 +705,25 @@ EXPECTED_ADVANCED_IDS = (
     "explore_scout_share",
     "explore_scout_opacity",
     "per_splat_bias_correction",
+    "match_growth",
+    "match_split_budget",
+    "match_oversize_share",
+    "match_screen_limit",
+    "match_clip_factor",
+    "match_screen_hinge",
+    "match_score_power",
+    "match_map_power",
+    "match_dead_peak",
+    "match_dead_epochs",
+    "match_peak_half_life",
+    "match_split_opacity",
+    "match_split_opacity_end",
+    "match_split_opacity_steps",
+    "match_walk",
+    "match_walk_end",
+    "match_walk_gate_peak",
+    "match_angular_mean_step",
+    "match_reg_rendered_only",
     "opacity_decay",
     "scale_decay",
     "means_noise_weight",
@@ -753,7 +772,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 132
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 151
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

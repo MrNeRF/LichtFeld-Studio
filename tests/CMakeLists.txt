@@ -810,6 +810,7 @@ set(TEST_FILES
     test_lfs_scheduler.cpp
     test_uncapped_compaction.cpp
     test_mrnf_strategy.cpp
+    test_match_strategy.cpp
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp
     test_per_splat_bias_correction.cpp

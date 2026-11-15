@@ -149,6 +149,8 @@ namespace lfs::training {
         // Rows present when it is switched on, and rows of a checkpoint without counters, start
         // saturated (group correction).
         void set_per_splat_bias_correction(bool enabled);
+        // The SH rest stays frozen through this iteration (default 1000); 0 updates it from the first step.
+        void set_sh_warmup_iterations(int iterations) noexcept { sh_warmup_iterations_ = iterations; }
         [[nodiscard]] bool per_splat_bias_correction() const noexcept { return per_splat_bias_correction_; }
         [[nodiscard]] const lfs::core::Tensor& row_steps() const noexcept { return row_steps_; }
         // Morton reorder permutes the counters with the rows.
@@ -274,6 +276,7 @@ namespace lfs::training {
         float cropbox_growth_inside_ = 1.0f;
         float cropbox_lr_scale_ = 1.0f;
         bool per_splat_mean_step_ = false;
+        int sh_warmup_iterations_ = 1000;
         float mean_step_median_extent_ = 0.0f;
         lfs::core::Tensor mean_step_far_mask_storage_;
         const bool* mean_step_far_mask_ = nullptr;

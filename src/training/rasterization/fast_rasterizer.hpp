@@ -146,6 +146,12 @@ namespace lfs::training {
         // Optional [N] exploration rows (see FusedAdamSettings): visible-view count and peak blend weight.
         float* explore_rendered = nullptr;
         float* explore_blend_peak = nullptr;
+        // Match strategy geometry step (fused_adam_types.h FusedAdamSettings).
+        float* view_radius_out = nullptr;
+        bool angular_mean_step = false;
+        float screen_hinge_limit = 0.0f;
+        float screen_hinge_weight = 0.0f;
+        bool reg_rendered_only = false;
         // Optional persistent device scalars (caller zeros each step). Accumulated in
         // preprocess_backward so loss-only reg kernels can be skipped on the FastGS path.
         float* scale_reg_loss_out = nullptr;

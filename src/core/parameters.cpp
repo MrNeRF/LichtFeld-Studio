@@ -1006,6 +1006,30 @@ namespace lfs::core {
                 return std::format("late_lr_anneal must be finite and within (0, 1] (got {})", late_lr_anneal);
             if (!std::isfinite(refine_need_power) || refine_need_power <= 0.0f)
                 return std::format("refine_need_power must be finite and positive (got {})", refine_need_power);
+            if (!std::isfinite(match_growth) || match_growth < 1.0f)
+                return std::format("match_growth must be finite and at least 1 (got {})", match_growth);
+            if (!std::isfinite(match_split_budget) || match_split_budget <= 0.0f || match_split_budget > 1.0f)
+                return std::format("match_split_budget must be finite and within (0, 1] (got {})", match_split_budget);
+            if (!std::isfinite(match_oversize_share) || match_oversize_share < 0.0f || match_oversize_share > 1.0f)
+                return std::format("match_oversize_share must be finite and within [0, 1] (got {})", match_oversize_share);
+            if (!std::isfinite(match_screen_limit) || match_screen_limit <= 0.0f)
+                return std::format("match_screen_limit must be finite and positive (got {})", match_screen_limit);
+            if (!std::isfinite(match_clip_factor) || !std::isfinite(match_screen_hinge) || match_screen_hinge < 0.0f)
+                return "match_clip_factor and match_screen_hinge must be finite, the hinge not negative";
+            if (!std::isfinite(match_score_power) || match_score_power <= 0.0f)
+                return std::format("match_score_power must be finite and positive (got {})", match_score_power);
+            if (match_map_power != 1.0f && match_map_power != 2.0f)
+                return std::format("match_map_power must be 1 or 2 (got {})", match_map_power);
+            if (!std::isfinite(match_dead_peak) || match_dead_peak < 0.0f || match_dead_epochs < 0)
+                return "match_dead_peak and match_dead_epochs must not be negative";
+            if (!std::isfinite(match_peak_half_life) || match_peak_half_life <= 0.0f)
+                return std::format("match_peak_half_life must be finite and positive (got {})", match_peak_half_life);
+            if (!std::isfinite(match_split_opacity) || match_split_opacity <= 0.0f || match_split_opacity > 1.0f ||
+                !std::isfinite(match_split_opacity_end) || match_split_opacity_end <= 0.0f ||
+                match_split_opacity_end > 1.0f || match_split_opacity_steps < 0)
+                return "match_split_opacity and match_split_opacity_end must be within (0, 1], the steps not negative";
+            if (!std::isfinite(match_walk) || match_walk < 0.0f || !std::isfinite(match_walk_end) || match_walk_end < 0.0f)
+                return "match_walk and match_walk_end must be finite and not negative";
             if (!std::isfinite(explore_walk_scale) || explore_walk_scale <= 0.0f)
                 return std::format("explore_walk_scale must be finite and positive (got {})", explore_walk_scale);
             if (!std::isfinite(explore_scout_share) || explore_scout_share < 0.0f || explore_scout_share > 1.0f)
@@ -1376,12 +1400,57 @@ namespace lfs::core {
             return p;
         }
 
+        OptimizationParameters OptimizationParameters::match_defaults() {
+            auto p = OptimizationParameters{};
+            p.strategy = std::string(kStrategyMatch);
+            p.iterations = 30'000;
+            p.max_cap = 5'000'000;
+            p.refine_every = 100;
+            p.start_refine = 500;
+            p.stop_refine = 27'500;
+            p.min_opacity = 0.005f;
+            p.init_opacity = 0.1f;
+            p.init_scaling = 0.35f;
+            // Dimensionless with the angular mean step: a step of about 3.3 x this x the camera distance.
+            p.means_lr = 2.56e-4f;
+            p.means_lr_end = 3.2e-6f;
+            p.scaling_lr = 0.02f;
+            p.scaling_lr_end = 0.005f;
+            p.rotation_lr = 0.0015f;
+            p.opacity_lr = 0.025f;
+            p.shs_lr = 0.005f; // the SH rest takes 1/20 of it
+            p.lambda_dssim = 0.2f;
+            p.use_error_map = true;
+            p.densify_error_map = DensifyErrorMap::SsimCs;
+            p.use_edge_map = false;
+            p.densify_structure_weight = 0.0f;
+            p.thin_structure_weight = 0.0f;
+            p.gradient_loss_weight = 0.0f;
+            p.opacity_reg = 0.0f;
+            p.scale_reg = 0.01f;
+            p.scale_reg_decay_power = 0.4f;
+            p.erank_reg = 0.001f;
+            p.dc_reg = 0.001f;
+            // L2 decay of 2 x 0.025 / 3 per SH rest coefficient and splat: the fused kernel divides the
+            // weight by the 45 coefficients of degree 3.
+            p.sh_rest_reg = 0.375f;
+            p.per_splat_bias_correction = true;
+            p.max_screen_share = 0.0f;
+            p.morton_reorder_interval = 0;
+            // Per-photo exposure and colour, then a 16x16x8 bilateral grid, both from the first step.
+            p.use_exposure_correction = true;
+            p.exposure_correction_grid_start_iter = 0;
+            return p;
+        }
+
         OptimizationParameters OptimizationParameters::defaults_for_strategy(const std::string_view strategy) {
             const auto canonical_strategy = canonical_strategy_name(strategy);
             if (canonical_strategy == kStrategyMCMC)
                 return mcmc_defaults();
             if (canonical_strategy == kStrategyIGSPlus)
                 return igs_plus_defaults();
+            if (canonical_strategy == kStrategyMatch)
+                return match_defaults();
             return mrnf_defaults();
         }
 

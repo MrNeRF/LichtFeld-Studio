@@ -32,6 +32,7 @@
 #include <format>
 #include <ios>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
@@ -123,6 +124,59 @@ namespace {
         nanoflann::L2_Simple_Adaptor<float, PointCloudAdaptor>,
         PointCloudAdaptor,
         3>;
+
+    // Root mean square distance to the 4 nearest other points (match strategy initialization).
+    lfs::core::Tensor compute_rms_neighbor_distances(const lfs::core::Tensor& points) {
+        auto cpu_points = points.cpu().contiguous();
+        const int num_points = static_cast<int>(cpu_points.size(0));
+        if (num_points <= 1)
+            return lfs::core::Tensor::full({static_cast<size_t>(num_points)}, 0.01f, points.device());
+        const float* data = cpu_points.ptr<float>();
+        PointCloudAdaptor cloud(data, num_points);
+        KDTree index(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
+        auto result = lfs::core::Tensor::zeros({static_cast<size_t>(num_points)}, lfs::core::Device::CPU);
+        float* result_data = result.ptr<float>();
+        const size_t num_results = std::min(5, num_points);
+#pragma omp parallel for if (num_points > 1000)
+        for (int i = 0; i < num_points; i++) {
+            std::vector<size_t> ret_indices(num_results);
+            std::vector<float> out_dists_sqr(num_results);
+            nanoflann::KNNResultSet<float> resultSet(num_results);
+            resultSet.init(&ret_indices[0], &out_dists_sqr[0]);
+            index.findNeighbors(resultSet, &data[i * 3], nanoflann::SearchParameters(10));
+            double sum = 0.0;
+            int count = 0;
+            for (size_t j = 0; j < num_results && count < 4; j++) {
+                if (ret_indices[j] == static_cast<size_t>(i))
+                    continue;
+                sum += out_dists_sqr[j];
+                ++count;
+            }
+            result_data[i] = count > 0 ? static_cast<float>(std::sqrt(sum / count)) : 0.01f;
+        }
+        return result.to(points.device());
+    }
+
+    // Random unit quaternions (w, x, y, z) from normalized 4D Gaussian draws, fixed seed.
+    lfs::core::Tensor random_unit_quaternions(const size_t n, const lfs::core::Device device) {
+        std::vector<float> q(n * 4);
+        std::mt19937 rng(0x51A7u);
+        std::normal_distribution<float> gauss(0.0f, 1.0f);
+        for (size_t i = 0; i < n; ++i) {
+            float norm2 = 0.0f;
+            do {
+                norm2 = 0.0f;
+                for (int c = 0; c < 4; ++c) {
+                    q[i * 4 + c] = gauss(rng);
+                    norm2 += q[i * 4 + c] * q[i * 4 + c];
+                }
+            } while (!(norm2 > 1e-12f));
+            const float inv = 1.0f / std::sqrt(norm2);
+            for (int c = 0; c < 4; ++c)
+                q[i * 4 + c] *= inv;
+        }
+        return lfs::core::Tensor::from_vector(q, lfs::core::TensorShape({n, 4}), device);
+    }
 
     /**
      * @brief Compute mean distance to 3 nearest neighbors for each point
@@ -2976,7 +3030,18 @@ namespace lfs::core {
                 // Fill the preallocated parameters in place so the pool sees no full-size temporaries.
                 means_.copy_from(params.optimization.random ? positions.mul(scene_scale) : positions);
 
-                if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
+                const bool match_init = params.optimization.strategy == lfs::core::param::kStrategyMatch;
+                if (match_init) {
+                    // log(init_scaling x RMS distance to the 4 nearest points, floored at 1e-8), isotropic.
+                    auto nn_dist = compute_rms_neighbor_distances(means_)
+                                       .mul(params.optimization.init_scaling)
+                                       .clamp_min(1e-8f);
+                    std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
+                    scaling_.copy_from(nn_dist.log()
+                                           .unsqueeze(-1)
+                                           .expand(std::span<const int>(scale_expand_shape))
+                                           .contiguous());
+                } else if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
                     if (num_points >= 3)
                         cuda::mrnf_knn_log_scales(means_, scaling_);
                     else
@@ -2992,8 +3057,12 @@ namespace lfs::core {
                                            .contiguous());
                 }
 
-                rotation_.zero_();
-                rotation_.slice(1, 0, 1).fill_(1.0f);
+                if (match_init) {
+                    rotation_.copy_from(random_unit_quaternions(static_cast<size_t>(num_points), rotation_.device()));
+                } else {
+                    rotation_.zero_();
+                    rotation_.slice(1, 0, 1).fill_(1.0f);
+                }
 
                 const float init_opacity = std::clamp(params.optimization.init_opacity, 1e-7f, 1.0f - 1e-7f);
                 opacity_.fill_(std::log(init_opacity / (1.0f - init_opacity)));

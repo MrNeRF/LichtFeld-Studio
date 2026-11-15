@@ -213,7 +213,7 @@ namespace {
         Help
     };
 
-    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "mrnf", "mnrf", "lfs", "igs+"};
+    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "mrnf", "mnrf", "lfs", "igs+", "match"};
 
     // Input paths are stored in projects and checkpoints, which may later be opened from another folder.
     std::filesystem::path absolute_input_path(const std::string& value) {
@@ -1509,7 +1509,7 @@ namespace {
                 const auto strat = ::args::get(strategy);
                 if (VALID_STRATEGIES.find(strat) == VALID_STRATEGIES.end()) {
                     return std::unexpected(std::format(
-                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, mrnf, igs+ (legacy aliases: mnrf, lfs)",
+                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, mrnf, igs+, match (legacy aliases: mnrf, lfs)",
                         strat));
                 }
 
@@ -2287,6 +2287,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
             params->optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
         else if (strategy == "mcmc")
             params->optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        else if (strategy == "match")
+            params->optimization = lfs::core::param::OptimizationParameters::match_defaults();
         else
             params->optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
     }

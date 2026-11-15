@@ -242,7 +242,8 @@ namespace lfs::training {
             }
             if (!((strategy == "mcmc" && magic == 0x4C464D43 && version == 1) ||
                   (strategy == "mrnf" && magic == 0x4C464252 && version >= 1 && version <= 3) ||
-                  (strategy == "igs+" && magic == 0x4C464947 && version <= 1)))
+                  (strategy == "igs+" && magic == 0x4C464947 && version <= 1) ||
+                  (strategy == "match" && magic == 0x4C464D41 && version == 1)))
                 throw std::runtime_error("Unsupported appearance checkpoint strategy");
             if (appearance_read<uint8_t>(source))
                 appearance_skip_optimizer(source);

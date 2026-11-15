@@ -100,6 +100,18 @@ namespace lfs::training {
         virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int /*iter*/) {
             return {};
         }
+
+        // Optional FastGS geometry-step settings of the match strategy: view_radius is an [N] row the
+        // backward fills with each splat's angular radius in the view (0 when culled); the rest switch the
+        // camera-distance position step, the on-screen size hinge and rendered-only shape regularizers.
+        struct FusedGeometryHooks {
+            lfs::core::Tensor view_radius;
+            bool angular_mean_step = false;
+            float screen_hinge_limit = 0.0f;
+            float screen_hinge_weight = 0.0f;
+            bool reg_rendered_only = false;
+        };
+        virtual FusedGeometryHooks fused_geometry_hooks(int /*iter*/) { return {}; }
     };
 
     class ICheckpointStateAdopter {

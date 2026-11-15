@@ -559,7 +559,7 @@ namespace lfs::core::param {
             .all_strategies()
             .string_prop(&OptimizationParameters::strategy,
                          "strategy", "Strategy", d.strategy,
-                         "Optimization strategy: mcmc, mrnf, or igs+")
+                         "Optimization strategy: mcmc, mrnf, igs+ or match")
             .flags(PROP_NEEDS_RESTART)
 
             // Shared densification parameters
@@ -731,6 +731,134 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.per_splat_bias_correction")
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_growth,
+                        "match_growth", "Match Growth", d.match_growth, 1.0f, 2.0f,
+                        "Splat count factor per refine of the match strategy, up to the cap")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_split_budget,
+                        "match_split_budget", "Match Split Budget", d.match_split_budget, 0.0f, 1.0f,
+                        "Share of the splats one refine of the match strategy may revive and grow together")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_oversize_share,
+                        "match_oversize_share", "Match Oversize Share", d.match_oversize_share, 0.0f, 1.0f,
+                        "Share of the match strategy births drawn by on-screen size excess times error score")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_screen_limit,
+                        "match_screen_limit", "Match Screen Limit", d.match_screen_limit, 0.01f, 3.0f,
+                        "Angular radius above which the match strategy counts a splat as oversize, clips it and pushes its scale down")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_clip_factor,
+                        "match_clip_factor", "Match Clip Factor", d.match_clip_factor, 0.0f, 4.0f,
+                        "Largest shrink of the match strategy size clip every 100 steps; 1 or less turns the clip off")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_screen_hinge,
+                        "match_screen_hinge", "Match Screen Hinge", d.match_screen_hinge, 0.0f, 8.0f,
+                        "Weight of the on-screen size hinge on the scale gradient (match strategy); 0 turns it off")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_score_power,
+                        "match_score_power", "Match Score Power", d.match_score_power, 0.01f, 4.0f,
+                        "Power of the per-step error of a splat before the running mean of the match strategy score")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_map_power,
+                        "match_map_power", "Match Map Power", d.match_map_power, 1.0f, 2.0f,
+                        "Power of the per-pixel error map of the match strategy score (1 or 2)")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_dead_peak,
+                        "match_dead_peak", "Match Dead Peak", d.match_dead_peak, 0.0f, 1.0f,
+                        "The match strategy treats a splat whose decaying peak blend weight is at most this as dead; 0 turns it off")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::match_dead_epochs,
+                      "match_dead_epochs", "Match Dead Epochs", d.match_dead_epochs, 0, 100,
+                      "The match strategy treats a splat unrendered for this many epochs as dead; 0 turns it off")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_peak_half_life,
+                        "match_peak_half_life", "Match Peak Half-Life", d.match_peak_half_life, 1.0f, 100000.0f,
+                        "Half-life in steps of the match strategy peak blend weight")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_split_opacity,
+                        "match_split_opacity", "Match Split Opacity", d.match_split_opacity, 0.01f, 1.0f,
+                        "Share of the opacity both halves of a match strategy split keep at the start")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_split_opacity_end,
+                        "match_split_opacity_end", "Match Split Opacity End", d.match_split_opacity_end, 0.01f, 1.0f,
+                        "Share of the opacity both halves of a match strategy split keep from Match Split Opacity Steps on")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::match_split_opacity_steps,
+                      "match_split_opacity_steps", "Match Split Opacity Steps", d.match_split_opacity_steps, 0, 1000000,
+                      "Step at which the match strategy split opacity share reaches its end value")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_walk,
+                        "match_walk", "Match Walk", d.match_walk, 0.0f, 1000.0f,
+                        "Scale of the match strategy position walk at the start; 0 turns it off")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_walk_end,
+                        "match_walk_end", "Match Walk End", d.match_walk_end, 0.0f, 1000.0f,
+                        "Scale of the match strategy position walk at the end of the run")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::match_walk_gate_peak,
+                       "match_walk_gate_peak", "Match Walk Gate Peak", d.match_walk_gate_peak,
+                       "The match strategy position walk also lets splats with a low peak blend weight move")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::match_angular_mean_step,
+                       "match_angular_mean_step", "Match Angular Mean Step", d.match_angular_mean_step,
+                       "The match strategy position step is a share of the camera distance, shaped by the splat")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::match_reg_rendered_only,
+                       "match_reg_rendered_only", "Match Regularize Rendered Only", d.match_reg_rendered_only,
+                       "The match strategy scale and rank regularizers act only on splats rendered in the step")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
             .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,

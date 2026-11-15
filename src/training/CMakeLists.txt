@@ -26,6 +26,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/bilateral_grid_tv.cu
     kernels/ppisp.cu
     kernels/pruning_kernels.cu
+    kernels/match_kernels.cu
     kernels/mcmc_kernels.cu
     kernels/mrnf_kernels.cu
     kernels/densification_kernels.cu
@@ -97,6 +98,7 @@ set(TRAINING_NEW_SOURCES
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/postprocess_compaction.cpp
+    strategies/match.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
     strategies/blob_seeding.cpp

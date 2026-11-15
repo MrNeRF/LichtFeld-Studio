@@ -335,6 +335,16 @@ namespace fast_lfs::rasterization::kernels {
     //
     // Frozen / crop-damped rows with zero lr skip the moment+param update but still
     // re-encode their current (u,log_s) under the new block bounds so codes stay valid.
+    // Optional per-row moment inputs (match strategy). first_moment_grads replaces the gradient in the
+    // first moment, second_moment_scale multiplies the squared gradient of the second moment, and
+    // hinge_push > 0 adds hinge_push x exp(2 (s_i - s_max)) x (sqrt(v_hat_i) + eps) to the gradient of
+    // both moments, s being the row's current values (log scales). The defaults leave the step unchanged.
+    struct AdamRowInputs {
+        const float* first_moment_grads = nullptr;
+        float second_moment_scale = 1.0f;
+        float hinge_push = 0.0f;
+    };
+
     template <int BITS>
     __device__ inline void adam_step_row_joint(
         const float* grads,
@@ -343,7 +353,8 @@ namespace fast_lfs::rasterization::kernels {
         const uint row_elements,
         const float beta1,
         const float beta2,
-        const float eps) {
+        const float eps,
+        const AdamRowInputs& inputs = {}) {
         using C = lfs::training::joint_adam::DeviceCodec<BITS>;
         constexpr float kInf = 1e30f;
 
@@ -392,6 +403,14 @@ namespace fast_lfs::rasterization::kernels {
         float us_u[MAX_FUSED_ADAM_ATTRIBUTES];
         float us_s[MAX_FUSED_ADAM_ATTRIBUTES];
 
+        const bool custom_moments = inputs.first_moment_grads != nullptr ||
+                                    inputs.second_moment_scale != 1.0f || inputs.hinge_push > 0.0f;
+        float row_max = -kInf;
+        if (touch && inputs.hinge_push > 0.0f) {
+            for (uint i = 0; i < active; ++i)
+                row_max = fmaxf(row_max, param.param[base + i]);
+        }
+
         if (touch) {
             for (uint i = 0; i < row; ++i) {
                 // Packed layout: [N, n_attr * bytes_per_cell] — cell = base+i
@@ -399,7 +418,21 @@ namespace fast_lfs::rasterization::kernels {
                 const float2 mv = C::decode_g1g2(param.joint_packed, cell, old_mm);
                 float m = mv.x;
                 float v = mv.y;
-                if (apply_step) {
+                if (apply_step && custom_moments) {
+                    float grad = (i < active) ? grads[i] : 0.0f;
+                    if (i < active && inputs.hinge_push > 0.0f)
+                        grad += inputs.hinge_push * __expf(2.0f * (param.param[base + i] - row_max)) *
+                                (sqrtf(mv.y) * bias_correction2_sqrt_rcp + eps);
+                    const float first = inputs.first_moment_grads != nullptr
+                                            ? ((i < active) ? inputs.first_moment_grads[i] : 0.0f)
+                                            : grad;
+                    m = beta1 * mv.x + (1.0f - beta1) * first;
+                    v = beta2 * mv.y + (1.0f - beta2) * grad * grad * inputs.second_moment_scale;
+                    if (i < active) {
+                        const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
+                        param.param[base + i] -= row_step_size * m / denom;
+                    }
+                } else if (apply_step) {
                     float grad = (i < active) ? grads[i] : 0.0f;
                     float hinge = 0.0f;
                     if (i < active && param.screen_share_max != nullptr &&
@@ -476,7 +509,8 @@ namespace fast_lfs::rasterization::kernels {
         const uint row_elements,
         const float beta1,
         const float beta2,
-        const float eps) {
+        const float eps,
+        const AdamRowInputs& inputs = {}) {
         if (param.gradient_out != nullptr) {
             if (primitive_idx < static_cast<uint>(param.n_primitives)) {
                 for (uint i = 0; i < row_elements; ++i)
@@ -485,11 +519,11 @@ namespace fast_lfs::rasterization::kernels {
             return;
         }
         if (param.joint_bits == 16) {
-            adam_step_row_joint<16>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            adam_step_row_joint<16>(grads, param, primitive_idx, row_elements, beta1, beta2, eps, inputs);
             return;
         }
         if (param.joint_bits == 8) {
-            adam_step_row_joint<8>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            adam_step_row_joint<8>(grads, param, primitive_idx, row_elements, beta1, beta2, eps, inputs);
             return;
         }
         // Non-joint state is unsupported (joint is the only codec).

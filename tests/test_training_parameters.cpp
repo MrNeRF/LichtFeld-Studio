@@ -128,7 +128,7 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, StrategyApplicabilityTagsAreCanonicalAndKnown) {
-        const std::set<std::string> canonical = {"mcmc", "mrnf", "igs+"};
+        const std::set<std::string> canonical = {"mcmc", "mrnf", "igs+", "match"};
         const std::map<std::string, std::vector<std::string>> expected = {
             {"means_lr_end", {"mrnf"}},
             {"ray_depth_lr", {"mrnf"}},
@@ -151,6 +151,25 @@ namespace {
             {"explore_scout_share", {"mrnf"}},
             {"explore_scout_opacity", {"mrnf"}},
             {"per_splat_bias_correction", {"mrnf"}},
+            {"match_growth", {"match"}},
+            {"match_split_budget", {"match"}},
+            {"match_oversize_share", {"match"}},
+            {"match_screen_limit", {"match"}},
+            {"match_clip_factor", {"match"}},
+            {"match_screen_hinge", {"match"}},
+            {"match_score_power", {"match"}},
+            {"match_map_power", {"match"}},
+            {"match_dead_peak", {"match"}},
+            {"match_dead_epochs", {"match"}},
+            {"match_peak_half_life", {"match"}},
+            {"match_split_opacity", {"match"}},
+            {"match_split_opacity_end", {"match"}},
+            {"match_split_opacity_steps", {"match"}},
+            {"match_walk", {"match"}},
+            {"match_walk_end", {"match"}},
+            {"match_walk_gate_peak", {"match"}},
+            {"match_angular_mean_step", {"match"}},
+            {"match_reg_rendered_only", {"match"}},
             {"opacity_decay", {"mrnf"}},
             {"scale_decay", {"mrnf"}},
             {"means_noise_weight", {"mrnf"}},
@@ -190,6 +209,44 @@ namespace {
 
     // These values discriminate MCMC from MRNF and pin both strategy dispatch and MCMC factory
     // values while continuing to exercise the production resolver seam.
+    // The match defaults are the ported loop's configuration; these pin the dispatch and the values that
+    // differ from both other factories.
+    TEST_F(TrainingParametersTest, ResolvesMatchFactorySentinels) {
+        const auto defaults = OptimizationParameters::defaults_for_strategy("match");
+
+        EXPECT_EQ(defaults.strategy, "match");
+        EXPECT_TRUE(defaults.validate().empty()) << defaults.validate();
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "means_lr"), 2.56e-4f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "means_lr_end"), 3.2e-6f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "scaling_lr"), 0.02f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "init_opacity"), 0.1f);
+        EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
+        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
+        EXPECT_EQ(resolved<size_t>(defaults, "start_refine"), 500u);
+        EXPECT_EQ(resolved<size_t>(defaults, "stop_refine"), 27'500u);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "match_growth"), 1.05f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "match_walk"), 160.0f);
+        EXPECT_TRUE(resolved<bool>(defaults, "match_angular_mean_step"));
+        EXPECT_TRUE(defaults.per_splat_bias_correction);
+        EXPECT_EQ(defaults.morton_reorder_interval, 0u);
+
+        auto bad = defaults;
+        bad.match_map_power = 3.0f;
+        EXPECT_NE(bad.validate().find("match_map_power"), std::string::npos);
+        bad = defaults;
+        bad.match_growth = 0.5f;
+        EXPECT_NE(bad.validate().find("match_growth"), std::string::npos);
+
+        const auto from_json = OptimizationParameters::from_json(
+            nlohmann::json{{"strategy", "match"}, {"match_walk", 0.0}, {"match_dead_epochs", 3}});
+        EXPECT_EQ(from_json.strategy, "match");
+        EXPECT_FLOAT_EQ(from_json.match_walk, 0.0f);
+        EXPECT_EQ(from_json.match_dead_epochs, 3);
+        EXPECT_FLOAT_EQ(from_json.means_lr, 2.56e-4f);
+    }
+
     TEST_F(TrainingParametersTest, ResolvesMcmcFactorySentinels) {
         const auto defaults = OptimizationParameters::defaults_for_strategy("mcmc");
 
@@ -608,10 +665,11 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {
-        const std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
+        const std::array<std::pair<std::string_view, OptimizationParameters>, 4> factories = {{
             {"mcmc", OptimizationParameters::mcmc_defaults()},
             {"mrnf", OptimizationParameters::mrnf_defaults()},
             {"igs_plus", OptimizationParameters::igs_plus_defaults()},
+            {"match", OptimizationParameters::match_defaults()},
         }};
 
         for (const auto& [name, params] : factories) {
@@ -635,6 +693,9 @@ namespace {
             } else if (name == "mrnf") {
                 mutated.max_cap = 123'456'789;
                 mutated_expected["max_cap"] = mutated.max_cap;
+            } else if (name == "match") {
+                mutated.match_walk = 0.0f;
+                mutated_expected["match_walk"] = mutated.match_walk;
             } else {
                 mutated.init_extent = 4.25f;
                 mutated_expected["init_extent"] = mutated.init_extent;

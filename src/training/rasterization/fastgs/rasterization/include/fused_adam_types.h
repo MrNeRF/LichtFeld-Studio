@@ -67,6 +67,18 @@ namespace fast_lfs::rasterization {
         // alpha * T over its pixels (blend backward, atomic max).
         float* explore_rendered = nullptr;
         float* explore_blend_peak = nullptr;
+        // Optional [N] row (match strategy): each splat's angular radius in this view, rho / (max(d, rho) +
+        // sqrt(max(d^2 - rho^2, 0))) with rho = max scale x sqrt(2 ln(255 opacity)) and d its camera
+        // distance; 0 when culled. Written for every row.
+        float* view_radius_out = nullptr;
+        // Match strategy geometry step: the position step is a share of the camera distance shaped by the
+        // splat (first moment e R diag(s) R^T g with e = sqrt(2 ln(255 opacity)), second moment (0.6 r g)^2
+        // with r the angular radius); the scale gradient gets the on-screen size hinge above
+        // screen_hinge_limit; the scale and rank regularizers skip splats that did not contribute.
+        bool angular_mean_step = false;
+        float screen_hinge_limit = 0.0f;
+        float screen_hinge_weight = 0.0f;
+        bool reg_rendered_only = false;
         // Optional persistent device scalars (caller zeros). Filled by preprocess_backward
         // via block-reduce + atomicAdd so the trainer can skip loss-only reg kernels.
         float* scale_reg_loss_out = nullptr;

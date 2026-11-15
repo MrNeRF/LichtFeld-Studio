@@ -5,6 +5,7 @@
 #include "strategy_factory.hpp"
 #include "core/logger.hpp"
 #include "improved_gs_plus.hpp"
+#include "match.hpp"
 #include "mcmc.hpp"
 #include "mrnf.hpp"
 #include <format>
@@ -42,6 +43,11 @@ namespace lfs::training {
         registry_[std::string(core::param::kStrategyIGSPlus)] = [](core::SplatData& model)
             -> std::expected<std::unique_ptr<IStrategy>, std::string> {
             return std::make_unique<ImprovedGSPlus>(model);
+        };
+
+        registry_[std::string(core::param::kStrategyMatch)] = [](core::SplatData& model)
+            -> std::expected<std::unique_ptr<IStrategy>, std::string> {
+            return std::make_unique<Match>(model);
         };
     }
 
