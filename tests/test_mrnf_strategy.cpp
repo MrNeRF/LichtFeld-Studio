@@ -3650,3 +3650,121 @@ TEST(MRNFStrategyTest, RefineErrorCompressSwitchStartsAFreshWindow) {
     restored.deserialize(ss);
     EXPECT_EQ(info_row(splat_copy, 3), std::vector<float>(kViewMeanSplats, 0.0f));
 }
+
+// --refine-need-power: NEED^p after the fold, in both fold paths. p = 1 is today's NEED; with p = 3
+// every active NEED is cubed, zero rows stay zero and free rows (with a stale error) are not touched.
+TEST(MRNFStrategyTest, RefineNeedPowerRaisesTheFoldedNeed) {
+    constexpr size_t live = 120;
+    constexpr size_t n = live + 20;
+    std::vector<float> error(n, 0.0f), footprint(n, 0.01f);
+    for (size_t i = 0; i < live; ++i)
+        error[i] = i % 3 == 0 ? 0.0f : 0.05f * static_cast<float>(i % 17 + 1);
+    for (size_t i = live; i < n; ++i)
+        error[i] = 0.3f;
+    const auto need_of = [&](const bool compress, const std::optional<float> power) {
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(1000);
+        params.refine_error_compress = compress;
+        if (power)
+            params.refine_need_power = *power;
+        strategy.initialize(params);
+        set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy.soft_delete_rows(row_range(live, splat_data.size()));
+        strategy.fold_need_into_refine_weights();
+        return strategy._refine_weight_max.cpu().to_vector();
+    };
+
+    for (const bool compress : {false, true}) {
+        SCOPED_TRACE(compress ? "compressed fold" : "footprint fold");
+        // Today: error over its mean (compressed: among the active rows; otherwise among the rows
+        // with error); the uniform footprint gives sparsity 1.
+        double active_sum = 0.0, error_sum = 0.0;
+        size_t with_error = 0;
+        for (size_t i = 0; i < n; ++i) {
+            error_sum += error[i];
+            with_error += error[i] > 0.0f ? 1 : 0;
+            active_sum += i < live ? error[i] : 0.0f;
+        }
+        const double scale = compress ? active_sum / live : error_sum / static_cast<double>(with_error);
+
+        const auto today = need_of(compress, std::nullopt);
+        const auto linear = need_of(compress, 1.0f);
+        EXPECT_EQ(linear, today);
+        for (size_t i = 0; i < live; ++i)
+            EXPECT_NEAR(linear[i], error[i] / scale, 1e-5 * (1.0 + error[i] / scale)) << i;
+
+        const auto cubed = need_of(compress, 3.0f);
+        size_t zeros = 0;
+        for (size_t i = 0; i < live; ++i) {
+            if (error[i] == 0.0f) {
+                EXPECT_EQ(cubed[i], 0.0f) << i;
+                ++zeros;
+                continue;
+            }
+            const double expected = std::pow(static_cast<double>(linear[i]), 3.0);
+            EXPECT_NEAR(cubed[i], expected, 1e-5 * expected) << i;
+        }
+        EXPECT_EQ(zeros, live / 3);
+        for (size_t i = live; i < n; ++i) {
+            EXPECT_GT(linear[i], 0.0f) << i;
+            EXPECT_EQ(cubed[i], linear[i]) << i;
+        }
+    }
+}
+
+// The refill weights are opacity x visibility x NEED and the growth weights candidates x NEED, so
+// both draws see the power: two equal groups at error 1 and 0.1 hold 10/11 of the receiver mass
+// at p = 1 and 1000/1001 at p = 3, and the refills then come (almost) all from the first group.
+TEST(MRNFStrategyTest, RefineNeedPowerSharpensTheReceiverDraws) {
+    constexpr size_t n = 220;
+    constexpr size_t high = 100;
+    constexpr size_t live = 200;
+    const auto run = [&](const float power, MRNF::GrowthResult* result) {
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n));
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(static_cast<int>(n));
+        params.grow_until_iter = 0;
+        params.refine_need_power = power;
+        strategy.initialize(params);
+        std::vector<float> error(n, 0.0f), footprint(n, 0.01f);
+        for (size_t i = 0; i < live; ++i)
+            error[i] = i < high ? 1.0f : 0.1f;
+        set_need_window(splat_data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy.soft_delete_rows(row_range(live, splat_data.size()));
+
+        // The weights grow_and_split draws from, built the same way after the fold.
+        const auto active = strategy._free_mask.slice(0, 0, n).logical_not().contiguous();
+        strategy.fold_need_into_refine_weights();
+        strategy._densify_n_scratch.ensure_n(n, Device::CUDA);
+        const auto refill = strategy.build_replace_parent_weights(n, active, {}, {}, strategy._refine_weight_max)
+                                .cpu()
+                                .to_vector();
+        const auto growth = (active * strategy._refine_weight_max).cpu().to_vector();
+        if (result) {
+            // A fresh window: grow_and_split folds it itself.
+            strategy._refine_weight_max = Tensor::from_vector(error, TensorShape({n}), Device::CUDA);
+            *result = strategy.grow_and_split(100, 20, Tensor::zeros_bool({n}, Device::CUDA));
+        }
+        const auto share = [&](const std::vector<float>& w) {
+            double below = 0.0, total = 0.0;
+            for (size_t i = 0; i < live; ++i) {
+                total += w[i];
+                below += i < high ? w[i] : 0.0f;
+            }
+            return below / total;
+        };
+        return std::pair{share(refill), share(growth)};
+    };
+
+    const auto [refill_linear, growth_linear] = run(1.0f, nullptr);
+    EXPECT_NEAR(refill_linear, 10.0 / 11.0, 1e-4);
+    EXPECT_NEAR(growth_linear, 10.0 / 11.0, 1e-4);
+
+    MRNF::GrowthResult result;
+    const auto [refill_cubed, growth_cubed] = run(3.0f, &result);
+    EXPECT_NEAR(refill_cubed, 1000.0 / 1001.0, 1e-5);
+    EXPECT_NEAR(growth_cubed, 1000.0 / 1001.0, 1e-5);
+    ASSERT_EQ(result.replacement_count, 20);
+    EXPECT_GE(rows_below(result.split_indices, high), 18u);
+}

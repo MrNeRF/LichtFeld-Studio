@@ -408,6 +408,9 @@ namespace lfs::core {
             // per-splat sum is compressed (^0.2) and averaged over the views with error. Implies
             // refine_error_view_mean.
             bool refine_error_compress = false;
+            // Need-guided growth raises the folded NEED to this power before the receiver draws, so
+            // high-need splats are drawn much more often than their linear share. 1 leaves NEED as is.
+            float refine_need_power = 1.0f;
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

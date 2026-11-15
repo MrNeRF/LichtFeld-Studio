@@ -1004,6 +1004,8 @@ namespace lfs::core {
                 return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
             if (!std::isfinite(late_lr_anneal) || late_lr_anneal <= 0.0f || late_lr_anneal > 1.0f)
                 return std::format("late_lr_anneal must be finite and within (0, 1] (got {})", late_lr_anneal);
+            if (!std::isfinite(refine_need_power) || refine_need_power <= 0.0f)
+                return std::format("refine_need_power must be finite and positive (got {})", refine_need_power);
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (perf_bench_warmup < 0)

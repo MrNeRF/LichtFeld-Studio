@@ -57,6 +57,15 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    // need = need^power in place on the active rows (free_mask true marks a free row; null: all
+    // rows active). Non-positive and NaN needs give 0; free rows are left as they are.
+    void launch_need_power(
+        float* need_inout,
+        const bool* free_mask,
+        float power,
+        size_t N,
+        void* stream = nullptr);
+
     // weights *= edge guidance factor.
     void launch_apply_edge_guidance(float* weights, EdgeGuidance edge_guidance, size_t N,
                                     void* stream = nullptr);

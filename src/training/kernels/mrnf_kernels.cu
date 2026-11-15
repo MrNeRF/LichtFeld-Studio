@@ -155,6 +155,29 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fold_need");
     }
 
+    __global__ void need_power_kernel(float* __restrict__ need,
+                                      const bool* __restrict__ free_mask,
+                                      const float power,
+                                      const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N || (free_mask != nullptr && free_mask[i]))
+            return;
+        const float v = need[i];
+        need[i] = v > 0.0f ? powf(v, power) : 0.0f;
+    }
+
+    void launch_need_power(float* need_inout, const bool* free_mask, const float power, const size_t N,
+                           void* stream) {
+        if (N == 0)
+            return;
+        LFS_ASSERT_MSG(power > 0.0f, "need power must be positive");
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        need_power_kernel<<<blocks, threads, 0, s>>>(need_inout, free_mask, power, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.need_power");
+    }
+
     // Ascending float order as unsigned radix keys, matching sort_less_op:
     // NaN after everything and -0 equal to +0.
     __device__ __forceinline__ uint32_t ascending_float_key(const float value) {

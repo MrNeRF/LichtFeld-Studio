@@ -348,6 +348,7 @@ REGISTRY_PLACEMENT = {
         "need_guided_growth",
         "refine_error_view_mean",
         "refine_error_compress",
+        "refine_need_power",
         "per_splat_bias_correction",
         "cropbox_growth_inside",
         "opacity_decay",

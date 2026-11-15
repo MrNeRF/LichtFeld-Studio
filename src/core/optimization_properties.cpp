@@ -644,6 +644,16 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::refine_need_power,
+                        "refine_need_power", "Refine Need Power", d.refine_need_power, 0.1f, 8.0f,
+                        "Need-guided growth raises each splat's need to this power before drawing receivers; 1 leaves it as is (MRNF)")
+            .locale("training.advanced.refine_need_power")
+            .tooltip("training.tooltip.refine_need_power")
+            .precision(2)
+            .ui_step(0.5)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

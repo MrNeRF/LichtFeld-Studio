@@ -665,6 +665,15 @@ namespace {
         EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
         params.cropbox_loss_weight = 1.1f;
         EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
+        params = {};
+        params.refine_need_power = 3.0f;
+        EXPECT_TRUE(params.validate().empty());
+        params.refine_need_power = 0.0f;
+        EXPECT_NE(params.validate().find("refine_need_power"), std::string::npos);
+        params.refine_need_power = -1.0f;
+        EXPECT_NE(params.validate().find("refine_need_power"), std::string::npos);
+        params.refine_need_power = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("refine_need_power"), std::string::npos);
     }
 
     // Catches a short schedule (e.g. --iter 30) rounding an interval to zero, which validation rejects.

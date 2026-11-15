@@ -76,6 +76,8 @@ class MRNFStrategyTest_RefineErrorCompressCandidatesAreEveryScoredSplat_Test;
 class MRNFStrategyTest_RefineErrorCompressNeedHasNoSparsityFactor_Test;
 class MRNFStrategyTest_RefineErrorCompressRanksSmallIntenseOverLargeFaint_Test;
 class MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
+class MRNFStrategyTest_RefineNeedPowerRaisesTheFoldedNeed_Test;
+class MRNFStrategyTest_RefineNeedPowerSharpensTheReceiverDraws_Test;
 
 namespace lfs::training {
 
@@ -190,6 +192,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_RefineErrorCompressNeedHasNoSparsityFactor_Test;
         friend class ::MRNFStrategyTest_RefineErrorCompressRanksSmallIntenseOverLargeFaint_Test;
         friend class ::MRNFStrategyTest_RefineErrorCompressSwitchStartsAFreshWindow_Test;
+        friend class ::MRNFStrategyTest_RefineNeedPowerRaisesTheFoldedNeed_Test;
+        friend class ::MRNFStrategyTest_RefineNeedPowerSharpensTheReceiverDraws_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -211,8 +215,10 @@ namespace lfs::training {
         // the receiver rule.
         [[nodiscard]] bool at_cap(size_t active) const;
         // Turns the window error in _refine_weight_max into NEED (error first, sparsity as a
-        // boost); after it, growth and refill draw by NEED for the rest of the refine.
+        // boost), then raises it to refine_need_power; after it, growth and refill draw by NEED
+        // for the rest of the refine.
         void fold_need_into_refine_weights();
+        void apply_refine_need_power();
         [[nodiscard]] float exchange_importance_decay() const;
         [[nodiscard]] int exchange_warmup_windows() const;
         [[nodiscard]] size_t exchange_quota(int iter, size_t active) const;

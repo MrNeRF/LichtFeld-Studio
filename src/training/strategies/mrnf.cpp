@@ -1180,6 +1180,7 @@ namespace lfs::training {
                     static_cast<float>(std::max<size_t>(active, 1)),
                 std::numeric_limits<float>::min());
             mrnf_strategy::launch_fold_need(_refine_weight_max.ptr<float>(), nullptr, scales, n);
+            apply_refine_need_power();
             return;
         }
         scales.error_scale = std::max(
@@ -1197,6 +1198,19 @@ namespace lfs::training {
         }
         mrnf_strategy::launch_fold_need(_refine_weight_max.ptr<float>(),
                                         has_footprint ? footprint.ptr<float>() : nullptr, scales, n);
+        apply_refine_need_power();
+    }
+
+    void MRNF::apply_refine_need_power() {
+        // Sharpens the receiver draws: the refill and growth weights are proportional to NEED, so
+        // NEED^p shifts the draws towards the high-need splats. The census logs NEED after this.
+        const float power = _params->refine_need_power;
+        if (power == 1.0f) {
+            return;
+        }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        mrnf_strategy::launch_need_power(_refine_weight_max.ptr<float>(),
+                                         _free_mask.is_valid() ? _free_mask.ptr<bool>() : nullptr, power, n);
     }
 
     void MRNF::log_refine_census(const int iter, const int pruned, const GrowthResult& growth,

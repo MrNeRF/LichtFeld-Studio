@@ -120,6 +120,7 @@
   "refine_error_compress": false,
   "refine_error_view_mean": false,
   "refine_every": 163,
+  "refine_need_power": 1.0,
   "reset_every": 3000,
   "rotation_lr": 0.001500000013038516,
   "save_steps": [

@@ -1755,6 +1755,33 @@ TEST(ArgumentParserTest, TrainingParsesPerSplatBiasCorrection) {
     EXPECT_FALSE((*off)->optimization.per_splat_bias_correction);
 }
 
+// Catches --refine-need-power not reaching the training parameters, or a non-positive power accepted.
+TEST(ArgumentParserTest, TrainingParsesRefineNeedPower) {
+    const auto data_path = make_test_path("lfs_arg_parser_need_power_data");
+    const auto output_path = make_test_path("lfs_arg_parser_need_power_output");
+    const auto parse = [&](const char* power) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str()};
+        if (power) {
+            argv.push_back("--refine-need-power");
+            argv.push_back(power);
+        }
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto cubed = parse("3");
+    ASSERT_TRUE(cubed.has_value()) << cubed.error();
+    EXPECT_FLOAT_EQ((*cubed)->optimization.refine_need_power, 3.0f);
+
+    const auto off = parse(nullptr);
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FLOAT_EQ((*off)->optimization.refine_need_power, 1.0f);
+
+    const auto zero = parse("0");
+    ASSERT_FALSE(zero.has_value());
+    EXPECT_NE(zero.error().find("refine_need_power"), std::string::npos) << zero.error();
+}
+
 // Catches --crop accepted without a region of interest to crop to.
 TEST(ArgumentParserTest, TrainingRejectsCropWithoutCropBox) {
     const auto data_path = make_test_path("lfs_arg_parser_crop_without_box_data");

@@ -57,6 +57,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--need-guided-growth", "need_guided_growth", Bool},
             OptimizationCliBinding{"--refine-error-view-mean", "refine_error_view_mean", Bool},
             OptimizationCliBinding{"--refine-error-compress", "refine_error_compress", Bool},
+            OptimizationCliBinding{"--refine-need-power", "refine_need_power", Float},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -826,6 +827,7 @@ namespace {
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
             ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
+            ::args::ValueFlag<float> refine_need_power(training_group, "power", lfs::core::args::optimization_cli_help("--refine-need-power"), {"refine-need-power"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1647,6 +1649,7 @@ namespace {
                                         config_file_val = cli_option_present({"--config"}) ? std::optional<std::string>(::args::get(config_file)) : std::optional<std::string>(),
                                         images_folder_val = cli_option_present({"--images"}) ? std::optional<std::string>(::args::get(images_folder)) : std::optional<std::string>(),
                                         test_every_val = cli_option_present({"--test-every"}) ? std::optional<int>(::args::get(test_every)) : std::optional<int>(),
+                                        refine_need_power_val = cli_option_present({"--refine-need-power"}) ? std::optional<float>(::args::get(refine_need_power)) : std::optional<float>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
@@ -1829,6 +1832,7 @@ namespace {
                 setFlag(tcp_connection_flag, svs.tcp_connection);
                 setVal(images_folder_val, ds.images);
                 setVal(test_every_val, ds.test_every);
+                setVal(refine_need_power_val, opt.refine_need_power);
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -2004,6 +2008,7 @@ namespace {
                 note_ds("invert_masks", invert_masks_flag);
                 note_ds("centralize_dataset", centralize_val.has_value());
                 note_opt("max_cap", max_cap_val.has_value());
+                note_opt("refine_need_power", refine_need_power_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
