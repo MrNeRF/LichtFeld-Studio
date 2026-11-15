@@ -12,7 +12,9 @@
 #include "strategy_utils.hpp"
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace lfs::training {
@@ -59,7 +61,7 @@ namespace lfs::training {
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t capacity =
             std::max(n, _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : n);
-        for (auto* row : {&_score, &_score_count, &_oversize, &_peak, &_streak, &_visible, &_step_peak, &_radius}) {
+        for (auto* row : {&_score, &_score_count, &_oversize, &_peak, &_streak, &_visible, &_step_peak, &_radius, &_renders}) {
             if (row->is_valid() && row->numel() >= n)
                 continue;
             auto grown = Tensor::zeros({capacity}, _splat_data->means().device());
@@ -239,6 +241,7 @@ namespace lfs::training {
         rows.oversize = _oversize.ptr<float>();
         rows.peak = _peak.ptr<float>();
         rows.streak = _streak.ptr<float>();
+        rows.renders = _renders.ptr<float>();
         match::launch_long_axis_split(rows, src.ptr<int64_t>(), dst.ptr<int64_t>(), src.numel(), share);
     }
 
@@ -281,6 +284,15 @@ namespace lfs::training {
         return std::min(added, static_cast<size_t>(std::max(0L, drawn)));
     }
 
+    size_t Match::extra_deaths(const lfs::core::param::OptimizationParameters& params, const int step,
+                               const int cap_step, const size_t live) {
+        const int stop = static_cast<int>(params.stop_refine);
+        if (!(params.match_extra_death_share > 0.0f) || cap_step < 0 || step < cap_step || step >= stop)
+            return 0;
+        const float taper = static_cast<float>(stop - step) / static_cast<float>(stop - cap_step);
+        return static_cast<size_t>(params.match_extra_death_share * taper * static_cast<float>(live));
+    }
+
     Match::RefineCounts Match::refine(const int step) {
         using namespace lfs::core;
         RefineCounts counts;
@@ -300,14 +312,26 @@ namespace lfs::training {
         auto eligible = Tensor::empty({n}, device, DataType::UInt8);
         match::DeadSettings dead_settings;
         dead_settings.min_opacity = _params->min_opacity;
-        dead_settings.dead_peak = _params->match_dead_peak;
+        const bool own_peak_threshold = _params->match_peak_death_threshold >= 0.0f;
+        dead_settings.dead_peak = own_peak_threshold ? _params->match_peak_death_threshold : _params->match_dead_peak;
+        dead_settings.peak_grace = own_peak_threshold ? static_cast<float>(_params->match_death_grace_renders) : 0.0f;
         dead_settings.dead_streak = _params->match_dead_epochs > 0
                                         ? static_cast<float>(_params->match_dead_epochs * steps_per_epoch())
                                         : 0.0f;
         match::launch_dead_mask(_splat_data->means().ptr<float>(), _splat_data->scaling_raw().ptr<float>(),
                                 _splat_data->rotation_raw().ptr<float>(), _splat_data->opacity_raw().ptr<float>(),
                                 _peak.ptr<float>(), _streak.ptr<float>(), _score.ptr<float>(), dead_settings,
-                                dead.ptr<uint8_t>(), eligible.ptr<uint8_t>(), n);
+                                dead.ptr<uint8_t>(), eligible.ptr<uint8_t>(), n, _renders.ptr<float>());
+        // Extra deaths once at the cap: the live splats the picture needs least (lowest peak blend weight).
+        if (_params->max_cap > 0 && n >= static_cast<size_t>(_params->max_cap) && _cap_step < 0)
+            _cap_step = step;
+        if (_params->match_extra_death_share > 0.0f && _cap_step >= 0) {
+            const size_t natural = static_cast<size_t>(dead.to(DataType::Int32).sum().item<int>());
+            const size_t extra = extra_deaths(*_params, step, _cap_step, n - natural);
+            counts.extra_dead = match::mark_lowest_dead(_peak.ptr<float>(), _renders.ptr<float>(),
+                                                        static_cast<float>(_params->match_death_grace_renders),
+                                                        dead.ptr<uint8_t>(), eligible.ptr<uint8_t>(), n, extra);
+        }
         const auto dead_rows = dead.to(DataType::Bool).nonzero().squeeze(-1);
         counts.dead = dead_rows.numel();
         const size_t live_scored = static_cast<size_t>(eligible.to(DataType::Int32).sum().item<int>());
@@ -391,6 +415,7 @@ namespace lfs::training {
         rows.oversize = _oversize.ptr<float>();
         rows.peak = _peak.ptr<float>();
         rows.streak = _streak.ptr<float>();
+        rows.renders = _renders.ptr<float>();
         match::StepSettings settings;
         settings.scoring = scoring;
         settings.screen_limit = _params->match_screen_limit;
@@ -404,8 +429,10 @@ namespace lfs::training {
             n = static_cast<size_t>(_splat_data->size());
             ensure_error_row();
             lfs::core::Tensor::trim_memory_pool();
-            LOG_INFO("Match refine step {}: {} splats, {} dead, {} revived, {} born ({} oversize)", step, n,
-                     counts.dead, counts.revived, counts.born + counts.oversize_born, counts.oversize_born);
+            LOG_INFO("Match refine step {}: {} splats, {} dead, {} revived, {} born ({} oversize){}", step, n,
+                     counts.dead, counts.revived, counts.born + counts.oversize_born, counts.oversize_born,
+                     _params->match_extra_death_share > 0.0f ? std::format(", {} extra dead", counts.extra_dead)
+                                                             : std::string{});
         }
 
         const bool gate_peak = _params->match_walk_gate_peak && scoring;
@@ -475,8 +502,10 @@ namespace lfs::training {
         for (auto [mine, theirs] : {std::pair{&_score, &source._score}, std::pair{&_score_count, &source._score_count},
                                     std::pair{&_oversize, &source._oversize}, std::pair{&_peak, &source._peak},
                                     std::pair{&_streak, &source._streak}, std::pair{&_visible, &source._visible},
-                                    std::pair{&_step_peak, &source._step_peak}, std::pair{&_radius, &source._radius}})
+                                    std::pair{&_step_peak, &source._step_peak}, std::pair{&_radius, &source._radius},
+                                    std::pair{&_renders, &source._renders}})
             std::swap(*mine, *theirs);
+        std::swap(_cap_step, source._cap_step);
     }
 
     void Match::reserve_optimizer_capacity(const size_t capacity) {

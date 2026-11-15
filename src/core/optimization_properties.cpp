@@ -890,6 +890,30 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"match"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::match_extra_death_share,
+                        "match_extra_death_share", "Match Extra Death Share", d.match_extra_death_share, 0.0f, 0.2f,
+                        "Once the match strategy reaches the cap, each refine also marks dead this share of the live "
+                        "splats with the lowest peak blend weight, tapering to zero at the refine end; 0: off")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::match_death_grace_renders,
+                      "match_death_grace_renders", "Match Death Grace Renders", d.match_death_grace_renders, 0, 10000,
+                      "Splats rendered fewer times than this since birth are exempt from the extra deaths and the "
+                      "own peak death threshold of the match strategy")
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::match_peak_death_threshold,
+                        "match_peak_death_threshold", "Match Peak Death Threshold", d.match_peak_death_threshold,
+                        -1.0f, 1.0f,
+                        "At least 0: the match strategy's peak blend weight death test uses this threshold and the "
+                        "death grace; below 0: Match Dead Peak without grace")
+            .precision(4)
+            .flags(PROP_ADVANCED)
+            .strategies({"match"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")

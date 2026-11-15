@@ -26,7 +26,8 @@ namespace lfs::training {
     //   - on a refine step (t > start_refine, t % refine_every == 0, t < stop_refine): dead splats are revived
     //     as split partners of live splats drawn by score, then the model grows by match_growth (to max_cap),
     //     a match_oversize_share of the births drawn by oversize x score; one budget of match_split_budget x N
-    //     covers both; scores reset;
+    //     covers both; scores reset; once at the cap, match_extra_death_share of the live splats with the lowest
+    //     peak blend weight (past the render grace) join the dead pool, the share tapering to 0 at stop_refine;
     //   - visible faint splats take a random walk step.
     // The fused backward takes the camera-distance position step, the on-screen size hinge and rendered-only
     // shape regularizers (fused_geometry_hooks).
@@ -86,6 +87,7 @@ namespace lfs::training {
             size_t revived = 0;
             size_t oversize_born = 0;
             size_t born = 0;
+            size_t extra_dead = 0; // of dead: marked by the extra death share
         };
         // Refine counts: the split budget max(1, (int)(share x N)) of revivals and births together; the births
         // min(target - N, budget - revived), target = max(N, min(cap, (int)(growth x N))); the oversize share
@@ -95,6 +97,10 @@ namespace lfs::training {
                                                   size_t budget, size_t revived);
         [[nodiscard]] static size_t oversize_births(const lfs::core::param::OptimizationParameters& params,
                                                     size_t added);
+        // Extra deaths of a refine at `step` among `live` splats: (size_t)(q x live), q = match_extra_death_share
+        // tapering linearly from cap_step (the first refine at the cap) to 0 at stop_refine; 0 before the cap.
+        [[nodiscard]] static size_t extra_deaths(const lfs::core::param::OptimizationParameters& params, int step,
+                                                 int cap_step, size_t live);
 
         // One refine at step `step` (exposed for tests).
         RefineCounts refine(int step);
@@ -109,6 +115,7 @@ namespace lfs::training {
         [[nodiscard]] lfs::core::Tensor visible_rows() const { return rows_view(_visible); }
         [[nodiscard]] lfs::core::Tensor step_peak_rows() const { return rows_view(_step_peak); }
         [[nodiscard]] lfs::core::Tensor radius_rows() const { return rows_view(_radius); }
+        [[nodiscard]] lfs::core::Tensor renders_rows() const { return rows_view(_renders); }
 
     private:
         [[nodiscard]] lfs::core::Tensor rows_view(const lfs::core::Tensor& row) const;
@@ -134,6 +141,8 @@ namespace lfs::training {
         lfs::core::Tensor _visible;
         lfs::core::Tensor _step_peak;
         lfs::core::Tensor _radius;
+        lfs::core::Tensor _renders; // steps rendered since birth (since the start or a resume for initial splats)
+        int _cap_step = -1;         // first refine step at the cap
         RefineCounts _last_refine;
     };
 

@@ -12,7 +12,7 @@ namespace lfs::training::match {
 
     // Per-step bookkeeping after the backward, one launch per step:
     //   rendered = step_peak > 0 (the splat reached at least one pixel with a non-zero blend weight);
-    //   streak = rendered ? 0 : streak + 1;
+    //   streak = rendered ? 0 : streak + 1;  renders += rendered (when the row is given);
     //   while scoring:
     //     radius > limit:          oversize += log2(radius / limit)
     //     visible and error != 0:  score = (score n + |error|^power) / (n + 1), n += 1
@@ -28,6 +28,7 @@ namespace lfs::training::match {
         float* oversize = nullptr;
         float* peak = nullptr;
         float* streak = nullptr;
+        float* renders = nullptr; // optional: steps rendered since birth
     };
     struct StepSettings {
         bool scoring = true;
@@ -41,18 +42,25 @@ namespace lfs::training::match {
     void launch_size_clip(float* log_scales, const float* radius, float limit, float max_factor, size_t n,
                           void* stream = nullptr);
 
-    // dead[i] = 1 when opacity <= min_opacity, or peak <= dead_peak (dead_peak > 0), or streak >= dead_streak
-    // (dead_streak > 0), or any parameter is not finite, or every log scale is <= -40.
+    // dead[i] = 1 when opacity <= min_opacity, or peak <= dead_peak (dead_peak > 0, and renders >= peak_grace
+    // when renders is given), or streak >= dead_streak (dead_streak > 0), or any parameter is not finite, or every
+    // log scale is <= -40.
     // eligible[i] = 1 when the splat is not dead and its score is positive.
     struct DeadSettings {
         float min_opacity = 0.005f;
         float dead_peak = 0.0f;
         float dead_streak = 0.0f;
+        float peak_grace = 0.0f;
     };
     void launch_dead_mask(const float* means, const float* log_scales, const float* raw_rotations,
                           const float* raw_opacities, const float* peak, const float* streak, const float* score,
                           const DeadSettings& settings, uint8_t* dead, uint8_t* eligible, size_t n,
-                          void* stream = nullptr);
+                          const float* renders = nullptr, void* stream = nullptr);
+
+    // Marks dead (dead = 1, eligible = 0) the `count` live splats (dead == 0) with renders >= grace that have the
+    // lowest key (ties by row). Returns the number marked: at most count, at most the candidates.
+    size_t mark_lowest_dead(const float* key, const float* renders, float grace, uint8_t* dead, uint8_t* eligible,
+                            size_t n, size_t count, void* stream = nullptr);
 
     // Draw `count` rows without replacement, each with probability proportional to its weight
     // (exponential race: the rows with the smallest Exp(1) / weight win). The weight of row i is
@@ -65,7 +73,7 @@ namespace lfs::training::match {
     // Long-axis split of src[j] into src[j] and dst[j] (src rows distinct, dst rows distinct, disjoint):
     // with a the axis of the largest scale and u its world direction, delta = 0.5 exp(s_a) u; the source
     // moves to mean - delta and dst sits at mean + delta. Both: s_a += ln 0.5, the other two += ln 0.85,
-    // opacity = k x opacity, peak = k x source peak, streak = 0. dst copies rotation, sh0 (3 floats),
+    // opacity = k x opacity, peak = k x source peak, streak = 0; dst renders = 0. dst copies rotation, sh0 (3 floats),
     // score, score count and oversize of the source. SH rest and optimizer state are the caller's.
     struct SplitRows {
         float* means = nullptr;
@@ -78,6 +86,7 @@ namespace lfs::training::match {
         float* oversize = nullptr;
         float* peak = nullptr;
         float* streak = nullptr;
+        float* renders = nullptr; // optional: dst renders = 0 (a new splat)
     };
     void launch_long_axis_split(const SplitRows& rows, const int64_t* src, const int64_t* dst, size_t count,
                                 float opacity_share, void* stream = nullptr);

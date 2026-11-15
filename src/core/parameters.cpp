@@ -1034,6 +1034,13 @@ namespace lfs::core {
                 return "match_cut_share must be in [0, 1]";
             if (!std::isfinite(match_cut) || match_cut <= 0.0f)
                 return "match_cut must be positive";
+            if (!std::isfinite(match_extra_death_share) || match_extra_death_share < 0.0f ||
+                match_extra_death_share > 1.0f)
+                return "match_extra_death_share must be in [0, 1]";
+            if (match_death_grace_renders < 0)
+                return "match_death_grace_renders must not be negative";
+            if (!std::isfinite(match_peak_death_threshold) || match_peak_death_threshold > 1.0f)
+                return "match_peak_death_threshold must be finite and at most 1";
             if (!std::isfinite(explore_walk_scale) || explore_walk_scale <= 0.0f)
                 return std::format("explore_walk_scale must be finite and positive (got {})", explore_walk_scale);
             if (!std::isfinite(explore_scout_share) || explore_scout_share < 0.0f || explore_scout_share > 1.0f)

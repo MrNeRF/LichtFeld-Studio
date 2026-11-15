@@ -545,3 +545,132 @@ TEST_F(MatchCutKernelTest, GradientsMatchFiniteDifferences) {
         }
     }
 }
+
+// Extra deaths (switch match_extra_death_share): a share of the live splats, tapering from the first refine at the
+// cap to zero at stop_refine; nothing before the cap or with the share at 0.
+TEST(MatchStrategyTest, ExtraDeathQuotaTapersFromTheCapToTheRefineEnd) {
+    auto params = match_params(64);
+    params.match_extra_death_share = 0.015f;
+    EXPECT_EQ(Match::extra_deaths(params, 4'100, 4'100, 1'000'000), 15'000u);
+    EXPECT_EQ(Match::extra_deaths(params, 15'800, 4'100, 1'000'000), 7'500u);
+    EXPECT_EQ(Match::extra_deaths(params, 27'400, 4'100, 1'000'000), 64u);
+    EXPECT_EQ(Match::extra_deaths(params, 27'500, 4'100, 1'000'000), 0u);
+    EXPECT_EQ(Match::extra_deaths(params, 4'000, -1, 1'000'000), 0u); // cap not reached
+    params.match_extra_death_share = 0.0f;
+    EXPECT_EQ(Match::extra_deaths(params, 4'100, 4'100, 1'000'000), 0u);
+}
+
+// The lowest keys among live splats past the render grace are marked dead and lose donor eligibility.
+TEST(MatchStrategyTest, LowestPeakSplatsPastTheGraceAreMarkedDead) {
+    const std::vector<float> peak = {0.5f, 0.1f, 0.2f, 0.05f, 0.3f, 0.01f};
+    const std::vector<float> renders = {50, 50, 50, 10, 50, 50};
+    const std::vector<uint8_t> dead0 = {0, 0, 0, 0, 0, 1};
+    auto key = Tensor::from_vector(peak, {6}, Device::CUDA);
+    auto rend = Tensor::from_vector(renders, {6}, Device::CUDA);
+    const auto run = [&](const size_t count, std::vector<uint8_t>& dead, std::vector<uint8_t>& eligible) {
+        uint8_t* d = nullptr;
+        uint8_t* e = nullptr;
+        cudaMalloc(&d, 6);
+        cudaMalloc(&e, 6);
+        cudaMemcpy(d, dead0.data(), 6, cudaMemcpyHostToDevice);
+        cudaMemset(e, 1, 6);
+        const size_t marked = match::mark_lowest_dead(key.ptr<float>(), rend.ptr<float>(), 30.0f, d, e, 6, count);
+        dead.resize(6);
+        eligible.resize(6);
+        cudaMemcpy(dead.data(), d, 6, cudaMemcpyDeviceToHost);
+        cudaMemcpy(eligible.data(), e, 6, cudaMemcpyDeviceToHost);
+        cudaFree(d);
+        cudaFree(e);
+        return marked;
+    };
+    std::vector<uint8_t> dead, eligible;
+    // Row 3 (lowest live peak) is in its grace, row 5 is dead already: rows 1 and 2 go.
+    EXPECT_EQ(run(2, dead, eligible), 2u);
+    EXPECT_EQ(dead, (std::vector<uint8_t>{0, 1, 1, 0, 0, 1}));
+    EXPECT_EQ(eligible, (std::vector<uint8_t>{1, 0, 0, 1, 1, 1}));
+    // More than the candidates: all four candidates.
+    EXPECT_EQ(run(10, dead, eligible), 4u);
+    EXPECT_EQ(dead, (std::vector<uint8_t>{1, 1, 1, 0, 1, 1}));
+}
+
+// At the cap a refine adds the quota to the dead pool; revived slots restart their render count.
+TEST(MatchStrategyTest, ExtraDeathsJoinTheDeadPoolAtTheCap) {
+    auto splats = make_splats({.n = 20});
+    Match strategy(splats);
+    auto params = match_params(20); // at the cap
+    params.match_extra_death_share = 0.25f;
+    params.match_death_grace_renders = 30;
+    strategy.initialize(params);
+    set_rows(strategy.score_rows(), std::vector<float>(20, 1.0f));
+    std::vector<float> peak(20), renders(20, 100.0f);
+    for (int i = 0; i < 20; ++i)
+        peak[i] = 0.5f + 0.01f * static_cast<float>(i);
+    renders[0] = 5.0f; // lowest peak, but in its grace
+    set_rows(strategy.peak_rows(), peak);
+    set_rows(strategy.renders_rows(), renders);
+
+    // First refine at the cap: taper 1, (size_t)(0.25 x 20 live) = 5 extra deaths: rows 1..5.
+    const auto counts = strategy.refine(600);
+    EXPECT_EQ(counts.extra_dead, 5u);
+    EXPECT_EQ(counts.dead, 5u);
+    EXPECT_EQ(counts.revived, 2u); // budget max(1, floor(0.1 x 20))
+    const auto after = host(strategy.renders_rows());
+    EXPECT_FLOAT_EQ(after[0], 5.0f);
+    EXPECT_FLOAT_EQ(after[1], 0.0f); // revived: a new splat
+    EXPECT_FLOAT_EQ(after[2], 0.0f);
+    EXPECT_FLOAT_EQ(after[3], 100.0f); // marked dead but not revived: keeps training
+}
+
+// match_peak_death_threshold >= 0: the peak test uses it and spares splats in their render grace; < 0 (default):
+// match_dead_peak without grace.
+TEST(MatchStrategyTest, OwnPeakDeathThresholdHonoursTheGrace) {
+    const auto dead_count = [](const float threshold) {
+        auto splats = make_splats({.n = 4});
+        Match strategy(splats);
+        auto params = match_params(64);
+        params.match_peak_death_threshold = threshold;
+        strategy.initialize(params);
+        set_rows(strategy.score_rows(), std::vector<float>(4, 1.0f));
+        set_rows(strategy.peak_rows(), {0.001f, 0.001f, 0.008f, 0.5f});
+        set_rows(strategy.renders_rows(), {5.0f, 50.0f, 50.0f, 50.0f});
+        return strategy.refine(600).dead;
+    };
+    EXPECT_EQ(dead_count(-1.0f), 2u); // 0.005, rows 0 and 1, no grace
+    EXPECT_EQ(dead_count(0.01f), 2u); // rows 1 and 2; row 0 in its grace
+    EXPECT_EQ(dead_count(0.0f), 0u);  // peak test off
+}
+
+// The switches at their defaults, or the grace alone, or the share before the cap, change nothing.
+TEST(MatchStrategyTest, DeathSwitchesOffLeaveTheRefineUnchanged) {
+    const auto refined = [](const float share, const int grace) {
+        auto splats = make_splats({.n = 20});
+        Match strategy(splats);
+        auto params = match_params(64); // below the cap
+        params.match_extra_death_share = share;
+        params.match_death_grace_renders = grace;
+        strategy.initialize(params);
+        auto op = host(splats.opacity_raw());
+        for (int i = 0; i < 4; ++i)
+            op[i] = logit(0.001f);
+        set_rows(splats.opacity_raw(), op);
+        std::vector<float> score(20), peak(20);
+        for (int i = 0; i < 20; ++i) {
+            score[i] = 1.0f + static_cast<float>(i);
+            peak[i] = i == 7 ? 0.001f : 0.5f;
+        }
+        set_rows(strategy.score_rows(), score);
+        set_rows(strategy.peak_rows(), peak);
+        const auto counts = strategy.refine(600);
+        auto state = host(splats.means());
+        for (const float v : host(splats.opacity_raw()))
+            state.push_back(v);
+        for (const float v : host(splats.scaling_raw()))
+            state.push_back(v);
+        state.push_back(static_cast<float>(counts.dead));
+        state.push_back(static_cast<float>(counts.revived));
+        return state;
+    };
+    const auto base = refined(0.0f, 30);
+    EXPECT_EQ(refined(0.0f, 1000), base);
+    EXPECT_EQ(refined(0.5f, 30), base);
+}

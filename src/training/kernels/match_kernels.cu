@@ -67,6 +67,8 @@ namespace lfs::training::match {
             const float error = rows.error[i];
             rows.error[i] = 0.0f;
             rows.streak[i] = step_peak > 0.0f ? 0.0f : rows.streak[i] + 1.0f;
+            if (rows.renders != nullptr && step_peak > 0.0f)
+                rows.renders[i] += 1.0f;
             if (!settings.scoring)
                 return;
             const float radius = rows.radius != nullptr ? rows.radius[i] : 0.0f;
@@ -99,7 +101,7 @@ namespace lfs::training::match {
         __global__ void dead_mask_kernel(const float* means, const float* log_scales, const float* raw_rotations,
                                          const float* raw_opacities, const float* peak, const float* streak,
                                          const float* score, const DeadSettings settings, uint8_t* dead,
-                                         uint8_t* eligible, const size_t n) {
+                                         uint8_t* eligible, const float* renders, const size_t n) {
             const size_t i = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
             if (i >= n)
                 return;
@@ -112,7 +114,8 @@ namespace lfs::training::match {
             for (int c = 0; c < 4; ++c)
                 finite = finite && isfinite(raw_rotations[i * 4 + c]);
             const bool is_dead = !finite || sigmoid(raw_opacities[i]) <= settings.min_opacity ||
-                                 (settings.dead_peak > 0.0f && peak[i] <= settings.dead_peak) ||
+                                 (settings.dead_peak > 0.0f && peak[i] <= settings.dead_peak &&
+                                  (renders == nullptr || renders[i] >= settings.peak_grace)) ||
                                  (settings.dead_streak > 0.0f && streak[i] >= settings.dead_streak) ||
                                  s_max <= kDeadLogScale;
             dead[i] = is_dead ? 1 : 0;
@@ -199,6 +202,8 @@ namespace lfs::training::match {
             rows.peak[d] = peak;
             rows.streak[s] = 0.0f;
             rows.streak[d] = 0.0f;
+            if (rows.renders != nullptr)
+                rows.renders[d] = 0.0f;
             rows.score[d] = rows.score[s];
             rows.score_count[d] = rows.score_count[s];
             rows.oversize[d] = rows.oversize[s];
@@ -236,6 +241,28 @@ namespace lfs::training::match {
                 if (isfinite(step))
                     means[i * 3 + d] += step;
             }
+        }
+
+        __global__ void lowest_keys_kernel(const float* key, const float* renders, const float grace,
+                                           const uint8_t* dead, const size_t n, float* keys, int32_t* rows,
+                                           unsigned int* candidates) {
+            const size_t i = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+            if (i >= n)
+                return;
+            const bool candidate = dead[i] == 0 && (renders == nullptr || renders[i] >= grace) && isfinite(key[i]);
+            keys[i] = candidate ? key[i] : INFINITY;
+            rows[i] = static_cast<int32_t>(i);
+            if (candidate)
+                atomicAdd(candidates, 1u);
+        }
+
+        __global__ void mark_rows_kernel(const int32_t* rows, const size_t count, uint8_t* dead, uint8_t* eligible) {
+            const size_t j = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+            if (j >= count)
+                return;
+            dead[rows[j]] = 1;
+            if (eligible != nullptr)
+                eligible[rows[j]] = 0;
         }
 
         __global__ void zero_rows_kernel(float* a, float* b, float* c, float* d, const size_t n) {
@@ -276,12 +303,12 @@ namespace lfs::training::match {
     void launch_dead_mask(const float* means, const float* log_scales, const float* raw_rotations,
                           const float* raw_opacities, const float* peak, const float* streak, const float* score,
                           const DeadSettings& settings, uint8_t* dead, uint8_t* eligible, const size_t n,
-                          void* stream) {
+                          const float* renders, void* stream) {
         if (n == 0)
             return;
         const cudaStream_t s = resolve_stream(stream);
         dead_mask_kernel<<<blocks_for(n), kThreads, 0, s>>>(means, log_scales, raw_rotations, raw_opacities, peak,
-                                                            streak, score, settings, dead, eligible, n);
+                                                            streak, score, settings, dead, eligible, renders, n);
         LFS_CUDA_LAUNCH_CHECK(s, "training.match.dead_mask");
     }
 
@@ -322,6 +349,46 @@ namespace lfs::training::match {
         widen_rows_kernel<<<blocks_for(drawn), kThreads, 0, s>>>(values.Current(), drawn, out);
         LFS_CUDA_LAUNCH_CHECK(s, "training.match.widen_rows");
         return drawn;
+    }
+
+    size_t mark_lowest_dead(const float* key, const float* renders, const float grace, uint8_t* dead,
+                            uint8_t* eligible, const size_t n, const size_t count, void* stream) {
+        if (n == 0 || count == 0)
+            return 0;
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(INT_MAX), "match death marking exceeds int32 rows");
+        const cudaStream_t s = resolve_stream(stream);
+        const lfs::core::CUDAStreamGuard stream_guard(s);
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        auto keys_a = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        auto keys_b = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        auto rows_a = Tensor::empty({n}, Device::CUDA, DataType::Int32);
+        auto rows_b = Tensor::empty({n}, Device::CUDA, DataType::Int32);
+        auto candidates = Tensor::zeros({1}, Device::CUDA, DataType::Int32);
+        auto* candidates_ptr = reinterpret_cast<unsigned int*>(candidates.ptr<int32_t>());
+        lowest_keys_kernel<<<blocks_for(n), kThreads, 0, s>>>(key, renders, grace, dead, n, keys_a.ptr<float>(),
+                                                              rows_a.ptr<int32_t>(), candidates_ptr);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.match.lowest_keys");
+        unsigned int h_candidates = 0;
+        LFS_CUDA_CHECK_MSG(cudaMemcpyAsync(&h_candidates, candidates_ptr, sizeof(h_candidates),
+                                           cudaMemcpyDeviceToHost, s),
+                           "match death candidate count");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "match death sync");
+        const size_t marked = std::min(count, static_cast<size_t>(h_candidates));
+        if (marked == 0)
+            return 0;
+        cub::DoubleBuffer<float> keys(keys_a.ptr<float>(), keys_b.ptr<float>());
+        cub::DoubleBuffer<int32_t> values(rows_a.ptr<int32_t>(), rows_b.ptr<int32_t>());
+        const auto radix_sort = [&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceRadixSort::SortPairs(workspace, workspace_bytes, keys, values, static_cast<int>(n), 0,
+                                                   32, s);
+        };
+        cuda_scratch::CubWorkspace workspace("cub::DeviceRadixSort::SortPairs", s, radix_sort);
+        workspace.run(radix_sort);
+        mark_rows_kernel<<<blocks_for(marked), kThreads, 0, s>>>(values.Current(), marked, dead, eligible);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.match.mark_dead");
+        return marked;
     }
 
     void launch_long_axis_split(const SplitRows& rows, const int64_t* src, const int64_t* dst, const size_t count,

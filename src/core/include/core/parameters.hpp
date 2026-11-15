@@ -451,27 +451,33 @@ namespace lfs::core {
             // Match strategy (--strategy match): one setting per component, so pieces can be removed one at
             // a time. Refines run every refine_every steps after start_refine until stop_refine; the cap is
             // max_cap and the dead-opacity threshold min_opacity.
-            float match_growth = 1.05f;            // splat count factor per refine, up to max_cap; 1 = no growth
-            float match_split_budget = 0.1f;       // share of the splats one refine may revive and grow together
-            float match_oversize_share = 0.15f;    // share of the births drawn by on-screen size excess x score
-            float match_screen_limit = 0.3f;       // angular radius limit of the oversize score, clip and hinge
-            float match_clip_factor = 1.5f;        // largest shrink of the clip every 100 steps; <= 1: no clip
-            float match_screen_hinge = 1.0f;       // on-screen size hinge on the scale gradient; 0: off
-            float match_score_power = 0.2f;        // power of a splat's per-step error before the running mean
-            float match_map_power = 2.0f;          // power of the per-pixel error map (1 or 2)
-            float match_dead_peak = 0.005f;        // dead when the decaying peak blend weight is at most this; 0: off
-            int match_dead_epochs = 2;             // dead when unrendered for this many epochs; 0: off
-            float match_peak_half_life = 800.0f;   // half-life in steps of the peak blend weight
-            float match_split_opacity = 0.5f;      // both halves of a split get this share of the opacity ...
-            float match_split_opacity_end = 0.55f; // ... rising linearly to this ...
-            int match_split_opacity_steps = 15000; // ... at this step
-            float match_walk = 160.0f;             // position walk scale at the start; 0: no walk
-            float match_walk_end = 1.6f;           // position walk scale at the end of the run
-            bool match_walk_gate_peak = true;      // the walk gate also uses the peak blend weight while it is tracked
-            bool match_angular_mean_step = true;   // position step in units of the camera distance, shaped by the splat
-            bool match_reg_rendered_only = true;   // scale and rank regularisers only on splats rendered in the step
-            float match_cut_share = 0.3f;          // share of steps (by step hash) trained with the truncated kernel
-            float match_cut = 4.0f;                // ... cut where half the squared Mahalanobis distance reaches this
+            float match_growth = 1.05f;               // splat count factor per refine, up to max_cap; 1 = no growth
+            float match_split_budget = 0.1f;          // share of the splats one refine may revive and grow together
+            float match_oversize_share = 0.15f;       // share of the births drawn by on-screen size excess x score
+            float match_screen_limit = 0.3f;          // angular radius limit of the oversize score, clip and hinge
+            float match_clip_factor = 1.5f;           // largest shrink of the clip every 100 steps; <= 1: no clip
+            float match_screen_hinge = 1.0f;          // on-screen size hinge on the scale gradient; 0: off
+            float match_score_power = 0.2f;           // power of a splat's per-step error before the running mean
+            float match_map_power = 2.0f;             // power of the per-pixel error map (1 or 2)
+            float match_dead_peak = 0.005f;           // dead when the decaying peak blend weight is at most this; 0: off
+            int match_dead_epochs = 2;                // dead when unrendered for this many epochs; 0: off
+            float match_peak_half_life = 800.0f;      // half-life in steps of the peak blend weight
+            float match_split_opacity = 0.5f;         // both halves of a split get this share of the opacity ...
+            float match_split_opacity_end = 0.55f;    // ... rising linearly to this ...
+            int match_split_opacity_steps = 15000;    // ... at this step
+            float match_walk = 160.0f;                // position walk scale at the start; 0: no walk
+            float match_walk_end = 1.6f;              // position walk scale at the end of the run
+            bool match_walk_gate_peak = true;         // the walk gate also uses the peak blend weight while it is tracked
+            bool match_angular_mean_step = true;      // position step in units of the camera distance, shaped by the splat
+            bool match_reg_rendered_only = true;      // scale and rank regularisers only on splats rendered in the step
+            float match_cut_share = 0.3f;             // share of steps (by step hash) trained with the truncated kernel
+            float match_cut = 4.0f;                   // ... cut where half the squared Mahalanobis distance reaches this
+            float match_extra_death_share = 0.0f;     // once at the cap: each refine also marks dead this share of the
+                                                      // live splats, lowest peak blend weight first, tapering to 0 at
+                                                      // stop_refine; 0: off
+            int match_death_grace_renders = 30;       // splats rendered fewer times since birth are exempt from it
+            float match_peak_death_threshold = -1.0f; // >= 0: the peak death test uses this threshold and the grace;
+                                                      // < 0: match_dead_peak without grace
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;
