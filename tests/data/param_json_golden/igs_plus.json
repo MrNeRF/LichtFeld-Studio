@@ -23,6 +23,7 @@
   "depth_auto_generate": true,
   "depth_loss_mode": "ssi",
   "depth_loss_weight": 2.0,
+  "donor_rank_impact": false,
   "donor_rank_per_view": false,
   "enable_eval": false,
   "enable_save_eval_images": true,

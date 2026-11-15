@@ -84,6 +84,12 @@ class MRNFStrategyTest_DonorRankPerViewOffKeepsTheSummedRanking_Test;
 class MRNFStrategyTest_DonorRankPerViewRanksBySumPerViewWithAFloor_Test;
 class MRNFStrategyTest_DonorRankPerViewCountFollowsItsSplats_Test;
 class MRNFStrategyTest_DonorRankPerViewResumeRebuildsTheCount_Test;
+class MRNFStrategyTest_DonorRankImpactOffKeepsTheBlendWeightDonors_Test;
+class MRNFStrategyTest_DonorRankImpactBackwardWritesImpactUnderNeedGrowth_Test;
+class MRNFStrategyTest_DonorRankImpactFadesTheMaximaLikeThePlainExchange_Test;
+class MRNFStrategyTest_DonorRankImpactKeepsASmallHighPeakSplat_Test;
+class MRNFStrategyTest_DonorRankImpactStateFollowsItsSplats_Test;
+class MRNFStrategyTest_DonorRankImpactResumeAndSwitchStartAfresh_Test;
 
 namespace lfs::training {
 
@@ -206,6 +212,12 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DonorRankPerViewRanksBySumPerViewWithAFloor_Test;
         friend class ::MRNFStrategyTest_DonorRankPerViewCountFollowsItsSplats_Test;
         friend class ::MRNFStrategyTest_DonorRankPerViewResumeRebuildsTheCount_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactOffKeepsTheBlendWeightDonors_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactBackwardWritesImpactUnderNeedGrowth_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactFadesTheMaximaLikeThePlainExchange_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactKeepsASmallHighPeakSplat_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactStateFollowsItsSplats_Test;
+        friend class ::MRNFStrategyTest_DonorRankImpactResumeAndSwitchStartAfresh_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -234,6 +246,10 @@ namespace lfs::training {
         // Need-guided donors rank by summed blend weight per view that saw the splat, the view
         // count floored at donor_view_floor(), instead of by the summed blend weight.
         [[nodiscard]] bool donor_rank_per_view_on() const;
+        // Need-guided donors rank by removal impact, as the plain exchange does: the backward
+        // writes the window impact sum and pixel peak, each fades as a maximum, and a row ranks
+        // by the later of its two positions. Takes precedence over the per-view rank.
+        [[nodiscard]] bool donor_rank_impact_on() const;
         [[nodiscard]] float donor_view_floor() const;
         // This window's count of views that covered each splat, or zeros. Read before the
         // window outputs are reset.

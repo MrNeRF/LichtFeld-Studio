@@ -415,6 +415,11 @@ namespace lfs::core {
             // floor of 5% of the training views) instead of the blend weight summed over the views, so
             // structure seen by few views is not drained for being seen by few views.
             bool donor_rank_per_view = false;
+            // Need-guided growth ranks its donors by removal impact (the later of the ranks by summed
+            // and by pixel-peak impact, each a faded window maximum) instead of by summed blend weight,
+            // so small splats that are right where they are are not drained for being small. Takes
+            // precedence over donor_rank_per_view.
+            bool donor_rank_impact = false;
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

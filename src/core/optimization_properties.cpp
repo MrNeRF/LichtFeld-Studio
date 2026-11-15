@@ -662,6 +662,14 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::donor_rank_impact,
+                       "donor_rank_impact", "Donor Rank Impact", d.donor_rank_impact,
+                       "Need-guided growth frees the splats whose removal changes the images least, by summed and pixel-peak impact, not by blend weight (MRNF)")
+            .locale("training.advanced.donor_rank_impact")
+            .tooltip("training.tooltip.donor_rank_impact")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

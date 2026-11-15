@@ -1328,9 +1328,10 @@ namespace lfs::training {
     }
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::impact_scratch(const int iter) {
-        // Need-guided growth ranks by the blend weight sum the backward already writes.
-        if (!growth_exchange_active(iter) || _params->need_guided_growth || !_splat_data ||
-            _splat_data->size() == 0) {
+        // Need-guided growth ranks by the blend weight sum the backward already writes, unless its
+        // donors rank by removal impact like the plain exchange's.
+        if (!growth_exchange_active(iter) || (_params->need_guided_growth && !donor_rank_impact_on()) ||
+            !_splat_data || _splat_data->size() == 0) {
             return {};
         }
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -1394,7 +1395,7 @@ namespace lfs::training {
         LFS_ASSERT_MSG(_exchange_importance_sum.numel() == n && _exchange_birth.numel() == n &&
                            (!_exchange_importance_peak.is_valid() || _exchange_importance_peak.numel() == n),
                        "MRNF growth exchange: importance does not match the splat count");
-        if (_params->need_guided_growth) {
+        if (_params->need_guided_growth && !donor_rank_impact_on()) {
             // Contribution: summed blend weight over about one pass. Each window adds its sum and
             // older windows fade by 1 - refine_every / views (their weights sum to one pass).
             const size_t views = _views ? _views->size() : 0;
@@ -1414,6 +1415,8 @@ namespace lfs::training {
             ++_exchange_windows;
             return;
         }
+        // Removal impact (the plain exchange, and need-guided donors ranked by impact): faded
+        // maxima of the window impact sum and pixel peak, half-life one pass.
         const float decay = exchange_importance_decay();
         _exchange_importance_sum = primary.maximum(_exchange_importance_sum.mul(decay));
         if (!secondary.is_valid()) {
@@ -1477,7 +1480,12 @@ namespace lfs::training {
     }
 
     bool MRNF::donor_rank_per_view_on() const {
-        return need_guided_growth_on() && _params->donor_rank_per_view;
+        // Ranking by removal impact takes precedence.
+        return need_guided_growth_on() && _params->donor_rank_per_view && !_params->donor_rank_impact;
+    }
+
+    bool MRNF::donor_rank_impact_on() const {
+        return need_guided_growth_on() && _params->donor_rank_impact;
     }
 
     float MRNF::donor_view_floor() const {
@@ -3328,10 +3336,16 @@ namespace lfs::training {
                 _splat_data->_densification_info.ndim() == 2 && _splat_data->_densification_info.shape()[0] >= 4)
                 _splat_data->_densification_info.slice(0, 3, 4).zero_();
         }
+        // A faded removal-impact maximum and a summed blend weight do not mix: switching the
+        // need-guided donor key starts the exchange memory afresh.
+        const auto impact_donors = [](const lfs::core::param::OptimizationParameters& p) {
+            return p.need_guided_growth && p.donor_rank_impact;
+        };
+        const bool donor_key_changed = _params && impact_donors(*_params) != impact_donors(params);
         auto resolved_params = params;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(with_noise_outside_cap(resolved_params, _splat_data));
-        if (renderer_changed)
+        if (renderer_changed || donor_key_changed)
             reset_exchange_state();
         if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");

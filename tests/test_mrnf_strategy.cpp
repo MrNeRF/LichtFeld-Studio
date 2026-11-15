@@ -57,6 +57,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/kernels/image_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/strategies/mrnf.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -73,9 +74,11 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 using namespace lfs::core;
@@ -4045,4 +4048,364 @@ TEST(MRNFStrategyTest, DonorRankPerViewResumeRebuildsTheCount) {
     fold_views(restored, splat_copy, kViewCoverage.size(), 96);
     restored.update_exchange_importance();
     EXPECT_EQ(restored._exchange_view_count.cpu().to_vector(), kCoveringViews);
+}
+
+namespace {
+    param::OptimizationParameters donor_impact_test_params(const bool impact) {
+        auto p = need_growth_test_params(32);
+        p.refine_every = 1;
+        p.donor_rank_impact = impact;
+        return p;
+    }
+
+    // Writes one window of removal impact into the buffers the backward would fill.
+    void write_impact_window(MRNF& strategy, const std::vector<float>& sum, const std::vector<float>& peak) {
+        auto [sum_out, peak_out] = strategy.impact_scratch(100);
+        ASSERT_TRUE(sum_out.is_valid());
+        ASSERT_TRUE(peak_out.is_valid());
+        sum_out.copy_(Tensor::from_vector(sum, TensorShape({sum.size()}), Device::CUDA));
+        peak_out.copy_(Tensor::from_vector(peak, TensorShape({peak.size()}), Device::CUDA));
+        strategy.on_impact_accumulated(100);
+    }
+} // namespace
+
+// Off, need-guided growth asks the backward for no impact and its donors are exactly the rows the
+// summed blend weight ranks lowest, as before. The impact option also takes precedence over the
+// per-view rank.
+TEST(MRNFStrategyTest, DonorRankImpactOffKeepsTheBlendWeightDonors) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(donor_impact_test_params(false));
+    strategy.set_training_dataset(make_hull_dataset());
+    ASSERT_FALSE(strategy.donor_rank_impact_on());
+    EXPECT_FALSE(strategy.impact_scratch(100).first.is_valid());
+    EXPECT_FALSE(strategy.impact_scratch(100).second.is_valid());
+    const size_t n = splat_data.size();
+
+    const std::vector<float> first{1.0f, 4.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f};
+    const std::vector<float> second{1.0f, 0.0f, 0.2f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 0.5f};
+    for (const auto* window : {&first, &second}) {
+        strategy.visibility_accumulator().copy_(Tensor::from_vector(*window, TensorShape({n}), Device::CUDA));
+        strategy.update_exchange_importance();
+    }
+    const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
+    for (size_t i = 0; i < n; ++i)
+        EXPECT_FLOAT_EQ(sum[i], 0.5f * first[i] + second[i]) << i;
+    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
+
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    const auto chosen = strategy.select_exchange_victims(3);
+    auto reference = Tensor::empty({3}, Device::CUDA, DataType::Int64);
+    const auto eligible = Tensor::ones_bool({n}, Device::CUDA);
+    mrnf_strategy::launch_rank_exchange_rows(strategy._exchange_importance_sum.ptr<float>(), nullptr,
+                                             eligible.ptr<bool>(), n, 3, reference.ptr<int64_t>());
+    EXPECT_EQ(chosen.cpu().to_vector_int64(), reference.cpu().to_vector_int64());
+    EXPECT_EQ(selected_rows(chosen), (std::vector<int64_t>{0, 1, 2}));
+
+    // Both donor options on: impact wins, no view count is kept.
+    auto both = donor_impact_test_params(true);
+    both.donor_rank_per_view = true;
+    strategy.set_optimization_params(both);
+    EXPECT_TRUE(strategy.donor_rank_impact_on());
+    EXPECT_FALSE(strategy.donor_rank_per_view_on());
+    both.donor_rank_impact = false;
+    strategy.set_optimization_params(both);
+    EXPECT_TRUE(strategy.donor_rank_per_view_on());
+    // Without need-guided growth the option does nothing (the plain exchange already ranks by impact).
+    auto plain = growth_exchange_test_params();
+    plain.donor_rank_impact = true;
+    strategy.set_optimization_params(plain);
+    EXPECT_FALSE(strategy.donor_rank_impact_on());
+}
+
+// On, the real backward pass writes the per-splat removal impact into the buffers need-guided
+// growth hands out, and the exchange memory takes them as its first window.
+TEST(MRNFStrategyTest, DonorRankImpactBackwardWritesImpactUnderNeedGrowth) {
+    constexpr int width = 64, height = 48;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    auto R = Tensor::eye(3, Device::CUDA);
+    auto T = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 4.0f}, TensorShape({3}), Device::CUDA);
+    Camera camera(R, T, 60.0f, 60.0f, width / 2.0f, height / 2.0f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "impact", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+
+    // A coloured splat in front of a grey one that matches the grey background.
+    const std::vector<float> means{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+    const std::vector<float> rotations{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    const std::vector<float> opacities{std::log(0.95f / 0.05f), std::log(0.8f / 0.2f)};
+    const std::vector<float> sh0{0.4f / sh_c0, -0.4f / sh_c0, 0.0f, 0.0f, 0.0f, 0.0f};
+    SplatData splat_data(0, Tensor::from_vector(means, TensorShape({2, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({2, 1, 3}), Device::CUDA),
+                         Tensor::zeros({2, 0, 3}, Device::CUDA),
+                         Tensor::full({2, 3}, -1.6f, Device::CUDA),
+                         Tensor::from_vector(rotations, TensorShape({2, 4}), Device::CUDA),
+                         Tensor::from_vector(opacities, TensorShape({2, 1}), Device::CUDA), 1.0f);
+
+    {
+        MRNF off(splat_data);
+        off.initialize(donor_impact_test_params(false));
+        EXPECT_FALSE(off.impact_scratch(100).first.is_valid());
+    }
+
+    MRNF strategy(splat_data);
+    strategy.initialize(donor_impact_test_params(true));
+    ASSERT_TRUE(strategy.donor_rank_impact_on());
+    ASSERT_TRUE(strategy.growth_exchange_active(100));
+    auto [impact_sum, impact_peak] = strategy.impact_scratch(100);
+    ASSERT_TRUE(impact_sum.is_valid());
+    ASSERT_TRUE(impact_peak.is_valid());
+    ASSERT_EQ(impact_sum.numel(), 2u);
+
+    auto forward = fast_rasterize_forward(camera, splat_data, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    strategy.get_optimizer().zero_grad(0);
+    FastGSFusedExtraGradients fused;
+    fused.impact_sum_out = impact_sum.ptr<float>();
+    fused.impact_peak_out = impact_peak.ptr<float>();
+    fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image), splat_data,
+                            strategy.get_optimizer(), {}, {}, DensificationType::None, 1, fused);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    strategy.on_impact_accumulated(100);
+
+    const auto sum = impact_sum.cpu().to_vector();
+    const auto peak = impact_peak.cpu().to_vector();
+    // Removing the front splat changes the image wherever it covers; the peak is one pixel's change,
+    // and the grey splat behind it changes nothing.
+    EXPECT_GT(sum[0], 1.0f);
+    EXPECT_GT(peak[0], 0.1f);
+    EXPECT_LT(peak[0], sum[0]);
+    EXPECT_NEAR(sum[1], 0.0f, 1.0e-4f);
+
+    strategy.visibility_accumulator().fill_(1.0f);
+    strategy.update_exchange_importance();
+    EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(), sum);
+    ASSERT_TRUE(strategy._exchange_importance_peak.is_valid());
+    EXPECT_EQ(strategy._exchange_importance_peak.cpu().to_vector(), peak);
+    EXPECT_FALSE(strategy._exchange_window_impact_sum.is_valid());
+    EXPECT_FALSE(strategy._exchange_impact_written);
+}
+
+// On, need-guided growth keeps the plain exchange's memory: faded maxima of the window impact
+// sum and peak with a half-life of one pass, the same warmup. Its own cosine quota stays.
+TEST(MRNFStrategyTest, DonorRankImpactFadesTheMaximaLikeThePlainExchange) {
+    const std::vector<float> sum1{4.0f, 1.0f, 2.0f, 8.0f, 0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> peak1{0.4f, 0.9f, 0.1f, 0.2f, 0.0f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f};
+    const std::vector<float> sum2{1.0f, 2.0f, 2.0f, 0.0f, 5.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> peak2{0.1f, 0.2f, 0.5f, 0.0f, 0.6f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f};
+    const auto run = [&](const param::OptimizationParameters& params) {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(params);
+        strategy.set_training_dataset(make_hull_dataset());
+        const size_t n = splat_data.size();
+        for (const bool second : {false, true}) {
+            write_impact_window(strategy, second ? sum2 : sum1, second ? peak2 : peak1);
+            strategy.visibility_accumulator().fill_(1.0f);
+            strategy.update_exchange_importance();
+        }
+        EXPECT_EQ(strategy._exchange_windows, 2);
+        return std::tuple{strategy._exchange_importance_sum.cpu().to_vector(),
+                          strategy._exchange_importance_peak.cpu().to_vector(),
+                          strategy.exchange_warmup_windows(), strategy.exchange_quota(2500, n)};
+    };
+
+    auto plain_params = growth_exchange_test_params();
+    plain_params.refine_every = 1;
+    const auto [sum, peak, warmup, quota] = run(donor_impact_test_params(true));
+    const auto [plain_sum, plain_peak, plain_warmup, plain_quota] = run(plain_params);
+    const float decay = std::pow(0.5f, 1.0f / 2.0f); // refine every step, two views
+    for (size_t i = 0; i < sum.size(); ++i) {
+        EXPECT_FLOAT_EQ(sum[i], std::fmax(sum2[i], decay * sum1[i])) << i;
+        EXPECT_FLOAT_EQ(peak[i], std::fmax(peak2[i], decay * peak1[i])) << i;
+    }
+    EXPECT_EQ(sum, plain_sum);
+    EXPECT_EQ(peak, plain_peak);
+    EXPECT_EQ(warmup, plain_warmup);
+
+    // The quota is need-guided growth's cosine taper from the iteration, with or without the option.
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF off(splat_data);
+    off.initialize(donor_impact_test_params(false));
+    EXPECT_EQ(quota, off.exchange_quota(2500, splat_data.size()));
+}
+
+// A small splat that is right where it is (little blend weight, a sharp pixel peak) is kept over a
+// large low-impact one; the blend-weight ranking frees the small one.
+TEST(MRNFStrategyTest, DonorRankImpactKeepsASmallHighPeakSplat) {
+    // Row 0: large and faint in impact (blend weight 50, impact sum 0.5, peak 0.01).
+    // Row 1: small twig (blend weight 0.3, impact sum 0.4, peak 0.9). The rest are solid.
+    const std::vector<float> blend{50.0f, 0.3f, 80.0f, 80.0f, 80.0f, 80.0f, 80.0f, 80.0f, 80.0f, 80.0f};
+    const std::vector<float> sum{0.5f, 0.4f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f, 9.0f};
+    const std::vector<float> peak{0.01f, 0.9f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
+    const auto donors = [&](const bool impact, const size_t count) {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(donor_impact_test_params(impact));
+        strategy.set_training_dataset(make_hull_dataset());
+        const size_t n = splat_data.size();
+        if (impact)
+            write_impact_window(strategy, sum, peak);
+        strategy.visibility_accumulator().copy_(Tensor::from_vector(blend, TensorShape({n}), Device::CUDA));
+        strategy.update_exchange_importance();
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        return selected_rows(strategy.select_exchange_victims(count));
+    };
+
+    EXPECT_EQ(donors(false, 1), (std::vector<int64_t>{1}));
+    EXPECT_EQ(donors(true, 1), (std::vector<int64_t>{0}));
+    // By summed impact alone the twig would go first (0.4 < 0.5); its peak ranks it last but one.
+    EXPECT_EQ(donors(true, 2), (std::vector<int64_t>{0, 2}));
+}
+
+// The impact memory follows its splats as the plain exchange's does: appended rows, filled slots
+// and split parents restart at 0 and wait a pass; compaction and a Morton reorder carry the
+// memory and the window buffers.
+TEST(MRNFStrategyTest, DonorRankImpactStateFollowsItsSplats) {
+    std::vector<float> iota10(10);
+    std::iota(iota10.begin(), iota10.end(), 1.0f);
+    {
+        // Two rows appended by growth, slot 3 refilled, row 0 split.
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(donor_impact_test_params(true));
+        constexpr size_t before = 8;
+        const std::vector<float> old_sum(iota10.begin(), iota10.begin() + before);
+        strategy._exchange_importance_sum = Tensor::from_vector(old_sum, TensorShape({before}), Device::CUDA);
+        strategy._exchange_importance_peak = strategy._exchange_importance_sum.mul(0.1f);
+        strategy._exchange_birth = Tensor::zeros({before}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 3;
+        strategy._exchange_free_before_growth = Tensor::zeros_bool({before}, Device::CUDA);
+        const auto filled = Tensor::from_vector(std::vector<int>{3}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+        strategy._exchange_free_before_growth.index_put_(filled, Tensor::ones_bool({1}, Device::CUDA));
+        const auto parents = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+        strategy.record_exchange_births(parents);
+
+        const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
+        const auto peak = strategy._exchange_importance_peak.cpu().to_vector();
+        const auto birth = strategy._exchange_birth.cpu().to_vector();
+        ASSERT_EQ(sum.size(), 10u);
+        ASSERT_EQ(peak.size(), 10u);
+        for (size_t row = 0; row < 10; ++row) {
+            const bool born = row == 0 || row == 3 || row >= before;
+            EXPECT_EQ(sum[row], born ? 0.0f : iota10[row]) << row;
+            EXPECT_FLOAT_EQ(peak[row], born ? 0.0f : 0.1f * iota10[row]) << row;
+            EXPECT_EQ(birth[row], born ? static_cast<float>(strategy._exchange_windows) : 0.0f) << row;
+        }
+        // Newborns wait a full pass: the two lowest eligible rows are 1 and 2.
+        EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{1, 2}));
+    }
+    {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(donor_impact_test_params(true));
+        splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+        const size_t n = splat_data.size();
+        strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+        strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        write_impact_window(strategy, iota10, std::vector<float>(n, 0.5f));
+        const auto mask = Tensor::from_vector(
+            std::vector<bool>{true, false, false, false, false, false, false, false, false, true},
+            TensorShape({10}), Device::CUDA);
+        strategy.remove_gaussians(mask);
+        ASSERT_EQ(splat_data.size(), 8u);
+        EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(),
+                  std::vector<float>(kExchangeSum.begin() + 1, kExchangeSum.end() - 1));
+        EXPECT_EQ(strategy._exchange_importance_peak.cpu().to_vector(),
+                  std::vector<float>(kExchangePeak.begin() + 1, kExchangePeak.end() - 1));
+        EXPECT_EQ(strategy._exchange_window_impact_sum.cpu().to_vector(),
+                  std::vector<float>(iota10.begin() + 1, iota10.end() - 1));
+        EXPECT_TRUE(strategy._exchange_impact_written);
+        // Same rows as the plain exchange after this compaction (worse of the sum and peak ranks).
+        EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)), (std::vector<int64_t>{1, 2}));
+    }
+    {
+        auto splat = create_mrnf_test_splat_data(4, 0);
+        {
+            const std::vector<float> means{3.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+            splat.means().copy_from(Tensor::from_vector(means, TensorShape({4, 3}), Device::CUDA));
+        }
+        auto params = donor_impact_test_params(true);
+        params.max_cap = 8;
+        MRNF strategy(splat);
+        strategy.initialize(params);
+        const std::vector<float> values{10.0f, 20.0f, 30.0f, 40.0f};
+        const auto row = [&](const float scale) {
+            return Tensor::from_vector(values, TensorShape({4}), Device::CUDA).mul(scale);
+        };
+        strategy._exchange_importance_sum = row(1.0f);
+        strategy._exchange_importance_peak = row(2.0f);
+        strategy._exchange_birth = row(3.0f);
+        strategy._exchange_window_impact_sum = row(4.0f);
+        strategy._exchange_window_impact_peak = row(5.0f);
+        const auto result = morton::apply_morton_reorder(
+            splat, &strategy.get_optimizer(), nullptr,
+            [&](const morton::RowVisitor& visit) { strategy.for_each_gaussian_row(visit); });
+        ASSERT_TRUE(result.applied);
+        const auto permutation = result.permutation.cpu();
+        const std::array<std::pair<const Tensor*, float>, 5> rows{{
+            {&strategy._exchange_importance_sum, 1.0f},
+            {&strategy._exchange_importance_peak, 2.0f},
+            {&strategy._exchange_birth, 3.0f},
+            {&strategy._exchange_window_impact_sum, 4.0f},
+            {&strategy._exchange_window_impact_peak, 5.0f},
+        }};
+        bool moved = false;
+        for (const auto& [tensor, scale] : rows) {
+            const auto got = tensor->cpu().to_vector();
+            for (size_t i = 0; i < 4; ++i) {
+                const auto from = static_cast<size_t>(permutation.ptr<int64_t>()[i]);
+                moved = moved || from != i;
+                EXPECT_EQ(got[i], scale * values[from]) << i;
+            }
+        }
+        EXPECT_TRUE(moved);
+    }
+}
+
+// The impact memory is transient like the plain exchange's: a resume drops it and the next
+// windows rebuild it. Switching the option mid-run starts the memory afresh too, since a summed
+// blend weight and a faded impact maximum do not mix; the same parameters keep it.
+TEST(MRNFStrategyTest, DonorRankImpactResumeAndSwitchStartAfresh) {
+    const std::vector<float> sum{4.0f, 1.0f, 2.0f, 8.0f, 0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> peak{0.4f, 0.9f, 0.1f, 0.2f, 0.0f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f};
+    const auto params = donor_impact_test_params(true);
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(params);
+    strategy.set_training_dataset(make_hull_dataset());
+    write_impact_window(strategy, sum, peak);
+    strategy.visibility_accumulator().fill_(1.0f);
+    strategy.update_exchange_importance();
+    write_impact_window(strategy, sum, peak);
+    ASSERT_TRUE(strategy._exchange_importance_peak.is_valid());
+    std::stringstream ss;
+    strategy.serialize(ss);
+
+    auto splat_copy = create_mrnf_test_splat_data();
+    MRNF restored(splat_copy);
+    restored.initialize(params);
+    restored.set_training_dataset(make_hull_dataset());
+    restored.deserialize(ss);
+    EXPECT_FALSE(restored._exchange_importance_sum.is_valid());
+    EXPECT_FALSE(restored._exchange_importance_peak.is_valid());
+    EXPECT_FALSE(restored._exchange_window_impact_sum.is_valid());
+    EXPECT_FALSE(restored._exchange_impact_written);
+    EXPECT_EQ(restored._exchange_windows, 0);
+    write_impact_window(restored, sum, peak);
+    restored.visibility_accumulator().fill_(1.0f);
+    restored.update_exchange_importance();
+    EXPECT_EQ(restored._exchange_importance_sum.cpu().to_vector(), sum);
+    EXPECT_EQ(restored._exchange_importance_peak.cpu().to_vector(), peak);
+
+    // Same parameters: the memory stays. Switching the option off (or on) drops it.
+    strategy.set_optimization_params(params);
+    EXPECT_TRUE(strategy._exchange_importance_sum.is_valid());
+    EXPECT_TRUE(strategy._exchange_impact_written);
+    strategy.set_optimization_params(donor_impact_test_params(false));
+    EXPECT_FALSE(strategy._exchange_importance_sum.is_valid());
+    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
+    EXPECT_FALSE(strategy._exchange_window_impact_sum.is_valid());
+    EXPECT_EQ(strategy._exchange_windows, 0);
 }
