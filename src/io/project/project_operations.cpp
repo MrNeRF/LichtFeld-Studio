@@ -848,6 +848,10 @@ namespace lfs::io::project {
                 if (!data) {
                     return std::move(data).error();
                 }
+                if (cancel && cancel()) {
+                    return fail<ExportSceneData>(lfs::ErrorCode::Cancelled, path,
+                                                 "Project export was canceled.", "canceled after loading source", "export.cancel");
+                }
                 // Published assets may retain dormant SH bands in their encoded
                 // payload. Preserve each node's published appearance when merging.
                 std::optional<PublishedSplatMetadata> publication;
