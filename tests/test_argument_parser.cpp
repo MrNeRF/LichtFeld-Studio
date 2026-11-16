@@ -37,16 +37,29 @@ namespace {
 
 } // namespace
 
-TEST(ArgumentParserTest, StandalonePluginScriptRequiresExactlyOneExplicitPath) {
-    const char* argv[]{"LichtFeld-Studio", "plugin", "run", "local check.py", "unexpected"};
-    EXPECT_FALSE(lfs::core::args::parse_args(3, argv));
-    const auto parsed = lfs::core::args::parse_args(4, argv);
+TEST(ArgumentParserTest, HeadlessScriptsWithoutDatasetPreserveOrderAndUtf8Paths) {
+    const char* argv[]{"LichtFeld-Studio", "--headless", "--python-script", "local check.py",
+                       "--python-script", "caf\xc3\xa9.py"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
-    const auto* mode = std::get_if<lfs::core::args::PluginMode>(&*parsed);
-    ASSERT_NE(mode, nullptr);
-    EXPECT_EQ(mode->command, lfs::core::args::PluginMode::Command::RUN);
-    EXPECT_EQ(mode->name, "local check.py");
-    EXPECT_FALSE(lfs::core::args::parse_args(5, argv));
+    EXPECT_TRUE((*parsed)->optimization.headless);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    ASSERT_EQ((*parsed)->python_scripts.size(), 2);
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[0]), "local check.py");
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[1]), "caf\xc3\xa9.py");
+}
+
+TEST(ArgumentParserTest, HeadlessStillRequiresSourceWithoutScriptsOrWithTcp) {
+    const auto initial = (std::filesystem::path(make_test_path("lfs_headless_script_init")) / "initial.ply").string();
+    std::ofstream(initial).put('\n');
+    for (const std::vector<const char*> argv : {
+             std::vector<const char*>{"LichtFeld-Studio", "--headless"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--tcp-connection"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--init", initial.c_str()}}) {
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("requires --data-path or --resume"), std::string::npos) << parsed.error();
+    }
 }
 
 // An untrained .licht on --data-path is its own destination, so

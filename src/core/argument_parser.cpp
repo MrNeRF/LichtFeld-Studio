@@ -1397,9 +1397,10 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path or resume
+            const bool has_scripts = python_scripts && !::args::get(python_scripts).empty();
+            // Headless scripts can run without a training source. TCP still needs one.
             // (--resume accepts both .resume checkpoints and .licht projects).
-            if (headless && !has_data_path && !has_resume) {
+            if (headless && !has_data_path && !has_resume && (!has_scripts || tcp_connection || init_path)) {
                 return std::unexpected(std::format(
                     "ERROR: Headless mode requires --data-path or --resume "
                     "(--resume file.licht counts as a project source)\n\n{}",
@@ -1972,7 +1973,7 @@ namespace {
                 // Python scripts
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
-                        params.python_scripts.emplace_back(script);
+                        params.python_scripts.emplace_back(lfs::core::utf8_to_path(script));
                     }
                 }
 
@@ -3394,7 +3395,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return std::unexpected(std::move(error));
         } else if (arg1 == "plugin") {
             if (argc < 3) {
-                return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|run|list> [name or script]");
+                return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|list> [name]");
             }
 
             const std::string_view subcmd = argv[2];
@@ -3412,12 +3413,6 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
                 }
                 mode.command = PluginMode::Command::CHECK;
                 mode.name = argv[3];
-            } else if (subcmd == "run") {
-                if (argc != 4) {
-                    return std::unexpected("Usage: LichtFeld-Studio plugin run <script.py>");
-                }
-                mode.command = PluginMode::Command::RUN;
-                mode.name = argv[3];
             } else if (subcmd == "list") {
                 mode.command = PluginMode::Command::LIST;
             } else if (subcmd == "-h" || subcmd == "--help") {
@@ -3426,7 +3421,6 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
 Commands:
   create <name>   Create plugin with venv and VS Code config
   check <name>    Validate plugin structure
-  run <script>    Run a local Python script without GUI, training or user plugins
   list            List installed plugins
 )");
                 return HelpMode{};

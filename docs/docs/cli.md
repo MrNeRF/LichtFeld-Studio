@@ -78,6 +78,6 @@ combined with `--gut`. At the end of training `pose_refinement.tsv` lists each c
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
 
-## Run a local Python integration check
+## Run a Python script
 
-`LichtFeld-Studio plugin run /path/to/check.py` executes an explicitly selected local script in LichtFeld Studio's Python runtime. It reuses the training script executor without preloading user plugins, opening the GUI, loading a dataset or starting training. The process returns a nonzero status if initialization or the script fails. Scripts are trusted local code and can perform any operation available to the Python runtime; do not use project metadata or downloaded content as the script path.
+`LichtFeld-Studio --headless --python-script /path/to/check.py` runs trusted local scripts without a dataset, GUI, training or user plugins, returning a nonzero status on failure; never take the script path from downloaded project metadata.

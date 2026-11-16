@@ -7,7 +7,6 @@
 #include "package_manager.hpp"
 #include "runner.hpp"
 
-#include <core/crash_handler.hpp>
 #include <core/executable_path.hpp>
 #include <core/path_utils.hpp>
 #include <cstdlib>
@@ -36,28 +35,6 @@ namespace lfs::python {
     } // anonymous namespace
 
     int run_plugin_command(const lfs::core::args::PluginMode& mode) {
-        if (mode.command == lfs::core::args::PluginMode::Command::RUN) {
-            // Training scripts run through --python-script, which needs a dataset
-            // or resume project. This standalone path reuses the same executor.
-            static bool output_failed = false; // This CLI invocation exits the process below.
-            set_output_callback([](const std::string& text, const bool is_error) {
-                if (std::fwrite(text.data(), 1, text.size(), is_error ? stderr : stdout) != text.size()) {
-                    output_failed = true;
-                }
-            });
-            const auto status = run_scripts({lfs::core::utf8_to_path(mode.name)}, false);
-            set_output_callback({});
-            if (!status) {
-                std::println(stderr, "Error: {}", status.error().user_message());
-            }
-            const bool output_flushed = std::fflush(stdout) == 0;
-            const bool error_flushed = std::fflush(stderr) == 0;
-            // Same exit as headless runs with --python-script: release the
-            // script's Python callbacks with the GIL held, then flush and exit
-            // without static destructors.
-            finalize();
-            lfs::core::flush_and_exit(status && !output_failed && output_flushed && error_flushed ? 0 : 1);
-        }
         if (!ensure_initialized()) {
             return 1;
         }
@@ -67,8 +44,6 @@ namespace lfs::python {
             const GilAcquire gil;
 
             switch (mode.command) {
-            case lfs::core::args::PluginMode::Command::RUN:
-                break; // Handled before acquiring the Python runtime GIL.
             case lfs::core::args::PluginMode::Command::CREATE: {
                 PyObjectGuard setup(PyImport_ImportModule("lfs_plugins.dev_setup"));
                 if (!setup) {

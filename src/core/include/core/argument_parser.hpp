@@ -83,7 +83,6 @@ namespace lfs::core::args {
     struct PluginMode {
         enum class Command { CREATE,
                              CHECK,
-                             RUN,
                              LIST };
         Command command;
         std::string name;
