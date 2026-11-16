@@ -83,7 +83,8 @@ namespace lfs::training::kernels {
                                               VignettingChannelParams* __restrict__ grad_vignetting_params,
                                               ColorPPISPParams* __restrict__ grad_color_params,
                                               CRFPPISPChannelParams* __restrict__ grad_crf_params,
-                                              float* grad_rgb_in, int camera_idx, int frame_idx) {
+                                              float* grad_rgb_in, int camera_idx, int frame_idx,
+                                              const float* __restrict__ grad_rgb_addend) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         int num_pixels = height * width;
 
@@ -148,6 +149,12 @@ namespace lfs::training::kernels {
 
             if (frame_idx != -1) {
                 ppisp_apply_exposure_bwd(rgb_input, exposure_params[frame_idx], grad_rgb, grad_rgb, grad_exposure_local);
+            }
+
+            if (grad_rgb_addend != nullptr) {
+                grad_rgb.x += grad_rgb_addend[0 * num_pixels + idx];
+                grad_rgb.y += grad_rgb_addend[1 * num_pixels + idx];
+                grad_rgb.z += grad_rgb_addend[2 * num_pixels + idx];
             }
 
             // Store RGB input gradient (CHW)
@@ -522,7 +529,8 @@ namespace lfs::training::kernels {
                                    const float* grad_rgb_out, float* grad_exposure_params,
                                    float* grad_vignetting_params, float* grad_color_params, float* grad_crf_params,
                                    float* grad_rgb_in, int height, int width, int num_cameras, int num_frames,
-                                   int camera_idx, int frame_idx, cudaStream_t stream) {
+                                   int camera_idx, int frame_idx, cudaStream_t stream,
+                                   const float* grad_rgb_addend) {
         stream = resolve_stream(stream);
         int num_pixels = height * width;
         int threads = PPISP_BLOCK_SIZE;
@@ -535,7 +543,8 @@ namespace lfs::training::kernels {
             reinterpret_cast<const CRFPPISPChannelParams*>(crf_params), rgb_in, grad_rgb_out, grad_exposure_params,
             reinterpret_cast<VignettingChannelParams*>(grad_vignetting_params),
             reinterpret_cast<ColorPPISPParams*>(grad_color_params),
-            reinterpret_cast<CRFPPISPChannelParams*>(grad_crf_params), grad_rgb_in, camera_idx, frame_idx);
+            reinterpret_cast<CRFPPISPChannelParams*>(grad_crf_params), grad_rgb_in, camera_idx, frame_idx,
+            grad_rgb_addend);
 
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP backward kernel launch failed");
     }

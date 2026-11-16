@@ -214,3 +214,27 @@ TEST(AppearanceInPlace, ExposureCorrectionChainMatchesAllocatingChainOnRealImage
     accumulate_decoupled_raw_gradient(decoupled_raw_gradient(arena_ctx), render_grad);
     EXPECT_EQ(host(render_grad), expected);
 }
+
+// Fails if the PPISP backward's addend (the pyramid loss's raw-render gradient, added as the input gradient is
+// written) differs from adding that gradient after the backward.
+TEST(AppearanceInPlace, PpispBackwardAddendEqualsAddingAfterwards) {
+    const lfs::core::TensorShape shape{3, 37, 53};
+    PPISP ppisp(100);
+    ppisp.register_frame(0, 0);
+    ppisp.finalize();
+    ppisp.exposure_params().add_(wave(ppisp.exposure_params().shape(), 3.0f));
+    ppisp.color_params().add_(wave(ppisp.color_params().shape(), 5.0f));
+    auto rgb_values = host(wave(shape, 11.0f));
+    for (float& v : rgb_values)
+        v += 0.5f;
+    const auto rgb = Tensor::from_vector(rgb_values, shape, Device::CUDA);
+    const auto incoming = wave(shape, 13.0f);
+    const auto addend = wave(shape, 17.0f);
+
+    auto expected = incoming.clone();
+    ppisp.backward_in_place(rgb, expected, 0, 0);
+    expected.add_(addend);
+    auto folded = incoming.clone();
+    ppisp.backward_in_place(rgb, folded, 0, 0, addend);
+    EXPECT_EQ(host(folded), host(expected));
+}

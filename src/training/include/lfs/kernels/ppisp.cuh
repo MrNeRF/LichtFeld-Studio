@@ -21,13 +21,15 @@ namespace lfs::training::kernels {
                                          int num_cameras, int num_frames, int camera_idx, int frame_idx,
                                          cudaStream_t stream = nullptr);
 
-    // Backward pass (CHW layout)
+    // Backward pass (CHW layout); grad_rgb_addend, when given, is added to the RGB input gradient as it is
+    // written.
     void launch_ppisp_backward_chw(const float* exposure_params, const float* vignetting_params,
                                    const float* color_params, const float* crf_params, const float* rgb_in,
                                    const float* grad_rgb_out, float* grad_exposure_params,
                                    float* grad_vignetting_params, float* grad_color_params, float* grad_crf_params,
                                    float* grad_rgb_in, int height, int width, int num_cameras, int num_frames,
-                                   int camera_idx, int frame_idx, cudaStream_t stream = nullptr);
+                                   int camera_idx, int frame_idx, cudaStream_t stream = nullptr,
+                                   const float* grad_rgb_addend = nullptr);
 
     // Adam optimizer update
     void launch_ppisp_adam_update(float* params, float* exp_avg, float* exp_avg_sq, const float* grad, int num_elements,

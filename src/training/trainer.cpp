@@ -8295,6 +8295,11 @@ namespace lfs::training {
                         // consumed input keeps one fewer full-resolution image live per stage.
                         corrected_image = {};
                         lfs::core::Tensor raster_grad = tile_grad;
+                        // A precomputed raw-render gradient (pyramid loss) is added by the PPISP backward when
+                        // that runs last, instead of by a pass of its own.
+                        const lfs::core::Tensor raw_addend =
+                            tile_raw_gradient ? tile_raw_gradient->precomputed : lfs::core::Tensor{};
+                        bool raw_gradient_added = false;
                         if (exposure_correction) {
                             if (grid_active_this_iter) {
                                 nvtxRangePush("bilateral_grid_backward");
@@ -8310,7 +8315,9 @@ namespace lfs::training {
                                 nvtxRangePush("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
-                                ppisp_->backward_in_place(output.image, raster_grad, cam->camera_id(), cam->uid());
+                                ppisp_->backward_in_place(output.image, raster_grad, cam->camera_id(), cam->uid(),
+                                                          raw_addend);
+                                raw_gradient_added = raw_addend.is_valid();
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
                                 }
@@ -8321,7 +8328,9 @@ namespace lfs::training {
                                 nvtxRangePush("ppisp_backward");
                                 LFS_VRAM_SCOPE("train.ppisp.backward");
                                 LOG_VRAM_DIFF("train.ppisp.backward");
-                                ppisp_->backward_in_place(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                                ppisp_->backward_in_place(ppisp_input, raster_grad, cam->camera_id(), cam->uid(),
+                                                          grid_on ? lfs::core::Tensor{} : raw_addend);
+                                raw_gradient_added = !grid_on && raw_addend.is_valid();
                                 ppisp_input = {};
                                 if (ppisp_frozen) {
                                     ppisp_->zero_grad();
@@ -8338,7 +8347,7 @@ namespace lfs::training {
                             }
                         }
 
-                        if (tile_raw_gradient) {
+                        if (tile_raw_gradient && !raw_gradient_added) {
                             lfs::training::kernels::accumulate_decoupled_raw_gradient(*tile_raw_gradient, raster_grad);
                         }
                         if (tile_raw_residual) {
