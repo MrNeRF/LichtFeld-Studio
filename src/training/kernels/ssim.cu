@@ -4356,7 +4356,11 @@ namespace lfs::training::kernels {
 
             for (int c = 0; c < CH; ++c) {
                 for (int pass = 0; pass < 2; ++pass) {
-                    const BranchPartials& partials = pass == 0 ? sharp : blurred;
+                    // Picked per pointer: a reference to either parameter put both on the stack.
+                    BranchPartials partials;
+#pragma unroll
+                    for (int k = 0; k < 4; ++k)
+                        partials.p[k] = pass == 0 ? sharp.p[k] : blurred.p[k];
                     // The sharp pass carries the SSIM weight (on the corrected-image partial only for
                     // the decoupled loss), the blurred pass the weight one.
                     const float lead = pass == 0 ? ssim_weight : 1.0f;
@@ -4370,15 +4374,21 @@ namespace lfs::training::kernels {
                     }
 
                     {
+                        // Every thread issues the loads of all its tile pixels before the first store, so
+                        // their latencies overlap instead of adding up row by row.
                         const int start_y = block.group_index().y * BLOCK_Y;
                         const int start_x = block.group_index().x * BLOCK_X;
                         const int tid = threadIdx.y * blockDim.x + threadIdx.x;
-                        const int warp_id = tid / 32;
-                        const int lane_id = tid % 32;
-                        constexpr int num_warps = (BLOCK_X * BLOCK_Y + 31) / 32;
-                        for (int row = warp_id; row < SHARED_Y; row += num_warps) {
-                            const int gy = start_y + row - HALO;
-                            for (int col = lane_id; col < SHARED_X; col += 32) {
+                        constexpr int threads = BLOCK_X * BLOCK_Y;
+                        constexpr int per_thread = (SHARED_Y * SHARED_X + threads - 1) / threads;
+                        float staged[per_thread][K];
+#pragma unroll
+                        for (int i = 0; i < per_thread; ++i) {
+                            const int t = tid + i * threads;
+                            if (t < SHARED_Y * SHARED_X) {
+                                const int row = t / SHARED_X;
+                                const int col = t % SHARED_X;
+                                const int gy = start_y + row - HALO;
                                 const int gx = start_x + col - HALO;
                                 float chain;
                                 if constexpr (Masked) {
@@ -4395,7 +4405,7 @@ namespace lfs::training::kernels {
                                 const auto load = [&](const __half* p) {
                                     return get_pix_value(p, bIdx, c, gy, gx, CH, H, W);
                                 };
-                                float* out = sData[row][col];
+                                float* out = staged[i];
                                 if constexpr (Decoupled) {
                                     float raw_mu = load(partials.p[0]);
                                     if constexpr (Masked)
@@ -4409,6 +4419,15 @@ namespace lfs::training::kernels {
                                     out[1] = -lead * load(partials.p[1]) * chain;
                                     out[2] = -lead * load(partials.p[2]) * chain;
                                 }
+                            }
+                        }
+#pragma unroll
+                        for (int i = 0; i < per_thread; ++i) {
+                            const int t = tid + i * threads;
+                            if (t < SHARED_Y * SHARED_X) {
+#pragma unroll
+                                for (int k = 0; k < K; ++k)
+                                    sData[t / SHARED_X][t % SHARED_X][k] = staged[i][k];
                             }
                         }
                     }
