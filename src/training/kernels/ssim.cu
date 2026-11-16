@@ -3796,6 +3796,30 @@ namespace lfs::training::kernels {
                 sum += (left + right) * w;
         }
 
+        // Window-sum scratch of the blur-tolerant forward and the error map pass: 10 floats per pixel, moved
+        // as float2. A half warp's 8-byte accesses at a 40-byte stride hit distinct banks, a pixel's sums take
+        // five shared-memory accesses instead of one per sum, and the forward keeps three blocks per SM.
+        constexpr int MOMENT_STRIDE = 10;
+
+        template <int N>
+        __device__ __forceinline__ void load_moments(const float (&row)[MOMENT_STRIDE], float (&v)[N]) {
+            static_assert(N % 2 == 0 && N <= MOMENT_STRIDE, "Moments come in float2 pairs within the row");
+#pragma unroll
+            for (int q = 0; q < N / 2; ++q) {
+                const float2 f = reinterpret_cast<const float2*>(row)[q];
+                v[2 * q] = f.x;
+                v[2 * q + 1] = f.y;
+            }
+        }
+
+        template <int N>
+        __device__ __forceinline__ void store_moments(float (&row)[MOMENT_STRIDE], const float (&v)[N]) {
+            static_assert(N % 2 == 0 && N <= MOMENT_STRIDE, "Moments come in float2 pairs within the row");
+#pragma unroll
+            for (int q = 0; q < N / 2; ++q)
+                reinterpret_cast<float2*>(row)[q] = make_float2(v[2 * q], v[2 * q + 1]);
+        }
+
         // Tile channels: x, y, Gx (plain loss) or corrected, raw, y, G corrected, G raw (decoupled).
         // Moments: x, x^2, y, y^2, xy, b, b^2, by (plain) or corrected, raw, raw^2, y, y^2, raw y,
         // b corrected, b raw, b raw^2, b raw y (decoupled).
@@ -3868,9 +3892,7 @@ namespace lfs::training::kernels {
                     s[7] += (Ct[2] * Ct[1]) * wc;
                 }
             }
-#pragma unroll
-            for (int k = 0; k < Mo; ++k)
-                xconv[yy][threadIdx.x][k] = s[k];
+            store_moments(xconv[yy][threadIdx.x], s);
         }
 
         // SSIM of one branch of the plain loss and its partials before the half rounding, as in
@@ -3994,9 +4016,7 @@ namespace lfs::training::kernels {
                 s[6] += Y * w;
                 s[7] += Y * Y * w;
             }
-#pragma unroll
-            for (int k = 0; k < CS_ERROR_SUMS; ++k)
-                xconv[ly][threadIdx.x][k] = s[k];
+            store_moments(xconv[ly][threadIdx.x], s);
         }
 
         // Vertical pass for this thread's pixel and the blend of one channel: returns w0 cs0 + w1 cs1
@@ -4013,9 +4033,11 @@ namespace lfs::training::kernels {
 #pragma unroll
             for (int d = -HALO; d <= HALO; ++d) {
                 const float w = cGauss[HALO + d];
+                float v[CS_ERROR_SUMS];
+                load_moments(xconv[ly + d][lx], v);
 #pragma unroll
                 for (int k = 0; k < CS_ERROR_SUMS; ++k)
-                    s[k] += xconv[ly + d][lx][k] * w;
+                    s[k] += v[k] * w;
             }
             const float mu_y = s[6];
             const float var_y = s[7] - mu_y * mu_y;
@@ -4070,8 +4092,6 @@ namespace lfs::training::kernels {
             constexpr int T = Decoupled ? 5 : 3;
             constexpr int Mo = Decoupled ? 10 : 8;
             constexpr int KP = Decoupled ? 4 : 3; // partials per branch
-            // Odd per-pixel strides keep the 16-wide rows of a warp on distinct shared-memory banks.
-            constexpr int MoS = Mo | 1;
             auto block = cg::this_thread_block();
             const int bIdx = block.group_index().z;
             const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -4082,7 +4102,7 @@ namespace lfs::training::kernels {
             const float scales[4] = {blurred_scale.x, blurred_scale.y, blurred_scale.z, blurred_scale.w};
 
             __shared__ float sTile[SHARED_Y][SHARED_X][T];
-            __shared__ float xconv[CONV_Y][CONV_X][MoS];
+            __shared__ __align__(8) float xconv[CONV_Y][CONV_X][MOMENT_STRIDE];
             __shared__ float mask_tile[SHARED_Y][SHARED_X];
 
             const auto load_tile = [&](const int c) {
@@ -4213,15 +4233,17 @@ namespace lfs::training::kernels {
 #pragma unroll
                     for (int d = 1; d <= HALO; ++d) {
                         const float w = cGauss[HALO - d];
-                        const float* top = xconv[ly - d][lx];
-                        const float* bot = xconv[ly + d][lx];
+                        float top[Mo], bot[Mo];
+                        load_moments(xconv[ly - d][lx], top);
+                        load_moments(xconv[ly + d][lx], bot);
 #pragma unroll
                         for (int k = 0; k < Mo; ++k)
                             o[k] += (top[k] + bot[k]) * w;
                     }
                     {
                         const float wC = cGauss[HALO];
-                        const float* ctr = xconv[ly][lx];
+                        float ctr[Mo];
+                        load_moments(xconv[ly][lx], ctr);
 #pragma unroll
                         for (int k = 0; k < Mo; ++k)
                             o[k] += ctr[k] * wC;
@@ -4508,8 +4530,7 @@ namespace lfs::training::kernels {
             const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
             const int pix_x = block.group_index().x * BLOCK_X + block.thread_index().x;
             __shared__ float tile[SHARED_Y][SHARED_X][3];
-            // Odd stride: the 16-wide rows of a warp on distinct banks.
-            __shared__ float xconv[CONV_Y][CONV_X][CS_ERROR_SUMS + 1];
+            __shared__ __align__(8) float xconv[CONV_Y][CONV_X][MOMENT_STRIDE];
             const bool blur = blurred != nullptr;
             float cs_sum = 0.0f;
             float sigma_sum = 0.0f;
