@@ -286,11 +286,8 @@ namespace lfs::training {
 
     size_t Match::extra_deaths(const lfs::core::param::OptimizationParameters& params, const int step,
                                const int cap_step, const size_t live) {
-        const int stop = static_cast<int>(params.stop_refine);
-        if (!(params.match_extra_death_share > 0.0f) || cap_step < 0 || step < cap_step || step >= stop)
-            return 0;
-        const float taper = static_cast<float>(stop - step) / static_cast<float>(stop - cap_step);
-        return static_cast<size_t>(params.match_extra_death_share * taper * static_cast<float>(live));
+        return tapered_quota(params.match_extra_death_share, step, cap_step, static_cast<int>(params.stop_refine),
+                             live);
     }
 
     Match::RefineCounts Match::refine(const int step) {

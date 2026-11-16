@@ -58,6 +58,22 @@ namespace lfs::training::match {
             return true;
         }
 
+        __device__ __forceinline__ float decayed_peak(const float peak, const float decay, const float step_peak) {
+            return fmaxf(peak * decay, step_peak);
+        }
+
+        __global__ void peak_update_kernel(float* step_peak, float* peak, float* renders, const float peak_decay,
+                                           const size_t n) {
+            const size_t i = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+            if (i >= n)
+                return;
+            const float s = step_peak[i];
+            step_peak[i] = 0.0f;
+            if (renders != nullptr && s > 0.0f)
+                renders[i] += 1.0f;
+            peak[i] = decayed_peak(peak[i], peak_decay, s);
+        }
+
         __global__ void step_update_kernel(const StepRows rows, const StepSettings settings, const size_t n) {
             const size_t i = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
             if (i >= n)
@@ -81,7 +97,7 @@ namespace lfs::training::match {
                 rows.score[i] = (rows.score[i] * count + w) / (count + 1.0f);
                 rows.score_count[i] = count + 1.0f;
             }
-            rows.peak[i] = fmaxf(rows.peak[i] * settings.peak_decay, step_peak);
+            rows.peak[i] = decayed_peak(rows.peak[i], settings.peak_decay, step_peak);
         }
 
         __global__ void size_clip_kernel(float* log_scales, const float* radius, const float limit,
@@ -349,6 +365,15 @@ namespace lfs::training::match {
         widen_rows_kernel<<<blocks_for(drawn), kThreads, 0, s>>>(values.Current(), drawn, out);
         LFS_CUDA_LAUNCH_CHECK(s, "training.match.widen_rows");
         return drawn;
+    }
+
+    void launch_peak_update(float* step_peak, float* peak, float* renders, const float peak_decay, const size_t n,
+                            void* stream) {
+        if (n == 0)
+            return;
+        const cudaStream_t s = resolve_stream(stream);
+        peak_update_kernel<<<blocks_for(n), kThreads, 0, s>>>(step_peak, peak, renders, peak_decay, n);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.match.peak_update");
     }
 
     size_t mark_lowest_dead(const float* key, const float* renders, const float grace, uint8_t* dead,

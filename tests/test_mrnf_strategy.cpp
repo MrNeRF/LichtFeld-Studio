@@ -55,9 +55,11 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/dataset.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/image_kernels.hpp"
+#include "training/kernels/match_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "training/strategies/match.hpp"
 #include "training/strategies/mrnf.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -4955,4 +4957,272 @@ TEST(MRNFStrategyTest, ReceiverSplitTakesTheOpacityAndCrossScale) {
         EXPECT_FLOAT_EQ(strategy.receiver_opacity_scale_at(15'000), 0.55f);
     }
     check(run_refill(params, 5'000), 0.525f, 0.85f);
+}
+
+namespace {
+    param::OptimizationParameters retire_test_params(const size_t cap, const float share) {
+        auto p = view_mean_test_params(false);
+        p.max_cap = static_cast<int>(cap);
+        p.grow_until_iter = 5'000;
+        p.mrnf_retire_share = share;
+        return p;
+    }
+} // namespace
+
+// The loss error map implies the compressed view mean (and with it threshold-free candidates); the
+// option needs a loss that writes the map, and the defaults leave everything off.
+TEST(MRNFStrategyTest, LossErrorMapImpliesTheCompressedViewMean) {
+    auto defaults = param::OptimizationParameters::mrnf_defaults();
+    EXPECT_FALSE(defaults.mrnf_loss_error_map);
+    EXPECT_EQ(defaults.mrnf_retire_share, 0.0f);
+    EXPECT_EQ(defaults.mrnf_retire_grace, 30);
+    EXPECT_FALSE(defaults.refine_error_compress_active());
+
+    defaults.mrnf_loss_error_map = true;
+    EXPECT_TRUE(defaults.refine_error_compress_active());
+    EXPECT_NE(defaults.validate().find("mrnf_loss_error_map"), std::string::npos);
+    defaults.ssim_blur_tolerant = true;
+    EXPECT_EQ(defaults.validate().find("mrnf_loss_error_map"), std::string::npos);
+    defaults.ssim_blur_tolerant = false;
+    defaults.loss_pyramid = true;
+    EXPECT_EQ(defaults.validate().find("mrnf_loss_error_map"), std::string::npos);
+
+    auto params = view_mean_test_params(false);
+    params.mrnf_loss_error_map = true;
+    params.loss_pyramid = true;
+
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    strategy.initialize(params);
+    EXPECT_TRUE(strategy.refine_error_compress_on());
+    EXPECT_TRUE(strategy.refine_error_view_mean_on());
+    EXPECT_EQ(splat_data._densification_info.shape()[0], 4u);
+
+    // Switching the map on mid-run starts a fresh window, as switching the compression does.
+    auto plain = view_mean_test_params(false);
+    MRNF switched(splat_data);
+    switched.initialize(plain);
+    EXPECT_FALSE(switched.refine_error_compress_on());
+    switched._refine_weight_max.fill_(1.0f);
+    switched.set_optimization_params(params);
+    EXPECT_TRUE(switched.refine_error_compress_on());
+    EXPECT_EQ(switched._refine_weight_max.cpu().to_vector(), std::vector<float>(kViewMeanSplats, 0.0f));
+}
+
+// With the loss error map, the score a refine ranks by is the match strategy's: per view the splat's
+// error sum ^0.2, the running mean over the views where it had error. Fed the same per-view sums, the
+// MRNF window mean and the match step update agree.
+TEST(MRNFStrategyTest, LossErrorMapScoreEqualsTheMatchScore) {
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(kViewMeanSplats));
+    MRNF strategy(splat_data);
+    auto params = view_mean_test_params(false);
+    params.mrnf_loss_error_map = true;
+    params.ssim_blur_tolerant = true;
+    strategy.initialize(params);
+    fold_views(strategy, splat_data, kViewCoverage.size(), 96);
+    auto mrnf_score = strategy._refine_weight_max.clone();
+    mrnf_strategy::launch_refine_error_view_mean(mrnf_score.ptr<float>(), splat_data._densification_info.ptr<float>(),
+                                                 kViewMeanSplats);
+
+    constexpr size_t n = kViewMeanSplats;
+    const auto zeros = [] { return Tensor::zeros({n}, Device::CUDA); };
+    auto error = zeros(), step_peak = zeros(), visible = zeros(), score = zeros(), score_count = zeros(),
+         oversize = zeros(), peak = zeros(), streak = zeros();
+    for (size_t v = 0; v < kViewCoverage.size(); ++v) {
+        error.copy_(Tensor::from_vector(kViewError[v], TensorShape({n}), Device::CUDA));
+        visible.copy_(Tensor::from_vector(kViewCoverage[v], TensorShape({n}), Device::CUDA));
+        step_peak.copy_(visible);
+        match::StepRows rows;
+        rows.error = error.ptr<float>();
+        rows.step_peak = step_peak.ptr<float>();
+        rows.visible = visible.ptr<float>();
+        rows.score = score.ptr<float>();
+        rows.score_count = score_count.ptr<float>();
+        rows.oversize = oversize.ptr<float>();
+        rows.peak = peak.ptr<float>();
+        rows.streak = streak.ptr<float>();
+        match::StepSettings settings;
+        settings.score_power = 0.2f;
+        match::launch_step_update(rows, settings, n);
+    }
+    const auto expected = score.cpu().to_vector();
+    const auto got = mrnf_score.cpu().to_vector();
+    for (size_t i = 0; i < n; ++i)
+        EXPECT_NEAR(got[i], expected[i], 1e-6f * std::max(1.0f, expected[i])) << i;
+    EXPECT_GT(expected[4], 0.0f); // error in one of four views: that view alone
+    EXPECT_EQ(expected[3], 0.0f); // never seen
+}
+
+// Off (the default share 0): no retirement rows, the backward gets the exploration rows it got before
+// (none, or the gate's own running peak), and a refine retires nothing.
+TEST(MRNFStrategyTest, RetireOffKeepsTheRefineBitIdentical) {
+    constexpr size_t n = 32;
+    for (const bool gate : {false, true}) {
+        SCOPED_TRACE(gate);
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        MRNF strategy(splat_data);
+        auto params = retire_test_params(n, 0.0f);
+        params.need_guided_growth = true;
+        params.explore_walk = gate;
+        params.explore_gate_peak = gate;
+        strategy.initialize(params);
+        EXPECT_FALSE(strategy.retire_on());
+        const auto [rendered, peak] = strategy.explore_scratch(100);
+        EXPECT_EQ(rendered.is_valid(), gate);
+        EXPECT_EQ(peak.is_valid(), gate);
+        if (gate)
+            EXPECT_EQ(peak.ptr<float>(), strategy._explore_peak.ptr<float>());
+        EXPECT_FALSE(strategy._retire_step_peak.is_valid());
+        EXPECT_FALSE(strategy._retire_renders.is_valid());
+        EXPECT_EQ(MRNF::retire_count(params, 100, 100, n), 0u);
+        strategy.visibility_accumulator().fill_(1.0f);
+        RenderOutput output;
+        strategy.post_backward(100, output);
+        EXPECT_EQ(strategy._last_retired, 0u);
+        EXPECT_EQ(strategy._retire_first_iter, -1);
+        EXPECT_EQ(strategy.active_count(), n);
+    }
+}
+
+// The quota is share x live from the first refine at the cap, falling linearly to 0 at grow_until_iter;
+// nothing before the cap. The strategy records the first refine at the cap once.
+TEST(MRNFStrategyTest, RetireQuotaStartsAtTheCapAndTapersToGrowthEnd) {
+    auto params = retire_test_params(1000, 0.0625f);
+    params.grow_until_iter = 10'000;
+    EXPECT_EQ(MRNF::retire_count(params, 3'000, -1, 100'000), 0u);
+    EXPECT_EQ(MRNF::retire_count(params, 1'000, 2'000, 100'000), 0u);
+    EXPECT_EQ(MRNF::retire_count(params, 2'000, 2'000, 100'000), 6250u);
+    EXPECT_EQ(MRNF::retire_count(params, 6'000, 2'000, 100'000), 3125u);
+    EXPECT_EQ(MRNF::retire_count(params, 9'999, 2'000, 100'000), 0u); // (size_t)(0.0625 x 1/8000 x 1e5)
+    EXPECT_EQ(MRNF::retire_count(params, 10'000, 2'000, 100'000), 0u);
+    // The match strategy's extra deaths share the taper, ending at stop_refine.
+    params.match_extra_death_share = 0.0625f;
+    params.stop_refine = 10'000;
+    EXPECT_EQ(Match::extra_deaths(params, 6'000, 2'000, 100'000), 3125u);
+
+    constexpr size_t n = 100;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF strategy(splat_data);
+    auto below = retire_test_params(2 * n, 0.05f);
+    strategy.initialize(below);
+    ASSERT_TRUE(strategy.retire_on());
+    auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+    EXPECT_EQ(strategy.mark_retirees(200, prune), 0u); // half the cap
+    EXPECT_EQ(strategy._retire_first_iter, -1);
+    strategy.set_optimization_params(retire_test_params(n, 0.05f));
+    strategy.explore_scratch(300);
+    strategy._retire_renders.fill_(100.0f);
+    EXPECT_EQ(strategy.mark_retirees(300, prune), 5u);
+    EXPECT_EQ(strategy._retire_first_iter, 300);
+    prune = Tensor::zeros_bool({n}, Device::CUDA);
+    EXPECT_EQ(strategy.mark_retirees(2'650, prune), 2u); // (size_t)(0.05 x 0.5 x 100)
+    EXPECT_EQ(strategy._retire_first_iter, 300);
+}
+
+// The retirees are the live, trainable splats with the lowest peak blend weight among those rendered at
+// least mrnf_retire_grace times; pruned and free rows are not counted or taken. The same refine refills
+// their slots and their rows start afresh.
+TEST(MRNFStrategyTest, RetireTakesTheLowestPeakPastTheGraceAndRefillsTheSlots) {
+    constexpr size_t n = 200;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF strategy(splat_data);
+    auto params = retire_test_params(n, 0.05f);
+    params.mrnf_retire_grace = 30;
+    strategy.initialize(params);
+    strategy.explore_scratch(100);
+    std::vector<float> peak(n, 0.5f), renders(n, 100.0f);
+    for (size_t i = 50; i < 80; ++i)
+        peak[i] = 0.001f * static_cast<float>(i - 49); // rising: 50 is the faintest
+    for (size_t i = 50; i < 55; ++i)
+        renders[i] = 29.0f; // within the grace
+    peak[198] = peak[199] = 0.0f;
+    strategy._explore_peak.copy_(Tensor::from_vector(peak, TensorShape({n}), Device::CUDA));
+    strategy._retire_renders.copy_(Tensor::from_vector(renders, TensorShape({n}), Device::CUDA));
+    strategy.soft_delete_rows(row_range(198, 200)); // free: 198 of 200 active, still at the cap
+
+    std::vector<bool> pruned_rows(n, false);
+    pruned_rows[55] = true; // pruned already: neither counted as live nor taken again
+    auto prune = Tensor::from_vector(pruned_rows, TensorShape({n}), Device::CUDA);
+    const size_t marked = strategy.mark_retirees(100, prune);
+    ASSERT_EQ(marked, 9u); // (size_t)(0.05 x 197)
+    const auto mask = prune.to(DataType::Float32).cpu().to_vector();
+    for (size_t i = 0; i < n; ++i) {
+        const bool expected = i >= 55 && i <= 64; // 55 (pruned before) and the nine faintest past the grace
+        EXPECT_EQ(mask[i] != 0.0f, expected) << i;
+    }
+
+    // A whole refine: the retirees are freed and refilled at once, so the model stays at the cap.
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF refining(data);
+    refining.initialize(params);
+    refining.explore_scratch(100);
+    refining._explore_peak.copy_(Tensor::from_vector(std::vector<float>(n, 0.5f), TensorShape({n}), Device::CUDA));
+    refining._explore_peak.slice(0, 0, 10).fill_(0.01f);
+    refining._retire_renders.fill_(100.0f);
+    refining.visibility_accumulator().fill_(1.0f);
+    RenderOutput output;
+    refining.post_backward(100, output);
+    EXPECT_EQ(refining._last_retired, 10u);
+    EXPECT_EQ(refining._retire_first_iter, 100);
+    EXPECT_EQ(refining.active_count(), n);
+    EXPECT_EQ(data.size(), n);
+    const auto after_renders = refining._retire_renders.cpu().to_vector();
+    size_t fresh = 0;
+    for (size_t i = 0; i < n; ++i)
+        fresh += after_renders[i] == 0.0f ? 1 : 0;
+    EXPECT_EQ(fresh, 10u); // the refilled slots
+    for (size_t i = 0; i < 10; ++i)
+        EXPECT_EQ(after_renders[i], 0.0f) << i;
+}
+
+// Retirement keeps its own per-step peak for the backward and folds it into the running peak (half-life
+// 800 steps) and the render count with the match kernels; the walk gate does not read it unless the gate
+// is on. The rows follow their splats and are dropped when the topology freezes.
+TEST(MRNFStrategyTest, RetireRowsTrackPeakAndRendersAndFollowTheirSplats) {
+    constexpr size_t n = 4;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF strategy(splat_data);
+    auto params = retire_test_params(32, 0.01f);
+    strategy.initialize(params);
+    ASSERT_TRUE(strategy.retire_on());
+    auto [rendered, step_peak] = strategy.explore_scratch(100);
+    ASSERT_TRUE(rendered.is_valid());
+    ASSERT_TRUE(step_peak.is_valid());
+    EXPECT_EQ(step_peak.ptr<float>(), strategy._retire_step_peak.ptr<float>());
+    ASSERT_TRUE(strategy._explore_peak.is_valid());
+
+    const float decay = std::pow(0.5f, 1.0f / 800.0f);
+    step_peak.copy_(Tensor::from_vector(std::vector<float>{0.3f, 0.0f, 0.8f, 0.1f}, TensorShape({n}), Device::CUDA));
+    const auto means = splat_data.means().cpu().to_vector();
+    strategy.explore_step(100);
+    EXPECT_EQ(splat_data.means().cpu().to_vector(), means); // no walk
+    EXPECT_EQ(strategy._explore_peak.cpu().to_vector(), (std::vector<float>{0.3f, 0.0f, 0.8f, 0.1f}));
+    EXPECT_EQ(strategy._retire_renders.cpu().to_vector(), (std::vector<float>{1.0f, 0.0f, 1.0f, 1.0f}));
+    EXPECT_EQ(strategy._retire_step_peak.cpu().to_vector(), std::vector<float>(n, 0.0f));
+    strategy.explore_scratch(101).second.copy_(
+        Tensor::from_vector(std::vector<float>{0.0f, 0.2f, 0.9f, 0.0f}, TensorShape({n}), Device::CUDA));
+    strategy.explore_step(101);
+    const auto folded = strategy._explore_peak.cpu().to_vector();
+    EXPECT_FLOAT_EQ(folded[0], 0.3f * decay);
+    EXPECT_FLOAT_EQ(folded[1], 0.2f);
+    EXPECT_FLOAT_EQ(folded[2], 0.9f);
+    EXPECT_FLOAT_EQ(folded[3], 0.1f * decay);
+    EXPECT_EQ(strategy._retire_renders.cpu().to_vector(), (std::vector<float>{1.0f, 1.0f, 2.0f, 1.0f}));
+
+    strategy.soft_delete_rows(row_range(2, 3));
+    EXPECT_EQ(strategy._retire_renders.cpu().to_vector()[2], 0.0f);
+    EXPECT_EQ(strategy._explore_peak.cpu().to_vector()[2], 0.0f);
+
+    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, false, false}, TensorShape({n}), Device::CUDA);
+    strategy.remove_gaussians(mask);
+    ASSERT_EQ(splat_data.size(), 3u);
+    EXPECT_EQ(strategy._retire_renders.cpu().to_vector(), (std::vector<float>{1.0f, 0.0f, 1.0f}));
+
+    // The topology freeze drops the retirement rows.
+    RenderOutput output;
+    strategy.post_backward(static_cast<int>(params.stop_refine), output);
+    EXPECT_FALSE(strategy.retire_on());
+    strategy.explore_scratch(static_cast<int>(params.stop_refine) + 1);
+    EXPECT_FALSE(strategy._retire_step_peak.is_valid());
+    EXPECT_FALSE(strategy._retire_renders.is_valid());
 }

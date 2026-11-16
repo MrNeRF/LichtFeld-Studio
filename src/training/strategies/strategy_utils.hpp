@@ -61,6 +61,16 @@ namespace lfs::training {
         const AdamOptimizer& optimizer,
         double final_fraction);
 
+    // Splats a turnover quota frees at `step` among `live`: (size_t)(share x taper x live), the taper falling
+    // linearly from 1 at `start` to 0 at `stop`; 0 without a start (start < 0), before it and from `stop` on.
+    [[nodiscard]] inline size_t tapered_quota(const float share, const int step, const int start, const int stop,
+                                              const size_t live) {
+        if (!(share > 0.0f) || start < 0 || step < start || step >= stop)
+            return 0;
+        const float taper = static_cast<float>(stop - step) / static_cast<float>(stop - start);
+        return static_cast<size_t>(share * taper * static_cast<float>(live));
+    }
+
     // Rows to remove at random so the live rows fit `max_cap`, as a run whose model starts above its cap keeps a random
     // subset; never a frozen or deleted row. None when they fit.
     [[nodiscard]] std::optional<lfs::core::Tensor> rows_over_cap(const lfs::core::SplatData& splat_data, int max_cap);

@@ -38,6 +38,12 @@ namespace lfs::training::match {
     };
     void launch_step_update(const StepRows& rows, const StepSettings& settings, size_t n, void* stream = nullptr);
 
+    // The peak rows of launch_step_update on their own, for any strategy that tracks the peak blend weight:
+    //   renders += 1 when step_peak > 0 (when renders is given);  peak = max(peak x peak_decay, step_peak);
+    //   step_peak = 0.
+    void launch_peak_update(float* step_peak, float* peak, float* renders, float peak_decay, size_t n,
+                            void* stream = nullptr);
+
     // Size clip: f = min(radius / limit, max_factor); when f > 1 every log scale drops by ln f.
     void launch_size_clip(float* log_scales, const float* radius, float limit, float max_factor, size_t n,
                           void* stream = nullptr);

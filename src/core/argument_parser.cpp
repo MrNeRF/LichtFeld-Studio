@@ -69,6 +69,9 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--receiver-opacity-scale", "receiver_opacity_scale", Float},
             OptimizationCliBinding{"--receiver-opacity-scale-end", "receiver_opacity_scale_end", Float},
             OptimizationCliBinding{"--receiver-cross-scale", "receiver_cross_scale", Float},
+            OptimizationCliBinding{"--mrnf-loss-error-map", "mrnf_loss_error_map", Bool},
+            OptimizationCliBinding{"--mrnf-retire-share", "mrnf_retire_share", Float},
+            OptimizationCliBinding{"--mrnf-retire-grace", "mrnf_retire_grace", Integer},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -843,6 +846,7 @@ namespace {
             ::args::Flag explore_scouts(training_group, "explore_scouts", lfs::core::args::optimization_cli_help("--explore-scouts"), {"explore-scouts"});
             ::args::Flag ssim_blur_tolerant(training_group, "ssim_blur_tolerant", lfs::core::args::optimization_cli_help("--ssim-blur-tolerant"), {"ssim-blur-tolerant"});
             ::args::Flag loss_pyramid(training_group, "loss_pyramid", lfs::core::args::optimization_cli_help("--loss-pyramid"), {"loss-pyramid"});
+            ::args::Flag mrnf_loss_error_map(training_group, "mrnf_loss_error_map", lfs::core::args::optimization_cli_help("--mrnf-loss-error-map"), {"mrnf-loss-error-map"});
             ::args::Flag per_splat_bias_correction(training_group, "per_splat_bias_correction", lfs::core::args::optimization_cli_help("--per-splat-bias-correction"), {"per-splat-bias-correction"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -854,6 +858,8 @@ namespace {
             ::args::ValueFlag<float> receiver_opacity_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-opacity-scale"), {"receiver-opacity-scale"});
             ::args::ValueFlag<float> receiver_opacity_scale_end(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-opacity-scale-end"), {"receiver-opacity-scale-end"});
             ::args::ValueFlag<float> receiver_cross_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-cross-scale"), {"receiver-cross-scale"});
+            ::args::ValueFlag<float> mrnf_retire_share(training_group, "share", lfs::core::args::optimization_cli_help("--mrnf-retire-share"), {"mrnf-retire-share"});
+            ::args::ValueFlag<int> mrnf_retire_grace(training_group, "renders", lfs::core::args::optimization_cli_help("--mrnf-retire-grace"), {"mrnf-retire-grace"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1682,6 +1688,8 @@ namespace {
                                         receiver_opacity_scale_val = cli_option_present({"--receiver-opacity-scale"}) ? std::optional<float>(::args::get(receiver_opacity_scale)) : std::optional<float>(),
                                         receiver_opacity_scale_end_val = cli_option_present({"--receiver-opacity-scale-end"}) ? std::optional<float>(::args::get(receiver_opacity_scale_end)) : std::optional<float>(),
                                         receiver_cross_scale_val = cli_option_present({"--receiver-cross-scale"}) ? std::optional<float>(::args::get(receiver_cross_scale)) : std::optional<float>(),
+                                        mrnf_retire_share_val = cli_option_present({"--mrnf-retire-share"}) ? std::optional<float>(::args::get(mrnf_retire_share)) : std::optional<float>(),
+                                        mrnf_retire_grace_val = cli_option_present({"--mrnf-retire-grace"}) ? std::optional<int>(::args::get(mrnf_retire_grace)) : std::optional<int>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
@@ -1743,6 +1751,7 @@ namespace {
                                         ssim_blur_tolerant_flag = bool(ssim_blur_tolerant),
                                         loss_pyramid_flag = bool(loss_pyramid),
                                         per_splat_bias_correction_flag = bool(per_splat_bias_correction),
+                                        mrnf_loss_error_map_flag = bool(mrnf_loss_error_map),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         pose_opt_flag = bool(pose_opt),
                                         use_ppisp_flag = bool(use_ppisp),
@@ -1878,6 +1887,8 @@ namespace {
                 setVal(receiver_opacity_scale_val, opt.receiver_opacity_scale);
                 setVal(receiver_opacity_scale_end_val, opt.receiver_opacity_scale_end);
                 setVal(receiver_cross_scale_val, opt.receiver_cross_scale);
+                setVal(mrnf_retire_share_val, opt.mrnf_retire_share);
+                setVal(mrnf_retire_grace_val, opt.mrnf_retire_grace);
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -1895,6 +1906,8 @@ namespace {
                     opt.refine_error_view_mean = true;
                 if (refine_error_compress_flag)
                     opt.refine_error_compress = true;
+                if (mrnf_loss_error_map_flag)
+                    opt.mrnf_loss_error_map = true;
                 if (donor_rank_per_view_flag)
                     opt.donor_rank_per_view = true;
                 if (donor_rank_impact_flag)
@@ -2074,6 +2087,8 @@ namespace {
                 note_opt("receiver_opacity_scale", receiver_opacity_scale_val.has_value());
                 note_opt("receiver_opacity_scale_end", receiver_opacity_scale_end_val.has_value());
                 note_opt("receiver_cross_scale", receiver_cross_scale_val.has_value());
+                note_opt("mrnf_retire_share", mrnf_retire_share_val.has_value());
+                note_opt("mrnf_retire_grace", mrnf_retire_grace_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
@@ -2093,6 +2108,7 @@ namespace {
                 note_opt("need_guided_growth", need_guided_growth_flag);
                 note_opt("refine_error_view_mean", refine_error_view_mean_flag);
                 note_opt("refine_error_compress", refine_error_compress_flag);
+                note_opt("mrnf_loss_error_map", mrnf_loss_error_map_flag);
                 note_opt("donor_rank_per_view", donor_rank_per_view_flag);
                 note_opt("donor_rank_impact", donor_rank_impact_flag);
                 note_opt("explore_walk", explore_walk_flag);

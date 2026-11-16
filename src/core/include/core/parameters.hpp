@@ -451,6 +451,19 @@ namespace lfs::core {
             float receiver_opacity_scale = 1.0f;
             float receiver_opacity_scale_end = 0.0f;
             float receiver_cross_scale = 0.7f;
+            // Growth ranks by the contrast-structure error map of the photometric loss (blended over the
+            // blur-tolerant branches and averaged over the pyramid scales; needs ssim_blur_tolerant or
+            // loss_pyramid), squared and not rescaled per view, each view's per-splat sum ^0.2, averaged over
+            // the views with error. Implies refine_error_compress.
+            bool mrnf_loss_error_map = false;
+            // From the first refine at the cap, each refine also frees this share of the live splats with the
+            // lowest peak blend weight (among those rendered at least mrnf_retire_grace times since birth),
+            // tapering linearly to 0 at grow_until_iter; the refill of the refine takes the freed slots. 0: off.
+            float mrnf_retire_share = 0.0f;
+            int mrnf_retire_grace = 30;
+            [[nodiscard]] bool refine_error_compress_active() const {
+                return refine_error_compress || mrnf_loss_error_map;
+            }
             // Adam bias correction per splat: each splat counts the steps since its moments last
             // restarted (split, append, compaction) and is corrected with 1 - beta^t for its own t,
             // instead of the parameter group's step count. Rows that never restarted are unchanged.

@@ -16,6 +16,7 @@
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
+#include "kernels/match_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/perf_bench.hpp"
@@ -740,11 +741,11 @@ namespace lfs::training {
     }
 
     bool MRNF::refine_error_view_mean_on() const {
-        return _params && (_params->refine_error_view_mean || _params->refine_error_compress);
+        return _params && (_params->refine_error_view_mean || _params->refine_error_compress_active());
     }
 
     bool MRNF::refine_error_compress_on() const {
-        return _params && _params->refine_error_compress;
+        return _params && _params->refine_error_compress_active();
     }
 
     void MRNF::ensure_densification_info_shape() {
@@ -950,8 +951,8 @@ namespace lfs::training {
             if (_bounds_valid) {
                 inject_noise(iter);
             }
-            if (explore_scouts_on()) {
-                explore_step(iter); // counts the scouts' renders
+            if (explore_scouts_on() || retire_on()) {
+                explore_step(iter); // counts the scouts' renders, folds the retirement peak
             }
         }
 
@@ -971,7 +972,8 @@ namespace lfs::training {
                            &_free_mask, &_exchange_importance_sum, &_exchange_importance_peak, &_exchange_birth,
                            &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_exchange_view_count,
                            &_exchange_window_views, &_exchange_window_coverage, &_far_field_mask,
-                           &_ray_depth_state, &_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
+                           &_ray_depth_state, &_explore_rendered, &_explore_peak, &_explore_scout_renders,
+                           &_retire_step_peak, &_retire_renders}) {
             visit(*rows);
         }
     }
@@ -1030,6 +1032,8 @@ namespace lfs::training {
             prune_mask = prune_mask.logical_and(active_mask);
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
+        // Retirees join the pruned rows: freed now, refilled by this refine.
+        _last_retired = retire_on() ? mark_retirees(iter, prune_mask) : 0;
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
@@ -1067,7 +1071,8 @@ namespace lfs::training {
         if (exchanging) {
             update_exchange_importance();
             const size_t active = active_count();
-            exchange_ready = _exchange_windows > exchange_warmup_windows() && at_cap(active);
+            // Retirees count as present: their slots are refilled by this refine.
+            exchange_ready = _exchange_windows > exchange_warmup_windows() && at_cap(active + _last_retired);
             if (exchange_ready) {
                 quota = exchange_quota(iter, active);
             }
@@ -1159,7 +1164,8 @@ namespace lfs::training {
         set_deleted_mask_rows(*_splat_data, _free_mask, indices, true);
 
         // A freed slot starts its exploration rows afresh for the child that fills it.
-        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
+        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders, &_retire_step_peak,
+                           &_retire_renders}) {
             if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
                 rows->index_put_(indices, Tensor::zeros({static_cast<size_t>(indices.numel())}, rows->device()));
         }
@@ -1303,6 +1309,9 @@ namespace lfs::training {
         }
         if (explore_walk_on()) {
             explore += std::format(", walk amplitude {:.3g}", explore_walk_amplitude(iter));
+        }
+        if (retire_on()) {
+            explore += std::format(", retired {} (of pruned)", _last_retired);
         }
         if (need) {
             LOG_INFO("{}{}", line, explore);
@@ -1549,6 +1558,48 @@ namespace lfs::training {
         return static_cast<float>(static_cast<double>(start) + (static_cast<double>(stop) - start) * u);
     }
 
+    bool MRNF::retire_on() const {
+        return _params && _params->mrnf_retire_share > 0.0f && !_params->gut && !_topology_frozen;
+    }
+
+    size_t MRNF::retire_count(const lfs::core::param::OptimizationParameters& params, const int iter,
+                              const int first_iter, const size_t live) {
+        return tapered_quota(params.mrnf_retire_share, iter, first_iter, static_cast<int>(params.grow_until_iter),
+                             live);
+    }
+
+    size_t MRNF::mark_retirees(const int iter, lfs::core::Tensor& prune_mask) {
+        using namespace lfs::core;
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        const size_t active = active_count();
+        if (_retire_first_iter < 0 && at_cap(active)) {
+            _retire_first_iter = iter;
+        }
+        const size_t natural = prune_mask.count_nonzero();
+        const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
+        ensure_explore_rows();
+        if (count == 0 || n == 0 || _explore_peak.numel() != n || _retire_renders.numel() != n) {
+            return 0;
+        }
+        // Rows that cannot retire: already pruned, free or frozen.
+        Tensor blocked = prune_mask;
+        if (_free_mask.is_valid()) {
+            blocked = blocked.logical_or(_free_mask.slice(0, 0, n));
+        }
+        if (auto trainable = make_trainable_mask(*_splat_data, n, _splat_data->means().device()); trainable.is_valid()) {
+            blocked = blocked.logical_or(trainable.logical_not());
+        }
+        blocked = blocked.contiguous();
+        Tensor dead = blocked.to(DataType::UInt8).contiguous();
+        const size_t marked = match::mark_lowest_dead(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
+                                                      static_cast<float>(_params->mrnf_retire_grace),
+                                                      dead.ptr<uint8_t>(), nullptr, n, count);
+        if (marked > 0) {
+            prune_mask = prune_mask.logical_or(dead.to(DataType::Bool).logical_and(blocked.logical_not())).contiguous();
+        }
+        return marked;
+    }
+
     void MRNF::ensure_explore_rows() {
         using namespace lfs::core;
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
@@ -1565,9 +1616,12 @@ namespace lfs::training {
                 row = Tensor::cat(std::vector<Tensor>{row, zero_splat_vector(n - rows, row.device())}, 0);
             }
         };
-        size_row(_explore_rendered, explore_walk_on() || scouts);
-        size_row(_explore_peak, explore_gate_peak_on());
+        const bool retire = retire_on();
+        size_row(_explore_rendered, explore_walk_on() || scouts || retire);
+        size_row(_explore_peak, explore_gate_peak_on() || retire);
         size_row(_explore_scout_renders, scouts);
+        size_row(_retire_step_peak, retire);
+        size_row(_retire_renders, retire);
     }
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::explore_scratch(const int /*iter*/) {
@@ -1575,7 +1629,8 @@ namespace lfs::training {
             return {};
         }
         ensure_explore_rows();
-        return {_explore_rendered, _explore_peak};
+        // Retirement folds the peak itself, so the backward writes the step's peak.
+        return {_explore_rendered, _retire_step_peak.is_valid() ? _retire_step_peak : _explore_peak};
     }
 
     void MRNF::explore_step(const int iter) {
@@ -1590,9 +1645,21 @@ namespace lfs::training {
             walk.log_scales = _splat_data->scaling_raw().ptr<float>();
             walk.amplitude = explore_walk_amplitude(iter);
         }
-        if (_explore_peak.is_valid() && _explore_peak.numel() == n) {
+        const float peak_decay = std::pow(0.5f, 1.0f / MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS);
+        const bool peak_row = _explore_peak.is_valid() && _explore_peak.numel() == n;
+        if (peak_row && _retire_step_peak.is_valid() && _retire_step_peak.numel() == n && _retire_renders.is_valid() &&
+            _retire_renders.numel() == n) {
+            // Retirement: peak = max(peak x decay, step peak) and the render count, as the match strategy keeps
+            // them; the walk then reads the folded peak as its gate without decaying it again.
+            match::launch_peak_update(_retire_step_peak.ptr<float>(), _explore_peak.ptr<float>(),
+                                      _retire_renders.ptr<float>(), peak_decay, n);
+            if (explore_gate_peak_on()) {
+                walk.blend_peak = _explore_peak.ptr<float>();
+                walk.peak_decay = 1.0f;
+            }
+        } else if (peak_row) {
             walk.blend_peak = _explore_peak.ptr<float>();
-            walk.peak_decay = std::pow(0.5f, 1.0f / MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS);
+            walk.peak_decay = peak_decay;
         }
         if (_explore_scout_renders.is_valid() && _explore_scout_renders.numel() == n) {
             walk.scout_renders = _explore_scout_renders.ptr<float>();
@@ -2089,7 +2156,8 @@ namespace lfs::training {
         constexpr std::size_t CHILD_CHUNK_BYTES = 256ull << 20;
         const std::size_t child_row_bytes = (3 + 4 + 3 + 3 + 1 + (use_shN ? sh_rest * 3 : 0)) * sizeof(float);
         // One rule per refine: refills and growth alike are receivers once need-guided growth is at the cap.
-        const bool receiver = need_guided && at_cap(current_active);
+        // Retirees freed by this refine count as present: their slots are refilled now.
+        const bool receiver = need_guided && at_cap(current_active + _last_retired);
         result.receiver_splits = receiver ? static_cast<int>(K) : 0;
         // Scouts: a seeded share of the receiver children, tapering with the donor quota.
         const float scout_share = receiver && explore_scouts_on() ? explore_scout_share_at(iter) : 0.0f;
@@ -2519,7 +2587,8 @@ namespace lfs::training {
             _ray_depth_state = Tensor();
         if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
             compact(_rendered_count);
-        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders}) {
+        for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders, &_retire_step_peak,
+                           &_retire_renders}) {
             if (rows->is_valid() && rows->numel() == old_size)
                 compact(*rows);
             else
@@ -3444,6 +3513,9 @@ namespace lfs::training {
         _explore_rendered = lfs::core::Tensor();
         _explore_peak = lfs::core::Tensor();
         _explore_scout_renders = lfs::core::Tensor();
+        _retire_step_peak = lfs::core::Tensor();
+        _retire_renders = lfs::core::Tensor();
+        _retire_first_iter = -1;
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
@@ -3482,7 +3554,7 @@ namespace lfs::training {
         const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
         // A max, a view sum and a compressed sum do not mix: switching the error fold starts a fresh window.
         const auto error_fold = [](const lfs::core::param::OptimizationParameters& p) {
-            return p.refine_error_compress ? 2 : (p.refine_error_view_mean ? 1 : 0);
+            return p.refine_error_compress_active() ? 2 : (p.refine_error_view_mean ? 1 : 0);
         };
         if (_params && error_fold(*_params) != error_fold(params)) {
             if (_refine_weight_max.is_valid() && _refine_weight_max.numel() > 0)

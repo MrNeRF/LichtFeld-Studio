@@ -99,6 +99,12 @@ class MRNFStrategyTest_ExploreScoutsShareOpacityTaperAndSeed_Test;
 class MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
 class MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
 class MRNFStrategyTest_ReceiverSplitTakesTheOpacityAndCrossScale_Test;
+class MRNFStrategyTest_RetireOffKeepsTheRefineBitIdentical_Test;
+class MRNFStrategyTest_RetireQuotaStartsAtTheCapAndTapersToGrowthEnd_Test;
+class MRNFStrategyTest_RetireTakesTheLowestPeakPastTheGraceAndRefillsTheSlots_Test;
+class MRNFStrategyTest_RetireRowsTrackPeakAndRendersAndFollowTheirSplats_Test;
+class MRNFStrategyTest_LossErrorMapImpliesTheCompressedViewMean_Test;
+class MRNFStrategyTest_LossErrorMapScoreEqualsTheMatchScore_Test;
 
 namespace lfs::training {
 
@@ -237,6 +243,12 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_ExploreScoutsSkipOpacityDecayUntilRendered_Test;
         friend class ::MRNFStrategyTest_ExploreRowsFollowTheirSplats_Test;
         friend class ::MRNFStrategyTest_ReceiverSplitTakesTheOpacityAndCrossScale_Test;
+        friend class ::MRNFStrategyTest_RetireOffKeepsTheRefineBitIdentical_Test;
+        friend class ::MRNFStrategyTest_RetireQuotaStartsAtTheCapAndTapersToGrowthEnd_Test;
+        friend class ::MRNFStrategyTest_RetireTakesTheLowestPeakPastTheGraceAndRefillsTheSlots_Test;
+        friend class ::MRNFStrategyTest_RetireRowsTrackPeakAndRendersAndFollowTheirSplats_Test;
+        friend class ::MRNFStrategyTest_LossErrorMapImpliesTheCompressedViewMean_Test;
+        friend class ::MRNFStrategyTest_LossErrorMapScoreEqualsTheMatchScore_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -283,6 +295,18 @@ namespace lfs::training {
         // The receiver split's opacity factor at iter: receiver_opacity_scale, or with
         // receiver_opacity_scale_end > 0 the linear ramp to it over [0, grow_until_iter].
         [[nodiscard]] float receiver_opacity_scale_at(int iter) const;
+        // Retirement (mrnf_retire_share > 0, FastGS): from the first refine at the cap, each refine also
+        // frees the live splats with the lowest peak blend weight among those rendered at least
+        // mrnf_retire_grace times since birth; the refine's refill takes their slots like pruned ones.
+        // The peak is the exploration peak row, folded from a per-step peak with the match kernels.
+        [[nodiscard]] bool retire_on() const;
+        // The retire quota at iter: mrnf_retire_share x live, tapering linearly from first_iter (the first
+        // refine at the cap) to 0 at grow_until_iter; 0 before the cap.
+        [[nodiscard]] static size_t retire_count(const lfs::core::param::OptimizationParameters& params, int iter,
+                                                 int first_iter, size_t live);
+        // Adds the retirees of this refine to prune_mask (active, trainable rows not already pruned) and
+        // returns their count.
+        size_t mark_retirees(int iter, lfs::core::Tensor& prune_mask);
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
         // After the backward: walks the splats rendered in this step and clears the step's marks.
@@ -437,7 +461,11 @@ namespace lfs::training {
         lfs::core::Tensor _explore_rendered;      // [N] views that rendered the splat this step
         lfs::core::Tensor _explore_peak;          // [N] running peak blend weight, halves in ~800 steps
         lfs::core::Tensor _explore_scout_renders; // [N] renders a scout needs before its opacity decays
-        int _exchange_windows = 0;                // windows in the current importance memory
+        lfs::core::Tensor _retire_step_peak;      // [N] largest blend weight of this step (retirement)
+        lfs::core::Tensor _retire_renders;        // [N] steps rendered since birth (retirement)
+        int _retire_first_iter = -1;              // first refine at the cap; transient
+        size_t _last_retired = 0;
+        int _exchange_windows = 0; // windows in the current importance memory
         bool _exchange_impact_written = false;
         int _exchange_first_iter = -1;
 

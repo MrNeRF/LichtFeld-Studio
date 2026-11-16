@@ -1055,6 +1055,14 @@ namespace lfs::core {
                                    receiver_opacity_scale_end);
             if (!std::isfinite(receiver_cross_scale) || receiver_cross_scale <= 0.0f || receiver_cross_scale > 1.0f)
                 return std::format("receiver_cross_scale must be finite and within (0, 1] (got {})", receiver_cross_scale);
+            if (!std::isfinite(mrnf_retire_share) || mrnf_retire_share < 0.0f || mrnf_retire_share >= 1.0f)
+                return std::format("mrnf_retire_share must be finite and within [0, 1) (got {})", mrnf_retire_share);
+            if (mrnf_retire_grace < 0)
+                return std::format("mrnf_retire_grace must not be negative (got {})", mrnf_retire_grace);
+            if (is_mrnf_strategy(strategy) && mrnf_retire_share > 0.0f && gut)
+                return "mrnf_retire_share needs the FastGS training renderer (GUT is not supported)";
+            if (is_mrnf_strategy(strategy) && mrnf_loss_error_map && !ssim_blur_tolerant && !loss_pyramid)
+                return "mrnf_loss_error_map needs ssim_blur_tolerant or loss_pyramid";
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (perf_bench_warmup < 0)

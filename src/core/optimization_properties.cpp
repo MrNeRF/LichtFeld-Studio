@@ -770,6 +770,34 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::mrnf_loss_error_map,
+                       "mrnf_loss_error_map", "Loss Error Map", d.mrnf_loss_error_map,
+                       "Ranks growth by the contrast-structure error map of the blur-tolerant or multi-scale loss; "
+                       "implies Refine Error Compress (MRNF)")
+            .locale("training.advanced.mrnf_loss_error_map")
+            .tooltip("training.tooltip.mrnf_loss_error_map")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::mrnf_retire_share,
+                        "mrnf_retire_share", "Retire Share", d.mrnf_retire_share, 0.0f, 0.5f,
+                        "From the first refine at the cap, each refine also frees this share of the live splats with "
+                        "the lowest peak blend weight, tapering to zero at the end of growth; 0: off (MRNF)")
+            .locale("training.advanced.mrnf_retire_share")
+            .tooltip("training.tooltip.mrnf_retire_share")
+            .precision(4)
+            .ui_step(0.005)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .int_prop(&OptimizationParameters::mrnf_retire_grace,
+                      "mrnf_retire_grace", "Retire Grace", d.mrnf_retire_grace, 0, 10000,
+                      "Splats rendered fewer times than this since birth are not retired (MRNF)")
+            .locale("training.advanced.mrnf_retire_grace")
+            .tooltip("training.tooltip.mrnf_retire_grace")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

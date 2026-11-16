@@ -1855,6 +1855,46 @@ TEST(ArgumentParserTest, TrainingParsesReceiverSplitScales) {
     }
 }
 
+// Catches the MRNF loss error map and retirement options not reaching the training parameters, a default
+// changing, or an invalid value or combination accepted.
+TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
+    const auto data_path = make_test_path("lfs_arg_parser_mrnf_pieces_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mrnf_pieces_output");
+    const auto parse = [&](std::vector<const char*> extra) {
+        std::vector<const char*> argv{"LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(),
+                                      "--output-path", output_path.c_str(), "--strategy", "mrnf"};
+        argv.insert(argv.end(), extra.begin(), extra.end());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+    };
+
+    const auto on = parse({"--ssim-blur-tolerant", "--mrnf-loss-error-map", "--mrnf-retire-share", "0.015",
+                           "--mrnf-retire-grace", "12"});
+    ASSERT_TRUE(on.has_value()) << on.error();
+    EXPECT_TRUE((*on)->optimization.mrnf_loss_error_map);
+    EXPECT_FLOAT_EQ((*on)->optimization.mrnf_retire_share, 0.015f);
+    EXPECT_EQ((*on)->optimization.mrnf_retire_grace, 12);
+
+    const auto off = parse({});
+    ASSERT_TRUE(off.has_value()) << off.error();
+    EXPECT_FALSE((*off)->optimization.mrnf_loss_error_map);
+    EXPECT_EQ((*off)->optimization.mrnf_retire_share, 0.0f);
+    EXPECT_EQ((*off)->optimization.mrnf_retire_grace, 30);
+
+    for (const auto& [args, field] :
+         {std::pair{std::vector<const char*>{"--mrnf-retire-share", "-0.1"}, "mrnf_retire_share"},
+          std::pair{std::vector<const char*>{"--mrnf-retire-share", "1"}, "mrnf_retire_share"},
+          std::pair{std::vector<const char*>{"--mrnf-retire-grace", "-1"}, "mrnf_retire_grace"},
+          std::pair{std::vector<const char*>{"--mrnf-retire-share", "0.01", "--gut"}, "mrnf_retire_share"},
+          std::pair{std::vector<const char*>{"--mrnf-loss-error-map"}, "mrnf_loss_error_map"}}) {
+        const auto bad = parse(args);
+        ASSERT_FALSE(bad.has_value()) << field;
+        EXPECT_NE(bad.error().find(field), std::string::npos) << bad.error();
+    }
+    const auto pyramid = parse({"--loss-pyramid", "--mrnf-loss-error-map"});
+    ASSERT_TRUE(pyramid.has_value()) << pyramid.error();
+    EXPECT_TRUE((*pyramid)->optimization.mrnf_loss_error_map);
+}
+
 // Catches --donor-rank-impact not reaching the training parameters, or being on without the flag.
 TEST(ArgumentParserTest, TrainingParsesDonorRankImpact) {
     const auto data_path = make_test_path("lfs_arg_parser_donor_impact_data");

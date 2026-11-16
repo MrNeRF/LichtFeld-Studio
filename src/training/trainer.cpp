@@ -6580,12 +6580,15 @@ namespace lfs::training {
                                                                           (core::param::is_mrnf_strategy(step_params.strategy) &&
                                                                            step_params.use_error_map));
                 const bool use_ssim_error = use_pixel_error_densification;
-                // Match strategy: the contrast-structure error map comes from the loss itself when the loss
-                // is blur-tolerant or multi-scale (blended branches, averaged scales); see the error map below.
+                // Match strategy (and MRNF with mrnf_loss_error_map): the contrast-structure error map comes
+                // from the loss itself when the loss is blur-tolerant or multi-scale (blended branches,
+                // averaged scales); see the error map below.
+                const bool mrnf_loss_error_map = core::param::is_mrnf_strategy(step_params.strategy) &&
+                                                 step_params.mrnf_loss_error_map;
                 {
                     auto& pyramid_ws = photometric_loss_.pyramid_workspace();
                     pyramid_ws.want_cs_error_map =
-                        match_strategy && use_ssim_error &&
+                        (match_strategy || mrnf_loss_error_map) && use_ssim_error &&
                         step_params.densify_error_map == lfs::core::param::DensifyErrorMap::SsimCs;
                     pyramid_ws.cs_error_map_ready = false;
                 }
@@ -8082,6 +8085,13 @@ namespace lfs::training {
                         if (use_pixel_error_densification) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
+                            static bool loss_map_missing_noted = false;
+                            if (mrnf_loss_error_map && photometric_loss_.pyramid_workspace().want_cs_error_map &&
+                                !photometric_loss_.pyramid_workspace().cs_error_map_ready &&
+                                !std::exchange(loss_map_missing_noted, true)) {
+                                LOG_WARN("mrnf_loss_error_map: this loss path wrote no contrast-structure map "
+                                         "(single-scale loss without the blur-tolerant term); growth uses the SSIM map");
+                            }
                             if (photometric_loss_.pyramid_workspace().cs_error_map_ready) {
                                 tile_error_map = photometric_loss_.pyramid_workspace().cs_error_map;
                             } else if (use_ssim_error && step_params.lambda_dssim > 0.0f) {
@@ -8162,7 +8172,7 @@ namespace lfs::training {
                             // Compressed refine error: square the map so well-fit pixels add nothing and
                             // strong structure errors dominate. The loss keeps its own maps.
                             const bool square_error_map =
-                                (step_params.refine_error_compress && core::param::is_mrnf_strategy(step_params.strategy)) ||
+                                (step_params.refine_error_compress_active() && core::param::is_mrnf_strategy(step_params.strategy)) ||
                                 (step_params.strategy == core::param::kStrategyMatch && step_params.match_map_power == 2.0f);
                             if (square_error_map && tile_error_map.is_valid()) {
                                 lfs::training::kernels::launch_square_floored_inplace(
@@ -8212,7 +8222,9 @@ namespace lfs::training {
                                                                     params_.optimization.densify_structure_weight);
                         }
 
-                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(step_params.strategy)) {
+                        // The loss error map keeps its scale across views, as the match strategy's does.
+                        if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(step_params.strategy) &&
+                            !mrnf_loss_error_map) {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
                             const auto map_mean = tile_error_map.mean();
