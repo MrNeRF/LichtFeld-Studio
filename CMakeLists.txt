@@ -901,38 +901,41 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     list(FILTER _vcpkg_debug_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
 
     # Always copy release DLLs - needed for both Release and Debug builds
-    if(_vcpkg_release_dlls)
+    # Keep each command below cmd.exe's line limit even in deep build paths.
+    foreach(_dll IN LISTS _vcpkg_release_dlls)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${_vcpkg_release_dlls}
+                "${_dll}"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying vcpkg release DLLs"
+            VERBATIM
         )
-    endif()
+    endforeach()
 
     # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
     # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
     # For multi-config generators (VS, Xcode): use generator expression
     if(_is_multi_config)
         # Multi-config: use generator expression to conditionally copy
-        if(_vcpkg_debug_dlls)
+        foreach(_dll IN LISTS _vcpkg_debug_dlls)
             add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,copy_if_different,true>
-                    ${_vcpkg_debug_dlls}
+                    "${_dll}"
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-                COMMENT "Copying vcpkg debug DLLs (Debug config only)"
+                VERBATIM
             )
-        endif()
+        endforeach()
         message(STATUS "Post-build: vcpkg DLLs - release always, debug for Debug config only (multi-config)")
     else()
         # Single-config: check CMAKE_BUILD_TYPE at configure time
         if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND _vcpkg_debug_dlls)
-            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${_vcpkg_debug_dlls}
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-                COMMENT "Copying vcpkg debug DLLs"
-            )
+            foreach(_dll IN LISTS _vcpkg_debug_dlls)
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_dll}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                    VERBATIM
+                )
+            endforeach()
             message(STATUS "Post-build: vcpkg DLLs - copying both release and debug (Debug build)")
         else()
             message(STATUS "Post-build: vcpkg DLLs - copying release only (${CMAKE_BUILD_TYPE} build)")
