@@ -250,10 +250,10 @@ namespace lfs::media::detail {
                 return SinkResult::failure(metadataError(ErrorCode::FailedPrecondition, "Frame metadata requires a decoded frame with a source timestamp (origin=" + std::to_string(static_cast<int>(info.origin)) + ", timestamp_origin=" + std::to_string(static_cast<int>(info.timestamp_origin)) + ", has_timestamp=" + std::to_string(info.source_timestamp.has_value()) + ")"));
             const auto append = [&](const json_detail::json& observation, std::string_view name) -> SinkResult {
                 if (properties.size() > max_packet_bytes - 1024)
-                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", limit=" + std::to_string(max_packet_bytes - 1024) + ")"));
+                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (observation=" + std::string(name) + ", properties_bytes=" + std::to_string(properties.size()) + ", limit=" + std::to_string(max_packet_bytes - 1024) + ")"));
                 auto encoded = json_detail::sourceMetadataXmlProperty(observation, max_packet_bytes - properties.size() - 1024, name);
                 if (!encoded)
-                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", value_limit=" + std::to_string(max_packet_bytes - properties.size() - 1024) + ")"));
+                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (observation=" + std::string(name) + ", properties_bytes=" + std::to_string(properties.size()) + ", value_limit=" + std::to_string(max_packet_bytes - properties.size() - 1024) + ")"));
                 properties += *encoded;
                 return {};
             };
@@ -267,7 +267,7 @@ namespace lfs::media::detail {
                     return result;
             }
             if (metadata.dji_metadata) {
-                auto observation = json_detail::djiFrameLookup(*metadata.dji_metadata, *info.source_timestamp, max_packet_bytes / 2);
+                auto observation = json_detail::djiFrameLookup(*metadata.dji_metadata, *info.source_timestamp);
                 if (!observation)
                     return SinkResult::failure(observation.error());
                 if (auto result = append(*observation, "DjiObservation"); !result)

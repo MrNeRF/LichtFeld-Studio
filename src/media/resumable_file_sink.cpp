@@ -212,12 +212,8 @@ namespace lfs::media::detail {
         if (f.dji_metadata) {
             Sha256 digest;
             for (const auto& sample : f.dji_metadata->samples()) {
-                if (cancelled_ && cancelled_())
-                    return SinkResult::failure(checkpointError(ErrorCode::Cancelled, "DJI checkpoint identity cancelled"));
-                const auto header = json_detail::dump(Json{{"pts", json_detail::timestamp(sample.pts)},
-                                                           {"source_offset", json_detail::optional(sample.source_offset)},
-                                                           {"payload_bytes", sample.bytes.size()}});
-                digest.update({reinterpret_cast<const std::uint8_t*>(header.data()), header.size()});
+                const std::array<std::int64_t, 5> header{sample.pts.ticks, sample.pts.time_base.numerator, sample.pts.time_base.denominator, sample.source_offset.value_or(-1), static_cast<std::int64_t>(sample.bytes.size())};
+                digest.update({reinterpret_cast<const std::uint8_t*>(header.data()), sizeof(header)});
                 digest.update(sample.bytes);
             }
             identity_["dji_metadata"] = json_detail::djiFrameBinding(*f.dji_metadata);

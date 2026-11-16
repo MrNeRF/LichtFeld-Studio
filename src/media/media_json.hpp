@@ -362,12 +362,10 @@ namespace lfs::media::json_detail {
     inline json djiFrameSample(const DjiFrameSample& sample) {
         return {{"pts", timestamp(sample.pts)}, {"source_offset", optional(sample.source_offset)}, {"bytes", hexBytes(sample.bytes)}, {"metadata", djiSample(sample.metadata)}};
     }
-    inline Result<json> djiFrameLookup(const DjiFrameMetadata& binding, Timestamp query, std::size_t payload_limit = timed_metadata_maxima.bytes) {
+    inline Result<json> djiFrameLookup(const DjiFrameMetadata& binding, Timestamp query) {
         const auto match = binding.lookup(query);
         if (!match)
             return match.error();
-        if (*match && binding.samples()[**match].bytes.size() > payload_limit)
-            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "DJI frame payload exceeds serialization budget (bytes=" + std::to_string(binding.samples()[**match].bytes.size()) + ", limit=" + std::to_string(payload_limit) + ")", .detection = LFS_SOURCE_SITE_CURRENT()});
         auto result = djiFrameBinding(binding);
         result["query"] = timestamp(query);
         result["match"] = *match ? djiFrameSample(binding.samples()[**match]) : json(nullptr);

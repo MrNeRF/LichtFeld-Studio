@@ -421,8 +421,6 @@ namespace {
                 output.files.srt_metadata = SrtFrameMetadata{std::move(*catalog), *srt_offset, srt_tolerance};
             }
             if (dji_frame_stream) {
-                if (*dji_frame_stream < 0)
-                    throw std::invalid_argument("DJI frame metadata requires a nonnegative stream index");
                 if (!output.files.embed_source_metadata && !output.write_source_metadata_sidecars)
                     throw std::invalid_argument("DJI frame metadata requires image metadata output");
                 ProbeOptions options;

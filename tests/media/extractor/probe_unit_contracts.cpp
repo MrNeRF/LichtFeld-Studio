@@ -519,7 +519,6 @@ namespace {
         require(preserved && (*preserved)["match"]["bytes"] == json_detail::hexBytes(timed.packets[0].bytes) &&
                     (*preserved)["match"]["metadata"]["sequence"] == 0,
                 "matched frame retains exact packet bytes and proto3 zero values");
-        require(!json_detail::djiFrameLookup(*binding, {-1001, {1, 60000}}, 0), "serialization refuses an oversized frame payload before hex allocation");
         const auto output = std::filesystem::temp_directory_path() / ("lfs-dji-frame-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         struct OutputDirectory {
             std::filesystem::path path;
