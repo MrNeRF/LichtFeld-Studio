@@ -5,8 +5,10 @@
 #pragma once
 #include "core/tensor.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -524,20 +526,20 @@ namespace lfs::training::kernels {
     // densification error map still reads the plain full-resolution SSIM of the unblurred render.
     struct PhotometricPyramidWorkspace {
         struct Level {
-            lfs::core::Tensor prediction;      // [N, C, h, w] pooled render (scales >= 1)
-            lfs::core::Tensor target;          // [N, C, h, w] pooled photo, Float32 (scales >= 1)
-            lfs::core::Tensor mask;            // [h, w] pooled weight (scales >= 1, weighted loss)
-            FusedL1SSIMWorkspace fused;        // scales >= 1, unweighted loss
-            MaskedFusedL1SSIMWorkspace masked; // scales >= 1, weighted loss
+            lfs::core::Tensor prediction; // [N, C, h, w] pooled render (scales >= 1)
+            lfs::core::Tensor target;     // [N, C, h, w] pooled photo, Float32 (scales >= 1)
+            lfs::core::Tensor mask;       // [h, w] pooled weight (scales >= 1, weighted loss)
+            // Scales >= 1: the SSIM workspace of the loss variant, grown to the largest image like the
+            // scale-0 arena.
+            LossWorkspaceArena arena;
             // Decoupled loss
-            lfs::core::Tensor raw;                                // [N, C, h, w] pooled raw render (scales >= 1)
-            lfs::core::Tensor grad_raw;                           // [N, C, h, w] raw-render gradient
-            DecoupledFusedL1SSIMWorkspace decoupled;              // scales >= 1, unweighted loss
-            MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled; // scales >= 1, weighted loss
+            lfs::core::Tensor raw;      // [N, C, h, w] pooled raw render (scales >= 1)
+            lfs::core::Tensor grad_raw; // [N, C, h, w] raw-render gradient
             // Blur-tolerant branch
             lfs::core::Tensor blurred;         // [N, C, h, w] blurred render
             lfs::core::Tensor ssim_sharp;      // [N, C, h, w] SSIM of the render, then the blurred-branch gradient
-            lfs::core::Tensor ssim_blurred;    // [N, C, h, w] SSIM of the blurred render, also blur scratch
+            lfs::core::Tensor ssim_blurred;    // [N, C, h, w] SSIM of the blurred render, also blur scratch;
+                                               // fused: the blurred raw-render gradient (decoupled loss)
             lfs::core::Tensor inv_support;     // [h, w] 1 / blurred keep mask, 0 where nothing is kept
             lfs::core::Tensor support_scratch; // [h, w]
             lfs::core::Tensor blend_map;       // [N, 1, h, w] channel-mean blended SSIM
@@ -547,9 +549,16 @@ namespace lfs::training::kernels {
             lfs::core::Tensor blurred_raw; // [N, C, h, w] blurred raw render (decoupled loss)
             lfs::core::Tensor app_dm_dmu1; // [N, C, h, w] fp16 blurred-branch corrected-image partial (decoupled)
             lfs::core::Tensor cs_error;    // [h, w] contrast-structure error of this scale (scales >= 1)
+            // Device storage behind the tensors above, by field offset: the photos differ in size, and
+            // the tensors are views into the largest allocation so far instead of new ones per image.
+            std::unordered_map<std::ptrdiff_t, lfs::core::Tensor> storage;
         };
         std::vector<Level> levels;
         lfs::core::Tensor loss; // [1]
+        // Blur-tolerant scales run as one blur (which also pools the next scale's render), one
+        // two-branch forward, one two-branch backward and one blur adjoint; set, they run the per-branch
+        // kernels instead (the reference the fused ones are tested against).
+        bool reference_kernels = false;
 
         // Contrast-structure error map of the loss, filled when want_cs_error_map is set (single image):
         // per pixel 1 - mean_c(w0 cs(x, y) + w1 cs(G x, y)) with w0, w1 the soft-maximum weights of the

@@ -14,8 +14,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 #include <random>
 #include <string>
@@ -778,4 +780,260 @@ TEST_F(BlurTolerantSSIMTest, ErrorMapBlendsTheBranchesOverTheScales) {
             left_plain += plain[static_cast<size_t>(py) * c.W + px];
         }
     EXPECT_LT(left_tolerant, 0.5 * left_plain);
+}
+
+namespace {
+
+    struct PyramidRun {
+        float loss = 0.0f;
+        float mask_sum = 0.0f;
+        std::vector<float> grad, grad_raw, ssim_map, cs_map;
+    };
+
+    // One pyramid loss call with the fused or the per-branch (reference) blur-tolerant kernels; the
+    // scale-0 SSIM and CS maps come from the arena workspace the loss used.
+    PyramidRun run_pyramid(const Tensor& x, const Tensor& raw, const Tensor& y, const Tensor& weight,
+                           const float ssim_weight, const int levels, const bool reference,
+                           const float denominator = 0.0f) {
+        LossWorkspaceArena arena;
+        PhotometricPyramidWorkspace workspace;
+        workspace.reference_kernels = reference;
+        const bool weighted = weight.is_valid();
+        PhotometricPyramidResult result;
+        if (raw.is_valid())
+            result = decoupled_photometric_pyramid_loss(x, raw, y, weight, ssim_weight, levels, true, arena, workspace,
+                                                        denominator);
+        else
+            result = photometric_pyramid_loss(x, y, weight, ssim_weight, levels, true, arena, workspace, denominator);
+        PyramidRun run{.loss = result.loss.item<float>(), .mask_sum = result.mask_sum_value, .grad = result.grad.cpu().to_vector()};
+        if (result.grad_raw.is_valid())
+            run.grad_raw = result.grad_raw.cpu().to_vector();
+        const auto maps = [&](const auto& ws) {
+            run.ssim_map = ws.ssim_map.cpu().to_vector();
+            run.cs_map = ws.cs_map.cpu().to_vector();
+        };
+        if (raw.is_valid() && weighted)
+            maps(arena.masked_decoupled());
+        else if (raw.is_valid())
+            maps(arena.decoupled());
+        else if (weighted)
+            maps(arena.masked_fused());
+        else
+            maps(arena.fused());
+        return run;
+    }
+
+    // ||a - b|| / ||b||, and the largest element difference relative to the largest |b|.
+    void expect_close(const std::vector<float>& a, const std::vector<float>& b, const double relative,
+                      const std::string& label) {
+        ASSERT_EQ(a.size(), b.size()) << label;
+        ASSERT_FALSE(b.empty()) << label;
+        double diff = 0.0, norm = 0.0, max_diff = 0.0, max_b = 0.0;
+        for (size_t i = 0; i < a.size(); ++i) {
+            ASSERT_TRUE(std::isfinite(a[i])) << label << " at " << i;
+            const double d = static_cast<double>(a[i]) - b[i];
+            diff += d * d;
+            norm += static_cast<double>(b[i]) * b[i];
+            max_diff = std::max(max_diff, std::abs(d));
+            max_b = std::max(max_b, std::abs(static_cast<double>(b[i])));
+        }
+        ASSERT_GT(norm, 0.0) << label;
+        EXPECT_LE(std::sqrt(diff / norm), relative) << label;
+        EXPECT_LE(max_diff, 10.0 * relative * max_b) << label;
+    }
+
+} // namespace
+
+// Catches a fused blur-tolerant level that is not the per-branch kernels' loss: loss, render and raw
+// gradients and the scale-0 maps agree within 1e-5 relative for the plain, weighted, decoupled and
+// weighted decoupled losses, over one to three scales with odd edges, a hole in the weight map
+// (whole ignored tiles), fractional weights, a byte photo and a fixed denominator.
+TEST_F(BlurTolerantSSIMTest, FusedLevelsMatchThePerBranchKernels) {
+    constexpr int C = 3, H = 75, W = 93;
+    const auto render = random_texture(C, H, W, 21);
+    auto photo = blurred(render, C, H, W);
+    {
+        std::mt19937 rng(22);
+        std::normal_distribution<float> noise(0.0f, 0.04f);
+        for (size_t i = 0; i < photo.size(); ++i)
+            if ((i % W) >= static_cast<size_t>(W / 2)) // right half: sharp photo with noise
+                photo[i] = std::clamp(render[i] + noise(rng), 0.0f, 1.0f);
+    }
+    std::vector<float> raw(render.size());
+    for (size_t i = 0; i < raw.size(); ++i)
+        raw[i] = std::clamp(1.1f * render[i] - 0.04f, 0.0f, 1.0f);
+    std::vector<float> weight(static_cast<size_t>(H) * W);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x)
+            weight[static_cast<size_t>(y) * W + x] = (y >= 20 && y < 60 && x >= 16 && x < 64) ? 0.0f
+                                                                                              : 1.0f + 0.5f * ((x * 7 + y * 3) % 5) / 4.0f;
+    std::vector<float> photo_levels(photo.size());
+    for (size_t i = 0; i < photo.size(); ++i)
+        photo_levels[i] = static_cast<float>(std::lround(photo[i] * 255.0f));
+
+    const auto x = image_tensor(render, C, H, W);
+    const auto y = image_tensor(photo, C, H, W);
+    const auto y_bytes = image_tensor(photo_levels, C, H, W).to(DataType::UInt8);
+    const auto r = image_tensor(raw, C, H, W);
+    const auto w = Tensor::from_vector(weight, {static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+    for (const bool decoupled : {false, true}) {
+        for (const bool weighted : {false, true}) {
+            for (const int levels : {1, 2, 3}) {
+                for (const bool bytes : {false, true}) {
+                    if (bytes && levels == 2)
+                        continue;
+                    const float denominator = weighted && levels == 3 ? 0.9f * static_cast<float>(C * H * W) : 0.0f;
+                    const std::string label = std::string(decoupled ? "decoupled" : "plain") +
+                                              (weighted ? " weighted" : "") + " levels " + std::to_string(levels) +
+                                              (bytes ? " byte photo" : "");
+                    const Tensor& photo_tensor = bytes ? y_bytes : y;
+                    const Tensor raw_tensor = decoupled ? r : Tensor{};
+                    const Tensor weight_tensor = weighted ? w : Tensor{};
+                    const auto fused = run_pyramid(x, raw_tensor, photo_tensor, weight_tensor, 0.2f, levels, false,
+                                                   denominator);
+                    const auto reference = run_pyramid(x, raw_tensor, photo_tensor, weight_tensor, 0.2f, levels,
+                                                       true, denominator);
+                    EXPECT_NEAR(fused.loss, reference.loss, 1.0e-5 * std::abs(reference.loss)) << label;
+                    EXPECT_EQ(fused.mask_sum, reference.mask_sum) << label;
+                    expect_close(fused.grad, reference.grad, 1.0e-5, label + " gradient");
+                    if (decoupled)
+                        expect_close(fused.grad_raw, reference.grad_raw, 1.0e-5, label + " raw gradient");
+                    else
+                        EXPECT_TRUE(fused.grad_raw.empty()) << label;
+                    expect_close(fused.ssim_map, reference.ssim_map, 1.0e-5, label + " SSIM map");
+                    expect_close(fused.cs_map, reference.cs_map, 1.0e-5, label + " CS map");
+                }
+            }
+        }
+    }
+}
+
+// Catches pyramid buffers that keep data or shape from an earlier photo: one workspace and arena
+// take photos of different sizes (larger, smaller, larger again, as the photos of a capture differ)
+// and each loss and gradient equals that of fresh buffers.
+TEST_F(BlurTolerantSSIMTest, FusedLevelsReuseTheirBuffersAcrossPhotoSizes) {
+    constexpr int C = 3;
+    LossWorkspaceArena arena;
+    PhotometricPyramidWorkspace workspace;
+    unsigned seed = 40;
+    for (const auto [H, W] : {std::pair{75, 93}, std::pair{61, 80}, std::pair{70, 91}}) {
+        const auto render = random_texture(C, H, W, seed++);
+        const auto photo = blurred(render, C, H, W);
+        std::vector<float> raw(render.size());
+        for (size_t i = 0; i < raw.size(); ++i)
+            raw[i] = std::clamp(0.9f * render[i] + 0.05f, 0.0f, 1.0f);
+        std::vector<float> weight(static_cast<size_t>(H) * W);
+        for (size_t i = 0; i < weight.size(); ++i)
+            weight[i] = 1.0f + 0.25f * static_cast<float>(i % 3);
+        const auto x = image_tensor(render, C, H, W);
+        const auto y = image_tensor(photo, C, H, W);
+        const auto r = image_tensor(raw, C, H, W);
+        const auto w = Tensor::from_vector(weight, {static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+        const float denominator = static_cast<float>(C * H * W);
+        const std::string label = std::to_string(W) + "x" + std::to_string(H);
+        const auto reused = decoupled_photometric_pyramid_loss(x, r, y, w, 0.2f, 3, true, arena, workspace,
+                                                               denominator);
+        const float loss = reused.loss.item<float>();
+        const auto grad = reused.grad.cpu().to_vector();
+        const auto grad_raw = reused.grad_raw.cpu().to_vector();
+        const auto fresh = run_pyramid(x, r, y, w, 0.2f, 3, false, denominator);
+        EXPECT_NEAR(loss, fresh.loss, 1.0e-6 * std::abs(fresh.loss)) << label;
+        expect_close(grad, fresh.grad, 1.0e-6, label + " gradient");
+        expect_close(grad_raw, fresh.grad_raw, 1.0e-6, label + " raw gradient");
+    }
+}
+
+namespace {
+    // Wall time per call of fn, in ms, after warmup calls.
+    template <typename Fn>
+    double time_ms(Fn&& fn, const int warmup = 3, const int iterations = 10) {
+        for (int i = 0; i < warmup; ++i)
+            fn();
+        cudaDeviceSynchronize();
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < iterations; ++i)
+            fn();
+        cudaDeviceSynchronize();
+        const auto stop = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(stop - start).count() / iterations;
+    }
+} // namespace
+
+// Timing at the full resolution of a 20 Mpx photo (not a check; run with
+// --gtest_also_run_disabled_tests): plain SSIM against the blur-tolerant pyramid with the per-branch
+// and the fused kernels, for the plain, weighted, decoupled and weighted decoupled losses.
+TEST_F(BlurTolerantSSIMTest, DISABLED_FullResolutionTiming) {
+    constexpr int C = 3, H = 3933, W = 5246;
+    std::vector<float> render(static_cast<size_t>(C) * H * W), photo(render.size()), raw(render.size());
+    std::vector<float> weight(static_cast<size_t>(H) * W);
+    std::mt19937 rng(3);
+    std::normal_distribution<float> noise(0.0f, 0.03f);
+    for (int c = 0; c < C; ++c)
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x) {
+                const size_t i = (static_cast<size_t>(c) * H + y) * W + x;
+                const float v = 0.5f + 0.25f * std::sin(0.013f * x + 0.7f * c) * std::cos(0.021f * y) +
+                                0.1f * std::sin(0.37f * x + 0.29f * y);
+                photo[i] = std::clamp(v + noise(rng), 0.0f, 1.0f);
+                render[i] = std::clamp(v, 0.0f, 1.0f);
+                raw[i] = std::clamp(0.95f * v + 0.02f, 0.0f, 1.0f);
+            }
+    for (size_t i = 0; i < weight.size(); ++i)
+        weight[i] = 1.0f + 0.5f * static_cast<float>((i * 2654435761u) % 7) / 6.0f;
+    const auto x = image_tensor(render, C, H, W);
+    const auto y = image_tensor(photo, C, H, W);
+    const auto r = image_tensor(raw, C, H, W);
+    const auto w = Tensor::from_vector(weight, {static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+    const int levels = loss_pyramid_levels(H, W);
+    const float denominator = static_cast<float>(C) * H * W;
+
+    // A profiler range, so a trace can capture just the timed calls.
+    cudaProfilerStart();
+    for (const bool decoupled : {false, true}) {
+        for (const bool weighted : {false, true}) {
+            const Tensor raw_tensor = decoupled ? r : Tensor{};
+            const Tensor weight_tensor = weighted ? w : Tensor{};
+            const float den = weighted ? denominator : 0.0f;
+            LossWorkspaceArena arena;
+            PhotometricPyramidWorkspace plain_ws, reference_ws, fused_ws;
+            reference_ws.reference_kernels = true;
+            const auto call = [&](PhotometricPyramidWorkspace& ws, const int K, const bool blur) {
+                if (decoupled) {
+                    auto result = decoupled_photometric_pyramid_loss(x, raw_tensor, y, weight_tensor, 0.2f, K, blur,
+                                                                     arena, ws, den);
+                    auto grad = result.grad;
+                    accumulate_decoupled_raw_gradient(decoupled_raw_gradient(result, raw_tensor), grad);
+                } else {
+                    (void)photometric_pyramid_loss(x, y, weight_tensor, 0.2f, K, blur, arena, ws, den);
+                }
+            };
+            // Plain SSIM: one scale without the blur term (the decoupled loss through its own kernels).
+            const auto plain_call = [&] {
+                if (decoupled) {
+                    if (weighted) {
+                        auto& ws = arena.masked_decoupled();
+                        auto [loss, ctx] = masked_decoupled_fused_l1_ssim_forward(x, raw_tensor, y, weight_tensor, 0.2f,
+                                                                                  ws, den);
+                        auto grads = masked_decoupled_fused_l1_ssim_backward(ctx, ws);
+                        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), grads.grad_corrected);
+                    } else {
+                        auto& ws = arena.decoupled();
+                        auto [loss, ctx] = decoupled_fused_l1_ssim_forward(x, raw_tensor, y, 0.2f, ws);
+                        auto grads = decoupled_fused_l1_ssim_backward(ctx, ws);
+                        accumulate_decoupled_raw_gradient(decoupled_raw_gradient(ctx), grads.grad_corrected);
+                    }
+                } else {
+                    call(plain_ws, 1, false);
+                }
+            };
+            const double plain = time_ms(plain_call);
+            const double reference = time_ms([&] { call(reference_ws, levels, true); });
+            const double fused = time_ms([&] { call(fused_ws, levels, true); });
+            std::printf("[timing] %s%s %dx%d K=%d: plain %.2f ms, blur-tolerant pyramid per-branch %.2f ms "
+                        "(+%.2f), fused %.2f ms (+%.2f)\n",
+                        decoupled ? "decoupled" : "plain", weighted ? " weighted" : "", W, H, levels, plain,
+                        reference, reference - plain, fused, fused - plain);
+        }
+    }
+    cudaProfilerStop();
 }
