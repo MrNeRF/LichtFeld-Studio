@@ -146,10 +146,12 @@ namespace lfs::training::kernels {
         // Identify greater axis (stored at 'x')
         uint3 scale_idxs = get_max_value_index(scale);
         if (split_across != nullptr && split_across[src_idx]) {
-            // Split across: the second axis takes the long axis's role (halved, offset along it).
-            const unsigned int second = scale_idxs.y;
-            scale_idxs.y = scale_idxs.x;
-            scale_idxs.x = second;
+            // Split across: the second axis takes the long axis's role (halved, offset along it). The other two
+            // indices come in index order, so take the larger of them.
+            const unsigned int a = scale_idxs.y;
+            const unsigned int b = scale_idxs.z;
+            const unsigned int second = scale[b] > scale[a] ? b : a;
+            scale_idxs = make_uint3(second, scale_idxs.x, second == a ? b : a);
         }
         unsigned int longest_idx = scale_idxs.x;
         float offset_magnitude = expf(scale[longest_idx]) * 0.5f;

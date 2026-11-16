@@ -5641,12 +5641,16 @@ TEST(MRNFStrategyTest, RetireRankBothFoldsTheWindowImpactApartFromTheDonors) {
         EXPECT_FALSE(strategy->exchange_ranks_by_impact());
         EXPECT_EQ(strategy->impact_scratch(100).first.is_valid(), both);
         for (const bool second : {false, true}) {
+            SCOPED_TRACE(std::string(both ? "both" : "peak") + (second ? " window 2" : " window 1"));
             if (both)
-                write_impact_window(*strategy, second ? sum2 : sum1, second ? peak2 : peak1);
+                EXPECT_NO_THROW(write_impact_window(*strategy, second ? sum2 : sum1, second ? peak2 : peak1));
             auto prune = Tensor::zeros_bool({n}, Device::CUDA);
-            EXPECT_EQ(strategy->mark_retirees(100, prune), 0u);
-            strategy->visibility_accumulator().copy_(Tensor::from_vector(blend, TensorShape({n}), Device::CUDA));
-            strategy->update_exchange_importance();
+            size_t marked = 1;
+            EXPECT_NO_THROW(marked = strategy->mark_retirees(100, prune));
+            EXPECT_EQ(marked, 0u);
+            EXPECT_NO_THROW(strategy->visibility_accumulator().copy_(
+                Tensor::from_vector(blend, TensorShape({n}), Device::CUDA)));
+            EXPECT_NO_THROW(strategy->update_exchange_importance());
             EXPECT_FALSE(strategy->_exchange_window_impact_sum.is_valid());
             EXPECT_FALSE(strategy->_exchange_impact_written);
         }
@@ -5667,18 +5671,18 @@ TEST(MRNFStrategyTest, RetireRankBothFoldsTheWindowImpactApartFromTheDonors) {
     }
 
     // Rows follow their splats: a freed slot restarts at 0, removal compacts, the freeze drops them.
-    both->soft_delete_rows(row_range(2, 3));
+    ASSERT_NO_THROW(both->soft_delete_rows(row_range(2, 3)));
     EXPECT_EQ(both->_retire_impact_sum.cpu().to_vector()[2], 0.0f);
     EXPECT_EQ(both->_retire_impact_peak.cpu().to_vector()[2], 0.0f);
     std::vector<bool> drop(n, false);
     drop[0] = true;
-    both->remove_gaussians(Tensor::from_vector(drop, TensorShape({n}), Device::CUDA));
+    ASSERT_NO_THROW(both->remove_gaussians(Tensor::from_vector(drop, TensorShape({n}), Device::CUDA)));
     ASSERT_EQ(both->_retire_impact_sum.numel(), n - 1);
     EXPECT_FLOAT_EQ(both->_retire_impact_sum.cpu().to_vector()[0], sum[1]);
     RenderOutput output;
-    both->post_backward(static_cast<int>(both->_params->stop_refine), output);
+    ASSERT_NO_THROW(both->post_backward(static_cast<int>(both->_params->stop_refine), output));
     EXPECT_FALSE(both->retire_rank_both_on());
-    both->explore_scratch(static_cast<int>(both->_params->stop_refine) + 1);
+    ASSERT_NO_THROW(both->explore_scratch(static_cast<int>(both->_params->stop_refine) + 1));
     EXPECT_FALSE(both->_retire_impact_sum.is_valid());
     EXPECT_FALSE(both->impact_scratch(static_cast<int>(both->_params->stop_refine) + 1).first.is_valid());
 }
@@ -5730,9 +5734,12 @@ TEST(MRNFStrategyTest, ImpactContrastNormDividesByThePhotoDeviation) {
     const auto [sum, peak] = run({}, 0.01f);
     ASSERT_GT(sum[0], 1.0f);
 
+    // The pixel peak (atomic max) is order-free; the sum is an atomic float sum, so it may differ in the last bit
+    // between any two runs.
     const auto [unit_sum, unit_peak] = run(std::vector<float>(pixels, 0.0f), 1.0f);
-    EXPECT_EQ(unit_sum, sum);
     EXPECT_EQ(unit_peak, peak);
+    for (size_t i = 0; i < sum.size(); ++i)
+        EXPECT_NEAR(unit_sum[i], sum[i], 1e-6f * sum[i]) << i;
 
     const auto [scaled_sum, scaled_peak] = run(std::vector<float>(pixels, 0.24f), 0.01f);
     EXPECT_NEAR(scaled_sum[0], sum[0] / 0.25f, 1e-4f * sum[0] / 0.25f);
