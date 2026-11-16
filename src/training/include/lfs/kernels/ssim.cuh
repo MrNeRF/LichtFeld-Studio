@@ -559,6 +559,9 @@ namespace lfs::training::kernels {
         // two-branch forward, one two-branch backward and one blur adjoint; set, they run the per-branch
         // kernels instead (the reference the fused ones are tested against).
         bool reference_kernels = false;
+        // The fused blur-tolerant forward writes the error map below from its own tiles; set, the fused
+        // levels leave it to the separate error map pass instead (the reference it is tested against).
+        bool reference_cs_error_pass = false;
 
         // Contrast-structure error map of the loss, filled when want_cs_error_map is set (single image):
         // per pixel 1 - mean_c(w0 cs(x, y) + w1 cs(G x, y)) with w0, w1 the soft-maximum weights of the

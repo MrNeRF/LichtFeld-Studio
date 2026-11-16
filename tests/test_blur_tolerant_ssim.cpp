@@ -888,16 +888,20 @@ namespace {
         float loss = 0.0f;
         float mask_sum = 0.0f;
         std::vector<float> grad, grad_raw, ssim_map, cs_map;
+        std::vector<float> cs_error_map, photo_sigma_map; // densification maps (single image)
     };
 
     // One pyramid loss call with the fused or the per-branch (reference) blur-tolerant kernels; the
     // scale-0 SSIM and CS maps come from the arena workspace the loss used.
     PyramidRun run_pyramid(const Tensor& x, const Tensor& raw, const Tensor& y, const Tensor& weight,
                            const float ssim_weight, const int levels, const bool reference,
-                           const float denominator = 0.0f) {
+                           const float denominator = 0.0f, const bool reference_cs_error_pass = false) {
         LossWorkspaceArena arena;
         PhotometricPyramidWorkspace workspace;
         workspace.reference_kernels = reference;
+        workspace.reference_cs_error_pass = reference_cs_error_pass;
+        workspace.want_cs_error_map = true;
+        workspace.want_photo_sigma_map = true;
         const bool weighted = weight.is_valid();
         PhotometricPyramidResult result;
         if (raw.is_valid())
@@ -908,6 +912,10 @@ namespace {
         PyramidRun run{.loss = result.loss.item<float>(), .mask_sum = result.mask_sum_value, .grad = result.grad.cpu().to_vector()};
         if (result.grad_raw.is_valid())
             run.grad_raw = result.grad_raw.cpu().to_vector();
+        if (workspace.cs_error_map_ready)
+            run.cs_error_map = workspace.cs_error_map.cpu().to_vector();
+        if (workspace.photo_sigma_map_ready)
+            run.photo_sigma_map = workspace.photo_sigma_map.cpu().to_vector();
         const auto maps = [&](const auto& ws) {
             run.ssim_map = ws.ssim_map.cpu().to_vector();
             run.cs_map = ws.cs_map.cpu().to_vector();
@@ -942,12 +950,29 @@ namespace {
         EXPECT_LE(max_diff, 10.0 * relative * max_b) << label;
     }
 
+    // Largest element difference, for maps in [0, 1] whose small values make a relative norm meaningless.
+    // The error map's 1 - cs comes from differences of window sums; its rounding differs by up to
+    // about 1e-5 between kernels that evaluate the same sums (fast math may reassociate them).
+    void expect_max_abs(const std::vector<float>& a, const std::vector<float>& b, const double tolerance,
+                        const std::string& label) {
+        ASSERT_EQ(a.size(), b.size()) << label;
+        ASSERT_FALSE(b.empty()) << label;
+        double max_diff = 0.0;
+        for (size_t i = 0; i < a.size(); ++i) {
+            ASSERT_TRUE(std::isfinite(a[i])) << label << " at " << i;
+            max_diff = std::max(max_diff, std::abs(static_cast<double>(a[i]) - b[i]));
+        }
+        EXPECT_LE(max_diff, tolerance) << label;
+    }
+
 } // namespace
 
 // Catches a fused blur-tolerant level that is not the per-branch kernels' loss: loss, render and raw
 // gradients and the scale-0 maps agree within 1e-5 relative for the plain, weighted, decoupled and
 // weighted decoupled losses, over one to three scales with odd edges, a hole in the weight map
-// (whole ignored tiles), fractional weights, a byte photo and a fixed denominator.
+// (whole ignored tiles), fractional weights, a byte photo and a fixed denominator. The densification
+// error map and photo deviation the fused forward writes from its own tiles equal those of the separate
+// error map pass over the same fused level.
 TEST_F(BlurTolerantSSIMTest, FusedLevelsMatchThePerBranchKernels) {
     constexpr int C = 3, H = 75, W = 93;
     const auto render = random_texture(C, H, W, 21);
@@ -1002,6 +1027,13 @@ TEST_F(BlurTolerantSSIMTest, FusedLevelsMatchThePerBranchKernels) {
                         EXPECT_TRUE(fused.grad_raw.empty()) << label;
                     expect_close(fused.ssim_map, reference.ssim_map, 1.0e-5, label + " SSIM map");
                     expect_close(fused.cs_map, reference.cs_map, 1.0e-5, label + " CS map");
+                    const auto separate = run_pyramid(x, raw_tensor, photo_tensor, weight_tensor, 0.2f, levels,
+                                                      false, denominator, /*reference_cs_error_pass=*/true);
+                    ASSERT_FALSE(separate.cs_error_map.empty()) << label;
+                    ASSERT_FALSE(separate.photo_sigma_map.empty()) << label;
+                    expect_max_abs(fused.cs_error_map, separate.cs_error_map, 1.0e-5, label + " error map");
+                    expect_max_abs(fused.photo_sigma_map, separate.photo_sigma_map, 1.0e-5,
+                                   label + " photo deviation");
                 }
             }
         }
