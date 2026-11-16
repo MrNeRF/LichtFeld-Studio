@@ -4124,10 +4124,12 @@ namespace lfs::training::kernels {
                 if (!in_image)
                     return;
                 float value = cs_error.scale * fmaxf(1.0f - error_sum / static_cast<float>(CH), 0.0f);
-                for (int k = 0; k < cs_error.coarse_levels; ++k)
-                    value += cs_error.coarse_scale *
-                             cs_error.coarse[k][static_cast<size_t>(pix_y >> (k + 1)) * cs_error.coarse_w[k] +
-                                                (pix_x >> (k + 1))];
+#pragma unroll
+                for (int k = 0; k < MAX_PYRAMID_LEVELS - 1; ++k)
+                    if (k < cs_error.coarse_levels)
+                        value += cs_error.coarse_scale *
+                                 cs_error.coarse[k][static_cast<size_t>(pix_y >> (k + 1)) * cs_error.coarse_w[k] +
+                                                    (pix_x >> (k + 1))];
                 cs_error.out[pix_id] = value;
                 if (cs_error.sigma_out != nullptr)
                     cs_error.sigma_out[pix_id] = sigma_sum / static_cast<float>(CH);
