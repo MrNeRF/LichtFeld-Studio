@@ -19,6 +19,7 @@
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/splat_operations.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_manager.hpp"
@@ -5207,32 +5208,16 @@ namespace lfs::vis {
         // leave a partially applied sequence of box/ellipsoid/polygon operations.
         try {
             auto prepared = owner->model->clone();
-            const auto model_world = scene_coords::nodeDataWorldTransform(scene_, owner->id);
             for (const auto member : active) {
                 const auto* node = scene_.getNodeById(member);
-                const auto world = scene_coords::nodeDataWorldTransform(scene_, member);
-                const float determinant = glm::determinant(world);
-                if (!std::isfinite(determinant) || determinant == 0.f)
-                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
-                const auto world_to_local = glm::inverse(world) * model_world;
-                for (int col = 0; col < 4; ++col)
-                    for (int row = 0; row < 4; ++row)
-                        if (!std::isfinite(world_to_local[col][row]))
-                            return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
-                const auto finite = [](const glm::vec3& value) { return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z); };
-                if ((node->cropbox && (!finite(node->cropbox->min) || !finite(node->cropbox->max) || glm::any(glm::lessThanEqual(node->cropbox->max, node->cropbox->min)))) ||
-                    (node->ellipsoid && (!finite(node->ellipsoid->radii) || glm::any(glm::lessThanEqual(node->ellipsoid->radii, glm::vec3(0))))) ||
-                    (node->crop_polygon && (!core::crop_polygon::isValidOutline(node->crop_polygon->vertices) || !core::crop_polygon::isValidHalfDepth(node->crop_polygon->half_depth))))
+                auto operation = core::readSplatOperation(*owner, *node);
+                if (!operation)
+                    return lfs::Result<void>::failure(operation.error());
+                const auto applied = core::applySplatCrop(prepared, operation->local_transform, operation->parameters);
+                if (!applied) {
+                    if (applied.error() == core::CropApplyError::InvalidTransform)
+                        return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
                     return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_volume"));
-                if (node->cropbox) {
-                    lfs::geometry::BoundingBox bounds;
-                    bounds.setBounds(node->cropbox->min, node->cropbox->max);
-                    bounds.setworld2BBox(world_to_local);
-                    (void)core::soft_crop_by_cropbox(prepared, bounds, node->cropbox->inverse);
-                } else if (node->ellipsoid) {
-                    (void)core::soft_crop_by_ellipsoid(prepared, world_to_local, node->ellipsoid->radii, node->ellipsoid->inverse);
-                } else {
-                    (void)core::soft_crop_by_polygon(prepared, world_to_local, *node->crop_polygon);
                 }
             }
             op::TransactionGuard transaction(LOC("splat_inspector.group_bake_history"));

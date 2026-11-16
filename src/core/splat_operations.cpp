@@ -2,8 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_operations.hpp"
+#include "core/splat_data_transform.hpp"
+#include "geometry/bounding_box.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <type_traits>
 
 namespace lfs::core {
     namespace {
@@ -11,6 +15,49 @@ namespace lfs::core {
             return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = "Cannot inspect this splat element.", .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()});
         }
     } // namespace
+
+    std::expected<void, CropApplyError>
+    applySplatCrop(SplatData& model, const glm::mat4& crop_to_owner,
+                   const SplatOperationParameters& parameters) {
+        return std::visit([&](const auto& volume) -> std::expected<void, CropApplyError> {
+            using Volume = std::decay_t<decltype(volume)>;
+            if constexpr (std::is_same_v<Volume, CollisionSettings>) {
+                return std::unexpected(CropApplyError::Unsupported);
+            } else {
+                if (!volume.enabled)
+                    return {};
+                const float determinant = glm::determinant(crop_to_owner);
+                if (!std::isfinite(determinant) || determinant == 0.f)
+                    return std::unexpected(CropApplyError::InvalidTransform);
+                const auto to_crop = glm::inverse(crop_to_owner);
+                for (int col = 0; col < 4; ++col)
+                    for (int row = 0; row < 4; ++row)
+                        if (!std::isfinite(to_crop[col][row]))
+                            return std::unexpected(CropApplyError::InvalidTransform);
+                const auto finite = [](const glm::vec3& value) {
+                    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+                };
+                if constexpr (std::is_same_v<Volume, CropBoxData>) {
+                    if (!finite(volume.min) || !finite(volume.max) || glm::any(glm::lessThanEqual(volume.max, volume.min)))
+                        return std::unexpected(CropApplyError::InvalidVolume);
+                    geometry::BoundingBox bounds;
+                    bounds.setBounds(volume.min, volume.max);
+                    bounds.setworld2BBox(to_crop);
+                    (void)soft_crop_by_cropbox(model, bounds, volume.inverse);
+                } else if constexpr (std::is_same_v<Volume, EllipsoidData>) {
+                    if (!finite(volume.radii) || glm::any(glm::lessThanEqual(volume.radii, glm::vec3(0))))
+                        return std::unexpected(CropApplyError::InvalidVolume);
+                    (void)soft_crop_by_ellipsoid(model, to_crop, volume.radii, volume.inverse);
+                } else {
+                    if (!crop_polygon::isValidOutline(volume.vertices) || !crop_polygon::isValidHalfDepth(volume.half_depth))
+                        return std::unexpected(CropApplyError::InvalidVolume);
+                    (void)soft_crop_by_polygon(model, to_crop, volume);
+                }
+                return {};
+            }
+        },
+                          parameters);
+    }
 
     lfs::Result<void>
     validateSplatOperation(const SceneNode& owner, const SceneNode& element) {

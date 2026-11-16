@@ -2960,9 +2960,6 @@ namespace lfs::io::project {
             !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
             !metadata->at("sh_degree").is_number_integer())
             return invalid();
-        if ((metadata->at("count").is_number_unsigned() && metadata->at("count").get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) ||
-            (metadata->at("sh_degree").is_number_unsigned() && metadata->at("sh_degree").get<std::uint64_t>() > 3))
-            return invalid();
         const auto count = metadata->at("count").get<std::int64_t>();
         const auto degree = metadata->at("sh_degree").get<std::int64_t>();
         if (count <= 0 || degree < 0 || degree > 3)

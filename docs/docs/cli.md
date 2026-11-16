@@ -28,18 +28,9 @@ LichtFeld-Studio convert scene.licht scene.ply
 LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
 ```
 
-`convert` reads a `.licht` project like the Project Manager export: it merges the visible splat nodes with
-their scene transforms, keeps the spherical-harmonic degree published for each Portal asset and removes noise
-infill from each source. Every convert output format and option applies to the merged result. The output holds
-only these splats, not the whole scene. Enabled box, ellipsoid and polygon crops are applied to each source
-before merging, including inverted crops. Disabling a model's crop group disables its crops in the export;
-hiding a crop's outline does not disable its effect. External RAD files are loaded at full detail, so they
-must be accessible and their decoded data must fit in memory. Missing or invalid visible sources fail the export.
-
-`LichtFeld-Studio convert --capabilities` prints one stable identifier per line. Builds with this project
-export print `visible-project-splats-v1` and `project-crops-rad-v1`; the latter identifies enabled crop
-application and full-detail external RAD loading. Scripts should check the required identifier lines instead
-of the help text.
+`convert` merges visible splats using saved transforms, enabled crops and the published SH degree.
+Referenced RAD data is loaded at full detail; unrelated checkpoints and Undo history are excluded.
+`LichtFeld-Studio convert --capabilities` prints `visible-project-splats-v1` when this export is supported.
 
 ## Embed a dataset in a project
 

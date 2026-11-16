@@ -8,6 +8,7 @@
 #include "core/scene.hpp"
 
 #include <array>
+#include <expected>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -58,6 +59,16 @@ namespace lfs::core {
     }
 
     using SplatOperationParameters = std::variant<CropBoxData, EllipsoidData, CropPolygonData, CollisionSettings>;
+
+    enum class CropApplyError { InvalidTransform,
+                                InvalidVolume,
+                                Unsupported };
+
+    // Apply one enabled volume in its direct owner's local space. Validation precedes
+    // mutation; callers own detached storage and any scene/Undo transaction.
+    [[nodiscard]] LFS_CORE_API std::expected<void, CropApplyError>
+    applySplatCrop(SplatData& model, const glm::mat4& crop_to_owner,
+                   const SplatOperationParameters& parameters);
 
     // Detached metadata only: no geometry tensors, volume words or borrowed
     // pointers. Read on the scene-owning thread (or under its read protection).

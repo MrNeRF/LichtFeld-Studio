@@ -4,10 +4,43 @@
 #include "core/splat_operations.hpp"
 
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 
 namespace {
     using namespace lfs::core;
+
+    TEST(SplatCropApplyTest, RejectsInvalidVolumesBeforeMutation) {
+        SplatData model;
+        CropBoxData box;
+        box.enabled = true;
+        box.max.x = std::numeric_limits<float>::infinity();
+        EllipsoidData ellipsoid;
+        ellipsoid.enabled = true;
+        ellipsoid.radii.y = 0;
+        CropPolygonData polygon;
+        polygon.vertices = {{0, 0}, {1, 0}};
+        for (const SplatOperationParameters volume : {SplatOperationParameters{box},
+                                                      SplatOperationParameters{ellipsoid}, SplatOperationParameters{polygon}}) {
+            const auto result = applySplatCrop(model, glm::mat4(1), volume);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error(), CropApplyError::InvalidVolume);
+            EXPECT_FALSE(model.has_deleted_mask());
+        }
+    }
+
+    TEST(SplatCropApplyTest, DisabledVolumesDoNotRequireAnInvertibleTransform) {
+        SplatData model;
+        CropBoxData box;
+        EXPECT_TRUE(applySplatCrop(model, glm::mat4(0), box));
+        box.enabled = true;
+        const auto invalid = applySplatCrop(model, glm::mat4(0), box);
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(invalid.error(), CropApplyError::InvalidTransform);
+        const auto unsupported = applySplatCrop(model, glm::mat4(1), CollisionSettings{});
+        ASSERT_FALSE(unsupported);
+        EXPECT_EQ(unsupported.error(), CropApplyError::Unsupported);
+    }
 
     class SplatOperationsTest : public ::testing::Test {
     protected:

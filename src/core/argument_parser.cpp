@@ -2322,7 +2322,7 @@ namespace {
 
     // Identifiers for scripts and plugins. Never reword one; add a new identifier
     // when the behavior it names changes.
-    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\nproject-crops-rad-v1\n";
+    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
     constexpr const char* MESH2SPLAT_HELP_FOOTER =

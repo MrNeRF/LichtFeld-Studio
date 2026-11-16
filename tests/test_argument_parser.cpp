@@ -1442,7 +1442,7 @@ TEST(ArgumentParserTest, ConvertCapabilitiesPrintsStableIdentifiersWithoutInput)
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
-    EXPECT_EQ(output, "visible-project-splats-v1\nproject-crops-rad-v1\n");
+    EXPECT_EQ(output, "visible-project-splats-v1\n");
 }
 
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
