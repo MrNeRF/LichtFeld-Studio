@@ -3497,8 +3497,13 @@ namespace lfs::training::kernels {
         // expressions and summation order of the per-branch kernels above, so the fused level gives
         // their result up to float contraction.
         // ---------------------------------------------------------------------------------------
+        // Tiles of 32 x 32 pixels on 32 x 8 threads: each thread holds FUSED_BLUR_ROWS rows of one column, so
+        // the vertical taps run over values in registers instead of one shared-memory read per tap.
         constexpr int FUSED_BLUR_TX = 32;
-        constexpr int FUSED_BLUR_TY = 16;
+        constexpr int FUSED_BLUR_TY = 32;
+        constexpr int FUSED_BLUR_THREADS_Y = 8;
+        constexpr int FUSED_BLUR_THREADS = FUSED_BLUR_TX * FUSED_BLUR_THREADS_Y;
+        constexpr int FUSED_BLUR_ROWS = FUSED_BLUR_TY / FUSED_BLUR_THREADS_Y;
 
         // The taps of radius R in registers, so the unrolled loops below index them at compile time.
         template <int R>
@@ -3512,57 +3517,90 @@ namespace lfs::training::kernels {
             __device__ __forceinline__ float operator[](const int d) const { return w[d < 0 ? -d : d]; }
         };
 
+        // out[i] = sum_d taps[d] v[i + R + d] over the rows first_row + i + d inside the image, d ascending as in
+        // the per-pixel kernels; v holds the rows first_row - R onwards of one column.
+        template <int R>
+        __device__ __forceinline__ void vertical_taps(const float (&v)[FUSED_BLUR_ROWS + 2 * R],
+                                                      const RegisterTaps<R>& taps, const int first_row, const int H,
+                                                      float (&out)[FUSED_BLUR_ROWS]) {
+#pragma unroll
+            for (int i = 0; i < FUSED_BLUR_ROWS; ++i) {
+                float sum = 0.0f;
+#pragma unroll
+                for (int d = -R; d <= R; ++d) {
+                    const int yy = first_row + i + d;
+                    if (yy >= 0 && yy < H)
+                        sum += taps[d] * v[i + R + d];
+                }
+                out[i] = sum;
+            }
+        }
+
         // Blur of in0 (and in1 when given) over kept pixels, as blur_support_* + blur_rows/cols_kernel,
         // and, when pool0 is given, the 2x2 average of each input for the next scale (as
-        // pool2x2_kernel) from the same tile.
+        // pool2x2_kernel). The tile holds keep * input, which equals the per-pixel kernels' product
+        // since keep is 0 or 1.
         template <typename MaskT, int R>
-        __global__ void __launch_bounds__(FUSED_BLUR_TX* FUSED_BLUR_TY)
+        __global__ void __launch_bounds__(FUSED_BLUR_THREADS)
             fused_blur_kernel(const float* __restrict__ in0, const float* __restrict__ in1,
                               const MaskT* __restrict__ mask, float* __restrict__ out0, float* __restrict__ out1,
                               float* __restrict__ inv_support, float* __restrict__ pool0, float* __restrict__ pool1,
                               const int planes, const int H, const int W, const int h, const int w,
                               const BlurTaps blur_taps) {
             static_assert(FUSED_BLUR_TX % 2 == 0 && FUSED_BLUR_TY % 2 == 0, "Pooling needs even tiles");
+            static_assert((FUSED_BLUR_TX / 2) * (FUSED_BLUR_TY / 2) == FUSED_BLUR_THREADS,
+                          "One pooled pixel per thread");
             constexpr int SX = FUSED_BLUR_TX + 2 * R;
             constexpr int SY = FUSED_BLUR_TY + 2 * R;
+            constexpr int V = FUSED_BLUR_ROWS + 2 * R;
             __shared__ float keep[SY][SX];
             __shared__ float tile[SY][SX];
             __shared__ float rows[SY][FUSED_BLUR_TX];
             const RegisterTaps<R> taps(blur_taps);
             const int x0 = blockIdx.x * FUSED_BLUR_TX, y0 = blockIdx.y * FUSED_BLUR_TY;
             const int tx = threadIdx.x, ty = threadIdx.y;
-            const int x = x0 + tx, y = y0 + ty;
-            const bool inside = x < W && y < H;
+            const int tid = ty * FUSED_BLUR_TX + tx;
+            const int x = x0 + tx;
+            const int row0 = ty * FUSED_BLUR_ROWS; // this thread's first row in the tile
+            const int y_first = y0 + row0;
             const size_t plane_pixels = static_cast<size_t>(H) * W;
 
-            for (int r = ty; r < SY; r += FUSED_BLUR_TY)
-                for (int c = tx; c < SX; c += FUSED_BLUR_TX) {
-                    const int gy = y0 - R + r, gx = x0 - R + c;
-                    keep[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W ? keep_value(mask, gy * W + gx) : 0.0f;
-                }
-            __syncthreads();
-            for (int r = ty; r < SY; r += FUSED_BLUR_TY) {
-                float sum = 0.0f;
-#pragma unroll
-                for (int d = -R; d <= R; ++d) {
-                    const int xx = x + d;
-                    if (xx >= 0 && xx < W)
-                        sum += taps[d] * keep[r][R + tx + d];
-                }
-                rows[r][tx] = sum;
+            for (int i = tid; i < SY * SX; i += FUSED_BLUR_THREADS) {
+                const int r = i / SX, c = i - r * SX;
+                const int gy = y0 - R + r, gx = x0 - R + c;
+                keep[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W ? keep_value(mask, gy * W + gx) : 0.0f;
             }
             __syncthreads();
-            float inv = 0.0f;
-            if (inside) {
-                float sum = 0.0f;
+            // Horizontal taps of every tile row (src: the keep mask, or keep * input) into rows.
+            const auto horizontal = [&](const float (&src)[SY][SX]) {
+                for (int r = ty; r < SY; r += FUSED_BLUR_THREADS_Y) {
+                    float sum = 0.0f;
 #pragma unroll
-                for (int d = -R; d <= R; ++d) {
-                    const int yy = y + d;
-                    if (yy >= 0 && yy < H)
-                        sum += taps[d] * rows[R + ty + d][tx];
+                    for (int d = -R; d <= R; ++d) {
+                        const int xx = x + d;
+                        if (xx >= 0 && xx < W)
+                            sum += taps[d] * src[r][R + tx + d];
+                    }
+                    rows[r][tx] = sum;
                 }
-                inv = sum > 1.0e-30f ? 1.0f / sum : 0.0f;
-                inv_support[static_cast<size_t>(y) * W + x] = inv;
+            };
+            const auto vertical = [&](float (&out)[FUSED_BLUR_ROWS]) {
+                float v[V];
+#pragma unroll
+                for (int j = 0; j < V; ++j)
+                    v[j] = rows[row0 + j][tx];
+                vertical_taps<R>(v, taps, y_first, H, out);
+            };
+
+            horizontal(keep);
+            __syncthreads();
+            float inv[FUSED_BLUR_ROWS];
+            vertical(inv);
+#pragma unroll
+            for (int i = 0; i < FUSED_BLUR_ROWS; ++i) {
+                inv[i] = inv[i] > 1.0e-30f ? 1.0f / inv[i] : 0.0f;
+                if (x < W && y_first + i < H)
+                    inv_support[static_cast<size_t>(y_first + i) * W + x] = inv[i];
             }
 
             for (int image = 0; image < 2; ++image) {
@@ -3573,19 +3611,17 @@ namespace lfs::training::kernels {
                     break;
                 for (int plane = 0; plane < planes; ++plane) {
                     const float* src = in + plane * plane_pixels;
-                    __syncthreads();
-                    for (int r = ty; r < SY; r += FUSED_BLUR_TY)
-                        for (int c = tx; c < SX; c += FUSED_BLUR_TX) {
-                            const int gy = y0 - R + r, gx = x0 - R + c;
-                            tile[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W ? src[static_cast<size_t>(gy) * W + gx]
-                                                                                : 0.0f;
-                        }
-                    __syncthreads();
+                    for (int i = tid; i < SY * SX; i += FUSED_BLUR_THREADS) {
+                        const int r = i / SX, c = i - r * SX;
+                        const int gy = y0 - R + r, gx = x0 - R + c;
+                        tile[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W
+                                         ? keep[r][c] * src[static_cast<size_t>(gy) * W + gx]
+                                         : 0.0f;
+                    }
                     if (pool != nullptr) {
                         constexpr int PX = FUSED_BLUR_TX / 2;
-                        const int tid = ty * FUSED_BLUR_TX + tx;
                         const int X = x0 / 2 + tid % PX, Y = y0 / 2 + tid / PX;
-                        if (tid < PX * (FUSED_BLUR_TY / 2) && X < w && Y < h) {
+                        if (X < w && Y < h) {
                             float sum = 0.0f;
                             int count = 0;
                             for (int a = 0; a < 2; ++a) {
@@ -3596,7 +3632,7 @@ namespace lfs::training::kernels {
                                     const int xx = 2 * X + b;
                                     if (xx >= W)
                                         continue;
-                                    sum += tile[R + yy - y0][R + xx - x0];
+                                    sum += src[static_cast<size_t>(yy) * W + xx];
                                     ++count;
                                 }
                             }
@@ -3604,26 +3640,16 @@ namespace lfs::training::kernels {
                                 sum / static_cast<float>(count);
                         }
                     }
-                    for (int r = ty; r < SY; r += FUSED_BLUR_TY) {
-                        float sum = 0.0f;
-#pragma unroll
-                        for (int d = -R; d <= R; ++d) {
-                            const int xx = x + d;
-                            if (xx >= 0 && xx < W)
-                                sum += taps[d] * keep[r][R + tx + d] * tile[r][R + tx + d];
-                        }
-                        rows[r][tx] = sum;
-                    }
                     __syncthreads();
-                    if (inside) {
-                        float sum = 0.0f;
+                    horizontal(tile);
+                    __syncthreads();
+                    float sum[FUSED_BLUR_ROWS];
+                    vertical(sum);
+                    if (x < W) {
 #pragma unroll
-                        for (int d = -R; d <= R; ++d) {
-                            const int yy = y + d;
-                            if (yy >= 0 && yy < H)
-                                sum += taps[d] * rows[R + ty + d][tx];
-                        }
-                        out[plane * plane_pixels + static_cast<size_t>(y) * W + x] = sum * inv;
+                        for (int i = 0; i < FUSED_BLUR_ROWS; ++i)
+                            if (y_first + i < H)
+                                out[plane * plane_pixels + static_cast<size_t>(y_first + i) * W + x] = sum[i] * inv[i];
                     }
                 }
             }
@@ -3632,8 +3658,10 @@ namespace lfs::training::kernels {
         // out_k = out_k + blur adjoint of g_k (as blur_adjoint_cols + blur_adjoint_rows_kernel with
         // accumulate), then + the coarser gradient through the 2x2 pooling (as
         // unpool2x2_adjoint_accumulate_kernel) when coarse_k is given, then x scale when apply_scale.
+        // The vertical taps run first, over every tile column; the 2R columns past the 32 the threads own
+        // go to the first threads.
         template <typename MaskT, int R>
-        __global__ void __launch_bounds__(FUSED_BLUR_TX* FUSED_BLUR_TY)
+        __global__ void __launch_bounds__(FUSED_BLUR_THREADS)
             fused_blur_adjoint_kernel(const float* __restrict__ g0, const float* __restrict__ g1,
                                       const float* __restrict__ inv_support, const MaskT* __restrict__ mask,
                                       float* __restrict__ out0, float* __restrict__ out1,
@@ -3642,25 +3670,61 @@ namespace lfs::training::kernels {
                                       const BlurTaps blur_taps, const float scale, const bool apply_scale) {
             constexpr int SX = FUSED_BLUR_TX + 2 * R;
             constexpr int SY = FUSED_BLUR_TY + 2 * R;
+            constexpr int V = FUSED_BLUR_ROWS + 2 * R;
+            // Column-pass items: SX columns times FUSED_BLUR_THREADS_Y row groups, item k on thread k and
+            // k - FUSED_BLUR_THREADS.
+            constexpr int ITEMS = SX * FUSED_BLUR_THREADS_Y;
+            static_assert(ITEMS <= 2 * FUSED_BLUR_THREADS, "At most two column items per thread");
             __shared__ float inv_tile[SY][SX];
             __shared__ float tile[SY][SX];
             __shared__ float cols[FUSED_BLUR_TY][SX];
             const RegisterTaps<R> taps(blur_taps);
             const int x0 = blockIdx.x * FUSED_BLUR_TX, y0 = blockIdx.y * FUSED_BLUR_TY;
             const int tx = threadIdx.x, ty = threadIdx.y;
-            const int x = x0 + tx, y = y0 + ty;
-            const bool inside = x < W && y < H;
+            const int tid = ty * FUSED_BLUR_TX + tx;
+            const int x = x0 + tx;
+            const int row0 = ty * FUSED_BLUR_ROWS;
+            const int y_first = y0 + row0;
             const size_t plane_pixels = static_cast<size_t>(H) * W;
 
-            for (int r = ty; r < SY; r += FUSED_BLUR_TY)
-                for (int c = tx; c < SX; c += FUSED_BLUR_TX) {
-                    const int gy = y0 - R + r, gx = x0 - R + c;
-                    inv_tile[r][c] =
-                        gy >= 0 && gy < H && gx >= 0 && gx < W ? inv_support[static_cast<size_t>(gy) * W + gx] : 0.0f;
+            for (int i = tid; i < SY * SX; i += FUSED_BLUR_THREADS) {
+                const int r = i / SX, c = i - r * SX;
+                const int gy = y0 - R + r, gx = x0 - R + c;
+                inv_tile[r][c] =
+                    gy >= 0 && gy < H && gx >= 0 && gx < W ? inv_support[static_cast<size_t>(gy) * W + gx] : 0.0f;
+            }
+            const bool second_item = tid + FUSED_BLUR_THREADS < ITEMS;
+            // Vertical taps of one column item: sum_d taps[d] g inv over rows inside the image.
+            const auto column = [&](const int item) {
+                const int c = item % SX, group = item / SX;
+                const int first = group * FUSED_BLUR_ROWS;
+                float t[V];
+#pragma unroll
+                for (int j = 0; j < V; ++j)
+                    t[j] = tile[first + j][c];
+#pragma unroll
+                for (int i = 0; i < FUSED_BLUR_ROWS; ++i) {
+                    float sum = 0.0f;
+#pragma unroll
+                    for (int d = -R; d <= R; ++d) {
+                        const int yy = y0 + first + i + d;
+                        if (yy >= 0 && yy < H)
+                            sum += taps[d] * t[i + R + d] * inv_tile[first + i + R + d][c];
+                    }
+                    cols[first + i][c] = sum;
                 }
-            const float keep_center = inside ? keep_value(mask, y * W + x) : 0.0f;
-            const int Y = y >> 1, X = x >> 1;
-            const float count = inside ? static_cast<float>(min(2, H - 2 * Y) * min(2, W - 2 * X)) : 1.0f;
+            };
+
+            float keep_center[FUSED_BLUR_ROWS];
+            float count[FUSED_BLUR_ROWS];
+            const int X = x >> 1;
+#pragma unroll
+            for (int i = 0; i < FUSED_BLUR_ROWS; ++i) {
+                const int y = y_first + i;
+                const bool inside = x < W && y < H;
+                keep_center[i] = inside ? keep_value(mask, y * W + x) : 0.0f;
+                count[i] = inside ? static_cast<float>(min(2, H - 2 * (y >> 1)) * min(2, W - 2 * X)) : 1.0f;
+            }
 
             for (int image = 0; image < 2; ++image) {
                 const float* g = image == 0 ? g0 : g1;
@@ -3670,41 +3734,40 @@ namespace lfs::training::kernels {
                     break;
                 for (int plane = 0; plane < planes; ++plane) {
                     const float* src = g + plane * plane_pixels;
-                    __syncthreads();
-                    for (int r = ty; r < SY; r += FUSED_BLUR_TY)
-                        for (int c = tx; c < SX; c += FUSED_BLUR_TX) {
-                            const int gy = y0 - R + r, gx = x0 - R + c;
-                            tile[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W ? src[static_cast<size_t>(gy) * W + gx]
-                                                                                : 0.0f;
-                        }
-                    __syncthreads();
-                    for (int c = tx; c < SX; c += FUSED_BLUR_TX) {
-                        float sum = 0.0f;
-#pragma unroll
-                        for (int d = -R; d <= R; ++d) {
-                            const int yy = y + d;
-                            if (yy >= 0 && yy < H)
-                                sum += taps[d] * tile[R + ty + d][c] * inv_tile[R + ty + d][c];
-                        }
-                        cols[ty][c] = sum;
+                    for (int i = tid; i < SY * SX; i += FUSED_BLUR_THREADS) {
+                        const int r = i / SX, c = i - r * SX;
+                        const int gy = y0 - R + r, gx = x0 - R + c;
+                        tile[r][c] = gy >= 0 && gy < H && gx >= 0 && gx < W ? src[static_cast<size_t>(gy) * W + gx]
+                                                                            : 0.0f;
                     }
                     __syncthreads();
-                    if (inside) {
-                        float sum = 0.0f;
+                    column(tid);
+                    if (second_item)
+                        column(tid + FUSED_BLUR_THREADS);
+                    __syncthreads();
+                    if (x < W) {
 #pragma unroll
-                        for (int d = -R; d <= R; ++d) {
-                            const int xx = x + d;
-                            if (xx >= 0 && xx < W)
-                                sum += taps[d] * cols[ty][R + tx + d];
+                        for (int i = 0; i < FUSED_BLUR_ROWS; ++i) {
+                            const int y = y_first + i;
+                            if (y >= H)
+                                continue;
+                            float sum = 0.0f;
+#pragma unroll
+                            for (int d = -R; d <= R; ++d) {
+                                const int xx = x + d;
+                                if (xx >= 0 && xx < W)
+                                    sum += taps[d] * cols[row0 + i][R + tx + d];
+                            }
+                            const size_t idx = plane * plane_pixels + static_cast<size_t>(y) * W + x;
+                            const float value = keep_center[i] * sum;
+                            float result = out[idx] + value;
+                            if (coarse != nullptr)
+                                result += coarse[plane * static_cast<size_t>(h) * w + static_cast<size_t>(y >> 1) * w + X] /
+                                          count[i];
+                            if (apply_scale)
+                                result *= scale;
+                            out[idx] = result;
                         }
-                        const size_t idx = plane * plane_pixels + static_cast<size_t>(y) * W + x;
-                        const float value = keep_center * sum;
-                        float result = out[idx] + value;
-                        if (coarse != nullptr)
-                            result += coarse[plane * static_cast<size_t>(h) * w + static_cast<size_t>(Y) * w + X] / count;
-                        if (apply_scale)
-                            result *= scale;
-                        out[idx] = result;
                     }
                 }
             }
@@ -4842,7 +4905,7 @@ namespace lfs::training::kernels {
             }
             const BlurTaps taps = make_blur_taps(sigma);
             const dim3 grid((W + FUSED_BLUR_TX - 1) / FUSED_BLUR_TX, (H + FUSED_BLUR_TY - 1) / FUSED_BLUR_TY);
-            const dim3 block(FUSED_BLUR_TX, FUSED_BLUR_TY);
+            const dim3 block(FUSED_BLUR_TX, FUSED_BLUR_THREADS_Y);
             dispatch_blur_radius(taps.radius, [&](auto radius) {
                 fused_blur_kernel<MaskT, decltype(radius)::value><<<grid, block, 0, stream>>>(
                     x, raw, mask, level.blurred.template ptr<float>(),
@@ -4873,7 +4936,7 @@ namespace lfs::training::kernels {
             const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
             const dim3 block(BLOCK_X, BLOCK_Y);
             const dim3 blur_grid((W + FUSED_BLUR_TX - 1) / FUSED_BLUR_TX, (H + FUSED_BLUR_TY - 1) / FUSED_BLUR_TY);
-            const dim3 blur_block(FUSED_BLUR_TX, FUSED_BLUR_TY);
+            const dim3 blur_block(FUSED_BLUR_TX, FUSED_BLUR_THREADS_Y);
             const lfs::core::TensorShape image_shape{static_cast<size_t>(N), static_cast<size_t>(C),
                                                      static_cast<size_t>(H), static_cast<size_t>(W)};
             const int planes = N * C;
