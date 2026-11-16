@@ -109,6 +109,12 @@ class MRNFStrategyTest_RetireSpareOffKeepsTheRetireesBitIdentical_Test;
 class MRNFStrategyTest_RetireSpareExemptsThinSplatsAndKeepsTheQuota_Test;
 class MRNFStrategyTest_RetireSpareWindowFollowsRendersAndSplats_Test;
 class MRNFStrategyTest_RetireSpareBackwardWritesTheRawMinorSigma_Test;
+class MRNFStrategyTest_RetireRankBothOffKeepsTheRetireesBitIdentical_Test;
+class MRNFStrategyTest_RetireRankBothKeepsHighImpactOrHighPeakSplats_Test;
+class MRNFStrategyTest_RetireRankBothFoldsTheWindowImpactApartFromTheDonors_Test;
+class MRNFStrategyTest_ImpactContrastNormDividesByThePhotoDeviation_Test;
+class MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
+class MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
 
 namespace lfs::training {
 
@@ -168,6 +174,7 @@ namespace lfs::training {
         void on_impact_accumulated(int iter) override;
         std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int iter) override;
         lfs::core::Tensor minor_sigma_scratch(int iter) override;
+        lfs::core::Tensor major_sigma_scratch(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
@@ -258,6 +265,12 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_RetireSpareExemptsThinSplatsAndKeepsTheQuota_Test;
         friend class ::MRNFStrategyTest_RetireSpareWindowFollowsRendersAndSplats_Test;
         friend class ::MRNFStrategyTest_RetireSpareBackwardWritesTheRawMinorSigma_Test;
+        friend class ::MRNFStrategyTest_RetireRankBothOffKeepsTheRetireesBitIdentical_Test;
+        friend class ::MRNFStrategyTest_RetireRankBothKeepsHighImpactOrHighPeakSplats_Test;
+        friend class ::MRNFStrategyTest_RetireRankBothFoldsTheWindowImpactApartFromTheDonors_Test;
+        friend class ::MRNFStrategyTest_ImpactContrastNormDividesByThePhotoDeviation_Test;
+        friend class ::MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
+        friend class ::MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -323,6 +336,24 @@ namespace lfs::training {
         // Closes the refine window of the minor sigma: rows drawn in it take the window's minimum, the others
         // keep their last value; the window starts afresh (+inf).
         void close_spare_window();
+        // Retire ranking Both (mrnf_retire_rank both with retirement on): the backward writes the removal impact
+        // every step; each refine folds the window into a faded maximum (half-life one pass, as the donor impact
+        // memory) and the retirees are the lowest by the latest of their ranks in peak blend weight, summed
+        // impact and pixel-peak impact.
+        [[nodiscard]] bool retire_rank_both_on() const;
+        // Folds the window impact into the retire impact rows; false when no impact was written this window.
+        bool fold_retire_impact();
+        // Whether the growth exchange ranks by removal impact (the plain exchange, or need-guided donors by impact).
+        [[nodiscard]] bool exchange_ranks_by_impact() const;
+        // Receiver keep-long (receiver_keep_long > 0 with need-guided growth, FastGS): a receiver whose raw
+        // projected major sigma, at its largest over the renders of the last refine window that drew it, is below
+        // receiver_keep_long pixels splits along its second axis.
+        [[nodiscard]] bool keep_long_on() const;
+        // Closes the refine window of the major sigma: rows drawn in it take the window's maximum, the others keep
+        // their last value; the window starts afresh (0 = undrawn).
+        void close_keep_long_window();
+        // [N] flags of the receivers that split across this refine (empty when keep-long is off).
+        [[nodiscard]] lfs::core::Tensor keep_long_split_across() const;
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
         // After the backward: walks the splats rendered in this step and clears the step's marks.
@@ -484,6 +515,12 @@ namespace lfs::training {
         lfs::core::Tensor _spare_window_sigma; // [N] smallest raw minor sigma (px) this refine window, +inf: undrawn
         lfs::core::Tensor _spare_sigma;        // [N] that minimum for the last window that drew the splat, +inf: none
         size_t _last_spared = 0;
+        lfs::core::Tensor _retire_impact_sum;      // [N] faded max of the window summed removal impact (rank Both)
+        lfs::core::Tensor _retire_impact_peak;     // [N] faded max of the window pixel-peak removal impact (rank Both)
+        int _retire_impact_windows = 0;            // windows folded into the retire impact rows
+        lfs::core::Tensor _keep_long_window_major; // [N] largest raw major sigma (px) this refine window, 0: undrawn
+        lfs::core::Tensor _keep_long_major;        // [N] that maximum for the last window that drew it, +inf: none
+        size_t _last_split_across = 0;
         int _exchange_windows = 0; // windows in the current importance memory
         bool _exchange_impact_written = false;
         int _exchange_first_iter = -1;

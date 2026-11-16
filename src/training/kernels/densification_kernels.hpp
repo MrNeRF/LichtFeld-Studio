@@ -46,6 +46,8 @@ namespace lfs::training::kernels {
      * @param cross_axis_scale Factor on the two shorter axes (the long axis is halved)
      * @param opacity_scale Factor on both children's opacity (1 keeps the parent's)
      * @param stream CUDA stream
+     * @param split_across Optional [N] flags by parent row: a flagged parent splits along its second-largest
+     *        axis (halved, offset along it) and the long axis takes cross_axis_scale like the third
      */
     inline constexpr float LONG_AXIS_SPLIT_CROSS_AXIS_SCALE = 0.85f;
     inline constexpr float LONG_AXIS_SPLIT_OPACITY_SCALE = 0.6f;
@@ -68,7 +70,8 @@ namespace lfs::training::kernels {
         int shN_dim,
         float cross_axis_scale,
         float opacity_scale,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const bool* split_across = nullptr);
 
     /**
      * fused free-slot write.

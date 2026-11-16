@@ -6591,6 +6591,9 @@ namespace lfs::training {
                         (match_strategy || mrnf_loss_error_map) && use_ssim_error &&
                         step_params.densify_error_map == lfs::core::param::DensifyErrorMap::SsimCs;
                     pyramid_ws.cs_error_map_ready = false;
+                    // Set below when the backward writes a contrast-normalised removal impact.
+                    pyramid_ws.want_photo_sigma_map = false;
+                    pyramid_ws.photo_sigma_map_ready = false;
                 }
                 DensificationType densification_type = DensificationType::None;
                 if (!in_popspa && (step_params.strategy == "mcmc" || match_strategy))
@@ -6747,6 +6750,7 @@ namespace lfs::training {
                 lfs::core::Tensor explore_rendered_rows;
                 lfs::core::Tensor explore_peak_rows;
                 lfs::core::Tensor explore_minor_sigma_rows;
+                lfs::core::Tensor explore_major_sigma_rows;
                 if (fastgs_path && !in_popspa) {
                     auto explore = strategy_->explore_scratch(iter);
                     const auto rows = static_cast<size_t>(strategy_->get_model().size());
@@ -6764,6 +6768,10 @@ namespace lfs::training {
                     if (auto sigma = strategy_->minor_sigma_scratch(iter); usable(sigma)) {
                         explore_minor_sigma_rows = std::move(sigma);
                         fused_extra_gradients.explore_minor_sigma = explore_minor_sigma_rows.ptr<float>();
+                    }
+                    if (auto sigma = strategy_->major_sigma_scratch(iter); usable(sigma)) {
+                        explore_major_sigma_rows = std::move(sigma);
+                        fused_extra_gradients.explore_major_sigma = explore_major_sigma_rows.ptr<float>();
                     }
                 }
                 lfs::core::Tensor view_radius_rows;
@@ -6846,6 +6854,9 @@ namespace lfs::training {
                                 impact_peak_scratch.numel() == static_cast<size_t>(model.size())) {
                                 fused_extra_gradients.impact_sum_out = impact_sum_scratch.ptr<float>();
                                 fused_extra_gradients.impact_peak_out = impact_peak_scratch.ptr<float>();
+                                // The loss's contrast-structure pass also writes the photo's local deviation.
+                                if (step_params.impact_contrast_norm)
+                                    photometric_loss_.pyramid_workspace().want_photo_sigma_map = true;
                             }
                         }
                         const float scale_weight = step_params.scale_reg_at(iter);
@@ -8381,6 +8392,29 @@ namespace lfs::training {
                                     if (strategy_->is_refining(iter))
                                         model_write_lock.lock();
                                     const cudaStream_t backward_stream = fast_ctx->forward_ctx.stream;
+                                    if (fused_extra_gradients.impact_sum_out != nullptr && step_params.impact_contrast_norm) {
+                                        // The photo's local standard deviation: the loss's SSIM window statistics when
+                                        // its contrast-structure pass ran, else one pass over the photo.
+                                        const auto& pyramid_ws = photometric_loss_.pyramid_workspace();
+                                        const auto fits = [&](const lfs::core::Tensor& map) {
+                                            return map.is_valid() && map.ndim() == 2 &&
+                                                   map.shape()[0] == static_cast<size_t>(fast_ctx->height) &&
+                                                   map.shape()[1] == static_cast<size_t>(fast_ctx->width);
+                                        };
+                                        const float* photo_sigma = nullptr;
+                                        if (pyramid_ws.photo_sigma_map_ready && fits(pyramid_ws.photo_sigma_map)) {
+                                            photo_sigma = pyramid_ws.photo_sigma_map.ptr<float>();
+                                        } else {
+                                            kernels::photo_local_sigma(gt_tile.is_contiguous() ? gt_tile : gt_tile.contiguous(),
+                                                                       impact_photo_sigma_map_);
+                                            if (fits(impact_photo_sigma_map_))
+                                                photo_sigma = impact_photo_sigma_map_.ptr<float>();
+                                        }
+                                        LFS_ASSERT_MSG(photo_sigma != nullptr,
+                                                       "impact_contrast_norm: the photo deviation map does not match the render");
+                                        fused_extra_gradients.impact_photo_sigma = photo_sigma;
+                                        fused_extra_gradients.impact_contrast_eps = step_params.impact_contrast_eps;
+                                    }
                                     fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                             gaussian_optimizer, tile_grad_alpha,
                                                             use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},

@@ -568,6 +568,12 @@ namespace lfs::training::kernels {
         bool want_cs_error_map = false;
         bool cs_error_map_ready = false;
         lfs::core::Tensor cs_error_map; // [H, W]
+        // With want_photo_sigma_map, the scale-0 pass of the contrast-structure map above also writes the photo's
+        // local standard deviation (its SSIM window statistics, mean over the channels) to photo_sigma_map;
+        // photo_sigma_map_ready tells whether the last pyramid loss call wrote it.
+        bool want_photo_sigma_map = false;
+        bool photo_sigma_map_ready = false;
+        lfs::core::Tensor photo_sigma_map; // [H, W]
     };
 
     struct PhotometricPyramidResult {
@@ -616,6 +622,11 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& image, const lfs::core::Tensor& weight, float sigma);
     [[nodiscard]] lfs::core::Tensor normalized_gaussian_blur_adjoint(
         const lfs::core::Tensor& grad, const lfs::core::Tensor& weight, float sigma);
+
+    // The photo's local standard deviation as the SSIM window sees it (11-tap Gaussian, sigma 1.5, zero padding),
+    // per pixel the mean over the channels of sqrt(max(E[y^2] - E[y]^2, 0)). target is [C, H, W] or [1, C, H, W]
+    // (Float32 or UInt8); out becomes [H, W]. The pyramid loss writes the same map with want_photo_sigma_map.
+    void photo_local_sigma(const lfs::core::Tensor& target, lfs::core::Tensor& out);
 
     // Fused SSIM map → error map: error_map[i] = max(0, 1 - mean_c(ssim_map[c, i]))
     // Replaces .neg().add(1).mean({1}).squeeze(0).clamp_min(0).contiguous() chain

@@ -83,6 +83,17 @@ namespace lfs::training::mrnf_strategy {
         int64_t* rows,
         void* stream = nullptr);
 
+    // The same for any number of keys (each non-null): a row's rank is the latest of its positions in
+    // ascending order of every key, i.e. the largest of its percentiles among the eligible rows.
+    void launch_rank_rows_latest(
+        const float* const* keys,
+        size_t n_keys,
+        const bool* eligible,
+        size_t N,
+        size_t count,
+        int64_t* rows,
+        void* stream = nullptr);
+
     void launch_fill_index_mask(
         const int64_t* indices,
         size_t count,

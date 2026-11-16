@@ -973,7 +973,8 @@ namespace lfs::training {
                            &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_exchange_view_count,
                            &_exchange_window_views, &_exchange_window_coverage, &_far_field_mask,
                            &_ray_depth_state, &_explore_rendered, &_explore_peak, &_explore_scout_renders,
-                           &_retire_step_peak, &_retire_renders, &_spare_window_sigma, &_spare_sigma}) {
+                           &_retire_step_peak, &_retire_renders, &_spare_window_sigma, &_spare_sigma,
+                           &_retire_impact_sum, &_retire_impact_peak, &_keep_long_window_major, &_keep_long_major}) {
             visit(*rows);
         }
     }
@@ -1084,6 +1085,11 @@ namespace lfs::training {
             reset_exchange_state();
         }
 
+        _last_split_across = 0;
+        if (keep_long_on()) {
+            ensure_explore_rows();
+            close_keep_long_window();
+        }
         auto growth = grow_and_split(
             iter, pruned_count, refine_candidates,
             exchanging && exchange_ready ? quota : 0);
@@ -1165,11 +1171,11 @@ namespace lfs::training {
 
         // A freed slot starts its exploration rows afresh for the child that fills it.
         for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders, &_retire_step_peak,
-                           &_retire_renders}) {
+                           &_retire_renders, &_retire_impact_sum, &_retire_impact_peak, &_keep_long_window_major}) {
             if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
                 rows->index_put_(indices, Tensor::zeros({static_cast<size_t>(indices.numel())}, rows->device()));
         }
-        for (auto* rows : {&_spare_window_sigma, &_spare_sigma}) {
+        for (auto* rows : {&_spare_window_sigma, &_spare_sigma, &_keep_long_major}) {
             if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
                 rows->index_put_(indices, Tensor::full({static_cast<size_t>(indices.numel())},
                                                        std::numeric_limits<float>::infinity(), rows->device()));
@@ -1322,6 +1328,13 @@ namespace lfs::training {
             explore += std::format(", spared {} thin (minor sigma < {:.3g} px)", _last_spared,
                                    _params->mrnf_retire_spare_px);
         }
+        if (retire_rank_both_on()) {
+            explore += _retire_impact_windows > 0 ? ", retire rank peak+impact" : ", retire rank peak (no impact yet)";
+        }
+        if (keep_long_on()) {
+            explore += std::format(", split across {} (major sigma < {:.3g} px)", _last_split_across,
+                                   _params->receiver_keep_long);
+        }
         if (need) {
             LOG_INFO("{}{}", line, explore);
         } else {
@@ -1371,9 +1384,9 @@ namespace lfs::training {
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::impact_scratch(const int iter) {
         // Need-guided growth ranks by the blend weight sum the backward already writes, unless its
-        // donors rank by removal impact like the plain exchange's.
-        if (!growth_exchange_active(iter) || (_params->need_guided_growth && !donor_rank_impact_on()) ||
-            !_splat_data || _splat_data->size() == 0) {
+        // donors rank by removal impact like the plain exchange's. Retire ranking Both reads the same window.
+        const bool exchange_impact = growth_exchange_active(iter) && exchange_ranks_by_impact();
+        if ((!exchange_impact && !retire_rank_both_on()) || !_splat_data || _splat_data->size() == 0) {
             return {};
         }
         const size_t n = static_cast<size_t>(_splat_data->size());
@@ -1417,7 +1430,8 @@ namespace lfs::training {
                        "MRNF growth exchange: coverage does not match the splat count");
         Tensor primary = window_coverage;
         Tensor secondary;
-        if (_exchange_impact_written) {
+        // The window impact may have been written for the retire ranking alone.
+        if (_exchange_impact_written && exchange_ranks_by_impact()) {
             LFS_ASSERT_MSG(_exchange_window_impact_sum.numel() == n &&
                                _exchange_window_impact_peak.numel() == n,
                            "MRNF growth exchange: impact does not match the splat count");
@@ -1588,6 +1602,8 @@ namespace lfs::training {
         const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
         ensure_explore_rows();
         _last_spared = 0;
+        // Every refine folds the window impact, also before the cap, so the memory is ready when retirement starts.
+        fold_retire_impact();
         const bool spare = spare_on() && _spare_sigma.numel() == n && _spare_window_sigma.numel() == n;
         if (spare) {
             close_spare_window();
@@ -1613,6 +1629,32 @@ namespace lfs::training {
             }
             blocked = blocked.logical_or(spared).contiguous();
         }
+        if (retire_rank_both_on()) {
+            if (_retire_impact_windows > 0 && _retire_impact_sum.numel() == n && _retire_impact_peak.numel() == n) {
+                // The lowest by the latest of the ranks in peak blend weight and in removal impact (summed and
+                // pixel-peak, as the donor impact rank) among the rows past the grace.
+                const Tensor eligible = blocked.logical_not()
+                                            .logical_and(_retire_renders >= static_cast<float>(_params->mrnf_retire_grace))
+                                            .contiguous();
+                const size_t marked = std::min(count, static_cast<size_t>(eligible.count_nonzero()));
+                if (marked == 0) {
+                    return 0;
+                }
+                Tensor rows = Tensor::empty({marked}, Device::CUDA, DataType::Int64);
+                const float* keys[3] = {_explore_peak.ptr<float>(), _retire_impact_sum.ptr<float>(),
+                                        _retire_impact_peak.ptr<float>()};
+                mrnf_strategy::launch_rank_rows_latest(keys, 3, eligible.ptr<bool>(), n, marked, rows.ptr<int64_t>());
+                Tensor retired = Tensor::zeros_bool({n}, Device::CUDA);
+                mrnf_strategy::launch_fill_index_mask(rows.ptr<int64_t>(), marked, retired.ptr<bool>());
+                prune_mask = prune_mask.logical_or(retired).contiguous();
+                return marked;
+            }
+            static bool impact_missing_noted = false;
+            if (!std::exchange(impact_missing_noted, true)) {
+                LOG_WARN("mrnf_retire_rank both: no removal impact was written yet; this refine ranks by peak "
+                         "blend weight alone");
+            }
+        }
         Tensor dead = blocked.to(DataType::UInt8).contiguous();
         const size_t marked = match::mark_lowest_dead(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
                                                       static_cast<float>(_params->mrnf_retire_grace),
@@ -1625,6 +1667,60 @@ namespace lfs::training {
 
     bool MRNF::spare_on() const {
         return retire_on() && _params->mrnf_retire_spare_px > 0.0f;
+    }
+
+    bool MRNF::retire_rank_both_on() const {
+        return retire_on() && _params->mrnf_retire_rank == lfs::core::param::MrnfRetireRank::Both;
+    }
+
+    bool MRNF::exchange_ranks_by_impact() const {
+        return _params && (!_params->need_guided_growth || donor_rank_impact_on());
+    }
+
+    bool MRNF::fold_retire_impact() {
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (!retire_rank_both_on() || n == 0 || !_exchange_impact_written ||
+            _exchange_window_impact_sum.numel() != n || _exchange_window_impact_peak.numel() != n ||
+            _retire_impact_sum.numel() != n || _retire_impact_peak.numel() != n) {
+            return false;
+        }
+        // Faded maxima with the donor impact memory's half-life of one pass.
+        const float decay = exchange_importance_decay();
+        _retire_impact_sum = _exchange_window_impact_sum.maximum(_retire_impact_sum.mul(decay)).contiguous();
+        _retire_impact_peak = _exchange_window_impact_peak.maximum(_retire_impact_peak.mul(decay)).contiguous();
+        ++_retire_impact_windows;
+        return true;
+    }
+
+    bool MRNF::keep_long_on() const {
+        return need_guided_growth_on() && _params->receiver_keep_long > 0.0f && !_params->gut;
+    }
+
+    void MRNF::close_keep_long_window() {
+        using namespace lfs::core;
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (_keep_long_window_major.numel() != n || _keep_long_major.numel() != n || n == 0) {
+            return;
+        }
+        const Tensor drawn = _keep_long_window_major > 0.0f;
+        _keep_long_major = Tensor::where(drawn, _keep_long_window_major, _keep_long_major).contiguous();
+        _keep_long_window_major.zero_();
+    }
+
+    lfs::core::Tensor MRNF::keep_long_split_across() const {
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (!keep_long_on() || n == 0 || _keep_long_major.numel() != n) {
+            return {};
+        }
+        return (_keep_long_major < _params->receiver_keep_long).contiguous();
+    }
+
+    lfs::core::Tensor MRNF::major_sigma_scratch(const int /*iter*/) {
+        if (!_params || !_splat_data || _splat_data->size() == 0 || !keep_long_on()) {
+            return {};
+        }
+        ensure_explore_rows();
+        return _keep_long_window_major;
     }
 
     void MRNF::close_spare_window() {
@@ -1682,6 +1778,16 @@ namespace lfs::training {
         const bool spare = spare_on();
         size_inf_row(_spare_window_sigma, spare);
         size_inf_row(_spare_sigma, spare);
+        const bool rank_both = retire_rank_both_on();
+        size_row(_retire_impact_sum, rank_both);
+        size_row(_retire_impact_peak, rank_both);
+        if (!rank_both) {
+            _retire_impact_windows = 0;
+        }
+        // The major sigma window starts at 0 (undrawn); the kept value at +inf (not short).
+        const bool keep_long = keep_long_on();
+        size_row(_keep_long_window_major, keep_long);
+        size_inf_row(_keep_long_major, keep_long);
     }
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::explore_scratch(const int /*iter*/) {
@@ -2251,6 +2357,11 @@ namespace lfs::training {
         // halves get receiver_opacity_scale x the parent's opacity.
         const float cross_scale = receiver ? _params->receiver_cross_scale : kernels::LONG_AXIS_SPLIT_CROSS_AXIS_SCALE;
         const float opacity_scale = receiver ? receiver_opacity_scale : kernels::LONG_AXIS_SPLIT_OPACITY_SCALE;
+        // Receivers whose projected long axis is already short split along their second axis.
+        const Tensor split_across = receiver ? keep_long_split_across() : Tensor();
+        if (split_across.is_valid() && K > 0) {
+            _last_split_across += split_across.index_select(0, split_indices).count_nonzero();
+        }
 
         // Parents and child destinations are disjoint rows, so each chunk splits
         // its own parents and places its own children.
@@ -2297,7 +2408,8 @@ namespace lfs::training {
                 0,
                 cross_scale,
                 opacity_scale,
-                nullptr);
+                nullptr,
+                split_across.is_valid() ? split_across.ptr<bool>() : nullptr);
 
             if (use_shN) {
                 lfs::training::sh_value::gather_shN_to_canonical(
@@ -2648,7 +2760,8 @@ namespace lfs::training {
         if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
             compact(_rendered_count);
         for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders, &_retire_step_peak,
-                           &_retire_renders, &_spare_window_sigma, &_spare_sigma}) {
+                           &_retire_renders, &_spare_window_sigma, &_spare_sigma, &_retire_impact_sum,
+                           &_retire_impact_peak, &_keep_long_window_major, &_keep_long_major}) {
             if (rows->is_valid() && rows->numel() == old_size)
                 compact(*rows);
             else
@@ -3577,6 +3690,11 @@ namespace lfs::training {
         _retire_renders = lfs::core::Tensor();
         _spare_window_sigma = lfs::core::Tensor();
         _spare_sigma = lfs::core::Tensor();
+        _retire_impact_sum = lfs::core::Tensor();
+        _retire_impact_peak = lfs::core::Tensor();
+        _retire_impact_windows = 0;
+        _keep_long_window_major = lfs::core::Tensor();
+        _keep_long_major = lfs::core::Tensor();
         _retire_first_iter = -1;
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);

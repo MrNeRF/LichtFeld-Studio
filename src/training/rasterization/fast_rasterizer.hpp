@@ -148,6 +148,11 @@ namespace lfs::training {
         float* explore_blend_peak = nullptr;
         // Optional [N] row: min with each contributing splat's raw projected minor-axis sigma (pixels).
         float* explore_minor_sigma = nullptr;
+        // Optional [N] row: max with each contributing splat's raw projected major-axis sigma (pixels).
+        float* explore_major_sigma = nullptr;
+        // Optional [H, W] photo local standard deviation for the contrast-normalised removal impact.
+        const float* impact_photo_sigma = nullptr;
+        float impact_contrast_eps = 0.01f;
         // Match strategy geometry step (fused_adam_types.h FusedAdamSettings).
         float* view_radius_out = nullptr;
         bool angular_mean_step = false;

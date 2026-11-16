@@ -784,6 +784,106 @@ TEST_F(BlurTolerantSSIMTest, ErrorMapBlendsTheBranchesOverTheScales) {
 
 namespace {
 
+    // The photo's local standard deviation under the SSIM window (11 taps, sigma 1.5, zero padding), channel mean.
+    std::vector<double> photo_sigma_cpu(const std::vector<float>& y, const int C, const int H, const int W) {
+        double g[11];
+        double gsum = 0.0;
+        for (int d = -5; d <= 5; ++d)
+            gsum += g[d + 5] = std::exp(-0.5 * d * d / (1.5 * 1.5));
+        for (double& v : g)
+            v /= gsum;
+        std::vector<double> out(static_cast<size_t>(H) * W, 0.0);
+        for (int ch = 0; ch < C; ++ch)
+            for (int py = 0; py < H; ++py)
+                for (int px = 0; px < W; ++px) {
+                    double m = 0.0, sq = 0.0;
+                    for (int dy = -5; dy <= 5; ++dy)
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int yy = py + dy, xx = px + dx;
+                            if (yy < 0 || yy >= H || xx < 0 || xx >= W)
+                                continue;
+                            const double w = g[dy + 5] * g[dx + 5];
+                            const double Y = y[(static_cast<size_t>(ch) * H + yy) * W + xx];
+                            m += w * Y, sq += w * Y * Y;
+                        }
+                    out[static_cast<size_t>(py) * W + px] += std::sqrt(std::max(sq - m * m, 0.0)) / C;
+                }
+        return out;
+    }
+
+} // namespace
+
+// The photo's local deviation (contrast-normalised removal impact): the pyramid loss writes it from the window
+// statistics of its contrast-structure pass when asked, only then, and the stand-alone pass gives the same map
+// for float and byte photos; both match the CPU window.
+TEST_F(BlurTolerantSSIMTest, PhotoLocalSigmaComesFromTheErrorMapPass) {
+    constexpr int C = 3, H = 37, W = 45;
+    auto y = random_texture(C, H, W, 7, 0.0f, 1.0f);
+    for (int py = 0; py < H; ++py)
+        for (int px = 0; px < W / 2; ++px)
+            for (int ch = 0; ch < C; ++ch)
+                y[(static_cast<size_t>(ch) * H + py) * W + px] = 0.6f; // a flat left half
+    const auto x = random_texture(C, H, W, 8);
+    const auto expected = photo_sigma_cpu(y, C, H, W);
+    const auto check = [&](const std::vector<float>& got, const std::string& label) {
+        ASSERT_EQ(got.size(), expected.size()) << label;
+        double max_err = 0.0;
+        for (size_t i = 0; i < got.size(); ++i)
+            max_err = std::max(max_err, std::abs(got[i] - expected[i]));
+        EXPECT_LT(max_err, 2.0e-5) << label;
+    };
+    EXPECT_NEAR(expected[static_cast<size_t>(H / 2) * W + 8], 0.0, 1e-9); // flat, away from the border
+    EXPECT_GT(expected[static_cast<size_t>(H / 2) * W + W - 10], 0.1);    // texture
+
+    for (const int levels : {1, 2}) {
+        LossWorkspaceArena arena;
+        PhotometricPyramidWorkspace workspace;
+        workspace.want_cs_error_map = true;
+        // Not asked: the error map pass writes no deviation.
+        (void)photometric_pyramid_loss(image_tensor(x, C, H, W), image_tensor(y, C, H, W), Tensor{}, 0.2f, levels,
+                                       true, arena, workspace);
+        ASSERT_TRUE(workspace.cs_error_map_ready);
+        EXPECT_FALSE(workspace.photo_sigma_map_ready);
+        EXPECT_FALSE(workspace.photo_sigma_map.is_valid());
+        const auto cs_before = workspace.cs_error_map.cpu().to_vector();
+        workspace.want_photo_sigma_map = true;
+        (void)photometric_pyramid_loss(image_tensor(x, C, H, W), image_tensor(y, C, H, W), Tensor{}, 0.2f, levels,
+                                       true, arena, workspace);
+        ASSERT_TRUE(workspace.photo_sigma_map_ready);
+        check(workspace.photo_sigma_map.cpu().to_vector(), "pyramid levels " + std::to_string(levels));
+        EXPECT_EQ(workspace.cs_error_map.cpu().to_vector(), cs_before); // the error map is unchanged
+        // Without the error map pass (no densification map wanted) nothing is written.
+        workspace.want_cs_error_map = false;
+        (void)photometric_pyramid_loss(image_tensor(x, C, H, W), image_tensor(y, C, H, W), Tensor{}, 0.2f, levels,
+                                       true, arena, workspace);
+        EXPECT_FALSE(workspace.photo_sigma_map_ready);
+    }
+
+    Tensor out;
+    photo_local_sigma(image_tensor(y, C, H, W), out);
+    ASSERT_EQ(out.ndim(), 2u);
+    check(out.cpu().to_vector(), "stand-alone float");
+    std::vector<float> levels(y.size()), quantised(y.size());
+    for (size_t i = 0; i < y.size(); ++i) {
+        levels[i] = static_cast<float>(std::lround(y[i] * 255.0f));
+        quantised[i] = levels[i] / 255.0f;
+    }
+    const Tensor byte_photo =
+        Tensor::from_vector(levels, {1, static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W)},
+                            Device::CUDA)
+            .to(DataType::UInt8);
+    Tensor byte_out;
+    photo_local_sigma(byte_photo, byte_out);
+    const auto byte_expected = photo_sigma_cpu(quantised, C, H, W);
+    const auto byte_got = byte_out.cpu().to_vector();
+    double max_err = 0.0;
+    for (size_t i = 0; i < byte_got.size(); ++i)
+        max_err = std::max(max_err, std::abs(byte_got[i] - byte_expected[i]));
+    EXPECT_LT(max_err, 2.0e-5);
+}
+
+namespace {
+
     struct PyramidRun {
         float loss = 0.0f;
         float mask_sum = 0.0f;

@@ -1063,6 +1063,12 @@ namespace lfs::core {
                 return std::format("mrnf_retire_spare_px must be finite and not negative (got {})", mrnf_retire_spare_px);
             if (is_mrnf_strategy(strategy) && mrnf_retire_share > 0.0f && gut)
                 return "mrnf_retire_share needs the FastGS training renderer (GUT is not supported)";
+            if (!std::isfinite(impact_contrast_eps) || impact_contrast_eps <= 0.0f)
+                return std::format("impact_contrast_eps must be finite and positive (got {})", impact_contrast_eps);
+            if (!std::isfinite(receiver_keep_long) || receiver_keep_long < 0.0f)
+                return std::format("receiver_keep_long must be finite and not negative (got {})", receiver_keep_long);
+            if (is_mrnf_strategy(strategy) && receiver_keep_long > 0.0f && gut)
+                return "receiver_keep_long needs the FastGS training renderer (GUT is not supported)";
             if (is_mrnf_strategy(strategy) && mrnf_loss_error_map && !ssim_blur_tolerant && !loss_pyramid)
                 return "mrnf_loss_error_map needs ssim_blur_tolerant or loss_pyramid";
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)

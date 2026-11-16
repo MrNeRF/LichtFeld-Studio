@@ -114,7 +114,8 @@ namespace lfs::training::kernels {
         int num_split,
         int shN_dim,
         float cross_axis_scale,
-        float opacity_scale) {
+        float opacity_scale,
+        const bool* __restrict__ split_across) {
         int split_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (split_idx >= num_split)
             return;
@@ -144,6 +145,12 @@ namespace lfs::training::kernels {
 
         // Identify greater axis (stored at 'x')
         uint3 scale_idxs = get_max_value_index(scale);
+        if (split_across != nullptr && split_across[src_idx]) {
+            // Split across: the second axis takes the long axis's role (halved, offset along it).
+            const unsigned int second = scale_idxs.y;
+            scale_idxs.y = scale_idxs.x;
+            scale_idxs.x = second;
+        }
         unsigned int longest_idx = scale_idxs.x;
         float offset_magnitude = expf(scale[longest_idx]) * 0.5f;
 
@@ -218,7 +225,8 @@ namespace lfs::training::kernels {
         int shN_dim,
         float cross_axis_scale,
         float opacity_scale,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const bool* split_across) {
         stream = resolve_stream(stream);
         if (num_split == 0)
             return;
@@ -230,7 +238,7 @@ namespace lfs::training::kernels {
             positions, rotations, scales, sh0, shN, opacities,
             second_positions, second_rotations, second_scales,
             second_sh0, second_shN, second_opacities,
-            split_indices, num_split, shN_dim, cross_axis_scale, opacity_scale);
+            split_indices, num_split, shN_dim, cross_axis_scale, opacity_scale, split_across);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 

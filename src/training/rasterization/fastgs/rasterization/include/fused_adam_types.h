@@ -70,6 +70,13 @@ namespace fast_lfs::rasterization {
         // Optional [N] row (MRNF retirement): lowered to the splat's projected minor-axis standard deviation in
         // pixels, before the 2D dilation, for every splat that contributed to the view (preprocess backward).
         float* explore_minor_sigma = nullptr;
+        // Optional [N] row (MRNF receiver split): raised to the splat's projected major-axis standard deviation in
+        // pixels, before the 2D dilation, for every splat that contributed to the view (preprocess backward).
+        float* explore_major_sigma = nullptr;
+        // Optional [H, W] map (blend backward, with the impact outputs): the photo's local standard deviation; the
+        // removal impact of each pixel is divided by (sigma + impact_contrast_eps).
+        const float* impact_photo_sigma = nullptr;
+        float impact_contrast_eps = 0.01f;
         // Optional [N] row (match strategy): each splat's angular radius in this view, rho / (max(d, rho) +
         // sqrt(max(d^2 - rho^2, 0))) with rho = max scale x sqrt(2 ln(255 opacity)) and d its camera
         // distance; 0 when culled. Written for every row.

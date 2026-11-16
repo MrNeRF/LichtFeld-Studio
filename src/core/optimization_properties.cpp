@@ -770,6 +770,17 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::receiver_keep_long,
+                        "receiver_keep_long", "Receiver Keep Long", d.receiver_keep_long, 0.0f, 16.0f,
+                        "At the cap, a receiver whose projected long axis (sigma in pixels, before the 2D dilation) "
+                        "is below this halves its second axis instead of the long one; 0: off (MRNF)")
+            .locale("training.advanced.receiver_keep_long")
+            .tooltip("training.tooltip.receiver_keep_long")
+            .precision(2)
+            .ui_step(0.25)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::mrnf_loss_error_map,
                        "mrnf_loss_error_map", "Loss Error Map", d.mrnf_loss_error_map,
                        "Ranks growth by the contrast-structure error map of the blur-tolerant or multi-scale loss; "
@@ -806,6 +817,36 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.mrnf_retire_spare_px")
             .precision(2)
             .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .enum_prop(&OptimizationParameters::mrnf_retire_rank,
+                       "mrnf_retire_rank", "Retire Rank", d.mrnf_retire_rank,
+                       {{"Peak", MrnfRetireRank::Peak, "training.options.mrnf_retire_rank.peak", "peak"},
+                        {"Both", MrnfRetireRank::Both, "training.options.mrnf_retire_rank.both", "both"}},
+                       "Retire the lowest peak blend weight, or the lowest of the larger of the peak blend weight "
+                       "and removal impact percentiles (MRNF)")
+            .locale("training.advanced.mrnf_retire_rank")
+            .tooltip("training.tooltip.mrnf_retire_rank")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::impact_contrast_norm,
+                       "impact_contrast_norm", "Impact Contrast Norm", d.impact_contrast_norm,
+                       "Removal impact divides each pixel's colour change by the photo's local standard deviation "
+                       "plus Impact Contrast Eps (MRNF)")
+            .locale("training.advanced.impact_contrast_norm")
+            .tooltip("training.tooltip.impact_contrast_norm")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
+            .float_prop(&OptimizationParameters::impact_contrast_eps,
+                        "impact_contrast_eps", "Impact Contrast Eps", d.impact_contrast_eps, 0.001f, 1.0f,
+                        "Added to the photo's local standard deviation (colour in [0, 1]) by Impact Contrast Norm (MRNF)")
+            .locale("training.advanced.impact_contrast_eps")
+            .tooltip("training.tooltip.impact_contrast_eps")
+            .precision(3)
+            .ui_step(0.005)
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()

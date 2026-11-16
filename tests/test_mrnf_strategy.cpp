@@ -2854,7 +2854,8 @@ namespace {
         std::vector<float> second_means, second_scales, second_opacities; // children
     };
 
-    SplitRun run_long_axis_split(const float cross_axis_scale, const float opacity_scale) {
+    SplitRun run_long_axis_split(const float cross_axis_scale, const float opacity_scale,
+                                 const std::vector<bool>& across = {}) {
         constexpr size_t n = 64;
         std::mt19937 rng(7);
         std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
@@ -2888,11 +2889,13 @@ namespace {
         for (size_t i = 0; i < n; ++i)
             rows[i] = static_cast<int>(i);
         const auto split_indices = Tensor::from_vector(rows, {n}, Device::CUDA).to(DataType::Int64);
+        const auto across_rows = across.empty() ? Tensor() : Tensor::from_vector(across, {n}, Device::CUDA);
         kernels::launch_long_axis_split_gaussians_inplace(
             means.ptr<float>(), quats.ptr<float>(), scales.ptr<float>(), sh0.ptr<float>(), nullptr,
             opacities.ptr<float>(), second_means.ptr<float>(), second_quats.ptr<float>(), second_scales.ptr<float>(),
             second_sh0.ptr<float>(), nullptr, second_opacities.ptr<float>(), split_indices.ptr<int64_t>(),
-            static_cast<int>(n), 0, cross_axis_scale, opacity_scale);
+            static_cast<int>(n), 0, cross_axis_scale, opacity_scale, nullptr,
+            across_rows.is_valid() ? across_rows.ptr<bool>() : nullptr);
         EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         run.first_means = means.cpu().to_vector();
         run.first_scales = scales.cpu().to_vector();
@@ -5467,4 +5470,492 @@ TEST(MRNFStrategyTest, RetireSpareBackwardWritesTheRawMinorSigma) {
     const auto lowered = window.cpu().to_vector();
     EXPECT_EQ(lowered[0], 0.3f);
     EXPECT_NEAR(lowered[1], focal * std::exp(scales_before[3]) / 4.5f, 1e-3f);
+}
+
+namespace {
+    // Retirement at the cap (share 0.05, grace 30) with the given rank; rows primed past the grace.
+    std::unique_ptr<MRNF> rank_test_strategy(SplatData& data, const size_t n, const param::MrnfRetireRank rank) {
+        auto strategy = std::make_unique<MRNF>(data);
+        auto params = retire_test_params(n, 0.05f);
+        params.mrnf_retire_rank = rank;
+        strategy->initialize(params);
+        strategy->explore_scratch(100);
+        return strategy;
+    }
+
+    // Peak blend weight, summed and pixel-peak removal impact per row: rows 100..129 are low in all three (rising),
+    // row 0 is the faintest but has the largest impact (a twig against the sky), row 1 the most opaque with no
+    // impact (a twig in front of a similar background); the rest are high in all three.
+    struct RankRows {
+        std::vector<float> peak, sum, impact_peak;
+    };
+    RankRows rank_test_rows(const size_t n) {
+        RankRows rows{std::vector<float>(n, 0.5f), std::vector<float>(n, 9.0f), std::vector<float>(n, 0.5f)};
+        for (size_t i = 100; i < 130; ++i) {
+            const float k = static_cast<float>(i - 100);
+            rows.peak[i] = 0.01f + 0.001f * k;
+            rows.sum[i] = 0.1f + 0.01f * k;
+            rows.impact_peak[i] = 0.01f + 0.001f * k;
+        }
+        rows.peak[0] = 0.0001f;
+        rows.sum[0] = 50.0f;
+        rows.impact_peak[0] = 0.9f;
+        rows.peak[1] = 0.99f;
+        rows.sum[1] = 0.0001f;
+        rows.impact_peak[1] = 0.0001f;
+        return rows;
+    }
+} // namespace
+
+#define RANK_TEST_PRIME(s, rows)                                                                    \
+    do {                                                                                            \
+        (s)->_explore_peak.copy_(Tensor::from_vector((rows).peak, TensorShape({n}), Device::CUDA)); \
+        (s)->_retire_renders.fill_(100.0f);                                                         \
+    } while (false)
+
+// Off: the default rank is the peak blend weight, nothing else changes: no impact is asked of the backward, no
+// impact rows are kept and the retirees are the lowest peaks as before. The contrast normalisation and the
+// keep-long split default off as well.
+TEST(MRNFStrategyTest, RetireRankBothOffKeepsTheRetireesBitIdentical) {
+    const auto defaults = param::OptimizationParameters::mrnf_defaults();
+    EXPECT_EQ(defaults.mrnf_retire_rank, param::MrnfRetireRank::Peak);
+    EXPECT_FALSE(defaults.impact_contrast_norm);
+    EXPECT_FLOAT_EQ(defaults.impact_contrast_eps, 0.01f);
+    EXPECT_EQ(defaults.receiver_keep_long, 0.0f);
+    EXPECT_EQ(param::mrnf_retire_rank_name(param::MrnfRetireRank::Both), "both");
+    EXPECT_EQ(param::mrnf_retire_rank_from_string("peak"), param::MrnfRetireRank::Peak);
+    EXPECT_FALSE(param::mrnf_retire_rank_from_string("impact").has_value());
+
+    constexpr size_t n = 200;
+    const auto rows = rank_test_rows(n);
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto strategy = rank_test_strategy(data, n, param::MrnfRetireRank::Peak);
+    RANK_TEST_PRIME(strategy, rows);
+    EXPECT_FALSE(strategy->retire_rank_both_on());
+    EXPECT_FALSE(strategy->impact_scratch(100).first.is_valid());
+    EXPECT_FALSE(strategy->_retire_impact_sum.is_valid());
+    EXPECT_FALSE(strategy->_retire_impact_peak.is_valid());
+    auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+    ASSERT_EQ(strategy->mark_retirees(100, prune), 10u);
+    // The lowest peaks: row 0 and the nine faintest of 100..129.
+    std::vector<size_t> expected{0};
+    for (size_t i = 100; i < 109; ++i)
+        expected.push_back(i);
+    EXPECT_EQ(marked_rows(prune), expected);
+
+    // Need-guided donors ranked by blend weight still ask for no impact; the rank needs retirement on.
+    auto need = need_growth_test_params(32);
+    need.mrnf_retire_rank = param::MrnfRetireRank::Both;
+    auto need_data = create_mrnf_test_splat_data(8, 0);
+    MRNF no_retire(need_data);
+    no_retire.initialize(need);
+    EXPECT_FALSE(no_retire.retire_rank_both_on());
+    EXPECT_FALSE(no_retire.impact_scratch(100).first.is_valid());
+    no_retire.ensure_explore_rows();
+    EXPECT_FALSE(no_retire._retire_impact_sum.is_valid());
+}
+
+// Rank Both retires the rows low in peak blend weight AND in removal impact: the faint twig with a large impact
+// and the opaque twig with none both stay, the quota is unchanged and the grace still holds. A whole refine
+// frees and refills the same count.
+TEST(MRNFStrategyTest, RetireRankBothKeepsHighImpactOrHighPeakSplats) {
+    constexpr size_t n = 200;
+    const auto rows = rank_test_rows(n);
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto strategy = rank_test_strategy(data, n, param::MrnfRetireRank::Both);
+    RANK_TEST_PRIME(strategy, rows);
+    ASSERT_TRUE(strategy->retire_rank_both_on());
+    // Before any impact: the peak ranking, with a warning.
+    {
+        auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+        ASSERT_EQ(strategy->mark_retirees(100, prune), 10u);
+        EXPECT_EQ(marked_rows(prune).front(), 0u);
+        EXPECT_EQ(strategy->_retire_impact_windows, 0);
+    }
+    write_impact_window(*strategy, rows.sum, rows.impact_peak);
+    std::vector<float> renders(n, 100.0f);
+    renders[102] = 29.0f; // within the grace
+    strategy->_retire_renders.copy_(Tensor::from_vector(renders, TensorShape({n}), Device::CUDA));
+    auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+    ASSERT_EQ(strategy->mark_retirees(100, prune), 10u);
+    EXPECT_EQ(strategy->_retire_impact_windows, 1);
+    EXPECT_EQ(strategy->_retire_impact_sum.cpu().to_vector(), rows.sum);
+    EXPECT_EQ(strategy->_retire_impact_peak.cpu().to_vector(), rows.impact_peak);
+    EXPECT_EQ(marked_rows(prune), (std::vector<size_t>{100, 101, 103, 104, 105, 106, 107, 108, 109, 110}));
+
+    // The rank is the latest of the three positions: high in any one key keeps a row.
+    {
+        auto keys = rows;
+        keys.sum[105] = 99.0f;         // only the summed impact is high
+        keys.impact_peak[106] = 0.99f; // only the pixel peak is high
+        keys.peak[107] = 0.9f;         // only the peak blend weight is high
+        auto d = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto s = rank_test_strategy(d, n, param::MrnfRetireRank::Both);
+        RANK_TEST_PRIME(s, keys);
+        write_impact_window(*s, keys.sum, keys.impact_peak);
+        auto p = Tensor::zeros_bool({n}, Device::CUDA);
+        ASSERT_EQ(s->mark_retirees(100, p), 10u);
+        EXPECT_EQ(marked_rows(p), (std::vector<size_t>{100, 101, 102, 103, 104, 108, 109, 110, 111, 112}));
+    }
+
+    // A whole refine: ten retired, freed and refilled, the model stays at the cap.
+    auto refine_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto refining = rank_test_strategy(refine_data, n, param::MrnfRetireRank::Both);
+    RANK_TEST_PRIME(refining, rows);
+    write_impact_window(*refining, rows.sum, rows.impact_peak);
+    refining->visibility_accumulator().fill_(1.0f);
+    RenderOutput output;
+    refining->post_backward(100, output);
+    EXPECT_EQ(refining->_last_retired, 10u);
+    EXPECT_EQ(refining->active_count(), n);
+    const auto after = refining->_retire_renders.cpu().to_vector();
+    EXPECT_EQ(after[0], 100.0f); // the faint high-impact splat stayed
+    EXPECT_EQ(after[1], 100.0f); // the opaque no-impact splat stayed
+    for (size_t i = 100; i < 110; ++i)
+        EXPECT_EQ(after[i], 0.0f) << i; // retired and refilled
+    // The window outputs were consumed by the refine.
+    EXPECT_FALSE(refining->_exchange_window_impact_sum.is_valid());
+    EXPECT_FALSE(refining->_exchange_impact_written);
+}
+
+// The retire impact memory folds each window as a faded maximum (half-life one pass, the donor impact memory's),
+// also before the cap; it follows its splats and is dropped at the topology freeze. Need-guided donors ranked
+// by blend weight read the same window buffers but keep their blend-weight memory exactly.
+TEST(MRNFStrategyTest, RetireRankBothFoldsTheWindowImpactApartFromTheDonors) {
+    const std::vector<float> sum1{4.0f, 1.0f, 2.0f, 8.0f, 0.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> peak1{0.4f, 0.9f, 0.1f, 0.2f, 0.0f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f};
+    const std::vector<float> sum2{1.0f, 2.0f, 2.0f, 0.0f, 5.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    const std::vector<float> peak2{0.1f, 0.2f, 0.5f, 0.0f, 0.6f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f};
+    const std::vector<float> blend{5.0f, 1.0f, 2.0f, 7.0f, 3.0f, 4.0f, 4.0f, 4.0f, 4.0f, 4.0f};
+    constexpr size_t n = 10;
+
+    const auto run = [&](const bool both) {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto strategy = std::make_unique<MRNF>(data);
+        auto params = need_growth_test_params(32); // below the cap: no quota, the memory still folds
+        params.refine_every = 1;
+        params.mrnf_retire_share = 0.05f;
+        params.mrnf_retire_rank = both ? param::MrnfRetireRank::Both : param::MrnfRetireRank::Peak;
+        strategy->initialize(params);
+        strategy->set_training_dataset(make_hull_dataset());
+        EXPECT_FALSE(strategy->exchange_ranks_by_impact());
+        EXPECT_EQ(strategy->impact_scratch(100).first.is_valid(), both);
+        for (const bool second : {false, true}) {
+            if (both)
+                write_impact_window(*strategy, second ? sum2 : sum1, second ? peak2 : peak1);
+            auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+            EXPECT_EQ(strategy->mark_retirees(100, prune), 0u);
+            strategy->visibility_accumulator().copy_(Tensor::from_vector(blend, TensorShape({n}), Device::CUDA));
+            strategy->update_exchange_importance();
+            EXPECT_FALSE(strategy->_exchange_window_impact_sum.is_valid());
+            EXPECT_FALSE(strategy->_exchange_impact_written);
+        }
+        return strategy;
+    };
+    const auto both = run(true);
+    const auto peak_only = run(false);
+    // The donors' memory is the blend weight in both runs.
+    EXPECT_EQ(both->_exchange_importance_sum.cpu().to_vector(), peak_only->_exchange_importance_sum.cpu().to_vector());
+    EXPECT_FALSE(both->_exchange_importance_peak.is_valid());
+    EXPECT_EQ(both->_retire_impact_windows, 2);
+    const float decay = std::pow(0.5f, 1.0f / 2.0f); // refine every step, two views
+    const auto sum = both->_retire_impact_sum.cpu().to_vector();
+    const auto peak = both->_retire_impact_peak.cpu().to_vector();
+    for (size_t i = 0; i < n; ++i) {
+        EXPECT_FLOAT_EQ(sum[i], std::fmax(sum2[i], decay * sum1[i])) << i;
+        EXPECT_FLOAT_EQ(peak[i], std::fmax(peak2[i], decay * peak1[i])) << i;
+    }
+
+    // Rows follow their splats: a freed slot restarts at 0, removal compacts, the freeze drops them.
+    both->soft_delete_rows(row_range(2, 3));
+    EXPECT_EQ(both->_retire_impact_sum.cpu().to_vector()[2], 0.0f);
+    EXPECT_EQ(both->_retire_impact_peak.cpu().to_vector()[2], 0.0f);
+    std::vector<bool> drop(n, false);
+    drop[0] = true;
+    both->remove_gaussians(Tensor::from_vector(drop, TensorShape({n}), Device::CUDA));
+    ASSERT_EQ(both->_retire_impact_sum.numel(), n - 1);
+    EXPECT_FLOAT_EQ(both->_retire_impact_sum.cpu().to_vector()[0], sum[1]);
+    RenderOutput output;
+    both->post_backward(static_cast<int>(both->_params->stop_refine), output);
+    EXPECT_FALSE(both->retire_rank_both_on());
+    both->explore_scratch(static_cast<int>(both->_params->stop_refine) + 1);
+    EXPECT_FALSE(both->_retire_impact_sum.is_valid());
+    EXPECT_FALSE(both->impact_scratch(static_cast<int>(both->_params->stop_refine) + 1).first.is_valid());
+}
+
+// The real backward divides each pixel's removal impact by (photo deviation + eps): a zero map with eps 1 leaves
+// the impact bit for bit, a constant deviation scales it by 1 / (sigma + eps), and a map that is flat where the
+// front splat lies keeps its impact while a textured one shrinks it.
+TEST(MRNFStrategyTest, ImpactContrastNormDividesByThePhotoDeviation) {
+    constexpr int width = 64, height = 48;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    const auto run = [&](const std::vector<float>& sigma, const float eps) {
+        auto R = Tensor::eye(3, Device::CUDA);
+        auto T = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 4.0f}, TensorShape({3}), Device::CUDA);
+        Camera camera(R, T, 60.0f, 60.0f, width / 2.0f, height / 2.0f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                      "impact", "", std::filesystem::path{}, width, height, 0);
+        auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+        const std::vector<float> means{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f};
+        const std::vector<float> rotations{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+        const std::vector<float> opacities{std::log(0.95f / 0.05f), std::log(0.8f / 0.2f)};
+        const std::vector<float> sh0{0.4f / sh_c0, -0.4f / sh_c0, 0.0f, 0.0f, 0.0f, 0.0f};
+        SplatData splat_data(0, Tensor::from_vector(means, TensorShape({2, 3}), Device::CUDA),
+                             Tensor::from_vector(sh0, TensorShape({2, 1, 3}), Device::CUDA),
+                             Tensor::zeros({2, 0, 3}, Device::CUDA), Tensor::full({2, 3}, -1.6f, Device::CUDA),
+                             Tensor::from_vector(rotations, TensorShape({2, 4}), Device::CUDA),
+                             Tensor::from_vector(opacities, TensorShape({2, 1}), Device::CUDA), 1.0f);
+        MRNF strategy(splat_data);
+        strategy.initialize(donor_impact_test_params(true));
+        auto [impact_sum, impact_peak] = strategy.impact_scratch(100);
+        EXPECT_TRUE(impact_sum.is_valid());
+        auto forward = fast_rasterize_forward(camera, splat_data, bg, 0, 0, 0, 0, false);
+        EXPECT_TRUE(forward.has_value());
+        strategy.get_optimizer().zero_grad(0);
+        FastGSFusedExtraGradients fused;
+        fused.impact_sum_out = impact_sum.ptr<float>();
+        fused.impact_peak_out = impact_peak.ptr<float>();
+        Tensor sigma_map;
+        if (!sigma.empty()) {
+            sigma_map = Tensor::from_vector(sigma, TensorShape({static_cast<size_t>(height), static_cast<size_t>(width)}),
+                                            Device::CUDA);
+            fused.impact_photo_sigma = sigma_map.ptr<float>();
+            fused.impact_contrast_eps = eps;
+        }
+        fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image), splat_data,
+                                strategy.get_optimizer(), {}, {}, DensificationType::None, 1, fused);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return std::pair{impact_sum.cpu().to_vector(), impact_peak.cpu().to_vector()};
+    };
+    const size_t pixels = static_cast<size_t>(width) * height;
+    const auto [sum, peak] = run({}, 0.01f);
+    ASSERT_GT(sum[0], 1.0f);
+
+    const auto [unit_sum, unit_peak] = run(std::vector<float>(pixels, 0.0f), 1.0f);
+    EXPECT_EQ(unit_sum, sum);
+    EXPECT_EQ(unit_peak, peak);
+
+    const auto [scaled_sum, scaled_peak] = run(std::vector<float>(pixels, 0.24f), 0.01f);
+    EXPECT_NEAR(scaled_sum[0], sum[0] / 0.25f, 1e-4f * sum[0] / 0.25f);
+    EXPECT_NEAR(scaled_peak[0], peak[0] / 0.25f, 1e-4f * peak[0] / 0.25f);
+    EXPECT_NEAR(scaled_sum[1], 0.0f, 1e-3f);
+
+    // Flat (sigma 0) on the left half, textured (sigma 0.49) on the right: with eps 0.01 the left pixels count
+    // 100x, the right ones 2x, so the sum lies between and the pixel peak is the flat side's.
+    std::vector<float> halves(pixels, 0.49f);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width / 2; ++x)
+            halves[static_cast<size_t>(y) * width + x] = 0.0f;
+    const auto [half_sum, half_peak] = run(halves, 0.01f);
+    EXPECT_GT(half_sum[0], 2.0f * sum[0] * 1.01f);
+    EXPECT_LT(half_sum[0], 100.0f * sum[0] * 0.99f);
+    EXPECT_NEAR(half_peak[0], 100.0f * peak[0], 1e-3f * 100.0f * peak[0]);
+}
+
+// The receiver rule splits a receiver whose projected long axis was short in its last window along its second
+// axis: the second axis halves and carries the offset, the long and third axes take the cross scale. Off (0),
+// above the threshold, or below the cap, the split is today's.
+TEST(MRNFStrategyTest, ReceiverKeepLongSplitsShortReceiversAcross) {
+    // Kernel: flagged rows split across, the rest as before; no flags is today's split exactly.
+    {
+        const auto today = run_long_axis_split(0.7f, 1.0f);
+        const auto none = run_long_axis_split(0.7f, 1.0f, std::vector<bool>(64, false));
+        EXPECT_EQ(none.first_scales, today.first_scales);
+        EXPECT_EQ(none.second_means, today.second_means);
+        std::vector<bool> flags(64);
+        for (size_t i = 0; i < flags.size(); ++i)
+            flags[i] = i % 2 == 0;
+        const auto across = run_long_axis_split(0.7f, 1.0f, flags);
+        for (size_t row = 0; row < 64; ++row) {
+            SCOPED_TRACE(row);
+            const float* scale = across.scales.data() + 3 * row;
+            if (!flags[row]) {
+                for (int c = 0; c < 3; ++c)
+                    EXPECT_EQ(across.first_scales[3 * row + c], today.first_scales[3 * row + c]);
+                continue;
+            }
+            const int axis = static_cast<int>(row % 3); // the long axis of the fixture
+            int second = -1;
+            for (int c = 0; c < 3; ++c)
+                if (c != axis && (second < 0 || scale[c] > scale[second]))
+                    second = c;
+            const float* q = across.quats.data() + 4 * row;
+            const float w = q[0], x = q[1], y = q[2], z = q[3];
+            const float R[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+                                2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+                                2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)};
+            const float length = 0.5f * std::exp(scale[second]);
+            for (int c = 0; c < 3; ++c) {
+                EXPECT_NEAR(across.first_scales[3 * row + c], scale[c] + std::log(c == second ? 0.5f : 0.7f), 1e-5f);
+                EXPECT_EQ(across.second_scales[3 * row + c], across.first_scales[3 * row + c]);
+                const float offset = R[3 * c + second] * length;
+                EXPECT_NEAR(across.first_means[3 * row + c], across.means[3 * row + c] + offset, 1e-5f);
+                EXPECT_NEAR(across.second_means[3 * row + c], across.means[3 * row + c] - offset, 1e-5f);
+            }
+        }
+    }
+
+    // Strategy: two refills at the cap split two receivers; every splat's last major sigma is set first.
+    struct Run {
+        std::vector<float> scales;
+        std::vector<bool> free;
+        size_t across = 0;
+        bool rows = false;
+    };
+    const auto run_refill = [](const float keep_long, const float major, const size_t cap) {
+        constexpr size_t m = 200;
+        auto data = create_mrnf_test_splat_data(static_cast<int>(m));
+        MRNF strategy(data);
+        auto params = need_growth_test_params(static_cast<int>(cap));
+        params.receiver_keep_long = keep_long;
+        strategy.initialize(params);
+        Run run;
+        if (auto window = strategy.major_sigma_scratch(0); window.is_valid()) {
+            run.rows = true;
+            window.fill_(major);
+            strategy.close_keep_long_window();
+        }
+        std::vector<float> error(m, 1.0f), footprint(m, 0.01f);
+        set_need_window(data, strategy._refine_weight_max, strategy.visibility_accumulator(), error, footprint);
+        strategy.soft_delete_rows(row_range(m - 2, m));
+        const auto result = strategy.grow_and_split(0, 2, strategy.compute_refine_candidates(), 0);
+        EXPECT_EQ(result.receiver_splits > 0, cap == m);
+        run.scales = data.scaling_raw().cpu().to_vector();
+        const auto free_cpu = strategy._free_mask.cpu();
+        for (size_t row = 0; row < m; ++row)
+            run.free.push_back(free_cpu.ptr<bool>()[row]);
+        run.across = strategy._last_split_across;
+        return run;
+    };
+    // The fixture's splats are round (all log scales 0), so the long axis is x and the second y.
+    const auto children_split_on = [](const Run& run, const int axis, const float cross) {
+        size_t children = 0;
+        for (size_t row = 0; row < run.free.size(); ++row) {
+            if (run.free[row] || (run.scales[3 * row] == 0.0f && run.scales[3 * row + 1] == 0.0f))
+                continue;
+            ++children;
+            for (int c = 0; c < 3; ++c)
+                EXPECT_NEAR(run.scales[3 * row + c], std::log(c == axis ? 0.5f : cross), 1e-6f) << row << " " << c;
+        }
+        return children;
+    };
+    const auto off = run_refill(0.0f, 1.0f, 200);
+    EXPECT_FALSE(off.rows);
+    EXPECT_EQ(children_split_on(off, 0, 0.7f), 4u);
+    EXPECT_EQ(off.across, 0u);
+
+    const auto short_major = run_refill(3.0f, 1.0f, 200);
+    EXPECT_TRUE(short_major.rows);
+    EXPECT_EQ(children_split_on(short_major, 1, 0.7f), 4u);
+    EXPECT_EQ(short_major.across, 2u);
+
+    const auto long_major = run_refill(3.0f, 3.0f, 200); // not below the threshold
+    EXPECT_EQ(children_split_on(long_major, 0, 0.7f), 4u);
+    EXPECT_EQ(long_major.across, 0u);
+
+    const auto below_cap = run_refill(3.0f, 1.0f, 400); // no receivers: today's refill split
+    EXPECT_EQ(below_cap.across, 0u);
+    for (size_t row = 0; row < below_cap.free.size(); ++row)
+        if (!below_cap.free[row] && below_cap.scales[3 * row] != 0.0f)
+            EXPECT_NEAR(below_cap.scales[3 * row], std::log(0.5f), 1e-6f) << row;
+}
+
+// The major sigma window starts at 0 (undrawn) and is what the backward raises; a refine closes it (drawn rows
+// take its maximum, the others keep their last value, +inf before any) and restarts it. Freed slots and new
+// rows start undrawn; the rows follow their splats and are dropped at the topology freeze. The real backward
+// writes the raw projected major sigma and keeps the maximum.
+TEST(MRNFStrategyTest, ReceiverKeepLongWindowFollowsRendersAndSplats) {
+    constexpr size_t n = 4;
+    {
+        auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        MRNF strategy(splat_data);
+        auto params = need_growth_test_params(32);
+        params.receiver_keep_long = 3.0f;
+        strategy.initialize(params);
+        ASSERT_TRUE(strategy.keep_long_on());
+        auto window = strategy.major_sigma_scratch(100);
+        ASSERT_TRUE(window.is_valid());
+        EXPECT_EQ(window.ptr<float>(), strategy._keep_long_window_major.ptr<float>());
+        EXPECT_EQ(window.cpu().to_vector(), std::vector<float>(n, 0.0f));
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector(), std::vector<float>(n, kInf));
+
+        window.copy_(Tensor::from_vector(std::vector<float>{2.0f, 0.0f, 5.0f, 1.0f}, TensorShape({n}), Device::CUDA));
+        strategy.close_keep_long_window();
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector(), (std::vector<float>{2.0f, kInf, 5.0f, 1.0f}));
+        EXPECT_EQ(strategy._keep_long_window_major.cpu().to_vector(), std::vector<float>(n, 0.0f));
+        EXPECT_EQ(strategy.keep_long_split_across().to(DataType::Float32).cpu().to_vector(),
+                  (std::vector<float>{1.0f, 0.0f, 0.0f, 1.0f}));
+        strategy.major_sigma_scratch(200).copy_(
+            Tensor::from_vector(std::vector<float>{0.0f, 4.0f, 2.5f, 0.0f}, TensorShape({n}), Device::CUDA));
+        strategy.close_keep_long_window();
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector(), (std::vector<float>{2.0f, 4.0f, 2.5f, 1.0f}));
+
+        strategy.soft_delete_rows(row_range(2, 3));
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector()[2], kInf);
+        const auto mask = Tensor::from_vector(std::vector<bool>{true, false, false, false}, TensorShape({n}), Device::CUDA);
+        strategy.remove_gaussians(mask);
+        ASSERT_EQ(splat_data.size(), 3u);
+        strategy.ensure_explore_rows();
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector(), (std::vector<float>{4.0f, kInf, 1.0f}));
+        strategy._keep_long_major = strategy._keep_long_major.slice(0, 0, 2).contiguous();
+        strategy.ensure_explore_rows();
+        EXPECT_EQ(strategy._keep_long_major.cpu().to_vector(), (std::vector<float>{4.0f, kInf, kInf}));
+
+        RenderOutput output;
+        strategy.post_backward(static_cast<int>(params.stop_refine), output);
+        EXPECT_FALSE(strategy.keep_long_on());
+        EXPECT_FALSE(strategy.major_sigma_scratch(static_cast<int>(params.stop_refine) + 1).is_valid());
+        strategy.explore_scratch(static_cast<int>(params.stop_refine) + 1);
+        EXPECT_FALSE(strategy._keep_long_window_major.is_valid());
+        EXPECT_FALSE(strategy._keep_long_major.is_valid());
+    }
+
+    // Real backward: the larger eigenvalue of the undilated 2D covariance, focal x scale / depth on the axis.
+    constexpr int width = 64, height = 48;
+    constexpr float focal = 60.0f;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    auto R = Tensor::eye(3, Device::CUDA);
+    auto T = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 4.0f}, TensorShape({3}), Device::CUDA);
+    Camera camera(R, T, focal, focal, width / 2.0f, height / 2.0f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "keep_long", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+    const std::vector<float> means{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 3.0f, 0.0f, 0.0f};
+    const std::vector<float> rotations{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    // 0: long in x (major 3.70 px), thin in y; 1: round behind it (2.69 px); 2: outside the view.
+    const std::vector<float> log_scales{-1.4f, -3.0f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f};
+    const std::vector<float> opacities{raw_of(0.95f), raw_of(0.8f), raw_of(0.8f)};
+    const std::vector<float> sh0{0.4f / sh_c0, -0.4f / sh_c0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    SplatData splat_data(0, Tensor::from_vector(means, TensorShape({3, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({3, 1, 3}), Device::CUDA),
+                         Tensor::zeros({3, 0, 3}, Device::CUDA),
+                         Tensor::from_vector(log_scales, TensorShape({3, 3}), Device::CUDA),
+                         Tensor::from_vector(rotations, TensorShape({3, 4}), Device::CUDA),
+                         Tensor::from_vector(opacities, TensorShape({3, 1}), Device::CUDA), 1.0f);
+    MRNF strategy(splat_data);
+    auto params = need_growth_test_params(3);
+    params.receiver_keep_long = 3.0f;
+    strategy.initialize(params);
+    auto window = strategy.major_sigma_scratch(100);
+    ASSERT_TRUE(window.is_valid());
+    const auto backward = [&] {
+        auto forward = fast_rasterize_forward(camera, splat_data, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+        strategy.get_optimizer().zero_grad(0);
+        FastGSFusedExtraGradients fused;
+        fused.explore_major_sigma = window.ptr<float>();
+        fast_rasterize_backward(forward->second, Tensor::full_like(forward->first.image, 0.01f), splat_data,
+                                strategy.get_optimizer(), {}, {}, DensificationType::None, 1, fused);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    };
+    const auto start_scales = splat_data.scaling_raw().cpu().to_vector();
+    backward();
+    const auto major = window.cpu().to_vector();
+    EXPECT_NEAR(major[0], focal * std::exp(start_scales[0]) / 4.0f, 1e-3f);
+    EXPECT_NEAR(major[1], focal * std::exp(start_scales[3]) / 4.5f, 1e-3f);
+    EXPECT_EQ(major[2], 0.0f); // not drawn
+    window.copy_(Tensor::from_vector(std::vector<float>{9.0f, 0.1f, 0.0f}, TensorShape({3}), Device::CUDA));
+    const auto scales_before = splat_data.scaling_raw().cpu().to_vector();
+    backward();
+    const auto raised = window.cpu().to_vector();
+    EXPECT_EQ(raised[0], 9.0f);
+    EXPECT_NEAR(raised[1], focal * std::exp(scales_before[3]) / 4.5f, 1e-3f);
 }

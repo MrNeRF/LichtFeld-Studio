@@ -387,6 +387,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                     float* const row = fused_adam.explore_minor_sigma + primitive_idx;
                     *row = fminf(*row, sqrtf(fmaxf(minor_variance, 0.0f)));
                 }
+                if (fused_adam.explore_major_sigma != nullptr) {
+                    // Larger eigenvalue of the raw (undilated) 2D covariance.
+                    const float half_gap = 0.5f * (raw_a - raw_c);
+                    const float major_variance = 0.5f * (raw_a + raw_c) + sqrtf(half_gap * half_gap + raw_b * raw_b);
+                    float* const row = fused_adam.explore_major_sigma + primitive_idx;
+                    *row = fmaxf(*row, sqrtf(fmaxf(major_variance, 0.0f)));
+                }
             }
             const float a = raw_a + kernel_size, b = raw_b, c = raw_c + kernel_size;
             const float aa = a * a, bb = b * b, cc = c * c;
@@ -779,6 +786,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* __restrict__ impact_sum_out,
         float* __restrict__ impact_peak_out,
         float* __restrict__ blend_peak_out,
+        const float* __restrict__ impact_photo_sigma,
+        const float impact_contrast_eps,
         uint* __restrict__ primitive_touched,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
@@ -832,7 +841,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         // Reverse-walk state of the thread's two pixels (rows y0 and y0 + 1).
         bool inside[2];
         uint pixel_idx[2], last[2];
-        float T[2], grad_T[2], grad_d[2], pixel_error[2], edge_weight[2], variance_scale[2];
+        float T[2], grad_T[2], grad_d[2], pixel_error[2], edge_weight[2], variance_scale[2], impact_scale[2];
         float3 grad_c[2], grad_n[2], behind[2], target[2];
 #pragma unroll
         for (int k = 0; k < 2; ++k) {
@@ -857,8 +866,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                 }
             }
             behind[k] = make_float3(0.0f);
-            if constexpr (IMPACT_SCORE)
+            impact_scale[k] = 1.0f;
+            if constexpr (IMPACT_SCORE) {
                 behind[k] = inside[k] ? background_color_at(background_grad, pixel_idx[k], n_pixels) : make_float3(0.0f);
+                // Contrast normalisation: the colour change counts relative to the photo's local contrast.
+                if (impact_photo_sigma != nullptr && inside[k])
+                    impact_scale[k] = 1.0f / (impact_photo_sigma[pixel_idx[k]] + impact_contrast_eps);
+            }
             pixel_error[k] = 1.0f;
             if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
                 pixel_error[k] = inside[k] ? densification_error_map[pixel_idx[k]] : 1.0f;
@@ -1071,9 +1085,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                 }
                 sums.u[kUEdge] += w * edge_weight[k];
                 if constexpr (IMPACT_SCORE) {
-                    const float removal_impact = w * (fabsf(color.x - behind[k].x) +
-                                                      fabsf(color.y - behind[k].y) +
-                                                      fabsf(color.z - behind[k].z));
+                    // impact_scale is exactly 1 without the contrast normalisation.
+                    const float removal_impact = w * ((fabsf(color.x - behind[k].x) +
+                                                       fabsf(color.y - behind[k].y) +
+                                                       fabsf(color.z - behind[k].z)) *
+                                                      impact_scale[k]);
                     sums.u[kUImpact] += removal_impact;
                     sums.peak = fmaxf(sums.peak, removal_impact);
                     behind[k] = accepted ? alpha * color + (1.0f - alpha) * behind[k] : behind[k];

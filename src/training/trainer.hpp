@@ -1045,6 +1045,8 @@ namespace lfs::training {
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
+        // Photo local standard deviation for the contrast-normalised removal impact when the loss wrote none.
+        core::Tensor impact_photo_sigma_map_;
 
         // Reusable buffer for Sobel edge map (lfs edge-importance densification)
         core::Tensor edge_map_buffer_;

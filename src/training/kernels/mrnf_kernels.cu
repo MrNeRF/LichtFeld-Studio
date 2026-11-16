@@ -245,8 +245,21 @@ namespace lfs::training::mrnf_strategy {
         const size_t count,
         int64_t* rows,
         void* stream) {
+        const float* keys[2] = {primary, secondary};
+        launch_rank_rows_latest(keys, secondary != nullptr ? 2 : 1, eligible, N, count, rows, stream);
+    }
+
+    void launch_rank_rows_latest(
+        const float* const* keys,
+        const size_t n_keys,
+        const bool* eligible,
+        const size_t N,
+        const size_t count,
+        int64_t* rows,
+        void* stream) {
         if (N == 0 || count == 0)
             return;
+        LFS_ASSERT_MSG(n_keys > 0 && keys[0] != nullptr, "MRNF rank needs at least one key");
         LFS_ASSERT_MSG(N <= static_cast<size_t>(INT_MAX) && count <= N,
                        "MRNF growth exchange exceeds int32 rank capacity");
         constexpr int threads = 256;
@@ -281,9 +294,10 @@ namespace lfs::training::mrnf_strategy {
             exchange_positions_kernel<<<blocks, threads, 0, s>>>(sort(32), ranks.ptr<int32_t>(), first, N);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.exchange_positions");
         };
-        rank_by(primary, true);
-        if (secondary != nullptr)
-            rank_by(secondary, false);
+        for (size_t k = 0; k < n_keys; ++k) {
+            LFS_ASSERT_MSG(keys[k] != nullptr, "MRNF rank key is null");
+            rank_by(keys[k], k == 0);
+        }
 
         exchange_rank_keys_kernel<<<blocks, threads, 0, s>>>(
             ranks.ptr<int32_t>(), eligible, u32(keys_a), u32(rows_a), N);

@@ -154,6 +154,32 @@ namespace lfs::core {
             return std::nullopt;
         }
 
+        // How MRNF ranks the retire candidates: by peak blend weight alone, or by the larger of the
+        // percentiles in peak blend weight and in removal impact.
+        enum class MrnfRetireRank {
+            Peak,
+            Both,
+        };
+
+        [[nodiscard]] inline constexpr std::string_view mrnf_retire_rank_name(const MrnfRetireRank rank) noexcept {
+            switch (rank) {
+            case MrnfRetireRank::Peak:
+                return "peak";
+            case MrnfRetireRank::Both:
+                return "both";
+            }
+            return "peak";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<MrnfRetireRank> mrnf_retire_rank_from_string(
+            const std::string_view value) noexcept {
+            if (value == "peak")
+                return MrnfRetireRank::Peak;
+            if (value == "both")
+                return MrnfRetireRank::Both;
+            return std::nullopt;
+        }
+
         enum class NormalLossSpace {
             Auto,
             CameraOpenCV,
@@ -465,6 +491,20 @@ namespace lfs::core {
             // over their renders in the last refine window that drew them, is below this many pixels are exempt
             // from the retire quota; the quota is taken from the other splats. 0: off.
             float mrnf_retire_spare_px = 0.0f;
+            // Retire ranking: Peak takes the lowest peak blend weight; Both ranks each candidate by the larger of
+            // its percentiles in peak blend weight and in removal impact (the donor impact memory: the later of
+            // the ranks by summed and by pixel-peak impact) and retires the lowest.
+            MrnfRetireRank mrnf_retire_rank = MrnfRetireRank::Peak;
+            // Removal impact (donor ranking by impact, retire ranking Both) divides each pixel's
+            // weight x |colour - colour behind| by the photo's local standard deviation (the SSIM window,
+            // mean over channels) plus impact_contrast_eps, so a splat counts by the structure it carries
+            // relative to the photo's local contrast.
+            bool impact_contrast_norm = false;
+            float impact_contrast_eps = 0.01f;
+            // Need-guided receiver split: a receiver whose raw projected major-axis standard deviation (largest
+            // over the renders of the last refine window that drew it) is below this many pixels halves its
+            // second axis instead of its long one. 0: off.
+            float receiver_keep_long = 0.0f;
             [[nodiscard]] bool refine_error_compress_active() const {
                 return refine_error_compress || mrnf_loss_error_map;
             }

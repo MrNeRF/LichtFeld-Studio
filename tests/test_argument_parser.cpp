@@ -1868,12 +1868,17 @@ TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
     };
 
     const auto on = parse({"--ssim-blur-tolerant", "--mrnf-loss-error-map", "--mrnf-retire-share", "0.015",
-                           "--mrnf-retire-grace", "12", "--mrnf-retire-spare-px", "1.25"});
+                           "--mrnf-retire-grace", "12", "--mrnf-retire-spare-px", "1.25", "--mrnf-retire-rank", "both",
+                           "--impact-contrast-norm", "--receiver-keep-long", "3"});
     ASSERT_TRUE(on.has_value()) << on.error();
     EXPECT_TRUE((*on)->optimization.mrnf_loss_error_map);
     EXPECT_FLOAT_EQ((*on)->optimization.mrnf_retire_share, 0.015f);
     EXPECT_EQ((*on)->optimization.mrnf_retire_grace, 12);
     EXPECT_FLOAT_EQ((*on)->optimization.mrnf_retire_spare_px, 1.25f);
+    EXPECT_EQ((*on)->optimization.mrnf_retire_rank, lfs::core::param::MrnfRetireRank::Both);
+    EXPECT_TRUE((*on)->optimization.impact_contrast_norm);
+    EXPECT_FLOAT_EQ((*on)->optimization.impact_contrast_eps, 0.01f);
+    EXPECT_FLOAT_EQ((*on)->optimization.receiver_keep_long, 3.0f);
 
     const auto off = parse({});
     ASSERT_TRUE(off.has_value()) << off.error();
@@ -1881,12 +1886,18 @@ TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
     EXPECT_EQ((*off)->optimization.mrnf_retire_share, 0.0f);
     EXPECT_EQ((*off)->optimization.mrnf_retire_grace, 30);
     EXPECT_EQ((*off)->optimization.mrnf_retire_spare_px, 0.0f);
+    EXPECT_EQ((*off)->optimization.mrnf_retire_rank, lfs::core::param::MrnfRetireRank::Peak);
+    EXPECT_FALSE((*off)->optimization.impact_contrast_norm);
+    EXPECT_EQ((*off)->optimization.receiver_keep_long, 0.0f);
+    EXPECT_FALSE(parse({"--mrnf-retire-rank", "impact"}).has_value());
 
     for (const auto& [args, field] :
          {std::pair{std::vector<const char*>{"--mrnf-retire-share", "-0.1"}, "mrnf_retire_share"},
           std::pair{std::vector<const char*>{"--mrnf-retire-share", "1"}, "mrnf_retire_share"},
           std::pair{std::vector<const char*>{"--mrnf-retire-grace", "-1"}, "mrnf_retire_grace"},
           std::pair{std::vector<const char*>{"--mrnf-retire-spare-px", "-0.5"}, "mrnf_retire_spare_px"},
+          std::pair{std::vector<const char*>{"--receiver-keep-long", "-1"}, "receiver_keep_long"},
+          std::pair{std::vector<const char*>{"--receiver-keep-long", "2", "--gut"}, "receiver_keep_long"},
           std::pair{std::vector<const char*>{"--mrnf-retire-share", "0.01", "--gut"}, "mrnf_retire_share"},
           std::pair{std::vector<const char*>{"--mrnf-loss-error-map"}, "mrnf_loss_error_map"}}) {
         const auto bad = parse(args);

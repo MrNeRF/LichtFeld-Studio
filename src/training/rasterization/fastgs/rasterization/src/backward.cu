@@ -139,6 +139,8 @@ void fast_lfs::rasterization::backward(
                         impact_sum_out,
                         impact_peak_out,
                         fused_adam.explore_blend_peak,
+                        fused_adam.impact_photo_sigma,
+                        fused_adam.impact_contrast_eps,
                         primitive_touched,
                         fastgs_status,
                         static_cast<uint>(n_instances),
@@ -263,6 +265,7 @@ void fast_lfs::rasterization::backward(
                                        fused_adam.rendered_count == nullptr &&
                                        fused_adam.explore_rendered == nullptr &&
                                        fused_adam.explore_minor_sigma == nullptr &&
+                                       fused_adam.explore_major_sigma == nullptr &&
                                        fused_adam.view_radius_out == nullptr &&
                                        !fused_adam.angular_mean_step &&
                                        fused_adam.screen_hinge_weight <= 0.0f &&
