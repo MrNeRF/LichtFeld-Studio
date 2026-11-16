@@ -6746,6 +6746,7 @@ namespace lfs::training {
                 }
                 lfs::core::Tensor explore_rendered_rows;
                 lfs::core::Tensor explore_peak_rows;
+                lfs::core::Tensor explore_minor_sigma_rows;
                 if (fastgs_path && !in_popspa) {
                     auto explore = strategy_->explore_scratch(iter);
                     const auto rows = static_cast<size_t>(strategy_->get_model().size());
@@ -6759,6 +6760,10 @@ namespace lfs::training {
                     if (usable(explore.second)) {
                         explore_peak_rows = std::move(explore.second);
                         fused_extra_gradients.explore_blend_peak = explore_peak_rows.ptr<float>();
+                    }
+                    if (auto sigma = strategy_->minor_sigma_scratch(iter); usable(sigma)) {
+                        explore_minor_sigma_rows = std::move(sigma);
+                        fused_extra_gradients.explore_minor_sigma = explore_minor_sigma_rows.ptr<float>();
                     }
                 }
                 lfs::core::Tensor view_radius_rows;

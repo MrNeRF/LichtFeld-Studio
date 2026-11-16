@@ -100,6 +100,11 @@ namespace lfs::training {
         virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int /*iter*/) {
             return {};
         }
+        // Optional FastGS [N] row the backward lowers to each contributing splat's projected minor-axis
+        // standard deviation in pixels (before the 2D dilation). Empty when not in use.
+        virtual lfs::core::Tensor minor_sigma_scratch(int /*iter*/) {
+            return {};
+        }
 
         // Optional FastGS geometry-step settings of the match strategy: view_radius is an [N] row the
         // backward fills with each splat's angular radius in the view (0 when culled); the rest switch the

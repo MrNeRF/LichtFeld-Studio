@@ -973,7 +973,7 @@ namespace lfs::training {
                            &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_exchange_view_count,
                            &_exchange_window_views, &_exchange_window_coverage, &_far_field_mask,
                            &_ray_depth_state, &_explore_rendered, &_explore_peak, &_explore_scout_renders,
-                           &_retire_step_peak, &_retire_renders}) {
+                           &_retire_step_peak, &_retire_renders, &_spare_window_sigma, &_spare_sigma}) {
             visit(*rows);
         }
     }
@@ -1169,6 +1169,11 @@ namespace lfs::training {
             if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
                 rows->index_put_(indices, Tensor::zeros({static_cast<size_t>(indices.numel())}, rows->device()));
         }
+        for (auto* rows : {&_spare_window_sigma, &_spare_sigma}) {
+            if (rows->is_valid() && rows->numel() == static_cast<size_t>(_splat_data->size()))
+                rows->index_put_(indices, Tensor::full({static_cast<size_t>(indices.numel())},
+                                                       std::numeric_limits<float>::infinity(), rows->device()));
+        }
 
         // Zero quaternion so deleted rows exit early in preprocessing.
         auto zero_rotation = Tensor::zeros({static_cast<size_t>(indices.numel()), 4}, _splat_data->rotation_raw().device());
@@ -1312,6 +1317,10 @@ namespace lfs::training {
         }
         if (retire_on()) {
             explore += std::format(", retired {} (of pruned)", _last_retired);
+        }
+        if (spare_on()) {
+            explore += std::format(", spared {} thin (minor sigma < {:.3g} px)", _last_spared,
+                                   _params->mrnf_retire_spare_px);
         }
         if (need) {
             LOG_INFO("{}{}", line, explore);
@@ -1578,7 +1587,12 @@ namespace lfs::training {
         const size_t natural = prune_mask.count_nonzero();
         const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
         ensure_explore_rows();
-        if (count == 0 || n == 0 || _explore_peak.numel() != n || _retire_renders.numel() != n) {
+        _last_spared = 0;
+        const bool spare = spare_on() && _spare_sigma.numel() == n && _spare_window_sigma.numel() == n;
+        if (spare) {
+            close_spare_window();
+        }
+        if ((count == 0 && !spare) || n == 0 || _explore_peak.numel() != n || _retire_renders.numel() != n) {
             return 0;
         }
         // Rows that cannot retire: already pruned, free or frozen.
@@ -1590,6 +1604,15 @@ namespace lfs::training {
             blocked = blocked.logical_or(trainable.logical_not());
         }
         blocked = blocked.contiguous();
+        if (spare) {
+            // Thin splats are exempt; the quota (counted on all live splats) is taken from the others.
+            const Tensor spared = (_spare_sigma < _params->mrnf_retire_spare_px).logical_and(blocked.logical_not());
+            _last_spared = spared.count_nonzero();
+            if (count == 0) {
+                return 0;
+            }
+            blocked = blocked.logical_or(spared).contiguous();
+        }
         Tensor dead = blocked.to(DataType::UInt8).contiguous();
         const size_t marked = match::mark_lowest_dead(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
                                                       static_cast<float>(_params->mrnf_retire_grace),
@@ -1598,6 +1621,26 @@ namespace lfs::training {
             prune_mask = prune_mask.logical_or(dead.to(DataType::Bool).logical_and(blocked.logical_not())).contiguous();
         }
         return marked;
+    }
+
+    bool MRNF::spare_on() const {
+        return retire_on() && _params->mrnf_retire_spare_px > 0.0f;
+    }
+
+    void MRNF::close_spare_window() {
+        using namespace lfs::core;
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        const Tensor drawn = _spare_window_sigma < inf;
+        _spare_sigma = Tensor::where(drawn, _spare_window_sigma, _spare_sigma).contiguous();
+        _spare_window_sigma.fill_(inf);
+    }
+
+    lfs::core::Tensor MRNF::minor_sigma_scratch(const int /*iter*/) {
+        if (!_params || !_splat_data || _splat_data->size() == 0 || !spare_on()) {
+            return {};
+        }
+        ensure_explore_rows();
+        return _spare_window_sigma;
     }
 
     void MRNF::ensure_explore_rows() {
@@ -1622,6 +1665,23 @@ namespace lfs::training {
         size_row(_explore_scout_renders, scouts);
         size_row(_retire_step_peak, retire);
         size_row(_retire_renders, retire);
+        // The minor sigma rows start at +inf: not drawn, so not thin.
+        const auto size_inf_row = [&](Tensor& row, const bool wanted) {
+            constexpr float inf = std::numeric_limits<float>::infinity();
+            if (!wanted) {
+                row = Tensor();
+                return;
+            }
+            const Device device = _splat_data->means().device();
+            if (!row.is_valid() || row.ndim() != 1 || row.numel() > n) {
+                row = Tensor::full({n}, inf, device);
+            } else if (const size_t rows = row.numel(); rows < n) {
+                row = Tensor::cat(std::vector<Tensor>{row, Tensor::full({n - rows}, inf, row.device())}, 0);
+            }
+        };
+        const bool spare = spare_on();
+        size_inf_row(_spare_window_sigma, spare);
+        size_inf_row(_spare_sigma, spare);
     }
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> MRNF::explore_scratch(const int /*iter*/) {
@@ -2588,7 +2648,7 @@ namespace lfs::training {
         if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
             compact(_rendered_count);
         for (auto* rows : {&_explore_rendered, &_explore_peak, &_explore_scout_renders, &_retire_step_peak,
-                           &_retire_renders}) {
+                           &_retire_renders, &_spare_window_sigma, &_spare_sigma}) {
             if (rows->is_valid() && rows->numel() == old_size)
                 compact(*rows);
             else
@@ -3515,6 +3575,8 @@ namespace lfs::training {
         _explore_scout_renders = lfs::core::Tensor();
         _retire_step_peak = lfs::core::Tensor();
         _retire_renders = lfs::core::Tensor();
+        _spare_window_sigma = lfs::core::Tensor();
+        _spare_sigma = lfs::core::Tensor();
         _retire_first_iter = -1;
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);

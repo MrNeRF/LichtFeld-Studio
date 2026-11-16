@@ -146,6 +146,8 @@ namespace lfs::training {
         // Optional [N] exploration rows (see FusedAdamSettings): visible-view count and peak blend weight.
         float* explore_rendered = nullptr;
         float* explore_blend_peak = nullptr;
+        // Optional [N] row: min with each contributing splat's raw projected minor-axis sigma (pixels).
+        float* explore_minor_sigma = nullptr;
         // Match strategy geometry step (fused_adam_types.h FusedAdamSettings).
         float* view_radius_out = nullptr;
         bool angular_mean_step = false;

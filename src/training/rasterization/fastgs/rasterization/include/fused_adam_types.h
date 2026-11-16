@@ -67,6 +67,9 @@ namespace fast_lfs::rasterization {
         // alpha * T over its pixels (blend backward, atomic max).
         float* explore_rendered = nullptr;
         float* explore_blend_peak = nullptr;
+        // Optional [N] row (MRNF retirement): lowered to the splat's projected minor-axis standard deviation in
+        // pixels, before the 2D dilation, for every splat that contributed to the view (preprocess backward).
+        float* explore_minor_sigma = nullptr;
         // Optional [N] row (match strategy): each splat's angular radius in this view, rho / (max(d, rho) +
         // sqrt(max(d^2 - rho^2, 0))) with rho = max scale x sqrt(2 ln(255 opacity)) and d its camera
         // distance; 0 when culled. Written for every row.

@@ -1059,6 +1059,8 @@ namespace lfs::core {
                 return std::format("mrnf_retire_share must be finite and within [0, 1) (got {})", mrnf_retire_share);
             if (mrnf_retire_grace < 0)
                 return std::format("mrnf_retire_grace must not be negative (got {})", mrnf_retire_grace);
+            if (!std::isfinite(mrnf_retire_spare_px) || mrnf_retire_spare_px < 0.0f)
+                return std::format("mrnf_retire_spare_px must be finite and not negative (got {})", mrnf_retire_spare_px);
             if (is_mrnf_strategy(strategy) && mrnf_retire_share > 0.0f && gut)
                 return "mrnf_retire_share needs the FastGS training renderer (GUT is not supported)";
             if (is_mrnf_strategy(strategy) && mrnf_loss_error_map && !ssim_blur_tolerant && !loss_pyramid)

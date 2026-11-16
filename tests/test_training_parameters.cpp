@@ -156,6 +156,7 @@ namespace {
             {"mrnf_loss_error_map", {"mrnf"}},
             {"mrnf_retire_share", {"mrnf"}},
             {"mrnf_retire_grace", {"mrnf"}},
+            {"mrnf_retire_spare_px", {"mrnf"}},
             {"per_splat_bias_correction", {"mrnf"}},
             {"match_growth", {"match"}},
             {"match_split_budget", {"match"}},

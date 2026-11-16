@@ -107,6 +107,7 @@
   "mrnf_loss_error_map": false,
   "mrnf_retire_grace": 30,
   "mrnf_retire_share": 0.0,
+  "mrnf_retire_spare_px": 0.0,
   "need_guided_growth": false,
   "noise_infill_mesh": "",
   "normal_auto_generate": true,

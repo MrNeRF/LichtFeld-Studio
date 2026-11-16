@@ -262,6 +262,7 @@ void fast_lfs::rasterization::backward(
                                        fused_adam.ray_depth_state == nullptr &&
                                        fused_adam.rendered_count == nullptr &&
                                        fused_adam.explore_rendered == nullptr &&
+                                       fused_adam.explore_minor_sigma == nullptr &&
                                        fused_adam.view_radius_out == nullptr &&
                                        !fused_adam.angular_mean_step &&
                                        fused_adam.screen_hinge_weight <= 0.0f &&

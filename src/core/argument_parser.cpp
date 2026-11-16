@@ -72,6 +72,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--mrnf-loss-error-map", "mrnf_loss_error_map", Bool},
             OptimizationCliBinding{"--mrnf-retire-share", "mrnf_retire_share", Float},
             OptimizationCliBinding{"--mrnf-retire-grace", "mrnf_retire_grace", Integer},
+            OptimizationCliBinding{"--mrnf-retire-spare-px", "mrnf_retire_spare_px", Float},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
@@ -860,6 +861,7 @@ namespace {
             ::args::ValueFlag<float> receiver_cross_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--receiver-cross-scale"), {"receiver-cross-scale"});
             ::args::ValueFlag<float> mrnf_retire_share(training_group, "share", lfs::core::args::optimization_cli_help("--mrnf-retire-share"), {"mrnf-retire-share"});
             ::args::ValueFlag<int> mrnf_retire_grace(training_group, "renders", lfs::core::args::optimization_cli_help("--mrnf-retire-grace"), {"mrnf-retire-grace"});
+            ::args::ValueFlag<float> mrnf_retire_spare_px(training_group, "pixels", lfs::core::args::optimization_cli_help("--mrnf-retire-spare-px"), {"mrnf-retire-spare-px"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
@@ -1690,6 +1692,7 @@ namespace {
                                         receiver_cross_scale_val = cli_option_present({"--receiver-cross-scale"}) ? std::optional<float>(::args::get(receiver_cross_scale)) : std::optional<float>(),
                                         mrnf_retire_share_val = cli_option_present({"--mrnf-retire-share"}) ? std::optional<float>(::args::get(mrnf_retire_share)) : std::optional<float>(),
                                         mrnf_retire_grace_val = cli_option_present({"--mrnf-retire-grace"}) ? std::optional<int>(::args::get(mrnf_retire_grace)) : std::optional<int>(),
+                                        mrnf_retire_spare_px_val = cli_option_present({"--mrnf-retire-spare-px"}) ? std::optional<float>(::args::get(mrnf_retire_spare_px)) : std::optional<float>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
@@ -1889,6 +1892,7 @@ namespace {
                 setVal(receiver_cross_scale_val, opt.receiver_cross_scale);
                 setVal(mrnf_retire_share_val, opt.mrnf_retire_share);
                 setVal(mrnf_retire_grace_val, opt.mrnf_retire_grace);
+                setVal(mrnf_retire_spare_px_val, opt.mrnf_retire_spare_px);
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -2089,6 +2093,7 @@ namespace {
                 note_opt("receiver_cross_scale", receiver_cross_scale_val.has_value());
                 note_opt("mrnf_retire_share", mrnf_retire_share_val.has_value());
                 note_opt("mrnf_retire_grace", mrnf_retire_grace_val.has_value());
+                note_opt("mrnf_retire_spare_px", mrnf_retire_spare_px_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());

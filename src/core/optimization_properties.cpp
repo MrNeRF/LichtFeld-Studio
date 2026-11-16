@@ -798,6 +798,17 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .float_prop(&OptimizationParameters::mrnf_retire_spare_px,
+                        "mrnf_retire_spare_px", "Retire Spare Thin", d.mrnf_retire_spare_px, 0.0f, 8.0f,
+                        "Splats whose projected minor-axis sigma (pixels, before the 2D dilation) was below this in "
+                        "the views that drew them are exempt from the retire quota; 0: off (MRNF)")
+            .locale("training.advanced.mrnf_retire_spare_px")
+            .tooltip("training.tooltip.mrnf_retire_spare_px")
+            .precision(2)
+            .ui_step(0.05)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::per_splat_bias_correction,
                        "per_splat_bias_correction", "Per-Splat Bias Correction", d.per_splat_bias_correction,
                        "Bias-corrects Adam per splat from the steps since its moments last restarted (MRNF)")

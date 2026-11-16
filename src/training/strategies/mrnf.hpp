@@ -105,6 +105,10 @@ class MRNFStrategyTest_RetireTakesTheLowestPeakPastTheGraceAndRefillsTheSlots_Te
 class MRNFStrategyTest_RetireRowsTrackPeakAndRendersAndFollowTheirSplats_Test;
 class MRNFStrategyTest_LossErrorMapImpliesTheCompressedViewMean_Test;
 class MRNFStrategyTest_LossErrorMapScoreEqualsTheMatchScore_Test;
+class MRNFStrategyTest_RetireSpareOffKeepsTheRetireesBitIdentical_Test;
+class MRNFStrategyTest_RetireSpareExemptsThinSplatsAndKeepsTheQuota_Test;
+class MRNFStrategyTest_RetireSpareWindowFollowsRendersAndSplats_Test;
+class MRNFStrategyTest_RetireSpareBackwardWritesTheRawMinorSigma_Test;
 
 namespace lfs::training {
 
@@ -163,6 +167,7 @@ namespace lfs::training {
         std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int iter) override;
         void on_impact_accumulated(int iter) override;
         std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int iter) override;
+        lfs::core::Tensor minor_sigma_scratch(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
@@ -249,6 +254,10 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_RetireRowsTrackPeakAndRendersAndFollowTheirSplats_Test;
         friend class ::MRNFStrategyTest_LossErrorMapImpliesTheCompressedViewMean_Test;
         friend class ::MRNFStrategyTest_LossErrorMapScoreEqualsTheMatchScore_Test;
+        friend class ::MRNFStrategyTest_RetireSpareOffKeepsTheRetireesBitIdentical_Test;
+        friend class ::MRNFStrategyTest_RetireSpareExemptsThinSplatsAndKeepsTheQuota_Test;
+        friend class ::MRNFStrategyTest_RetireSpareWindowFollowsRendersAndSplats_Test;
+        friend class ::MRNFStrategyTest_RetireSpareBackwardWritesTheRawMinorSigma_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -307,6 +316,13 @@ namespace lfs::training {
         // Adds the retirees of this refine to prune_mask (active, trainable rows not already pruned) and
         // returns their count.
         size_t mark_retirees(int iter, lfs::core::Tensor& prune_mask);
+        // Thin-splat exemption (mrnf_retire_spare_px > 0 with retirement on): splats whose raw projected
+        // minor-axis sigma, at its smallest over the renders of the last refine window that drew them, is
+        // below mrnf_retire_spare_px pixels are not retired; the quota is taken from the other splats.
+        [[nodiscard]] bool spare_on() const;
+        // Closes the refine window of the minor sigma: rows drawn in it take the window's minimum, the others
+        // keep their last value; the window starts afresh (+inf).
+        void close_spare_window();
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
         // After the backward: walks the splats rendered in this step and clears the step's marks.
@@ -465,6 +481,9 @@ namespace lfs::training {
         lfs::core::Tensor _retire_renders;        // [N] steps rendered since birth (retirement)
         int _retire_first_iter = -1;              // first refine at the cap; transient
         size_t _last_retired = 0;
+        lfs::core::Tensor _spare_window_sigma; // [N] smallest raw minor sigma (px) this refine window, +inf: undrawn
+        lfs::core::Tensor _spare_sigma;        // [N] that minimum for the last window that drew the splat, +inf: none
+        size_t _last_spared = 0;
         int _exchange_windows = 0; // windows in the current importance memory
         bool _exchange_impact_written = false;
         int _exchange_first_iter = -1;

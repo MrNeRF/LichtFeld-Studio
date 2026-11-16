@@ -67,6 +67,7 @@ namespace lfs::training {
         fused_adam.rendered_count = fused_extra_gradients.rendered_count;
         fused_adam.explore_rendered = fused_extra_gradients.explore_rendered;
         fused_adam.explore_blend_peak = fused_extra_gradients.explore_blend_peak;
+        fused_adam.explore_minor_sigma = fused_extra_gradients.explore_minor_sigma;
         fused_adam.view_radius_out = fused_extra_gradients.view_radius_out;
         fused_adam.angular_mean_step = fused_extra_gradients.angular_mean_step;
         fused_adam.screen_hinge_limit = fused_extra_gradients.screen_hinge_limit;

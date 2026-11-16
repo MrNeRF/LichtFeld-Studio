@@ -379,6 +379,15 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float raw_a = dot(jwc_r1, jw_r1);
             const float raw_b = dot(jwc_r1, jw_r2);
             const float raw_c = dot(jwc_r2, jw_r2);
+            if constexpr (!DISABLED_FEATURES) {
+                if (fused_adam.explore_minor_sigma != nullptr) {
+                    // Smaller eigenvalue of the raw (undilated) 2D covariance.
+                    const float half_gap = 0.5f * (raw_a - raw_c);
+                    const float minor_variance = 0.5f * (raw_a + raw_c) - sqrtf(half_gap * half_gap + raw_b * raw_b);
+                    float* const row = fused_adam.explore_minor_sigma + primitive_idx;
+                    *row = fminf(*row, sqrtf(fmaxf(minor_variance, 0.0f)));
+                }
+            }
             const float a = raw_a + kernel_size, b = raw_b, c = raw_c + kernel_size;
             const float aa = a * a, bb = b * b, cc = c * c;
             const float ac = a * c, ab = a * b, bc = b * c;

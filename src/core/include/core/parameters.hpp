@@ -461,6 +461,10 @@ namespace lfs::core {
             // tapering linearly to 0 at grow_until_iter; the refill of the refine takes the freed slots. 0: off.
             float mrnf_retire_share = 0.0f;
             int mrnf_retire_grace = 30;
+            // Splats whose projected minor-axis standard deviation (raw, before the 2D dilation), at its smallest
+            // over their renders in the last refine window that drew them, is below this many pixels are exempt
+            // from the retire quota; the quota is taken from the other splats. 0: off.
+            float mrnf_retire_spare_px = 0.0f;
             [[nodiscard]] bool refine_error_compress_active() const {
                 return refine_error_compress || mrnf_loss_error_map;
             }

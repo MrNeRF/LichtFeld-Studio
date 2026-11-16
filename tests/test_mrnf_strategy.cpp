@@ -5226,3 +5226,245 @@ TEST(MRNFStrategyTest, RetireRowsTrackPeakAndRendersAndFollowTheirSplats) {
     EXPECT_FALSE(strategy._retire_step_peak.is_valid());
     EXPECT_FALSE(strategy._retire_renders.is_valid());
 }
+
+namespace {
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+
+    std::vector<float> spare_test_peaks(const size_t n) {
+        std::vector<float> peak(n, 0.5f);
+        for (size_t i = 50; i < 80; ++i)
+            peak[i] = 0.001f * static_cast<float>(i - 49); // rising: 50 is the faintest
+        return peak;
+    }
+
+    // A strategy at the cap with retirement (share 0.05, grace 30) and the given spare threshold; the tests set
+    // every splat past the grace and the peaks of spare_test_peaks (SPARE_TEST_PRIME).
+    std::unique_ptr<MRNF> spare_test_strategy(SplatData& data, const size_t n, const float spare_px) {
+        auto strategy = std::make_unique<MRNF>(data);
+        auto params = retire_test_params(n, 0.05f);
+        params.mrnf_retire_spare_px = spare_px;
+        strategy->initialize(params);
+        strategy->explore_scratch(100);
+        return strategy;
+    }
+
+    std::vector<size_t> marked_rows(const Tensor& prune) {
+        const auto mask = prune.to(DataType::Float32).cpu().to_vector();
+        std::vector<size_t> rows;
+        for (size_t i = 0; i < mask.size(); ++i)
+            if (mask[i] != 0.0f)
+                rows.push_back(i);
+        return rows;
+    }
+} // namespace
+
+// The tests are friends of MRNF, the helpers above are not.
+#define SPARE_TEST_PRIME(s)                                                                                 \
+    do {                                                                                                    \
+        (s)->_explore_peak.copy_(Tensor::from_vector(spare_test_peaks(n), TensorShape({n}), Device::CUDA)); \
+        (s)->_retire_renders.fill_(100.0f);                                                                 \
+    } while (false)
+
+// Off (the default 0) keeps no minor sigma rows, gives the backward none and retires exactly the rows it
+// retired before; on with no thin splat retires the same rows.
+TEST(MRNFStrategyTest, RetireSpareOffKeepsTheRetireesBitIdentical) {
+    EXPECT_EQ(param::OptimizationParameters::mrnf_defaults().mrnf_retire_spare_px, 0.0f);
+    constexpr size_t n = 200;
+    std::vector<size_t> expected;
+    for (size_t i = 50; i < 60; ++i)
+        expected.push_back(i); // (size_t)(0.05 x 200) faintest
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto strategy = spare_test_strategy(data, n, 0.0f);
+        SPARE_TEST_PRIME(strategy);
+        EXPECT_TRUE(strategy->retire_on());
+        EXPECT_FALSE(strategy->spare_on());
+        EXPECT_FALSE(strategy->minor_sigma_scratch(100).is_valid());
+        EXPECT_FALSE(strategy->_spare_window_sigma.is_valid());
+        EXPECT_FALSE(strategy->_spare_sigma.is_valid());
+        auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+        EXPECT_EQ(strategy->mark_retirees(100, prune), 10u);
+        EXPECT_EQ(marked_rows(prune), expected);
+        EXPECT_EQ(strategy->_last_spared, 0u);
+    }
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto strategy = spare_test_strategy(data, n, 1.25f);
+        SPARE_TEST_PRIME(strategy);
+        ASSERT_TRUE(strategy->spare_on());
+        strategy->minor_sigma_scratch(100).fill_(1.3f); // every splat drawn, none thin
+        auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+        EXPECT_EQ(strategy->mark_retirees(100, prune), 10u);
+        EXPECT_EQ(marked_rows(prune), expected);
+        EXPECT_EQ(strategy->_last_spared, 0u);
+    }
+    // Retirement off: no rows even with a threshold.
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF off(data);
+    auto params = retire_test_params(n, 0.0f);
+    params.mrnf_retire_spare_px = 1.25f;
+    off.initialize(params);
+    EXPECT_FALSE(off.spare_on());
+    EXPECT_FALSE(off.minor_sigma_scratch(100).is_valid());
+}
+
+// Splats thinner than the threshold in the last window that drew them are never retired, and the quota
+// (share x live, counted on all live splats) is taken from the other splats; with too few others it
+// retires what there is. The census count is the live thin splats.
+TEST(MRNFStrategyTest, RetireSpareExemptsThinSplatsAndKeepsTheQuota) {
+    constexpr size_t n = 200;
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto strategy = spare_test_strategy(data, n, 1.25f);
+    SPARE_TEST_PRIME(strategy);
+    std::vector<float> sigma(n, 3.0f);
+    for (size_t i = 50; i < 55; ++i)
+        sigma[i] = 1.0f; // the five faintest are thin
+    sigma[57] = 1.2499f; // thin, just below the threshold
+    sigma[58] = 1.25f;   // not below: not exempt
+    sigma[150] = 0.2f;   // thin but bright: counted, not a candidate anyway
+    sigma[199] = kInf;   // not drawn this window: not thin
+    strategy->minor_sigma_scratch(100).copy_(Tensor::from_vector(sigma, TensorShape({n}), Device::CUDA));
+
+    auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+    ASSERT_EQ(strategy->mark_retirees(100, prune), 10u); // the quota is unchanged
+    EXPECT_EQ(marked_rows(prune), (std::vector<size_t>{55, 56, 58, 59, 60, 61, 62, 63, 64, 65}));
+    EXPECT_EQ(strategy->_last_spared, 7u);
+
+    // Too few splats left that are not thin: the refine retires only those.
+    auto few_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto few = spare_test_strategy(few_data, n, 1.25f);
+    SPARE_TEST_PRIME(few);
+    std::vector<float> mostly_thin(n, 0.6f);
+    mostly_thin[3] = mostly_thin[90] = mostly_thin[120] = 2.0f;
+    few->minor_sigma_scratch(100).copy_(Tensor::from_vector(mostly_thin, TensorShape({n}), Device::CUDA));
+    prune = Tensor::zeros_bool({n}, Device::CUDA);
+    EXPECT_EQ(few->mark_retirees(100, prune), 3u);
+    EXPECT_EQ(marked_rows(prune), (std::vector<size_t>{3, 90, 120}));
+    EXPECT_EQ(few->_last_spared, n - 3);
+
+    // A whole refine: thin faint splats survive, the model stays at the cap, the census counts them.
+    auto refine_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto refining = spare_test_strategy(refine_data, n, 1.25f);
+    SPARE_TEST_PRIME(refining);
+    refining->_explore_peak.slice(0, 0, 20).fill_(0.0001f);
+    std::vector<float> thin_first(n, 3.0f);
+    for (size_t i = 0; i < 10; ++i)
+        thin_first[i] = 0.9f;
+    refining->minor_sigma_scratch(100).copy_(Tensor::from_vector(thin_first, TensorShape({n}), Device::CUDA));
+    refining->visibility_accumulator().fill_(1.0f);
+    RenderOutput output;
+    refining->post_backward(100, output);
+    EXPECT_EQ(refining->_last_retired, 10u);
+    EXPECT_EQ(refining->_last_spared, 10u);
+    EXPECT_EQ(refining->active_count(), n);
+    const auto renders = refining->_retire_renders.cpu().to_vector();
+    for (size_t i = 0; i < 10; ++i)
+        EXPECT_EQ(renders[i], 100.0f) << i; // spared: not freed and refilled
+    for (size_t i = 10; i < 20; ++i)
+        EXPECT_EQ(renders[i], 0.0f) << i; // retired and refilled
+}
+
+// The window row starts at +inf and is what the backward lowers; each refine closes it (drawn rows take its
+// minimum, undrawn rows keep the last one) and restarts it. Freed slots and new rows start at +inf; the
+// rows follow their splats and are dropped at the topology freeze.
+TEST(MRNFStrategyTest, RetireSpareWindowFollowsRendersAndSplats) {
+    constexpr size_t n = 4;
+    auto splat_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    MRNF strategy(splat_data);
+    auto params = retire_test_params(32, 0.01f);
+    params.mrnf_retire_spare_px = 1.0f;
+    strategy.initialize(params);
+    auto window = strategy.minor_sigma_scratch(100);
+    ASSERT_TRUE(window.is_valid());
+    EXPECT_EQ(window.ptr<float>(), strategy._spare_window_sigma.ptr<float>());
+    EXPECT_EQ(window.cpu().to_vector(), std::vector<float>(n, kInf));
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector(), std::vector<float>(n, kInf));
+
+    window.copy_(Tensor::from_vector(std::vector<float>{0.5f, kInf, 2.0f, 0.7f}, TensorShape({n}), Device::CUDA));
+    strategy.close_spare_window();
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector(), (std::vector<float>{0.5f, kInf, 2.0f, 0.7f}));
+    EXPECT_EQ(strategy._spare_window_sigma.cpu().to_vector(), std::vector<float>(n, kInf));
+    strategy.minor_sigma_scratch(200).copy_(
+        Tensor::from_vector(std::vector<float>{kInf, 0.9f, 3.0f, kInf}, TensorShape({n}), Device::CUDA));
+    strategy.close_spare_window();
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector(), (std::vector<float>{0.5f, 0.9f, 3.0f, 0.7f}));
+
+    strategy.soft_delete_rows(row_range(2, 3));
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector()[2], kInf);
+    const auto mask = Tensor::from_vector(std::vector<bool>{true, false, false, false}, TensorShape({n}), Device::CUDA);
+    strategy.remove_gaussians(mask);
+    ASSERT_EQ(splat_data.size(), 3u);
+    strategy.ensure_explore_rows();
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector(), (std::vector<float>{0.9f, kInf, 0.7f}));
+    EXPECT_EQ(strategy._spare_window_sigma.numel(), 3u);
+
+    // New rows (growth) start undrawn.
+    strategy._spare_sigma = strategy._spare_sigma.slice(0, 0, 2).contiguous();
+    strategy.ensure_explore_rows();
+    EXPECT_EQ(strategy._spare_sigma.cpu().to_vector(), (std::vector<float>{0.9f, kInf, kInf}));
+
+    RenderOutput output;
+    strategy.post_backward(static_cast<int>(params.stop_refine), output);
+    EXPECT_FALSE(strategy.spare_on());
+    EXPECT_FALSE(strategy.minor_sigma_scratch(static_cast<int>(params.stop_refine) + 1).is_valid());
+    strategy.explore_scratch(static_cast<int>(params.stop_refine) + 1);
+    EXPECT_FALSE(strategy._spare_window_sigma.is_valid());
+    EXPECT_FALSE(strategy._spare_sigma.is_valid());
+}
+
+// The real backward lowers the row to each contributing splat's projected minor-axis sigma before the 2D
+// dilation: focal x scale / depth for an axis-aligned splat on the optical axis.
+TEST(MRNFStrategyTest, RetireSpareBackwardWritesTheRawMinorSigma) {
+    constexpr int width = 64, height = 48;
+    constexpr float focal = 60.0f;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    auto R = Tensor::eye(3, Device::CUDA);
+    auto T = Tensor::from_vector(std::vector<float>{0.0f, 0.0f, 4.0f}, TensorShape({3}), Device::CUDA);
+    Camera camera(R, T, focal, focal, width / 2.0f, height / 2.0f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "spare", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+    const std::vector<float> means{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 3.0f, 0.0f, 0.0f};
+    const std::vector<float> rotations{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    // 0: thin in y (minor 0.75 px), 1: round behind it (2.69 px), 2: outside the view.
+    const std::vector<float> log_scales{-1.6f, -3.0f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f, -1.6f};
+    const std::vector<float> opacities{raw_of(0.95f), raw_of(0.8f), raw_of(0.8f)};
+    const std::vector<float> sh0{0.4f / sh_c0, -0.4f / sh_c0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    SplatData splat_data(0, Tensor::from_vector(means, TensorShape({3, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({3, 1, 3}), Device::CUDA),
+                         Tensor::zeros({3, 0, 3}, Device::CUDA),
+                         Tensor::from_vector(log_scales, TensorShape({3, 3}), Device::CUDA),
+                         Tensor::from_vector(rotations, TensorShape({3, 4}), Device::CUDA),
+                         Tensor::from_vector(opacities, TensorShape({3, 1}), Device::CUDA), 1.0f);
+
+    MRNF strategy(splat_data);
+    auto params = retire_test_params(3, 0.01f);
+    params.mrnf_retire_spare_px = 1.25f;
+    strategy.initialize(params);
+    auto window = strategy.minor_sigma_scratch(100);
+    ASSERT_TRUE(window.is_valid());
+
+    const auto backward = [&] {
+        auto forward = fast_rasterize_forward(camera, splat_data, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+        strategy.get_optimizer().zero_grad(0);
+        FastGSFusedExtraGradients fused;
+        fused.explore_minor_sigma = window.ptr<float>();
+        fast_rasterize_backward(forward->second, Tensor::full_like(forward->first.image, 0.01f), splat_data,
+                                strategy.get_optimizer(), {}, {}, DensificationType::None, 1, fused);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    };
+    const auto start_scales = splat_data.scaling_raw().cpu().to_vector();
+    backward();
+    const auto sigma = window.cpu().to_vector();
+    EXPECT_NEAR(sigma[0], focal * std::exp(start_scales[1]) / 4.0f, 1e-3f);
+    EXPECT_NEAR(sigma[1], focal * std::exp(start_scales[3]) / 4.5f, 1e-3f);
+    EXPECT_EQ(sigma[2], kInf); // not drawn
+
+    // It keeps the minimum over the views of the window.
+    window.copy_(Tensor::from_vector(std::vector<float>{0.3f, 9.0f, kInf}, TensorShape({3}), Device::CUDA));
+    const auto scales_before = splat_data.scaling_raw().cpu().to_vector();
+    backward();
+    const auto lowered = window.cpu().to_vector();
+    EXPECT_EQ(lowered[0], 0.3f);
+    EXPECT_NEAR(lowered[1], focal * std::exp(scales_before[3]) / 4.5f, 1e-3f);
+}

@@ -363,6 +363,7 @@ REGISTRY_PLACEMENT = {
         "mrnf_loss_error_map",
         "mrnf_retire_share",
         "mrnf_retire_grace",
+        "mrnf_retire_spare_px",
         "per_splat_bias_correction",
         "match_growth",
         "match_split_budget",
