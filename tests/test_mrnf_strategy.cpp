@@ -5629,9 +5629,11 @@ TEST(MRNFStrategyTest, RetireRankBothFoldsTheWindowImpactApartFromTheDonors) {
     const std::vector<float> blend{5.0f, 1.0f, 2.0f, 7.0f, 3.0f, 4.0f, 4.0f, 4.0f, 4.0f, 4.0f};
     constexpr size_t n = 10;
 
+    // The strategy keeps a reference to its splats: they live as long as the test.
+    auto both_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    auto peak_data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
     const auto run = [&](const bool both) {
-        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
-        auto strategy = std::make_unique<MRNF>(data);
+        auto strategy = std::make_unique<MRNF>(both ? both_data : peak_data);
         auto params = need_growth_test_params(32); // below the cap: no quota, the memory still folds
         params.refine_every = 1;
         params.mrnf_retire_share = 0.05f;
