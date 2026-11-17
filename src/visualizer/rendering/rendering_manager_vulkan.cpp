@@ -1917,7 +1917,15 @@ namespace lfs::vis {
     }
 
     void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
-        frame.exact_surface_picking = exact_surface_picking_;
+        constexpr DirtyMask camera_flags = DirtyFlag::CAMERA | DirtyFlag::OVERLAY;
+        const bool camera_only = (frame.frame_dirty & DirtyFlag::CAMERA) &&
+                                 !(frame.frame_dirty & ~camera_flags);
+        // Camera motion needs color, not a new full-image exact-depth replay.
+        // A pending point request marks VIEWPORT and still obtains exact depth.
+        frame.exact_surface_picking = exact_surface_picking_ &&
+                                      (!camera_only || frame.training_active || frame.deterministic_export ||
+                                       splitViewUsesGTComparison(frame.settings.split_view_mode) ||
+                                       splitViewUsesPLYComparison(frame.settings.split_view_mode));
     }
 
     RenderingManager::VulkanFrameResult RenderingManager::drawVulkanFrame(const RenderContext& context) {
