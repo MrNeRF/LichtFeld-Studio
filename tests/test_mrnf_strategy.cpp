@@ -2187,6 +2187,23 @@ TEST(MRNFStrategyTest, RayDepthStateFollowsItsSplats) {
     EXPECT_FALSE(disabled.get_optimizer().ray_depth_state().is_valid());
 }
 
+// Built through a float32 arange, the four rows appended at B = 2^24 came out as B, B, B+2, B+4 and one row as none,
+// so ray_depth_inherit wrote an existing splat's state and read child rows past the end of the list.
+TEST(MRNFStrategyTest, SplitChildRowsAreExactPastFloat32Precision) {
+    constexpr int64_t b = int64_t{1} << 24;
+    const auto reused = Tensor::from_vector(std::vector<int>{7}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    const auto expect_rows = [](const Tensor& rows, const std::vector<int64_t>& expected) {
+        ASSERT_EQ(rows.dtype(), DataType::Int64);
+        ASSERT_EQ(rows.device(), Device::CUDA);
+        ASSERT_EQ(rows.shape(), TensorShape({expected.size()}));
+        EXPECT_EQ(rows.cpu().to_vector_int64(), expected);
+    };
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 4), {7, b, b + 1, b + 2, b + 3});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 1), {b});
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 0), {7});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 0), {});
+}
+
 TEST(MRNFStrategyTest, SetTrainingDatasetBeforeInitialize) {
     auto splat_data = create_mrnf_test_splat_data(0);
     MRNF strategy(splat_data);
