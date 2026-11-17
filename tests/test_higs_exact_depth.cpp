@@ -5,6 +5,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/point_cloud_vulkan_renderer.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -93,6 +94,9 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
             auto approximate = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size});
             ASSERT_TRUE(approximate) << approximate.error();
             EXPECT_NEAR(*approximate, 4.0f, 1e-4f); // Confirms the HiGS approximate path is active.
+            auto uncovered = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size, .require_exact_depth = true});
+            ASSERT_TRUE(uncovered) << uncovered.error();
+            EXPECT_EQ(*uncovered, lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
             auto color = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Main);
             ASSERT_TRUE(color) << color.error();
             const auto* data = (*color)->ptr<uint8_t>();
@@ -116,6 +120,17 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
                     auto depth = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size});
                     ASSERT_TRUE(depth) << depth.error();
                     EXPECT_NEAR(*depth, 6.0f, 1e-4f);
+                    auto exact_pick = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size, .require_exact_depth = true});
+                    ASSERT_TRUE(exact_pick) << exact_pick.error();
+                    EXPECT_NEAR(*exact_pick, masked ? lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending : 6.0f, 1e-4f);
+                    auto scaled_pick = renderer.sampleDepthAtPixel(context, {.pixel = (size / 2) * 2, .source_size = size * 2, .require_exact_depth = true});
+                    ASSERT_TRUE(scaled_pick) << scaled_pick.error();
+                    EXPECT_NEAR(*scaled_pick, masked ? lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending : 6.0f, 1e-4f);
+                    if (masked) {
+                        auto outside = renderer.sampleDepthAtPixel(context, {.pixel = {0, 0}, .source_size = size, .require_exact_depth = true});
+                        ASSERT_TRUE(outside) << outside.error();
+                        EXPECT_EQ(*outside, lfs::vis::PointCloudVulkanRenderer::kDepthSamplePending);
+                    }
                     auto exact_color = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Main);
                     ASSERT_TRUE(exact_color) << exact_color.error();
                     const auto* pixels = (*exact_color)->ptr<uint8_t>();
