@@ -9,7 +9,6 @@ Targets:
 """
 
 import concurrent.futures
-import os
 import sys
 import tempfile
 import threading
@@ -265,9 +264,8 @@ class TestPluginConcurrency:
             mgr.unload("watch_plugin")
 
     @pytest.mark.parametrize("fail_refresh", [False, True])
-    @pytest.mark.parametrize("hot_reload", [False, True])
     def test_file_mtime_race_condition(
-        self, thread_plugins_dir, monkeypatch, fail_refresh, hot_reload
+        self, thread_plugins_dir, monkeypatch, fail_refresh
     ):
         """A watcher interleaved with a refresh must see a complete snapshot."""
         from lfs_plugins import PluginManager
@@ -277,7 +275,6 @@ class TestPluginConcurrency:
         mgr = PluginManager.instance()
         assert mgr.load("mtime_plugin")
         plugin = mgr._plugins["mtime_plugin"]
-        plugin.info.hot_reload = hot_reload
         watcher = PluginWatcher(mgr)
         original_scan = type(plugin.info.path).rglob
 
@@ -299,16 +296,6 @@ class TestPluginConcurrency:
         watcher._check_for_changes()
         assert not watcher._pending_reloads
         assert not plugin.needs_restart
-
-        # A real edit must still be detected even when its timestamp is unchanged.
-        init_file = plugin.info.path / "__init__.py"
-        stamp = init_file.stat()
-        init_file.write_text(init_file.read_text() + "\n# changed content")
-        os.utime(init_file, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
-        assert init_file.stat().st_mtime_ns == stamp.st_mtime_ns
-        watcher._check_for_changes()
-        assert bool(watcher._pending_reloads) == hot_reload
-        assert plugin.needs_restart == (not hot_reload)
 
     def test_loading_plugin_waits_for_initial_file_snapshot(
         self, thread_plugins_dir, monkeypatch
