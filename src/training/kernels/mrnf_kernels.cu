@@ -540,7 +540,7 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.explore_scouts");
     }
 
-    template <bool RenderedOnly>
+    template <bool RenderedOnly, bool Reach>
     __global__ void mrnf_decay_kernel(
         float* __restrict__ raw_opacities,
         float* __restrict__ log_scales,
@@ -551,7 +551,8 @@ namespace lfs::training::mrnf_strategy {
         float train_t,
         size_t N,
         const float* __restrict__ rendered_count,
-        const float* __restrict__ opacity_hold) {
+        const float* __restrict__ opacity_hold,
+        const float* __restrict__ reach) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -560,6 +561,27 @@ namespace lfs::training::mrnf_strategy {
             return;
 
         const float t_shrink = 1.0f - train_t;
+
+        if constexpr (Reach) {
+            // A row with reach r < 1 takes both decays times r; reach 1 takes the path below unchanged.
+            const float r = reach[idx];
+            if (r < 1.0f) {
+                const bool held = opacity_hold != nullptr && opacity_hold[idx] > 0.0f;
+                const float reached_delta = opacity_decay * t_shrink * fmaxf(r, 0.0f);
+                if ((!RenderedOnly || rendered_count[idx] > 0.0f) && !held &&
+                    (reached_delta != 0.0f || isinf(raw_opacities[idx]))) {
+                    raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - reached_delta);
+                }
+                if (!(r > 0.0f))
+                    return; // no reach: the scale stays as it is
+                const float reached_factor = 1.0f - scale_decay * t_shrink * r;
+                for (int d = 0; d < 3; ++d) {
+                    const float scale = expf(log_scales[idx * 3 + d]) * reached_factor;
+                    log_scales[idx * 3 + d] = logf(fmaxf(scale, 1e-12f));
+                }
+                return;
+            }
+        }
 
         const float opacity_delta = opacity_decay * t_shrink;
         // A sigmoid/logit round trip loses finite saturated logits even when
@@ -588,7 +610,8 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream,
         const float* rendered_count,
-        const float* opacity_hold) {
+        const float* opacity_hold,
+        const float* reach) {
 
         if (N == 0)
             return;
@@ -597,17 +620,57 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
 
+        const auto launch = [&](auto kernel) {
+            kernel<<<blocks, threads, 0, s>>>(raw_opacities, log_scales, frozen_mask, frozen_mask_size,
+                                              opacity_decay, scale_decay, train_t, N, rendered_count,
+                                              opacity_hold, reach);
+        };
         if (rendered_count != nullptr) {
-            mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
-                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, rendered_count, opacity_hold);
+            launch(reach != nullptr ? mrnf_decay_kernel<true, true> : mrnf_decay_kernel<true, false>);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
         } else {
-            mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
-                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                opacity_decay, scale_decay, train_t, N, nullptr, opacity_hold);
+            launch(reach != nullptr ? mrnf_decay_kernel<false, true> : mrnf_decay_kernel<false, false>);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
         }
+    }
+
+    __global__ void mrnf_covered_reach_kernel(
+        const float* __restrict__ peak,
+        const float* __restrict__ renders,
+        const float* __restrict__ raw_opacities,
+        float grace,
+        size_t N,
+        float* __restrict__ reach) {
+
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= N)
+            return;
+        float r = 1.0f; // within the grace: unknown, treated as visible
+        if (renders[idx] >= grace) {
+            const float opacity = fmaxf(d_sigmoid(raw_opacities[idx]), 1e-6f);
+            const float p = peak[idx];
+            // Explicit at and above the opacity: the fast-math division need not give exactly 1 there.
+            r = p >= opacity ? 1.0f : fminf(fmaxf(p / opacity, 0.0f), 1.0f);
+        }
+        reach[idx] = r;
+    }
+
+    void launch_mrnf_covered_reach(
+        const float* peak,
+        const float* renders,
+        const float* raw_opacities,
+        float grace,
+        size_t N,
+        float* reach,
+        void* stream) {
+
+        if (N == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        mrnf_covered_reach_kernel<<<blocks, threads, 0, s>>>(peak, renders, raw_opacities, grace, N, reach);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.covered_reach");
     }
 
     __global__ void fold_densification_error_and_zero_kernel(

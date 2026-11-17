@@ -831,6 +831,15 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::mrnf_keep_covered,
+                       "mrnf_keep_covered", "Keep Covered", d.mrnf_keep_covered,
+                       "Opacity and scale decay scale by the share of a splat's opacity that reaches a photo, and "
+                       "splats with less than half are not retired (MRNF, FastGS)")
+            .locale("training.advanced.mrnf_keep_covered")
+            .tooltip("training.tooltip.mrnf_keep_covered")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::impact_contrast_norm,
                        "impact_contrast_norm", "Impact Contrast Norm", d.impact_contrast_norm,
                        "Removal impact divides each pixel's colour change by the photo's local standard deviation "

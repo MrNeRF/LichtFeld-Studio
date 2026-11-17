@@ -65,6 +65,8 @@ namespace lfs::training {
         constexpr float MRNF_EXPLORE_WALK_END_RATIO = 0.01f;
         constexpr float MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS = 800.0f;
         constexpr float MRNF_EXPLORE_SCOUT_RENDERS = 20.0f;
+        // Keep covered: a retire-quota pick whose reach is below this is mostly covered and stays alive.
+        constexpr float MRNF_COVERED_REACH = 0.5f;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -526,6 +528,8 @@ namespace lfs::training {
         _densify_child_allocated_peak_bytes = 0;
         if (optimParams.gut && optimParams.opacity_decay_rendered_only)
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
+        if (optimParams.gut && optimParams.mrnf_keep_covered)
+            LOG_WARN("mrnf_keep_covered has no effect with GUT (it needs the FastGS training renderer)");
         auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
@@ -951,7 +955,7 @@ namespace lfs::training {
             if (_bounds_valid) {
                 inject_noise(iter);
             }
-            if (explore_scouts_on() || retire_on()) {
+            if (explore_scouts_on() || retire_on() || keep_covered_on()) {
                 explore_step(iter); // counts the scouts' renders, folds the retirement peak
             }
         }
@@ -1034,7 +1038,11 @@ namespace lfs::training {
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
         // Retirees join the pruned rows: freed now, refilled by this refine.
+        _last_covered_spared = 0;
         _last_retired = retire_on() ? mark_retirees(iter, prune_mask) : 0;
+        if (keep_covered_on()) {
+            log_keep_covered(iter, prune_mask);
+        }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
             _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
@@ -1585,6 +1593,43 @@ namespace lfs::training {
         return _params && _params->mrnf_retire_share > 0.0f && !_params->gut && !_topology_frozen;
     }
 
+    bool MRNF::keep_covered_on() const {
+        return _params && _params->mrnf_keep_covered && !_params->gut && !_topology_frozen;
+    }
+
+    lfs::core::Tensor MRNF::covered_reach() const {
+        using namespace lfs::core;
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (!keep_covered_on() || n == 0 || _explore_peak.numel() != n || _retire_renders.numel() != n) {
+            return {};
+        }
+        Tensor reach = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        mrnf_strategy::launch_mrnf_covered_reach(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
+                                                 _splat_data->opacity_raw().ptr<float>(),
+                                                 static_cast<float>(_params->mrnf_retire_grace), n,
+                                                 reach.ptr<float>());
+        return reach;
+    }
+
+    void MRNF::log_keep_covered(const int iter, const lfs::core::Tensor& prune_mask) {
+        using namespace lfs::core;
+        ensure_explore_rows();
+        const Tensor reach = covered_reach();
+        if (!reach.is_valid()) {
+            return;
+        }
+        // Rows that stay alive through this refine (not pruned, retired or free).
+        Tensor live = (_retire_renders >= static_cast<float>(_params->mrnf_retire_grace))
+                          .logical_and(prune_mask.logical_not());
+        if (_free_mask.is_valid()) {
+            live = live.logical_and(_free_mask.slice(0, 0, reach.numel()).logical_not());
+        }
+        const size_t past_grace = live.count_nonzero();
+        const size_t covered = (reach < MRNF_COVERED_REACH).logical_and(live).count_nonzero();
+        LOG_INFO("MRNF keep covered {}: past the grace {}, reach < {:.2g} {}, spared from the retire quota {}", iter,
+                 past_grace, MRNF_COVERED_REACH, covered, _last_covered_spared);
+    }
+
     size_t MRNF::retire_count(const lfs::core::param::OptimizationParameters& params, const int iter,
                               const int first_iter, const size_t live) {
         return tapered_quota(params.mrnf_retire_share, iter, first_iter, static_cast<int>(params.grow_until_iter),
@@ -1602,6 +1647,21 @@ namespace lfs::training {
         const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
         ensure_explore_rows();
         _last_spared = 0;
+        // Keep covered: the picks with reach below MRNF_COVERED_REACH leave the selection again and stay alive;
+        // the quota is not refilled from other rows. Returns how many were taken out.
+        const auto drop_covered = [this](Tensor& retired) -> size_t {
+            const Tensor reach = covered_reach();
+            if (!reach.is_valid()) {
+                return 0;
+            }
+            const Tensor covered = retired.logical_and(reach < MRNF_COVERED_REACH);
+            const size_t kept = covered.count_nonzero();
+            if (kept > 0) {
+                retired = retired.logical_and(covered.logical_not());
+            }
+            _last_covered_spared = kept;
+            return kept;
+        };
         // Every refine folds the window impact, also before the cap, so the memory is ready when retirement starts.
         fold_retire_impact();
         const bool spare = spare_on() && _spare_sigma.numel() == n && _spare_window_sigma.numel() == n;
@@ -1646,8 +1706,9 @@ namespace lfs::training {
                 mrnf_strategy::launch_rank_rows_latest(keys, 3, eligible.ptr<bool>(), n, marked, rows.ptr<int64_t>());
                 Tensor retired = Tensor::zeros_bool({n}, Device::CUDA);
                 mrnf_strategy::launch_fill_index_mask(rows.ptr<int64_t>(), marked, retired.ptr<bool>());
+                const size_t kept = drop_covered(retired);
                 prune_mask = prune_mask.logical_or(retired).contiguous();
-                return marked;
+                return marked - kept;
             }
             static bool impact_missing_noted = false;
             if (!std::exchange(impact_missing_noted, true)) {
@@ -1659,10 +1720,13 @@ namespace lfs::training {
         const size_t marked = match::mark_lowest_dead(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
                                                       static_cast<float>(_params->mrnf_retire_grace),
                                                       dead.ptr<uint8_t>(), nullptr, n, count);
+        size_t kept = 0;
         if (marked > 0) {
-            prune_mask = prune_mask.logical_or(dead.to(DataType::Bool).logical_and(blocked.logical_not())).contiguous();
+            Tensor retired = dead.to(DataType::Bool).logical_and(blocked.logical_not());
+            kept = drop_covered(retired);
+            prune_mask = prune_mask.logical_or(retired).contiguous();
         }
-        return marked;
+        return marked - kept;
     }
 
     bool MRNF::spare_on() const {
@@ -1755,7 +1819,8 @@ namespace lfs::training {
                 row = Tensor::cat(std::vector<Tensor>{row, zero_splat_vector(n - rows, row.device())}, 0);
             }
         };
-        const bool retire = retire_on();
+        // Keep covered tracks the retirement rows from the first step, also without the quota.
+        const bool retire = retire_on() || keep_covered_on();
         size_row(_explore_rendered, explore_walk_on() || scouts || retire);
         size_row(_explore_peak, explore_gate_peak_on() || retire);
         size_row(_explore_scout_renders, scouts);
@@ -2862,6 +2927,11 @@ namespace lfs::training {
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
 
         assert(!_params->opacity_decay_rendered_only || _params->gut || _rendered_count.numel() == n);
+        lfs::core::Tensor reach;
+        if (keep_covered_on()) {
+            ensure_explore_rows(); // rows appended by this refine start within the grace: reach 1
+            reach = covered_reach();
+        }
         mrnf_strategy::launch_mrnf_decay(
             _splat_data->opacity_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
@@ -2874,7 +2944,8 @@ namespace lfs::training {
             _params->opacity_decay_rendered_only && !_params->gut ? _rendered_count.ptr<float>() : nullptr,
             explore_scouts_on() && _explore_scout_renders.is_valid() && _explore_scout_renders.numel() == n
                 ? _explore_scout_renders.ptr<float>()
-                : nullptr);
+                : nullptr,
+            reach.is_valid() ? reach.ptr<float>() : nullptr);
     }
 
     void MRNF::enforce_max_cap() {

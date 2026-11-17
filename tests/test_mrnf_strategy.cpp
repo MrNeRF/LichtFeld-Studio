@@ -5968,3 +5968,240 @@ TEST(MRNFStrategyTest, ReceiverKeepLongWindowFollowsRendersAndSplats) {
     EXPECT_EQ(raised[0], 9.0f);
     EXPECT_NEAR(raised[1], focal * std::exp(scales_before[3]) / 4.5f, 1e-3f);
 }
+
+namespace {
+    // Retirement at the cap (share 0.05, grace 30) with keep covered on or off; rows sized for the backward.
+    std::unique_ptr<MRNF> covered_test_strategy(SplatData& data, const size_t n, const bool keep,
+                                                const param::MrnfRetireRank rank = param::MrnfRetireRank::Peak,
+                                                const float share = 0.05f) {
+        auto strategy = std::make_unique<MRNF>(data);
+        auto params = retire_test_params(n, share);
+        params.mrnf_retire_grace = 30;
+        params.mrnf_retire_rank = rank;
+        params.mrnf_keep_covered = keep;
+        strategy->initialize(params);
+        strategy->explore_scratch(100);
+        return strategy;
+    }
+
+    float covered_test_logit(const float p) { return std::log(p / (1.0f - p)); }
+
+    // Peaks 0.5, rows 50..79 rising from 0.01 (above the 1/255 prune floor when the opacity matches the peak).
+    std::vector<float> covered_test_peaks(const size_t n) {
+        std::vector<float> peak(n, 0.5f);
+        for (size_t i = 50; i < 80; ++i)
+            peak[i] = 0.01f + 0.001f * static_cast<float>(i - 50);
+        return peak;
+    }
+
+    // Raw opacities that put each of the given rows at its peak blend weight (reach ~1); the other rows keep
+    // raw 0 (opacity 0.5).
+    void set_opacity_to_peak(SplatData& data, const std::vector<float>& peak, const std::vector<size_t>& rows) {
+        std::vector<float> raw(peak.size(), 0.0f);
+        for (const size_t i : rows)
+            raw[i] = covered_test_logit(peak[i]);
+        data.opacity_raw().copy_(Tensor::from_vector(raw, TensorShape({peak.size(), 1}), Device::CUDA));
+    }
+} // namespace
+
+// Off by default. On, the retirement rows are sized and folded from the first step also without the retire
+// quota; with GUT or after the topology freeze it is off. With every pick visible (reach >= 0.5) the retirees
+// are exactly the ones picked with the switch off.
+TEST(MRNFStrategyTest, KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical) {
+    EXPECT_FALSE(param::OptimizationParameters::mrnf_defaults().mrnf_keep_covered);
+    constexpr size_t n = 4;
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto strategy = covered_test_strategy(data, 32, true, param::MrnfRetireRank::Peak, 0.0f);
+        EXPECT_FALSE(strategy->retire_on());
+        ASSERT_TRUE(strategy->keep_covered_on());
+        auto [rendered, step_peak] = strategy->explore_scratch(100);
+        ASSERT_TRUE(rendered.is_valid());
+        ASSERT_TRUE(step_peak.is_valid());
+        EXPECT_EQ(step_peak.ptr<float>(), strategy->_retire_step_peak.ptr<float>());
+        step_peak.copy_(Tensor::from_vector(std::vector<float>{0.3f, 0.0f, 0.8f, 0.1f}, TensorShape({n}), Device::CUDA));
+        strategy->explore_step(100);
+        EXPECT_EQ(strategy->_explore_peak.cpu().to_vector(), (std::vector<float>{0.3f, 0.0f, 0.8f, 0.1f}));
+        EXPECT_EQ(strategy->_retire_renders.cpu().to_vector(), (std::vector<float>{1.0f, 0.0f, 1.0f, 1.0f}));
+        // A refine without the quota retires nothing.
+        strategy->visibility_accumulator().fill_(1.0f);
+        RenderOutput output;
+        strategy->post_backward(100, output);
+        EXPECT_EQ(strategy->_last_retired, 0u);
+        EXPECT_EQ(strategy->_last_covered_spared, 0u);
+        // The topology freeze drops the rows.
+        strategy->post_backward(static_cast<int>(strategy->_params->stop_refine), output);
+        EXPECT_FALSE(strategy->keep_covered_on());
+        strategy->explore_scratch(static_cast<int>(strategy->_params->stop_refine) + 1);
+        EXPECT_FALSE(strategy->_retire_renders.is_valid());
+    }
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        MRNF gut(data);
+        auto params = retire_test_params(32, 0.0f);
+        params.mrnf_keep_covered = true;
+        params.gut = true;
+        gut.initialize(params);
+        EXPECT_FALSE(gut.keep_covered_on());
+        gut.ensure_explore_rows();
+        EXPECT_FALSE(gut._retire_renders.is_valid());
+        EXPECT_FALSE(gut.covered_reach().is_valid());
+    }
+    constexpr size_t m = 200;
+    const auto peak = covered_test_peaks(m);
+    std::vector<size_t> faint;
+    for (size_t i = 50; i < 80; ++i)
+        faint.push_back(i);
+    std::vector<std::vector<size_t>> picked;
+    for (const bool keep : {false, true}) {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(m), 0);
+        set_opacity_to_peak(data, peak, faint);
+        auto strategy = covered_test_strategy(data, m, keep);
+        strategy->_explore_peak.copy_(Tensor::from_vector(peak, TensorShape({m}), Device::CUDA));
+        strategy->_retire_renders.fill_(100.0f);
+        auto prune = Tensor::zeros_bool({m}, Device::CUDA);
+        EXPECT_EQ(strategy->mark_retirees(100, prune), 10u);
+        EXPECT_EQ(strategy->_last_covered_spared, 0u);
+        picked.push_back(marked_rows(prune));
+    }
+    EXPECT_EQ(picked[0], picked[1]);
+}
+
+// Both decays of a row scale by its reach: a row past the grace that reached no photo keeps its opacity and
+// scale, a row whose peak equals its opacity and a row within the grace decay bit for bit as with the switch
+// off, and a half-covered row takes half the opacity decrement.
+TEST(MRNFStrategyTest, KeepCoveredDecayScalesByTheReach) {
+    constexpr size_t n = 5;
+    std::vector<std::vector<float>> opacity, scale;
+    std::vector<float> opacity_before, scale_before;
+    for (const bool keep : {false, true}) {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        auto strategy = covered_test_strategy(data, 32, keep, param::MrnfRetireRank::Peak, 0.0f);
+        // Raw opacity 0: opacity exactly 0.5 for every row.
+        if (keep) {
+            ASSERT_TRUE(strategy->_explore_peak.is_valid());
+            strategy->_explore_peak.copy_(Tensor::from_vector(std::vector<float>{0.0f, 0.5f, 0.0f, 0.25f, 0.9f},
+                                                              TensorShape({n}), Device::CUDA));
+            strategy->_retire_renders.copy_(Tensor::from_vector(std::vector<float>{30.0f, 100.0f, 29.0f, 100.0f, 40.0f},
+                                                                TensorShape({n}), Device::CUDA));
+            EXPECT_EQ(strategy->covered_reach().cpu().to_vector(),
+                      (std::vector<float>{0.0f, 1.0f, 1.0f, 0.5f, 1.0f}));
+        } else {
+            EXPECT_FALSE(strategy->_explore_peak.is_valid());
+            EXPECT_FALSE(strategy->covered_reach().is_valid());
+        }
+        opacity_before = data.opacity_raw().cpu().to_vector();
+        scale_before = data.scaling_raw().cpu().to_vector();
+        strategy->apply_decay(static_cast<int>(strategy->_params->iterations / 2));
+        opacity.push_back(data.opacity_raw().cpu().to_vector());
+        scale.push_back(data.scaling_raw().cpu().to_vector());
+    }
+    const auto& off_o = opacity[0];
+    const auto& on_o = opacity[1];
+    const auto& off_s = scale[0];
+    const auto& on_s = scale[1];
+    // Reach 0: untouched.
+    EXPECT_EQ(on_o[0], opacity_before[0]);
+    for (int d = 0; d < 3; ++d)
+        EXPECT_EQ(on_s[d], scale_before[d]) << d;
+    // Reach 1 (peak == opacity, peak above it) and within the grace: as with the switch off.
+    for (const size_t i : {size_t{1}, size_t{2}, size_t{4}}) {
+        EXPECT_EQ(on_o[i], off_o[i]) << i;
+        for (int d = 0; d < 3; ++d)
+            EXPECT_EQ(on_s[i * 3 + d], off_s[i * 3 + d]) << i;
+    }
+    ASSERT_LT(off_o[1], opacity_before[1]); // the decay is on in these parameters
+    // Reach 0.5: half the opacity decrement, half the scale decay.
+    const auto sigmoid = [](const float x) { return 1.0f / (1.0f + std::exp(-x)); };
+    const float full_drop = sigmoid(opacity_before[3]) - sigmoid(off_o[3]);
+    EXPECT_NEAR(sigmoid(opacity_before[3]) - sigmoid(on_o[3]), 0.5f * full_drop, 2e-6f);
+    const float full_shrink = 1.0f - std::exp(off_s[9] - scale_before[9]);
+    EXPECT_NEAR(1.0f - std::exp(on_s[9] - scale_before[9]), 0.5f * full_shrink, 2e-6f);
+}
+
+// The retire quota picks exactly the rows it picks with the switch off; the picks with reach below 0.5 then stay
+// alive, the visible picks are retired and the quota is not refilled from other rows. Both selection paths, and
+// a whole refine in which the covered splat keeps its slot and the visible picks are freed and refilled.
+TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
+    constexpr size_t n = 200;
+    const auto peak = covered_test_peaks(n);
+    std::vector<size_t> visible;
+    for (size_t i = 50; i < 80; ++i)
+        if (i != 52 && i != 56)
+            visible.push_back(i); // 52 and 56 stay at opacity 0.5: reach 0.024 and 0.032
+    const auto prime = [&](MRNF& s) {
+        s._explore_peak.copy_(Tensor::from_vector(peak, TensorShape({n}), Device::CUDA));
+        s._retire_renders.fill_(100.0f);
+    };
+    std::vector<size_t> off_rows;
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        set_opacity_to_peak(data, peak, visible);
+        auto off = covered_test_strategy(data, n, false);
+        prime(*off);
+        auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+        ASSERT_EQ(off->mark_retirees(100, prune), 10u);
+        off_rows = marked_rows(prune);
+    }
+    std::vector<size_t> expected_off;
+    for (size_t i = 50; i < 60; ++i)
+        expected_off.push_back(i);
+    ASSERT_EQ(off_rows, expected_off);
+    const std::vector<size_t> expected_on{50, 51, 53, 54, 55, 57, 58, 59};
+    {
+        auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+        set_opacity_to_peak(data, peak, visible);
+        auto on = covered_test_strategy(data, n, true);
+        prime(*on);
+        const auto reach = on->covered_reach().cpu().to_vector();
+        EXPECT_LT(reach[52], 0.5f);
+        EXPECT_LT(reach[56], 0.5f);
+        EXPECT_GE(reach[50], 0.5f);
+        auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+        ASSERT_EQ(on->mark_retirees(100, prune), 8u);
+        EXPECT_EQ(marked_rows(prune), expected_on);
+        EXPECT_EQ(on->_last_covered_spared, 2u);
+        // The visible rows retired equal the visible rows retired with the switch off (8 of its 10).
+        size_t off_visible = 0;
+        for (const size_t i : off_rows)
+            off_visible += (i != 52 && i != 56) ? 1 : 0;
+        EXPECT_EQ(marked_rows(prune).size(), off_visible);
+    }
+    // Rank Both: the same picks (peak, summed and pixel-peak impact all rising over 50..79), the same exemption.
+    {
+        std::vector<float> sum(n, 9.0f), impact_peak(n, 0.5f);
+        for (size_t i = 50; i < 80; ++i) {
+            sum[i] = 0.1f + 0.01f * static_cast<float>(i - 50);
+            impact_peak[i] = 0.01f + 0.001f * static_cast<float>(i - 50);
+        }
+        for (const bool keep : {false, true}) {
+            SCOPED_TRACE(keep);
+            auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+            set_opacity_to_peak(data, peak, visible);
+            auto s = covered_test_strategy(data, n, keep, param::MrnfRetireRank::Both);
+            prime(*s);
+            write_impact_window(*s, sum, impact_peak);
+            auto prune = Tensor::zeros_bool({n}, Device::CUDA);
+            ASSERT_EQ(s->mark_retirees(100, prune), keep ? 8u : 10u);
+            EXPECT_EQ(s->_retire_impact_windows, 1);
+            EXPECT_EQ(marked_rows(prune), keep ? expected_on : expected_off);
+            EXPECT_EQ(s->_last_covered_spared, keep ? 2u : 0u);
+        }
+    }
+    // A whole refine: the covered picks keep their slots and rows, the visible picks are freed and refilled.
+    auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
+    set_opacity_to_peak(data, peak, visible);
+    auto refining = covered_test_strategy(data, n, true);
+    prime(*refining);
+    refining->visibility_accumulator().fill_(1.0f);
+    RenderOutput output;
+    refining->post_backward(100, output);
+    EXPECT_EQ(refining->_last_retired, 8u);
+    EXPECT_EQ(refining->_last_covered_spared, 2u);
+    EXPECT_EQ(refining->active_count(), n);
+    const auto renders = refining->_retire_renders.cpu().to_vector();
+    EXPECT_EQ(renders[52], 100.0f);
+    EXPECT_EQ(renders[56], 100.0f);
+    for (const size_t i : expected_on)
+        EXPECT_EQ(renders[i], 0.0f) << i; // retired and refilled
+}

@@ -495,6 +495,10 @@ namespace lfs::core {
             // its percentiles in peak blend weight and in removal impact (the donor impact memory: the later of
             // the ranks by summed and by pixel-peak impact) and retires the lowest.
             MrnfRetireRank mrnf_retire_rank = MrnfRetireRank::Peak;
+            // Covered splats: a splat rendered at least mrnf_retire_grace times has a reach, its peak blend weight
+            // over its opacity (clamped to [0, 1]). Its opacity and scale decay scale by the reach, and splats
+            // with reach below one half are taken back out of the retire quota's pick (not refilled). FastGS only.
+            bool mrnf_keep_covered = false;
             // Removal impact (donor ranking by impact, retire ranking Both) divides each pixel's
             // weight x |colour - colour behind| by the photo's local standard deviation (the SSIM window,
             // mean over channels) plus impact_contrast_eps, so a splat counts by the structure it carries

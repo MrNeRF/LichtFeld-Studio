@@ -115,6 +115,9 @@ class MRNFStrategyTest_RetireRankBothFoldsTheWindowImpactApartFromTheDonors_Test
 class MRNFStrategyTest_ImpactContrastNormDividesByThePhotoDeviation_Test;
 class MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
 class MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
+class MRNFStrategyTest_KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical_Test;
+class MRNFStrategyTest_KeepCoveredDecayScalesByTheReach_Test;
+class MRNFStrategyTest_KeepCoveredTakesCoveredPicksOutOfTheRetireQuota_Test;
 
 namespace lfs::training {
 
@@ -271,6 +274,9 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_ImpactContrastNormDividesByThePhotoDeviation_Test;
         friend class ::MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
         friend class ::MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
+        friend class ::MRNFStrategyTest_KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical_Test;
+        friend class ::MRNFStrategyTest_KeepCoveredDecayScalesByTheReach_Test;
+        friend class ::MRNFStrategyTest_KeepCoveredTakesCoveredPicksOutOfTheRetireQuota_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
         // Frees rows the way refine() prunes them: free mask, deleted mask, zero
@@ -354,6 +360,16 @@ namespace lfs::training {
         void close_keep_long_window();
         // [N] flags of the receivers that split across this refine (empty when keep-long is off).
         [[nodiscard]] lfs::core::Tensor keep_long_split_across() const;
+        // Keep covered (mrnf_keep_covered, FastGS): the peak and render rows of retirement are kept from the
+        // first step, also without the retire quota. A row past the retire grace has reach
+        // clamp(peak / max(opacity, 1e-6), 0, 1), the others 1; both decays of a row scale by its reach, and the
+        // quota's pick drops rows with reach below MRNF_COVERED_REACH (not refilled from other rows).
+        [[nodiscard]] bool keep_covered_on() const;
+        // [N] reach of every row (empty when keep covered is off or the rows do not match the model).
+        [[nodiscard]] lfs::core::Tensor covered_reach() const;
+        // The keep-covered census line of a refine: live rows past the grace that stay (not in prune_mask), those
+        // with reach below MRNF_COVERED_REACH, and the quota picks spared this refine.
+        void log_keep_covered(int iter, const lfs::core::Tensor& prune_mask);
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
         // After the backward: walks the splats rendered in this step and clears the step's marks.
@@ -515,6 +531,7 @@ namespace lfs::training {
         lfs::core::Tensor _spare_window_sigma; // [N] smallest raw minor sigma (px) this refine window, +inf: undrawn
         lfs::core::Tensor _spare_sigma;        // [N] that minimum for the last window that drew the splat, +inf: none
         size_t _last_spared = 0;
+        size_t _last_covered_spared = 0;           // quota picks with reach below MRNF_COVERED_REACH kept this refine
         lfs::core::Tensor _retire_impact_sum;      // [N] faded max of the window summed removal impact (rank Both)
         lfs::core::Tensor _retire_impact_peak;     // [N] faded max of the window pixel-peak removal impact (rank Both)
         int _retire_impact_windows = 0;            // windows folded into the retire impact rows

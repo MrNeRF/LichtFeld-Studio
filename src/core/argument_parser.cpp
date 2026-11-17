@@ -75,6 +75,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--mrnf-retire-grace", "mrnf_retire_grace", Integer},
             OptimizationCliBinding{"--mrnf-retire-spare-px", "mrnf_retire_spare_px", Float},
             OptimizationCliBinding{"--mrnf-retire-rank", "mrnf_retire_rank", Enum, false, "; values: peak, both"},
+            OptimizationCliBinding{"--mrnf-keep-covered", "mrnf_keep_covered", Bool},
             OptimizationCliBinding{"--impact-contrast-norm", "impact_contrast_norm", Bool},
             OptimizationCliBinding{"--per-splat-bias-correction", "per_splat_bias_correction", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
@@ -870,6 +871,7 @@ namespace {
                 std::unordered_map<std::string, lfs::core::param::MrnfRetireRank>{
                     {"peak", lfs::core::param::MrnfRetireRank::Peak},
                     {"both", lfs::core::param::MrnfRetireRank::Both}});
+            ::args::Flag mrnf_keep_covered(training_group, "mrnf_keep_covered", lfs::core::args::optimization_cli_help("--mrnf-keep-covered"), {"mrnf-keep-covered"});
             ::args::Flag impact_contrast_norm(training_group, "impact_contrast_norm", lfs::core::args::optimization_cli_help("--impact-contrast-norm"), {"impact-contrast-norm"});
             ::args::ValueFlag<float> receiver_keep_long(training_group, "pixels", lfs::core::args::optimization_cli_help("--receiver-keep-long"), {"receiver-keep-long"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
@@ -1704,6 +1706,7 @@ namespace {
                                         mrnf_retire_grace_val = cli_option_present({"--mrnf-retire-grace"}) ? std::optional<int>(::args::get(mrnf_retire_grace)) : std::optional<int>(),
                                         mrnf_retire_spare_px_val = cli_option_present({"--mrnf-retire-spare-px"}) ? std::optional<float>(::args::get(mrnf_retire_spare_px)) : std::optional<float>(),
                                         mrnf_retire_rank_val = cli_option_present({"--mrnf-retire-rank"}) ? std::optional<lfs::core::param::MrnfRetireRank>(::args::get(mrnf_retire_rank)) : std::optional<lfs::core::param::MrnfRetireRank>(),
+                                        mrnf_keep_covered_flag = bool(mrnf_keep_covered),
                                         impact_contrast_norm_flag = bool(impact_contrast_norm),
                                         receiver_keep_long_val = cli_option_present({"--receiver-keep-long"}) ? std::optional<float>(::args::get(receiver_keep_long)) : std::optional<float>(),
                                         thin_structure_weight_val = cli_option_present({"--thin-structure-weight"}) ? std::optional<float>(::args::get(thin_structure_weight)) : std::optional<float>(),
@@ -1910,6 +1913,8 @@ namespace {
                 setVal(receiver_keep_long_val, opt.receiver_keep_long);
                 if (impact_contrast_norm_flag)
                     opt.impact_contrast_norm = true;
+                if (mrnf_keep_covered_flag)
+                    opt.mrnf_keep_covered = true;
                 setVal(thin_structure_weight_val, opt.thin_structure_weight);
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
@@ -2113,6 +2118,7 @@ namespace {
                 note_opt("mrnf_retire_spare_px", mrnf_retire_spare_px_val.has_value());
                 note_opt("mrnf_retire_rank", mrnf_retire_rank_val.has_value());
                 note_opt("impact_contrast_norm", impact_contrast_norm_flag);
+                note_opt("mrnf_keep_covered", mrnf_keep_covered_flag);
                 note_opt("receiver_keep_long", receiver_keep_long_val.has_value());
                 note_opt("thin_structure_weight", thin_structure_weight_val.has_value());
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
