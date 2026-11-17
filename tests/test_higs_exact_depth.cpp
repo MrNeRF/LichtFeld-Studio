@@ -10,7 +10,6 @@
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "window/vulkan_context.hpp"
-#include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 #include <array>
 #include <cmath>
@@ -32,9 +31,12 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
     struct VideoGuard {
         ~VideoGuard() { SDL_QuitSubSystem(SDL_INIT_VIDEO); }
     } video_guard;
-    lfs::vis::WindowManager window("HiGS exact depth regression", 64, 64);
-    ASSERT_TRUE(window.init());
-    auto& context = *window.getVulkanContext();
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("HiGS exact depth regression", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN),
+        SDL_DestroyWindow);
+    ASSERT_TRUE(window) << SDL_GetError();
+    lfs::vis::VulkanContext context;
+    ASSERT_TRUE(context.init(window.get(), 64, 64)) << context.lastError();
     lfs::rendering::setExpectedVulkanDeviceUuid(context.deviceUUID());
     using lfs::core::Device;
     using lfs::core::Tensor;
