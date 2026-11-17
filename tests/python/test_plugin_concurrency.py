@@ -304,7 +304,8 @@ class TestPluginConcurrency:
         init_file = plugin.info.path / "__init__.py"
         stamp = init_file.stat()
         init_file.write_text(init_file.read_text() + "\n# changed content")
-        os.utime(init_file, (stamp.st_atime, stamp.st_mtime))
+        os.utime(init_file, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        assert init_file.stat().st_mtime_ns == stamp.st_mtime_ns
         watcher._check_for_changes()
         assert bool(watcher._pending_reloads) == hot_reload
         assert plugin.needs_restart == (not hot_reload)
