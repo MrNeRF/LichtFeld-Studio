@@ -99,6 +99,7 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -21273,7 +21274,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             if (!cuda_device_available()) {
                 GTEST_SKIP() << "CUDA device unavailable";
             }
-            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
         }
 
         void TearDown() override {
@@ -21364,6 +21365,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         }
 
         void expectDeferredMaintenanceAndExplicitCapture(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            CapturingErrorConsumer consumer;
+            auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
             auto& lifecycle = *viewer.project_lifecycle_;
             EXPECT_EQ(lifecycle.document_->find_splat(uuid), nullptr);
             lifecycle.last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
@@ -21371,12 +21374,31 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             lifecycle.updateMaintenance();
             EXPECT_EQ(lifecycle.autosave_failure_backoff_seconds_, 60u);
             EXPECT_TRUE(lifecycle.autosave_memory_warning_published_);
-            lifecycle.last_project_write_error_.clear();
+            const auto messages = consumer.user_messages.size();
+            ASSERT_GT(messages, 0u);
             lifecycle.updateMaintenance();
-            EXPECT_TRUE(lifecycle.last_project_write_error_.empty()) << "retry must respect backoff";
+            EXPECT_TRUE(lifecycle.autosave_memory_warning_published_);
+            lifecycle.autosave_retry_not_before_ = {};
+            lifecycle.updateMaintenance();
+            EXPECT_EQ(lifecycle.autosave_failure_backoff_seconds_, 120u);
+            EXPECT_EQ(consumer.user_messages.size(), messages) << "one warning per failure streak";
             // Explicit synchronization still supports the synchronous fallback.
             ASSERT_TRUE(lifecycle.synchronizeDocumentFromViewer());
             ASSERT_NE(lifecycle.document_->find_splat(uuid), nullptr);
+        }
+
+        void expectPartialCapture(VisualizerImpl& viewer, const lfs::core::Uuid& first,
+                                  const lfs::core::Uuid& second) {
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            auto& lifecycle = *viewer.project_lifecycle_;
+            ASSERT_TRUE(lifecycle.startAutosave());
+            ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            EXPECT_NE(lifecycle.document_->find_splat(first), nullptr);
+            EXPECT_EQ(lifecycle.document_->find_splat(second), nullptr);
+            EXPECT_TRUE(lifecycle.hasDirtyProject());
         }
     };
 
@@ -21497,6 +21519,28 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
         expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, AutosaveMakesProgressWhenOnlyOneSnapshotFits) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto first = scene.addSplat("First", cudaSplat(64));
+        const auto second = scene.addSplat("Second", cudaSplat(128));
+        ASSERT_NE(first, lfs::core::NULL_NODE);
+        ASSERT_NE(second, lfs::core::NULL_NODE);
+        const auto first_uuid = scene.getNodeById(first)->uuid;
+        const auto second_uuid = scene.getNodeById(second)->uuid;
+        // The first snapshot fits; the second must wait for its memory to be released.
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [queries = 0](lfs::core::MemoryDomain) mutable -> std::size_t {
+                return ++queries == 2 ? 0 : std::numeric_limits<std::size_t>::max() / 2;
+            });
+        ASSERT_NO_FATAL_FAILURE(expectPartialCapture(viewer, first_uuid, second_uuid));
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
+        EXPECT_EQ(autosaveCaptures(viewer, first_uuid), 0) << "retain the first snapshot";
+        expectAutosavedGaussians(viewer, first_uuid);
+        expectAutosavedGaussians(viewer, second_uuid);
     }
 
     TEST_F(PayloadRecaptureTest, SavedProjectSceneEditsDoNotRecapture) {

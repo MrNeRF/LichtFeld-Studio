@@ -481,12 +481,6 @@ namespace {
                               Tensor{}, cpu->scaling_raw().to(Device::CUDA),
                               cpu->rotation_raw().to(Device::CUDA), cpu->opacity_raw().to(Device::CUDA), 1.0f);
         CaptureHeadroomGuard headroom(true);
-        auto pending = SplatChapterPayload::start_async_capture(
-            model, lfs::io::project::SplatSourceKind::Generated, false);
-        ASSERT_TRUE(pending.has_value())
-            << lfs::format_for_developer(pending.error());
-        EXPECT_FALSE(*pending);
-
         auto deferred = SplatChapterPayload::start_async_capture(
             model, lfs::io::project::SplatSourceKind::Generated, false,
             lfs::io::project::SplatCaptureFallback::Defer);
@@ -505,7 +499,7 @@ namespace {
                 lfs::io::project::detail::set_splat_capture_stream_hook_for_testing({});
             }
         } allocation_failure;
-        pending = SplatChapterPayload::start_async_capture(
+        auto pending = SplatChapterPayload::start_async_capture(
             model, lfs::io::project::SplatSourceKind::Generated, false);
         ASSERT_TRUE(pending.has_value());
         EXPECT_FALSE(*pending);
