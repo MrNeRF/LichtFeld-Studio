@@ -2801,12 +2801,6 @@ namespace lfs::io::project {
                 }
                 result.payload = std::move(*parsed);
             }
-            if (const Json* enabled = JsonChapterDom::read_json_ref(element, "crop_effects_enabled")) {
-                if (!enabled->is_boolean())
-                    return fail<SceneNodeRecord>(lfs::ErrorCode::DataLoss, "Invalid crop group state.", "crop_effects_enabled must be boolean", "SCNG", "nodes.crop_effects_enabled");
-                result.crop_effects_enabled = enabled->get<bool>();
-            }
-
             if (const Json* cropbox =
                     JsonChapterDom::read_json_ref(element, "cropbox");
                 cropbox) {
@@ -2945,6 +2939,28 @@ namespace lfs::io::project {
         return *cached_nodes_;
     }
 
+    lfs::Result<std::optional<PublishedSplatMetadata>> SceneGraphChapter::published_splat_metadata(
+        const lfs::core::Uuid& uuid) const {
+        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto metadata = element ? element->get_json("publication") : std::nullopt;
+        if (!metadata)
+            return std::optional<PublishedSplatMetadata>{};
+        const auto invalid = [] {
+            return fail<std::optional<PublishedSplatMetadata>>(
+                lfs::ErrorCode::DataLoss, "The published splat metadata is invalid.",
+                "Invalid publication count or SH degree", "SCNG", "nodes.publication");
+        };
+        if (!metadata->is_object() || !metadata->contains("count") ||
+            !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
+            !metadata->at("sh_degree").is_number_integer())
+            return invalid();
+        const auto count = metadata->at("count").get<std::int64_t>();
+        const auto degree = metadata->at("sh_degree").get<std::int64_t>();
+        if (count <= 0 || degree < 0 || degree > 3)
+            return invalid();
+        return std::optional<PublishedSplatMetadata>{PublishedSplatMetadata{static_cast<std::uint64_t>(count), static_cast<int>(degree)}};
+    }
+
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
         const lfs::core::Uuid& uuid) const {
         if (uuid.is_nil()) {
@@ -3031,12 +3047,6 @@ namespace lfs::io::project {
             element["visible"] = value.visible;
             element["locked"] = value.locked;
             element["training_enabled"] = value.training_enabled;
-            // The gate defaults to true. Avoid adding a crop-only key to every
-            // camera in large datasets, while clearing a previously stored override.
-            if (!value.crop_effects_enabled)
-                element["crop_effects_enabled"] = false;
-            else
-                element.erase("crop_effects_enabled");
             element["payload_diverged"] = value.payload_diverged;
             if (value.point_cloud_source)
                 element["point_cloud_source"] = true;

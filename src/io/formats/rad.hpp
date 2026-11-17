@@ -79,8 +79,8 @@ namespace lfs::io {
         std::span<std::uint8_t> dst);
 
     // Load RAD (Random Access Dynamic) format - chunked hierarchical Gaussian splat format.
-    // Overrides exist for deterministic tests; production callers use the
-    // heuristics (out-of-core when the workset exceeds half of available RAM).
+    // Explicit overrides support full-detail export and deterministic tests.
+    // Viewer callers use heuristics (out-of-core when the workset exceeds half of available RAM).
     struct RadLoadOverrides {
         std::optional<bool> out_of_core;
         std::optional<std::size_t> preview_splats;

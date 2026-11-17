@@ -200,7 +200,6 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::Camera> camera;
         int camera_uid = -1;
         bool training_enabled = true;
-        bool crop_effects_enabled = true;
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
@@ -279,7 +278,6 @@ namespace lfs::core {
             bool visible = true;
             bool locked = false;
             bool training_enabled = true;
-            bool crop_effects_enabled = true;
             bool payload_diverged = false;
             bool point_cloud_source = false;
             PayloadHydrationState payload_hydration =
@@ -486,7 +484,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableCropBox> getRenderableCropBoxes() const;
 
@@ -504,7 +501,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
@@ -523,7 +519,6 @@ namespace lfs::core {
             glm::mat4 local_transform{1.0f};
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
-            bool crop_effects_enabled = true;
         };
         [[nodiscard]] std::vector<RenderableCropPolygon> getRenderableCropPolygons() const;
 

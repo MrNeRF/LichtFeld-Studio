@@ -33,6 +33,23 @@ def test_private_directory_requires_parent(tmp_path):
         mkdir_private(tmp_path / "missing" / "private")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended filesystem paths")
+def test_windows_private_directory_long_path(tmp_path):
+    from _lfs_path_io import Path as IOPath
+
+    root = IOPath(tmp_path) / "long-private"
+    path = root.joinpath(*(["nested-" + "x" * 45] * 6))
+    try:
+        mkdir_private(path, parents=True)
+        marker = path / "marker"
+        marker.write_text("preserve")
+        mkdir_private(path, exist_ok=True)
+        assert marker.read_text() == "preserve"
+    finally:
+        if root.exists():
+            shutil.rmtree(root)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows private DACL")
 def test_windows_private_acl_grants_user_and_preserves_existing_acl(tmp_path):
     import ctypes

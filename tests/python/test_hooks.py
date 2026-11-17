@@ -314,3 +314,31 @@ def test_headless_training_hook_outcome(tmp_path, gpu_available, outcome):
         assert type(step["is_paused"]) is bool
         assert "terminal_state" not in step
     assert (process.returncode != 0) == (outcome == "failed")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("exit_code", [None, 0, 7, "failure"])
+def test_headless_scripts_handle_exit_without_dataset(tmp_path, exit_code):
+    root = Path(__file__).resolve().parents[2]
+    build = Path(os.environ.get("LFS_TEST_BUILD_DIR", os.environ.get("LFS_BUILD_DIR", root / "build")))
+    executable = Path(os.environ.get("LFS_EXECUTABLE", build / ("LichtFeld-Studio.exe" if os.name == "nt" else "LichtFeld-Studio")))
+    assert executable.is_file(), f"Build the executable first: {executable}"
+    first = tmp_path / "script-café.py"
+    second = tmp_path / "second.py"
+    proof = tmp_path / "order.txt"
+    first.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        f"proof = Path({str(proof)!r})\n"
+        "assert Path(__file__).name == 'script-café.py'\n"
+        "proof.write_text('first', encoding='utf-8')\n"
+        f"sys.exit({exit_code!r})\n", encoding="utf-8")
+    second.write_text("proof.write_text(proof.read_text(encoding='utf-8') + ':second', encoding='utf-8')\n", encoding="utf-8")
+    environment = {**os.environ, "CUDA_VISIBLE_DEVICES": "-1", "LFS_HOME": str(tmp_path / "home")}
+    for name in ("PYTHONHOME", "PYTHONPATH"):
+        environment.pop(name, None)
+    process = subprocess.run([str(executable), "--headless", "--python-script", str(first),
+                              "--python-script", str(second)], env=environment,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    success = exit_code in (None, 0)
+    assert (process.returncode == 0) == success, process.stdout.decode("utf-8", errors="replace")
+    assert proof.read_text(encoding="utf-8") == ("first:second" if success else "first")
