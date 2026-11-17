@@ -81,6 +81,7 @@ namespace {
                              "  JXL: [--jxl-distance N (enables lossy)] [--jxl-effort N] [--overwrite] (Float32 SDR default; --jxl-precision float32|uint16; --jxl-transfer linear|srgb; effort 4..9 for lossless Float32, otherwise 1..9)\n"
                              "  EXR: [--exr-precision half|float] [--exr-compression zip|none] [--overwrite]\n"
                              "       [--float-profile sdr|pq-nits|hlg-scene] [--input-transfer auto|linear|srgb|bt709] [--input-primaries auto|bt709|bt2020]\n";
+                std::cout << "  [--dji-stream INDEX] (exact container PTS; requires image metadata output)\n";
                 std::cout << "  [--srt-metadata SIDECAR --srt-offset-ms N [--srt-point-tolerance-ms N]] (requires image metadata output)\n";
                 return 0;
             }
@@ -196,6 +197,7 @@ namespace {
             FileExtraction output;
             std::filesystem::path srt_path;
             std::optional<std::int64_t> srt_offset, srt_tolerance;
+            std::optional<int> dji_frame_stream;
             ProbeOptions probe;
             bool dji_metadata_requested = false;
             std::optional<std::size_t> timed_bytes, timed_records;
@@ -320,7 +322,11 @@ namespace {
                     output.files.embed_source_metadata = true;
                 else if (flag == "--source-metadata-sidecars")
                     output.write_source_metadata_sidecars = true;
-                else if (flag == "--srt-metadata") {
+                else if (flag == "--dji-stream") {
+                    if (dji_frame_stream)
+                        throw std::invalid_argument("Specify --dji-stream once");
+                    dji_frame_stream = number<int>(value());
+                } else if (flag == "--srt-metadata") {
                     if (!srt_path.empty())
                         throw std::invalid_argument("Specify SRT metadata once");
                     srt_path = lfs::core::utf8_to_path(value());
@@ -400,10 +406,6 @@ namespace {
             } else if (exr_options) {
                 throw std::invalid_argument("EXR options require --format exr");
             }
-            cancellation = 0;
-            std::signal(SIGINT, interrupt);
-            std::signal(SIGTERM, interrupt);
-            request.cancelled = [] { return cancellation != 0; };
             if (!quiet)
                 request.progress = [](const IngestProgress& p) {
                     std::cerr << json{{"event", "progress"}, {"processed", p.processed}, {"estimated", p.estimated}, {"discarded", p.discarded}}.dump() << '\n';
@@ -418,6 +420,26 @@ namespace {
                     return failed(catalog.error());
                 output.files.srt_metadata = SrtFrameMetadata{std::move(*catalog), *srt_offset, srt_tolerance};
             }
+            if (dji_frame_stream) {
+                if (!output.files.embed_source_metadata && !output.write_source_metadata_sidecars)
+                    throw std::invalid_argument("DJI frame metadata requires image metadata output");
+                ProbeOptions options;
+                options.depth = ProbeDepth::Headers;
+                options.timed_metadata_stream = *dji_frame_stream;
+                auto observed = MediaIngest::probe(request.input, options);
+                if (!observed)
+                    return failed(observed.error());
+                auto binding = DjiFrameMetadata::create(*observed->timed_metadata);
+                if (!binding)
+                    return failed(binding.error());
+                output.files.dji_metadata = std::move(*binding);
+            }
+            // Metadata preflight keeps the standalone probe's default signal
+            // behavior; cooperative cancellation starts with image extraction.
+            cancellation = 0;
+            std::signal(SIGINT, interrupt);
+            std::signal(SIGTERM, interrupt);
+            request.cancelled = [] { return cancellation != 0; };
             const auto result = MediaIngest::extractFiles(request, output);
             if (!result)
                 return failed(result.error());

@@ -3068,6 +3068,40 @@ class IngestCLI(unittest.TestCase):
         self.assertIn(str(output),result["error"]["message"])
         self.assertIn("native",result["error"])
         self.assertEqual(output.read_bytes(),b"keep")
+    @unittest.skipIf(sys.platform == "win32", "POSIX FIFO and signal contract")
+    def test_sigterm_interrupts_dji_metadata_preflight(self):
+        import errno
+        import time
+        pending = self.root / "pending telemetry.mp4"
+        os.mkfifo(pending)
+        output = self.root / "preflight-cancelled"
+        process = subprocess.Popen([str(CLI), "extract", str(pending), "--output", str(output),
+                                    "--dji-stream", "0", "--embed-source-metadata"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        writer = None
+        try:
+            # A writer can open only once the child has reached the FIFO reader.
+            # Keep it open without bytes so the metadata probe cannot complete.
+            deadline = time.monotonic() + 20
+            while writer is None and process.poll() is None and time.monotonic() < deadline:
+                try:
+                    writer = os.open(pending, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as error:
+                    if error.errno != errno.ENXIO:
+                        raise
+                    time.sleep(.01)
+            self.assertIsNotNone(writer, "CLI must reach the metadata input")
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, -signal.SIGTERM, (stdout, stderr))
+            self.assertFalse(output.exists())
+        finally:
+            if writer is not None:
+                os.close(writer)
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
     @unittest.skipIf(sys.platform == "win32", "Windows terminate() does not deliver a CRT SIGTERM")
     def test_sigterm_cancels_and_preserves_written_frames(self):
         source=self.root/"long.nut"

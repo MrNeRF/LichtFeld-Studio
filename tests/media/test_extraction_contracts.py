@@ -379,23 +379,34 @@ class ExtractionContracts(unittest.TestCase):
         encoded = next(files.glob("*.jpg"))
         sidecar = self.root / "backend telemetry.srt"
         sidecar.write_bytes(packet())
-        for hardware, resume in ((False, False), (True, False), (True, True)):
-            with self.subTest(hardware=hardware, resume=resume):
+        dji = fixtures.dji_ac204(self.root, with_video=True, ffmpeg=FFMPEG, padding=b"unknown\x00<>&" * 8000)
+        for hardware, resume, use_dji in ((h, r, d) for d in (False, True) for h, r in ((False, False), (True, False), (True, True))):
+            with self.subTest(hardware=hardware, resume=resume, dji=use_dji):
                 work = Path(tempfile.mkdtemp(prefix="timed-jpeg-", dir=self.root))
                 output = work / "output"
                 request = {"operation": "jpeg-backend", "input": str(self.corpus / "cfr-asymmetric.nut"), "output": str(output),
                            "backend_mode": "normal", "allow_hardware": hardware, "encoded_reference": str(encoded),
                            "embed_metadata": True, "resume": resume, "srt_path": str(sidecar), "srt_offset_ms": 0}
+                if use_dji:
+                    request["input"] = str(dji)
+                    del request["srt_path"], request["srt_offset_ms"]
+                    request["dji_metadata_stream"] = 1
                 path = work / "request.json"
                 path.write_text(json.dumps(request), encoding="utf-8")
                 result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 actual = json.loads(result.stdout)
                 self.assertTrue(actual["success"], actual)
-                self.assertEqual(actual["accepted"], 4)
+                self.assertEqual(actual["accepted"], 6 if use_dji else 4)
                 self.assertEqual(actual["batches"] > 0, hardware)
-                observed = [json.loads(read(image.read_bytes())[3]["SrtObservation"])["match"] for image in sorted(output.glob("*.jpg"))]
-                self.assertEqual([value["cue"] if value else None for value in observed], [0, 0, None, None])
+                field = "DjiObservation" if use_dji else "SrtObservation"
+                decoded = [read(image.read_bytes()) for image in sorted(output.glob("*.jpg"))]
+                observed = [json.loads(image[3][field])["match"] for image in decoded]
+                if use_dji:
+                    self.assertGreater(decoded[0][5], 0)
+                    self.assertTrue(bytes.fromhex(observed[0]["bytes"]).endswith(b"unknown\x00<>&" * 8000))
+                actual_indices = [(value["metadata"]["sequence"] if use_dji else value["cue"]) if value else None for value in observed]
+                self.assertEqual(actual_indices, list(range(6)) if use_dji else [0, 0, None, None])
                 if resume:
                     previous = {image.name: image.read_bytes() for image in output.glob("*.jpg")}
                     result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)

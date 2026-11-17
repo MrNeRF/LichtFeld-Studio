@@ -71,6 +71,18 @@ nlohmann::json runJpegBackendContracts(const nlohmann::json& request) {
             throw std::runtime_error(std::string(catalog.error().detail()));
         files.files.srt_metadata = media::SrtFrameMetadata{std::move(*catalog), request.at("srt_offset_ms").get<std::int64_t>()};
     }
+    if (request.contains("dji_metadata_stream")) {
+        media::ProbeOptions options;
+        options.depth = media::ProbeDepth::Headers;
+        options.timed_metadata_stream = request.at("dji_metadata_stream").get<int>();
+        auto observed = media::MediaProbe::inspect(input.input, options);
+        if (!observed)
+            throw std::runtime_error(std::string(observed.error().detail()));
+        auto binding = media::DjiFrameMetadata::create(*observed->timed_metadata);
+        if (!binding)
+            throw std::runtime_error(std::string(binding.error().detail()));
+        files.files.dji_metadata = std::move(*binding);
+    }
     files.files.image_output.overwrite = request.value("overwrite", true);
     files.write_source_metadata_sidecars = request.value("write_sidecars", false);
     if (request.value("cancel_after_cleanup", false))

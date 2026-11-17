@@ -26,11 +26,13 @@ SPECS = (
 )
 
 
-def dji_ac204(directory):
-    """Original packet payloads in an independent, synthetic single-track MP4.
+def dji_ac204(directory, *, with_video=False, ffmpeg="ffmpeg", padding=b""):
+    """Pinned DJI payloads in a synthetic MP4 with optional video and padding.
 
     The 30,000/1,001 clock is a test input, not original device timing.
-    No video codec, decoder or network is involved.
+    The default data-only carrier needs no codec. with_video adds six synthetic
+    MPEG-4 frames for offline extraction tests; neither form is a camera original.
+    Padding appends an unknown field to the first packet for large-XMP tests.
     """
     import struct
     corpus = Path(__file__).resolve().parents[1] / "tests/media/fixtures/dji-ac204/ac204_djmd_first300.bin"
@@ -43,6 +45,41 @@ def dji_ac204(directory):
             raise ValueError("truncated DJI packet fixture")
         samples.append(data[offset:offset + size])
         offset += size
+    if padding:
+        # Unknown Product field100, wire2: exercise preservation/Extended XMP
+        # without changing any interpreted camera values.
+        length, encoded = len(padding), bytearray()
+        while length >= 128:
+            encoded.append((length & 127) | 128)
+            length >>= 7
+        encoded.append(length)
+        samples[0] += b"\xa2\x06" + bytes(encoded) + padding
+    video_prefix, video_children = b"", b""
+    movie_timescale = 30000
+    if with_video:
+        samples = samples[:6]
+        # Keep the video mdat offsets unchanged and append a separate data mdat.
+        video = directory / "dji-carrier-video.mp4"
+        run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc2=size=64x32:rate=30000/1001", "-frames:v", "6",
+                        "-c:v", "mpeg4", "-bf", "2", "-colorspace", "bt709", "-color_trc", "bt709", "-color_primaries", "bt709", "-color_range", "tv", "-movflags", "+write_colr", str(video)])
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("srt_fixture", Path(__file__).resolve().parents[1] / "tests/media/srt_metadata_fixture.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        data = video.read_bytes()
+        moov = next(offset for offset, kind in helper.mp4_boxes(data) if kind == b"moov")
+        size, = struct.unpack_from(">I", data, moov)
+        if moov + size != len(data):
+            raise ValueError("synthetic video moov must be last")
+        mvhd_offset = next(offset for offset, kind in helper.mp4_boxes(data) if kind == b"mvhd")
+        if data[mvhd_offset + 8] != 0:
+            raise ValueError("synthetic video mvhd must use version zero")
+        movie_timescale, = struct.unpack_from(">I", data, mvhd_offset + 20)
+        mvhd_size, = struct.unpack_from(">I", data, mvhd_offset)
+        children = bytearray(data[moov + 8:])
+        struct.pack_into(">I", children, mvhd_offset - moov - 8 + mvhd_size - 4, 3)
+        video_prefix, video_children = data[:moov], bytes(children)
     def u32(*values):
         return struct.pack(">" + "I" * len(values), *values)
     def box(kind, payload):
@@ -54,7 +91,8 @@ def dji_ac204(directory):
     ftyp = box(b"ftyp", b"isom" + u32(0) + b"isommp42")
     mdat = box(b"mdat", b"".join(samples))
     mvhd = full(b"mvhd", u32(0, 0, 30000, duration, 0x10000) + b"\x01\x00" + bytes(10) + identity + bytes(24) + u32(2))
-    tkhd = full(b"tkhd", u32(0, 0, 1, 0, duration) + bytes(16) + identity + bytes(8), flags=3)
+    track_duration = (duration * movie_timescale + 29999) // 30000
+    tkhd = full(b"tkhd", u32(0, 0, 2 if with_video else 1, 0, track_duration) + bytes(16) + identity + bytes(8), flags=3)
     mdhd = full(b"mdhd", u32(0, 0, 30000, duration) + bytes(4))
     hdlr = full(b"hdlr", u32(0) + b"meta" + bytes(12) + b"DJI fixture\0")
     dref = full(b"dref", u32(1) + full(b"url ", b"", flags=1))
@@ -62,12 +100,12 @@ def dji_ac204(directory):
     stts = full(b"stts", u32(1, len(samples), 1001))
     stsc = full(b"stsc", u32(1, 1, len(samples), 1))
     stsz = full(b"stsz", u32(0, len(samples), *map(len, samples)))
-    stco = full(b"stco", u32(1, len(ftyp) + 8))
+    stco = full(b"stco", u32(1, len(video_prefix or ftyp) + 8))
     stbl = box(b"stbl", stsd + stts + stsc + stsz + stco)
     minf = box(b"minf", full(b"nmhd", b"") + box(b"dinf", dref) + stbl)
     trak = box(b"trak", tkhd + box(b"mdia", mdhd + hdlr + minf))
     output = directory / "dji-ac204 é 日本語.mp4"
-    output.write_bytes(ftyp + mdat + box(b"moov", mvhd + trak))
+    output.write_bytes((video_prefix or ftyp) + mdat + box(b"moov", (video_children or mvhd) + trak))
     return output
 
 

@@ -94,7 +94,18 @@ namespace lfs::python {
             .def_ro("catalog", &SrtFrameMetadata::catalog)
             .def_ro("offset_milliseconds", &SrtFrameMetadata::offset_milliseconds)
             .def_ro("point_tolerance_milliseconds", &SrtFrameMetadata::point_tolerance_milliseconds);
-        nb::class_<FileFrameSinkOptions>(m, "FileFrameSinkOptions").def(nb::init<>()).def_rw("output_directory", &FileFrameSinkOptions::output_directory).def_rw("filename_pattern", &FileFrameSinkOptions::filename_pattern).def_rw("format", &FileFrameSinkOptions::format).def_rw("jpeg_quality", &FileFrameSinkOptions::jpeg_quality).def_rw("exr", &FileFrameSinkOptions::exr).def_rw("tiff16", &FileFrameSinkOptions::tiff16).def_rw("jxl", &FileFrameSinkOptions::jxl).def_rw("avif", &FileFrameSinkOptions::avif).def_rw("embed_source_metadata", &FileFrameSinkOptions::embed_source_metadata).def_rw("srt_metadata", &FileFrameSinkOptions::srt_metadata);
+        nb::class_<DjiFrameMetadata>(m, "DjiFrameMetadata")
+            .def_prop_ro("sample_count", [](const DjiFrameMetadata& value) { return value.samples().size(); })
+            .def("lookup_json", [](const DjiFrameMetadata& value, Timestamp query) {
+                nb::gil_scoped_release release;
+                try {
+                    auto result = json_detail::djiFrameLookup(value, query);
+                    if (!result) throw Exception(result.error());
+                    return json_detail::dump(*result);
+                } catch (const std::bad_alloc&) {
+                    throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()}));
+                } }, nb::arg("timestamp"), "Match a container presentation timestamp exactly. Gaps return null; no interpolation, hold or camera-clock conversion.");
+        nb::class_<FileFrameSinkOptions>(m, "FileFrameSinkOptions").def(nb::init<>()).def_rw("output_directory", &FileFrameSinkOptions::output_directory).def_rw("filename_pattern", &FileFrameSinkOptions::filename_pattern).def_rw("format", &FileFrameSinkOptions::format).def_rw("jpeg_quality", &FileFrameSinkOptions::jpeg_quality).def_rw("exr", &FileFrameSinkOptions::exr).def_rw("tiff16", &FileFrameSinkOptions::tiff16).def_rw("jxl", &FileFrameSinkOptions::jxl).def_rw("avif", &FileFrameSinkOptions::avif).def_rw("embed_source_metadata", &FileFrameSinkOptions::embed_source_metadata).def_rw("srt_metadata", &FileFrameSinkOptions::srt_metadata, nb::rv_policy::copy).def_rw("dji_metadata", &FileFrameSinkOptions::dji_metadata, nb::rv_policy::copy);
         nb::class_<FileExtraction>(m, "FileExtraction").def(nb::init<>()).def_rw("files", &FileExtraction::files).def_rw("write_metadata", &FileExtraction::write_metadata).def_rw("resume", &FileExtraction::resume).def_rw("preserve_source_metadata", &FileExtraction::preserve_source_metadata).def_rw("write_source_metadata_sidecars", &FileExtraction::write_source_metadata_sidecars);
         nb::class_<Rational>(m, "Rational").def(nb::init<>()).def_rw("numerator", &Rational::numerator).def_rw("denominator", &Rational::denominator);
         nb::class_<Timestamp>(m, "Timestamp").def(nb::init<>()).def_rw("ticks", &Timestamp::ticks).def_rw("time_base", &Timestamp::time_base);
@@ -112,7 +123,13 @@ namespace lfs::python {
                 const auto result = interpretDjiMetadata(*value.timed_metadata);
                 if (!result) throw Exception(result.error());
                 try { return json_detail::dump(json_detail::djiMetadata(*result)); }
-                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "DJI JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Interpret collected DJI Action 4/5 djmd packets. Returns one sample per packet, with camera timestamps in microseconds since power-up.");
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "DJI JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Interpret collected DJI Action 4/5 djmd packets. Returns one sample per packet, with camera timestamps in microseconds since power-up.").def("dji_frame_metadata", [](const MediaDescription& value) {
+                if (!value.timed_metadata)
+                    throw Exception(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "DJI frame metadata requires collected timed packets", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                nb::gil_scoped_release release;
+                auto result = DjiFrameMetadata::create(*value.timed_metadata);
+                if (!result) throw Exception(result.error());
+                return std::move(*result); }, "Bind collected DJI packets to their container PTS for frames from the same source.");
         nb::class_<FrameLayout>(m, "FrameLayout").def_ro("width", &FrameLayout::width).def_ro("height", &FrameLayout::height).def_ro("row_stride", &FrameLayout::row_stride).def_ro("format", &FrameLayout::format).def_ro("color", &FrameLayout::color);
         nb::class_<FrameInfo>(m, "FrameInfo").def(nb::init<>()).def_rw("source_timestamp", &FrameInfo::source_timestamp).def_rw("timestamp_origin", &FrameInfo::timestamp_origin).def_rw("decode_index", &FrameInfo::decode_index).def_rw("delivery_index", &FrameInfo::delivery_index).def_rw("relative_seconds", &FrameInfo::relative_seconds).def_rw("legacy_source_frame", &FrameInfo::legacy_source_frame).def_rw("sharpness_score", &FrameInfo::sharpness_score).def_rw("origin", &FrameInfo::origin).def_rw("output_timestamp", &FrameInfo::output_timestamp).def_rw("source_component_depth", &FrameInfo::source_component_depth);
         nb::class_<IngestProgress>(m, "IngestProgress").def_ro("processed", &IngestProgress::processed).def_ro("estimated", &IngestProgress::estimated).def_ro("discarded", &IngestProgress::discarded);

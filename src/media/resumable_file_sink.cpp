@@ -185,7 +185,7 @@ namespace lfs::media::detail {
         if (output_.files.embed_source_metadata) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image metadata requires a source observation"));
-            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, output_.files.format, false, f.srt_metadata);
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, output_.files.format, false, f.srt_metadata, f.dji_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             embedded_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
@@ -195,7 +195,7 @@ namespace lfs::media::detail {
         } else if (output_.write_source_metadata_sidecars) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image sidecars require a source observation"));
-            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true, f.srt_metadata);
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true, f.srt_metadata, f.dji_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             sidecar_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
@@ -208,6 +208,16 @@ namespace lfs::media::detail {
             const auto& binding = *f.srt_metadata;
             identity_["srt_metadata"] = json_detail::srtFrameBinding(binding, srt_frame_metadata_policy);
             identity_["srt_metadata"]["source_sha256"] = digest.finish();
+        }
+        if (f.dji_metadata) {
+            Sha256 digest;
+            for (const auto& sample : f.dji_metadata->samples()) {
+                const std::array<std::int64_t, 5> header{sample.pts.ticks, sample.pts.time_base.numerator, sample.pts.time_base.denominator, sample.source_offset.value_or(-1), static_cast<std::int64_t>(sample.bytes.size())};
+                digest.update({reinterpret_cast<const std::uint8_t*>(header.data()), sizeof(header)});
+                digest.update(sample.bytes);
+            }
+            identity_["dji_metadata"] = json_detail::djiFrameBinding(*f.dji_metadata);
+            identity_["dji_metadata"]["samples_sha256"] = digest.finish();
         }
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
         identity_["selection"] = {static_cast<int>(r.selection.mode), r.selection.fps, r.selection.interval, r.start_seconds, r.end_seconds};

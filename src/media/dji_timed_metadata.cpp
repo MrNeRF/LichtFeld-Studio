@@ -8,6 +8,10 @@
 #include <span>
 #include <string_view>
 #include <utility>
+extern "C" {
+#include <libavutil/avutil.h>
+#include <libavutil/mathematics.h>
+}
 
 namespace lfs::media {
     namespace {
@@ -180,5 +184,65 @@ namespace lfs::media {
             // Do not allocate a diagnostic while handling an allocation failure.
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()});
         }
+    }
+    struct DjiFrameStorage {
+        int stream_index;
+        std::vector<DjiFrameSample> samples;
+    };
+    Result<DjiFrameMetadata> DjiFrameMetadata::create(const TimedMetadataObservation& observation) {
+        try {
+            auto parsed = interpretDjiMetadata(observation);
+            if (!parsed)
+                return parsed.error();
+            // Validate clocks before copying payloads decoded by the shared interpreter.
+            for (std::size_t i = 0; i < observation.packets.size(); ++i) {
+                const auto& pts = observation.packets[i].pts;
+                if (!pts)
+                    throw Failure{ErrorCode::InvalidArgument, "DJI frame metadata requires valid packet PTS (packet=" + std::to_string(i) + ")"};
+                if (i && observation.packets[i - 1].pts->ticks >= pts->ticks)
+                    throw Failure{ErrorCode::FailedPrecondition, "DJI frame metadata requires strictly increasing packet PTS (packet=" + std::to_string(i) + ")"};
+            }
+            auto storage = std::make_shared<DjiFrameStorage>();
+            storage->stream_index = observation.stream_index;
+            storage->samples.reserve(parsed->size());
+            for (std::size_t i = 0; i < parsed->size(); ++i) {
+                const auto& packet = observation.packets[i];
+                storage->samples.push_back({*packet.pts, std::move((*parsed)[i]), packet.source_offset, packet.bytes});
+            }
+            return DjiFrameMetadata(std::move(storage));
+        } catch (Failure& error) {
+            return make_error({.code = error.code, .domain = ErrorDomain::IO, .detail = std::move(error.detail), .detection = LFS_SOURCE_SITE_CURRENT()});
+        } catch (const std::bad_alloc&) {
+            return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+    }
+    int DjiFrameMetadata::streamIndex() const noexcept {
+        return storage_ ? storage_->stream_index : -1;
+    }
+    std::span<const DjiFrameSample> DjiFrameMetadata::samples() const noexcept {
+        return storage_ ? std::span<const DjiFrameSample>(storage_->samples) : std::span<const DjiFrameSample>{};
+    }
+    Result<std::optional<std::size_t>> DjiFrameMetadata::lookup(Timestamp query) const {
+        if (!storage_ || query.ticks == AV_NOPTS_VALUE || query.time_base.numerator <= 0 || query.time_base.denominator <= 0)
+            return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "DJI frame lookup requires a live binding and a valid timestamp with positive time base", .detection = LFS_SOURCE_SITE_CURRENT()});
+        const auto& entries = storage_->samples;
+        const auto clock = entries.front().pts.time_base;
+        const AVRational source{query.time_base.numerator, query.time_base.denominator}, target{clock.numerator, clock.denominator};
+        auto ticks = query.ticks;
+        if (av_cmp_q(source, target) != 0) {
+            const auto down = av_rescale_q_rnd(ticks, source, target, AV_ROUND_DOWN);
+            const auto up = av_rescale_q_rnd(ticks, source, target, AV_ROUND_UP);
+            // FFmpeg reports overflow as INT64_MIN, also its missing-PTS sentinel.
+            // Neither sentinel nor rounded fractional ticks can match a sample.
+            if (down == AV_NOPTS_VALUE || up == AV_NOPTS_VALUE)
+                return make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "DJI frame lookup timestamp cannot be represented in the stream time base (ticks=" + std::to_string(ticks) + ", time_base=" + std::to_string(source.num) + "/" + std::to_string(source.den) + ")", .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (down != up)
+                return std::optional<std::size_t>{};
+            ticks = down;
+        }
+        const auto found = std::lower_bound(entries.begin(), entries.end(), ticks, [](const auto& sample, std::int64_t value) { return sample.pts.ticks < value; });
+        if (found == entries.end() || found->pts.ticks != ticks)
+            return std::optional<std::size_t>{};
+        return std::optional<std::size_t>(static_cast<std::size_t>(found - entries.begin()));
     }
 } // namespace lfs::media

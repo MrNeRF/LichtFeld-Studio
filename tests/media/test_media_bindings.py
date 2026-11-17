@@ -975,6 +975,181 @@ class MediaBindings(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             self.assertTrue(all(value == actual for value in executor.map(lambda _: observed.dji_metadata_json(), range(6))))
 
+    def test_dji_frame_metadata_lookup_export_resume_and_cli(self):
+        import xml.etree.ElementTree as ET
+        path = fixtures.dji_ac204(self.root, with_video=True, ffmpeg=os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
+        observed = media.MediaIngest.probe(path, timed_metadata_stream=1)
+        binding = observed.dji_frame_metadata()
+        self.assertEqual(binding.sample_count, 6)
+        request = self.request()
+        request.input, request.end_seconds = path, -1
+        report, frames = media.MediaIngest.extract(request)
+        self.assertEqual(report.frames_accepted, 6)
+        expected = [json.loads(binding.lookup_json(frame.info.source_timestamp)) for frame in frames]
+        raw = (ROOT / "tests/media/fixtures/dji-ac204/ac204_djmd_first300.bin").read_bytes()
+        offset = 0
+        for index, item in enumerate(expected):
+            size, = struct.unpack_from(">I", raw, offset)
+            offset += 4
+            self.assertEqual(item["match"]["bytes"], raw[offset:offset + size].hex())
+            self.assertEqual(item["match"]["pts"], {"ticks": index * 1001, "time_base": [1, 30000]})
+            offset += size
+        self.assertEqual([x["match"]["metadata"]["sequence"] for x in expected], list(range(6)))
+        query = media.Timestamp()
+        clock = media.Rational()
+        clock.numerator, clock.denominator = 1, 30000
+        query.time_base, query.ticks = clock, 1
+        self.assertIsNone(json.loads(binding.lookup_json(query))["match"])
+        self.assertEqual(expected[0]["match"]["metadata"]["sequence"], 0)
+        srt = self.root / "coexisting telemetry.srt"
+        srt.write_bytes(srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 [latitude: 12]")]))
+        srt_binding = media.SrtFrameMetadata(media.MediaIngest.source_srt_metadata(srt), 0)
+        for name, fmt in (("png", media.FrameFileFormat.PNG), ("jpeg", media.FrameFileFormat.JPEG)):
+            with self.subTest(format=name):
+                request.output_format = media.FramePixelFormat.RGB8 if name in ("png", "jpeg") else media.FramePixelFormat.RGBFloat32
+                output = media.FileExtraction()
+                output.files.output_directory = self.root / ("dji-frame-" + name)
+                output.files.format, output.files.dji_metadata = fmt, binding
+                output.files.embed_source_metadata = True
+                output.write_source_metadata_sidecars = True
+                output.resume = name == "png"
+                if name == "png":
+                    output.files.srt_metadata = srt_binding
+                self.assertEqual(media.MediaIngest.extract_files(request, output).frames_accepted, 6)
+                manifest_path = output.files.output_directory / "extraction_metadata.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                for index, record in enumerate(manifest["frames"]):
+                    side = ET.fromstring((output.files.output_directory / record["sidecar"]).read_bytes())
+                    node = side.find(".//{https://lichtfeld.io/ns/media/1.0/}DjiObservation")
+                    self.assertEqual(json.loads(node.text), expected[index])
+                    if name == "png":
+                        self.assertIsNotNone(side.find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation"))
+                    image = output.files.output_directory / record["file"]
+                    blocks = json.loads(media.MediaIngest.source_metadata_json(image))["metadata"]["image_xmp"]["blocks"]
+                    embedded = [json.loads(n.text) for block in blocks
+                                for n in ET.fromstring(bytes.fromhex(block["payload_bytes"])).iter()
+                                if n.tag == "{https://lichtfeld.io/ns/media/1.0/}DjiObservation"]
+                    self.assertEqual(embedded, [expected[index]])
+                if output.resume:
+                    before = {file.name: file.read_bytes() for file in output.files.output_directory.iterdir() if file.is_file() and file.suffix in (".png", ".xmp")}
+                    media.MediaIngest.extract_files(request, output)
+                    self.assertEqual(before, {file.name: file.read_bytes() for file in output.files.output_directory.iterdir() if file.is_file() and file.suffix in (".png", ".xmp")})
+                    original = path.read_bytes()
+                    changed = bytearray(original)
+                    packet = json.loads(observed.to_json())["timed_metadata"]["packets"][0]
+                    changed[packet["source_offset"] + len(bytes.fromhex(packet["bytes"])) - 1] ^= 1
+                    try:
+                        path.write_bytes(changed)
+                        different = media.MediaIngest.probe(path, timed_metadata_stream=1).dji_frame_metadata()
+                    finally:
+                        path.write_bytes(original)
+                    output.files.dji_metadata = different
+                    with self.assertRaisesRegex(MEDIA_ERROR, "Checkpoint identity or frame changed"):
+                        media.MediaIngest.extract_files(request, output)
+                    self.assertEqual(before, {file.name: file.read_bytes() for file in output.files.output_directory.iterdir() if file.is_file() and file.suffix in (".png", ".xmp")})
+                    output.files.dji_metadata = binding
+                    media.MediaIngest.extract_files(request, output)
+                    self.assertEqual(before, {file.name: file.read_bytes() for file in output.files.output_directory.iterdir() if file.is_file() and file.suffix in (".png", ".xmp")})
+                    shifted = bytearray(original)
+                    mdhd = [pos for pos, kind in srt_metadata_fixture.mp4_boxes(shifted) if kind == b"mdhd"][-1]
+                    struct.pack_into(">I", shifted, mdhd + 20, 60000)
+                    try:
+                        path.write_bytes(shifted)
+                        shifted_observation = media.MediaIngest.probe(path, timed_metadata_stream=1)
+                        self.assertEqual([p["bytes"] for p in json.loads(shifted_observation.to_json())["timed_metadata"]["packets"]],
+                                         [p["bytes"] for p in json.loads(observed.to_json())["timed_metadata"]["packets"]])
+                        shifted_binding = shifted_observation.dji_frame_metadata()
+                    finally:
+                        path.write_bytes(original)
+                    output.files.dji_metadata = shifted_binding
+                    with self.assertRaisesRegex(MEDIA_ERROR, "Checkpoint identity or frame changed"):
+                        media.MediaIngest.extract_files(request, output)
+                    output.files.dji_metadata = binding
+                    media.MediaIngest.extract_files(request, output)
+                    self.assertEqual(before, {file.name: file.read_bytes() for file in output.files.output_directory.iterdir() if file.is_file() and file.suffix in (".png", ".xmp")})
+        cli = subprocess.run([str(METADATA_CLI), "extract", str(path), "--output", str(self.root / "dji-cli"),
+                              "--interval", "1", "--dji-stream", "1", "--embed-source-metadata", "--source-metadata-sidecars", "--quiet"],
+                             check=True, capture_output=True, timeout=60)
+        self.assertEqual(json.loads(cli.stdout)["frames_accepted"], 6)
+        cli_dir = self.root / "dji-cli"
+        cli_manifest = json.loads((cli_dir / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(cli_manifest["dji_metadata"]["stream_index"], 1)
+        for index, record in enumerate(cli_manifest["frames"]):
+            node = ET.fromstring((cli_dir / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}DjiObservation")
+            self.assertIsNotNone(node)
+            self.assertEqual(json.loads(node.text), expected[index])
+        for flags, message in [(["--dji-stream", "-1", "--embed-source-metadata"], "nonnegative stream index"),
+                               (["--dji-stream", "1"], "image metadata output"),
+                               (["--dji-stream", "1", "--dji-stream", "1"], "Specify --dji-stream once")]:
+            rejected_dir = self.root / "dji-invalid"
+            failed = subprocess.run([str(METADATA_CLI), "extract", str(path), "--output", str(rejected_dir), *flags], capture_output=True, timeout=30)
+            self.assertEqual(failed.returncode, 2)
+            error = json.loads(failed.stdout)["error"]
+            self.assertEqual(error["code"], "InvalidArgument")
+            self.assertIn(message, error["message"])
+            self.assertFalse(rejected_dir.exists())
+        unused_request = self.request()
+        unused_request.input = path
+        unused = media.FileExtraction()
+        unused.files.output_directory, unused.files.dji_metadata = self.root / "dji-unused", binding
+        with self.assertRaisesRegex(MEDIA_ERROR, "Frame metadata requires embedded metadata or XMP sidecars"):
+            media.MediaIngest.extract_files(unused_request, unused)
+        self.assertFalse(unused.files.output_directory.exists())
+        retimed = bytearray(path.read_bytes())
+        boxes = srt_metadata_fixture.mp4_boxes(retimed)
+        mdhd = [pos for pos, kind in boxes if kind == b"mdhd"][-1]
+        stts = [pos for pos, kind in boxes if kind == b"stts"][-1]
+        struct.pack_into(">II", retimed, mdhd + 20, 60000, 12012)
+        struct.pack_into(">I", retimed, stts + 20, 2002)
+        retimed_path = self.root / "equivalent metadata clock.mp4"
+        retimed_path.write_bytes(retimed)
+        retimed_request = self.request()
+        retimed_request.input, retimed_request.end_seconds = retimed_path, -1
+        retimed_output = media.FileExtraction()
+        retimed_output.files.output_directory = self.root / "retimed-export"
+        retimed_output.files.dji_metadata = media.MediaIngest.probe(retimed_path, timed_metadata_stream=1).dji_frame_metadata()
+        retimed_output.write_source_metadata_sidecars = True
+        self.assertEqual(media.MediaIngest.extract_files(retimed_request, retimed_output).frames_accepted, 6)
+        records = json.loads((retimed_output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))["frames"]
+        for index, record in enumerate(records):
+            node = ET.fromstring((retimed_output.files.output_directory / record["sidecar"]).read_bytes()).find(".//{https://lichtfeld.io/ns/media/1.0/}DjiObservation")
+            actual = json.loads(node.text)
+            self.assertEqual(actual["query"]["time_base"], [1, 30000])
+            self.assertEqual(actual["match"]["pts"], {"ticks": index * 2002, "time_base": [1, 60000]})
+            self.assertEqual(actual["match"]["metadata"]["sequence"], index)
+            self.assertEqual(actual["match"]["bytes"], expected[index]["match"]["bytes"])
+        path.unlink()
+        del observed
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(lambda _: json.loads(binding.lookup_json(frames[0].info.source_timestamp)), range(6)))
+        self.assertEqual(results, [expected[0]] * 6)
+
+    def test_timed_option_getters_own_snapshots(self):
+        path = fixtures.dji_ac204(self.root)
+        binding = media.MediaIngest.probe(path, timed_metadata_stream=0).dji_frame_metadata()
+        srt = self.root / "getter telemetry.srt"
+        srt.write_bytes(srt_metadata_fixture.packet())
+        srt_binding = media.SrtFrameMetadata(media.MediaIngest.source_srt_metadata(srt), 0)
+        options = media.FileFrameSinkOptions()
+        options.dji_metadata, options.srt_metadata = binding, srt_binding
+        dji_snapshot, srt_snapshot = options.dji_metadata, options.srt_metadata
+        replacement_root = self.root / "replacement"
+        replacement_root.mkdir()
+        replacement = fixtures.dji_ac204(replacement_root, with_video=True, ffmpeg=os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
+        options.dji_metadata = media.MediaIngest.probe(replacement, timed_metadata_stream=1).dji_frame_metadata()
+        self.assertEqual(options.dji_metadata.sample_count, 6)
+        self.assertEqual(dji_snapshot.sample_count, 300)
+        options.dji_metadata = None
+        replacement.unlink()
+        options.srt_metadata = media.SrtFrameMetadata(srt_binding.catalog, 123)
+        self.assertEqual(srt_snapshot.offset_milliseconds, 0)
+        options.srt_metadata = None
+        del binding, srt_binding
+        path.unlink()
+        srt.unlink()
+        self.assertEqual(dji_snapshot.sample_count, 300)
+        self.assertEqual(srt_snapshot.offset_milliseconds, 0)
+
     def test_timed_metadata_probe_cli_parity_and_owned_result(self):
         path = srt_metadata_fixture.embedded(self.root, os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"))
         self.assertNotIn("timed_metadata", json.loads(media.MediaIngest.probe(path, headers_only=True).to_json()))

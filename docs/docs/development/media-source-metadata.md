@@ -1202,3 +1202,14 @@ values = json.loads(observed.dji_metadata_json())["samples"]
 
 The interpreter leaves the collected bytes untouched. Unsupported declarations,
 malformed wire data, nonfinite floats and invalid exposure ratios are refused.
+
+### DJI telemetry on extracted frames
+
+`observed.dji_frame_metadata()` creates a `DjiFrameMetadata` binding from the
+selected track. Pass it as `output.files.dji_metadata` with embedded metadata
+or source sidecars enabled; the existing frame writer stores the matched record
+as `DjiObservation`. The CLI equivalent is `extract --dji-stream INDEX`.
+
+Association uses exact container PTS, including equivalent rational time bases.
+Missing or non-increasing packet timestamps are refused. Resume checks the
+selected track, packet clocks and raw payloads before continuing an export.

@@ -52,10 +52,11 @@ namespace lfs::media::detail {
         std::vector<std::uint8_t> extended_markers;
         bool rendered = false;
         std::optional<SrtFrameMetadata> srt_metadata;
+        std::optional<DjiFrameMetadata> dji_metadata;
     };
-    [[nodiscard]] SinkResult validateSrtFrameMetadata(const std::optional<SrtFrameMetadata>&, bool image_metadata_output);
+    [[nodiscard]] SinkResult validateFrameMetadata(const std::optional<SrtFrameMetadata>&, const std::optional<DjiFrameMetadata>&, bool image_metadata_output);
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat, std::string_view provenance);
-    [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false, const std::optional<SrtFrameMetadata>& srt = {});
+    [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false, const std::optional<SrtFrameMetadata>& srt = {}, const std::optional<DjiFrameMetadata>& dji = {});
     [[nodiscard]] std::string_view imageXmpSuffix();
     [[nodiscard]] Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&, bool sidecar = false);
     // Contiguous representation required by TIFF/OpenEXR setters, libjxl boxes and libheif metadata items.

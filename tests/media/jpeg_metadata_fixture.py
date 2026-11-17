@@ -76,8 +76,9 @@ def read(data):
     facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in standard.iter()
              if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
     catalog_tree = extension if extension is not None else standard
-    timed = catalog_tree.find(".//{https://lichtfeld.io/ns/media/1.0/}SrtObservation")
-    if timed is not None:
-        facts["SrtObservation"] = timed.text
+    for name in ("SrtObservation", "DjiObservation"):
+        timed = catalog_tree.find(".//{https://lichtfeld.io/ns/media/1.0/}" + name)
+        if timed is not None:
+            facts[name] = timed.text
     catalog = json.loads(catalog_tree.find(".//{https://lichtfeld.io/ns/media/1.0/}SourceMetadata").text)
     return bytes(original), first[0x112], (dimensions[0xa002], dimensions[0xa003]), facts, catalog, len(chunks)

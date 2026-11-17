@@ -1200,7 +1200,7 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (const auto valid = media::detail::validateSrtFrameMetadata(params.srt_metadata, params.embed_source_metadata || params.write_source_metadata_sidecars); !valid) {
+            if (const auto valid = media::detail::validateFrameMetadata(params.srt_metadata, params.dji_metadata, params.embed_source_metadata || params.write_source_metadata_sidecars); !valid) {
                 failure_ = valid.error();
                 error = std::string(failure_->detail());
                 return false;
@@ -1227,6 +1227,7 @@ namespace lfs::io {
             media::FileFrameSinkOptions file_options{params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number};
             file_options.embed_source_metadata = params.embed_source_metadata;
             file_options.srt_metadata = params.srt_metadata;
+            file_options.dji_metadata = params.dji_metadata;
             file_options.image_output = params.jpeg_metadata_output;
             media::FileFrameSink file_sink(std::move(file_options));
             auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
@@ -2040,7 +2041,7 @@ namespace lfs::io {
                             };
                             if (params.embed_source_metadata) {
                                 if (!jpeg_metadata) {
-                                    auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG, false, params.srt_metadata);
+                                    auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG, false, params.srt_metadata, params.dji_metadata);
                                     if (!prepared)
                                         check_sink(media::SinkResult::failure(prepared.error()));
                                     jpeg_metadata = std::move(*prepared);
@@ -2849,6 +2850,8 @@ namespace lfs::io {
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
+                        if (params.dji_metadata)
+                            root["dji_metadata"] = media::json_detail::djiFrameBinding(*params.dji_metadata);
                         if (params.srt_metadata) {
                             const auto& binding = *params.srt_metadata;
                             root["srt_metadata"] = media::json_detail::srtFrameBinding(binding, media::detail::srt_frame_metadata_policy);

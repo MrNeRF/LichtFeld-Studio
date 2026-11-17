@@ -243,22 +243,36 @@ namespace lfs::media::detail {
             std::string{}.swap(result.source_properties);
             return result;
         }
-        SinkResult appendSrtMetadata(std::string& properties, const std::optional<SrtFrameMetadata>& binding, const FrameInfo& info) {
-            if (!binding)
+        SinkResult appendFrameMetadata(std::string& properties, const EmbeddedImageMetadata& metadata, const FrameInfo& info) {
+            if (!metadata.srt_metadata && !metadata.dji_metadata)
                 return {};
             if (info.origin != FrameOrigin::Decoded || !info.source_timestamp || (info.timestamp_origin != TimestampOrigin::Presentation && info.timestamp_origin != TimestampOrigin::BestEffort))
-                return SinkResult::failure(metadataError(ErrorCode::FailedPrecondition, "SRT frame metadata requires a decoded frame with a source timestamp (origin=" + std::to_string(static_cast<int>(info.origin)) + ", timestamp_origin=" + std::to_string(static_cast<int>(info.timestamp_origin)) + ", has_timestamp=" + std::to_string(info.source_timestamp.has_value()) + ")"));
-            auto observation = json_detail::srtLookup(binding->catalog, *info.source_timestamp,
-                                                      binding->offset_milliseconds, binding->point_tolerance_milliseconds);
-            if (!observation)
-                return SinkResult::failure(observation.error());
-            (*observation)["policy"] = srt_frame_metadata_policy;
-            if (properties.size() > max_packet_bytes - 1024)
-                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", limit=" + std::to_string(max_packet_bytes - 1024) + ")"));
-            auto encoded = json_detail::sourceMetadataXmlProperty(*observation, max_packet_bytes - properties.size() - 1024, "SrtObservation");
-            if (!encoded)
-                return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "SRT frame metadata exceeds the export packet budget (properties_bytes=" + std::to_string(properties.size()) + ", srt_value_limit=" + std::to_string(max_packet_bytes - properties.size() - 1024) + ")"));
-            properties += *encoded;
+                return SinkResult::failure(metadataError(ErrorCode::FailedPrecondition, "Frame metadata requires a decoded frame with a source timestamp (origin=" + std::to_string(static_cast<int>(info.origin)) + ", timestamp_origin=" + std::to_string(static_cast<int>(info.timestamp_origin)) + ", has_timestamp=" + std::to_string(info.source_timestamp.has_value()) + ")"));
+            const auto append = [&](const json_detail::json& observation, std::string_view name) -> SinkResult {
+                if (properties.size() > max_packet_bytes - 1024)
+                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (observation=" + std::string(name) + ", properties_bytes=" + std::to_string(properties.size()) + ", limit=" + std::to_string(max_packet_bytes - 1024) + ")"));
+                auto encoded = json_detail::sourceMetadataXmlProperty(observation, max_packet_bytes - properties.size() - 1024, name);
+                if (!encoded)
+                    return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "Frame metadata exceeds the export packet budget (observation=" + std::string(name) + ", properties_bytes=" + std::to_string(properties.size()) + ", value_limit=" + std::to_string(max_packet_bytes - properties.size() - 1024) + ")"));
+                properties += *encoded;
+                return {};
+            };
+            if (metadata.srt_metadata) {
+                const auto& binding = *metadata.srt_metadata;
+                auto observation = json_detail::srtLookup(binding.catalog, *info.source_timestamp, binding.offset_milliseconds, binding.point_tolerance_milliseconds);
+                if (!observation)
+                    return SinkResult::failure(observation.error());
+                (*observation)["policy"] = srt_frame_metadata_policy;
+                if (auto result = append(*observation, "SrtObservation"); !result)
+                    return result;
+            }
+            if (metadata.dji_metadata) {
+                auto observation = json_detail::djiFrameLookup(*metadata.dji_metadata, *info.source_timestamp);
+                if (!observation)
+                    return SinkResult::failure(observation.error());
+                if (auto result = append(*observation, "DjiObservation"); !result)
+                    return result;
+            }
             return {};
         }
     } // namespace
@@ -284,7 +298,7 @@ namespace lfs::media::detail {
             } else {
                 frameProperties(tree, width, height, metadata.applied_rotation, info, sidecar ? std::string_view(sidecar_metadata_policy) : embeddedMetadataPolicy(metadata.format));
             }
-            if (auto appended = appendSrtMetadata(tree, metadata.srt_metadata, info); !appended)
+            if (auto appended = appendFrameMetadata(tree, metadata, info); !appended)
                 return appended.error();
             if (tree.size() + metadata.source_properties.size() + imageXmpSuffix().size() > max_packet_bytes)
                 return metadataError(ErrorCode::ResourceExhausted, "Image XMP exceeds the export packet budget");
@@ -293,14 +307,14 @@ namespace lfs::media::detail {
             return metadataError(ErrorCode::ResourceExhausted, "Image frame metadata allocation failed");
         }
     }
-    SinkResult validateSrtFrameMetadata(const std::optional<SrtFrameMetadata>& binding, bool image_metadata_output) {
-        if (binding && !image_metadata_output)
-            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT frame metadata requires embedded metadata or XMP sidecars"));
+    SinkResult validateFrameMetadata(const std::optional<SrtFrameMetadata>& binding, const std::optional<DjiFrameMetadata>& dji, bool image_metadata_output) {
+        if ((binding || dji) && !image_metadata_output)
+            return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "Frame metadata requires embedded metadata or XMP sidecars"));
         if (binding && binding->point_tolerance_milliseconds && *binding->point_tolerance_milliseconds < 0)
             return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "SRT point tolerance must be nonnegative (tolerance_ms=" + std::to_string(*binding->point_tolerance_milliseconds) + ")"));
         return {};
     }
-    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar, const std::optional<SrtFrameMetadata>& srt) {
+    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar, const std::optional<SrtFrameMetadata>& srt, const std::optional<DjiFrameMetadata>& dji) {
         if (embeddedMetadataPolicy(format).empty())
             return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
         try {
@@ -315,9 +329,10 @@ namespace lfs::media::detail {
             result.applied_rotation = applied_rotation;
             result.source_properties = std::move(*properties);
             result.srt_metadata = srt;
-            if (const auto valid = validateSrtFrameMetadata(srt, true); !valid)
+            result.dji_metadata = dji;
+            if (const auto valid = validateFrameMetadata(srt, dji, true); !valid)
                 return valid.error();
-            if (format != FrameFileFormat::JPEG || sidecar || srt)
+            if (format != FrameFileFormat::JPEG || sidecar || srt || dji)
                 return result;
             return packJpegMetadata(std::move(result));
         } catch (const std::bad_alloc&) {
@@ -344,11 +359,12 @@ namespace lfs::media::detail {
         if (jpeg.size() < 4 || jpeg[0] != 0xff || jpeg[1] != 0xd8)
             return SinkResult::failure(metadataError(ErrorCode::DataLoss, "JPEG encoder returned an invalid header"));
         try {
-            if (metadata.srt_metadata) {
+            if (metadata.srt_metadata || metadata.dji_metadata) {
                 auto frame_metadata = metadata;
-                if (auto appended = appendSrtMetadata(frame_metadata.source_properties, frame_metadata.srt_metadata, info); !appended)
+                if (auto appended = appendFrameMetadata(frame_metadata.source_properties, frame_metadata, info); !appended)
                     return appended;
                 frame_metadata.srt_metadata.reset();
+                frame_metadata.dji_metadata.reset();
                 auto prepared = packJpegMetadata(std::move(frame_metadata));
                 if (!prepared)
                     return SinkResult::failure(prepared.error());

@@ -3,6 +3,7 @@
 #pragma once
 #include "core/atomic_file.hpp"
 #include "core/export.hpp"
+#include "media/dji_timed_metadata.hpp"
 #include "media/image_output.hpp"
 #include "media/srt_metadata.hpp"
 #include <filesystem>
@@ -49,6 +50,7 @@ namespace lfs::media {
         // Explicit timed observations, exported only when embedded or sidecar
         // metadata is enabled. The timestamp offset has no implicit default.
         std::optional<SrtFrameMetadata> srt_metadata;
+        std::optional<DjiFrameMetadata> dji_metadata;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:

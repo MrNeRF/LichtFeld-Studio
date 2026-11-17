@@ -464,6 +464,15 @@ class SrtFrameMetadata:
     @property
     def point_tolerance_milliseconds(self) -> int | None: ...
 
+class DjiFrameMetadata:
+    @property
+    def sample_count(self) -> int: ...
+
+    def lookup_json(self, timestamp: Timestamp) -> str:
+        """
+        Match a container presentation timestamp exactly. Gaps return null; no interpolation, hold or camera-clock conversion.
+        """
+
 class FileFrameSinkOptions:
     def __init__(self) -> None: ...
 
@@ -526,6 +535,12 @@ class FileFrameSinkOptions:
 
     @srt_metadata.setter
     def srt_metadata(self, arg: SrtFrameMetadata | None) -> None: ...
+
+    @property
+    def dji_metadata(self) -> DjiFrameMetadata | None: ...
+
+    @dji_metadata.setter
+    def dji_metadata(self, arg: DjiFrameMetadata | None) -> None: ...
 
 class FileExtraction:
     def __init__(self) -> None: ...
@@ -719,6 +734,11 @@ class MediaDescription:
     def dji_metadata_json(self) -> str:
         """
         Interpret collected DJI Action 4/5 djmd packets. Returns one sample per packet, with camera timestamps in microseconds since power-up.
+        """
+
+    def dji_frame_metadata(self) -> DjiFrameMetadata:
+        """
+        Bind collected DJI packets to their container PTS for frames from the same source.
         """
 
 class FrameLayout:

@@ -6,6 +6,7 @@
 
 #include "core/atomic_file.hpp"
 #include "core/export.hpp"
+#include "media/dji_timed_metadata.hpp"
 #include "media/srt_metadata.hpp"
 #include <cstddef>
 #include <filesystem>
@@ -161,6 +162,7 @@ namespace lfs::io {
             // Appended: MediaIngest file sinks own publication and optional recovery.
             bool write_source_metadata_sidecars = false;
             std::optional<media::SrtFrameMetadata> srt_metadata;
+            std::optional<media::DjiFrameMetadata> dji_metadata;
         };
 
         struct ValidatedLayout {
