@@ -40,6 +40,7 @@
 #include "app/mcp_gui_tools.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/missing_dataset_images.hpp"
 #include "io/video/video_encoder.hpp"
 #include "io/video/video_export_schedule.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -155,7 +156,8 @@ namespace lfs::app {
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
             std::string detail,
-            const lfs::core::SourceSite source) {
+            const lfs::core::SourceSite source,
+            lfs::SmallFields fields = {}) {
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::App,
@@ -163,6 +165,7 @@ namespace lfs::app {
                     "The training project could not be restored.",
                 .detail = std::move(detail),
                 .detection = source,
+                .fields = std::move(fields),
             });
         }
 
@@ -654,16 +657,21 @@ namespace lfs::app {
             }
             if (images_folder_changed) {
                 scene.rebaseCameraAssetPaths(
-                    checkpoint_params.dataset.data_path / checkpoint_images_folder,
-                    checkpoint_params.dataset.data_path / checkpoint_params.dataset.images);
+                    checkpoint_params.dataset.data_path / core::path_from_source_format(
+                                                              core::utf8_to_path(checkpoint_images_folder),
+                                                              checkpoint_dataset_path),
+                    checkpoint_params.dataset.data_path / core::utf8_to_path(checkpoint_params.dataset.images));
             }
             if (dataset_root_changed || images_folder_changed) {
                 const auto missing_images = scene.revalidateCameraImagePresence();
                 if (!missing_images.empty()) {
+                    lfs::SmallFields fields;
+                    fields.add("missing_count", static_cast<std::int64_t>(missing_images.size()));
+                    fields.add("examples", io::join_missing_dataset_image_examples(missing_images));
                     return training_project_error(
                         lfs::ErrorCode::InvalidArgument,
                         "The supplied dataset is not compatible with the resumed project's cameras",
-                        LFS_SOURCE_SITE_CURRENT());
+                        LFS_SOURCE_SITE_CURRENT(), std::move(fields));
                 }
             }
             if (checkpoint_params.optimization.mask_mode != core::param::MaskMode::None) {

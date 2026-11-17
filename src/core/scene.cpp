@@ -6961,9 +6961,7 @@ namespace lfs::core {
             const bool exists = lfs::core::native_fs::is_regular_file(image_path, exists_error);
             camera.set_has_image(exists);
             if (!exists) {
-                missing.push_back(camera.image_name().empty()
-                                      ? path_to_utf8(image_path.filename())
-                                      : camera.image_name());
+                missing.push_back(path_to_utf8(image_path));
             }
         }
         return missing;
