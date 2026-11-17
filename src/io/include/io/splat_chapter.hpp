@@ -55,8 +55,9 @@ namespace lfs::io::project {
         // Enqueue a device-only snapshot on a dedicated stream. Before returning,
         // order later source-stream writes after the snapshot without a host wait.
         // A null pointer requests synchronous capture() when device capture is
-        // unavailable. Defer reports ResourceExhausted instead of requesting a
-        // synchronous CUDA capture when allocation headroom is unavailable.
+        // unavailable. Defer reports ResourceExhausted with RetryableWithBackoff
+        // instead of requesting a synchronous CUDA capture when allocation
+        // headroom is unavailable.
         [[nodiscard]] static lfs::Result<std::unique_ptr<AsyncSplatCapture>>
         start_async_capture(const lfs::core::SplatData& model,
                             SplatSourceKind source_kind,

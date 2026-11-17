@@ -21515,6 +21515,10 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto id = scene.addSplat("CPU", lfs::test::licht::make_splat(64));
         ASSERT_NE(id, lfs::core::NULL_NODE);
         const auto uuid = scene.getNodeById(id)->uuid;
+        auto& empty_cuda = scene.getNodeById(id)->model->shN();
+        empty_cuda = lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA);
+        ASSERT_TRUE(empty_cuda.is_valid());
+        ASSERT_EQ(empty_cuda.bytes(), 0u);
         lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
             [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
