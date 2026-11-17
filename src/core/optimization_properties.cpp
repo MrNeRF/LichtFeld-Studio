@@ -840,6 +840,15 @@ namespace lfs::core::param {
             .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
+            .bool_prop(&OptimizationParameters::mrnf_reg_rendered_only,
+                       "mrnf_reg_rendered_only", "Regularize Rendered Only", d.mrnf_reg_rendered_only,
+                       "The scale and rank regularisers act only on splats that contributed to the step's render "
+                       "(MRNF, FastGS)")
+            .locale("training.advanced.mrnf_reg_rendered_only")
+            .tooltip("training.tooltip.mrnf_reg_rendered_only")
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .bool_prop(&OptimizationParameters::impact_contrast_norm,
                        "impact_contrast_norm", "Impact Contrast Norm", d.impact_contrast_norm,
                        "Removal impact divides each pixel's colour change by the photo's local standard deviation "

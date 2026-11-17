@@ -367,6 +367,7 @@ REGISTRY_PLACEMENT = {
         "mrnf_retire_spare_px",
         "mrnf_retire_rank",
         "mrnf_keep_covered",
+        "mrnf_reg_rendered_only",
         "impact_contrast_norm",
         "impact_contrast_eps",
         "per_splat_bias_correction",

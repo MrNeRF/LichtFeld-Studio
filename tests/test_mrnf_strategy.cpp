@@ -6241,3 +6241,29 @@ TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
     for (const size_t i : expected_on)
         EXPECT_EQ(renders[i], 0.0f) << i; // retired and refilled
 }
+
+// Off by default: the hooks stay at their defaults, so the backward regularises every splat as before. On (FastGS),
+// only reg_rendered_only changes; with GUT the switch does nothing.
+TEST(MRNFStrategyTest, RegRenderedOnlyReachesTheFusedHooksOnlyWhenOn) {
+    EXPECT_FALSE(param::OptimizationParameters::mrnf_defaults().mrnf_reg_rendered_only);
+    const auto hooks_for = [](const bool on, const bool gut) {
+        auto data = create_mrnf_test_splat_data(8, 0);
+        MRNF strategy(data);
+        auto params = vanilla_mrnf_params();
+        params.max_cap = 32;
+        params.mrnf_reg_rendered_only = on;
+        params.gut = gut;
+        strategy.initialize(params);
+        return strategy.fused_geometry_hooks(100);
+    };
+    const IStrategy::FusedGeometryHooks defaults;
+    for (const auto& [on, gut] : {std::pair{false, false}, std::pair{true, false}, std::pair{true, true}}) {
+        SCOPED_TRACE(std::string("on ") + (on ? "1" : "0") + " gut " + (gut ? "1" : "0"));
+        const auto hooks = hooks_for(on, gut);
+        EXPECT_EQ(hooks.reg_rendered_only, on && !gut);
+        EXPECT_FALSE(hooks.view_radius.is_valid());
+        EXPECT_EQ(hooks.angular_mean_step, defaults.angular_mean_step);
+        EXPECT_EQ(hooks.screen_hinge_limit, defaults.screen_hinge_limit);
+        EXPECT_EQ(hooks.screen_hinge_weight, defaults.screen_hinge_weight);
+    }
+}

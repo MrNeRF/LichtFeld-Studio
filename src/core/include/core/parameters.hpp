@@ -500,6 +500,9 @@ namespace lfs::core {
             // splats) with reach below one half is kept: its opacity and scale decay scale by its reach and the
             // retire quota is taken from the other splats. Other splats are unaffected. FastGS only.
             bool mrnf_keep_covered = false;
+            // The scale and rank regularisers (and the normal flatten regulariser) act only on splats that
+            // contributed to the step's render, as in the match strategy. FastGS only.
+            bool mrnf_reg_rendered_only = false;
             // Removal impact (donor ranking by impact, retire ranking Both) divides each pixel's
             // weight x |colour - colour behind| by the photo's local standard deviation (the SSIM window,
             // mean over channels) plus impact_contrast_eps, so a splat counts by the structure it carries

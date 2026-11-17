@@ -1869,7 +1869,8 @@ TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
 
     const auto on = parse({"--ssim-blur-tolerant", "--mrnf-loss-error-map", "--mrnf-retire-share", "0.015",
                            "--mrnf-retire-grace", "12", "--mrnf-retire-spare-px", "1.25", "--mrnf-retire-rank", "both",
-                           "--impact-contrast-norm", "--receiver-keep-long", "3", "--mrnf-keep-covered"});
+                           "--impact-contrast-norm", "--receiver-keep-long", "3", "--mrnf-keep-covered",
+                           "--mrnf-reg-rendered-only"});
     ASSERT_TRUE(on.has_value()) << on.error();
     EXPECT_TRUE((*on)->optimization.mrnf_loss_error_map);
     EXPECT_FLOAT_EQ((*on)->optimization.mrnf_retire_share, 0.015f);
@@ -1880,6 +1881,7 @@ TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
     EXPECT_FLOAT_EQ((*on)->optimization.impact_contrast_eps, 0.01f);
     EXPECT_FLOAT_EQ((*on)->optimization.receiver_keep_long, 3.0f);
     EXPECT_TRUE((*on)->optimization.mrnf_keep_covered);
+    EXPECT_TRUE((*on)->optimization.mrnf_reg_rendered_only);
 
     const auto off = parse({});
     ASSERT_TRUE(off.has_value()) << off.error();
@@ -1891,6 +1893,7 @@ TEST(ArgumentParserTest, TrainingParsesMrnfLossErrorMapAndRetirement) {
     EXPECT_FALSE((*off)->optimization.impact_contrast_norm);
     EXPECT_EQ((*off)->optimization.receiver_keep_long, 0.0f);
     EXPECT_FALSE((*off)->optimization.mrnf_keep_covered);
+    EXPECT_FALSE((*off)->optimization.mrnf_reg_rendered_only);
     EXPECT_FALSE(parse({"--mrnf-retire-rank", "impact"}).has_value());
 
     for (const auto& [args, field] :

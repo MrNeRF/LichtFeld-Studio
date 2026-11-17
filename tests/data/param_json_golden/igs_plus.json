@@ -108,6 +108,7 @@
   "morton_reorder_interval": 5000,
   "mrnf_keep_covered": false,
   "mrnf_loss_error_map": false,
+  "mrnf_reg_rendered_only": false,
   "mrnf_retire_grace": 30,
   "mrnf_retire_rank": "peak",
   "mrnf_retire_share": 0.0,

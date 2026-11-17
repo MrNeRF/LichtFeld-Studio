@@ -716,6 +716,7 @@ EXPECTED_ADVANCED_IDS = (
     "mrnf_retire_spare_px",
     "mrnf_retire_rank",
     "mrnf_keep_covered",
+    "mrnf_reg_rendered_only",
     "impact_contrast_norm",
     "impact_contrast_eps",
     "per_splat_bias_correction",
@@ -791,7 +792,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 170
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 171
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -890,6 +891,7 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "mrnf_retire_spare_px",
         "mrnf_retire_rank",
         "mrnf_keep_covered",
+        "mrnf_reg_rendered_only",
         "impact_contrast_norm",
         "impact_contrast_eps",
         "per_splat_bias_correction",

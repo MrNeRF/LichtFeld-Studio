@@ -159,6 +159,7 @@ namespace {
             {"mrnf_retire_spare_px", {"mrnf"}},
             {"mrnf_retire_rank", {"mrnf"}},
             {"mrnf_keep_covered", {"mrnf"}},
+            {"mrnf_reg_rendered_only", {"mrnf"}},
             {"impact_contrast_norm", {"mrnf"}},
             {"impact_contrast_eps", {"mrnf"}},
             {"receiver_keep_long", {"mrnf"}},

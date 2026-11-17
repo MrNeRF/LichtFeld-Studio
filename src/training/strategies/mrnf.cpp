@@ -532,6 +532,8 @@ namespace lfs::training {
             LOG_INFO("opacity_decay_rendered_only has no effect with GUT");
         if (optimParams.gut && optimParams.mrnf_keep_covered)
             LOG_WARN("mrnf_keep_covered has no effect with GUT (it needs the FastGS training renderer)");
+        if (optimParams.gut && optimParams.mrnf_reg_rendered_only)
+            LOG_WARN("mrnf_reg_rendered_only has no effect with GUT (it needs the FastGS fused backward)");
         auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
@@ -1800,6 +1802,12 @@ namespace lfs::training {
             return {};
         }
         return (_keep_long_major < _params->receiver_keep_long).contiguous();
+    }
+
+    IStrategy::FusedGeometryHooks MRNF::fused_geometry_hooks(const int /*iter*/) {
+        FusedGeometryHooks hooks;
+        hooks.reg_rendered_only = _params && _params->mrnf_reg_rendered_only && !_params->gut;
+        return hooks;
     }
 
     lfs::core::Tensor MRNF::major_sigma_scratch(const int /*iter*/) {

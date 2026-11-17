@@ -117,6 +117,7 @@ class MRNFStrategyTest_ImpactContrastNormDividesByThePhotoDeviation_Test;
 class MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
 class MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
 class MRNFStrategyTest_KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical_Test;
+class MRNFStrategyTest_RegRenderedOnlyReachesTheFusedHooksOnlyWhenOn_Test;
 class MRNFStrategyTest_KeepCoveredDecayScalesByTheReach_Test;
 class MRNFStrategyTest_KeepCoveredTakesCoveredPicksOutOfTheRetireQuota_Test;
 
@@ -179,6 +180,9 @@ namespace lfs::training {
         std::pair<lfs::core::Tensor, lfs::core::Tensor> explore_scratch(int iter) override;
         lfs::core::Tensor minor_sigma_scratch(int iter) override;
         lfs::core::Tensor major_sigma_scratch(int iter) override;
+        // mrnf_reg_rendered_only (FastGS): the backward skips the shape regularisers of splats that did not
+        // contribute in the step; every other hook stays at its default.
+        FusedGeometryHooks fused_geometry_hooks(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
@@ -276,6 +280,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_ReceiverKeepLongSplitsShortReceiversAcross_Test;
         friend class ::MRNFStrategyTest_ReceiverKeepLongWindowFollowsRendersAndSplats_Test;
         friend class ::MRNFStrategyTest_KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical_Test;
+        friend class ::MRNFStrategyTest_RegRenderedOnlyReachesTheFusedHooksOnlyWhenOn_Test;
         friend class ::MRNFStrategyTest_KeepCoveredDecayScalesByTheReach_Test;
         friend class ::MRNFStrategyTest_KeepCoveredTakesCoveredPicksOutOfTheRetireQuota_Test;
 
