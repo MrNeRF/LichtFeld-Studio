@@ -18,6 +18,32 @@ from lfs_plugins import http, portal_gallery
 from lfs_plugins.portal_account import PortalHTTPError, PortalProtocolError
 
 
+@pytest.mark.parametrize("revision", ["contentRevision", "metadataRevision", "presentationRevision"])
+def test_representation_changed_during_validation_does_not_replace_destination(tmp_path, monkeypatch, revision):
+    identifier = str(uuid.uuid4())
+    data = b"download bytes"
+    target = tmp_path / "asset.licht"
+    scene = dict(id=identifier, contentRevision="c", metadataRevision="m", presentationRevision="p")
+    choice = dict(representationId="pinned", size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                  format="licht", status="ready")
+
+    def request(method, path, body=None, **kwargs):
+        if path.endswith('/me'):
+            return dict(gallerySyncVersion=1, revisionDomains=1, id='owner', sourceFormats=['licht'])
+        return {"representations": [choice]} if path.endswith("download-options") else dict(scene)
+
+    def response(method, path, **kwargs):
+        return 206, {"Content-Range": f"bytes 0-{len(data)-1}/{len(data)}"}, data
+
+    account = SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=request,
+                              request_response_authenticated=response)
+    client = portal_gallery.PortalGalleryClient(account)
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *_: scene.update({revision: "changed"}))
+    with pytest.raises(portal_gallery.GalleryTransferInvalid, match="scene changed"):
+        client.download(identifier, target)
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("representation", [False, True], ids=["legacy", "representation"])
 @pytest.mark.parametrize("swap", ["identity", "path", "appeared"])
 def test_download_rechecks_destination_before_replacement(tmp_path, monkeypatch, representation, swap):
@@ -595,7 +621,7 @@ def test_project_representation_failure_is_not_indefinite_processing(tmp_path, m
     client.max_file_bytes = 100
     client.processing_deadline = portal_gallery.time.time() - 1
     used = []
-    monkeypatch.setattr(client, "_download_representation", lambda *args: used.append(args[1]) or {"id": identifier})
+    monkeypatch.setattr(client, "_download_representation", lambda *args, **kwargs: used.append(args[1]) or {"id": identifier})
     if status == "ready":
         assert client.download(identifier, tmp_path / "project.licht") == {"id": identifier}
         assert used == [choice]
@@ -744,3 +770,38 @@ def test_upload_refuses_a_camera_path_past_the_gallery_keyframe_limit(tmp_path):
     with pytest.raises(ValueError, match="camera_path"):
         client.upload(path, {"title": "Scene", "viewerSettings": {"cameraPath": _camera_path(4097)}})
     assert not any(url.endswith("/splats/uploads") for url in calls)
+
+
+def test_completed_representation_reuse_checks_hash_format_and_current_revision(tmp_path, monkeypatch):
+    identifier = str(uuid.uuid4())
+    data = b"fixture checked by the canonical format validator"
+    checksum = hashlib.sha256(data).hexdigest()
+    target = tmp_path / "asset.licht"
+    target.write_bytes(data)
+    scene = {"id": identifier, "contentRevision": "content", "metadataRevision": "metadata", "presentationRevision": "view"}
+    choice = {"representationId": "representation-1", "format": "licht", "status": "ready",
+              "size": len(data), "sha256": checksum}
+    checkpoint = {"apiRepresentationId": "representation-1", "sceneId": identifier, "size": len(data),
+                  "expectedSha256": checksum, "sha256": checksum}
+    calls, validated = [], []
+
+    def request(method, path, body=None, **kwargs):
+        calls.append(path)
+        return {"representations": [choice]} if path.endswith("download-options") else dict(scene)
+
+    account = SimpleNamespace(base_url="https://portal.lichtfeld.io", request_json_authenticated=request)
+    client = portal_gallery.PortalGalleryClient(account)
+    client.max_file_bytes = 1024
+    monkeypatch.setattr(portal_gallery, "validate_download", lambda *args: validated.append(args[0]))
+    assert client.download(identifier, target, checkpoint=checkpoint, reuse_completed=True) == scene
+    assert validated == [target]
+    assert len(calls) == 3  # Options plus scene checks before and after file validation.
+    assert target.read_bytes() == data
+
+    def changed(*_):
+        scene["contentRevision"] = "new-content"
+
+    monkeypatch.setattr(portal_gallery, "validate_download", changed)
+    with pytest.raises(portal_gallery.GalleryTransferInvalid, match="scene changed"):
+        client.download(identifier, target, checkpoint=checkpoint, reuse_completed=True)
+    assert target.read_bytes() == data
