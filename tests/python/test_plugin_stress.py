@@ -254,22 +254,46 @@ def test_update_newer_version_while_loaded(local_archive_preparer):
     assert sys.modules["lfs_plugins.stress_update"].VERSION == "2.0.0"
 
 
-def test_import_failure_has_error_and_no_half_installed_directory(local_archive_preparer):
-    manager, plugins_dir, archives = local_archive_preparer
-    url = "github:local/stress_import_error"
-    archives[url] = _archive(
-        "stress_import_error",
-        "1.0.0",
-        "raise RuntimeError('intentional stress import failure')\n",
-    )
-
+@pytest.mark.parametrize("native_library", [
+    False,
+    pytest.param(True, marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL locking")),
+])
+def test_import_failure_has_error_and_no_half_installed_directory(
+    local_archive_preparer, monkeypatch, native_library
+):
     from lfs_plugins.errors import PluginError
 
-    with pytest.raises(PluginError, match="intentional stress import failure"):
-        manager.install(url, auto_load=True)
+    manager, plugins_dir, archives = local_archive_preparer
+    url = "github:local/stress_import_error"
+    code = "raise RuntimeError('intentional stress import failure')\n"
+    if native_library:
+        import builtins
+        import os
+        from _ctypes import FreeLibrary
 
-    assert manager.get_state("stress_import_error") is None
-    assert not (plugins_dir / "stress_import_error").exists()
+        monkeypatch.setattr(builtins, "_plugin_test_library", None, raising=False)
+        code = (
+            "import builtins, ctypes\nfrom pathlib import Path\n"
+            "builtins._plugin_test_library = ctypes.WinDLL(str(Path(__file__).with_name('probe.dll')))\n"
+        ) + code
+    payload = BytesIO(_archive("stress_import_error", "1.0.0", code))
+    if native_library:
+        with zipfile.ZipFile(payload, "a") as archive:
+            archive.write(Path(os.environ["WINDIR"]) / "System32" / "version.dll",
+                          "stress_import_error/probe.dll")
+    archives[url] = payload.getvalue()
+
+    try:
+        with pytest.raises(PluginError, match="intentional stress import failure"):
+            manager.install(url, auto_load=True)
+
+        assert manager.get_state("stress_import_error") is None
+        assert not (plugins_dir / "stress_import_error").exists()
+        archives[url] = _archive("stress_import_error", "1.0.0", "")
+        assert manager.install(url) == "stress_import_error"
+    finally:
+        if native_library and builtins._plugin_test_library is not None:
+            FreeLibrary(builtins._plugin_test_library._handle)
 
 
 def test_autostart_preference_round_trip_uses_panel_storage(plugin_runtime):
