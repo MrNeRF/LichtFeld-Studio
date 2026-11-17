@@ -15,6 +15,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
 #include "core/parameters.hpp"
@@ -21277,6 +21278,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
 
         void TearDown() override {
             lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+            lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
             VisualizerImplResetTest::TearDown();
         }
 
@@ -21349,6 +21351,32 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(saved->model->visible_count(), live->model->visible_count());
             EXPECT_EQ(saved->model->means().cpu().to_vector(), live->model->means().cpu().to_vector());
             EXPECT_EQ(saved->model->opacity_raw().cpu().to_vector(), live->model->opacity_raw().cpu().to_vector());
+        }
+
+        void expectDeferredAutosave(VisualizerImpl& viewer) {
+            lfs::test::licht::drain_work_queue(viewer.work_queue_mutex_, viewer.work_queue_);
+            auto& lifecycle = *viewer.project_lifecycle_;
+            const auto deferred = lifecycle.startAutosave();
+            ASSERT_FALSE(deferred);
+            EXPECT_EQ(deferred.error().code(), lfs::ErrorCode::ResourceExhausted);
+            EXPECT_FALSE(viewer.jobs().anyRunning(JobType::ProjectWrite));
+            EXPECT_TRUE(lifecycle.hasDirtyProject());
+        }
+
+        void expectDeferredMaintenanceAndExplicitCapture(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            auto& lifecycle = *viewer.project_lifecycle_;
+            EXPECT_EQ(lifecycle.document_->find_splat(uuid), nullptr);
+            lifecycle.last_autosave_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle.last_mutation_at_ = std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle.updateMaintenance();
+            EXPECT_EQ(lifecycle.autosave_failure_backoff_seconds_, 60u);
+            EXPECT_TRUE(lifecycle.autosave_memory_warning_published_);
+            lifecycle.last_project_write_error_.clear();
+            lifecycle.updateMaintenance();
+            EXPECT_TRUE(lifecycle.last_project_write_error_.empty()) << "retry must respect backoff";
+            // Explicit synchronization still supports the synchronous fallback.
+            ASSERT_TRUE(lifecycle.synchronizeDocumentFromViewer());
+            ASSERT_NE(lifecycle.document_->find_splat(uuid), nullptr);
         }
     };
 
@@ -21436,23 +21464,38 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         expect_recaptured_once("crop apply");
     }
 
-    // Without VRAM headroom the capture runs synchronously on the viewer thread, so a
-    // repeated capture freezes the application on every autosave.
-    TEST_F(PayloadRecaptureTest, SynchronousCaptureRunsOncePerPayloadChange) {
-        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(true);
+    TEST_F(PayloadRecaptureTest, AutosaveDefersWithoutHeadroomAndRetriesDirtyPayload) {
         VisualizerImpl viewer(projectOptions());
         ASSERT_NO_FATAL_FAILURE(prepare(viewer));
         auto& scene = viewer.getScene();
         const auto splat_id = scene.addSplat("Synchronous", cudaSplat(64));
         ASSERT_NE(splat_id, lfs::core::NULL_NODE);
         const auto uuid = scene.getNodeById(splat_id)->uuid;
-        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture";
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
+        ASSERT_NO_FATAL_FAILURE(expectDeferredAutosave(viewer));
+        ASSERT_NO_FATAL_FAILURE(expectDeferredMaintenanceAndExplicitCapture(viewer, uuid));
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "idle autosaves";
         ASSERT_TRUE(viewer.getSceneManager()->renameNode(splat_id, "Renamed"));
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
         ASSERT_TRUE(cap::writeGaussianField(*viewer.getSceneManager(), viewer.getRenderingManager(), "Renamed",
                                             "opacity", {0}, {0.5f}));
+        ASSERT_NO_FATAL_FAILURE(expectDeferredAutosave(viewer));
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(nullptr);
         EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "Gaussian field write";
+        expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, CpuAutosaveDoesNotRequireDeviceHeadroom) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto id = scene.addSplat("CPU", lfs::test::licht::make_splat(64));
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(id)->uuid;
+        lfs::core::MemoryPressureCoordinator::instance().set_free_memory_probe(
+            [](lfs::core::MemoryDomain) -> std::size_t { return 0; });
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
         expectAutosavedGaussians(viewer, uuid);
     }
 

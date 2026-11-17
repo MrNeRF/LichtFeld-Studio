@@ -6307,8 +6307,7 @@ namespace lfs::vis::project {
             last_project_write_error_ =
                 developerError(
                     cause);
-            if (training &&
-                cause.code() ==
+            if (cause.code() ==
                     lfs::ErrorCode::ResourceExhausted &&
                 !autosave_memory_warning_published_) {
                 const auto message =
@@ -7002,7 +7001,10 @@ namespace lfs::vis::project {
                     start_async_capture(
                         *model,
                         lfs::io::project::SplatSourceKind::Generated,
-                        false);
+                        false,
+                        mode == DocumentSyncMode::Autosave || mode == DocumentSyncMode::LightTrainingAutosave
+                            ? lfs::io::project::SplatCaptureFallback::Defer
+                            : lfs::io::project::SplatCaptureFallback::Synchronous);
                 if (!async) {
                     return lfs::Status::failure(std::move(async).error());
                 } else if (*async) {
