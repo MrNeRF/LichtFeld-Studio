@@ -65,8 +65,10 @@ namespace lfs::training {
         constexpr float MRNF_EXPLORE_WALK_END_RATIO = 0.01f;
         constexpr float MRNF_EXPLORE_PEAK_HALF_LIFE_STEPS = 800.0f;
         constexpr float MRNF_EXPLORE_SCOUT_RENDERS = 20.0f;
-        // Keep covered: a retire-quota pick whose reach is below this is mostly covered and stays alive.
+        // Keep covered: a row whose reach is below this is mostly covered.
         constexpr float MRNF_COVERED_REACH = 0.5f;
+        // Keep covered: only covered rows with a largest axis of at least this times the live median are kept.
+        constexpr float MRNF_KEEP_COVERED_SIZE_FACTOR = 6.0f;
 
         [[nodiscard]] lfs::core::Tensor compact_bool_indices(
             const lfs::core::Tensor& mask, size_t count) {
@@ -1039,6 +1041,9 @@ namespace lfs::training {
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
         // Retirees join the pruned rows: freed now, refilled by this refine.
         _last_covered_spared = 0;
+        if (keep_covered_on()) {
+            update_covered_size_floor(prune_mask);
+        }
         _last_retired = retire_on() ? mark_retirees(iter, prune_mask) : 0;
         if (keep_covered_on()) {
             log_keep_covered(iter, prune_mask);
@@ -1597,37 +1602,70 @@ namespace lfs::training {
         return _params && _params->mrnf_keep_covered && !_params->gut && !_topology_frozen;
     }
 
-    lfs::core::Tensor MRNF::covered_reach() const {
+    void MRNF::update_covered_size_floor(const lfs::core::Tensor& prune_mask) {
+        using namespace lfs::core;
+        _covered_median_axis = 0.0f;
+        _covered_log_size_floor = std::numeric_limits<float>::infinity();
+        const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
+        if (n == 0) {
+            return;
+        }
+        Tensor live = prune_mask.is_valid() && prune_mask.numel() == n ? prune_mask.logical_not()
+                                                                       : Tensor::ones_bool({n}, Device::CUDA);
+        if (_free_mask.is_valid()) {
+            live = live.logical_and(_free_mask.slice(0, 0, n).logical_not());
+        }
+        live = live.contiguous();
+        const size_t count = live.count_nonzero();
+        if (count == 0) {
+            return;
+        }
+        // The median of the largest log-scale is the log of the median largest axis (exp is monotone).
+        const Tensor largest = _splat_data->scaling_raw().max(1).contiguous();
+        const size_t k = (count + 1) / 2;
+        const float median_log = mrnf_strategy::launch_kth_largest(largest.ptr<float>(), live.ptr<bool>(), n, k);
+        _covered_median_axis = std::exp(median_log);
+        _covered_log_size_floor = median_log + std::log(MRNF_KEEP_COVERED_SIZE_FACTOR);
+    }
+
+    lfs::core::Tensor MRNF::covered_factor(lfs::core::Tensor* reach) const {
         using namespace lfs::core;
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         if (!keep_covered_on() || n == 0 || _explore_peak.numel() != n || _retire_renders.numel() != n) {
             return {};
         }
-        Tensor reach = Tensor::empty({n}, Device::CUDA, DataType::Float32);
-        mrnf_strategy::launch_mrnf_covered_reach(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
-                                                 _splat_data->opacity_raw().ptr<float>(),
-                                                 static_cast<float>(_params->mrnf_retire_grace), n,
-                                                 reach.ptr<float>());
-        return reach;
+        Tensor factor = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        if (reach != nullptr) {
+            *reach = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        }
+        mrnf_strategy::launch_mrnf_covered_factor(
+            _explore_peak.ptr<float>(), _retire_renders.ptr<float>(), _splat_data->opacity_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(), static_cast<float>(_params->mrnf_retire_grace), MRNF_COVERED_REACH,
+            _covered_log_size_floor, n, factor.ptr<float>(), reach != nullptr ? reach->ptr<float>() : nullptr);
+        return factor;
     }
 
     void MRNF::log_keep_covered(const int iter, const lfs::core::Tensor& prune_mask) {
         using namespace lfs::core;
         ensure_explore_rows();
-        const Tensor reach = covered_reach();
-        if (!reach.is_valid()) {
+        Tensor reach;
+        const Tensor factor = covered_factor(&reach);
+        if (!factor.is_valid()) {
             return;
         }
         // Rows that stay alive through this refine (not pruned, retired or free).
         Tensor live = (_retire_renders >= static_cast<float>(_params->mrnf_retire_grace))
                           .logical_and(prune_mask.logical_not());
         if (_free_mask.is_valid()) {
-            live = live.logical_and(_free_mask.slice(0, 0, reach.numel()).logical_not());
+            live = live.logical_and(_free_mask.slice(0, 0, factor.numel()).logical_not());
         }
         const size_t past_grace = live.count_nonzero();
         const size_t covered = (reach < MRNF_COVERED_REACH).logical_and(live).count_nonzero();
-        LOG_INFO("MRNF keep covered {}: past the grace {}, reach < {:.2g} {}, spared from the retire quota {}", iter,
-                 past_grace, MRNF_COVERED_REACH, covered, _last_covered_spared);
+        const size_t kept = (factor < MRNF_COVERED_REACH).logical_and(live).count_nonzero();
+        LOG_INFO("MRNF keep covered {}: past the grace {}, reach < {:.2g} {}, median largest axis {:.4g}, kept {} "
+                 "(axis >= {:.3g} x median), spared from the retire quota {}",
+                 iter, past_grace, MRNF_COVERED_REACH, covered, _covered_median_axis, kept,
+                 MRNF_KEEP_COVERED_SIZE_FACTOR, _last_covered_spared);
     }
 
     size_t MRNF::retire_count(const lfs::core::param::OptimizationParameters& params, const int iter,
@@ -1647,14 +1685,14 @@ namespace lfs::training {
         const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
         ensure_explore_rows();
         _last_spared = 0;
-        // Keep covered: the picks with reach below MRNF_COVERED_REACH leave the selection again and stay alive;
-        // the quota is not refilled from other rows. Returns how many were taken out.
+        // Keep covered: the kept picks (large, reach below MRNF_COVERED_REACH) leave the selection again and stay
+        // alive; the quota is not refilled from other rows. Returns how many were taken out.
         const auto drop_covered = [this](Tensor& retired) -> size_t {
-            const Tensor reach = covered_reach();
-            if (!reach.is_valid()) {
+            const Tensor factor = covered_factor();
+            if (!factor.is_valid()) {
                 return 0;
             }
-            const Tensor covered = retired.logical_and(reach < MRNF_COVERED_REACH);
+            const Tensor covered = retired.logical_and(factor < MRNF_COVERED_REACH);
             const size_t kept = covered.count_nonzero();
             if (kept > 0) {
                 retired = retired.logical_and(covered.logical_not());
@@ -2929,8 +2967,8 @@ namespace lfs::training {
         assert(!_params->opacity_decay_rendered_only || _params->gut || _rendered_count.numel() == n);
         lfs::core::Tensor reach;
         if (keep_covered_on()) {
-            ensure_explore_rows(); // rows appended by this refine start within the grace: reach 1
-            reach = covered_reach();
+            ensure_explore_rows(); // rows appended by this refine start within the grace: factor 1
+            reach = covered_factor();
         }
         mrnf_strategy::launch_mrnf_decay(
             _splat_data->opacity_raw().ptr<float>(),

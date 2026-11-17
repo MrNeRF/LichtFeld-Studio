@@ -833,8 +833,8 @@ namespace lfs::core::param {
             .all_strategies()
             .bool_prop(&OptimizationParameters::mrnf_keep_covered,
                        "mrnf_keep_covered", "Keep Covered", d.mrnf_keep_covered,
-                       "Opacity and scale decay scale by the share of a splat's opacity that reaches a photo, and "
-                       "splats with less than half are not retired (MRNF, FastGS)")
+                       "Large splats (6x the median size) with less than half of their opacity reaching a photo decay "
+                       "by that share and are not retired (MRNF, FastGS)")
             .locale("training.advanced.mrnf_keep_covered")
             .tooltip("training.tooltip.mrnf_keep_covered")
             .flags(PROP_ADVANCED)

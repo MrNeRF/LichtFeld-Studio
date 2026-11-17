@@ -14,6 +14,7 @@
 #include "strategy_utils.hpp"
 #include <cassert>
 #include <future>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -362,13 +363,19 @@ namespace lfs::training {
         [[nodiscard]] lfs::core::Tensor keep_long_split_across() const;
         // Keep covered (mrnf_keep_covered, FastGS): the peak and render rows of retirement are kept from the
         // first step, also without the retire quota. A row past the retire grace has reach
-        // clamp(peak / max(opacity, 1e-6), 0, 1), the others 1; both decays of a row scale by its reach, and the
-        // quota's pick drops rows with reach below MRNF_COVERED_REACH (not refilled from other rows).
+        // clamp(peak / max(opacity, 1e-6), 0, 1), the others 1. A row is kept when its reach is below
+        // MRNF_COVERED_REACH and its largest axis is at least MRNF_KEEP_COVERED_SIZE_FACTOR x the median largest
+        // axis of the live rows at this refine: both its decays scale by its reach, and the quota's pick drops it
+        // (not refilled from other rows). Every other row decays and retires as with the switch off.
         [[nodiscard]] bool keep_covered_on() const;
-        // [N] reach of every row (empty when keep covered is off or the rows do not match the model).
-        [[nodiscard]] lfs::core::Tensor covered_reach() const;
-        // The keep-covered census line of a refine: live rows past the grace that stay (not in prune_mask), those
-        // with reach below MRNF_COVERED_REACH, and the quota picks spared this refine.
+        // Sets the size floor of this refine from the live rows (not free, not in prune_mask).
+        void update_covered_size_floor(const lfs::core::Tensor& prune_mask);
+        // [N] decay factor: the reach of a kept row, 1 for every other row; reach, when given, gets every row's
+        // reach. Empty when keep covered is off or the rows do not match the model.
+        [[nodiscard]] lfs::core::Tensor covered_factor(lfs::core::Tensor* reach = nullptr) const;
+        // The keep-covered census line of a refine over the live rows that stay (not in prune_mask): rows past the
+        // grace, those with reach below MRNF_COVERED_REACH, the median largest axis, the kept rows, and the quota
+        // picks spared this refine.
         void log_keep_covered(int iter, const lfs::core::Tensor& prune_mask);
         // Sizes the exploration rows to the model (new rows zero) or drops the ones not in use.
         void ensure_explore_rows();
@@ -531,12 +538,14 @@ namespace lfs::training {
         lfs::core::Tensor _spare_window_sigma; // [N] smallest raw minor sigma (px) this refine window, +inf: undrawn
         lfs::core::Tensor _spare_sigma;        // [N] that minimum for the last window that drew the splat, +inf: none
         size_t _last_spared = 0;
-        size_t _last_covered_spared = 0;           // quota picks with reach below MRNF_COVERED_REACH kept this refine
-        lfs::core::Tensor _retire_impact_sum;      // [N] faded max of the window summed removal impact (rank Both)
-        lfs::core::Tensor _retire_impact_peak;     // [N] faded max of the window pixel-peak removal impact (rank Both)
-        int _retire_impact_windows = 0;            // windows folded into the retire impact rows
-        lfs::core::Tensor _keep_long_window_major; // [N] largest raw major sigma (px) this refine window, 0: undrawn
-        lfs::core::Tensor _keep_long_major;        // [N] that maximum for the last window that drew it, +inf: none
+        size_t _last_covered_spared = 0;                                        // kept rows taken out of the retire quota's pick this refine
+        float _covered_median_axis = 0.0f;                                      // median largest axis of the live rows at the last refine
+        float _covered_log_size_floor = std::numeric_limits<float>::infinity(); // log of the kept size floor
+        lfs::core::Tensor _retire_impact_sum;                                   // [N] faded max of the window summed removal impact (rank Both)
+        lfs::core::Tensor _retire_impact_peak;                                  // [N] faded max of the window pixel-peak removal impact (rank Both)
+        int _retire_impact_windows = 0;                                         // windows folded into the retire impact rows
+        lfs::core::Tensor _keep_long_window_major;                              // [N] largest raw major sigma (px) this refine window, 0: undrawn
+        lfs::core::Tensor _keep_long_major;                                     // [N] that maximum for the last window that drew it, +inf: none
         size_t _last_split_across = 0;
         int _exchange_windows = 0; // windows in the current importance memory
         bool _exchange_impact_written = false;

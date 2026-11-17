@@ -146,7 +146,7 @@ namespace lfs::training::mrnf_strategy {
      * @param train_t — current training progress [0, 1]
      * @param N — number of splats
      * @param stream — CUDA stream
-     * @param reach [N] — optional; a row with reach r < 1 takes opacity_decay x r and scale_decay x r
+     * @param reach [N] — optional per-row factor; a row with r < 1 takes opacity_decay x r and scale_decay x r
      *        (r <= 0 leaves it as it is), r >= 1 decays as without it
      */
     void launch_mrnf_decay(
@@ -163,15 +163,21 @@ namespace lfs::training::mrnf_strategy {
         const float* opacity_hold = nullptr,
         const float* reach = nullptr);
 
-    // Covered-splat reach: for a row rendered at least grace times, clamp(peak / max(sigmoid(raw opacity),
-    // 1e-6), 0, 1), the share of its opacity that reached a photo in its best recent view; 1 for the others.
-    void launch_mrnf_covered_reach(
+    // Keep covered. reach: for a row rendered at least grace times, clamp(peak / max(sigmoid(raw opacity), 1e-6),
+    // 0, 1), the share of its opacity that reached a photo in its best recent view; 1 for the others. factor: the
+    // reach for a kept row (reach < keep_reach and largest log-scale >= log_size_floor), 1 for every other row.
+    // reach is optional.
+    void launch_mrnf_covered_factor(
         const float* peak,
         const float* renders,
         const float* raw_opacities,
+        const float* log_scales,
         float grace,
+        float keep_reach,
+        float log_size_floor,
         size_t N,
-        float* reach,
+        float* factor,
+        float* reach = nullptr,
         void* stream = nullptr);
 
     // Exploration walk for need-guided growth, one launch per training step after the backward.
