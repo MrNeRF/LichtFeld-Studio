@@ -429,6 +429,7 @@ namespace lfs::core {
             std::monostate,
             float,
             std::tuple<float, float, float>,
+            std::tuple<int64_t, int64_t, int64_t>,
             std::pair<float, float>,
             std::pair<int, int>,
             void*,
@@ -1580,6 +1581,10 @@ namespace lfs::core {
         static Tensor arange(float end);
         static Tensor arange(float start, float end, float step = 1.0f);
         static Tensor arange(float start, float end, float step, Device device);
+        static Tensor arange(int64_t start, int64_t end, int64_t step, Device device, DataType dtype);
+        template <typename Start, typename End, typename Step>
+            requires(std::floating_point<Start> || std::floating_point<End> || std::floating_point<Step>)
+        static Tensor arange(Start start, End end, Step step, Device device, DataType dtype) = delete;
         static Tensor linspace(float start, float end, size_t steps, Device device = Device::CUDA);
         static Tensor eye(size_t n, Device device = Device::CUDA);
         static Tensor eye(size_t m, size_t n, Device device = Device::CUDA);

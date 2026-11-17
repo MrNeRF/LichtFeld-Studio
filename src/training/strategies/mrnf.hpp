@@ -65,6 +65,9 @@ namespace lfs::training {
     inline constexpr double kBlobSeedCapacityFraction = 0.01;
     inline constexpr float kFarMaskOrbits = 2.0f;
 
+    // Child rows of one split chunk in parent order: the reused free slots, then the appended rows.
+    lfs::core::Tensor split_child_rows(const lfs::core::Tensor& reused_rows, size_t first_appended_row, size_t appended);
+
     class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
         MRNF() = delete;
