@@ -11,7 +11,9 @@
 #include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
 #include "crc32c.hpp"
+#ifndef LFS_FORMAT_TEST_TARGET
 #include "geometry/bounding_box.hpp"
+#endif
 #include "io/atomic_output.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
