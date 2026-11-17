@@ -44,7 +44,11 @@ namespace lfs::training::kernels {
      * @param num_split Number of Gaussians to split
      * @param shN_dim SH higher degree dimension
      * @param stream CUDA stream
+     * @param cross_axis_scale Factor on the two shorter axes (the long axis is halved)
+     * @param opacity_scale Factor on both children's opacity
      */
+    inline constexpr float LONG_AXIS_SPLIT_CROSS_AXIS_SCALE = 0.85f;
+    inline constexpr float LONG_AXIS_SPLIT_OPACITY_SCALE = 0.6f;
     void launch_long_axis_split_gaussians_inplace(
         float* positions,
         float* rotations,
@@ -61,7 +65,9 @@ namespace lfs::training::kernels {
         const int64_t* split_indices,
         int num_split,
         int shN_dim,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        float cross_axis_scale = LONG_AXIS_SPLIT_CROSS_AXIS_SCALE,
+        float opacity_scale = LONG_AXIS_SPLIT_OPACITY_SCALE);
 
     /**
      * fused free-slot write.

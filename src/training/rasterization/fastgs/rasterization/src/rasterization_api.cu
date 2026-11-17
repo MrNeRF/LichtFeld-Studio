@@ -499,8 +499,6 @@ namespace fast_lfs::rasterization {
         unsigned shN_value_bits,
         const float* edge_weight_map,
         float* edge_score_out,
-        float* impact_sum_out,
-        float* impact_peak_out,
         const ColorVarianceLoss& color_variance) {
 
         // The forward chose the stream and chained the arena frame on it; the
@@ -537,11 +535,6 @@ namespace fast_lfs::rasterization {
             outputs.error_message = "Invalid edge-score inputs in backward_raw";
             return outputs;
         }
-        if ((impact_sum_out == nullptr) != (impact_peak_out == nullptr)) {
-            release_forward_context(forward_ctx);
-            outputs.error_message = "Invalid impact-score outputs in backward_raw";
-            return outputs;
-        }
 
         try {
             // Validate required inputs using pure CUDA validation
@@ -574,8 +567,6 @@ namespace fast_lfs::rasterization {
                 throw std::runtime_error("grad_w2c_ptr and grad_cam_position_ptr must be given together");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_score_out, "edge_score_out");
-            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(impact_sum_out, "impact_sum_out");
-            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(impact_peak_out, "impact_peak_out");
         } catch (const std::exception& e) {
             release_forward_context(forward_ctx);
             last_backward_error = e.what();
@@ -714,8 +705,6 @@ namespace fast_lfs::rasterization {
                 shN_value_bits,
                 edge_weight_map,
                 edge_score_out,
-                impact_sum_out,
-                impact_peak_out,
                 stream,
                 color_variance);
 

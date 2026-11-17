@@ -583,16 +583,6 @@ namespace lfs::core::param {
             .strategies({"igs+"})
             // MRNF strategy parameters
             .all_strategies()
-            .float_prop(&OptimizationParameters::growth_grad_threshold,
-                        "growth_grad_threshold", "Growth Grad Threshold", d.growth_grad_threshold, 0.0f, 1.0f,
-                        "Min refine weight for growth candidacy (MRNF)")
-            .locale("training.advanced.growth_grad_threshold")
-            .tooltip("training.tooltip.growth_grad_threshold")
-            .precision(4)
-            .ui_step(0.0001)
-            .flags(PROP_ADVANCED)
-            .strategies({"mrnf"})
-            .all_strategies()
             .float_prop(&OptimizationParameters::grow_fraction,
                         "grow_fraction", "Grow Fraction", d.grow_fraction, 0.0f, 1.0f,
                         "Fraction of above-threshold splats to grow (MRNF)")
@@ -610,14 +600,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.grow_until_iter")
             .precision(0)
             .ui_step(1000)
-            .strategies({"mrnf"})
-            .all_strategies()
-            .bool_prop(&OptimizationParameters::growth_exchange,
-                       "growth_exchange", "Growth Exchange", d.growth_exchange,
-                       "Keeps error-guided growth working at the splat cap by freeing the splats whose removal changes the image least (MRNF)")
-            .locale("training.advanced.growth_exchange")
-            .tooltip("training.tooltip.growth_exchange")
-            .flags(PROP_ADVANCED)
             .strategies({"mrnf"})
             .all_strategies()
             .float_prop(&OptimizationParameters::opacity_decay,

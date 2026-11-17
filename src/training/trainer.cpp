@@ -6677,12 +6677,21 @@ namespace lfs::training {
                     assert(support.ndim() == 1 && support.numel() == strategy_->get_model().size());
                     fused_extra_gradients.rendered_count = support.ptr<float>();
                 }
+                lfs::core::Tensor blend_peak_rows;
+                if (fastgs_path && !in_popspa) {
+                    auto peak = strategy_->blend_peak_scratch(iter);
+                    if (peak.is_valid() && peak.dtype() == lfs::core::DataType::Float32 &&
+                        peak.numel() == static_cast<size_t>(strategy_->get_model().size())) {
+                        blend_peak_rows = std::move(peak);
+                        fused_extra_gradients.blend_peak = blend_peak_rows.ptr<float>();
+                    }
+                }
+                fused_extra_gradients.reg_rendered_only =
+                    fastgs_path && !in_popspa && strategy_->regularize_rendered_only();
                 if (pose_refinement_ && run_fastgs_gaussian_backward)
                     pose_refinement_->bind_gradients(fused_extra_gradients, iter);
                 lfs::core::Tensor edge_score_scratch;
                 lfs::core::Tensor edge_weight_map;
-                lfs::core::Tensor impact_sum_scratch;
-                lfs::core::Tensor impact_peak_scratch;
                 lfs::core::Tensor fused_scale_reg_loss_gpu;
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor fused_erank_reg_loss_gpu;
@@ -6731,19 +6740,6 @@ namespace lfs::training {
                         if (edge_weight_scoring_active_) {
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                             fused_extra_gradients.edge_score_out = edge_score_scratch.ptr<float>();
-                        }
-                        {
-                            auto impact = in_popspa ? std::pair<lfs::core::Tensor, lfs::core::Tensor>{} : strategy_->impact_scratch(iter);
-                            impact_sum_scratch = std::move(impact.first);
-                            impact_peak_scratch = std::move(impact.second);
-                            if (impact_sum_scratch.is_valid() && impact_peak_scratch.is_valid() &&
-                                impact_sum_scratch.dtype() == lfs::core::DataType::Float32 &&
-                                impact_peak_scratch.dtype() == lfs::core::DataType::Float32 &&
-                                impact_sum_scratch.numel() == static_cast<size_t>(model.size()) &&
-                                impact_peak_scratch.numel() == static_cast<size_t>(model.size())) {
-                                fused_extra_gradients.impact_sum_out = impact_sum_scratch.ptr<float>();
-                                fused_extra_gradients.impact_peak_out = impact_peak_scratch.ptr<float>();
-                            }
                         }
                         const float scale_weight = step_params.scale_reg_at(iter);
                         const bool log_scale_reg = core::param::is_mrnf_strategy(step_params.strategy);
@@ -8259,9 +8255,6 @@ namespace lfs::training {
                                         pose_refinement_->step(*cam, iter, backward_stream);
                                     if (fused_extra_gradients.edge_score_out != nullptr) {
                                         strategy_->on_edge_score_accumulated(iter);
-                                    }
-                                    if (fused_extra_gradients.impact_sum_out != nullptr) {
-                                        strategy_->on_impact_accumulated(iter);
                                     }
                                     if (model_write_lock.owns_lock()) {
                                         recordParamsReady();

@@ -689,9 +689,7 @@ EXPECTED_ADVANCED_IDS = (
     "densify_structure_weight",
     "morton_reorder_interval",
     "min_opacity",
-    "growth_grad_threshold",
     "grow_fraction",
-    "growth_exchange",
     "opacity_decay",
     "scale_decay",
     "means_noise_weight",
@@ -740,7 +738,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 119
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 117
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -813,10 +811,8 @@ def test_strategy_applicability_filters_auto_rows_and_search(lf):
         "means_lr_end",
         "ray_depth_lr",
         "scaling_lr_end",
-        "growth_grad_threshold",
         "grow_fraction",
         "grow_until_iter",
-        "growth_exchange",
         "opacity_decay",
         "scale_decay",
         "means_noise_weight",
