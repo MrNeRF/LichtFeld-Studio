@@ -1454,8 +1454,20 @@ TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
-    EXPECT_NE(help.find(".licht (project)"), std::string::npos);
+    EXPECT_NE(help.find(".licht (visible splat nodes of a project"), std::string::npos);
     EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ConvertCapabilitiesPrintsStableIdentifiersWithoutInput) {
+    // The Blender plugin matches this line exactly before downloading a Portal project.
+    const char* argv[] = {"LichtFeld-Studio", "convert", "--capabilities"};
+    testing::internal::CaptureStdout();
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    const auto output = testing::internal::GetCapturedStdout();
+
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    EXPECT_EQ(output, "visible-project-splats-v1\n");
 }
 
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {

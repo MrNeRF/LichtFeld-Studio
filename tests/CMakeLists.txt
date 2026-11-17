@@ -862,6 +862,7 @@ set(TEST_FILES
     test_geometry_payload.cpp
     test_selection_chapter.cpp
     test_project_document.cpp
+    test_project_operations.cpp
     test_project_thumbnail_sources.cpp
     test_project_training_copy.cpp
     test_gallery_scene_publication.cpp

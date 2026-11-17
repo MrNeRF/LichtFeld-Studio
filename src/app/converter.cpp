@@ -25,6 +25,7 @@
 #include "io/loader.hpp"
 #include "io/ply_to_rad_lod.hpp"
 #include "io/project_document.hpp"
+#include "io/project_operations.hpp"
 #include "rendering/mesh2splat.hpp"
 #include <algorithm>
 #include <cctype>
@@ -242,8 +243,14 @@ namespace lfs::app {
                 lfs::io::project::ProjectDocumentOpenOptions options;
                 options.defer_geometry_payloads = true;
                 if (auto document = lfs::io::project::ProjectDocument::open(input, options)) {
+                    // Training facts only describe an export made of the bound checkpoint alone.
                     const auto bound = document->bound_checkpoint_uuid();
-                    if (bound && *bound && document->splat_uuids().empty()) {
+                    const auto nodes = document->scene_graph().nodes();
+                    const bool checkpoint_only =
+                        nodes && std::ranges::count_if(*nodes, [](const auto& node) {
+                                     return node.type == "splat" && node.payload.has_value();
+                                 }) == 1;
+                    if (bound && *bound && checkpoint_only) {
                         if (const auto* checkpoint = document->find_checkpoint(**bound)) {
                             fill_stamp_from_checkpoint_stream(stamp, *checkpoint);
                         }
@@ -253,82 +260,23 @@ namespace lfs::app {
             return stamp;
         }
 
+        // .licht inputs share the closed-project export materialization, so
+        // every output format uses the same materialization as export_project_as.
         bool loadSplatFromLichtProject(
             const std::filesystem::path& input,
+            const param::OutputFormat format,
             std::shared_ptr<SplatData>& splat) {
-            auto document = lfs::io::project::ProjectDocument::open(input);
-            if (!document) {
-                LOG_ERROR("Failed to open project: {}", lfs::format_for_developer(document.error()));
-                std::println(stderr, "  Error: {}", document.error().user_message());
+            auto scene = lfs::io::project::load_project_splats(
+                input, format == param::OutputFormat::RAD);
+            if (!scene) {
+                LOG_ERROR("Failed to load project splats: {}",
+                          lfs::format_for_developer(scene.error()));
+                std::println(stderr, "  Error: {}", scene.error().user_message());
                 return false;
             }
-
-            const auto bound = document->bound_checkpoint_uuid();
-            if (!bound) {
-                LOG_ERROR("Failed to resolve project training checkpoint: {}",
-                          lfs::format_for_developer(bound.error()));
-                return false;
-            }
-            const auto splats = document->splat_uuids();
-            const auto model_count = (bound->has_value() ? 1u : 0u) + splats.size();
-            if (model_count == 0) {
-                LOG_ERROR("Project contains no splat model: {}", path_to_utf8(input));
-                std::println(stderr, "  Error: project contains no splat model");
-                return false;
-            }
-            if (model_count > 1) {
-                LOG_ERROR("Project contains multiple splat models ({} checkpoint(s), {} splat(s)): {}",
-                          bound->has_value() ? 1 : 0, splats.size(), path_to_utf8(input));
-                std::println(stderr,
-                             "  Error: project contains {} checkpoint model(s) and {} splat model(s); export from the LichtFeld Studio GUI instead",
-                             bound->has_value() ? 1 : 0, splats.size());
-                return false;
-            }
-
-            if (bound->has_value()) {
-                const auto* checkpoint = document->find_checkpoint(**bound);
-                if (!checkpoint) {
-                    LOG_ERROR("Project checkpoint handle disappeared: {}", path_to_utf8(input));
-                    std::println(stderr, "  Error: project checkpoint handle disappeared");
-                    return false;
-                }
-
-                std::optional<core::CheckpointSplatDataLoadResult> loaded;
-                auto visited = checkpoint->visit_stream(
-                    [&](std::istream& stream, const std::uint64_t bytes) -> lfs::Result<void> {
-                        loaded = core::load_checkpoint_splat_data(stream, bytes, {});
-                        return {};
-                    });
-                if (!visited) {
-                    LOG_ERROR("Failed to stream project checkpoint: {}",
-                              lfs::format_for_developer(visited.error()));
-                    std::println(stderr, "  Error: {}", visited.error().user_message());
-                    return false;
-                }
-                if (!loaded || !*loaded) {
-                    const auto message = loaded ? loaded->error() : "checkpoint visitor did not run";
-                    LOG_ERROR("Failed to load project checkpoint: {}", message);
-                    std::println(stderr, "  Error: {}", message);
-                    return false;
-                }
-                splat = std::make_shared<SplatData>(std::move(**loaded));
-                return true;
-            }
-
-            const auto* splat_chapter = document->find_splat(splats.front());
-            if (!splat_chapter) {
-                LOG_ERROR("Project splat handle disappeared: {}", path_to_utf8(input));
-                std::println(stderr, "  Error: project splat handle disappeared");
-                return false;
-            }
-            auto hydrated = splat_chapter->hydrate({});
-            if (!hydrated) {
-                LOG_ERROR("Failed to load project splat: {}",
-                          lfs::format_for_developer(hydrated.error()));
-                std::println(stderr, "  Error: {}", hydrated.error().user_message());
-                return false;
-            }
-            splat = std::shared_ptr<SplatData>(std::move(*hydrated));
+            if (scene->node_count > 1)
+                std::println("  Merged {} visible splat nodes", scene->node_count);
+            splat = std::move(scene->splats);
             return true;
         }
 
@@ -467,12 +415,12 @@ namespace lfs::app {
 
             std::shared_ptr<SplatData> splat;
             if (isLichtExtension(input)) {
-                if (!loadSplatFromLichtProject(input, splat)) {
+                if (!loadSplatFromLichtProject(input, params.format, splat)) {
                     return false;
                 }
             } else {
                 const auto loader = lfs::io::Loader::create();
-                auto load_result = loader->load(input);
+                auto load_result = loader->load(input, {.full_detail = true});
                 if (!load_result) {
                     LOG_ERROR("Load failed: {}", load_result.error().format());
                     std::println(stderr, "  Error: {}", load_result.error().message);
@@ -487,6 +435,14 @@ namespace lfs::app {
                 }
 
                 splat = std::move(*splat_ptr);
+            }
+            if (params.format != param::OutputFormat::RAD && splat->lod_tree && splat->lod_tree->has_tree()) {
+                auto leaves = lfs::core::extract_lod_leaves(*splat);
+                if (!leaves) {
+                    std::println(stderr, "  Error: {}", leaves.error().user_message());
+                    return false;
+                }
+                splat = std::make_shared<SplatData>(std::move(*leaves));
             }
             if (auto without_noise = lfs::core::without_noise_infill(*splat))
                 splat = std::make_shared<SplatData>(std::move(*without_noise));
