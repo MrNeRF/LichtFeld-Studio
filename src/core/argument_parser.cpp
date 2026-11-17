@@ -1397,9 +1397,10 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path or resume
+            const bool has_scripts = python_scripts && !::args::get(python_scripts).empty();
+            // Headless scripts can run without a training source. TCP still needs one.
             // (--resume accepts both .resume checkpoints and .licht projects).
-            if (headless && !has_data_path && !has_resume) {
+            if (headless && !has_data_path && !has_resume && (!has_scripts || tcp_connection || init_path)) {
                 return std::unexpected(std::format(
                     "ERROR: Headless mode requires --data-path or --resume "
                     "(--resume file.licht counts as a project source)\n\n{}",
@@ -1972,7 +1973,7 @@ namespace {
                 // Python scripts
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
-                        params.python_scripts.emplace_back(script);
+                        params.python_scripts.emplace_back(lfs::core::utf8_to_path(script));
                     }
                 }
 
