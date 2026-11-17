@@ -900,46 +900,35 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     list(FILTER _vcpkg_release_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
     list(FILTER _vcpkg_debug_dlls EXCLUDE REGEX "${_lfs_exr_cpp_dll_pattern}")
 
-    # Always copy release DLLs - needed for both Release and Debug builds
-    # Keep each command below cmd.exe's line limit even in deep build paths.
-    foreach(_dll IN LISTS _vcpkg_release_dlls)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_dll}"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            VERBATIM
-        )
-    endforeach()
-
-    # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
-    # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
-    # For multi-config generators (VS, Xcode): use generator expression
-    if(_is_multi_config)
-        # Multi-config: use generator expression to conditionally copy
-        foreach(_dll IN LISTS _vcpkg_debug_dlls)
+    # Copy release DLLs first, then Debug overrides when applicable. Batches
+    # keep command lines short without starting a process for every DLL.
+    foreach(_dll_list IN ITEMS _vcpkg_release_dlls _vcpkg_debug_dlls)
+        list(LENGTH ${_dll_list} _dll_count)
+        if(_dll_count EQUAL 0)
+            continue()
+        endif()
+        set(_copy_operation copy_if_different)
+        if(_is_multi_config AND _dll_list STREQUAL "_vcpkg_debug_dlls")
+            set(_copy_operation "$<IF:$<CONFIG:Debug>,copy_if_different,true>")
+        endif()
+        math(EXPR _last_dll "${_dll_count} - 1")
+        foreach(_batch_start RANGE 0 ${_last_dll} 16)
+            list(SUBLIST ${_dll_list} ${_batch_start} 16 _dll_batch)
             add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,copy_if_different,true>
-                    "${_dll}"
+                COMMAND ${CMAKE_COMMAND} -E ${_copy_operation}
+                    ${_dll_batch}
                     "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
                 VERBATIM
             )
         endforeach()
+    endforeach()
+
+    if(_is_multi_config)
         message(STATUS "Post-build: vcpkg DLLs - release always, debug for Debug config only (multi-config)")
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug" AND _vcpkg_debug_dlls)
+        message(STATUS "Post-build: vcpkg DLLs - copying both release and debug (Debug build)")
     else()
-        # Single-config: check CMAKE_BUILD_TYPE at configure time
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND _vcpkg_debug_dlls)
-            foreach(_dll IN LISTS _vcpkg_debug_dlls)
-                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${_dll}"
-                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-                    VERBATIM
-                )
-            endforeach()
-            message(STATUS "Post-build: vcpkg DLLs - copying both release and debug (Debug build)")
-        else()
-            message(STATUS "Post-build: vcpkg DLLs - copying release only (${CMAKE_BUILD_TYPE} build)")
-        endif()
+        message(STATUS "Post-build: vcpkg DLLs - copying release only (${CMAKE_BUILD_TYPE} build)")
     endif()
 endif()
 
