@@ -593,4 +593,139 @@ namespace {
         EXPECT_FALSE(handModelFromSkinnedMesh(outside).has_value());
         EXPECT_FALSE(handModelFromSkinnedMesh({}).has_value());
     }
+
+    // The open hand with fingers folded toward the palm: by `knuckle` radians
+    // where they leave it, then by `middle` and `last` more at the two joints
+    // further out. `fingers` of them fold, from the index on.
+    [[nodiscard]] HandJoints foldedHand(const float knuckle, const float middle, const float last,
+                                        const std::size_t fingers = 4) {
+        const HandJoints open = openHand();
+        HandJoints folded = open;
+        for (std::size_t finger = 0; finger < fingers; ++finger) {
+            const std::size_t first = hand_detail::kFingers[finger] + 1;
+            float turned = 0.0f;
+            for (std::size_t joint = first; joint < first + 3; ++joint) {
+                turned += joint == first ? knuckle : joint == first + 1 ? middle
+                                                                        : last;
+                // Fingers lie along -Z with the palm at -Y: they fold about X.
+                folded[joint + 1] = folded[joint] + glm::angleAxis(-turned, glm::vec3(1, 0, 0)) * (open[joint + 1] - open[joint]);
+            }
+        }
+        return folded;
+    }
+
+    [[nodiscard]] HandJoints fist() {
+        return foldedHand(glm::radians(80.0f), glm::radians(100.0f), glm::radians(70.0f));
+    }
+
+    TEST(VrMath, FistClosureTellsAFistFromFingersBroughtTogether) {
+        EXPECT_NEAR(fistClosure(openHand()), 0.0f, 1e-4f);
+        // Every finger folded back onto the palm.
+        EXPECT_TRUE(fistClosure(fist()) > 0.95f);
+        // Fingers half bent do not make a fist.
+        const float half = fistClosure(foldedHand(glm::radians(40.0f), glm::radians(60.0f), glm::radians(30.0f)));
+        EXPECT_TRUE(half > 0.15f && half < 0.5f);
+        // Nor does the index alone, bent to meet the thumb.
+        EXPECT_TRUE(fistClosure(foldedHand(glm::radians(30.0f), glm::radians(50.0f), glm::radians(30.0f), 1)) < 0.1f);
+
+        // The hand closes steadily into it.
+        float before = 0.0f;
+        for (int step = 1; step <= 10; ++step) {
+            const float share = static_cast<float>(step) / 10.0f;
+            const float closure = fistClosure(foldedHand(share * glm::radians(80.0f), share * glm::radians(100.0f),
+                                                         share * glm::radians(70.0f)));
+            EXPECT_TRUE(closure >= before);
+            before = closure;
+        }
+        // Neither the size of the hand nor where it is matters.
+        const HandJoints small = foldedHand(glm::radians(60.0f), glm::radians(80.0f), glm::radians(40.0f));
+        HandJoints large = small;
+        for (glm::vec3& joint : large)
+            joint = joint * 1.3f + glm::vec3(0.2f, 1.1f, -0.3f);
+        EXPECT_NEAR(fistClosure(large), fistClosure(small), 1e-4f);
+        // Joints that all fell on one point are no fist.
+        HandJoints collapsed;
+        collapsed.fill(glm::vec3(0.1f, 1.0f, -0.2f));
+        EXPECT_NEAR(fistClosure(collapsed), 0.0f, 1e-6f);
+    }
+
+    // The left hand that mirrors a right one.
+    [[nodiscard]] HandJoints mirroredHand(HandJoints joints) {
+        for (glm::vec3& joint : joints)
+            joint.x = -joint.x;
+        return joints;
+    }
+
+    TEST(VrMath, GrabHandFromJointsIsTurnedAsTheGripOfAController) {
+        const HandJoints joints = openHand();
+        const GrabHand hand = grabHandFromJoints(joints);
+        expectVecNear(hand.position, joints[0]);
+        // -Z from the little finger to the index along the knuckles, +X into
+        // the palm of this right hand: out of its back.
+        expectVecNear(hand.orientation * glm::vec3(0, 0, -1), glm::normalize(joints[7] - joints[22]));
+        expectVecNear(hand.orientation * glm::vec3(1, 0, 0), {0.0f, 1.0f, 0.0f});
+        // Closing the fist neither moves nor turns the hand that holds.
+        const GrabHand closed = grabHandFromJoints(fist());
+        expectVecNear(closed.position, hand.position);
+        expectVecNear(closed.orientation * glm::vec3(1, 0, 0), hand.orientation * glm::vec3(1, 0, 0));
+        expectVecNear(closed.orientation * glm::vec3(0, 1, 0), hand.orientation * glm::vec3(0, 1, 0));
+
+        // The left hand held alike: +X comes out of its palm, and both hands
+        // have their +Y the same way, mirrored.
+        const GrabHand left = grabHandFromJoints(mirroredHand(joints));
+        const glm::vec3 up = hand.orientation * glm::vec3(0, 1, 0);
+        expectVecNear(left.orientation * glm::vec3(1, 0, 0), {0.0f, -1.0f, 0.0f});
+        expectVecNear(left.orientation * glm::vec3(0, 1, 0), {-up.x, up.y, up.z});
+        EXPECT_TRUE(glm::dot(left.orientation * glm::vec3(0, 1, 0), up) > 0.8f);
+    }
+
+    TEST(VrMath, TwoBareHandsRollTheSceneAsTwoGripsDo) {
+        // Both hands held alike, 40 cm apart, the scene between them.
+        const glm::vec3 midpoint{-0.2f, 1.3f, -0.4f};
+        const glm::vec3 half{0.2f, 0.0f, 0.0f};
+        const glm::vec3 held{0.3f, 0.8f, -1.0f};
+        // A hand of this shape with its palm at `palm`, turned by `turn`.
+        const auto handAt = [](const HandJoints& shape, const glm::vec3 palm, const glm::quat turn) {
+            HandJoints joints;
+            for (std::size_t joint = 0; joint < joints.size(); ++joint)
+                joints[joint] = palm + turn * (shape[joint] - shape[0]);
+            return grabHandFromJoints(joints);
+        };
+        const HandJoints right = openHand();
+        const HandJoints left = mirroredHand(right);
+        for (const float angle : {0.6f, -1.2f}) {
+            auto rig = grabRig();
+            const glm::vec3 world = worldOf(rig, held);
+            const glm::quat roll = glm::angleAxis(angle, glm::vec3(1, 0, 0));
+            GrabManipulation grab;
+            grab.update(rig, handAt(left, midpoint - half, IDENTITY), handAt(right, midpoint + half, IDENTITY));
+            // Twisting both wrists about the line between the hands rolls the
+            // scene by as much.
+            grab.update(rig, handAt(left, midpoint - half, roll), handAt(right, midpoint + half, roll));
+            expectScenePointNear(worldOf(rig, midpoint + roll * (held - midpoint)), world);
+        }
+    }
+
+    TEST(VrMath, EyeSeesWhatLiesInsideItsFieldOfView) {
+        const EyeFov fov{glm::radians(-50.0f), glm::radians(40.0f), glm::radians(45.0f), glm::radians(-45.0f)};
+        const glm::vec3 eye{0.1f, 1.6f, 0.2f};
+        // A point at arm's length, at these angles in degrees to the right and up.
+        const auto at = [&](const float across, const float upward) {
+            return eye + glm::vec3(std::tan(glm::radians(across)), std::tan(glm::radians(upward)), -1.0f) * 0.4f;
+        };
+        EXPECT_TRUE(eyeSees(fov, IDENTITY, eye, at(0.0f, 0.0f)));
+        EXPECT_TRUE(eyeSees(fov, IDENTITY, eye, at(-48.0f, 0.0f)));
+        EXPECT_FALSE(eyeSees(fov, IDENTITY, eye, at(42.0f, 0.0f)));
+        EXPECT_FALSE(eyeSees(fov, IDENTITY, eye, at(0.0f, 47.0f)));
+        EXPECT_FALSE(eyeSees(fov, IDENTITY, eye, at(0.0f, -47.0f)));
+        // Nothing behind the eye, whatever the angles.
+        EXPECT_FALSE(eyeSees(fov, IDENTITY, eye, eye + glm::vec3(0.0f, 0.0f, 0.4f)));
+        // A margin narrows the view, a negative one widens it.
+        EXPECT_FALSE(eyeSees(fov, IDENTITY, eye, at(38.0f, 0.0f), glm::radians(4.0f)));
+        EXPECT_TRUE(eyeSees(fov, IDENTITY, eye, at(42.0f, 0.0f), glm::radians(-4.0f)));
+        // The view turns with the eye: a quarter turn to the left looks along -X.
+        const glm::quat left = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 1, 0));
+        EXPECT_TRUE(eyeSees(fov, left, eye, eye + glm::vec3(-0.4f, 0.0f, 0.0f)));
+        EXPECT_FALSE(eyeSees(fov, left, eye, at(0.0f, 0.0f)));
+    }
 } // namespace

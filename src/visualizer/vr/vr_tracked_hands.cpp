@@ -85,6 +85,8 @@ namespace lfs::vis::vr {
         HandRenderer renderer;
         std::array<std::vector<HandVertex>, 2> meshes;
         std::vector<HandVertex> scratch;
+        // Left, right: the hand as the runtime tracks it this frame.
+        std::array<std::optional<Hand>, 2> located;
         // The hands as they are drawn.
         std::array<HandPoseSmoother, 2> drawn;
         XrTime time = 0;
@@ -144,28 +146,35 @@ namespace lfs::vis::vr {
 
         // Where the runtime tracks the joints of the left (0) or right (1) hand
         // for this frame; nothing while it does not track them all.
-        [[nodiscard]] std::optional<HandJoints> locate(const std::size_t hand, const XrSpace space, const XrTime at) const {
+        [[nodiscard]] std::optional<Hand> locate(const std::size_t hand, const XrSpace space, const XrTime at) const {
             if (!trackers[hand])
                 return std::nullopt;
-            std::array<XrHandJointLocationEXT, XR_HAND_JOINT_COUNT_EXT> located{};
+            std::array<XrHandJointLocationEXT, XR_HAND_JOINT_COUNT_EXT> joints{};
             XrHandJointLocationsEXT locations{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
-            locations.jointCount = static_cast<std::uint32_t>(located.size());
-            locations.jointLocations = located.data();
+            locations.jointCount = static_cast<std::uint32_t>(joints.size());
+            locations.jointLocations = joints.data();
+            XrHandTrackingDataSourceStateEXT source{XR_TYPE_HAND_TRACKING_DATA_SOURCE_STATE_EXT};
+            if (data_sources)
+                locations.next = &source;
             XrHandJointsLocateInfoEXT info{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT};
             info.baseSpace = space;
             info.time = at;
             if (XR_FAILED(locate_joints(trackers[hand], &info, &locations)) || !locations.isActive)
                 return std::nullopt;
-            HandJoints joints;
-            for (std::size_t joint = 0; joint < joints.size(); ++joint) {
-                if (!(located[joint].locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT))
+            Hand tracked;
+            for (std::size_t joint = 0; joint < tracked.joints.size(); ++joint) {
+                if (!(joints[joint].locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT))
                     return std::nullopt;
-                const XrVector3f& position = located[joint].pose.position;
-                joints[joint] = {position.x, position.y, position.z};
+                const XrVector3f& position = joints[joint].pose.position;
+                tracked.joints[joint] = {position.x, position.y, position.z};
             }
-            if (!handJointsValid(joints))
+            if (!handJointsValid(tracked.joints))
                 return std::nullopt;
-            return joints;
+            // A runtime that does not say where the joints come from leaves
+            // the hand to grab as a controller does.
+            tracked.bare = data_sources && source.isActive &&
+                           source.dataSource == XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT;
+            return tracked;
         }
 
         void draw(const VkCommandBuffer command, const VkImageView target, const glm::ivec2 size, const EyePose& pose) {
@@ -257,6 +266,8 @@ namespace lfs::vis::vr {
             return;
         }
         LOG_INFO("VR hands: drawn from the runtime's hand tracking");
+        if (!p.data_sources)
+            LOG_INFO("VR hands: the runtime does not tell a bare hand from one around a controller; both grab with the grip");
 
         // The eye images hold display-encoded bits in a plain RGBA8 image.
         auto& mirror = p.mirror;
@@ -311,12 +322,23 @@ namespace lfs::vis::vr {
         }
         p.trackers = {XR_NULL_HANDLE, XR_NULL_HANDLE};
         p.eye_sizes = {glm::ivec2(0), glm::ivec2(0)};
+        p.located = {};
         p.drawn = {};
         p.time = 0;
         p.context = nullptr;
     }
 
-    void TrackedHands::update(const XrSpace space, const XrTime time, const std::array<bool, 2>& gripping, const bool show) {
+    void TrackedHands::locate(const XrSpace space, const XrTime time) {
+        auto& p = *impl_;
+        for (std::size_t i = 0; i < p.located.size(); ++i)
+            p.located[i] = p.locate(i, space, time);
+    }
+
+    const std::optional<TrackedHands::Hand>& TrackedHands::hand(const std::size_t index) const {
+        return impl_->located[index];
+    }
+
+    void TrackedHands::update(const XrTime time, const std::array<bool, 2>& gripping, const bool show) {
         auto& p = *impl_;
         if (!p.renderer.ready())
             return;
@@ -327,14 +349,14 @@ namespace lfs::vis::vr {
         for (std::size_t i = 0; i < p.meshes.size(); ++i) {
             p.meshes[i].clear();
             colors[i] = gripping[i] ? kHandGripColor : kHandColor;
-            const auto joints = show && p.models[i] ? p.locate(i, space, time) : std::nullopt;
-            if (!joints) {
+            const auto& tracked = p.located[i];
+            if (!show || !p.models[i] || !tracked) {
                 // A hand that comes back starts where it is, not where it was.
                 p.drawn[i].reset();
                 continue;
             }
             // Only where the joints are is used: see handPoseFromJoints().
-            const HandPose pose = p.drawn[i].update(handPoseFromJoints(*joints), dt);
+            const HandPose pose = p.drawn[i].update(handPoseFromJoints(tracked->joints), dt);
             appendSkinnedHand(p.meshes[i], *p.models[i], pose, p.scratch);
         }
         p.renderer.setHands({p.meshes[0], p.meshes[1]}, colors);

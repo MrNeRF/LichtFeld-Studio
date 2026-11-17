@@ -73,6 +73,19 @@ namespace lfs::vis::vr {
         return projection * view;
     }
 
+    // Whether an eye at this pose sees a point: inside its field of view,
+    // narrowed on every side by `margin` radians, or widened when negative.
+    [[nodiscard]] inline bool eyeSees(const EyeFov fov, const glm::quat orientation, const glm::vec3 position,
+                                      const glm::vec3 point, const float margin = 0.0f) {
+        const glm::vec3 local = glm::conjugate(detail::normalizedOrientation(orientation)) * (point - position);
+        if (!(local.z < 0.0f))
+            return false;
+        const float across = std::atan2(local.x, -local.z);
+        const float upward = std::atan2(local.y, -local.z);
+        return across >= fov.left + margin && across <= fov.right - margin &&
+               upward >= fov.down + margin && upward <= fov.up - margin;
+    }
+
     // Remove pitch/roll, preserving projected forward heading about world +Y.
     // Looking straight up/down uses the projected right axis; invalid/zero input
     // yields identity. The result is always a normalized quaternion.

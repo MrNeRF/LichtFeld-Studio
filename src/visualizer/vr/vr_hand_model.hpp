@@ -83,6 +83,56 @@ namespace lfs::vis::vr {
         return pose;
     }
 
+    // The hand as it holds the scene, for a runtime that gives a bare hand no
+    // grip pose: at the palm, and turned as OpenXR turns the grip of a
+    // controller. -Z runs along the knuckles from the little finger to the
+    // index, +X goes through the palm, into that of a right hand and out of
+    // that of a left one. Two hands held alike then agree on their axes, as
+    // two controllers do, which a grip with both hands turns the scene by;
+    // the frame of the wrist joint would not do, mirrored as it is from one
+    // hand to the other.
+    [[nodiscard]] inline GrabHand grabHandFromJoints(const HandJoints& joints) {
+        using namespace hand_detail;
+        const glm::vec3 wrist = joints[kWrist];
+        const glm::vec3 index = joints[kFingers[0] + 1];
+        const glm::vec3 little = joints[kFingers[3] + 1];
+        const glm::vec3 z = direction(little - index, glm::vec3(0.0f, 0.0f, 1.0f));
+        const glm::vec3 through = glm::cross(little - wrist, index - wrist);
+        glm::vec3 x = through - z * glm::dot(through, z);
+        if (glm::dot(x, x) < 1e-12f) {
+            glm::vec3 unused;
+            basis(z, x, unused);
+        }
+        x = glm::normalize(x);
+        return {joints[0], glm::normalize(glm::quat_cast(glm::mat3(x, glm::cross(z, x), z)))};
+    }
+
+    // How far a hand is closed into a fist: 0 with the fingers straight, 1
+    // with the four fingertips folded back onto the palm. Each finger tells
+    // how near its tip has come to its knuckle, as a share of its length, so
+    // the size of the hand does not matter, and the fist is as closed as its
+    // fingers are on average. The thumb does not count: it lies over the
+    // fingers or beside them. Thumb and index brought together, which
+    // runtimes take for a grip, leave the other fingers open: far from a fist.
+    [[nodiscard]] inline float fistClosure(const HandJoints& joints) {
+        using namespace hand_detail;
+        // Tip to knuckle over the length of the finger: straight, and folded.
+        constexpr float kStraight = 0.95f;
+        constexpr float kFolded = 0.40f;
+        float closure = 0.0f;
+        for (const std::size_t finger : kFingers) {
+            const std::size_t knuckle = finger + 1;
+            float length = 0.0f;
+            for (std::size_t joint = knuckle; joint < knuckle + 3; ++joint)
+                length += glm::length(joints[joint + 1] - joints[joint]);
+            if (!(length > 1e-4f))
+                return 0.0f;
+            const float reach = glm::length(joints[knuckle + 3] - joints[knuckle]) / length;
+            closure += glm::clamp((kStraight - reach) / (kStraight - kFolded), 0.0f, 1.0f);
+        }
+        return closure / static_cast<float>(kFingers.size());
+    }
+
     // Steadies a tracked hand before it is drawn: camera hand tracking shakes
     // when it loses sight of a finger. The wrist is steadied where it is;
     // every other joint is steadied in the wrist's frame, where it moves only

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "vr_hands.hpp"
 #include "vr_math.hpp"
 #include "window/vulkan_context.hpp"
 #include <array>
@@ -39,6 +40,13 @@ namespace lfs::vis::vr {
             glm::quat orientation{1.0f, 0.0f, 0.0f, 0.0f};
             glm::vec3 position{0.0f}; // in the tracking space
         };
+        // A hand as the runtime tracks it: where its joints are, and whether
+        // it is bare: tracked as it is, not posed by the runtime around the
+        // controller it holds.
+        struct Hand {
+            HandJoints joints{};
+            bool bare = false;
+        };
         // The left eye with the hands on it, in SHADER_READ_ONLY_OPTIMAL.
         struct Mirror {
             VkImage image = VK_NULL_HANDLE;
@@ -63,10 +71,17 @@ namespace lfs::vis::vr {
         // session, which owns the hand trackers, is destroyed afterwards.
         void stop();
 
-        // Builds the hands of the frame shown at `time` from the joints the
-        // runtime tracks in `space`. A gripping hand takes the color of a hand
-        // that holds the scene. Without `show`, no hand is drawn.
-        void update(XrSpace space, XrTime time, const std::array<bool, 2>& gripping, bool show);
+        // Locates the hands in `space` for the frame shown at `time`.
+        void locate(XrSpace space, XrTime time);
+        // The left (0) or right (1) hand as located for the frame; nothing
+        // while the runtime does not track all of its joints. No hand is bare
+        // to a runtime that does not say where the joints come from.
+        [[nodiscard]] const std::optional<Hand>& hand(std::size_t index) const;
+
+        // Builds the hands of the frame shown at `time` from where locate()
+        // found them. A gripping hand takes the color of a hand that holds the
+        // scene. Without `show`, no hand is drawn.
+        void update(XrTime time, const std::array<bool, 2>& gripping, bool show);
 
         // Records the left eye passing through the mirror image: `source`, in
         // TRANSFER_SRC_OPTIMAL, is copied to the mirror image, the hands are
