@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -377,6 +378,41 @@ namespace {
         EXPECT_EQ(loaded->size(), 5u);
     }
 
+    void add_external_rad(ProjectDocument& document, const Uuid& rad, const Uuid& parent,
+                          const std::array<float, 16>& transform, const char* filename = "live.rad",
+                          const std::uint32_t child_order = 0) {
+        require_status(document.edit_references().upsert(ReferenceRecord{
+            .uuid = rad,
+            .key = "splat.live_rad",
+            .kind = "rad",
+            .locator = {.preferred = filename, .base = LocatorBase::Project},
+            .fingerprint = fingerprint(9),
+            .unresolved = true,
+        }));
+        require_status(document.edit_project().upsert_embed_decision(EmbedDecision{
+            .uuid = rad,
+            .node_uuid = rad,
+            .payload_fourcc = "REFS",
+            .decision = "external",
+            .reference_uuid = rad,
+            .reason = "live RAD remains external",
+        }));
+        require_status(document.edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = rad,
+            .type = "splat",
+            .name = "Live RAD",
+            .parent_uuid = parent,
+            .child_order = child_order,
+            .local_transform = transform,
+            .payload = PayloadBinding{
+                .fourcc = "REFS",
+                .instance_uuid = rad,
+                .reference_uuid = rad,
+                .source_kind = "rad",
+            },
+        }));
+    }
+
     TEST_F(ConverterLichtTest, AppliesSceneVisibilityTransformsCropsAndLiveRad) {
         const auto project = temp_dir / "scene.licht";
         const auto output = temp_dir / "scene.ply";
@@ -406,36 +442,7 @@ namespace {
             }));
             // External RAD participates in the merged export, with its node transform.
             const auto rad = test_uuid(409);
-            require_status(document->edit_references().upsert(ReferenceRecord{
-                .uuid = rad,
-                .key = "splat.live_rad",
-                .kind = "rad",
-                .locator = {.preferred = "live.rad", .base = LocatorBase::Project},
-                .fingerprint = fingerprint(9),
-                .unresolved = true,
-            }));
-            require_status(document->edit_project().upsert_embed_decision(EmbedDecision{
-                .uuid = rad,
-                .node_uuid = rad,
-                .payload_fourcc = "REFS",
-                .decision = "external",
-                .reference_uuid = rad,
-                .reason = "live RAD remains external",
-            }));
-            require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
-                .uuid = rad,
-                .type = "splat",
-                .name = "Live RAD",
-                .parent_uuid = root,
-                .child_order = 4,
-                .local_transform = translation(20, 0, 0),
-                .payload = PayloadBinding{
-                    .fourcc = "REFS",
-                    .instance_uuid = rad,
-                    .reference_uuid = rad,
-                    .source_kind = "rad",
-                },
-            }));
+            add_external_rad(*document, rad, root, translation(20, 0, 0), "live.rad", 4);
             const auto saved = document->save(project, save_options(410, 200));
             ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
         }
@@ -500,10 +507,13 @@ namespace {
 
                 auto disabled = ProjectDocument::open(project);
                 ASSERT_TRUE(disabled);
-                auto owner = disabled->edit_scene_graph().find(source);
-                ASSERT_TRUE(owner && *owner);
-                (**owner).crop_effects_enabled = false;
-                require_status(disabled->edit_scene_graph().upsert_node(**owner));
+                if (crop.cropbox)
+                    crop.cropbox->enabled = false;
+                else if (crop.ellipsoid)
+                    crop.ellipsoid->enabled = false;
+                else
+                    crop.crop_polygon->enabled = false;
+                require_status(disabled->edit_scene_graph().upsert_node(crop));
                 ASSERT_TRUE(disabled->save(project, save_options(604, 300)));
                 const auto whole = load_project_splats(project);
                 ASSERT_TRUE(whole) << lfs::format_for_developer(whole.error());
@@ -588,6 +598,39 @@ namespace {
         ASSERT_EQ(x.size(), 2u);
         EXPECT_NEAR(x[0], 1.0f, 0.01f);
         EXPECT_NEAR(x[1], 2.0f, 0.01f);
+
+        const auto project = temp_dir / "tree.licht";
+        auto document = make_empty_document(test_uuid(640), 100);
+        const auto root = test_uuid(641), rad = test_uuid(642);
+        add_root_group(*document, root);
+        add_external_rad(*document, rad, root, translation(0, 0, 0), "tree.rad");
+        ASSERT_TRUE(document->save(project, save_options(643, 200)));
+        const auto flat = load_project_splats(project);
+        ASSERT_TRUE(flat);
+        EXPECT_EQ(flat->splats->size(), 2u);
+        const auto tree = load_project_splats(project, true);
+        ASSERT_TRUE(tree);
+        ASSERT_TRUE(tree->splats->lod_tree);
+        EXPECT_TRUE(tree->splats->lod_tree->has_tree());
+        EXPECT_EQ(tree->splats->size(), 3u);
+        // Cancellation requested after the source boundary must stay a Result,
+        // rather than escaping the RAD loader as LoadCancelledError.
+        int cancel_checks = 0;
+        const auto canceled = load_project_splats(project, false, [&] { return ++cancel_checks > 1; });
+        ASSERT_FALSE(canceled);
+        EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = test_uuid(644),
+            .type = "cropbox",
+            .name = "One leaf and its parent",
+            .parent_uuid = rad,
+            .cropbox = CropBoxRecord{.min = {-0.5f, -1, -1}, .max = {1.5f, 1, 1}, .enabled = true},
+        }));
+        ASSERT_TRUE(document->save(project, save_options(645, 300)));
+        const auto cropped = load_project_splats(project, true);
+        ASSERT_TRUE(cropped);
+        EXPECT_EQ(cropped->splats->size(), 1u);
+        EXPECT_FALSE(cropped->splats->lod_tree && cropped->splats->lod_tree->has_tree());
     }
 
     TEST_F(ConverterLichtTest, RemovesNoiseInfillFromEachSourceBeforeMerging) {

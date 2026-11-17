@@ -88,3 +88,7 @@ its rotation, the ROI training options and tiled training.
 combined with `--gut`. At the end of training `pose_refinement.tsv` lists each camera's move and turn, and
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
+
+## Run a Python script
+
+`LichtFeld-Studio --headless --python-script /path/to/check.py` runs trusted local scripts without a dataset, GUI, training or user plugins, returning a nonzero status on failure; never take the script path from downloaded project metadata.

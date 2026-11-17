@@ -261,7 +261,7 @@ namespace lfs::app {
         }
 
         // .licht inputs share the closed-project export materialization, so
-        // every output format gets the same visible scene as the Project Manager.
+        // every output format uses the same materialization as export_project_as.
         bool loadSplatFromLichtProject(
             const std::filesystem::path& input,
             const param::OutputFormat format,

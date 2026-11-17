@@ -9,9 +9,9 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/splat_operations.hpp"
 #include "core/user_paths.hpp"
 #include "crc32c.hpp"
+#include "geometry/bounding_box.hpp"
 #include "io/atomic_output.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <concepts>
 #include <cstring>
 #include <format>
@@ -817,7 +818,9 @@ namespace lfs::io::project {
             ExportSceneData result;
             std::unordered_multimap<lfs::core::Uuid, const SceneNodeRecord*> crops;
             for (const auto& record : *records) {
-                if (record.parent_uuid && (record.cropbox || record.ellipsoid || record.crop_polygon))
+                if (record.parent_uuid && ((record.type == "cropbox" && record.cropbox) ||
+                                           (record.type == "ellipsoid" && record.ellipsoid) ||
+                                           (record.type == "crop_polygon" && record.crop_polygon)))
                     crops.emplace(*record.parent_uuid, &record);
             }
             for (const auto& record : *records) {
@@ -879,37 +882,39 @@ namespace lfs::io::project {
                     }
                     *data = std::make_shared<lfs::core::SplatData>(std::move(*kept));
                 }
-                if (record.crop_effects_enabled) {
-                    const auto [begin, end] = crops.equal_range(record.uuid);
-                    for (auto crop = begin; crop != end; ++crop) {
-                        const auto& volume = *crop->second;
-                        lfs::core::SplatOperationParameters parameters;
-                        if (volume.cropbox) {
-                            const auto& box = *volume.cropbox;
-                            parameters = lfs::core::CropBoxData{.min = glm::make_vec3(box.min.data()),
-                                                                .max = glm::make_vec3(box.max.data()),
-                                                                .inverse = box.inverse,
-                                                                .enabled = box.enabled};
-                        } else if (volume.ellipsoid) {
-                            const auto& ellipsoid = *volume.ellipsoid;
-                            parameters = lfs::core::EllipsoidData{.radii = glm::make_vec3(ellipsoid.radii.data()),
-                                                                  .inverse = ellipsoid.inverse,
-                                                                  .enabled = ellipsoid.enabled};
-                        } else {
-                            lfs::core::CropPolygonData polygon;
-                            polygon.half_depth = volume.crop_polygon->half_depth;
-                            polygon.inverse = volume.crop_polygon->inverse;
-                            polygon.enabled = volume.crop_polygon->enabled;
-                            for (const auto& vertex : volume.crop_polygon->vertices)
-                                polygon.vertices.emplace_back(vertex[0], vertex[1]);
-                            parameters = std::move(polygon);
-                        }
-                        // Direct-child crops are defined in the owner's local space.
-                        const auto applied = lfs::core::applySplatCrop(**data,
-                                                                       glm::make_mat4(volume.local_transform.data()), parameters);
-                        if (!applied)
-                            return fail<ExportSceneData>(lfs::ErrorCode::InvalidArgument, path,
-                                                         "A crop has an invalid transform or volume.", volume.name, "export.crop");
+                const auto [begin, end] = crops.equal_range(record.uuid);
+                for (auto crop = begin; crop != end; ++crop) {
+                    const auto& volume = *crop->second;
+                    const bool enabled = volume.cropbox     ? volume.cropbox->enabled
+                                         : volume.ellipsoid ? volume.ellipsoid->enabled
+                                                            : volume.crop_polygon->enabled;
+                    if (!enabled)
+                        continue;
+                    // Direct-child volumes are expressed in the owner's local
+                    // space. Payload geometry was validated by the chapter reader.
+                    const auto to_crop = glm::inverse(glm::make_mat4(volume.local_transform.data()));
+                    for (int col = 0; col < 4; ++col)
+                        for (int row = 0; row < 4; ++row)
+                            if (!std::isfinite(to_crop[col][row]))
+                                return fail<ExportSceneData>(lfs::ErrorCode::InvalidArgument, path,
+                                                             "A crop has an invalid transform.", volume.name, "export.crop");
+                    if (volume.cropbox) {
+                        const auto& box = *volume.cropbox;
+                        lfs::geometry::BoundingBox bounds;
+                        bounds.setBounds(glm::make_vec3(box.min.data()), glm::make_vec3(box.max.data()));
+                        bounds.setworld2BBox(to_crop);
+                        (void)lfs::core::soft_crop_by_cropbox(**data, bounds, box.inverse);
+                    } else if (volume.ellipsoid) {
+                        const auto& ellipsoid = *volume.ellipsoid;
+                        (void)lfs::core::soft_crop_by_ellipsoid(**data, to_crop,
+                                                                glm::make_vec3(ellipsoid.radii.data()), ellipsoid.inverse);
+                    } else {
+                        lfs::core::CropPolygonData polygon;
+                        polygon.half_depth = volume.crop_polygon->half_depth;
+                        polygon.inverse = volume.crop_polygon->inverse;
+                        for (const auto& vertex : volume.crop_polygon->vertices)
+                            polygon.vertices.emplace_back(vertex[0], vertex[1]);
+                        (void)lfs::core::soft_crop_by_polygon(**data, to_crop, polygon);
                     }
                 }
                 if ((*data)->visible_count() == 0)
@@ -920,7 +925,7 @@ namespace lfs::io::project {
             if (result.splats.empty()) {
                 return fail<ExportSceneData>(
                     lfs::ErrorCode::NotFound, path,
-                    "The project has no visible splats to export after cropping.",
+                    "The project has no visible splats to export.",
                     "SCNG contains no visible splat payload", "export.scene_graph");
             }
             return result;

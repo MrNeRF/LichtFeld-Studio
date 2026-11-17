@@ -4,7 +4,6 @@
 
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/crop_polygon.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
 #include "core/error_bus.hpp"
@@ -19,7 +18,6 @@
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/splat_operations.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_manager.hpp"
@@ -54,7 +52,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cmath>
 #include <cuda_runtime.h>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -92,7 +89,7 @@ namespace lfs::vis {
         [[nodiscard]] bool containsEnabledScopedRenderableNode(const std::vector<TRenderable>& renderables,
                                                                const core::NodeId node_id) {
             return std::ranges::any_of(renderables, [node_id](const auto& item) {
-                return item.node_id == node_id && item.data && item.data->enabled && item.crop_effects_enabled && item.parent_node_index >= 0;
+                return item.node_id == node_id && item.data && item.data->enabled && item.parent_node_index >= 0;
             });
         }
 
@@ -3069,7 +3066,7 @@ namespace lfs::vis {
 
         core::NodeId single_id = core::NULL_NODE;
         for (const auto& cropbox : renderable_cropboxes) {
-            if (!cropbox.data || !cropbox.data->enabled || !cropbox.crop_effects_enabled || cropbox.parent_node_index < 0) {
+            if (!cropbox.data || !cropbox.data->enabled || cropbox.parent_node_index < 0) {
                 continue;
             }
             if (single_id != core::NULL_NODE) {
@@ -3149,7 +3146,7 @@ namespace lfs::vis {
 
         core::NodeId single_id = core::NULL_NODE;
         for (const auto& ellipsoid : renderable_ellipsoids) {
-            if (!ellipsoid.data || !ellipsoid.data->enabled || !ellipsoid.crop_effects_enabled || ellipsoid.parent_node_index < 0) {
+            if (!ellipsoid.data || !ellipsoid.data->enabled || ellipsoid.parent_node_index < 0) {
                 continue;
             }
             if (single_id != core::NULL_NODE) {
@@ -3194,7 +3191,7 @@ namespace lfs::vis {
 
         core::NodeId single_id = core::NULL_NODE;
         for (const auto& polygon : renderable_polygons) {
-            if (!polygon.data || !polygon.data->enabled || !polygon.crop_effects_enabled || polygon.parent_node_index < 0) {
+            if (!polygon.data || !polygon.data->enabled || polygon.parent_node_index < 0) {
                 continue;
             }
             if (single_id != core::NULL_NODE) {
@@ -5110,141 +5107,6 @@ namespace lfs::vis {
         return generated_name;
     }
 
-    namespace {
-        bool isSplatCropVolume(const core::SceneNode& node) {
-            return node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID || node.type == core::NodeType::CROP_POLYGON;
-        }
-        lfs::Error cropGroupError(lfs::ErrorCode code, std::string message, std::string detail = {}) {
-            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = detail.empty() ? std::move(message) : std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()});
-        }
-        lfs::Result<void> cropGroupFailure(lfs::ErrorCode code, std::string message, std::string detail = {}) {
-            return lfs::Result<void>::failure(cropGroupError(code, std::move(message), std::move(detail)));
-        }
-        lfs::Result<core::NodeId> cropGroupOwner(SceneManager& manager, const core::Uuid& uuid) {
-            auto& scene = manager.getScene();
-            const auto* owner = scene.getNodeByUuid(uuid);
-            const auto* editor = services().editorOrNull();
-            if (!owner || owner->type != core::NodeType::SPLAT)
-                return cropGroupError(lfs::ErrorCode::NotFound, LOC("splat_inspector.group_owner_missing"));
-            if (scene.isNodeEffectivelyLocked(owner->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
-                return cropGroupError(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_editing_unavailable"));
-            return owner->id;
-        }
-        std::vector<core::NodeId> cropGroupMembers(const core::Scene& scene, core::NodeId owner) {
-            std::vector<core::NodeId> result;
-            if (const auto* parent = scene.getNodeById(owner))
-                for (const auto id : parent->children)
-                    if (const auto* node = scene.getNodeById(id); node && node->parent_id == owner && isSplatCropVolume(*node))
-                        result.push_back(id);
-            return result;
-        }
-    } // namespace
-
-    lfs::Result<void> SceneManager::setSplatCropGroupEnabled(const core::Uuid& uuid, bool enabled) {
-        const auto id = cropGroupOwner(*this, uuid);
-        if (!id)
-            return lfs::Result<void>::failure(id.error());
-        auto* owner = scene_.getNodeById(*id);
-        if (owner->crop_effects_enabled == enabled)
-            return {};
-        auto before = op::SceneGraphMetadataEntry::captureNodes(*this, {owner->name});
-        auto after = before;
-        after[0].crop_effects_enabled = enabled;
-        auto entry = std::make_unique<op::SceneGraphMetadataEntry>(*this, enabled ? LOC("splat_inspector.group_enable") : LOC("splat_inspector.group_disable"),
-                                                                   std::vector<op::SceneGraphNodeMetadataDiff>{{std::move(before[0]), std::move(after[0])}});
-        owner->crop_effects_enabled = enabled;
-        scene_.notifyMutation(core::Scene::MutationType::VISIBILITY_CHANGED);
-        op::undoHistory().push(std::move(entry));
-        if (auto* rm = services().renderingOrNull())
-            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
-        return {};
-    }
-
-    lfs::Result<void> SceneManager::deleteSplatCropGroup(const core::Uuid& uuid) {
-        const auto id = cropGroupOwner(*this, uuid);
-        if (!id)
-            return lfs::Result<void>::failure(id.error());
-        const auto members = cropGroupMembers(scene_, *id);
-        if (members.empty())
-            return {};
-        for (const auto member : members)
-            if (scene_.isNodeEffectivelyLocked(member))
-                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_crop_locked"));
-        op::TransactionGuard transaction(LOC("splat_inspector.group_delete_history"));
-        const auto removed = removeNodesByIdsWithResult(members, false);
-        if (!removed)
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_remove_failed"));
-        if (auto result = setSplatCropGroupEnabled(uuid, true); !result)
-            return lfs::Result<void>::failure(result.error());
-        transaction.commit();
-        return {};
-    }
-
-    lfs::Result<void> SceneManager::bakeSplatCropGroup(const core::Uuid& uuid) {
-        const auto id = cropGroupOwner(*this, uuid);
-        if (!id)
-            return lfs::Result<void>::failure(id.error());
-        auto* owner = scene_.getNodeById(*id);
-        if (!owner->crop_effects_enabled || !owner->model || !canApplyCropToNode(*id))
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_bake_unavailable"));
-        std::vector<core::NodeId> active;
-        for (const auto member : cropGroupMembers(scene_, *id)) {
-            const auto* node = scene_.getNodeById(member);
-            if ((node->type == core::NodeType::CROPBOX && !node->cropbox) ||
-                (node->type == core::NodeType::ELLIPSOID && !node->ellipsoid) ||
-                (node->type == core::NodeType::CROP_POLYGON && !node->crop_polygon))
-                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_payload_missing"));
-            const bool enabled = node->cropbox ? node->cropbox->enabled : node->ellipsoid ? node->ellipsoid->enabled
-                                                                                          : node->crop_polygon && node->crop_polygon->enabled;
-            if (!enabled)
-                continue;
-            if (scene_.isNodeEffectivelyLocked(member))
-                return cropGroupFailure(lfs::ErrorCode::PermissionDenied, LOC("splat_inspector.group_crop_locked"));
-            active.push_back(member);
-        }
-        if (active.empty())
-            return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_no_active"));
-        // Compute on detached storage: invalid geometry or allocation failure cannot
-        // leave a partially applied sequence of box/ellipsoid/polygon operations.
-        try {
-            auto prepared = owner->model->clone();
-            for (const auto member : active) {
-                const auto* node = scene_.getNodeById(member);
-                auto operation = core::readSplatOperation(*owner, *node);
-                if (!operation)
-                    return lfs::Result<void>::failure(operation.error());
-                const auto applied = core::applySplatCrop(prepared, operation->local_transform, operation->parameters);
-                if (!applied) {
-                    if (applied.error() == core::CropApplyError::InvalidTransform)
-                        return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_transform"));
-                    return cropGroupFailure(lfs::ErrorCode::InvalidArgument, LOC("splat_inspector.group_invalid_volume"));
-                }
-            }
-            op::TransactionGuard transaction(LOC("splat_inspector.group_bake_history"));
-            auto snapshot = std::make_unique<op::SceneSnapshot>(*this, LOC("splat_inspector.group_bake_history"));
-            snapshot->captureTopology();
-            const auto visible_before = owner->model->visible_count();
-            if (prepared.has_deleted_mask())
-                (void)owner->model->soft_delete(prepared.deleted());
-            if (owner->model->visible_count() != visible_before)
-                scene_.markPayloadDiverged(owner->id);
-            snapshot->captureAfter();
-            op::pushSceneSnapshotIfChanged(std::move(snapshot));
-            const auto removed = removeNodesByIdsWithResult(active, false);
-            if (!removed)
-                return cropGroupFailure(lfs::ErrorCode::FailedPrecondition, LOC("splat_inspector.group_remove_failed"));
-            selection_.invalidateNodeMask();
-            scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-            if (auto* rm = services().renderingOrNull())
-                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
-            transaction.commit();
-            return {};
-        } catch (const std::exception& error) {
-            // LFS-CENSUS-OK(empty-catch): translate the detached preparation/transaction exception into the caller-visible Result; the transaction guard rolls back recorded mutations.
-            return cropGroupFailure(lfs::ErrorCode::Internal, LOC("splat_inspector.group_bake_failed"), error.what());
-        }
-    }
-
     std::string SceneManager::duplicateNodeTree(const core::NodeId id) {
         if (id == core::NULL_NODE) {
             return {};
@@ -5750,7 +5612,6 @@ namespace lfs::vis {
         result.type = node->type;
         result.local_transform = node->local_transform.get();
         result.visible = node->visible;
-        result.crop_effects_enabled = node->crop_effects_enabled;
         result.locked = node->locked;
         result.point_cloud_source = node->point_cloud_source;
         result.collision = node->collision;
@@ -5777,8 +5638,6 @@ namespace lfs::vis {
             result.ellipsoid = std::make_unique<core::EllipsoidData>(*node->ellipsoid);
         }
 
-        if (node->crop_polygon)
-            result.crop_polygon = std::make_unique<core::CropPolygonData>(*node->crop_polygon);
         for (const core::NodeId child_id : node->children) {
             if (const auto* child = scene_.getNodeById(child_id)) {
                 result.children.push_back(copyNodeHierarchy(child));
@@ -5788,33 +5647,41 @@ namespace lfs::vis {
         return result;
     }
 
-    core::NodeId SceneManager::pasteCropVolume(const ClipboardEntry::HierarchyNode& source, const core::NodeId parent_id) {
-        const auto* parent = scene_.getNodeById(parent_id);
-        if (!parent || (source.type == core::NodeType::CROP_POLYGON && parent->type != core::NodeType::SPLAT))
-            return core::NULL_NODE;
-        core::Scene::RestoreNodeDesc copy;
-        copy.uuid = core::generate_uuid_v4();
-        copy.type = source.type;
-        copy.name = makeUniqueNodeName(scene_, source.name);
-        copy.parent = parent_id;
-        copy.local_transform = source.local_transform;
-        copy.visible = source.visible;
-        copy.locked = source.locked;
-        if (source.cropbox)
-            copy.cropbox = std::make_unique<core::CropBoxData>(*source.cropbox);
-        if (source.ellipsoid)
-            copy.ellipsoid = std::make_unique<core::EllipsoidData>(*source.ellipsoid);
-        if (source.crop_polygon)
-            copy.crop_polygon = std::make_unique<core::CropPolygonData>(*source.crop_polygon);
-        return scene_.restoreNodeWithUuid(std::move(copy));
-    }
-
     void SceneManager::pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, const core::NodeId parent_id) {
         for (const auto& child : src.children) {
-            if ((child.type == core::NodeType::CROPBOX && child.cropbox) ||
-                (child.type == core::NodeType::ELLIPSOID && child.ellipsoid) ||
-                (child.type == core::NodeType::CROP_POLYGON && child.crop_polygon))
-                pasteCropVolume(child, parent_id);
+            if (child.type == core::NodeType::CROPBOX && child.cropbox) {
+                const core::NodeId cropbox_id = scene_.getOrCreateCropBoxForSplat(parent_id);
+                if (cropbox_id == core::NULL_NODE)
+                    continue;
+
+                const auto* cropbox_info = scene_.getNodeById(cropbox_id);
+                if (!cropbox_info)
+                    continue;
+
+                auto* cropbox_node = scene_.getMutableNode(cropbox_info->name);
+                if (cropbox_node && cropbox_node->cropbox) {
+                    *cropbox_node->cropbox = *child.cropbox;
+                    cropbox_node->local_transform.setQuiet(child.local_transform);
+                    cropbox_node->transform_dirty = true;
+                }
+            } else if (child.type == core::NodeType::ELLIPSOID && child.ellipsoid) {
+                core::NodeId ellipsoid_id = scene_.getEllipsoidForSplat(parent_id);
+                if (ellipsoid_id == core::NULL_NODE)
+                    ellipsoid_id = scene_.addEllipsoid(child.name, parent_id);
+                if (ellipsoid_id == core::NULL_NODE)
+                    continue;
+
+                const auto* ellipsoid_info = scene_.getNodeById(ellipsoid_id);
+                if (!ellipsoid_info)
+                    continue;
+
+                auto* ellipsoid_node = scene_.getMutableNode(ellipsoid_info->name);
+                if (ellipsoid_node && ellipsoid_node->ellipsoid) {
+                    *ellipsoid_node->ellipsoid = *child.ellipsoid;
+                    ellipsoid_node->local_transform.setQuiet(child.local_transform);
+                    ellipsoid_node->transform_dirty = true;
+                }
+            }
         }
     }
 
@@ -6215,10 +6082,14 @@ namespace lfs::vis {
                                     child_id = scene_.addSplat(child_name, std::move(paste_data), parent_id);
                                 } else if (child.type == core::NodeType::MESH && child.mesh) {
                                     child_id = scene_.addMesh(child_name, cloneMeshData(*child.mesh), parent_id);
-                                } else if ((child.type == core::NodeType::CROPBOX && child.cropbox) ||
-                                           (child.type == core::NodeType::ELLIPSOID && child.ellipsoid) ||
-                                           (child.type == core::NodeType::CROP_POLYGON && child.crop_polygon)) {
-                                    child_id = pasteCropVolume(child, parent_id);
+                                } else if (child.type == core::NodeType::CROPBOX && child.cropbox) {
+                                    child_id = scene_.addCropBox(child_name, parent_id);
+                                    if (auto* pasted_cropbox = scene_.getCropBoxData(child_id))
+                                        *pasted_cropbox = *child.cropbox;
+                                } else if (child.type == core::NodeType::ELLIPSOID && child.ellipsoid) {
+                                    child_id = scene_.addEllipsoid(child_name, parent_id);
+                                    if (auto* pasted_ellipsoid = scene_.getEllipsoidData(child_id))
+                                        *pasted_ellipsoid = *child.ellipsoid;
                                 }
                                 if (child_id == core::NULL_NODE)
                                     continue;
@@ -6226,7 +6097,6 @@ namespace lfs::vis {
                                     pasted_child->point_cloud_source = child.point_cloud_source;
                                     pasted_child->local_transform.setQuiet(child.local_transform);
                                     pasted_child->visible.setQuiet(child.visible);
-                                    pasted_child->crop_effects_enabled = child.crop_effects_enabled;
                                     pasted_child->locked.setQuiet(child.locked);
                                     pasted_child->transform_dirty = true;
                                 }
@@ -6238,7 +6108,6 @@ namespace lfs::vis {
                         auto* mutable_group = scene_.getMutableNode(pasted_group->name);
                         mutable_group->local_transform.setQuiet(entry.transform);
                         mutable_group->visible.setQuiet(entry.hierarchy->visible);
-                        mutable_group->crop_effects_enabled = entry.hierarchy->crop_effects_enabled;
                         mutable_group->locked.setQuiet(entry.hierarchy->locked);
                         mutable_group->transform_dirty = true;
                     }
@@ -6276,8 +6145,6 @@ namespace lfs::vis {
                 }
 
                 pasted_id = scene_.addSplat(name, std::move(paste_data));
-                if (auto* pasted = scene_.getNodeById(pasted_id); pasted && entry.hierarchy)
-                    pasted->crop_effects_enabled = entry.hierarchy->crop_effects_enabled;
                 scene_.markPayloadDiverged(pasted_id);
             } else {
                 continue;

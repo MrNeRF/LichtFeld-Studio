@@ -25,6 +25,7 @@
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -181,6 +182,28 @@ namespace {
                 }
                 return lfs::app::run_batch_training(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                const auto& params = *mode.params;
+                if (params.optimization.headless && !params.python_scripts.empty() &&
+                    params.dataset.data_path.empty() && !params.dataset_project &&
+                    !params.resume_checkpoint && !params.resume_project) {
+                    // Script-only headless invocations do not initialize the GPU or training.
+                    static bool output_failed = false;
+                    lfs::python::set_output_callback([](const std::string& text, const bool is_error) {
+                        if (std::fwrite(text.data(), 1, text.size(), is_error ? stderr : stdout) != text.size())
+                            output_failed = true;
+                    });
+                    const auto status = lfs::python::run_scripts(params.python_scripts, false);
+                    if (!status)
+                        std::println(stderr, "Error: {}", status.error().user_message());
+                    lfs::python::finalize();
+                    lfs::python::set_output_callback({});
+                    const bool output_flushed = std::fflush(stdout) == 0;
+                    const bool error_flushed = std::fflush(stderr) == 0;
+                    const int code = status && !output_failed && output_flushed && error_flushed ? 0 : 1;
+                    if (code == 0)
+                        lfs::core::mark_clean_exit();
+                    lfs::core::flush_and_exit(code);
+                }
 #ifdef __GLIBC__
                 // Training workers create many short-lived glibc arenas. Limit their
                 // retained heap without overriding an explicit user setting.

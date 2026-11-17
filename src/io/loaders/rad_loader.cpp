@@ -92,7 +92,6 @@ namespace lfs::io {
         }
 
         LOG_INFO("Loading RAD file: {}", lfs::core::path_to_utf8(path));
-        throw_if_load_cancel_requested(options);
         auto splat_result = load_rad(path, {
                                                .out_of_core = options.full_detail ? std::optional<bool>{false} : std::nullopt,
                                                .preview_splats = std::nullopt,
@@ -102,7 +101,6 @@ namespace lfs::io {
                               std::format("Failed to load RAD: {}", splat_result.error()), path);
         }
 
-        throw_if_load_cancel_requested(options);
         SplatData& data = *splat_result;
         if (!options.full_detail && radPagedGpuUploadRequested(data)) {
             // Paged residency streams chunk payloads from disk, and that path
