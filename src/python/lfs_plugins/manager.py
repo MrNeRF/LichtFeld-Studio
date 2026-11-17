@@ -257,7 +257,13 @@ class PluginManager:
                             if self._plugins.get(name) is plugin:
                                 del self._plugins[name]
                     if published and target_dir.exists():
-                        shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
+                        # Loaded native libraries can prevent deletion on Windows.
+                        # Restore the private path so a failed install remains retryable.
+                        try:
+                            target_dir.replace(staging_dir)
+                        except OSError:
+                            _log.exception("Failed to restore staging directory for '%s'", name)
+                            shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
                     raise
         finally:
             if (

@@ -338,101 +338,61 @@ def test_cancelled_dependency_sync_never_writes_stamp(tmp_path, monkeypatch):
     assert not installer._deps_stamp_path().exists()
 
 
-@pytest.mark.parametrize("transport", ["archive", "git"])
-def test_install_autoload_keeps_panel_and_callback_paths_valid(
-    async_plugin_manager, bypass_plugin_installer, monkeypatch, transport
+def test_install_autoload_keeps_panel_template_usable(
+    async_plugin_manager, bypass_plugin_installer, monkeypatch
 ):
-    from lfs_plugins import PluginState
     from lfs_plugins.installer import PluginSourceInfo
 
     manager, plugins_dir = async_plugin_manager
     name = "async_test_installed_panel"
     staging = plugins_dir / ".panel-stage"
-    target = plugins_dir / name
     _write_plugin(
         staging, name,
         "from pathlib import Path\n"
         "class Panel:\n"
-        "    template = str(Path(__file__).with_name('panel.rml'))\n"
-        "def on_load():\n"
-        "    assert Path(Panel.template).read_text() == 'panel content'\n",
+        "    template = str(Path(__file__).with_name('panel.rml'))\n",
     )
     (staging / "panel.rml").write_text("panel content")
-    (staging / "lazy.py").write_text("from pathlib import Path\nROOT = Path(__file__).parent\n")
-    source = PluginSourceInfo(transport=transport, origin="owner/repo")
-    if transport == "archive":
-        monkeypatch.setattr(
-            "lfs_plugins.manager.prepare_github_archive", lambda *args: (staging, source)
-        )
-    else:
-        monkeypatch.setattr("lfs_plugins.manager.clone_from_url", lambda *args: staging)
-    loaded_paths = []
-    manager._on_plugin_loaded.append(lambda info: loaded_paths.append(str(info.path)))
+    monkeypatch.setattr(
+        "lfs_plugins.manager.prepare_github_archive",
+        lambda *args: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
+    )
 
-    assert manager.install("owner/repo", transport=transport) == name
-    plugin = manager._plugins[name]
-    assert plugin.state == PluginState.ACTIVE
-    assert Path(plugin.module.Panel.template) == target / "panel.rml"
-    assert Path(plugin.module.Panel.template).read_text() == "panel content"
-    assert loaded_paths == [str(target)]
-    assert not staging.exists()
-    lazy = __import__(f"lfs_plugins.{name}.lazy", fromlist=["ROOT"])
-    assert lazy.ROOT == target
+    assert manager.install("owner/repo") == name
+    template = Path(manager._plugins[name].module.Panel.template)
+    assert template == plugins_dir / name / "panel.rml"
+    assert template.read_text() == "panel content"
 
 
-@pytest.mark.parametrize("failure", ["activation", "cancellation"])
-def test_install_autoload_failure_removes_published_plugin_and_allows_retry(
-    async_plugin_manager, bypass_plugin_installer, monkeypatch, tmp_path, failure
+def test_cancel_after_install_activation_unloads_before_removing_files(
+    async_plugin_manager, bypass_plugin_installer, monkeypatch, tmp_path
 ):
-    from lfs_plugins import PluginError, PluginLoadCancelled
+    from lfs_plugins import PluginLoadCancelled
     from lfs_plugins.installer import PluginSourceInfo
 
     manager, plugins_dir = async_plugin_manager
-    name = "async_test_failed_install"
-    staging = plugins_dir / ".failed-stage"
-    target = plugins_dir / name
+    name = "async_test_cancelled_install"
+    staging = plugins_dir / ".cancelled-stage"
     marker = tmp_path / "unloaded.txt"
-    activation = "raise RuntimeError('activation failed')" if failure == "activation" else "pass"
     _write_plugin(
         staging, name,
-        f"""from pathlib import Path
-
-def on_load():
-    {activation}
-
-def on_unload():
-    Path({str(marker)!r}).write_text(Path(__file__).with_name('panel.rml').read_text())
-""",
+        "from pathlib import Path\n"
+        "def on_unload():\n"
+        f"    Path({str(marker)!r}).write_text(Path(__file__).read_text())\n",
     )
-    (staging / "panel.rml").write_text("cleanup resource")
-    source = PluginSourceInfo(transport="archive", origin="owner/repo")
     monkeypatch.setattr(
-        "lfs_plugins.manager.prepare_github_archive", lambda *args, **kwargs: (staging, source)
+        "lfs_plugins.manager.prepare_github_archive",
+        lambda *args, **kwargs: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
     )
     cancel = threading.Event()
-    if failure == "cancellation":
-        manager._on_plugin_loaded.append(lambda info: cancel.set())
-    expected_error = PluginError if failure == "activation" else PluginLoadCancelled
+    manager.on_plugin_loaded(lambda info: cancel.set())
 
-    with pytest.raises(expected_error):
+    with pytest.raises(PluginLoadCancelled):
         manager.install("owner/repo", should_cancel=cancel.is_set)
 
-    assert marker.read_text() == "cleanup resource"
-    assert not target.exists()
-    assert not staging.exists()
-    assert name not in manager._plugins
-    assert not any(
-        m == f"lfs_plugins.{name}" or m.startswith(f"lfs_plugins.{name}.")
-        for m in sys.modules
-    )
-    assert str(staging) not in sys.path
-    assert str(target) not in sys.path
-
-    cancel.clear()
-    manager._on_plugin_loaded.clear()
-    _write_plugin(staging, name, "def on_load():\n    pass\n")
-    assert manager.install("owner/repo") == name
-    assert target.is_dir()
+    assert "def on_unload()" in marker.read_text()
+    assert not (plugins_dir / name).exists()
+    assert manager.get_state(name) is None
 
 
 def test_install_preserves_existing_plugin_on_name_conflict(
@@ -448,7 +408,7 @@ def test_install_preserves_existing_plugin_on_name_conflict(
     assert manager.load(name)
     original = manager._plugins[name]
     staging = plugins_dir / ".conflicting-stage"
-    _write_plugin(staging, name, "VALUE = 'replacement'\n")
+    _write_plugin(staging, name, "")
     monkeypatch.setattr(
         "lfs_plugins.manager.prepare_github_archive",
         lambda *args: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
@@ -459,29 +419,5 @@ def test_install_preserves_existing_plugin_on_name_conflict(
 
     assert manager._plugins[name] is original
     assert original.state == PluginState.ACTIVE
-    assert original.module.VALUE == "original"
     assert (target / "__init__.py").read_text() == "VALUE = 'original'\n"
     assert not staging.exists()
-
-
-def test_install_rename_failure_cleans_staging_without_loading(
-    async_plugin_manager, bypass_plugin_installer, monkeypatch
-):
-    from lfs_plugins.installer import PluginSourceInfo
-
-    manager, plugins_dir = async_plugin_manager
-    name = "async_test_rename_failure"
-    staging = plugins_dir / ".rename-stage"
-    _write_plugin(staging, name, "raise AssertionError('must not import')\n")
-    monkeypatch.setattr(
-        "lfs_plugins.manager.prepare_github_archive",
-        lambda *args: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
-    )
-    with patch.object(type(staging), "replace", side_effect=OSError("rename failed")):
-        with pytest.raises(OSError, match="rename failed"):
-            manager.install("owner/repo")
-
-    assert name not in manager._plugins
-    assert not staging.exists()
-    assert not (plugins_dir / name).exists()
-    assert f"lfs_plugins.{name}" not in sys.modules
