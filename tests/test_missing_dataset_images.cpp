@@ -555,7 +555,7 @@ TEST_F(MissingDatasetImagesTest, RevalidateMarksDeletedImageMissing) {
     fs::remove(temp_dir_ / "missing.png");
     const auto missing = scene.revalidateCameraImagePresence();
     ASSERT_EQ(missing.size(), 1u);
-    EXPECT_EQ(missing.front(), lfs::core::path_to_utf8(temp_dir_ / "missing.png"));
+    EXPECT_EQ(missing.front(), "missing.png");
 
     auto* present = camera_by_name(scene, "present.png");
     auto* deleted = camera_by_name(scene, "missing.png");

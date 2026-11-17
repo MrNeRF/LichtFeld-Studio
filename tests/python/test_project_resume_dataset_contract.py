@@ -41,7 +41,7 @@ def _png(width: int, height: int, rgba: tuple[int, int, int, int]) -> bytes:
 
 
 def _make_dataset(root: Path, prefix: str) -> None:
-    images = root / "images"
+    images = root / "images/original"
     images.mkdir(parents=True)
     frames = []
     for index in range(4):
@@ -53,7 +53,7 @@ def _make_dataset(root: Path, prefix: str) -> None:
             [0, 0, 1, 0],
             [0, 0, 0, 1],
         ]
-        frames.append({"file_path": f"images/{name}", "transform_matrix": matrix})
+        frames.append({"file_path": f"images/original/{name}", "transform_matrix": matrix})
     (root / "transforms.json").write_text(
         json.dumps(
             {
@@ -139,7 +139,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
         "--data-path",
         str(dataset),
         "--images",
-        "images",
+        r"images\original" if os.name == "nt" else "images/original",
         "-r",
         "1",
         "--max-width",
@@ -191,7 +191,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
         "--data-path",
         str(moved),
         "--images",
-        "images",
+        "images/original",
         "-r",
         "1",
         "--max-width",
@@ -207,7 +207,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
     continued = _run_app(
         app, home, deadline,
         "--resume", str(tmp_path / "moved-resume" / "project.licht"),
-        "--data-path", str(moved), "--images", "images",
+        "--data-path", str(moved),
         "--iter", "4", "-r", "1", "--max-width", "8", "--no-download",
         "--output-path", str(tmp_path / "continued-resume"),
     )
@@ -215,7 +215,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
 
     renamed_images = moved / "photos" / "nêsted"
     renamed_images.parent.mkdir()
-    (moved / "images").rename(renamed_images)
+    (moved / "images/original").rename(renamed_images)
     try:
         overridden = _run_app(
             app, home, deadline,
@@ -226,7 +226,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
         )
         assert overridden.returncode == 0, overridden.stdout + overridden.stderr
     finally:
-        renamed_images.rename(moved / "images")
+        renamed_images.rename(moved / "images/original")
 
     conflict = _run_app(
         app,
@@ -237,7 +237,7 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
         "--data-path",
         str(incompatible),
         "--images",
-        "images",
+        "images/original",
         "-r",
         "1",
         "--max-width",
@@ -250,11 +250,11 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
     )
     assert conflict.returncode != 0, conflict.stdout + conflict.stderr
     assert "not compatible" in conflict.stdout + conflict.stderr
-    assert str(incompatible / "images" / "frame_0.png") in conflict.stdout + conflict.stderr
+    assert str(incompatible / "images/original" / "frame_0.png") in conflict.stdout + conflict.stderr
 
     mask_dir = moved / "masks"
     mask_dir.mkdir()
-    for image in sorted((moved / "images").glob("*.png")):
+    for image in sorted((moved / "images/original").glob("*.png")):
         (mask_dir / image.name).write_bytes(_png(8, 8, (255, 255, 255, 255)))
     masked = _run_app(
         app,
@@ -264,8 +264,6 @@ def test_resume_uses_compatible_external_dataset_masks_and_embedded_fallback(tmp
         str(project),
         "--data-path",
         str(moved),
-        "--images",
-        "images",
         "--mask-mode",
         "segment",
         "--log-level",

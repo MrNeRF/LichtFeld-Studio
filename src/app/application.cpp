@@ -530,6 +530,8 @@ namespace lfs::app {
                 std::move(**parsed_params);
             const auto checkpoint_dataset_path =
                 checkpoint_params.dataset.data_path;
+            checkpoint_params.dataset.images = core::path_to_generic_utf8(core::path_from_source_format(
+                core::utf8_to_path(checkpoint_params.dataset.images), checkpoint_dataset_path));
             const auto checkpoint_images_folder =
                 checkpoint_params.dataset.images;
 
@@ -657,17 +659,20 @@ namespace lfs::app {
             }
             if (images_folder_changed) {
                 scene.rebaseCameraAssetPaths(
-                    checkpoint_params.dataset.data_path / core::path_from_source_format(
-                                                              core::utf8_to_path(checkpoint_images_folder),
-                                                              checkpoint_dataset_path),
+                    checkpoint_params.dataset.data_path / core::utf8_to_path(checkpoint_images_folder),
                     checkpoint_params.dataset.data_path / core::utf8_to_path(checkpoint_params.dataset.images));
             }
             if (dataset_root_changed || images_folder_changed) {
                 const auto missing_images = scene.revalidateCameraImagePresence();
                 if (!missing_images.empty()) {
+                    std::vector<std::string> missing_paths;
+                    for (const auto& camera : scene.getAllCameras()) {
+                        if (!camera->has_image() && !camera->image_path().empty())
+                            missing_paths.push_back(core::path_to_utf8(camera->image_path()));
+                    }
                     lfs::SmallFields fields;
                     fields.add("missing_count", static_cast<std::int64_t>(missing_images.size()));
-                    fields.add("examples", io::join_missing_dataset_image_examples(missing_images));
+                    fields.add("examples", io::join_missing_dataset_image_examples(missing_paths));
                     return training_project_error(
                         lfs::ErrorCode::InvalidArgument,
                         "The supplied dataset is not compatible with the resumed project's cameras",
