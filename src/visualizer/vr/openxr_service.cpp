@@ -4,7 +4,6 @@
 #include "openxr_service.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
-#include "core/native_fs.hpp"
 #include "internal/resource_paths.hpp"
 #include "openxr_runtimes.hpp"
 #include "preferences.hpp"
@@ -15,8 +14,6 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
-#include <fstream>
-#include <iterator>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -712,15 +709,19 @@ namespace lfs::vis::vr {
                 return;
             constexpr std::array<const char*, 2> names = {"vr/hand_left.glb", "vr/hand_right.glb"};
             for (std::size_t i = 0; i < names.size(); ++i) {
+                hand_models[i].reset();
                 try {
-                    std::ifstream file(lfs::core::native_fs::native_path(getAssetPath(names[i])), std::ios::binary);
-                    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)),
-                                                          std::istreambuf_iterator<char>());
-                    hand_models[i] = loadHandModel(bytes);
+                    auto mesh = lfs::io::load_skinned_mesh(getAssetPath(names[i]));
+                    if (!mesh) {
+                        LOG_WARN("VR hands: could not read {}: {}", names[i], mesh.error().format());
+                        continue;
+                    }
+                    hand_models[i] = handModelFromSkinnedMesh(std::move(*mesh));
+                    if (!hand_models[i])
+                        LOG_WARN("VR hands: {} has no bone for some of the hand joints", names[i]);
                 } catch (const std::exception& error) {
                     // Not bundled: this hand is not drawn.
                     LOG_WARN("VR hands: could not read {}: {}", names[i], error.what());
-                    hand_models[i].reset();
                 }
             }
         }

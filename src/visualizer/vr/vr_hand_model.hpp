@@ -4,18 +4,16 @@
 
 #pragma once
 
+#include "io/skinned_mesh.hpp"
 #include "vr_hands.hpp"
 #include "vr_math.hpp"
 #include <array>
 #include <cstdint>
-#include <cstring>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <nlohmann/json.hpp>
 #include <optional>
-#include <span>
-#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::vr {
@@ -130,12 +128,7 @@ namespace lfs::vis::vr {
     // bone per hand joint, named after it. OpenXR and WebXR define the same
     // joints, so each bone goes where its joint is tracked.
     struct HandModel {
-        struct Vertex {
-            glm::vec3 position{0.0f};
-            glm::vec3 normal{0.0f};
-            std::array<std::uint16_t, 4> bones{};
-            std::array<float, 4> weights{};
-        };
+        using Vertex = lfs::io::SkinnedMesh::Vertex;
         std::vector<Vertex> vertices;
         std::vector<std::uint32_t> indices; // triangles
         // Per bone: the joint that moves it, the matrix that takes a vertex of
@@ -176,203 +169,61 @@ namespace lfs::vis::vr {
             "pinky-finger-phalanx-distal",
             "pinky-finger-tip",
         };
-
-        // Elements of a glTF accessor inside the binary chunk.
-        struct Accessor {
-            const std::uint8_t* data = nullptr;
-            std::size_t stride = 0;
-            std::size_t count = 0;
-            int component = 0; // 5121 unsigned byte, 5123 unsigned short, 5125 unsigned int, 5126 float
-            bool normalized = false;
-
-            [[nodiscard]] double number(const std::size_t element, const std::size_t part) const {
-                const std::uint8_t* const at = data + element * stride;
-                switch (component) {
-                case 5121:
-                    return at[part];
-                case 5123: {
-                    std::uint16_t value;
-                    std::memcpy(&value, at + part * 2, 2);
-                    return value;
-                }
-                case 5125: {
-                    std::uint32_t value;
-                    std::memcpy(&value, at + part * 4, 4);
-                    return value;
-                }
-                default: {
-                    float value;
-                    std::memcpy(&value, at + part * 4, 4);
-                    return value;
-                }
-                }
-            }
-
-            // Integers that stand for 0..1 are scaled back to it.
-            [[nodiscard]] float real(const std::size_t element, const std::size_t part) const {
-                const double value = number(element, part);
-                if (!normalized || component == 5126)
-                    return static_cast<float>(value);
-                return static_cast<float>(value / (component == 5121 ? 255.0 : component == 5123 ? 65535.0
-                                                                                                 : 4294967295.0));
-            }
-        };
-
-        [[nodiscard]] inline std::optional<Accessor> accessor(const nlohmann::json& document,
-                                                              const std::span<const std::uint8_t> binary,
-                                                              const std::size_t index, const std::string_view type,
-                                                              const std::size_t parts) {
-            const auto& described = document.at("accessors").at(index);
-            if (described.at("type").get<std::string>() != type || !described.contains("bufferView"))
-                return std::nullopt;
-            const auto& view = document.at("bufferViews").at(described.at("bufferView").get<std::size_t>());
-            Accessor result;
-            result.component = described.at("componentType").get<int>();
-            result.normalized = described.value("normalized", false);
-            result.count = described.at("count").get<std::size_t>();
-            const std::size_t width = result.component == 5121 ? 1 : result.component == 5123 ? 2
-                                                                                              : 4;
-            if (result.component != 5121 && result.component != 5123 && result.component != 5125 && result.component != 5126)
-                return std::nullopt;
-            const std::size_t element = width * parts;
-            result.stride = view.value("byteStride", std::size_t{0});
-            if (result.stride == 0)
-                result.stride = element;
-            const std::size_t offset = view.value("byteOffset", std::size_t{0}) + described.value("byteOffset", std::size_t{0});
-            if (result.count == 0 || result.stride < element ||
-                offset + (result.count - 1) * result.stride + element > binary.size())
-                return std::nullopt;
-            result.data = binary.data() + offset;
-            return result;
-        }
     } // namespace hand_detail
 
-    // Reads a hand model from a binary glTF file (.glb): the first mesh that
-    // has a skin, with that skin. Nothing is returned for a file that is not
-    // one, or that lacks a bone for any of the hand joints.
-    [[nodiscard]] inline std::optional<HandModel> loadHandModel(const std::span<const std::uint8_t> file) {
+    // Makes a hand model of a skinned mesh in that layout, as
+    // lfs::io::load_skinned_mesh() reads the bundled ones. Nothing is returned
+    // for a mesh that lacks a bone for any of the hand joints.
+    [[nodiscard]] inline std::optional<HandModel> handModelFromSkinnedMesh(lfs::io::SkinnedMesh mesh) {
         using namespace hand_detail;
-        const auto word = [&](const std::size_t offset) {
-            std::uint32_t value = 0;
-            if (offset + 4 <= file.size())
-                std::memcpy(&value, file.data() + offset, 4);
-            return value;
-        };
-        constexpr std::uint32_t kGltf = 0x46546C67, kJson = 0x4E4F534A, kBinary = 0x004E4942;
-        if (word(0) != kGltf || word(4) != 2 || word(16) != kJson)
+        if (mesh.indices.empty() || mesh.indices.size() % 3 != 0)
             return std::nullopt;
-        const std::size_t json_size = word(12);
-        const std::size_t binary_header = 20 + json_size;
-        if (binary_header + 8 > file.size() || word(binary_header + 4) != kBinary)
-            return std::nullopt;
-        const std::size_t binary_size = word(binary_header);
-        if (binary_header + 8 + binary_size > file.size())
-            return std::nullopt;
-        const std::span<const std::uint8_t> binary = file.subspan(binary_header + 8, binary_size);
 
-        try {
-            const auto document = nlohmann::json::parse(file.data() + 20, file.data() + 20 + json_size);
-            const auto& nodes = document.at("nodes");
-            const nlohmann::json* skinned = nullptr;
-            for (const auto& node : nodes) {
-                if (node.contains("mesh") && node.contains("skin")) {
-                    skinned = &node;
-                    break;
+        HandModel model;
+        // Where each joint is, and how its bone is turned, in the rest pose.
+        HandJoints rest_joints{};
+        std::array<bool, kHandJointCount> found{};
+        std::vector<glm::quat> rest_turn;
+        for (const lfs::io::SkinnedMesh::Bone& bone : mesh.bones) {
+            const glm::mat4 rest = glm::inverse(bone.inverse_bind);
+            glm::mat3 turned(rest);
+            for (int column = 0; column < 3; ++column)
+                turned[column] = direction(turned[column], glm::vec3(0.0f));
+            // A bone that is no joint, a root for instance, follows the wrist.
+            std::size_t joint = kWrist;
+            for (std::size_t i = 0; i < kBoneNames.size(); ++i) {
+                if (bone.name == kBoneNames[i]) {
+                    joint = i + 1;
+                    found[joint] = true;
+                    rest_joints[joint] = glm::vec3(rest[3]);
                 }
             }
-            if (!skinned)
-                return std::nullopt;
-            const auto& skin = document.at("skins").at(skinned->at("skin").get<std::size_t>());
-            const auto& primitive =
-                document.at("meshes").at(skinned->at("mesh").get<std::size_t>()).at("primitives").at(0);
-            if (primitive.value("mode", 4) != 4)
-                return std::nullopt;
-            const auto& attributes = primitive.at("attributes");
-            const auto read = [&](const nlohmann::json& index, const std::string_view type, const std::size_t parts) {
-                return accessor(document, binary, index.get<std::size_t>(), type, parts);
-            };
-            const auto positions = read(attributes.at("POSITION"), "VEC3", 3);
-            const auto normals = read(attributes.at("NORMAL"), "VEC3", 3);
-            const auto bones = read(attributes.at("JOINTS_0"), "VEC4", 4);
-            const auto weights = read(attributes.at("WEIGHTS_0"), "VEC4", 4);
-            const auto indices = read(primitive.at("indices"), "SCALAR", 1);
-            const auto binds = read(skin.at("inverseBindMatrices"), "MAT4", 16);
-            const auto& bone_nodes = skin.at("joints");
-            if (!positions || !normals || !bones || !weights || !indices || !binds ||
-                normals->count != positions->count || bones->count != positions->count ||
-                weights->count != positions->count || binds->count != bone_nodes.size() || indices->count % 3 != 0)
-                return std::nullopt;
-
-            HandModel model;
-            // Where each joint is, and how its bone is turned, in the rest pose.
-            HandJoints rest_joints{};
-            std::array<bool, kHandJointCount> found{};
-            std::vector<glm::quat> rest_turn;
-            for (std::size_t bone = 0; bone < bone_nodes.size(); ++bone) {
-                const std::string name = nodes.at(bone_nodes[bone].get<std::size_t>()).value("name", std::string{});
-                glm::mat4 matrix;
-                for (int column = 0; column < 4; ++column) {
-                    for (int row = 0; row < 4; ++row)
-                        matrix[column][row] = binds->real(bone, static_cast<std::size_t>(column * 4 + row));
-                }
-                const glm::mat4 rest = glm::inverse(matrix);
-                glm::mat3 turned(rest);
-                for (int column = 0; column < 3; ++column)
-                    turned[column] = direction(turned[column], glm::vec3(0.0f));
-                // A bone that is no joint, a root for instance, follows the wrist.
-                std::size_t joint = kWrist;
-                for (std::size_t i = 0; i < kBoneNames.size(); ++i) {
-                    if (name == kBoneNames[i]) {
-                        joint = i + 1;
-                        found[joint] = true;
-                        rest_joints[joint] = glm::vec3(rest[3]);
-                    }
-                }
-                model.joints.push_back(joint);
-                model.inverse_bind.push_back(matrix);
-                rest_turn.push_back(glm::normalize(glm::quat_cast(turned)));
-            }
-            for (std::size_t joint = kWrist; joint < kHandJointCount; ++joint) {
-                if (!found[joint])
-                    return std::nullopt;
-            }
-            rest_joints[0] = (rest_joints[kWrist] + rest_joints[kFingers[1] + 1]) * 0.5f;
-            const HandPose rest_pose = handPoseFromJoints(rest_joints);
-            for (std::size_t bone = 0; bone < model.joints.size(); ++bone)
-                model.turn.push_back(glm::normalize(glm::inverse(rest_pose[model.joints[bone]].orientation) * rest_turn[bone]));
-
-            model.vertices.resize(positions->count);
-            for (std::size_t i = 0; i < positions->count; ++i) {
-                auto& vertex = model.vertices[i];
-                float total = 0.0f;
-                for (std::size_t part = 0; part < 3; ++part) {
-                    vertex.position[static_cast<int>(part)] = positions->real(i, part);
-                    vertex.normal[static_cast<int>(part)] = normals->real(i, part);
-                }
-                for (std::size_t part = 0; part < 4; ++part) {
-                    const double bone = bones->number(i, part);
-                    if (!(bone >= 0.0 && bone < static_cast<double>(model.joints.size())))
-                        return std::nullopt;
-                    vertex.bones[part] = static_cast<std::uint16_t>(bone);
-                    vertex.weights[part] = weights->real(i, part);
-                    total += vertex.weights[part];
-                }
-                if (!(total > 1e-6f))
-                    return std::nullopt;
-                for (float& weight : vertex.weights)
-                    weight /= total;
-            }
-            model.indices.resize(indices->count);
-            for (std::size_t i = 0; i < indices->count; ++i) {
-                const double index = indices->number(i, 0);
-                if (!(index >= 0.0 && index < static_cast<double>(model.vertices.size())))
-                    return std::nullopt;
-                model.indices[i] = static_cast<std::uint32_t>(index);
-            }
-            return model;
-        } catch (const nlohmann::json::exception&) {
-            return std::nullopt;
+            model.joints.push_back(joint);
+            model.inverse_bind.push_back(bone.inverse_bind);
+            rest_turn.push_back(glm::normalize(glm::quat_cast(turned)));
         }
+        for (std::size_t joint = kWrist; joint < kHandJointCount; ++joint) {
+            if (!found[joint])
+                return std::nullopt;
+        }
+        rest_joints[0] = (rest_joints[kWrist] + rest_joints[kFingers[1] + 1]) * 0.5f;
+        const HandPose rest_pose = handPoseFromJoints(rest_joints);
+        for (std::size_t bone = 0; bone < model.joints.size(); ++bone)
+            model.turn.push_back(glm::normalize(glm::inverse(rest_pose[model.joints[bone]].orientation) * rest_turn[bone]));
+
+        for (const HandModel::Vertex& vertex : mesh.vertices) {
+            for (const std::uint16_t bone : vertex.bones) {
+                if (bone >= model.joints.size())
+                    return std::nullopt;
+            }
+        }
+        for (const std::uint32_t index : mesh.indices) {
+            if (index >= mesh.vertices.size())
+                return std::nullopt;
+        }
+        model.vertices = std::move(mesh.vertices);
+        model.indices = std::move(mesh.indices);
+        return model;
     }
 
     // Appends the triangles of the model, its bones moved to the joints of a

@@ -485,58 +485,25 @@ namespace {
         expectVecNear(steady[5].position, rest[5].position);
     }
 
-    // A binary glTF hand model: an unturned bone at every joint of the open hand
-    // and one triangle, two corners on the wrist and one on the tip of the index.
-    [[nodiscard]] std::vector<std::uint8_t> handModelFile(const bool hand_bones = true) {
+    // A hand model as lfs::io::load_skinned_mesh() reads one: an unturned bone
+    // at every joint of the open hand and one triangle, two corners on the
+    // wrist and one on the tip of the index.
+    [[nodiscard]] lfs::io::SkinnedMesh handSkinnedMesh(const bool hand_bones = true) {
         const HandJoints joints = openHand();
         const glm::vec3 wrist = joints[1], tip = joints[10];
-        std::vector<std::uint8_t> binary;
-        const auto put = [&binary](const auto& values) {
-            const auto* const bytes = reinterpret_cast<const std::uint8_t*>(values.data());
-            binary.insert(binary.end(), bytes, bytes + values.size() * sizeof(values[0]));
-        };
-        put(std::array<float, 9>{wrist.x, wrist.y, wrist.z, wrist.x + 0.01f, wrist.y, wrist.z, tip.x, tip.y, tip.z}); // positions, offset 0
-        put(std::array<float, 9>{0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f});                              // normals, 36
-        put(std::array<std::uint8_t, 12>{0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0});                                        // bones, 72
-        put(std::array<float, 12>{1.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f});           // weights, 84
-        put(std::array<std::uint16_t, 4>{0, 1, 2, 0});                                                                // indices, 132, padded
-        std::string names, bones;
-        for (std::size_t joint = 1; joint < joints.size(); ++joint) { // inverse binds, 140
-            put(std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -joints[joint].x, -joints[joint].y, -joints[joint].z, 1});
-            names += R"(,{"name":")" + (hand_bones ? std::string(hand_detail::kBoneNames[joint - 1]) : "bone" + std::to_string(joint)) + R"("})";
-            bones += (joint > 1 ? "," : "") + std::to_string(joint);
+        lfs::io::SkinnedMesh mesh;
+        for (std::size_t joint = 1; joint < joints.size(); ++joint) {
+            glm::mat4 inverse_bind(1.0f);
+            inverse_bind[3] = glm::vec4(-joints[joint], 1.0f);
+            mesh.bones.push_back({hand_bones ? std::string(hand_detail::kBoneNames[joint - 1]) : "bone" + std::to_string(joint),
+                                  inverse_bind});
         }
-        std::string json =
-            R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":1740}],)"
-            R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},)"
-            R"({"buffer":0,"byteOffset":72,"byteLength":12},{"buffer":0,"byteOffset":84,"byteLength":48},)"
-            R"({"buffer":0,"byteOffset":132,"byteLength":6},{"buffer":0,"byteOffset":140,"byteLength":1600}],)"
-            R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},)"
-            R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},)"
-            R"({"bufferView":2,"componentType":5121,"count":3,"type":"VEC4"},)"
-            R"({"bufferView":3,"componentType":5126,"count":3,"type":"VEC4"},)"
-            R"({"bufferView":4,"componentType":5123,"count":3,"type":"SCALAR"},)"
-            R"({"bufferView":5,"componentType":5126,"count":25,"type":"MAT4"}],)"
-            R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"JOINTS_0":2,"WEIGHTS_0":3},"indices":4}]}],)"
-            R"("skins":[{"joints":[)" +
-            bones + R"(],"inverseBindMatrices":5}],"nodes":[{"mesh":0,"skin":0})" + names + "]}";
-        while (json.size() % 4 != 0)
-            json += ' ';
-        std::vector<std::uint8_t> file;
-        const auto word = [&file](const std::uint32_t value) {
-            const auto* const bytes = reinterpret_cast<const std::uint8_t*>(&value);
-            file.insert(file.end(), bytes, bytes + 4);
-        };
-        word(0x46546C67);
-        word(2);
-        word(static_cast<std::uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
-        word(static_cast<std::uint32_t>(json.size()));
-        word(0x4E4F534A);
-        file.insert(file.end(), json.begin(), json.end());
-        word(static_cast<std::uint32_t>(binary.size()));
-        word(0x004E4942);
-        file.insert(file.end(), binary.begin(), binary.end());
-        return file;
+        const glm::vec3 up{0.0f, 1.0f, 0.0f};
+        mesh.vertices = {{wrist, up, {0, 0, 0, 0}, {1.0f, 0.0f, 0.0f, 0.0f}},
+                         {wrist + glm::vec3(0.01f, 0.0f, 0.0f), up, {0, 0, 0, 0}, {1.0f, 0.0f, 0.0f, 0.0f}},
+                         {tip, up, {9, 0, 0, 0}, {1.0f, 0.0f, 0.0f, 0.0f}}};
+        mesh.indices = {0, 1, 2};
+        return mesh;
     }
 
     TEST(VrMath, HandPoseFromJointsTurnsWithTheHand) {
@@ -564,15 +531,13 @@ namespace {
     }
 
     TEST(VrMath, HandModelGoesWhereTheJointsAre) {
-        const auto model = loadHandModel(handModelFile());
+        const auto model = handModelFromSkinnedMesh(handSkinnedMesh());
         ASSERT_TRUE(model.has_value());
         EXPECT_EQ(model->vertices.size(), std::size_t{3});
         EXPECT_EQ(model->indices.size(), std::size_t{3});
         // Bones are matched to the joints by name: the wrist is joint 1, the index tip joint 10.
         EXPECT_EQ(model->joints[0], std::size_t{1});
         EXPECT_EQ(model->joints[9], std::size_t{10});
-        // Weights are brought back to a sum of one.
-        EXPECT_NEAR(model->vertices[1].weights[0], 1.0f, TOLERANCE);
 
         const HandJoints joints = openHand();
         const glm::vec3 wrist = joints[1], tip = joints[10];
@@ -608,14 +573,24 @@ namespace {
         expectVecNear(mesh[1].position, wrist + glm::vec3(0.01f, 0.0f, 0.0f));
     }
 
-    TEST(VrMath, HandModelRefusesFilesThatAreNotHandModels) {
-        const auto file = handModelFile();
-        EXPECT_FALSE(loadHandModel(std::span(file).first(file.size() - 40)).has_value());
-        EXPECT_FALSE(loadHandModel(std::span(file).first(10)).has_value());
-        auto not_gltf = file;
-        not_gltf[0] = 'x';
-        EXPECT_FALSE(loadHandModel(not_gltf).has_value());
+    TEST(VrMath, HandModelRefusesMeshesThatAreNotHandModels) {
         // A skinned mesh whose bones are not the hand joints.
-        EXPECT_FALSE(loadHandModel(handModelFile(false)).has_value());
+        EXPECT_FALSE(handModelFromSkinnedMesh(handSkinnedMesh(false)).has_value());
+        // A hand that lacks a joint: the tip of the little finger.
+        auto short_hand = handSkinnedMesh();
+        short_hand.bones.pop_back();
+        EXPECT_FALSE(handModelFromSkinnedMesh(short_hand).has_value());
+        // A vertex moved by a bone the mesh does not have.
+        auto stray = handSkinnedMesh();
+        stray.vertices[2].bones[1] = 200;
+        EXPECT_FALSE(handModelFromSkinnedMesh(stray).has_value());
+        // Corners that make no triangle, or name no vertex.
+        auto open_triangle = handSkinnedMesh();
+        open_triangle.indices.pop_back();
+        EXPECT_FALSE(handModelFromSkinnedMesh(open_triangle).has_value());
+        auto outside = handSkinnedMesh();
+        outside.indices[2] = 3;
+        EXPECT_FALSE(handModelFromSkinnedMesh(outside).has_value());
+        EXPECT_FALSE(handModelFromSkinnedMesh({}).has_value());
     }
 } // namespace
