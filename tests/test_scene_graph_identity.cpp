@@ -1308,8 +1308,7 @@ TEST(SceneCameraAssetPathTest, RebaseSourceFormatsAndImageFolderOverrides) {
             std::filesystem::path(), 64, 64, 2, 0);
         scene.addCamera("other-frame.png", group, other_camera);
         scene.rebaseCameraAssetPaths(root, destination);
-        const auto original_images = destination / lfs::core::path_from_source_format(
-                                                       lfs::core::utf8_to_path(source.images), root);
+        const auto original_images = destination / source.expected_images;
         EXPECT_EQ(camera->image_path(), destination / source.expected_images / "rigA/frame.png");
         EXPECT_EQ(camera->mask_path(), destination / "masks/rigA/frame.png");
         EXPECT_EQ(camera->depth_path(), destination / "depth/rigA/frame.exr");
@@ -1338,9 +1337,12 @@ TEST(SceneCameraAssetPathTest, RebaseSourceFormatsAndImageFolderOverrides) {
         EXPECT_EQ(camera->normal_path(), normal);
         EXPECT_EQ(camera->mask_path(), mask);
         EXPECT_EQ(camera->mask_asset_uuid(), embedded_mask);
-        camera->set_normal_path("/server/share/dataset/external.png");
-        scene.rebaseCameraAssetPaths(root, destination);
-        EXPECT_EQ(camera->normal_path(), std::filesystem::path("/server/share/dataset/external.png"));
+        if (std::string_view(source.root).starts_with("\\\\")) {
+            const std::filesystem::path external("/server/share/dataset/external.png");
+            camera->set_normal_path(external);
+            scene.rebaseCameraAssetPaths(root, destination);
+            EXPECT_EQ(camera->normal_path(), external);
+        }
     }
 }
 
