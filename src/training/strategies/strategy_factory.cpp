@@ -45,9 +45,8 @@ namespace lfs::training {
             return std::make_unique<ImprovedGSPlus>(model);
         };
 
-        registry_[std::string(core::param::kStrategyMatch)] = [](core::SplatData& model)
-            -> std::expected<std::unique_ptr<IStrategy>, std::string> {
-            return std::make_unique<Match>(model);
+        registry_[std::string(core::param::kStrategyMatch)] = [](core::SplatData& model) {
+            return std::unique_ptr<IStrategy>(std::make_unique<Match>(model));
         };
     }
 

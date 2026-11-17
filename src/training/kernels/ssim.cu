@@ -4790,18 +4790,21 @@ namespace lfs::training::kernels {
                     maskedDecoupledFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
                         H, W, C, C1, C2, ssim_weight, image, raw_image, y, mask, p[3], p[0], p[1], p[2], ssim_map,
                         cs_map, ssim_channels);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
                 } else if constexpr (decoupled) {
                     decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, stream>>>(
                         H, W, C, C1, C2, ssim_weight, image, raw_image, y, p[3], p[0], p[1], p[2], ssim_map, cs_map,
                         ssim_channels);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
                 } else if constexpr (masked) {
                     maskedFusedL1SSIMForwardCUDA<TargetT, MaskT><<<grid, block, 0, stream>>>(
                         H, W, C, C1, C2, image, y, mask, p[0], p[1], p[2], ssim_map, cs_map, ssim_channels);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
                 } else {
                     fusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, stream>>>(
                         H, W, C, C1, C2, image, y, p[0], p[1], p[2], ssim_map, cs_map, ssim_channels);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
                 }
-                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_forward");
             };
 
             forward(x, raw, sharp, ws.ssim_map.template ptr<float>(), ws.cs_map.template ptr<float>(), ssim_sharp);
@@ -4867,20 +4870,23 @@ namespace lfs::training::kernels {
                     maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/false>
                         <<<grid, block, 0, stream>>>(weight, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[3],
                                                      nullptr, nullptr);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
                 } else if constexpr (decoupled) {
                     fusedL1SSIMBackwardCUDA<TargetT, /*HasSigmaPartials=*/false><<<grid, block, 0, stream>>>(
                         weight, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[3],
                         nullptr, nullptr);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
                 } else if constexpr (masked) {
                     maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT, /*HasSigmaPartials=*/true>
                         <<<grid, block, 0, stream>>>(weight, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[0],
                                                      p[1], p[2]);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
                 } else {
                     fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, stream>>>(
                         weight, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[0],
                         p[1], p[2]);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
                 }
-                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_backward");
             };
             // Decoupled loss: contrast and structure of the raw render (its partials carry the SSIM weight).
             const auto raw_backward = [&](const float* image, float* out, const BranchPartials& partials) {
@@ -4890,12 +4896,13 @@ namespace lfs::training::kernels {
                                                   /*ScaledMeanPartial=*/true>
                         <<<grid, block, 0, stream>>>(1.0f, inv_mask_sum, H, W, C, C1, C2, image, y, mask, out, p[0],
                                                      p[1], p[2]);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_raw_backward");
                 } else {
                     fusedL1SSIMBackwardCUDA<TargetT><<<grid, block, 0, stream>>>(
                         1.0f, H, W, C, C1, C2, grad_per_pixel, /*apply_valid_padding=*/true, image, y, out, p[0], p[1],
                         p[2]);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_raw_backward");
                 }
-                LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_raw_backward");
             };
 
             float* grad = level_gradient(ws).template ptr<float>();
@@ -5332,12 +5339,12 @@ namespace lfs::training::kernels {
                         blend_cs_error_kernel<<<grid, block, 0, stream>>>(H, W, C, x, blurred, y, out,
                                                                           s == 0 ? level_scale : 1.0f,
                                                                           BLUR_TOLERANT_SSIM_TEMPERATURE, sigma_out);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_cs_error");
                     };
                     if (s == 0)
                         dispatch_target_ptr(y0, launch);
                     else
                         launch(level.target.ptr<float>());
-                    LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim.pyramid_cs_error");
                     if (s > 0) {
                         add_upsampled_error_kernel<<<pyramid_blocks(static_cast<size_t>(heights[0]) * widths[0]),
                                                      PYRAMID_THREADS, 0, stream>>>(

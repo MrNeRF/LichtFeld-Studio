@@ -141,8 +141,8 @@ namespace lfs::training {
                     if (param.capacity() >= capacity || param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
-                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(), param.numel() * sizeof(float),
-                               cudaMemcpyDeviceToDevice);
+                    LFS_CUDA_CHECK(cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
+                                              param.numel() * sizeof(float), cudaMemcpyDeviceToDevice));
                     param = std::move(new_param);
                 };
                 const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
@@ -154,8 +154,8 @@ namespace lfs::training {
                     if (param.capacity() >= required || param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), required, Device::CUDA, param.dtype());
-                    cudaMemcpy(new_param.data_ptr(), param.data_ptr(), param.numel() * dtype_size(param.dtype()),
-                               cudaMemcpyDeviceToDevice);
+                    LFS_CUDA_CHECK(cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
+                                              param.numel() * dtype_size(param.dtype()), cudaMemcpyDeviceToDevice));
                     param = std::move(new_param);
                 };
                 ensure_capacity_direct(_splat_data->means());

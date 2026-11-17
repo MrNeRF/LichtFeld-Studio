@@ -620,16 +620,26 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
 
-        const auto launch = [&](auto kernel) {
-            kernel<<<blocks, threads, 0, s>>>(raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-                                              opacity_decay, scale_decay, train_t, N, rendered_count,
-                                              opacity_hold, reach);
-        };
-        if (rendered_count != nullptr) {
-            launch(reach != nullptr ? mrnf_decay_kernel<true, true> : mrnf_decay_kernel<true, false>);
+        // One launch per decay variant: without a reach the kernels are the ones the decay always used.
+        if (rendered_count != nullptr && reach != nullptr) {
+            mrnf_decay_kernel<true, true><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size, opacity_decay, scale_decay, train_t, N,
+                rendered_count, opacity_hold, reach);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count_and_reach");
+        } else if (rendered_count != nullptr) {
+            mrnf_decay_kernel<true, false><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size, opacity_decay, scale_decay, train_t, N,
+                rendered_count, opacity_hold, nullptr);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_rendered_count");
+        } else if (reach != nullptr) {
+            mrnf_decay_kernel<false, true><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size, opacity_decay, scale_decay, train_t, N,
+                nullptr, opacity_hold, reach);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_with_reach");
         } else {
-            launch(reach != nullptr ? mrnf_decay_kernel<false, true> : mrnf_decay_kernel<false, false>);
+            mrnf_decay_kernel<false, false><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size, opacity_decay, scale_decay, train_t, N,
+                nullptr, opacity_hold, nullptr);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay_without_rendered_count");
         }
     }
