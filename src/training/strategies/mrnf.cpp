@@ -1040,7 +1040,6 @@ namespace lfs::training {
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
         // Retirees join the pruned rows: freed now, refilled by this refine.
-        _last_covered_spared = 0;
         if (keep_covered_on()) {
             update_covered_size_floor(prune_mask);
         }
@@ -1662,10 +1661,10 @@ namespace lfs::training {
         const size_t past_grace = live.count_nonzero();
         const size_t covered = (reach < MRNF_COVERED_REACH).logical_and(live).count_nonzero();
         const size_t kept = (factor < MRNF_COVERED_REACH).logical_and(live).count_nonzero();
-        LOG_INFO("MRNF keep covered {}: past the grace {}, reach < {:.2g} {}, median largest axis {:.4g}, kept {} "
-                 "(axis >= {:.3g} x median), spared from the retire quota {}",
+        LOG_INFO("MRNF keep covered {}: past the grace {}, reach < {:.2g} {}, median largest axis {:.4g}, kept out of "
+                 "the retire pool {} (axis >= {:.3g} x median), retired {}",
                  iter, past_grace, MRNF_COVERED_REACH, covered, _covered_median_axis, kept,
-                 MRNF_KEEP_COVERED_SIZE_FACTOR, _last_covered_spared);
+                 MRNF_KEEP_COVERED_SIZE_FACTOR, _last_retired);
     }
 
     size_t MRNF::retire_count(const lfs::core::param::OptimizationParameters& params, const int iter,
@@ -1685,21 +1684,6 @@ namespace lfs::training {
         const size_t count = retire_count(*_params, iter, _retire_first_iter, active > natural ? active - natural : 0);
         ensure_explore_rows();
         _last_spared = 0;
-        // Keep covered: the kept picks (large, reach below MRNF_COVERED_REACH) leave the selection again and stay
-        // alive; the quota is not refilled from other rows. Returns how many were taken out.
-        const auto drop_covered = [this](Tensor& retired) -> size_t {
-            const Tensor factor = covered_factor();
-            if (!factor.is_valid()) {
-                return 0;
-            }
-            const Tensor covered = retired.logical_and(factor < MRNF_COVERED_REACH);
-            const size_t kept = covered.count_nonzero();
-            if (kept > 0) {
-                retired = retired.logical_and(covered.logical_not());
-            }
-            _last_covered_spared = kept;
-            return kept;
-        };
         // Every refine folds the window impact, also before the cap, so the memory is ready when retirement starts.
         fold_retire_impact();
         const bool spare = spare_on() && _spare_sigma.numel() == n && _spare_window_sigma.numel() == n;
@@ -1727,6 +1711,11 @@ namespace lfs::training {
             }
             blocked = blocked.logical_or(spared).contiguous();
         }
+        if (const Tensor factor = covered_factor(); factor.is_valid()) {
+            // Keep covered: kept rows (large, reach below MRNF_COVERED_REACH) leave the pool before the pick, like
+            // thin splats; the quota (counted on all live splats) is taken from the others.
+            blocked = blocked.logical_or(factor < MRNF_COVERED_REACH).contiguous();
+        }
         if (retire_rank_both_on()) {
             if (_retire_impact_windows > 0 && _retire_impact_sum.numel() == n && _retire_impact_peak.numel() == n) {
                 // The lowest by the latest of the ranks in peak blend weight and in removal impact (summed and
@@ -1744,9 +1733,8 @@ namespace lfs::training {
                 mrnf_strategy::launch_rank_rows_latest(keys, 3, eligible.ptr<bool>(), n, marked, rows.ptr<int64_t>());
                 Tensor retired = Tensor::zeros_bool({n}, Device::CUDA);
                 mrnf_strategy::launch_fill_index_mask(rows.ptr<int64_t>(), marked, retired.ptr<bool>());
-                const size_t kept = drop_covered(retired);
                 prune_mask = prune_mask.logical_or(retired).contiguous();
-                return marked - kept;
+                return marked;
             }
             static bool impact_missing_noted = false;
             if (!std::exchange(impact_missing_noted, true)) {
@@ -1758,13 +1746,10 @@ namespace lfs::training {
         const size_t marked = match::mark_lowest_dead(_explore_peak.ptr<float>(), _retire_renders.ptr<float>(),
                                                       static_cast<float>(_params->mrnf_retire_grace),
                                                       dead.ptr<uint8_t>(), nullptr, n, count);
-        size_t kept = 0;
         if (marked > 0) {
-            Tensor retired = dead.to(DataType::Bool).logical_and(blocked.logical_not());
-            kept = drop_covered(retired);
-            prune_mask = prune_mask.logical_or(retired).contiguous();
+            prune_mask = prune_mask.logical_or(dead.to(DataType::Bool).logical_and(blocked.logical_not())).contiguous();
         }
-        return marked - kept;
+        return marked;
     }
 
     bool MRNF::spare_on() const {

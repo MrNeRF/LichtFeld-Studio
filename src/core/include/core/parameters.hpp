@@ -497,8 +497,8 @@ namespace lfs::core {
             MrnfRetireRank mrnf_retire_rank = MrnfRetireRank::Peak;
             // Covered splats: a splat rendered at least mrnf_retire_grace times has a reach, its peak blend weight
             // over its opacity (clamped to [0, 1]). A large splat (largest axis at least 6x the median of the live
-            // splats) with reach below one half is kept: its opacity and scale decay scale by its reach and it is
-            // taken back out of the retire quota's pick (not refilled). Other splats are unaffected. FastGS only.
+            // splats) with reach below one half is kept: its opacity and scale decay scale by its reach and the
+            // retire quota is taken from the other splats. Other splats are unaffected. FastGS only.
             bool mrnf_keep_covered = false;
             // Removal impact (donor ranking by impact, retire ranking Both) divides each pixel's
             // weight x |colour - colour behind| by the photo's local standard deviation (the SSIM window,

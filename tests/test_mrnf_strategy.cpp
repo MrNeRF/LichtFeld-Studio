@@ -6038,7 +6038,6 @@ TEST(MRNFStrategyTest, KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical) {
         RenderOutput output;
         strategy->post_backward(100, output);
         EXPECT_EQ(strategy->_last_retired, 0u);
-        EXPECT_EQ(strategy->_last_covered_spared, 0u);
         // The topology freeze drops the rows.
         strategy->post_backward(static_cast<int>(strategy->_params->stop_refine), output);
         EXPECT_FALSE(strategy->keep_covered_on());
@@ -6073,7 +6072,6 @@ TEST(MRNFStrategyTest, KeepCoveredOffKeepsTheRowsAndTheRetireesBitIdentical) {
         auto prune = Tensor::zeros_bool({m}, Device::CUDA);
         strategy->update_covered_size_floor(prune);
         EXPECT_EQ(strategy->mark_retirees(100, prune), 10u);
-        EXPECT_EQ(strategy->_last_covered_spared, 0u);
         picked.push_back(marked_rows(prune));
     }
     EXPECT_EQ(picked[0], picked[1]);
@@ -6151,9 +6149,10 @@ TEST(MRNFStrategyTest, KeepCoveredDecayScalesByTheReach) {
     EXPECT_NEAR(1.0f - std::exp(on_s[9] - scale_before[9]), 0.25f * full_shrink, 2e-6f);
 }
 
-// The retire quota picks exactly the rows it picks with the switch off; the kept picks (large, reach below 0.5)
-// then stay alive, small covered picks and visible picks are retired and the quota is not refilled from other
-// rows. Both selection paths, and a whole refine in which the kept splat keeps its slot.
+// Kept rows (large, reach below 0.5) leave the retire pool before the pick, as thin splats do: the quota (counted
+// on all live rows) is taken from the other rows, so as many rows retire as with the switch off, no kept row among
+// them, and a small covered row retires as before. Both selection paths, and a whole refine in which the kept
+// splat keeps its slot.
 TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
     constexpr size_t n = 200;
     const auto peak = covered_test_peaks(n);
@@ -6172,10 +6171,6 @@ TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
         s._explore_peak.copy_(Tensor::from_vector(peak, TensorShape({n}), Device::CUDA));
         s._retire_renders.fill_(100.0f);
     };
-    const auto is_visible = [&](const size_t i) { return i != 52 && i != 56; };
-    const auto count_visible = [&](const std::vector<size_t>& rows) {
-        return static_cast<size_t>(std::count_if(rows.begin(), rows.end(), is_visible));
-    };
     std::vector<size_t> off_rows;
     {
         auto data = make_data();
@@ -6189,7 +6184,8 @@ TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
     for (size_t i = 50; i < 60; ++i)
         expected_off.push_back(i);
     ASSERT_EQ(off_rows, expected_off);
-    const std::vector<size_t> expected_on{50, 51, 53, 54, 55, 56, 57, 58, 59};
+    // On: 52 is out of the pool, the next faintest (60) takes its place; 56 retires.
+    const std::vector<size_t> expected_on{50, 51, 53, 54, 55, 56, 57, 58, 59, 60};
     {
         auto data = make_data();
         auto on = covered_test_strategy(data, n, true);
@@ -6204,13 +6200,13 @@ TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
         EXPECT_GE(all_reach[50], 0.5f);
         EXPECT_LT(factor[52], 0.5f); // kept
         EXPECT_EQ(factor[56], 1.0f); // small: not kept
-        ASSERT_EQ(on->mark_retirees(100, prune), 9u);
-        EXPECT_EQ(marked_rows(prune), expected_on);
-        EXPECT_EQ(on->_last_covered_spared, 1u);
-        // The visible rows retired equal the visible rows retired with the switch off.
-        EXPECT_EQ(count_visible(marked_rows(prune)), count_visible(off_rows));
+        ASSERT_EQ(on->mark_retirees(100, prune), off_rows.size());
+        const auto on_rows = marked_rows(prune);
+        EXPECT_EQ(on_rows, expected_on);
+        EXPECT_EQ(std::count(on_rows.begin(), on_rows.end(), size_t{52}), 0);
+        EXPECT_EQ(std::count(on_rows.begin(), on_rows.end(), size_t{56}), 1);
     }
-    // Rank Both: the same picks (peak, summed and pixel-peak impact all rising over 50..79), the same exemption.
+    // Rank Both: the same pool (peak, summed and pixel-peak impact all rising over 50..79), the same exemption.
     {
         std::vector<float> sum(n, 9.0f), impact_peak(n, 0.5f);
         for (size_t i = 50; i < 80; ++i) {
@@ -6225,22 +6221,19 @@ TEST(MRNFStrategyTest, KeepCoveredTakesCoveredPicksOutOfTheRetireQuota) {
             write_impact_window(*s, sum, impact_peak);
             auto prune = Tensor::zeros_bool({n}, Device::CUDA);
             s->update_covered_size_floor(prune);
-            ASSERT_EQ(s->mark_retirees(100, prune), keep ? 9u : 10u);
+            ASSERT_EQ(s->mark_retirees(100, prune), 10u);
             EXPECT_EQ(s->_retire_impact_windows, 1);
             EXPECT_EQ(marked_rows(prune), keep ? expected_on : expected_off);
-            EXPECT_EQ(s->_last_covered_spared, keep ? 1u : 0u);
         }
     }
-    // A whole refine: the kept pick keeps its slot and rows, the small covered and the visible picks are freed and
-    // refilled.
+    // A whole refine: the kept row keeps its slot and rows, ten others are freed and refilled.
     auto data = make_data();
     auto refining = covered_test_strategy(data, n, true);
     prime(*refining);
     refining->visibility_accumulator().fill_(1.0f);
     RenderOutput output;
     refining->post_backward(100, output);
-    EXPECT_EQ(refining->_last_retired, 9u);
-    EXPECT_EQ(refining->_last_covered_spared, 1u);
+    EXPECT_EQ(refining->_last_retired, 10u);
     EXPECT_FLOAT_EQ(refining->_covered_median_axis, 1.0f);
     EXPECT_EQ(refining->active_count(), n);
     const auto renders = refining->_retire_renders.cpu().to_vector();
