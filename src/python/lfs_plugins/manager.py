@@ -531,8 +531,8 @@ class PluginManager:
             t_onload = time.monotonic()
 
             self._raise_if_cancelled(should_cancel)
-            plugin.state = PluginState.ACTIVE
             self._update_file_mtimes(plugin)
+            plugin.state = PluginState.ACTIVE
             self._emit_stage(on_stage, "complete", f"Loaded {name}")
 
             _log.info(
@@ -923,11 +923,12 @@ class PluginManager:
         return plugin.error_traceback if plugin else None
 
     def _update_file_mtimes(self, plugin: PluginInstance):
-        """Record file modification times for hot reload."""
-        plugin.file_mtimes.clear()
+        """Publish a complete snapshot for the concurrent hot reload watcher."""
+        file_mtimes = {}
         for py_file in plugin.info.path.rglob("*.py"):
             if ".venv" not in py_file.parts:
-                plugin.file_mtimes[py_file] = py_file.stat().st_mtime
+                file_mtimes[py_file] = py_file.stat().st_mtime
+        plugin.file_mtimes = file_mtimes
 
     def start_watcher(self, poll_interval: float = 1.0):
         """Start hot reload file watcher."""
