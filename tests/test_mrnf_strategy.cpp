@@ -679,6 +679,18 @@ TEST(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
     EXPECT_GT(masses({}, 0.8f).second, 0.0f) << "an empty ROI hands a partial share to the rest";
 }
 
+TEST(MRNFStrategyTest, PercentileRankStaysInsideTheSortedValues) {
+    using mrnf_strategy::percentile_bounds_ranks;
+    using Ranks = std::pair<size_t, size_t>;
+    constexpr size_t past_float32 = (size_t{1} << 24) + 4;
+    EXPECT_EQ(percentile_bounds_ranks(past_float32, 1.0f), (Ranks{0, past_float32 - 1}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 1.0f), (Ranks{0, 19'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, std::nextafter(1.0f, 0.0f)), (Ranks{0, 19'999'998}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 0.0f), (Ranks{9'999'999, 9'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(1, 1.0f), (Ranks{0, 0}));
+    EXPECT_EQ(percentile_bounds_ranks(11, 0.5f), (Ranks{2, 7}));
+}
+
 TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
     auto splat_data = create_mrnf_test_splat_data(1);
     MRNF strategy(splat_data);
