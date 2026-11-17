@@ -15,6 +15,10 @@
 #include <vector>
 
 namespace lfs::training {
+    int64_t next_training_iteration(const int completed) {
+        return static_cast<int64_t>(std::max(0, completed)) + 1;
+    }
+
     struct TrainingProgress::Impl {
         std::unique_ptr<indicators::ProgressBar> progress_bar;
         std::chrono::steady_clock::time_point start_time;

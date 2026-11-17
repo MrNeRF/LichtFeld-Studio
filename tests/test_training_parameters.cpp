@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
+#include "training/progress.hpp"
 
 #include <algorithm>
 #include <any>
@@ -329,6 +330,94 @@ namespace {
 
         EXPECT_TRUE(json.contains("iterations"));
         EXPECT_TRUE(PropertyRegistry::instance().get_group_snapshot("optimization"));
+    }
+
+    TEST_F(TrainingParametersTest, IterationsRegistryRangeIsTheTrainerLimit) {
+        const auto meta = optimization_meta("iterations");
+        ASSERT_TRUE(meta.min_value.has_value() && meta.max_value.has_value());
+        const auto maximum = static_cast<size_t>(*meta.max_value);
+        ASSERT_EQ(static_cast<double>(maximum), *meta.max_value);
+
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.iterations = maximum;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.iterations = maximum + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.iterations = static_cast<size_t>(*meta.min_value);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.iterations = static_cast<size_t>(*meta.min_value) - 1;
+        EXPECT_FALSE(params.validate().empty());
+    }
+
+    TEST_F(TrainingParametersTest, NormalSupervisionAtTheLastSignedIteration) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        constexpr int last = std::numeric_limits<int>::max();
+        p.iterations = last;
+        p.use_normal_loss = true;
+        p.normal_start_fraction = p.normal_end_fraction = 1.0f;
+        EXPECT_FALSE(p.normal_supervision_active(1));
+        EXPECT_FALSE(p.normal_supervision_active(last - 1));
+        EXPECT_TRUE(p.normal_supervision_active(last));
+    }
+
+    TEST_F(TrainingParametersTest, CompletedIterationHasAWideSuccessor) {
+        constexpr int last = std::numeric_limits<int>::max();
+        EXPECT_EQ(lfs::training::next_training_iteration(0), 1);
+        EXPECT_EQ(lfs::training::next_training_iteration(last - 1), last);
+        EXPECT_EQ(lfs::training::next_training_iteration(last), int64_t{last} + 1);
+    }
+
+    TEST_F(TrainingParametersTest, LargeControllerTailStartsAtZero) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.ppisp_controller_activation_step = -1;
+        p.steps_scaler = 1'000'000.0f;
+        EXPECT_EQ(p.resolved_ppisp_controller_activation_step(std::numeric_limits<int>::max()), 0);
+    }
+
+    TEST_F(TrainingParametersTest, ControllerTailKeepsFloat32Rounding) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.ppisp_controller_activation_step = -1;
+        p.steps_scaler = 1.0005f;
+        EXPECT_EQ(p.resolved_ppisp_controller_activation_step(30'000), 24'997);
+    }
+
+    TEST_F(TrainingParametersTest, GenericScalingKeepsFloat32ScheduleRounding) {
+        auto p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(0.66665f);
+        EXPECT_EQ(p.iterations, 20000u);
+        EXPECT_EQ(p.eval_steps.back(), 20000u);
+        EXPECT_EQ(p.save_steps.back(), 20000u);
+        p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(1.005f);
+        EXPECT_EQ(p.stop_refine, 28643u);
+        p = OptimizationParameters::mrnf_defaults();
+        p.scale_steps(1.0005f);
+        EXPECT_EQ(p.eval_steps.front(), 7003u);
+        EXPECT_EQ(p.iterations, 30015u);
+        p.iterations = std::numeric_limits<int>::max();
+        p.scale_steps(1.0f);
+        EXPECT_EQ(p.iterations, uint64_t{1} << 31);
+    }
+
+    TEST_F(TrainingParametersTest, StepScalingSaturatesOutOfDomainProducts) {
+        constexpr size_t saturated = std::numeric_limits<size_t>::max();
+        for (const float ratio : {1e20f, 0x1p63f, std::numeric_limits<float>::infinity(),
+                                  std::numeric_limits<float>::quiet_NaN()}) {
+            auto p = OptimizationParameters::mrnf_defaults();
+            p.iterations = 1;
+            p.scale_steps(ratio);
+            EXPECT_EQ(p.iterations, saturated);
+            EXPECT_FALSE(p.validate().empty());
+        }
+        for (const bool eval : {true, false}) {
+            auto p = OptimizationParameters::mrnf_defaults();
+            auto& steps = eval ? p.eval_steps : p.save_steps;
+            steps = {saturated / 2};
+            p.scale_steps(2.0f);
+            EXPECT_EQ(p.iterations, 60000u);
+            EXPECT_EQ(steps, (std::vector<size_t>{saturated}));
+            EXPECT_FALSE(p.validate().empty());
+        }
     }
 
     TEST_F(TrainingParametersTest, MissingRequiredJsonKeyStillThrows) {

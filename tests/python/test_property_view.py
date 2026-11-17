@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,7 +34,7 @@ EXPECTED_NUMBER_ROWS = {
         0,
         100,
         1,
-        1_000_000,
+        2_147_483_647,
         True,
     ),
     "max_cap": (
@@ -962,6 +963,128 @@ def test_all_number_rows_match_registry_declarations(lf):
         if prop_id in property_view.LEARNING_RATES:
             # Opacity LR is fixed during training on this branch; late_lr_anneal schedules it.
             assert prop_info["live_update"] is (prop_id != "opacity_lr")
+
+
+def test_iterations_input_accepts_and_clamps_at_the_trainer_limit(lf):
+    row = next(row for row in _all_rows(lf) if row["id"] == "iterations")
+    params = {"iterations": 30_000}
+    binding = property_view.SectionBinding("training", [row], lambda: params, {}, lambda _: None)
+
+    for text, expected in (("1,000,001", 1_000_001), ("2,147,483,648", 2_147_483_647)):
+        binding.update_draft("iterations", text)
+        assert binding.commit("iterations")
+        assert params["iterations"] == expected
+
+
+@pytest.mark.parametrize("case", ["reject", "locked", "unlocked", "unreachable", "ordinary"])
+def test_iteration_edit_through_the_training_panel(lf, monkeypatch, case):
+    from lfs_plugins.training_panel import TrainingPanel
+
+    params = lf.optimization_params()
+    # Headless bindings use the native default parameter store.
+    monkeypatch.setattr(type(params), "has_params", lambda self: True)
+    fields = ("iterations", "start_refine", "stop_refine", "reset_every", "refine_every",
+              "morton_reorder_interval", "sh_degree_interval", "grow_until_iter",
+              "color_variance_warmup_iters", "steps_scaler")
+
+    def snapshot():
+        return ([params.get(name) for name in fields], params.eval_steps, params.save_steps)
+
+    original, original_eval, original_save = snapshot()
+    panel = TrainingPanel()
+    panel._auto_scale_steps_locked = case != "unlocked"
+    row = next(row for row in _all_rows(lf) if row["id"] == "iterations")
+    binding = property_view.SectionBinding(
+        "training", [row], lambda: params, {}, lambda _: None,
+        value_setter=panel._set_property_view_value,
+    )
+    try:
+        params.iterations = 30_000
+        params.steps_scaler = 1.0
+        params.set("stop_refine", 60_000 if case == "reject" else 15_000)
+        for steps in ("eval", "save"):
+            getattr(params, f"clear_{steps}_steps")()
+            entries = [7_000, 30_000, 60_000] if case == "unreachable" else [7_000, 30_000]
+            for step in entries:
+                getattr(params, f"add_{steps}_step")(step)
+        before = snapshot()
+        target = {"reject": 1_500_000_000, "unreachable": 1_500_000_000, "ordinary": 30_015}.get(case, 2**31 - 1)
+        binding.update_draft("iterations", str(target))
+        if case == "reject":
+            assert not binding.commit("iterations")
+            assert snapshot() == before
+        else:
+            assert binding.commit("iterations")
+            assert params.iterations == target
+            expected = [(7_000 * target + 15_000) // 30_000, target]
+            if case == "ordinary":
+                expected = [7_003, target]
+            elif case == "unlocked":
+                expected = [7_000, 30_000]
+            assert params.eval_steps == expected
+            assert params.save_steps == expected
+            assert not params.validate()
+    finally:
+        if params.steps_scaler != 1.0:
+            params.apply_step_scaling(1.0)
+        for name, value in zip(fields, original):
+            params.set(name, value)
+        for kind, values in (("eval", original_eval), ("save", original_save)):
+            getattr(params, f"clear_{kind}_steps")()
+            for value in values:
+                getattr(params, f"add_{kind}_step")(value)
+
+
+def test_rejected_relock_preserves_panel_and_shows_warmup_error(lf, monkeypatch):
+    from lfs_plugins.training_panel import TrainingPanel
+
+    params = lf.optimization_params()
+    fields = ("iterations", "steps_scaler", "color_variance_warmup_iters", "color_variance_weight")
+    original = [params.get(name) for name in fields]
+    # The headless store exposes the native scaler and validator without a viewer's camera service.
+    def scale_for_cameras(count):
+        assert count == 300
+        params.apply_step_scaling(count / 300)
+
+    notices = []
+    monkeypatch.setattr(type(params), "has_params", lambda self: True)
+    monkeypatch.setattr(type(params), "auto_scale_steps", lambda self, count: scale_for_cameras(count))
+    monkeypatch.setattr(lf, "get_scene", lambda: SimpleNamespace(active_camera_count=300))
+    monkeypatch.setattr(lf.ui, "message_dialog", lambda title, message, style: notices.append((message, style)))
+    panel = TrainingPanel()
+    panel._on_step_scaling_lock_toggle()
+    panel._auto_scaled_for_cameras = 600
+    panel._auto_scale_user_override = True
+    try:
+        for name, value in zip(fields, (60000, 2.0, 59999, 1.0)):
+            params.set(name, value)
+        assert not params.validate()
+        panel._on_step_scaling_lock_toggle()
+        assert not panel._auto_scale_steps_locked
+        assert panel._auto_scaled_for_cameras == 600
+        assert panel._auto_scale_user_override
+        assert [params.get(name) for name in fields] == [60000, 2.0, 59999, 1.0]
+        assert len(notices) == 1
+        assert "color_variance_warmup_iters must be less than iterations" in notices[0][0]
+        assert notices[0][1] == "error"
+    finally:
+        params.set("color_variance_weight", 0.0)
+        params.set("color_variance_warmup_iters", 0)
+        for name, value in zip(fields, original):
+            params.set(name, value)
+
+
+def test_direct_step_scaling_preserves_parameters_on_rejection(lf):
+    params = lf.optimization_params()
+    original = (params.iterations, params.steps_scaler, params.eval_steps, params.save_steps)
+    try:
+        with pytest.raises(ValueError, match="iterations"):
+            params.apply_step_scaling(100_000.0)
+        assert (params.iterations, params.steps_scaler, params.eval_steps, params.save_steps) == original
+    finally:
+        if params.steps_scaler != original[1]:
+            params.apply_step_scaling(1.0)
+            params.steps_scaler = original[1]
 
 
 def test_checkbox_and_select_rows_match_registry_declarations(lf):

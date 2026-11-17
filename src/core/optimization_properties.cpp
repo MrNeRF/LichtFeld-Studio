@@ -20,7 +20,8 @@ namespace lfs::core::param {
         PropertyGroupBuilder<OptimizationParameters>("optimization", "Optimization")
             // Training control
             .size_prop(&OptimizationParameters::iterations,
-                       "iterations", "Max Iterations", d.iterations, 1, 1000000,
+                       "iterations", "Max Iterations", d.iterations, 1,
+                       static_cast<size_t>(std::numeric_limits<int>::max()),
                        "Maximum number of training iterations")
             .json_required()
             .locale("training_params.iterations")
