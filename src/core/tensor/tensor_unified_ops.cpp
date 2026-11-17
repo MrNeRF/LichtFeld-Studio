@@ -23,6 +23,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <format>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <string_view>
@@ -602,8 +603,8 @@ namespace lfs::core {
                                "arange element count is not representable");
                 count = static_cast<size_t>(count_value);
             } else {
-                LFS_ASSERT_MSG(args.dtype == DataType::Int32 || args.dtype == DataType::Int64,
-                               "integer arange supports only Int32 and Int64");
+                LFS_ASSERT_MSG(args.dtype == DataType::Int32 || args.dtype == DataType::Int64 || args.dtype == DataType::UInt8,
+                               "integer arange requires an integer dtype");
                 LFS_ASSERT_MSG(integer_step != 0,
                                "arange step cannot be zero");
                 const bool ascending = integer_step > 0;
@@ -623,11 +624,14 @@ namespace lfs::core {
                     return static_cast<int64_t>(static_cast<uint64_t>(integer_start) +
                                                 static_cast<uint64_t>(i) * static_cast<uint64_t>(integer_step));
                 }
-                if (whole_float_start_and_step) {
-                    return static_cast<int64_t>(static_cast<double>(start) +
-                                                static_cast<double>(i) * static_cast<double>(step));
+                if (!whole_float_start_and_step) {
+                    const double rounded = start + i * step;
+                    if (rounded >= std::numeric_limits<int32_t>::min() &&
+                        rounded <= std::numeric_limits<int32_t>::max())
+                        return static_cast<int64_t>(rounded);
                 }
-                return static_cast<int64_t>(start + i * step);
+                return static_cast<int64_t>(static_cast<double>(start) +
+                                            static_cast<double>(i) * static_cast<double>(step));
             };
             LFS_ASSERT_MSG(count == 0 ||
                                dtype_size(args.dtype) <=
@@ -704,6 +708,13 @@ namespace lfs::core {
                     LFS_CUDA_CHECK_MSG(
                         memcpy_ordered(result.data_, data.data(), bytes, cudaMemcpyHostToDevice, s),
                         "Int64 arange CUDA copy");
+                } else {
+                    std::vector<uint8_t> data(count);
+                    for (size_t i = 0; i < count; ++i)
+                        data[i] = static_cast<uint8_t>(integer_value(i));
+                    LFS_CUDA_CHECK_MSG(
+                        memcpy_ordered(result.data_, data.data(), bytes, cudaMemcpyHostToDevice, s),
+                        "UInt8 arange CUDA copy");
                 }
             } else {
                 void* ptr = PinnedMemoryAllocator::instance().allocate(bytes);
@@ -735,6 +746,10 @@ namespace lfs::core {
                     for (size_t i = 0; i < count; ++i) {
                         data_ptr[i] = integer_value(i);
                     }
+                } else {
+                    auto* data = static_cast<uint8_t*>(result.data_);
+                    for (size_t i = 0; i < count; ++i)
+                        data[i] = static_cast<uint8_t>(integer_value(i));
                 }
             }
             break;
