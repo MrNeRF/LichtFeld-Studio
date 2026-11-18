@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
 
@@ -16,7 +17,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace {
@@ -128,6 +131,12 @@ namespace {
             ASSERT_EQ(actual[i], expected[i]) << "element " << i;
         }
     }
+
+    std::unique_ptr<lfs::io::NvCodecImageLoader> make_codec() {
+        lfs::io::NvCodecImageLoader::Options options;
+        options.decoder_pool_size = 1;
+        return std::make_unique<lfs::io::NvCodecImageLoader>(options);
+    }
 } // namespace
 
 TEST(PriorOwnSize, FitDepthGivesTheLoadersEnlargement) {
@@ -202,3 +211,66 @@ TEST(PriorOwnSize, FitKeepsTheOldNumbersWhenTheCameraSizeChangedAfterTheRequest)
     expect_same(host(lfs::core::fit_normal_prior(normal, 46, 74, 31, 50, true)),
                 host(lfs::core::lanczos_resize_float_chw(lfs::core::resize_normal_prior(normal, 46, 74), 31, 50, 2)));
 }
+
+namespace {
+    // One lossless J2K round trip of a prior file's own samples, in the two J2K forms the prior
+    // cache uses for them: 16-bit normals as RGB, 8-bit depth as grayscale. (8-bit normals are
+    // kept raw: nvJPEG2000 can hang decoding 8-bit RGB codestreams, as it does for 37x53 noise.)
+    struct SampleCase {
+        bool rgb;
+        size_t height;
+        size_t width;
+    };
+
+    class PriorOwnSizeJpeg2k : public ::testing::TestWithParam<SampleCase> {};
+} // namespace
+
+TEST_P(PriorOwnSizeJpeg2k, RoundTripKeepsTheSamples) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    std::unique_ptr<lfs::io::NvCodecImageLoader> codec;
+    try {
+        codec = make_codec();
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+    const auto [rgb, height, width] = GetParam();
+    const size_t count = height * width * (rgb ? 3 : 1);
+    std::mt19937 rng(4092);
+    std::uniform_int_distribution<int> sample(0, rgb ? 65535 : 255);
+    std::vector<uint16_t> u16(count);
+    std::vector<uint8_t> u8(count);
+    for (size_t i = 0; i < count; ++i) {
+        u16[i] = static_cast<uint16_t>(sample(rng));
+        u8[i] = static_cast<uint8_t>(u16[i]);
+    }
+    std::vector<uint8_t> bytes;
+    if (rgb) {
+        // uint16 samples travel in a Float16 container, as the loader holds them.
+        const auto input = Tensor::from_blob(u16.data(), TensorShape({height, width, 3}), Device::CPU, DataType::Float16)
+                               .to(Device::CUDA);
+        bytes = codec->encode_to_jpeg2k(input, lfs::io::RgbLayout::HWC);
+    } else {
+        const auto input = Tensor::from_blob(u8.data(), TensorShape({height, width}), Device::CPU, DataType::UInt8)
+                               .to(Device::CUDA);
+        bytes = codec->encode_grayscale_to_jpeg2k(input, nullptr, true, true);
+    }
+    const auto decoded = codec->decode_jpeg2k_16bit_from_memory_gpu(bytes, nullptr, true, true);
+    ASSERT_EQ(decoded.shape(), rgb ? TensorShape({height, width, 3}) : TensorShape({height, width}));
+    ASSERT_EQ(decoded.dtype(), rgb ? DataType::Float32 : DataType::UInt8);
+    const auto values = host(decoded);
+    for (size_t i = 0; i < count; ++i) {
+        // 16-bit samples come back as the first visit scales them, 8-bit ones as they are.
+        const float expected = rgb ? static_cast<float>(u16[i]) * (1.0f / 65535.f) : static_cast<float>(u8[i]);
+        ASSERT_EQ(values[i], expected) << "sample " << i;
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Sizes, PriorOwnSizeJpeg2k,
+    ::testing::Values(SampleCase{true, 37, 53}, SampleCase{true, 1951, 2610}, SampleCase{false, 37, 53},
+                      SampleCase{false, 1951, 2610}),
+    [](const ::testing::TestParamInfo<SampleCase>& info) {
+        return std::string(info.param.rgb ? "rgb16_" : "gray8_") + std::to_string(info.param.height) + "x" +
+               std::to_string(info.param.width);
+    });
