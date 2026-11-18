@@ -11,6 +11,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
+#include "core/normal_prior_rotation.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -61,6 +62,27 @@ namespace lfs::core {
                 result[row * 3 + col] = R_acc(row, col);
             }
         }
+        return result;
+    }
+
+    std::optional<std::array<float, 9>> normal_prior_rotation(
+        const Camera& camera, const bool world_space, const std::array<float, 9>& prior_world_rotation) {
+        std::array<float, 9> result{};
+        if (!world_space) {
+            if (!camera.is_undistort_prepared() || !is_view(camera.undistort_params()))
+                return std::nullopt;
+            const auto& view_to_source = camera.undistort_params().view_rotation;
+            for (size_t row = 0; row < 3; ++row)
+                for (size_t col = 0; col < 3; ++col)
+                    result[row * 3 + col] = view_to_source[col * 3 + row];
+            return result;
+        }
+
+        const auto w2c = camera_rotation_to_cpu_array(camera.R());
+        for (size_t row = 0; row < 3; ++row)
+            for (size_t col = 0; col < 3; ++col)
+                for (size_t k = 0; k < 3; ++k)
+                    result[row * 3 + col] += w2c[row * 3 + k] * prior_world_rotation[k * 3 + col];
         return result;
     }
 
@@ -181,7 +203,7 @@ namespace lfs::core {
             rotation.matmul(_R.cpu()), rotation.matmul(_T.cpu().reshape({3, 1})).reshape({3}),
             params.dst_fx, params.dst_fy, params.dst_cx, params.dst_cy, Tensor{}, Tensor{},
             CameraModelType::PINHOLE, image_name, _image_path, _mask_path,
-            params.dst_width, params.dst_height, uid, _camera_id);
+            params.dst_width, params.dst_height, uid, _camera_id, _depth_path, _normal_path);
         view->_split = _split;
         view->_has_alpha = _has_alpha;
         view->_has_image = _has_image;
@@ -976,7 +998,8 @@ namespace lfs::core {
         // Decode vectors before validity-aware resampling and normalization.
         normal = normal.mul(2.0f).sub(1.0f);
 
-        if (decode.srgb || decode.flip_yz || decode.world_space) {
+        const auto rotation = normal_prior_rotation(*this, decode.world_space, decode.world_rotation);
+        if (decode.srgb || decode.flip_yz || rotation) {
             auto normal_cpu = normal.cpu().contiguous();
             const size_t pixel_count = normal_cpu.shape()[1] * normal_cpu.shape()[2];
             if (decode.srgb) {
@@ -985,22 +1008,8 @@ namespace lfs::core {
             if (decode.flip_yz) {
                 flip_normal_prior_yz_chw(normal_cpu.ptr<float>(), pixel_count);
             }
-            if (decode.world_space) {
-                const std::array<float, 9> r_w2c = camera_rotation_to_cpu_array(_R);
-                std::array<float, 9> world_to_camera{};
-                for (size_t row = 0; row < 3; ++row) {
-                    for (size_t col = 0; col < 3; ++col) {
-                        float sum = 0.0f;
-                        for (size_t k = 0; k < 3; ++k) {
-                            sum += r_w2c[row * 3 + k] * decode.world_rotation[k * 3 + col];
-                        }
-                        world_to_camera[row * 3 + col] = sum;
-                    }
-                }
-                transform_normal_prior_world_to_camera_chw(
-                    normal_cpu.ptr<float>(),
-                    pixel_count,
-                    world_to_camera);
+            if (rotation) {
+                transform_normal_prior_world_to_camera_chw(normal_cpu.ptr<float>(), pixel_count, *rotation);
             }
             normal = normal_cpu.to(Device::CUDA, _stream);
             if (_stream) {

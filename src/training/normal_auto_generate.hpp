@@ -69,4 +69,12 @@ namespace lfs::training {
         std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
         const PriorMapEstimator& estimator = {});
 
+    // Generate on the source lenses and return the training photographs for convention detection.
+    lfs::Result<std::vector<std::shared_ptr<lfs::core::Camera>>> prepare_training_prior_maps(
+        const lfs::core::param::TrainingParameters& params,
+        std::span<const std::shared_ptr<lfs::core::Camera>> train,
+        std::span<const std::shared_ptr<lfs::core::Camera>> val,
+        std::span<const std::shared_ptr<lfs::core::Camera>> scene,
+        const PriorMapEstimator& estimator = {});
+
 } // namespace lfs::training

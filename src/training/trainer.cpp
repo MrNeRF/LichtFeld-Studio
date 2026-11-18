@@ -151,7 +151,6 @@ namespace lfs::training {
             std::vector<std::shared_ptr<Camera>> expanded;
             expanded.reserve(cameras.size() + count * (kPanoramaViewCount - 1));
             int min_size = std::numeric_limits<int>::max(), max_size = 0;
-            bool has_priors = false;
             for (const auto& camera : cameras) {
                 if (!is_panorama(camera)) {
                     expanded.push_back(camera);
@@ -167,14 +166,11 @@ namespace lfs::training {
                 expanded.insert(expanded.end(), views.begin(), views.end());
                 min_size = std::min(min_size, views.front()->camera_width());
                 max_size = std::max(max_size, views.front()->camera_width());
-                has_priors |= !camera->depth_path().empty() || !camera->normal_path().empty();
             }
             cameras = std::move(expanded);
             const auto face_size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
             LOG_INFO("Split {} panoramas into {} pinhole views (face size {} px)",
                      count, count * kPanoramaViewCount, face_size);
-            if (has_priors)
-                LOG_INFO("Panorama depth and normal priors are unused for pinhole views");
             return {};
         }
 
@@ -376,11 +372,14 @@ namespace lfs::training {
             // are independent, so fan them out; the serial version dominated
             // training startup on large scenes.
             std::vector<const lfs::core::Camera*> probe_cams;
+            const auto spherical = [](const auto& camera) {
+                return camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            };
             const size_t stride = std::max<size_t>(1, cameras.size() / kProbeViews);
             for (size_t i = 0; i < cameras.size() && probe_cams.size() < kProbeViews; i += stride) {
                 const auto* cam = cameras[i];
                 if (cam->camera_width() <= 0 || cam->camera_height() <= 0 ||
-                    cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f) {
+                    (!spherical(*cam) && (cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f))) {
                     continue;
                 }
                 probe_cams.push_back(cam);
@@ -467,9 +466,13 @@ namespace lfs::training {
                         continue;
                     }
                     view.normals.push_back(n);
-                    view.rays.push_back({(s.u * width - cx) / fx,
-                                         (s.v * height - cy) / fy,
-                                         1.0f});
+                    if (spherical(*raw.cam)) {
+                        const float lon = (s.u - 0.5f) * static_cast<float>(2 * M_PI);
+                        const float lat = (s.v - 0.5f) * static_cast<float>(M_PI);
+                        view.rays.push_back({std::cos(lat) * std::sin(lon), std::sin(lat), std::cos(lat) * std::cos(lon)});
+                    } else {
+                        view.rays.push_back({(s.u * width - cx) / fx, (s.v * height - cy) / fy, 1.0f});
+                    }
                 }
                 if (!view.normals.empty()) {
                     views.push_back(std::move(view));
@@ -7714,6 +7717,9 @@ namespace lfs::training {
                                         const float* const depth_pixel_weight =
                                             roi_weight_ptr_on_stream(depth_stream);
                                         lfs::core::pin_operands({&rendered_depth, &rendered_alpha, &target_depth});
+                                        const int x0 = fast_ctx ? fast_ctx->tile_x_offset : gsplat_ctx->render_tile_x_offset;
+                                        const int y0 = fast_ctx ? fast_ctx->tile_y_offset : gsplat_ctx->render_tile_y_offset;
+                                        const auto ray_grid = depth_prior_ray_grid(*cam, x0, y0);
                                         lfs::training::kernels::launch_depth_loss(
                                             rendered_depth.ptr<float>(),
                                             rendered_alpha.ptr<float>(),
@@ -7729,7 +7735,8 @@ namespace lfs::training {
                                             depth_prior_qstep,
                                             depth_anchor,
                                             depth_stream,
-                                            depth_pixel_weight);
+                                            depth_pixel_weight,
+                                            ray_grid ? &*ray_grid : nullptr);
 
                                         tile_loss = tile_loss + depth_loss_scalar_;
                                         // Rendered against an external depth target, the loss changes along the
@@ -9290,21 +9297,12 @@ namespace lfs::training {
             }
             aux_pipeline_config.load_depths = training_depth_priors_enabled(params_.optimization);
             aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
-            {
-                // Val cameras need maps too for the eval depth and normal metrics;
-                // one call keeps generation to a single estimator pass.
-                auto prior_cameras = train_dataset_->get_cameras();
-                if (val_dataset_) {
-                    const auto& val_cameras = val_dataset_->get_cameras();
-                    prior_cameras.insert(prior_cameras.end(), val_cameras.begin(), val_cameras.end());
-                }
-                // Prior maps belong to the photograph. A view has none of its own.
-                std::erase_if(prior_cameras, [](const auto& cam) {
-                    return cam && cam->is_undistort_prepared() && is_view(cam->undistort_params());
-                });
-                if (!prior_cameras.empty())
-                    ensure_training_prior_maps(params_, prior_cameras);
-            }
+            using CameraSpan = std::span<const std::shared_ptr<lfs::core::Camera>>;
+            const auto training_photographs = prepare_training_prior_maps(
+                params_, train_dataset_->get_cameras(), val_dataset_ ? CameraSpan(val_dataset_->get_cameras()) : CameraSpan{},
+                scene_->getAllCameras());
+            if (!training_photographs)
+                return lfs::Status::failure(training_photographs.error());
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
                 for (const auto& cam : train_dataset_->get_cameras()) {
@@ -9334,7 +9332,7 @@ namespace lfs::training {
                 normal_prior_world_rotation_ = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
                 normal_prior_usable_ = true;
                 std::vector<const lfs::core::Camera*> normal_cameras;
-                for (const auto& cam : train_dataset_->get_cameras()) {
+                for (const auto& cam : *training_photographs) {
                     if (cam->has_normal()) {
                         normal_cameras.push_back(cam.get());
                     }
@@ -9349,7 +9347,7 @@ namespace lfs::training {
                              train_dataset_->get_cameras().size());
                 } else {
                     LOG_INFO("Normal maps available for {}/{} training cameras",
-                             normal_cameras.size(), train_dataset_->get_cameras().size());
+                             normal_cameras.size(), training_photographs->size());
 
                     nvtxRangePush("resolve_normal_prior_convention");
                     const auto normal_resolve_start = std::chrono::steady_clock::now();
@@ -9389,16 +9387,10 @@ namespace lfs::training {
                 aux_pipeline_config.normal_world_space = normal_prior_world_space_;
                 aux_pipeline_config.normal_srgb = normal_prior_srgb_;
                 aux_pipeline_config.normal_world_rotation = normal_prior_world_rotation_;
-                if (normal_prior_world_space_) {
-                    aux_pipeline_config.normal_world_to_camera_by_source.resize(
-                        train_dataset_->get_cameras().size());
-                    for (size_t i = 0; i < train_dataset_->get_cameras().size(); ++i) {
-                        aux_pipeline_config.normal_world_to_camera_by_source[i] =
-                            camera_world_to_camera_normal_matrix(
-                                *train_dataset_->get_cameras()[i],
-                                normal_prior_world_rotation_);
-                    }
-                }
+                auto& rotations = aux_pipeline_config.normal_rotation_by_source;
+                rotations.reserve(train_dataset_->get_cameras().size());
+                for (const auto& camera : train_dataset_->get_cameras())
+                    rotations.push_back(normal_prior_rotation(*camera, normal_prior_world_space_, normal_prior_world_rotation_));
             }
             if (evaluator_) {
                 evaluator_->set_normal_prior_decode({
