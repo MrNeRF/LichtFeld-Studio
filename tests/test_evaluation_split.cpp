@@ -128,7 +128,7 @@ namespace {
         lfs::training::Trainer trainer(scene);
         const auto result = trainer.initialize(params);
         ASSERT_FALSE(result);
-        EXPECT_EQ(result.error(), "Panorama view camera UIDs exceed the supported range.");
+        EXPECT_EQ(result.error(), "View camera UIDs exceed the supported range.");
     }
 
 } // namespace

@@ -46,25 +46,7 @@ namespace lfs::core {
         using detail::apply_distortion;
         using detail::thin_prism_fisheye_from_theta_point;
 
-        __device__ float2 source_position(const float pixel_x, const float pixel_y,
-                                          const UndistortParams& params) {
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-            float dnx, dny;
-            if (is_view(params)) {
-                const auto* r = params.view_rotation;
-                const float x = r[0] * nx + r[1] * ny + r[2];
-                const float y = r[3] * nx + r[4] * ny + r[5];
-                const float z = r[6] * nx + r[7] * ny + r[8];
-                dnx = atan2f(x, z);
-                dny = atan2f(y, hypotf(x, z));
-            } else {
-                apply_distortion(nx, ny, params.model_type, params.distortion,
-                                 params.num_distortion, dnx, dny);
-            }
-            return {dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET,
-                    dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET};
-        }
+        using detail::source_position;
 
         __device__ bool remap_tap(int& x, int& y, const int width, const int height, const bool panorama) {
             if (x >= 0 && x < width && y >= 0 && y < height)
@@ -210,7 +192,7 @@ namespace lfs::core {
                     float absolute_full = 0.0f;
                     (void)lanczos3_sample(
                         src, params.src_width, params.src_height, channels,
-                        source.x, source.y, sample, absolute_inside, absolute_full, is_view(params));
+                        source.x, source.y, sample, absolute_inside, absolute_full, params.model_type == CameraModelType::EQUIRECTANGULAR);
                     for (int channel = 0; channel < channels; ++channel)
                         result[channel] += sample[channel];
                 }
@@ -606,7 +588,7 @@ namespace lfs::core {
                     if (mode == AreaFilterMode::DEPTH) {
                         const float sample = bilinear_sample_renormalized(
                             src, params.src_width, params.src_height, params.src_width,
-                            source.x, source.y, true, is_view(params));
+                            source.x, source.y, true, params.model_type == CameraModelType::EQUIRECTANGULAR);
                         if (sample > 0.0f && isfinite(sample)) {
                             result[0] += sample;
                             valid_samples += 1.0f;
@@ -616,7 +598,7 @@ namespace lfs::core {
                             result[channel] += bilinear_sample_renormalized(
                                 src + channel * input_plane,
                                 params.src_width, params.src_height, params.src_width,
-                                source.x, source.y, false, is_view(params));
+                                source.x, source.y, false, params.model_type == CameraModelType::EQUIRECTANGULAR);
                         }
                         valid_samples += 1.0f;
                     }

@@ -95,13 +95,14 @@ namespace lfs::preprocessing {
         }
 
         template <class Model>
-        __global__ void lens_rays_kernel(const Model model, const int width, const int height, float* rays) {
+        __global__ void lens_rays_kernel(const Model model, const int width, const size_t count, const float* image_xy, float* rays) {
             const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-            if (i >= static_cast<size_t>(width) * height)
+            if (i >= count)
                 return;
+            const float x = image_xy ? image_xy[2 * i] : static_cast<float>(i % width) + 0.5f;
+            const float y = image_xy ? image_xy[2 * i + 1] : static_cast<float>(i / width) + 0.5f;
             glm::fvec3 ray;
-            const bool valid = pixel_ray(model, static_cast<float>(i % width) + 0.5f,
-                                         static_cast<float>(i / width) + 0.5f, ray);
+            const bool valid = pixel_ray(model, x, y, ray);
             for (int c = 0; c < 3; ++c)
                 rays[3 * i + c] = valid ? ray[c] : nanf("");
         }
@@ -234,12 +235,24 @@ namespace lfs::preprocessing {
 
     } // namespace
 
+    float lens_max_angle(const LensCamera& camera) {
+        float limit = 0.0f;
+        with_lens_model(camera, [&](const auto& model) {
+            if constexpr (requires { model.max_angle; })
+                limit = model.max_angle;
+        });
+        return limit;
+    }
+
     void lens_rays(const LensCamera& camera, float* rays, cudaStream_t stream) {
-        const size_t pixels = static_cast<size_t>(camera.width) * camera.height;
+        lens_rays_at(camera, nullptr, static_cast<size_t>(camera.width) * camera.height, rays, stream);
+    }
+
+    void lens_rays_at(const LensCamera& camera, const float* image_xy, const size_t pixels, float* rays, cudaStream_t stream) {
         if (!pixels)
             return;
         with_lens_model(camera, [&](const auto& model) {
-            lens_rays_kernel<<<blocks_for(pixels), kThreads, 0, stream>>>(model, camera.width, camera.height, rays);
+            lens_rays_kernel<<<blocks_for(pixels), kThreads, 0, stream>>>(model, camera.width, pixels, image_xy, rays);
         });
         LFS_CUDA_LAUNCH_CHECK(stream, "lens.rays");
     }

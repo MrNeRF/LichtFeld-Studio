@@ -1123,16 +1123,7 @@ namespace {
                 const auto model = cam->camera_model_type();
                 if (model == lfs::core::CameraModelType::PINHOLE || model == lfs::core::CameraModelType::ORTHO)
                     continue;
-                lenses.emplace(key,
-                               LensSource{
-                                   .projection = lfs::training::depth_camera_projection(*cam),
-                                   .fx = cam->focal_x(),
-                                   .fy = cam->focal_y(),
-                                   .cx = cam->center_x(),
-                                   .cy = cam->center_y(),
-                                   .width = cam->camera_width(),
-                                   .height = cam->camera_height(),
-                               });
+                lenses.emplace(key, lfs::preprocessing::make_lens_camera(*cam));
             }
         } catch (const std::exception& e) {
             LOG_WARN("Lens cameras unavailable ({}); estimating on the raw images", e.what());
