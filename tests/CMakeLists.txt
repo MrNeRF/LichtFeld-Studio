@@ -1006,6 +1006,7 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_prior_own_size.cpp
     test_normal_auto_generate.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp

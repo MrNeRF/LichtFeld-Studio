@@ -1,0 +1,204 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+// Depth and normal priors travel at their own size and are enlarged where the
+// loss reads them (#4092). The fit must give the numbers the loader's
+// enlargement and the loss's old resize gave.
+
+#include <gtest/gtest.h>
+
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <random>
+#include <vector>
+
+namespace {
+    using lfs::core::DataType;
+    using lfs::core::Device;
+    using lfs::core::Tensor;
+    using lfs::core::TensorShape;
+
+    bool has_cuda_device() {
+        int count = 0;
+        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+    }
+
+    // Depth with every kind of value the prior resize treats as invalid.
+    Tensor depth_prior(const size_t height, const size_t width) {
+        std::mt19937 rng(4092);
+        std::uniform_real_distribution<float> value(0.5f, 40.0f);
+        std::vector<float> depth(height * width);
+        for (size_t i = 0; i < depth.size(); ++i) {
+            switch (i % 11) {
+            case 3: depth[i] = 0.0f; break;
+            case 5: depth[i] = -1.0f; break;
+            case 7: depth[i] = std::numeric_limits<float>::quiet_NaN(); break;
+            case 9: depth[i] = std::numeric_limits<float>::infinity(); break;
+            default: depth[i] = value(rng);
+            }
+        }
+        return Tensor::from_vector(depth, {height, width}, Device::CUDA);
+    }
+
+    // Unnormalized normals facing the camera, as the prior transform gives them,
+    // with short and zero vectors that the prior resize treats as invalid.
+    Tensor normal_prior(const size_t height, const size_t width) {
+        std::mt19937 rng(92);
+        std::uniform_real_distribution<float> lateral(-0.8f, 0.8f);
+        std::uniform_real_distribution<float> facing(0.5f, 1.0f);
+        const size_t plane = height * width;
+        std::vector<float> normal(3 * plane);
+        for (size_t i = 0; i < plane; ++i) {
+            const float scale = i % 13 == 4 ? 0.0f : i % 13 == 8 ? 0.3f
+                                                                 : 1.0f;
+            normal[i] = scale * lateral(rng);
+            normal[plane + i] = scale * lateral(rng);
+            normal[2 * plane + i] = scale * facing(rng);
+        }
+        return Tensor::from_vector(normal, {3, height, width}, Device::CUDA);
+    }
+
+    std::vector<float> host(const Tensor& tensor) {
+        return tensor.cpu().to_vector();
+    }
+
+    // The prior kernel the loader enlarges with, written out on the CPU: validity
+    // from the nearest pixel, bilinear weights over the valid neighbours,
+    // renormalized; normals scaled to unit length.
+    std::vector<float> cpu_prior_resize(const std::vector<float>& src, const int channels,
+                                        const int sw, const int sh, const int dw, const int dh) {
+        const size_t sp = static_cast<size_t>(sw) * sh;
+        const size_t dp = static_cast<size_t>(dw) * dh;
+        const auto valid = [&](const size_t i) {
+            if (channels == 1)
+                return std::isfinite(src[i]) && src[i] > 0.0f;
+            const float x = src[i], y = src[sp + i], z = src[2 * sp + i];
+            return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) && x * x + y * y + z * z >= 0.25f;
+        };
+        std::vector<float> dst(channels * dp, 0.0f);
+        for (int y = 0; y < dh; ++y) {
+            for (int x = 0; x < dw; ++x) {
+                const float sx = std::clamp((x + 0.5f) * sw / dw - 0.5f, 0.0f, sw - 1.0f);
+                const float sy = std::clamp((y + 0.5f) * sh / dh - 0.5f, 0.0f, sh - 1.0f);
+                const int x0 = static_cast<int>(sx);
+                const int y0 = static_cast<int>(sy);
+                const size_t nearest =
+                    static_cast<size_t>(static_cast<int>(sy + 0.5f)) * sw + static_cast<int>(sx + 0.5f);
+                double value[3] = {};
+                double weight = 0.0;
+                if (valid(nearest)) {
+                    for (int j = 0; j < 2; ++j) {
+                        for (int i = 0; i < 2; ++i) {
+                            const size_t index =
+                                static_cast<size_t>(std::min(y0 + j, sh - 1)) * sw + std::min(x0 + i, sw - 1);
+                            if (!valid(index))
+                                continue;
+                            const double w = (i ? sx - x0 : 1.0 - (sx - x0)) * (j ? sy - y0 : 1.0 - (sy - y0));
+                            weight += w;
+                            for (int c = 0; c < channels; ++c)
+                                value[c] += w * src[c * sp + index];
+                        }
+                    }
+                }
+                if (channels == 3)
+                    weight = std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
+                const size_t out = static_cast<size_t>(y) * dw + x;
+                for (int c = 0; c < channels; ++c)
+                    dst[c * dp + out] = weight > 1e-8 ? static_cast<float>(value[c] / weight) : 0.0f;
+            }
+        }
+        return dst;
+    }
+
+    // Bit for bit; NaN only where both have NaN.
+    void expect_same(const std::vector<float>& actual, const std::vector<float>& expected) {
+        ASSERT_EQ(actual.size(), expected.size());
+        for (size_t i = 0; i < actual.size(); ++i) {
+            if (std::isnan(expected[i])) {
+                ASSERT_TRUE(std::isnan(actual[i])) << "element " << i;
+                continue;
+            }
+            ASSERT_EQ(actual[i], expected[i]) << "element " << i;
+        }
+    }
+} // namespace
+
+TEST(PriorOwnSize, FitDepthGivesTheLoadersEnlargement) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    const auto prior = depth_prior(23, 37);
+    const auto loader_output = host(lfs::core::resize_depth_prior(prior, 46, 74));
+    // The loader enlarged to the request's size, which the render normally has.
+    expect_same(host(lfs::core::fit_depth_prior(prior, 46, 74, 46, 74, true)), loader_output);
+    // A request of 0 x 0 means the render's size.
+    expect_same(host(lfs::core::fit_depth_prior(prior, 0, 0, 46, 74, true)), loader_output);
+    // A prior read at the request's size still passes the prior resize, as in the loader.
+    expect_same(host(lfs::core::fit_depth_prior(prior, 23, 37, 23, 37, true)),
+                host(lfs::core::resize_depth_prior(prior, 23, 37)));
+    // An undistorted prior that already has the request's size is used as it is.
+    expect_same(host(lfs::core::fit_depth_prior(prior, 23, 37, 23, 37, false)), host(prior));
+}
+
+TEST(PriorOwnSize, EnlargementMatchesTheKernelWrittenOutOnTheCpu) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    // Release builds the kernel with -use_fast_math, whose division is approximate; with
+    // power-of-two output sizes and whole-number ratios every sample point is exact on
+    // both sides and clear of a pixel boundary, so only the accumulation differs.
+    const auto depth = depth_prior(16, 32);
+    const auto normal = normal_prior(16, 32);
+    for (const int scale : {2, 4}) {
+        SCOPED_TRACE(scale);
+        const int dh = 16 * scale;
+        const int dw = 32 * scale;
+        const auto gpu_depth = host(lfs::core::fit_depth_prior(depth, dh, dw, dh, dw, true));
+        const auto cpu_depth = cpu_prior_resize(host(depth), 1, 32, 16, dw, dh);
+        ASSERT_EQ(gpu_depth.size(), cpu_depth.size());
+        for (size_t i = 0; i < cpu_depth.size(); ++i) {
+            if (cpu_depth[i] == 0.0f)
+                ASSERT_EQ(gpu_depth[i], 0.0f) << "depth " << i;
+            else
+                ASSERT_NEAR(gpu_depth[i], cpu_depth[i], 1e-5f * std::abs(cpu_depth[i])) << "depth " << i;
+        }
+        const auto gpu_normal = host(lfs::core::fit_normal_prior(normal, dh, dw, dh, dw, true));
+        const auto cpu_normal = cpu_prior_resize(host(normal), 3, 32, 16, dw, dh);
+        ASSERT_EQ(gpu_normal.size(), cpu_normal.size());
+        for (size_t i = 0; i < cpu_normal.size(); ++i) {
+            if (cpu_normal[i] == 0.0f)
+                ASSERT_EQ(gpu_normal[i], 0.0f) << "normal " << i;
+            else
+                ASSERT_NEAR(gpu_normal[i], cpu_normal[i], 1e-5f) << "normal " << i;
+        }
+    }
+}
+
+TEST(PriorOwnSize, FitNormalGivesTheLoadersEnlargement) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    const auto prior = normal_prior(23, 37);
+    expect_same(host(lfs::core::fit_normal_prior(prior, 46, 74, 46, 74, true)),
+                host(lfs::core::resize_normal_prior(prior, 46, 74)));
+    expect_same(host(lfs::core::fit_normal_prior(prior, 23, 37, 23, 37, true)),
+                host(lfs::core::resize_normal_prior(prior, 23, 37)));
+    expect_same(host(lfs::core::fit_normal_prior(prior, 23, 37, 23, 37, false)), host(prior));
+}
+
+TEST(PriorOwnSize, FitKeepsTheOldNumbersWhenTheCameraSizeChangedAfterTheRequest) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    // The loader enlarged to the requested 46 x 74, then the loss resized that to
+    // the 31 x 50 render with Lanczos.
+    const auto depth = depth_prior(23, 37);
+    expect_same(host(lfs::core::fit_depth_prior(depth, 46, 74, 31, 50, true)),
+                host(lfs::core::lanczos_resize_grayscale(lfs::core::resize_depth_prior(depth, 46, 74), 31, 50, 2)));
+    const auto normal = normal_prior(23, 37);
+    expect_same(host(lfs::core::fit_normal_prior(normal, 46, 74, 31, 50, true)),
+                host(lfs::core::lanczos_resize_float_chw(lfs::core::resize_normal_prior(normal, 46, 74), 31, 50, 2)));
+}

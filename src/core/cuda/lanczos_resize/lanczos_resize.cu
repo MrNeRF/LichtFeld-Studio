@@ -677,7 +677,8 @@ namespace lfs::core {
     }
 
     template <int Channels>
-    Tensor resize_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
+    Tensor resize_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream,
+                        const bool synchronize) {
         if (!input.is_valid() || input.device() != Device::CUDA || input.dtype() != DataType::Float32 ||
             !input.is_contiguous() || output_h <= 0 || output_w <= 0 ||
             input.ndim() != (Channels == 1 ? 2 : 3) || (Channels == 3 && input.size(0) != 3)) {
@@ -695,16 +696,46 @@ namespace lfs::core {
         resize_prior_kernel<Channels><<<grid, block, 0, stream>>>(input.ptr<float>(), output.ptr<float>(), w, h, output_w, output_h);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Prior resample kernel launch");
         // Match the existing resize helpers' lifetime/stream completion contract.
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "Prior resample completion");
+        if (synchronize)
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "Prior resample completion");
         return output;
     }
 
     Tensor resize_depth_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
-        return resize_prior<1>(input, output_h, output_w, stream);
+        return resize_prior<1>(input, output_h, output_w, stream, true);
     }
 
     Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w, cudaStream_t stream) {
-        return resize_prior<3>(input, output_h, output_w, stream);
+        return resize_prior<3>(input, output_h, output_w, stream, true);
+    }
+
+    template <int Channels>
+    Tensor fit_prior(const Tensor& input, int request_h, int request_w, const int render_h, const int render_w,
+                     const bool resample_always, cudaStream_t stream) {
+        if (request_h <= 0 || request_w <= 0) {
+            request_h = render_h;
+            request_w = render_w;
+        }
+        const auto height = [](const Tensor& t) { return static_cast<int>(t.size(t.ndim() - 2)); };
+        const auto width = [](const Tensor& t) { return static_cast<int>(t.size(t.ndim() - 1)); };
+        Tensor fitted = input;
+        if (resample_always || height(fitted) != request_h || width(fitted) != request_w)
+            fitted = resize_prior<Channels>(fitted, request_h, request_w, stream, false);
+        if (height(fitted) != render_h || width(fitted) != render_w) {
+            fitted = Channels == 1 ? lanczos_resize_grayscale(fitted, render_h, render_w, 2, stream)
+                                   : lanczos_resize_float_chw(fitted, render_h, render_w, 2, stream);
+        }
+        return fitted;
+    }
+
+    Tensor fit_depth_prior(const Tensor& input, const int request_h, const int request_w, const int render_h,
+                           const int render_w, const bool resample_always, cudaStream_t stream) {
+        return fit_prior<1>(input, request_h, request_w, render_h, render_w, resample_always, stream);
+    }
+
+    Tensor fit_normal_prior(const Tensor& input, const int request_h, const int request_w, const int render_h,
+                            const int render_w, const bool resample_always, cudaStream_t stream) {
+        return fit_prior<3>(input, request_h, request_w, render_h, render_w, resample_always, stream);
     }
 
 } // namespace lfs::core
