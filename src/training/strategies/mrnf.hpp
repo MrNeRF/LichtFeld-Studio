@@ -39,6 +39,7 @@ class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
 class MRNFStrategyTest_GrowAndSplitReusesFreeSlotsBeforeAppending_Test;
+class MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
 class MRNFStrategyTest_ChunkedChildPlacementMatchesSingleChunk_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
@@ -131,6 +132,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DeletedMaskCapacityGrowthPreservesExistingRows_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReusesFreeSlotsBeforeAppending_Test;
+        friend class ::MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
         friend class ::MRNFStrategyTest_ChunkedChildPlacementMatchesSingleChunk_Test;
         friend class ::MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
         friend class ::MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;

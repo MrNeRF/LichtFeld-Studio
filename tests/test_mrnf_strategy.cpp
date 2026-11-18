@@ -55,6 +55,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
+#include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mrnf.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -1342,6 +1343,26 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(splat_data.size(), initial_size);
     EXPECT_EQ(strategy.active_count(), initial_size - 1);
     EXPECT_EQ(strategy.free_count(), 1u);
+}
+
+TEST(MRNFStrategyTest, FreeSlotCountIsExactPastFloat32Precision) {
+    constexpr size_t b = size_t{1} << 24;
+    const auto all_free = Tensor::ones_bool({b + 3}, Device::CUDA);
+    auto splats = create_mrnf_test_splat_data(1);
+    const auto one_mean = splats.means();
+    MRNF mrnf(splats);
+    ImprovedGSPlus igs(splats);
+    mrnf._free_mask = all_free;
+    igs._free_mask = all_free;
+    for (const size_t rows : {b + 1, b + 3}) {
+        SCOPED_TRACE(rows);
+        // A broadcast view supplies the logical row count without allocating a large model.
+        splats.means() = one_mean.expand({rows, 3});
+        EXPECT_EQ(mrnf.free_count(), rows);
+        EXPECT_EQ(mrnf.active_count(), 0u);
+        EXPECT_EQ(igs.free_count(), rows);
+        EXPECT_EQ(igs.active_count(), 0u);
+    }
 }
 
 // A refine that runs out of VRAM at any allocation must be undone to the rows
