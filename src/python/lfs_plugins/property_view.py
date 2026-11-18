@@ -132,7 +132,7 @@ BESPOKE_OR_HIDDEN = {
     "ppisp_controller_activation_step": "derived -1 schedule semantics",
     "bg_modulation": "legacy mirror controlled by bg_mode",
     "headless": "runtime-only read-only flag",
-    "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
+    "steps_scaler": "driven by set_scaled_iterations via the iterations lock; raw edits desync step counts",
     "eval_mask": "mesh file browser and path display",
     "noise_infill_mesh": "mesh file browser and path display",
     "eval_mask_report": "headline set select and also-score checkboxes",

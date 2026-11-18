@@ -8856,7 +8856,7 @@ namespace lfs::training {
                         !project_hook_destination
                              .empty();
                     if (!may_save_at_project_hook) {
-                        if (iter + 1 == target ||
+                        if (int64_t{iter} + 1 == target ||
                             iter == target) {
                             LOG_DEBUG(
                                 "Skipping save-project-at-iter project save at iteration {}: trainer-initiated saves are not authorized",
@@ -8871,7 +8871,7 @@ namespace lfs::training {
                     } else {
                         if (!in_popspa &&
                             !(popspa_enabled() && target > get_regular_iterations()) &&
-                            iter + 1 == target &&
+                            int64_t{iter} + 1 == target &&
                             !prepared_project_snapshot_) {
                             prepare_project_snapshot_at_safe_point(
                                 target,
@@ -9186,8 +9186,9 @@ namespace lfs::training {
             }
 
             // Start from current_iteration_ (allows resume from checkpoint)
-            int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
+            int64_t next_iter = next_training_iteration(current_iteration_.load());
             if (progress_) {
+                const int iter = static_cast<int>(std::min<int64_t>(next_iter, get_total_iterations()));
                 progress_->update(
                     iter,
                     current_loss_.load(),
@@ -9406,7 +9407,7 @@ namespace lfs::training {
                 pipelined_config,
                 aux_pipeline_config,
                 TRAINING_SAMPLER_SEED,
-                static_cast<size_t>(std::max(0, iter - 1)));
+                static_cast<size_t>(next_iter - 1));
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
@@ -9426,19 +9427,19 @@ namespace lfs::training {
             std::optional<POPSpaPhase> popspa_sampler_phase;
             const auto popspa_project_hook = getParams().save_project_at_iteration;
             unsigned oom_steps_in_a_row = 0;
-            while (iter <= get_total_iterations() ||
+            while (next_iter <= get_total_iterations() ||
                    (popspa_enabled() && (!popspa_controller_.is_initialized() ||
                                          popspa_controller_.phase() != POPSpaPhase::Complete))) {
-                lfs::core::Tensor::set_memory_pool_iteration(iter);
-
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
-                if (auto advanced = advance_popspa_boundaries(iter - 1, stop_token); !advanced) {
+                if (auto advanced = advance_popspa_boundaries(static_cast<int>(next_iter - 1), stop_token); !advanced) {
                     terminal_error = std::move(advanced).error();
                     break;
                 }
-                if (iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
+                if (next_iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
                     break;
+                const int iter = static_cast<int>(next_iter);
+                lfs::core::Tensor::set_memory_pool_iteration(iter);
                 // The regular-phase save consumes the initially reserved UUID.
                 // Reserve another outside the optimizer safe point for a CLI
                 // snapshot inside POPSpa. Its layout is prepared after this step,
@@ -9662,8 +9663,8 @@ namespace lfs::training {
 
                 if (repeat_iteration)
                     continue;
-                ++iter;
-                if (iter == params_.optimization.stop_refine)
+                ++next_iter;
+                if (static_cast<size_t>(next_iter) == params_.optimization.stop_refine)
                     lfs::diagnostics::VramProfiler::instance().mark("densification_stop");
             }
 
@@ -9675,7 +9676,7 @@ namespace lfs::training {
                                          current_iteration_.load() >= get_total_iterations();
             // A resume at the terminal iteration starts at max+1, so there is no
             // training step in which to service an evaluation scheduled at max.
-            const bool terminal_eval_due = !popspa_enabled() && iter > get_total_iterations() &&
+            const bool terminal_eval_due = !popspa_enabled() && next_iter > get_total_iterations() &&
                                            evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations());
             if (!terminal_error && !stop_token.stop_requested() && !stop_requested_.load() &&
                 evaluator_->is_enabled() && (popspa_complete || terminal_eval_due)) {

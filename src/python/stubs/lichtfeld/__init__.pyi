@@ -2150,6 +2150,9 @@ class OptimizationParams:
     def builtin_default(self, name: str) -> object:
         """Get the built-in default for the active method and step scaling"""
 
+    def set_scaled_iterations(self, target: int) -> None:
+        """Set the iteration limit and rescale its schedule together"""
+
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 

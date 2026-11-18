@@ -448,6 +448,7 @@ namespace lfs::core {
             std::string config_file = "";
 
             void scale_steps(float ratio);
+            [[nodiscard]] OptimizationParameters scaled_to_iterations(size_t target) const;
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
