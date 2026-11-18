@@ -263,44 +263,61 @@ class TestPluginConcurrency:
         if mgr.get_state("watch_plugin") == PluginState.ACTIVE:
             mgr.unload("watch_plugin")
 
-    def test_file_mtime_race_condition(self, thread_plugins_dir):
-        """Access file_mtimes dict while watcher is checking."""
-        from lfs_plugins import PluginManager, PluginState
+    @pytest.mark.parametrize("fail_refresh", [False, True])
+    def test_file_mtime_race_condition(
+        self, thread_plugins_dir, monkeypatch, fail_refresh
+    ):
+        """A watcher interleaved with a refresh must see a complete snapshot."""
+        from lfs_plugins import PluginManager
         from lfs_plugins.watcher import PluginWatcher
 
         create_plugin_files(thread_plugins_dir / "mtime_plugin", "mtime_plugin")
-
         mgr = PluginManager.instance()
-        mgr.load("mtime_plugin")
+        assert mgr.load("mtime_plugin")
+        plugin = mgr._plugins["mtime_plugin"]
+        watcher = PluginWatcher(mgr)
+        original_scan = type(plugin.info.path).rglob
 
-        watcher = PluginWatcher(mgr, poll_interval=0.01)
-        watcher.start()
+        def interleaved_scan(path, pattern):
+            if path == plugin.info.path:
+                watcher._check_for_changes()
+                assert not watcher._pending_reloads
+                assert not plugin.needs_restart
+                if fail_refresh:
+                    raise OSError("snapshot scan failed")
+            yield from original_scan(path, pattern)
 
-        errors = []
+        monkeypatch.setattr(type(plugin.info.path), "rglob", interleaved_scan)
+        if fail_refresh:
+            with pytest.raises(OSError, match="snapshot scan failed"):
+                mgr._update_file_mtimes(plugin)
+        else:
+            mgr._update_file_mtimes(plugin)
+        watcher._check_for_changes()
+        assert not watcher._pending_reloads
+        assert not plugin.needs_restart
 
-        def modify_files():
-            plugin = mgr._plugins.get("mtime_plugin")
-            if not plugin:
-                return
-            for _ in range(10):
-                try:
-                    # Modify files to trigger mtime checks
-                    init_file = thread_plugins_dir / "mtime_plugin" / "__init__.py"
-                    content = init_file.read_text()
-                    init_file.write_text(content + "\n# comment")
-                    time.sleep(0.02)
-                except Exception as e:
-                    errors.append(e)
+    def test_loading_plugin_waits_for_initial_file_snapshot(
+        self, thread_plugins_dir, monkeypatch
+    ):
+        from lfs_plugins import PluginManager, PluginState
+        from lfs_plugins.watcher import PluginWatcher
 
-        thread = threading.Thread(target=modify_files)
-        thread.start()
-        thread.join(timeout=5.0)
+        create_plugin_files(thread_plugins_dir / "initial_snapshot", "initial_snapshot")
+        mgr = PluginManager.instance()
+        watcher = PluginWatcher(mgr)
+        original_update = mgr._update_file_mtimes
 
-        watcher.stop()
+        def interleaved_update(plugin):
+            watcher._check_for_changes()
+            assert not watcher._pending_reloads
+            original_update(plugin)
 
-        assert not errors, f"Errors occurred: {errors}"
-        if mgr.get_state("mtime_plugin") == PluginState.ACTIVE:
-            mgr.unload("mtime_plugin")
+        monkeypatch.setattr(mgr, "_update_file_mtimes", interleaved_update)
+        assert mgr.load("initial_snapshot")
+        assert mgr.get_state("initial_snapshot") == PluginState.ACTIVE
+        watcher._check_for_changes()
+        assert not watcher._pending_reloads
 
     def test_concurrent_discover(self, thread_plugins_dir):
         """Multiple threads calling discover() simultaneously."""

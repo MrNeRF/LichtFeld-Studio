@@ -46,11 +46,28 @@ namespace lfs::core {
         using detail::apply_distortion;
         using detail::thin_prism_fisheye_from_theta_point;
 
+        using detail::source_position;
+
+        __device__ bool remap_tap(int& x, int& y, const int width, const int height, const bool panorama) {
+            if (x >= 0 && x < width && y >= 0 && y < height)
+                return true;
+            if (!panorama)
+                return false;
+            while (y < 0 || y >= height) {
+                y = y < 0 ? -1 - y : height - 1 - (y - height);
+                x += width / 2;
+            }
+            x %= width;
+            if (x < 0)
+                x += width;
+            return true;
+        }
+
         __device__ float bilinear_sample_renormalized(
             const float* __restrict__ src,
             const int width, const int height, const int stride,
             const float sx, const float sy,
-            const bool positive_only = false) {
+            const bool positive_only = false, const bool panorama = false) {
             const int x0 = static_cast<int>(floorf(sx));
             const int y0 = static_cast<int>(floorf(sy));
             const float fx = sx - static_cast<float>(x0);
@@ -58,11 +75,11 @@ namespace lfs::core {
             float value = 0.0f;
             float weight_sum = 0.0f;
             for (int dy = 0; dy < 2; ++dy) {
-                const int y = y0 + dy;
                 const float wy = dy == 0 ? 1.0f - fy : fy;
                 for (int dx = 0; dx < 2; ++dx) {
-                    const int x = x0 + dx;
-                    if (x < 0 || x >= width || y < 0 || y >= height)
+                    int x = x0 + dx;
+                    int y = y0 + dy;
+                    if (!remap_tap(x, y, width, height, panorama))
                         continue;
                     const float sample = src[y * stride + x];
                     if (!isfinite(sample) || (positive_only && sample <= 0.0f))
@@ -77,6 +94,12 @@ namespace lfs::core {
                 return value / weight_sum;
             if (positive_only)
                 return 0.0f;
+            if (panorama) {
+                int x = static_cast<int>(floorf(sx + 0.5f));
+                int y = static_cast<int>(floorf(sy + 0.5f));
+                remap_tap(x, y, width, height, true);
+                return src[y * stride + x];
+            }
             const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
             const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
             return src[nearest_y * stride + nearest_x];
@@ -99,7 +122,7 @@ namespace lfs::core {
             const float* __restrict__ src,
             const int width, const int height, const int channels,
             const float sx, const float sy,
-            float* values, float& absolute_inside, float& absolute_full) {
+            float* values, float& absolute_inside, float& absolute_full, const bool panorama = false) {
             const int base_x = static_cast<int>(floorf(sx));
             const int base_y = static_cast<int>(floorf(sy));
             float weights_x[6];
@@ -115,12 +138,12 @@ namespace lfs::core {
             absolute_full = 0.0f;
             const int plane = width * height;
             for (int j = 0; j < 6; ++j) {
-                const int y = base_y + j - 2;
                 for (int i = 0; i < 6; ++i) {
-                    const int x = base_x + i - 2;
+                    int x = base_x + i - 2;
+                    int y = base_y + j - 2;
                     const float weight = weights_x[i] * weights_y[j];
                     absolute_full += fabsf(weight);
-                    if (x < 0 || x >= width || y < 0 || y >= height)
+                    if (!remap_tap(x, y, width, height, panorama))
                         continue;
                     signed_inside += weight;
                     absolute_inside += fabsf(weight);
@@ -138,7 +161,7 @@ namespace lfs::core {
 
             for (int channel = 0; channel < channels; ++channel) {
                 values[channel] = bilinear_sample_renormalized(
-                    src + channel * plane, width, height, width, sx, sy);
+                    src + channel * plane, width, height, width, sx, sy, false, panorama);
             }
             return false;
         }
@@ -163,19 +186,13 @@ namespace lfs::core {
                                           (static_cast<float>(qx) + 0.5f) / quadrature;
                     const float pixel_y = static_cast<float>(oy) +
                                           (static_cast<float>(qy) + 0.5f) / quadrature;
-                    const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-                    const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-                    float dnx, dny;
-                    apply_distortion(nx, ny, params.model_type, params.distortion,
-                                     params.num_distortion, dnx, dny);
-                    const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-                    const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                    const float2 source = source_position(pixel_x, pixel_y, params);
                     float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                     float absolute_inside = 0.0f;
                     float absolute_full = 0.0f;
                     (void)lanczos3_sample(
                         src, params.src_width, params.src_height, channels,
-                        sx, sy, sample, absolute_inside, absolute_full);
+                        source.x, source.y, sample, absolute_inside, absolute_full, params.model_type == CameraModelType::EQUIRECTANGULAR);
                     for (int channel = 0; channel < channels; ++channel)
                         result[channel] += sample[channel];
                 }
@@ -567,17 +584,11 @@ namespace lfs::core {
                                           (static_cast<float>(qx) + 0.5f) / quadrature;
                     const float pixel_y = static_cast<float>(oy) +
                                           (static_cast<float>(qy) + 0.5f) / quadrature;
-                    const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-                    const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-                    float dnx, dny;
-                    apply_distortion(nx, ny, params.model_type, params.distortion,
-                                     params.num_distortion, dnx, dny);
-                    const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-                    const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                    const float2 source = source_position(pixel_x, pixel_y, params);
                     if (mode == AreaFilterMode::DEPTH) {
                         const float sample = bilinear_sample_renormalized(
                             src, params.src_width, params.src_height, params.src_width,
-                            sx, sy, true);
+                            source.x, source.y, true, params.model_type == CameraModelType::EQUIRECTANGULAR);
                         if (sample > 0.0f && isfinite(sample)) {
                             result[0] += sample;
                             valid_samples += 1.0f;
@@ -587,7 +598,7 @@ namespace lfs::core {
                             result[channel] += bilinear_sample_renormalized(
                                 src + channel * input_plane,
                                 params.src_width, params.src_height, params.src_width,
-                                sx, sy);
+                                source.x, source.y, false, params.model_type == CameraModelType::EQUIRECTANGULAR);
                         }
                         valid_samples += 1.0f;
                     }
@@ -941,6 +952,7 @@ namespace lfs::core {
     Tensor distort_image_to_source(
         const Tensor& src, const UndistortParams& params,
         Tensor& validity_mask, cudaStream_t stream) {
+        assert(!is_view(params));
         assert(src.is_valid());
         assert(src.ndim() == 3);
         assert(src.device() == Device::CUDA);
@@ -1073,21 +1085,25 @@ namespace lfs::core {
 
     Tensor distort_mask_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(
             src, params, AreaFilterMode::NONNEGATIVE, stream);
     }
 
     Tensor distort_depth_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(src, params, AreaFilterMode::DEPTH, stream);
     }
 
     Tensor distort_normal_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(src, params, AreaFilterMode::NORMAL, stream);
     }
 
     Tensor inverse_distortion_sample_map(const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         assert(params.src_width > 0 && params.src_height > 0);
         nvtxRangePush("inverse_distortion_sample_map");
         const CUDAStreamGuard stream_guard(stream);

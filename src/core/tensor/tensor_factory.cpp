@@ -230,6 +230,15 @@ namespace lfs::core {
         return load(LoadOp::Arange, args);
     }
 
+    Tensor Tensor::arange(int64_t start, int64_t end, int64_t step, Device device, DataType dtype) {
+        LoadArgs args;
+        args.shape = TensorShape{};
+        args.device = device;
+        args.dtype = dtype;
+        args.args = std::tuple<int64_t, int64_t, int64_t>{start, end, step};
+        return load(LoadOp::Arange, args);
+    }
+
     Tensor Tensor::eye(size_t n, Device device) {
         LoadArgs args;
         args.shape = TensorShape{n, n};

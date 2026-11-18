@@ -1067,7 +1067,7 @@ namespace lfs::python {
             }
             if (camera_needs_distortion_handling(*cam)) {
                 has_any = true;
-                if (!cam->has_distortion()) {
+                if (!cam->has_distortion() && cam->camera_model_type() != core::CameraModelType::EQUIRECTANGULAR) {
                     return false;
                 }
             }
@@ -1145,7 +1145,7 @@ namespace lfs::python {
         const auto ellipsoids = scene_->getRenderableEllipsoids();
         const auto polygons = scene_->getRenderableCropPolygons();
         const auto enabled = [](const auto& volume) {
-            return volume.data && volume.data->enabled && volume.crop_effects_enabled && volume.parent_node_index >= 0;
+            return volume.data && volume.data->enabled && volume.parent_node_index >= 0;
         };
         if (!std::any_of(boxes.begin(), boxes.end(), enabled) &&
             !std::any_of(ellipsoids.begin(), ellipsoids.end(), enabled) &&

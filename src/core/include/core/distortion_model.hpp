@@ -138,6 +138,16 @@ namespace lfs::core::detail {
     }
 
     template <typename Scalar>
+    LFS_DISTORTION_HD inline void project_fisheye_ray(
+        Scalar x, Scalar y, Scalar z, CameraModelType model, const Scalar* dist, int count,
+        Scalar& dx, Scalar& dy) {
+        const Scalar r = std::hypot(x, y);
+        const Scalar scale = r > 0 ? std::atan2(r, z) / r : Scalar(0);
+        thin_prism_fisheye_from_theta_point(x * scale, y * scale, dist,
+                                            model == CameraModelType::FISHEYE && count > 4 ? 4 : count, dx, dy);
+    }
+
+    template <typename Scalar>
     LFS_DISTORTION_HD inline void apply_distortion(
         const Scalar x, const Scalar y,
         const CameraModelType model,

@@ -514,6 +514,10 @@ namespace lfs::io {
             mix_float(params.dst_cy * grid.scale_y);
             for (int i = 0; i < params.num_distortion; ++i)
                 mix_float(params.distortion[i]);
+            if (is_view(params)) {
+                for (const float value : params.view_rotation)
+                    mix_float(value);
+            }
             return hash;
         }
 
@@ -1564,6 +1568,10 @@ namespace lfs::io {
                 << ":nd" << u.num_distortion;
             for (int i = 0; i < u.num_distortion; ++i) {
                 key << ":d" << i << "=" << u.distortion[i];
+            }
+            if (is_view(u)) {
+                for (const float value : u.view_rotation)
+                    key << ":" << value;
             }
         }
         if (kind == SidecarCacheFormat::Normal) {

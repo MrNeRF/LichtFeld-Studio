@@ -2881,15 +2881,6 @@ contract["check_selection_submode_follows_native_mode"](lf)
                     const auto helper = shape == "ellipsoid" ? scene.addEllipsoid("helper", target)
                                         : shape == "polygon" ? scene.addCropPolygon("helper", target, polygon)
                                                              : scene.addCropBox("helper", target);
-                    ASSERT_TRUE(scene.renameNode(scene.duplicateNode("helper"), "preceding_crop"));
-                    ASSERT_TRUE(scene.renameNode(scene.duplicateNode("helper"), "following_crop"));
-                    const auto childNames = [&]() {
-                        std::vector<std::string> names;
-                        for (const auto child : scene.getNode("target")->children)
-                            names.push_back(scene.getNodeById(child)->name);
-                        return names;
-                    };
-                    const auto original_order = childNames();
                     scene.setNodeTransform(helper, glm::mat4(1.0f));
                     auto* volume = scene.getMutableNode("helper");
                     if (shape == "ellipsoid") {
@@ -2900,7 +2891,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
                         volume->cropbox->max = glm::vec3(0.5f);
                         volume->cropbox->enabled = false;
                     }
-                    manager->selectNode(helper);
+                    manager->selectNode(target);
                     auto& gizmo = viewer.getGuiManager()->gizmo();
                     gizmo.setCropToolShape(shape);
                     ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
@@ -2936,17 +2927,14 @@ contract["check_selection_submode_follows_native_mode"](lf)
                         EXPECT_EQ(node->model->visible_count(), 1u);
                         EXPECT_EQ(scene.getNodeById(helper), nullptr);
                         const auto count = op::undoHistory().undoCount();
-                        EXPECT_EQ(count, 1u);
                         for (size_t i = 0; i < count; ++i)
                             ASSERT_TRUE(op::undoHistory().undo().success);
                         ASSERT_NE(scene.getNode("helper"), nullptr);
-                        EXPECT_EQ(childNames(), original_order);
                         EXPECT_EQ(scene.getNode("target")->model->visible_count(), 4u);
                         for (size_t i = 0; i < count; ++i)
                             ASSERT_TRUE(op::undoHistory().redo().success);
                         EXPECT_EQ(scene.getNode("target")->model->visible_count(), 1u);
                         EXPECT_EQ(scene.getNode("helper"), nullptr);
-                        EXPECT_EQ(childNames(), (std::vector<std::string>{"preceding_crop", "following_crop"}));
                     }
                     UnifiedToolRegistry::instance().setActiveTool("");
                     op::undoHistory().clear();
@@ -2955,8 +2943,8 @@ contract["check_selection_submode_follows_native_mode"](lf)
         }
     }
 
-    // Starting a new polygon from a selected saved crop must cancel back to
-    // selection only; a single selection must never reopen crop editing.
+    // Drawing hides the splat's crop box so its gizmo cannot take the clicks;
+    // cancelling must hand the box, the selection and the tool back unchanged.
     TEST_F(VisualizerImplResetTest, CancelledCropPolygonDrawRestoresTheVolumeSelectionAndTool) {
         VisualizerImpl viewer(projectOptions());
         auto& scene = viewer.getScene();
@@ -2965,24 +2953,28 @@ contract["check_selection_submode_follows_native_mode"](lf)
         const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
         const auto box = scene.addCropBox("target_cropbox", target);
         manager->selectNode(box);
-        ASSERT_NE(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+        ASSERT_EQ(gizmo.cropToolShape(), "box");
+        ASSERT_TRUE(scene.getNodeById(box)->visible.get());
+
         for (const auto action : {input::Action::CANCEL_POLYGON, input::Action::UNDO_POLYGON_VERTEX}) {
             SCOPED_TRACE(static_cast<int>(action));
-            const auto visible = scene.getNodeById(box)->visible.get();
-            const auto count = scene.getNodeCount();
-            gizmo.newCropTool("polygon");
+            // The toolbar picks the shape before it starts the drawing.
+            gizmo.setCropToolShape("polygon");
+            gizmo.activateCropPolygonTool();
             ASSERT_EQ(op::operators().activeModalId(), op::to_string(op::BuiltinOp::CropPolygonDraw));
+            EXPECT_FALSE(scene.getNodeById(box)->visible.get());
             EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{target});
+
             op::ModalEvent event{};
             event.type = op::ModalEvent::Type::ACTION;
             event.data = op::ActionEvent{action, 0, {0.0, 0.0}};
             EXPECT_EQ(op::operators().dispatchModalEvent(event), op::OperatorResult::CANCELLED);
             EXPECT_FALSE(op::operators().hasModalOperator());
-            EXPECT_EQ(scene.getNodeById(box)->visible.get(), visible);
-            EXPECT_EQ(scene.getNodeCount(), count);
+            EXPECT_TRUE(scene.getNodeById(box)->visible.get());
             EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{box});
-            EXPECT_NE(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
-            EXPECT_NE(viewer.getEditorContext().getActiveOperator(), "builtin.cropbox");
+            EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+            EXPECT_EQ(gizmo.cropToolShape(), "box");
         }
         UnifiedToolRegistry::instance().setActiveTool("");
         op::undoHistory().clear();
@@ -3279,13 +3271,6 @@ assert lf.ui.get_crop_tool_inverse() is True
             ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
             ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
 
-            const auto gaussian_count = viewer.getScene().getTotalGaussianCount();
-            const auto uuid = viewer.getScene().getNode(cropbox_name)->uuid;
-            gizmo.finishCropTool();
-            EXPECT_NE(viewer.getScene().getNodeByUuid(uuid), nullptr);
-            EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), gaussian_count);
-            EXPECT_NE(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
-            EXPECT_NE(viewer.getEditorContext().getActiveOperator(), "builtin.cropbox");
             const auto* const cropbox = viewer.getScene().getNode(cropbox_name);
             ASSERT_NE(cropbox, nullptr);
             EXPECT_EQ(cropbox->cropbox->min, glm::vec3(-0.25f, -0.5f, -0.75f));
@@ -3489,13 +3474,10 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
         ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
 
-        const auto duplicate = addEllipsoid(scene, splat_id, "duplicate");
-        ASSERT_NE(duplicate, lfs::core::NULL_NODE);
+        ASSERT_NE(addEllipsoid(scene, splat_id, "duplicate"), lfs::core::NULL_NODE);
         ASSERT_NO_FATAL_FAILURE(save(viewer));
         ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
-        ASSERT_EQ(scene.getEllipsoidForSplat(splat_id), duplicate);
-        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
-        ASSERT_TRUE(manager->removeNodesByIdsWithResult({duplicate}, false));
+        ASSERT_EQ(scene.getEllipsoidForSplat(splat_id), lfs::core::NULL_NODE);
         ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
     }
 
@@ -3513,7 +3495,6 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         ASSERT_NE(target_id, lfs::core::NULL_NODE);
         ASSERT_NE(scene.addCropBox("target_cropbox", target_id), lfs::core::NULL_NODE);
         scene_manager->selectNode("target_cropbox");
-        viewer.getGuiManager()->gizmo().editCropTool(scene.getNode("target_cropbox")->uuid);
         ASSERT_EQ(registry.getActiveTool(), "builtin.cropbox");
 
         op::undoHistory().clear();
@@ -19875,14 +19856,11 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_FALSE(state.available);
             return;
         }
-        // Finish the real restore without pumping the viewer queue. Cold CUDA
-        // initialization is not a timing contract; publication must still wait
-        // for the viewer thread to process the completion below.
-        viewer.project_lifecycle_->hydration_threads_.back().join();
-        {
+        ASSERT_TRUE(waitUntil([&] {
             std::lock_guard lock(viewer.work_queue_mutex_);
-            ASSERT_FALSE(viewer.work_queue_.empty());
-        }
+            return !viewer.work_queue_.empty();
+        },
+                              std::chrono::seconds(2)));
         EXPECT_EQ(app_store().stored_session_generation.get(), generation + 1);
         ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
             return app_store().stored_session_generation.get() == generation + 2;

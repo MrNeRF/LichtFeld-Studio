@@ -2798,6 +2798,7 @@ namespace {
             "bicycle";
         ckpt_params.dataset.output_path = output_path;
 
+        ckpt_params.dataset.images = "images/relocated";
         size_t display_count = 0;
         uint64_t display_means = 0;
         uint64_t display_sh0 = 0;
@@ -2836,6 +2837,7 @@ namespace {
                 << installed.error();
             ASSERT_NE(installed->trainer, nullptr);
             EXPECT_EQ(installed->iteration, expected_iteration);
+            EXPECT_EQ(installed->trainer->getParams().dataset.images, ckpt_params.dataset.images);
             EXPECT_EQ(
                 installed->trainer->get_current_iteration(),
                 expected_iteration);

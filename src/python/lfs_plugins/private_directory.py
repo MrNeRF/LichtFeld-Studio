@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from _lfs_path_io import Path
+from _lfs_path_io import Path, native_path
 
 
 def _windows_create(path: Path) -> None:
@@ -56,7 +56,7 @@ def _windows_create(path: Path) -> None:
                 sddl, 1, ctypes.byref(descriptor), None):
             raise ctypes.WinError(ctypes.get_last_error())
         attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
-        if not kernel.CreateDirectoryW(str(path), ctypes.byref(attributes)):
+        if not kernel.CreateDirectoryW(native_path(path), ctypes.byref(attributes)):
             raise ctypes.WinError(ctypes.get_last_error())
     finally:
         if descriptor:

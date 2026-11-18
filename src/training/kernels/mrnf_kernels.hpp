@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace lfs::training::mrnf_strategy {
 
@@ -136,6 +137,8 @@ namespace lfs::training::mrnf_strategy {
         float percentile,
         MRNFBounds* bounds,
         void* stream = nullptr);
+
+    std::pair<size_t, size_t> percentile_bounds_ranks(size_t n, float percentile);
 
     // Median of geomean(exp(scaling_raw)); out_valid is false when no usable extent remains.
     void launch_median_geomean_extent(

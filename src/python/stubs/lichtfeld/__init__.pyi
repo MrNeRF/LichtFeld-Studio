@@ -886,12 +886,12 @@ class Tensor:
 
     @overload
     @staticmethod
-    def arange(end: float) -> Tensor:
+    def arange(end: int | float, *, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
         """Create 1D tensor with values from 0 to end"""
 
     @overload
     @staticmethod
-    def arange(start: float, end: float, step: float = 1.0, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
+    def arange(start: int | float, end: int | float, step: int | float = 1, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
         """Create 1D tensor with values from start to end"""
 
     @staticmethod
@@ -2149,6 +2149,9 @@ class OptimizationParams:
 
     def builtin_default(self, name: str) -> object:
         """Get the built-in default for the active method and step scaling"""
+
+    def set_scaled_iterations(self, target: int) -> None:
+        """Set the iteration limit and rescale its schedule together"""
 
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""

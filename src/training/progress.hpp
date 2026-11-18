@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace lfs::training {
+    [[nodiscard]] int64_t next_training_iteration(int completed);
+
     class TrainingProgress {
     public:
         enum class Phase {

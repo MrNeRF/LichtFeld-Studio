@@ -55,6 +55,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
+#include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mrnf.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -677,6 +678,18 @@ TEST(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
     EXPECT_EQ(masses({0, 1, 2, 3}, 1.0f).second, 0.0f);
     EXPECT_EQ(masses({}, 1.0f), (std::pair{0.0f, 0.0f})) << "a strict share with an empty ROI draws nothing";
     EXPECT_GT(masses({}, 0.8f).second, 0.0f) << "an empty ROI hands a partial share to the rest";
+}
+
+TEST(MRNFStrategyTest, PercentileRankStaysInsideTheSortedValues) {
+    using mrnf_strategy::percentile_bounds_ranks;
+    using Ranks = std::pair<size_t, size_t>;
+    constexpr size_t past_float32 = (size_t{1} << 24) + 4;
+    EXPECT_EQ(percentile_bounds_ranks(past_float32, 1.0f), (Ranks{0, past_float32 - 1}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 1.0f), (Ranks{0, 19'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, std::nextafter(1.0f, 0.0f)), (Ranks{0, 19'999'998}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 0.0f), (Ranks{9'999'999, 9'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(1, 1.0f), (Ranks{0, 0}));
+    EXPECT_EQ(percentile_bounds_ranks(11, 0.5f), (Ranks{2, 7}));
 }
 
 TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
@@ -1342,6 +1355,26 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(splat_data.size(), initial_size);
     EXPECT_EQ(strategy.active_count(), initial_size - 1);
     EXPECT_EQ(strategy.free_count(), 1u);
+}
+
+TEST(MRNFStrategyTest, FreeSlotCountIsExactPastFloat32Precision) {
+    constexpr size_t b = size_t{1} << 24;
+    const auto all_free = Tensor::ones_bool({b + 3}, Device::CUDA);
+    auto splats = create_mrnf_test_splat_data(1);
+    const auto one_mean = splats.means();
+    MRNF mrnf(splats);
+    ImprovedGSPlus igs(splats);
+    mrnf._free_mask = all_free;
+    igs._free_mask = all_free;
+    for (const size_t rows : {b + 1, b + 3}) {
+        SCOPED_TRACE(rows);
+        // A broadcast view supplies the logical row count without allocating a large model.
+        splats.means() = one_mean.expand({rows, 3});
+        EXPECT_EQ(mrnf.free_count(), rows);
+        EXPECT_EQ(mrnf.active_count(), 0u);
+        EXPECT_EQ(igs.free_count(), rows);
+        EXPECT_EQ(igs.active_count(), 0u);
+    }
 }
 
 // A refine that runs out of VRAM at any allocation must be undone to the rows
@@ -2185,6 +2218,23 @@ TEST(MRNFStrategyTest, RayDepthStateFollowsItsSplats) {
     disabled.initialize(off);
     EXPECT_FALSE(disabled._ray_depth_state.is_valid());
     EXPECT_FALSE(disabled.get_optimizer().ray_depth_state().is_valid());
+}
+
+// Built through a float32 arange, the four rows appended at B = 2^24 came out as B, B, B+2, B+4 and one row as none,
+// so ray_depth_inherit wrote an existing splat's state and read child rows past the end of the list.
+TEST(MRNFStrategyTest, SplitChildRowsAreExactPastFloat32Precision) {
+    constexpr int64_t b = int64_t{1} << 24;
+    const auto reused = Tensor::from_vector(std::vector<int>{7}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    const auto expect_rows = [](const Tensor& rows, const std::vector<int64_t>& expected) {
+        ASSERT_EQ(rows.dtype(), DataType::Int64);
+        ASSERT_EQ(rows.device(), Device::CUDA);
+        ASSERT_EQ(rows.shape(), TensorShape({expected.size()}));
+        EXPECT_EQ(rows.cpu().to_vector_int64(), expected);
+    };
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 4), {7, b, b + 1, b + 2, b + 3});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 1), {b});
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 0), {7});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 0), {});
 }
 
 TEST(MRNFStrategyTest, SetTrainingDatasetBeforeInitialize) {

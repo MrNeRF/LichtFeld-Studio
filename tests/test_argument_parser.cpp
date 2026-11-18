@@ -37,6 +37,31 @@ namespace {
 
 } // namespace
 
+TEST(ArgumentParserTest, HeadlessScriptsWithoutDatasetPreserveOrderAndUtf8Paths) {
+    const char* argv[]{"LichtFeld-Studio", "--headless", "--python-script", "local check.py",
+                       "--python-script", "caf\xc3\xa9.py"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.headless);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    ASSERT_EQ((*parsed)->python_scripts.size(), 2);
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[0]), "local check.py");
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[1]), "caf\xc3\xa9.py");
+}
+
+TEST(ArgumentParserTest, HeadlessStillRequiresSourceWithoutScriptsOrWithTcp) {
+    const auto initial = (std::filesystem::path(make_test_path("lfs_headless_script_init")) / "initial.ply").string();
+    std::ofstream(initial).put('\n');
+    for (const std::vector<const char*> argv : {
+             std::vector<const char*>{"LichtFeld-Studio", "--headless"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--tcp-connection"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--init", initial.c_str()}}) {
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("requires --data-path or --resume"), std::string::npos) << parsed.error();
+    }
+}
+
 // An untrained .licht on --data-path is its own destination, so
 // --output-path is optional and the project stays bound for the run.
 TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
@@ -1429,8 +1454,20 @@ TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
-    EXPECT_NE(help.find(".licht (project)"), std::string::npos);
+    EXPECT_NE(help.find(".licht (visible splat nodes of a project"), std::string::npos);
     EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ConvertCapabilitiesPrintsStableIdentifiersWithoutInput) {
+    // The Blender plugin matches this line exactly before downloading a Portal project.
+    const char* argv[] = {"LichtFeld-Studio", "convert", "--capabilities"};
+    testing::internal::CaptureStdout();
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    const auto output = testing::internal::GetCapturedStdout();
+
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    EXPECT_EQ(output, "visible-project-splats-v1\n");
 }
 
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
