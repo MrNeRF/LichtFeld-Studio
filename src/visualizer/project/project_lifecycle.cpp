@@ -338,20 +338,16 @@ namespace lfs::vis::project {
                 operation);
         }
 
-        void publishAutosaveMemoryWarning(
-            std::string shortfall,
-            std::string detail) {
+        void publishAutosaveMemoryWarning(std::string detail) {
             auto warning = lfs::make_error(
                 lfs::ErrorInit{
                     .code = lfs::ErrorCode::ResourceExhausted,
-                    .domain = lfs::ErrorDomain::Training,
+                    .domain = lfs::ErrorDomain::IO,
                     .severity = lfs::Severity::Warning,
                     .retryability =
                         lfs::Retryability::RetryableWithBackoff,
                     .operation_id = {},
-                    .user_message = LOCF(
-                        "runtime.autosave_deferred_no_memory",
-                        shortfall),
+                    .user_message = LOC("runtime.autosave_deferred_no_memory"),
                     .detail = std::move(detail),
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                     .fields = {},
@@ -362,12 +358,7 @@ namespace lfs::vis::project {
 
         void publishAutosaveMemoryWarning(
             const lfs::Error& cause) {
-            const auto shortfall =
-                cause.user_message().empty()
-                    ? developerError(cause)
-                    : std::string(cause.user_message());
-            publishAutosaveMemoryWarning(
-                shortfall, developerError(cause));
+            publishAutosaveMemoryWarning(developerError(cause));
         }
 
         void notifyTrainerRestoreFailure(
@@ -3397,6 +3388,7 @@ namespace lfs::vis::project {
     void ProjectLifecycle::clearAutosaveFailureBackoff() {
         autosave_failure_backoff_seconds_ = 0;
         autosave_retry_not_before_ = {};
+        autosave_memory_warning_published_ = false;
     }
 
     void ProjectLifecycle::scheduleAutosaveFailureBackoff() {
@@ -5949,7 +5941,6 @@ namespace lfs::vis::project {
                     std::chrono::steady_clock::
                         now();
                 autosave_quiesce_logged_ = false;
-                autosave_memory_warning_published_ = false;
                 autosave_disk_full_destination_.reset();
             } else if (
                 !dest_is_scratch &&
@@ -6040,8 +6031,7 @@ namespace lfs::vis::project {
                         publishAutosaveMemoryWarning(
                             *last_project_write_typed_error_);
                     } else {
-                        publishAutosaveMemoryWarning(
-                            error, error);
+                        publishAutosaveMemoryWarning(error);
                     }
                     autosave_memory_warning_published_ = true;
                 } else if (!was_autosave && disk_full) {
@@ -6208,9 +6198,6 @@ namespace lfs::vis::project {
             viewer_.getTrainerManager() &&
             viewer_.getTrainerManager()
                 ->isTrainingActive();
-        if (!training) {
-            autosave_memory_warning_published_ = false;
-        }
         const bool training_write_window =
             isTrainingWriteWindowOpen();
         const auto scene_serial =
@@ -6307,8 +6294,7 @@ namespace lfs::vis::project {
             last_project_write_error_ =
                 developerError(
                     cause);
-            if (training &&
-                cause.code() ==
+            if (cause.code() ==
                     lfs::ErrorCode::ResourceExhausted &&
                 !autosave_memory_warning_published_) {
                 const auto message =
@@ -7002,8 +6988,17 @@ namespace lfs::vis::project {
                     start_async_capture(
                         *model,
                         lfs::io::project::SplatSourceKind::Generated,
-                        false);
+                        false,
+                        mode == DocumentSyncMode::Autosave || mode == DocumentSyncMode::LightTrainingAutosave
+                            ? lfs::io::project::SplatCaptureFallback::Defer
+                            : lfs::io::project::SplatCaptureFallback::Synchronous);
                 if (!async) {
+                    // Keep snapshots already queued: the existing worker installs
+                    // this partial batch before the next autosave retries the rest.
+                    if (!async_captures.empty() &&
+                        async.error().retryability() == lfs::Retryability::RetryableWithBackoff) {
+                        break;
+                    }
                     return lfs::Status::failure(std::move(async).error());
                 } else if (*async) {
                     async_captures.push_back({

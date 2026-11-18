@@ -3110,7 +3110,7 @@
     "apriltag_busy": "Ya hay un escaneo de AprilTags en curso",
     "environment_map_failed": "No se pudo leer el mapa de entorno «{}». Se ha conservado el entorno anterior.",
     "training_save_no_memory": "No se pudo guardar el proyecto: {}",
-    "autosave_deferred_no_memory": "El guardado automático está en pausa: no hay suficiente memoria libre ({}). El entrenamiento continúa; el guardado automático se reanudará cuando se libere memoria.",
+    "autosave_deferred_no_memory": "El guardado automático está en pausa: no hay suficiente memoria libre. Se reanudará cuando se libere memoria.",
     "autosave_no_disk_space": "No hay suficiente espacio en disco para guardar automáticamente el proyecto en «{}».",
     "training_init_unavailable": "El archivo de inicialización del entrenamiento \"{}\" no está disponible; el entrenamiento empieza desde la nube de puntos restaurada.",
     "scene_filter": "Filtro: \"{}\"",
