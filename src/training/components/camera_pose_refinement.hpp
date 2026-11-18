@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "core/camera.hpp"
+#include "core/camera_views.hpp"
 #include "core/error.hpp"
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
@@ -22,21 +22,20 @@ namespace lfs::training {
 
     struct FastGSFusedExtraGradients;
 
-    // A pose offset per camera from its pose at construction, refined by Adam from the rasterizer's camera gradient
+    // A pose offset per photograph from its pose at construction, refined by Adam from the rasterizer's camera gradient
     // (kernels/camera_pose_math.hpp). After each step the camera draws its refined pose; commit() also writes it into
     // the cameras' R and T, which saves, exports and the viewer read.
     class CameraPoseOffsets {
     public:
-        explicit CameraPoseOffsets(std::vector<std::shared_ptr<lfs::core::Camera>> cameras);
+        explicit CameraPoseOffsets(std::vector<core::CameraViewGroup> groups);
 
-        [[nodiscard]] int row_of(const lfs::core::Camera& camera) const;
-        [[nodiscard]] const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras() const { return cameras_; }
+        [[nodiscard]] const std::vector<core::CameraViewGroup>& groups() const { return groups_; }
         // Where the next backward writes the camera gradient.
         [[nodiscard]] float* grad_w2c() { return grad_w2c_.ptr<float>(); }
         [[nodiscard]] float* grad_cam_position() { return grad_cam_position_.ptr<float>(); }
 
-        // After the backward of camera `row`: one Adam step of its offset, on the backward's stream.
-        void step(int row, float lr_rotation, float lr_translation, cudaStream_t stream);
+        // One Adam step of the drawn camera's photograph, on the backward's stream.
+        void step(const core::Camera& camera, float lr_rotation, float lr_translation, cudaStream_t stream);
         // R and T (and the device pose) to the refined poses, or back to the start poses. The caller keeps other
         // readers of the cameras' R and T out.
         void commit();
@@ -51,8 +50,16 @@ namespace lfs::training {
         [[nodiscard]] const float* start_pose(int row) const { return start_host_.data() + 16 * row; }
 
     private:
-        std::vector<std::shared_ptr<lfs::core::Camera>> cameras_;
-        std::unordered_map<int, int> row_of_uid_;
+        struct DrawIndex {
+            int row;
+            int draw;
+        };
+        std::vector<core::CameraViewGroup> groups_;
+        std::unordered_map<int, DrawIndex> draw_of_uid_;
+        std::vector<int> first_draw_;
+        std::vector<float> rotations_host_;
+        core::Tensor rotations_;
+        void set_row_pose(size_t row, const float* pose);
         std::vector<float> start_host_;
         lfs::core::Tensor start_;   // [N, 16]
         lfs::core::Tensor offsets_; // [N, 6]
@@ -72,8 +79,8 @@ namespace lfs::training {
     public:
         // Fails unless every camera is drawn with the pinhole projection (pinhole, or undistorted).
         static lfs::Result<std::unique_ptr<CameraPoseRefinement>> create(
-            std::vector<std::shared_ptr<lfs::core::Camera>> cameras, int iterations);
-        CameraPoseRefinement(std::vector<std::shared_ptr<lfs::core::Camera>> cameras, int iterations);
+            std::vector<core::CameraViewGroup> groups, int iterations);
+        CameraPoseRefinement(std::vector<core::CameraViewGroup> groups, int iterations);
 
         // Asks the coming backward for the camera gradient while the rate is above zero.
         void bind_gradients(FastGSFusedExtraGradients& extra, int iteration);
@@ -83,7 +90,7 @@ namespace lfs::training {
 
         [[nodiscard]] bool reports_at(int iteration) const;
         [[nodiscard]] std::string summary(int iteration) const;
-        // One row per camera: updates, move and turn, with their world-axis components.
+        // One row per photograph: updates, move and turn, with their world-axis components.
         [[nodiscard]] lfs::Status write_table(const std::filesystem::path& path) const;
 
     private:
@@ -95,7 +102,7 @@ namespace lfs::training {
         int hold_;
     };
 
-    // Fits each held-out camera to the frozen model, the same fixed number of steps for every view, so a model trained
+    // Fits each held-out photograph to the frozen model, cycling through its views for a fixed number of steps, so a model trained
     // with --pose-opt is scored from where its views fit. apply() and restore() move R and T as commit() does.
     class RefittedCameraPoses {
     public:
@@ -106,7 +113,7 @@ namespace lfs::training {
             bool mip_filter = false;
         };
 
-        RefittedCameraPoses(std::vector<std::shared_ptr<lfs::core::Camera>> cameras,
+        RefittedCameraPoses(std::vector<core::CameraViewGroup> groups,
                             lfs::core::SplatData& model,
                             lfs::core::Tensor& background,
                             const Settings& settings);

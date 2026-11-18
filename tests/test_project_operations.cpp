@@ -491,6 +491,20 @@ namespace {
         auto splat = require_result(SplatChapterPayload::capture(
             *make_splat(4), SplatSourceKind::ImportedPly, false));
         require_status(document.set_splat(node_uuid, std::move(splat)));
+        require_status(document.edit_project().upsert_embed_decision(EmbedDecision{
+            .uuid = node_uuid,
+            .node_uuid = node_uuid,
+            .payload_fourcc = "SPLT",
+            .decision = "embedded",
+            .reason = "export fixture",
+        }));
+        require_status(document.edit_project().upsert_embedded_payload_provenance(EmbeddedPayloadProvenance{
+            .uuid = node_uuid,
+            .node_uuid = node_uuid,
+            .fourcc = "SPLT",
+            .import_locator = {.preferred = "assets/visible.ply", .base = LocatorBase::Project},
+            .import_fingerprint = fingerprint(63),
+        }));
         static_cast<void>(require_result(save_document(document, path, fixed_uuid(1262))));
 
         const auto output = temporary.path / "visible.sog";

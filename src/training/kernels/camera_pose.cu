@@ -14,6 +14,7 @@ namespace lfs::training::kernels {
             float* adam_m,
             float* adam_v,
             float* steps,
+            const float* draw_to_owner,
             const float* grad_w2c,
             const float* grad_cam_position,
             float* w2c,
@@ -23,7 +24,9 @@ namespace lfs::training::kernels {
             const float* start = w2c0 + row * 16;
             float* off = offsets + row * 6;
             float grad[6];
-            camera_pose::offset_grad(start, off, grad_w2c, grad_cam_position, grad);
+            float owner_gradient[16];
+            camera_pose::rotate_rows<false>(draw_to_owner + 9 * step.draw, grad_w2c, owner_gradient);
+            camera_pose::offset_grad(start, off, owner_gradient, grad_cam_position, grad);
 
             bool finite = true;
             for (int k = 0; k < 6; ++k)
@@ -43,7 +46,10 @@ namespace lfs::training::kernels {
                 }
                 steps[row] = t;
             }
-            camera_pose::compose(start, off, w2c, cam_position);
+            float owner_pose[16];
+            camera_pose::compose(start, off, owner_pose, cam_position);
+            for (int i = 0; i < step.draw_count; ++i)
+                camera_pose::rotate_rows<true>(draw_to_owner + 9 * (step.first_draw + i), owner_pose, w2c + 16 * i);
         }
     } // namespace
 
@@ -53,6 +59,7 @@ namespace lfs::training::kernels {
         float* adam_m,
         float* adam_v,
         float* steps,
+        const float* draw_to_owner,
         const float* grad_w2c,
         const float* grad_cam_position,
         float* w2c,
@@ -61,7 +68,7 @@ namespace lfs::training::kernels {
         cudaStream_t stream) {
         stream = resolve_stream(stream);
         camera_pose_adam_step_kernel<<<1, 1, 0, stream>>>(
-            w2c0, offsets, adam_m, adam_v, steps, grad_w2c, grad_cam_position, w2c, cam_position, step);
+            w2c0, offsets, adam_m, adam_v, steps, draw_to_owner, grad_w2c, grad_cam_position, w2c, cam_position, step);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.camera_pose.adam_step");
     }
 

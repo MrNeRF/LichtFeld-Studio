@@ -1,7 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/camera.hpp"
+#include "core/camera_views.hpp"
 #include "core/image_io.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -38,6 +39,66 @@ namespace {
         }
     };
 } // namespace
+
+TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid) {
+    constexpr int w = 128, h = 64;
+    std::vector<uint8_t> pixels(w * h * 3);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            for (int c = 0; c < 3; ++c)
+                pixels[(y * w + x) * 3 + c] = (3 * x + 5 * y + c * 71) % 256;
+
+    const auto bytes = Tensor::from_blob(pixels.data(), {h, w, 3}, Device::CPU, DataType::UInt8);
+    const auto lens = compute_undistort_params(84, 81, w / 2, h / 2, w, h,
+                                               Tensor::from_vector({-.18f, .04f}, {2}, Device::CPU), {},
+                                               CameraModelType::PINHOLE);
+    const Camera panorama(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), 0, 0, 0, 0,
+                          {}, {}, CameraModelType::EQUIRECTANGULAR, "source.png", temp.path / "source.png", {}, w, h, 0);
+    const auto faces = plan_camera_views(panorama, 0);
+    ASSERT_EQ(faces.size(), kPanoramaViewCount);
+    auto& cache = lfs::io::CacheLoader::getInstance(true);
+    cache.reset_cache();
+    cache.update_cache_params(true, 1, lfs::io::DEFAULT_MIN_FREE_GB, lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO,
+                              false, lfs::io::DEFAULT_PRINT_STATUS_FREQ);
+
+    const auto check = [&](const std::filesystem::path& path, const Tensor& decoded) {
+        SCOPED_TRACE(path.extension().string());
+        // Two faces share all calibration and size fields except their rotation.
+        for (const auto* mapping : {&lens, &faces[0].params, &faces[1].params}) {
+            for (const auto& [resize, cap] : {std::pair{1, 0}, std::pair{2, 0}, std::pair{2, 13}}) {
+                const auto grid = prepare_undistort_params(*mapping, w, h, resize, cap);
+                const auto expected = undistort_image(decoded, grid, nullptr).clamp(0.f, 1.f);
+                for (bool u8 : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << "view=" << is_view(*mapping) << " resize=" << resize
+                                                      << " max_width=" << cap << " uint8=" << u8);
+                    const lfs::io::LoadParams params{.resize_factor = resize, .max_width = cap, .undistort = mapping, .output_uint8 = u8};
+                    for (int visit = 0; visit < 2; ++visit) {
+                        const auto image = cache.load_cached_image(path, params);
+                        EXPECT_EQ(image.dtype(), u8 ? DataType::UInt8 : DataType::Float32);
+                        EXPECT_EQ(image.shape(), expected.shape());
+                        if (image.shape() != expected.shape())
+                            continue;
+                        auto actual = image.to(Device::CUDA).to(DataType::Float32);
+                        if (u8)
+                            actual = actual / 255.f;
+                        const float tolerance = u8 ? 1.f / 255.f : 1.f / 65535.f;
+                        EXPECT_LE((actual - expected).abs().max().item(), tolerance) << "visit=" << visit;
+                    }
+                }
+            }
+        }
+    };
+    const auto png = temp.path / "source.png";
+    ASSERT_TRUE(save_png(png, pixels.data(), w, h, 3, 8, 0));
+    check(png, bytes.to(Device::CUDA).to(DataType::Float32).permute({2, 0, 1}).contiguous() / 255.f);
+    if (lfs::io::NvCodecImageLoader::is_available()) {
+        const auto jpeg = temp.path / "source.jpg";
+        save_image_u8(jpeg, bytes, 100);
+        lfs::io::NvCodecImageLoader decoder({.enable_fallback = false, .decoder_pool_size = 1});
+        check(jpeg, decoder.load_image_gpu(jpeg));
+    }
+    cache.reset_cache();
+}
 
 TEST_F(MaskRgbCache, IgnoredSourceColorsCannotChangeColdHotOrSpilledTargets) {
     check_memory_precedence();

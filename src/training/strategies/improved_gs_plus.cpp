@@ -841,9 +841,8 @@ namespace lfs::training {
             return 0;
         }
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        const auto free_count_val = static_cast<size_t>(active_region.sum_scalar());
-        return current_size - free_count_val;
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return current_size - active_region.count_nonzero();
     }
 
     size_t ImprovedGSPlus::free_count() const {
@@ -856,8 +855,8 @@ namespace lfs::training {
             return 0;
         }
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        return static_cast<size_t>(active_region.sum_scalar());
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return active_region.count_nonzero();
     }
 
     lfs::core::Tensor ImprovedGSPlus::get_active_indices() const {

@@ -4,7 +4,7 @@
 
 #include "preprocessing/preprocess.hpp"
 #include "core/native_fs.hpp"
-#include "preprocessing/lens_priors.hpp"
+#include "lens_lookup.hpp"
 
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
@@ -1066,16 +1066,7 @@ namespace {
         Image inference;
     };
 
-    // A lens the rasterizer models natively, with intrinsics at width x height.
-    struct LensSource {
-        lfs::training::kernels::DepthCameraProjection projection;
-        float fx = 0.0f;
-        float fy = 0.0f;
-        float cx = 0.0f;
-        float cy = 0.0f;
-        int width = 0;
-        int height = 0;
-    };
+    using LensSource = lfs::preprocessing::LensCamera;
 
     // Side of the grid the face estimates are gathered onto before the maps are written.
     constexpr int kLensGridSide = 1024;
@@ -1101,22 +1092,38 @@ namespace {
             const auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
             if (!scene)
                 return lenses;
+            const auto root = fs::absolute(params.dataset_path).lexically_normal();
+            const auto folder = (root / params.images_folder).lexically_normal();
+            std::unordered_map<std::string, const lfs::core::Camera*> owners;
+            const auto claim = [&](const fs::path& path, const lfs::core::Camera* camera) {
+                auto [it, inserted] = owners.try_emplace(lens_key(path), camera);
+                if (!inserted && it->second && it->second != camera) {
+                    LOG_WARN("Multiple cameras match {}; estimating the raw image", it->first);
+                    it->second = nullptr;
+                }
+            };
             for (const auto& cam : scene->cameras) {
+                if (!cam || cam->image_path().empty())
+                    continue;
+                claim(cam->image_path(), cam.get());
+                const auto image = fs::absolute(cam->image_path()).lexically_normal();
+                const auto in_folder = image.lexically_relative(folder);
+                const auto in_dataset = image.lexically_relative(root);
+                if ((!in_folder.empty() && *in_folder.begin() != "..") ||
+                    !in_dataset.has_parent_path() || *in_dataset.begin() == "..")
+                    continue;
+                const auto alternate = folder / in_dataset.lexically_relative(*in_dataset.begin());
+                std::error_code ec;
+                if (fs::is_regular_file(alternate, ec))
+                    claim(alternate, cam.get());
+            }
+            for (const auto& [key, cam] : owners) {
                 if (!cam)
                     continue;
                 const auto model = cam->camera_model_type();
                 if (model == lfs::core::CameraModelType::PINHOLE || model == lfs::core::CameraModelType::ORTHO)
                     continue;
-                lenses.emplace(lens_key(cam->image_path()),
-                               LensSource{
-                                   .projection = lfs::training::depth_camera_projection(*cam),
-                                   .fx = cam->focal_x(),
-                                   .fy = cam->focal_y(),
-                                   .cx = cam->center_x(),
-                                   .cy = cam->center_y(),
-                                   .width = cam->camera_width(),
-                                   .height = cam->camera_height(),
-                               });
+                lenses.emplace(key, lfs::preprocessing::make_lens_camera(*cam));
             }
         } catch (const std::exception& e) {
             LOG_WARN("Lens cameras unavailable ({}); estimating on the raw images", e.what());
@@ -1451,6 +1458,13 @@ namespace {
 } // namespace
 
 namespace lfs::preprocessing {
+
+    std::optional<LensCamera> lookup_lens_source(const core::param::PreprocessParameters& params,
+                                                 const fs::path& image_path) {
+        const auto lenses = load_lens_sources(params);
+        const auto it = lenses.find(lens_key(image_path));
+        return it == lenses.end() ? std::nullopt : std::optional{it->second};
+    }
 
     std::span<const ModelDescriptor> model_catalog() { return kModelCatalog; }
 

@@ -433,7 +433,15 @@ namespace lfs::python {
         }
     }
 
+    void PyOptimizationParams::set_scaled_iterations(const size_t target) {
+        set_impl("iterations", nb::cast(target), true);
+    }
+
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
+        set_impl(prop_id, std::move(value), false);
+    }
+
+    void PyOptimizationParams::set_impl(const std::string& prop_id, nb::object value, const bool scale_schedule) {
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
             throw std::runtime_error("Unknown property: " + prop_id);
@@ -495,7 +503,7 @@ namespace lfs::python {
 
         std::any old_value;
         modify_params([&](auto& p) {
-            auto candidate = p;
+            auto candidate = scale_schedule ? p.scaled_to_iterations(std::any_cast<size_t>(new_value)) : p;
             auto current_ref = PropertyObjectRef::cpp(&p);
             auto candidate_ref = PropertyObjectRef::cpp(&candidate);
             old_value = meta->getter(current_ref);
@@ -1009,6 +1017,8 @@ namespace lfs::python {
             .def("get", &PyOptimizationParams::get, nb::arg("name"), "Get property value by name")
             .def("builtin_default", &PyOptimizationParams::builtin_default, nb::arg("name"),
                  "Get the built-in default for the active method and step scaling")
+            .def("set_scaled_iterations", &PyOptimizationParams::set_scaled_iterations, nb::arg("target"),
+                 "Set the iteration limit and rescale its schedule together")
             .def("set", &PyOptimizationParams::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             .def("__getattr__", &PyOptimizationParams::get, nb::arg("name"), "Get property value by attribute name")
             .def("prop_info", &PyOptimizationParams::prop_info, nb::arg("prop_id"),
@@ -1182,14 +1192,17 @@ namespace lfs::python {
                 "apply_step_scaling",
                 [](PyOptimizationParams&, float new_scaler) {
                     modify_params([new_scaler](auto& opt) {
+                        auto candidate = opt;
                         const float clamped = std::max(0.0f, new_scaler);
                         const float prev = opt.steps_scaler;
-                        opt.steps_scaler = clamped;
-                        if (clamped <= 0.0f)
-                            return;
-
-                        const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
-                        opt.scale_steps(ratio);
+                        if (clamped > 0.0f) {
+                            const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
+                            candidate.scale_steps(ratio);
+                        }
+                        candidate.steps_scaler = clamped;
+                        if (const auto error = candidate.validate(); !error.empty())
+                            throw std::invalid_argument(error);
+                        opt = std::move(candidate);
                     });
                 },
                 nb::arg("new_scaler"),

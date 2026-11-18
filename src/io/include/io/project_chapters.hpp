@@ -445,7 +445,6 @@ namespace lfs::io::project {
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
-        bool crop_effects_enabled = true;
         bool payload_diverged = false;
         bool point_cloud_source = false;
         std::optional<GeorefPose> georef_pose = std::nullopt;
@@ -458,6 +457,11 @@ namespace lfs::io::project {
         std::optional<lfs::core::Uuid> collision = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
+    };
+
+    struct PublishedSplatMetadata {
+        std::uint64_t count;
+        int sh_degree;
     };
 
     class LFS_IO_API SceneGraphChapter {
@@ -481,6 +485,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_training_model_uuid(std::optional<lfs::core::Uuid> value);
         [[nodiscard]] lfs::Result<std::vector<SceneNodeRecord>> nodes() const;
+        [[nodiscard]] lfs::Result<std::optional<PublishedSplatMetadata>>
+        published_splat_metadata(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<std::optional<SceneNodeRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);

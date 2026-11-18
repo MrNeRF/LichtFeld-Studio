@@ -153,6 +153,7 @@ namespace lfs::vis {
             // sample into the actual output image size for the selected slot.
             glm::ivec2 source_size{0, 0};
             OutputSlot output_slot = OutputSlot::Main;
+            bool require_exact_depth = false;
         };
 
         LFS_VIS_API VksplatViewportRenderer();

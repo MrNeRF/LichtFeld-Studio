@@ -1397,9 +1397,10 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path or resume
+            const bool has_scripts = python_scripts && !::args::get(python_scripts).empty();
+            // Headless scripts can run without a training source. TCP still needs one.
             // (--resume accepts both .resume checkpoints and .licht projects).
-            if (headless && !has_data_path && !has_resume) {
+            if (headless && !has_data_path && !has_resume && (!has_scripts || tcp_connection || init_path)) {
                 return std::unexpected(std::format(
                     "ERROR: Headless mode requires --data-path or --resume "
                     "(--resume file.licht counts as a project source)\n\n{}",
@@ -1972,7 +1973,7 @@ namespace {
                 // Python scripts
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
-                        params.python_scripts.emplace_back(script);
+                        params.python_scripts.emplace_back(lfs::core::utf8_to_path(script));
                     }
                 }
 
@@ -2312,11 +2313,17 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .rad, .resume (checkpoint),\n"
+        "          .licht (visible splat nodes of a project with their transforms and enabled crops)\n"
         "  Output: .ply, .sog, .ssog, .spz, .glb, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
+        "  Scripts:  --capabilities prints stable feature identifiers, one per line\n"
         "\n";
+
+    // Identifiers for scripts and plugins. Never reword one; add a new identifier
+    // when the behavior it names changes.
+    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
     constexpr const char* MESH2SPLAT_HELP_FOOTER =
@@ -2378,6 +2385,7 @@ namespace {
         ::args::Flag rad_stream(parser, "stream", "RAD output: streamable Spark-compatible chunks (default)", {"stream"});
         ::args::Flag rad_none_stream(parser, "none-stream", "RAD output: native LichtFeld chunks", {"none-stream"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
+        ::args::Flag capabilities(parser, "capabilities", "Print stable feature identifiers, one per line, and exit", {"capabilities"});
 
         std::vector<std::string> args_vec(argv + 1, argv + argc);
         args_vec[0] = std::string(argv[0]) + " convert";
@@ -2390,6 +2398,11 @@ namespace {
             return core_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
             return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        if (capabilities) {
+            std::print("{}", CONVERT_CAPABILITIES);
+            return core_args::HelpMode{};
         }
 
         if (!input) {

@@ -13,6 +13,7 @@
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
 #include "core/camera_frame_normalizer.hpp"
+#include "core/camera_views.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
@@ -59,6 +60,7 @@
 #include "noise_infill.hpp"
 #include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "preprocessing/lens_priors.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat/GeometryFeatures.h"
@@ -126,6 +128,50 @@ namespace lfs::training {
         constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
         // Longest pause between retries of a step that keeps running out of VRAM.
         constexpr int kMaxStepOomBackoffMs = 2000;
+
+        lfs::Status expand_camera_views(const lfs::core::Scene& scene,
+                                        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+            using lfs::core::Camera;
+            using lfs::core::kPanoramaViewCount;
+            int64_t first = 0;
+            for (const auto& camera : scene.getAllCameras())
+                first = std::max(first, int64_t{camera->uid()} + 1);
+            std::vector<std::shared_ptr<Camera>> expanded;
+            expanded.reserve(cameras.size());
+            size_t sources = 0, faces = 0;
+            int min_size = std::numeric_limits<int>::max(), max_size = 0;
+            for (const auto& camera : cameras) {
+                const auto model = camera->camera_model_type();
+                float lens_limit = 0;
+                if (model == core::CameraModelType::FISHEYE || model == core::CameraModelType::THIN_PRISM_FISHEYE)
+                    lens_limit = preprocessing::lens_max_angle(preprocessing::make_lens_camera(*camera));
+                const auto plan = plan_camera_views(*camera, lens_limit);
+                if (plan.empty()) {
+                    expanded.push_back(camera);
+                    continue;
+                }
+                const auto uid = first + int64_t{kPanoramaViewCount} * camera->uid();
+                if (camera->uid() < 0 || uid + static_cast<int>(plan.size()) - 1 > std::numeric_limits<int>::max())
+                    return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
+                                                                 .domain = lfs::ErrorDomain::Training,
+                                                                 .user_message = "View camera UIDs exceed the supported range.",
+                                                                 .detection = LFS_SOURCE_SITE_CURRENT()}));
+                const auto views = make_camera_views(*camera, plan, static_cast<int>(uid));
+                expanded.insert(expanded.end(), views.begin(), views.end());
+                for (const auto& view : views) {
+                    min_size = std::min({min_size, view->camera_width(), view->camera_height()});
+                    max_size = std::max({max_size, view->camera_width(), view->camera_height()});
+                }
+                ++sources;
+                faces += views.size();
+            }
+            if (sources) {
+                cameras = std::move(expanded);
+                const auto size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
+                LOG_INFO("Split {} photographs into {} pinhole views (face size {} px)", sources, faces, size);
+            }
+            return {};
+        }
 
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
@@ -329,7 +375,8 @@ namespace lfs::training {
             for (size_t i = 0; i < cameras.size() && probe_cams.size() < kProbeViews; i += stride) {
                 const auto* cam = cameras[i];
                 if (cam->camera_width() <= 0 || cam->camera_height() <= 0 ||
-                    cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f) {
+                    (cam->camera_model_type() != core::CameraModelType::EQUIRECTANGULAR &&
+                     (cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f))) {
                     continue;
                 }
                 probe_cams.push_back(cam);
@@ -395,15 +442,24 @@ namespace lfs::training {
             for (const auto& raw : raw_views) {
                 NormalPriorDecodedView view;
                 view.w2c = camera_w2c_rotation_array(*raw.cam);
-                const float width = static_cast<float>(raw.cam->camera_width());
-                const float height = static_cast<float>(raw.cam->camera_height());
-                const float fx = raw.cam->focal_x();
-                const float fy = raw.cam->focal_y();
-                const float cx = raw.cam->center_x();
-                const float cy = raw.cam->center_y();
+                const auto lens = preprocessing::make_lens_camera(*raw.cam);
                 view.normals.reserve(raw.samples.size());
                 view.rays.reserve(raw.samples.size());
-                for (const auto& s : raw.samples) {
+                std::vector<float> lens_rays;
+                if (raw.cam->camera_model_type() != core::CameraModelType::PINHOLE) {
+                    std::vector<float> xy;
+                    xy.reserve(2 * raw.samples.size());
+                    for (const auto& s : raw.samples)
+                        xy.insert(xy.end(), {s.u * lens.width, s.v * lens.height});
+                    const auto pixels = core::Tensor::from_vector(xy, {raw.samples.size(), 2}, core::Device::CUDA);
+                    auto rays = core::Tensor::empty({raw.samples.size(), 3}, core::Device::CUDA);
+                    preprocessing::lens_rays_at(lens, pixels.ptr<float>(), raw.samples.size(), rays.ptr<float>(), rays.stream());
+                    lens_rays = rays.to_vector();
+                }
+                for (size_t i = 0; i < raw.samples.size(); ++i) {
+                    if (!lens_rays.empty() && !std::isfinite(lens_rays[3 * i]))
+                        continue;
+                    const auto& s = raw.samples[i];
                     std::array<float, 3> n;
                     if (result.srgb) {
                         n = {lfs::core::srgb_encoding_to_linear(s.r) * 2.0f - 1.0f,
@@ -416,9 +472,11 @@ namespace lfs::training {
                         continue;
                     }
                     view.normals.push_back(n);
-                    view.rays.push_back({(s.u * width - cx) / fx,
-                                         (s.v * height - cy) / fy,
-                                         1.0f});
+                    if (!lens_rays.empty()) {
+                        view.rays.push_back({lens_rays[3 * i], lens_rays[3 * i + 1], lens_rays[3 * i + 2]});
+                    } else {
+                        view.rays.push_back({(s.u * lens.width - lens.cx) / lens.fx, (s.v * lens.height - lens.cy) / lens.fy, 1.0f});
+                    }
                 }
                 if (!view.normals.empty()) {
                     views.push_back(std::move(view));
@@ -1220,7 +1278,12 @@ namespace lfs::training {
             // Training and checkpoint state use the original camera UID as the slot.
             // Disabled, missing-image and evaluation cameras must not shrink that space.
             int camera_slots = 0;
-            for (const auto& camera : scene_->getAllCameras()) {
+            auto cameras = scene_->getAllCameras();
+            for (const auto& dataset : {train_dataset_, val_dataset_}) {
+                if (dataset)
+                    cameras.insert(cameras.end(), dataset->get_cameras().begin(), dataset->get_cameras().end());
+            }
+            for (const auto& camera : cameras) {
                 const int uid = camera->uid();
                 if (uid < 0 || uid == std::numeric_limits<int>::max()) {
                     return std::unexpected(std::format(
@@ -3041,6 +3104,18 @@ namespace lfs::training {
                     }
                 }
 
+                if (params.optimization.enable_eval && params.optimization.eval_all) {
+                    for (const auto& camera : source_cameras)
+                        camera->set_split(lfs::core::CameraSplit::Train);
+                }
+
+                train_frame_scale_ = camera_derived_frame_scale(source_cameras);
+                if (params.optimization.undistort) {
+                    auto expanded = expand_camera_views(*scene_, source_cameras);
+                    if (!expanded)
+                        return std::unexpected(std::string(expanded.error().user_message()));
+                }
+
                 if (params.optimization.holds_out_eval_images()) {
                     for (const auto& camera : source_cameras) {
                         switch (camera->split()) {
@@ -3061,7 +3136,6 @@ namespace lfs::training {
                 return std::unexpected("No camera source available");
             }
 
-            train_frame_scale_ = camera_derived_frame_scale(source_cameras);
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());
             }
@@ -3072,9 +3146,6 @@ namespace lfs::training {
                     source_cameras, dataset_config, CameraDataset::Split::ALL);
                 val_dataset_ = std::make_shared<CameraDataset>(
                     source_cameras, dataset_config, CameraDataset::Split::ALL);
-                for (const auto& camera : source_cameras) {
-                    camera->set_split(lfs::core::CameraSplit::Train);
-                }
                 LOG_INFO("Training on all {} images and evaluating on them", train_dataset_->size());
             } else if (params.optimization.enable_eval) {
                 train_dataset_ = std::make_shared<CameraDataset>(
@@ -3186,8 +3257,19 @@ namespace lfs::training {
             }
 
             pose_refinement_.reset();
+            held_out_pose_groups_.clear();
             if (params.optimization.pose_opt) {
-                auto refinement = CameraPoseRefinement::create(train_dataset_->get_cameras(),
+                const auto scene_cameras = scene_->getAllCameras();
+                auto train = core::group_camera_views(train_dataset_->get_cameras(), scene_cameras);
+                if (!train)
+                    return std::unexpected(std::string(train.error().user_message()));
+                if (val_dataset_ && !params.optimization.eval_all) {
+                    auto held_out = core::group_camera_views(val_dataset_->get_cameras(), scene_cameras);
+                    if (!held_out)
+                        return std::unexpected(std::string(held_out.error().user_message()));
+                    held_out_pose_groups_ = std::move(*held_out);
+                }
+                auto refinement = CameraPoseRefinement::create(std::move(*train),
                                                                static_cast<int>(params.optimization.iterations));
                 if (!refinement)
                     return std::unexpected(std::string(refinement.error().user_message()));
@@ -7650,6 +7732,9 @@ namespace lfs::training {
                                         const float* const depth_pixel_weight =
                                             roi_weight_ptr_on_stream(depth_stream);
                                         lfs::core::pin_operands({&rendered_depth, &rendered_alpha, &target_depth});
+                                        const int x0 = fast_ctx ? fast_ctx->tile_x_offset : gsplat_ctx->render_tile_x_offset;
+                                        const int y0 = fast_ctx ? fast_ctx->tile_y_offset : gsplat_ctx->render_tile_y_offset;
+                                        const auto ray_grid = depth_prior_ray_grid(*cam, x0, y0);
                                         lfs::training::kernels::launch_depth_loss(
                                             rendered_depth.ptr<float>(),
                                             rendered_alpha.ptr<float>(),
@@ -7665,7 +7750,8 @@ namespace lfs::training {
                                             depth_prior_qstep,
                                             depth_anchor,
                                             depth_stream,
-                                            depth_pixel_weight);
+                                            depth_pixel_weight,
+                                            ray_grid ? &*ray_grid : nullptr);
 
                                         tile_loss = tile_loss + depth_loss_scalar_;
                                         // Rendered against an external depth target, the loss changes along the
@@ -8856,7 +8942,7 @@ namespace lfs::training {
                         !project_hook_destination
                              .empty();
                     if (!may_save_at_project_hook) {
-                        if (iter + 1 == target ||
+                        if (int64_t{iter} + 1 == target ||
                             iter == target) {
                             LOG_DEBUG(
                                 "Skipping save-project-at-iter project save at iteration {}: trainer-initiated saves are not authorized",
@@ -8871,7 +8957,7 @@ namespace lfs::training {
                     } else {
                         if (!in_popspa &&
                             !(popspa_enabled() && target > get_regular_iterations()) &&
-                            iter + 1 == target &&
+                            int64_t{iter} + 1 == target &&
                             !prepared_project_snapshot_) {
                             prepare_project_snapshot_at_safe_point(
                                 target,
@@ -8973,7 +9059,7 @@ namespace lfs::training {
         // The training cameras moved with the model; score the held-out views from where they fit it best.
         std::optional<RefittedCameraPoses> refit;
         if (pose_refinement_ && val_dataset_ && !params_.optimization.eval_all) {
-            refit.emplace(val_dataset_->get_cameras(), strategy_->get_model(), background_,
+            refit.emplace(held_out_pose_groups_, strategy_->get_model(), background_,
                           RefittedCameraPoses::Settings{
                               .resize_factor = params_.dataset.resize_factor,
                               .max_width = params_.dataset.max_width,
@@ -8982,7 +9068,7 @@ namespace lfs::training {
                           });
             std::unique_lock render_lock(render_mutex_);
             refit->apply();
-            LOG_INFO("Refitted {} held-out cameras to the model before scoring them", val_dataset_->get_cameras().size());
+            LOG_INFO("Refitted {} held-out cameras to the model before scoring them", held_out_pose_groups_.size());
         }
         auto restore_poses = makeScopeGuard([this, &refit] {
             if (refit) {
@@ -9186,8 +9272,9 @@ namespace lfs::training {
             }
 
             // Start from current_iteration_ (allows resume from checkpoint)
-            int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
+            int64_t next_iter = next_training_iteration(current_iteration_.load());
             if (progress_) {
+                const int iter = static_cast<int>(std::min<int64_t>(next_iter, get_total_iterations()));
                 progress_->update(
                     iter,
                     current_loss_.load(),
@@ -9225,16 +9312,12 @@ namespace lfs::training {
             }
             aux_pipeline_config.load_depths = training_depth_priors_enabled(params_.optimization);
             aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
-            {
-                // Val cameras need maps too for the eval depth and normal metrics;
-                // one call keeps generation to a single estimator pass.
-                auto prior_cameras = train_dataset_->get_cameras();
-                if (val_dataset_) {
-                    const auto& val_cameras = val_dataset_->get_cameras();
-                    prior_cameras.insert(prior_cameras.end(), val_cameras.begin(), val_cameras.end());
-                }
-                ensure_training_prior_maps(params_, prior_cameras);
-            }
+            using CameraSpan = std::span<const std::shared_ptr<lfs::core::Camera>>;
+            const auto training_photographs = prepare_training_prior_maps(
+                params_, train_dataset_->get_cameras(), val_dataset_ ? CameraSpan(val_dataset_->get_cameras()) : CameraSpan{},
+                scene_->getAllCameras());
+            if (!training_photographs)
+                return lfs::Status::failure(training_photographs.error());
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
                 for (const auto& cam : train_dataset_->get_cameras()) {
@@ -9264,7 +9347,7 @@ namespace lfs::training {
                 normal_prior_world_rotation_ = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
                 normal_prior_usable_ = true;
                 std::vector<const lfs::core::Camera*> normal_cameras;
-                for (const auto& cam : train_dataset_->get_cameras()) {
+                for (const auto& cam : *training_photographs) {
                     if (cam->has_normal()) {
                         normal_cameras.push_back(cam.get());
                     }
@@ -9279,7 +9362,7 @@ namespace lfs::training {
                              train_dataset_->get_cameras().size());
                 } else {
                     LOG_INFO("Normal maps available for {}/{} training cameras",
-                             normal_cameras.size(), train_dataset_->get_cameras().size());
+                             normal_cameras.size(), training_photographs->size());
 
                     nvtxRangePush("resolve_normal_prior_convention");
                     const auto normal_resolve_start = std::chrono::steady_clock::now();
@@ -9319,16 +9402,10 @@ namespace lfs::training {
                 aux_pipeline_config.normal_world_space = normal_prior_world_space_;
                 aux_pipeline_config.normal_srgb = normal_prior_srgb_;
                 aux_pipeline_config.normal_world_rotation = normal_prior_world_rotation_;
-                if (normal_prior_world_space_) {
-                    aux_pipeline_config.normal_world_to_camera_by_source.resize(
-                        train_dataset_->get_cameras().size());
-                    for (size_t i = 0; i < train_dataset_->get_cameras().size(); ++i) {
-                        aux_pipeline_config.normal_world_to_camera_by_source[i] =
-                            camera_world_to_camera_normal_matrix(
-                                *train_dataset_->get_cameras()[i],
-                                normal_prior_world_rotation_);
-                    }
-                }
+                auto& rotations = aux_pipeline_config.normal_rotation_by_source;
+                rotations.reserve(train_dataset_->get_cameras().size());
+                for (const auto& camera : train_dataset_->get_cameras())
+                    rotations.push_back(normal_prior_rotation(*camera, normal_prior_world_space_, normal_prior_world_rotation_));
             }
             if (evaluator_) {
                 evaluator_->set_normal_prior_decode({
@@ -9406,7 +9483,7 @@ namespace lfs::training {
                 pipelined_config,
                 aux_pipeline_config,
                 TRAINING_SAMPLER_SEED,
-                static_cast<size_t>(std::max(0, iter - 1)));
+                static_cast<size_t>(next_iter - 1));
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
@@ -9426,19 +9503,19 @@ namespace lfs::training {
             std::optional<POPSpaPhase> popspa_sampler_phase;
             const auto popspa_project_hook = getParams().save_project_at_iteration;
             unsigned oom_steps_in_a_row = 0;
-            while (iter <= get_total_iterations() ||
+            while (next_iter <= get_total_iterations() ||
                    (popspa_enabled() && (!popspa_controller_.is_initialized() ||
                                          popspa_controller_.phase() != POPSpaPhase::Complete))) {
-                lfs::core::Tensor::set_memory_pool_iteration(iter);
-
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
-                if (auto advanced = advance_popspa_boundaries(iter - 1, stop_token); !advanced) {
+                if (auto advanced = advance_popspa_boundaries(static_cast<int>(next_iter - 1), stop_token); !advanced) {
                     terminal_error = std::move(advanced).error();
                     break;
                 }
-                if (iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
+                if (next_iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
                     break;
+                const int iter = static_cast<int>(next_iter);
+                lfs::core::Tensor::set_memory_pool_iteration(iter);
                 // The regular-phase save consumes the initially reserved UUID.
                 // Reserve another outside the optimizer safe point for a CLI
                 // snapshot inside POPSpa. Its layout is prepared after this step,
@@ -9662,8 +9739,8 @@ namespace lfs::training {
 
                 if (repeat_iteration)
                     continue;
-                ++iter;
-                if (iter == params_.optimization.stop_refine)
+                ++next_iter;
+                if (static_cast<size_t>(next_iter) == params_.optimization.stop_refine)
                     lfs::diagnostics::VramProfiler::instance().mark("densification_stop");
             }
 
@@ -9675,7 +9752,7 @@ namespace lfs::training {
                                          current_iteration_.load() >= get_total_iterations();
             // A resume at the terminal iteration starts at max+1, so there is no
             // training step in which to service an evaluation scheduled at max.
-            const bool terminal_eval_due = !popspa_enabled() && iter > get_total_iterations() &&
+            const bool terminal_eval_due = !popspa_enabled() && next_iter > get_total_iterations() &&
                                            evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations());
             if (!terminal_error && !stop_token.stop_requested() && !stop_requested_.load() &&
                 evaluator_->is_enabled() && (popspa_complete || terminal_eval_due)) {

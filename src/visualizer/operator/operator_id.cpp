@@ -39,7 +39,6 @@ namespace lfs::vis::op {
             {"crop.draw_polygon", "Draw Crop Polygon"},
             {"crop_polygon.set", "Set Crop Polygon"},
             {"scale_distance.pick_point", "Scale by Distance"},
-            {"crop_volume.duplicate", "Duplicate Crop Volume"},
         }};
 
         struct ToolInfo {

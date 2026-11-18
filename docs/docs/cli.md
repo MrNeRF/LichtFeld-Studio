@@ -21,6 +21,17 @@ Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_vo
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
 returning `False` cancels. Optional transforms are 16 column-major data-world values.
 
+## Convert a project
+
+```sh
+LichtFeld-Studio convert scene.licht scene.ply
+LichtFeld-Studio convert scene.licht scene.spz --sh-degree 2
+```
+
+`convert` merges visible splats using saved transforms, enabled crops and the published SH degree.
+Referenced RAD data is loaded at full detail; unrelated checkpoints and Undo history are excluded.
+`LichtFeld-Studio convert --capabilities` prints `visible-project-splats-v1` when this export is supported.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a
@@ -77,3 +88,7 @@ its rotation, the ROI training options and tiled training.
 combined with `--gut`. At the end of training `pose_refinement.tsv` lists each camera's move and turn, and
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
+
+## Run a Python script
+
+`LichtFeld-Studio --headless --python-script /path/to/check.py` runs trusted local scripts without a dataset, GUI, training or user plugins, returning a nonzero status on failure; never take the script path from downloaded project metadata.
