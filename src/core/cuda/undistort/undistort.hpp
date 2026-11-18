@@ -19,7 +19,13 @@ namespace lfs::core {
         float distortion[12];
         int num_distortion;
         bool crop_solve_failed = false;
+        // Row-major rotation from the destination pinhole frame to the source frame.
+        float view_rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     };
+
+    __host__ __device__ inline bool is_view(const UndistortParams& params) {
+        return params.model_type == CameraModelType::EQUIRECTANGULAR;
+    }
 
     struct UndistortGrid {
         int width;

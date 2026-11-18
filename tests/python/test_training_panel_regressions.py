@@ -2746,7 +2746,7 @@ def test_distorted_images_shows_prompt_and_handles_cancel(training_panel_module,
     assert len(started) == 0
 
 
-def test_distorted_images_equirectangular_offers_only_gut(training_panel_module, monkeypatch):
+def test_distorted_images_without_undistort_support_offer_only_gut(training_panel_module, monkeypatch):
     module = training_panel_module
     panel = module.TrainingPanel()
     panel._handle = _HandleStub()

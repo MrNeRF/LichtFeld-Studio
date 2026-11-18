@@ -50,6 +50,9 @@ namespace lfs::core {
                const std::filesystem::path& normal_path = {});
         Camera(const Camera&, const Tensor& transform);
 
+        std::shared_ptr<Camera> make_pinhole_view(const UndistortParams& params, int uid,
+                                                  const std::string& image_name) const;
+
         // Destructor to clean up CUDA stream
         ~Camera();
 
