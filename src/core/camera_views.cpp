@@ -4,10 +4,12 @@
 #include "core/camera_distortion_layout.hpp"
 #include "core/distortion_model.hpp"
 #include "core/path_utils.hpp"
+#include "core/source_site.hpp"
 #include <algorithm>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 #include <numbers>
+#include <unordered_map>
 
 namespace lfs::core {
 
@@ -99,6 +101,36 @@ namespace lfs::core {
             return result;
         }
     } // namespace
+
+    lfs::Result<std::vector<CameraViewGroup>> group_camera_views(
+        std::span<const std::shared_ptr<Camera>> drawn, std::span<const std::shared_ptr<Camera>> scene) {
+        std::unordered_map<std::filesystem::path, std::shared_ptr<Camera>> sources;
+        for (const auto& camera : scene)
+            if (camera)
+                sources.emplace(camera->image_path(), camera);
+
+        std::vector<CameraViewGroup> groups;
+        std::unordered_map<const Camera*, size_t> rows;
+        for (const auto& camera : drawn) {
+            if (!camera)
+                continue;
+            auto owner = camera;
+            if (camera->is_undistort_prepared() && is_view(camera->undistort_params())) {
+                const auto found = sources.find(camera->image_path());
+                if (found == sources.end())
+                    return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
+                                            .domain = lfs::ErrorDomain::Training,
+                                            .user_message = "A pinhole view has no photograph in the scene",
+                                            .detection = LFS_SOURCE_SITE_CURRENT()});
+                owner = found->second;
+            }
+            const auto [it, inserted] = rows.try_emplace(owner.get(), groups.size());
+            if (inserted)
+                groups.push_back({owner, {}});
+            groups[it->second].drawn.push_back(camera);
+        }
+        return groups;
+    }
 
     std::string photograph_image_name(const std::string& view_image_name) {
         auto path = utf8_to_path(view_image_name);

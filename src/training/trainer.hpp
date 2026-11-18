@@ -881,6 +881,7 @@ namespace lfs::training {
         std::unique_ptr<PPISP> ppisp_;
         // --pose-opt; null when off.
         std::unique_ptr<CameraPoseRefinement> pose_refinement_;
+        std::vector<core::CameraViewGroup> held_out_pose_groups_;
         // Train-set EXIF EV mean used by seed_exposure (0.5 * (ev - mean)). Unset
         // when the seed was skipped or disabled; eval then uses exposure 0.
         std::optional<float> ppisp_exif_exposure_mean_;
