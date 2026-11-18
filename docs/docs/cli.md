@@ -89,6 +89,8 @@ combined with `--gut`. At the end of training `pose_refinement.tsv` lists each c
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
 
+`--calibration-correction` fits a smooth image displacement for each training camera to absorb small calibration errors. It starts at step 1000 scaled by `--steps-scaler`. Training checkpoints retain the correction. During evaluation, the option fits a fresh alignment of each render onto its held-out photograph before scoring. It also works with `eval` on models trained with any calibration setting.
+
 ## Run a Python script
 
 `LichtFeld-Studio --headless --python-script /path/to/check.py` runs trusted local scripts without a dataset, GUI, training or user plugins, returning a nonzero status on failure; never take the script path from downloaded project metadata.

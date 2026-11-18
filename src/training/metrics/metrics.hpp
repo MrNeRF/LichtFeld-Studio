@@ -150,6 +150,7 @@ namespace lfs::training {
         lfs::core::param::EvalPixelSet headline = lfs::core::param::EvalPixelSet::Mask;
         PixelSetScores sets;
         std::vector<ViewMetrics> views;
+        std::string alignment_summary;
 
         [[nodiscard]] std::string to_string() const {
             if (cancelled) {

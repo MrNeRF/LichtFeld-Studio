@@ -29,6 +29,7 @@
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "mesh_mask_kernels.cuh"
+#include "training/components/calibration_correction.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -1471,6 +1472,8 @@ namespace lfs::training {
             }
             report_file << std::setw(15) << m.elapsed_time
                         << std::setw(15) << m.num_gaussians << "\n";
+            if (!m.alignment_summary.empty())
+                report_file << m.alignment_summary << "\n";
         }
 
         report_file.close();
@@ -1702,6 +1705,7 @@ namespace lfs::training {
                                                                               : std::vector<std::string>{};
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
+        std::vector<float> displacement_lengths;
         size_t saved_images = 0;
         std::optional<std::pair<int, int>> lpips_preflight_size;
         cudaEvent_t lpips_start_event = nullptr;
@@ -1826,7 +1830,13 @@ namespace lfs::training {
             lfs::core::Tensor ssim_map;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            lfs::core::Tensor displacement;
             try {
+                if (_params.optimization.calibration_correction) {
+                    r_output.image = CalibrationCorrection::align_for_scoring(
+                        r_output.image, image_as_float01(gt_image), headline_pixels, displacement, &render_raw);
+                    r_output.image = image_for_metrics(r_output.image, view.bit_depth);
+                }
                 psnr = _psnr_metric->compute(r_output.image, gt_image, headline_pixels);
                 ssim = _ssim_metric->compute_evaluation(r_output.image, gt_image, headline_pixels,
                                                         score_mask_sets ? erodes_ssim_windows(headline) : erode_ssim_mask,
@@ -1852,6 +1862,11 @@ namespace lfs::training {
             view.ssim = ssim;
             view.masked = headline_pixels.is_valid();
             evaluated_images++;
+            if (displacement.is_valid()) {
+                const auto offsets = displacement.to_vector();
+                for (size_t i = 0; i < offsets.size(); i += 2)
+                    displacement_lengths.push_back(std::hypot(offsets[i], offsets[i + 1]));
+            }
 
             struct MaskSet {
                 std::string_view name;
@@ -2297,6 +2312,14 @@ namespace lfs::training {
 
         if (skipped_images > 0) {
             LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
+        }
+        if (_params.optimization.calibration_correction && source.report_scores) {
+            std::ranges::sort(displacement_lengths);
+            const auto n = displacement_lengths.size();
+            const float median = n ? .5f * (displacement_lengths[(n - 1) / 2] + displacement_lengths[n / 2]) : 0.f;
+            result.alignment_summary = std::format("Aligned {} views, displacement median {:.3f} px, maximum {:.3f} px",
+                                                   evaluated_images, median, n ? displacement_lengths.back() : 0.f);
+            LOG_INFO("{}", result.alignment_summary);
         }
         if (evaluated_images == 0) {
             LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);

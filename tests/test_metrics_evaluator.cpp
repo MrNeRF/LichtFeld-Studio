@@ -2185,3 +2185,46 @@ TEST(MetricsEvaluator, IgnoredPaintCannotChangeSidecarAlphaOrFolderScores) {
     }
     std::filesystem::remove_all(tmp);
 }
+
+TEST(MetricsEvaluator, CalibrationCorrectionScoresTheAlignedRenderOnlyWhenEnabled) {
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_calibration_scoring";
+    std::filesystem::create_directories(tmp);
+    constexpr int w = 128, h = 96;
+    const auto signal = [](int x, int y, int c) {
+        return uint8_t(std::lround(128 + 54 * std::sin(.17 * x + .04 * y + c) + 36 * std::cos(.06 * x - .14 * y + c)));
+    };
+    std::vector<uint8_t> reference(w * h * 3);
+    std::vector<float> prediction(w * h * 3), expected(w * h * 3);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            for (int c = 0; c < 3; ++c) {
+                const auto value = signal(x + 2, y, c);
+                reference[(y * w + x) * 3 + c] = value;
+                expected[(c * h + y) * w + x] = float(value) / 255.f;
+                prediction[(c * h + y) * w + x] = float(signal(x, y, c)) / 255.f;
+            }
+    const auto path = tmp / "frame.png";
+    ASSERT_TRUE(lfs::core::save_png(path, reference.data(), w, h, 3, 8, 0));
+    auto camera = make_eval_camera(path, {}, w, h);
+    auto dataset = std::make_shared<CameraDataset>(std::vector{camera}, DatasetConfig{}, CameraDataset::Split::ALL);
+    auto source = Tensor::from_vector(prediction, {3, h, w}, Device::CUDA);
+    auto target = Tensor::from_vector(expected, {3, h, w}, Device::CUDA);
+    const float nominal = lfs::training::PSNR{}.compute(source, target);
+    auto render = [&](Camera&, Camera&, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
+        return lfs::training::EvaluationRenderResult{.output = {.image = source}};
+    };
+    for (bool enabled : {false, true}) {
+        auto params = make_eval_params(tmp);
+        params.optimization.calibration_correction = enabled;
+        MetricsEvaluator evaluator(params);
+        auto result = evaluator.evaluate_views(1, dataset, {.render = render}, Tensor::zeros({3}, Device::CUDA));
+        ASSERT_TRUE(result.valid);
+        if (enabled)
+            EXPECT_GT(result.psnr, nominal + 10.f);
+        else
+            EXPECT_FLOAT_EQ(result.psnr, nominal);
+        EXPECT_EQ(result.alignment_summary.empty(), !enabled);
+    }
+    std::filesystem::remove_all(tmp);
+}

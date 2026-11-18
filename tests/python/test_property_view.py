@@ -597,6 +597,10 @@ EXPECTED_CHECKBOX_ROWS = {
         "training.tooltip.ppisp_freeze_gaussians",
     ),
     "pose_opt": ("training_params.pose_opt", "training.tooltip.pose_opt"),
+    "calibration_correction": (
+        "training_params.calibration_correction",
+        "training.tooltip.calibration_correction",
+    ),
     "random": ("training.init.random_init", "training.tooltip.random_init"),
     "enable_eval": (
         "training_params.enable_eval",
@@ -735,13 +739,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 85
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 85
+    assert len(property_view.MIGRATED_PROP_IDS) == 86
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 86
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 119
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 120
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -1483,6 +1487,25 @@ def _run_template_blocks(rml, run_id):
             pos = tag.end()
         blocks.append((opening.group(0), rml[opening.start() : pos]))
     return blocks
+
+
+def test_calibration_correction_row_sits_below_pose_refinement():
+    run_ids = [run.id for run in property_view.RUNS]
+    pose = run_ids.index("pose_opt_toggle")
+    assert run_ids[pose + 1] == "calibration_correction_toggle"
+    pose_run, calibration_run = property_view.RUNS[pose], property_view.RUNS[pose + 1]
+    assert calibration_run.prop_ids == ("calibration_correction",)
+    assert calibration_run.visibility_condition_id == pose_run.visibility_condition_id
+    assert calibration_run.disabled_condition_id == pose_run.disabled_condition_id
+
+    rml = TRAINING_RML.read_text(encoding="utf-8")
+    ((_, pose_block),) = _run_template_blocks(rml, "pose_opt_toggle")
+    ((_, calibration_block),) = _run_template_blocks(rml, "calibration_correction_toggle")
+    pose_end = rml.index(pose_block) + len(pose_block)
+    assert rml[pose_end : rml.index(calibration_block)].strip() == ""
+    assert calibration_block.replace(
+        "pv_calibration_correction_toggle_rows", "pv_pose_opt_toggle_rows"
+    ) == pose_block
 
 
 def test_run_templates_render_every_row_kind_they_contain():

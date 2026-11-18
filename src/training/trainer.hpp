@@ -634,7 +634,7 @@ namespace lfs::training {
             const lfs::core::Tensor& gt_image,
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
-            int iteration = 0);
+            int iteration = 0, CalibrationCorrection* fit = nullptr);
 
         void add_gradient_residual(
             const core::Tensor& corrected, const core::Tensor& target,
@@ -663,7 +663,7 @@ namespace lfs::training {
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
             const lfs::core::Tensor& structure_map = {},
-            int iteration = 0);
+            int iteration = 0, CalibrationCorrection* fit = nullptr);
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -709,6 +709,8 @@ namespace lfs::training {
         // Cleanup method for re-initialization
         void cleanup();
 
+        lfs::Result<int> camera_slot_count() const;
+        lfs::Status initialize_calibration_correction();
         std::expected<void, std::string> initialize_bilateral_grid();
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
@@ -880,6 +882,7 @@ namespace lfs::training {
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
         // --pose-opt; null when off.
+        std::unique_ptr<CalibrationCorrection> calibration_correction_;
         std::unique_ptr<CameraPoseRefinement> pose_refinement_;
         std::vector<core::CameraViewGroup> held_out_pose_groups_;
         // Train-set EXIF EV mean used by seed_exposure (0.5 * (ev - mean)). Unset

@@ -54,6 +54,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "licht_test_support.hpp"
 #include "training/checkpoint.hpp"
+#include "training/components/calibration_correction.hpp"
 #include "training/components/popspa_controller.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
@@ -4733,6 +4734,68 @@ namespace {
         constexpr size_t padding_end = offsetof(lfs::core::TensorFileHeader, numel);
         for (size_t i = padding_begin; i < padding_end; ++i)
             EXPECT_EQ(static_cast<unsigned char>(bytes[i]), 0u) << "header padding byte " << i;
+    }
+
+    TEST(CheckpointCalibrationCorrectionTest, FieldRoundTripsAndOldCheckpointsLoadAsZero) {
+        using namespace lfs::training;
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 2000;
+        params.optimization.max_cap = 4;
+        params.optimization.calibration_correction = true;
+        auto model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        MCMC strategy(*model);
+
+        CalibrationCorrection warp(5);
+        std::vector<float> values(warp.field().numel());
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = 0.01f * static_cast<float>(static_cast<int>(i % 97) - 48);
+        warp.field() = lfs::core::Tensor::from_vector(values, warp.field().shape(), lfs::core::Device::CUDA);
+
+        const auto load = [&](const std::string& bytes, CalibrationCorrection* destination) {
+            auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA);
+            MCMC target_strategy(*target_model);
+            auto target_params = params;
+            std::istringstream input(bytes, std::ios::binary);
+            return load_checkpoint(input, bytes.size(), target_strategy, target_params, nullptr, nullptr, nullptr, {},
+                                   "calibration correction test", nullptr, nullptr, nullptr, destination);
+        };
+
+        std::ostringstream with_warp(std::ios::binary);
+        auto serialized = serialize_checkpoint(with_warp, 1500, strategy, params, nullptr, nullptr, nullptr, nullptr,
+                                               nullptr, &warp);
+        ASSERT_TRUE(serialized.has_value()) << lfs::format_for_developer(serialized.error());
+        EXPECT_TRUE(lfs::core::has_flag(serialized->header.flags, lfs::core::CheckpointFlags::HAS_CALIBRATION_CORRECTION));
+
+        CalibrationCorrection restored(5);
+        const auto loaded = load(with_warp.str(), &restored);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(*loaded, 1500);
+        EXPECT_EQ(restored.field().to_vector(), values);
+
+        // A reader without a warp consumes the block; a different camera count keeps a fresh warp.
+        EXPECT_TRUE(load(with_warp.str(), nullptr).has_value());
+        CalibrationCorrection other_dataset(3);
+        ASSERT_TRUE(load(with_warp.str(), &other_dataset).has_value());
+        EXPECT_EQ(other_dataset.field().to_vector(), std::vector<float>(other_dataset.field().numel(), 0.0f));
+
+        warp.field() = lfs::core::Tensor::zeros({5, 7, 7, 2}, lfs::core::Device::CUDA);
+        std::ostringstream other_grid(std::ios::binary);
+        ASSERT_TRUE(serialize_checkpoint(other_grid, 1500, strategy, params, nullptr, nullptr, nullptr, nullptr,
+                                         nullptr, &warp));
+        ASSERT_TRUE(load(other_grid.str(), &restored));
+        EXPECT_EQ(restored.field().to_vector(), std::vector<float>(values.size(), 0.f));
+
+        // Without the option the checkpoint has no warp block, and loading it resets the field to zero.
+        restored.field().fill_(1.f);
+        params.optimization.calibration_correction = false;
+        std::ostringstream without_warp(std::ios::binary);
+        auto plain = serialize_checkpoint(without_warp, 1500, strategy, params, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(plain.has_value()) << lfs::format_for_developer(plain.error());
+        EXPECT_FALSE(lfs::core::has_flag(plain->header.flags, lfs::core::CheckpointFlags::HAS_CALIBRATION_CORRECTION));
+        EXPECT_LT(without_warp.str().size(), with_warp.str().size());
+        ASSERT_TRUE(load(without_warp.str(), &restored).has_value());
+        EXPECT_EQ(restored.field().to_vector(), std::vector<float>(values.size(), 0.0f));
     }
 
 } // namespace

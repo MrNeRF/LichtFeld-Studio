@@ -103,6 +103,8 @@ namespace lfs::core {
         }
         if (header.version >= CHECKPOINT_VERSION_HAS_POPSPA)
             known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_POPSPA);
+        if (header.version >= CHECKPOINT_VERSION_FIELDWISE_CONFIGS)
+            known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_CALIBRATION_CORRECTION);
         if ((static_cast<uint32_t>(header.flags) & ~known_flags) != 0)
             return std::unexpected("Invalid checkpoint: unknown feature flags");
         if (has_flag(header.flags, CheckpointFlags::HAS_SPARSITY) && has_flag(header.flags, CheckpointFlags::HAS_POPSPA))

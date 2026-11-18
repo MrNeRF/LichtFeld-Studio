@@ -719,6 +719,16 @@ namespace lfs::core::param {
             .locale("training_params.pose_opt")
             .tooltip("training.tooltip.pose_opt")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::calibration_correction,
+                       "calibration_correction", "Calibration Correction", d.calibration_correction,
+                       "Fits a small, smooth warp to every training photo that absorbs what the calibration missed "
+                       "(rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that "
+                       "disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step "
+                       "count; evaluation then scores each held-out view after aligning the render to the photo.")
+            .locale("training_params.calibration_correction")
+            .tooltip("training.tooltip.calibration_correction")
+            .flags(PROP_ADVANCED)
+            .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,
                        "Enable per-camera physically plausible image signal processing")
