@@ -14,6 +14,7 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
+#include "core/panorama_views.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -177,6 +178,12 @@ namespace lfs::training {
             }
         };
 
+        bool score_distorted_grid(const lfs::core::Camera& camera,
+                                  const lfs::core::param::TrainingParameters& params) {
+            return params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted &&
+                   !is_view(camera.undistort_params());
+        }
+
         lfs::io::LoadParams evaluation_load_params(const lfs::core::Camera& camera,
                                                    const lfs::core::param::TrainingParameters& params) {
             lfs::io::LoadParams load_params;
@@ -194,7 +201,7 @@ namespace lfs::training {
             load_params.skip_blob_cache = true;
             load_params.cuda_stream = lfs::core::getCurrentCUDAStream();
             if (params.optimization.undistort && camera.is_undistort_prepared() &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted)
+                !score_distorted_grid(camera, params))
                 load_params.undistort = &camera.undistort_params();
             return load_params;
         }
@@ -667,7 +674,7 @@ namespace lfs::training {
         try {
             const bool undistorted_reference =
                 params.optimization.undistort && camera.is_undistort_prepared() &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted;
+                !score_distorted_grid(camera, params);
             if (cached_inputs) {
                 inputs = *cached_inputs;
                 if (!inputs.gt_image.is_valid() || inputs.source_width <= 0 ||
@@ -718,7 +725,10 @@ namespace lfs::training {
 
             if (!cached_inputs) {
                 if (mask_folder) {
-                    const auto mask_path = mask_folder->find(camera.image_name());
+                    const auto mask_path = mask_folder->find(
+                        scaled_undistort && is_view(*scaled_undistort)
+                            ? lfs::core::panorama_image_name(camera.image_name())
+                            : camera.image_name());
                     if (mask_path.empty())
                         return evaluation_error(std::format("no evaluation mask for '{}' in the mask folder",
                                                             camera.image_name()),
@@ -766,8 +776,7 @@ namespace lfs::training {
             int render_height = inputs.source_height;
             float dilation_scale = 1.0f;
             const bool distorted_evaluation =
-                scaled_undistort &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
+                scaled_undistort && !undistorted_reference;
             const bool native_gut_evaluation = distorted_evaluation && params.optimization.gut;
             const bool warp_to_distorted = distorted_evaluation && !native_gut_evaluation;
             // Geometric masks follow the lens the scored image was taken with: the source lens when
@@ -1783,7 +1792,7 @@ namespace lfs::training {
             const auto prepared_validity = prepared->validity_mask;
             const bool distorted_coordinates =
                 _params.optimization.undistort && cam->is_undistort_prepared() &&
-                _params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
+                score_distorted_grid(*cam, _params);
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
             view.validity_mask_applied = prepared->validity_mask_applied;

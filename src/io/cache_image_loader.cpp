@@ -227,6 +227,10 @@ namespace lfs::io {
             mix_float(undistort.dst_cy * grid.scale_y);
             for (int i = 0; i < undistort.num_distortion; ++i)
                 mix_float(undistort.distortion[i]);
+            if (is_view(undistort)) {
+                for (const float value : undistort.view_rotation)
+                    mix_float(value);
+            }
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
             if (include_output_format)

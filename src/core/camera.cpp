@@ -170,6 +170,35 @@ namespace lfs::core {
         }
     }
 
+    std::shared_ptr<Camera> Camera::make_pinhole_view(const UndistortParams& params, const int uid,
+                                                      const std::string& image_name) const {
+        const auto rotation = Tensor::from_vector(
+                                  std::vector<float>(std::begin(params.view_rotation), std::end(params.view_rotation)),
+                                  {3, 3}, Device::CPU)
+                                  .transpose(0, 1)
+                                  .contiguous();
+        auto view = std::make_shared<Camera>(
+            rotation.matmul(_R.cpu()), rotation.matmul(_T.cpu().reshape({3, 1})).reshape({3}),
+            params.dst_fx, params.dst_fy, params.dst_cx, params.dst_cy, Tensor{}, Tensor{},
+            CameraModelType::PINHOLE, image_name, _image_path, _mask_path,
+            params.dst_width, params.dst_height, uid, _camera_id);
+        view->_split = _split;
+        view->_has_alpha = _has_alpha;
+        view->_has_image = _has_image;
+        view->_mask_asset_uuid = _mask_asset_uuid;
+        view->_mask_asset_owner = _mask_asset_owner;
+        view->_in_memory_mask_raw = _in_memory_mask_raw;
+        view->_mask_revision = _mask_revision;
+        view->_sfm_observations = _sfm_observations;
+        view->_sfm_observation_source = _sfm_observation_source;
+        view->_sfm_observation_node = _sfm_observation_node;
+        view->_sfm_observation_count = _sfm_observation_count;
+        view->adopt_undistortion(params, UndistortDestination::Calibration);
+        view->prepare_undistortion();
+        view->restore_image_dimensions(view->camera_width(), view->camera_height(), false);
+        return view;
+    }
+
     Camera::~Camera() {
         // Destroy CUDA stream if it was created
         if (_stream) {
@@ -1142,9 +1171,7 @@ namespace lfs::core {
     }
 
     bool Camera::has_distortion() const noexcept {
-        // Equirectangular is a complete projection model handled natively by the
-        // rasterizer; there is no pinhole image to "undistort" to, so it must not
-        // be routed through the undistortion path.
+        // A panorama has no lens correction of its own.
         if (_camera_model_type == CameraModelType::EQUIRECTANGULAR)
             return false;
         if (_radial_distortion.is_valid() && _radial_distortion.numel() > 0)

@@ -29,6 +29,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
+#include "core/panorama_views.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -126,6 +127,56 @@ namespace lfs::training {
         constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
         // Longest pause between retries of a step that keeps running out of VRAM.
         constexpr int kMaxStepOomBackoffMs = 2000;
+
+        lfs::Status expand_panorama_views(const lfs::core::Scene& scene,
+                                          std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+                                          const bool pose_opt) {
+            using lfs::core::Camera;
+            using lfs::core::kPanoramaViewCount;
+            const auto is_panorama = [](const auto& camera) {
+                return camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            };
+            const auto count = std::ranges::count_if(cameras, is_panorama);
+            if (!count)
+                return {};
+            if (pose_opt)
+                return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::Unsupported,
+                                                             .domain = lfs::ErrorDomain::Training,
+                                                             .user_message = "Pose refinement does not support panoramas split into views.",
+                                                             .detection = LFS_SOURCE_SITE_CURRENT()}));
+
+            int64_t first = 0;
+            for (const auto& camera : scene.getAllCameras())
+                first = std::max(first, int64_t{camera->uid()} + 1);
+            std::vector<std::shared_ptr<Camera>> expanded;
+            expanded.reserve(cameras.size() + count * (kPanoramaViewCount - 1));
+            int min_size = std::numeric_limits<int>::max(), max_size = 0;
+            bool has_priors = false;
+            for (const auto& camera : cameras) {
+                if (!is_panorama(camera)) {
+                    expanded.push_back(camera);
+                    continue;
+                }
+                const auto uid = first + int64_t{kPanoramaViewCount} * camera->uid();
+                if (camera->uid() < 0 || uid + kPanoramaViewCount - 1 > std::numeric_limits<int>::max())
+                    return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
+                                                                 .domain = lfs::ErrorDomain::Training,
+                                                                 .user_message = "Panorama view camera UIDs exceed the supported range.",
+                                                                 .detection = LFS_SOURCE_SITE_CURRENT()}));
+                const auto views = make_panorama_views(*camera, static_cast<int>(uid));
+                expanded.insert(expanded.end(), views.begin(), views.end());
+                min_size = std::min(min_size, views.front()->camera_width());
+                max_size = std::max(max_size, views.front()->camera_width());
+                has_priors |= !camera->depth_path().empty() || !camera->normal_path().empty();
+            }
+            cameras = std::move(expanded);
+            const auto face_size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
+            LOG_INFO("Split {} panoramas into {} pinhole views (face size {} px)",
+                     count, count * kPanoramaViewCount, face_size);
+            if (has_priors)
+                LOG_INFO("Panorama depth and normal priors are unused for pinhole views");
+            return {};
+        }
 
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
@@ -1220,7 +1271,12 @@ namespace lfs::training {
             // Training and checkpoint state use the original camera UID as the slot.
             // Disabled, missing-image and evaluation cameras must not shrink that space.
             int camera_slots = 0;
-            for (const auto& camera : scene_->getAllCameras()) {
+            auto cameras = scene_->getAllCameras();
+            for (const auto& dataset : {train_dataset_, val_dataset_}) {
+                if (dataset)
+                    cameras.insert(cameras.end(), dataset->get_cameras().begin(), dataset->get_cameras().end());
+            }
+            for (const auto& camera : cameras) {
                 const int uid = camera->uid();
                 if (uid < 0 || uid == std::numeric_limits<int>::max()) {
                     return std::unexpected(std::format(
@@ -3041,6 +3097,18 @@ namespace lfs::training {
                     }
                 }
 
+                if (params.optimization.enable_eval && params.optimization.eval_all) {
+                    for (const auto& camera : source_cameras)
+                        camera->set_split(lfs::core::CameraSplit::Train);
+                }
+
+                train_frame_scale_ = camera_derived_frame_scale(source_cameras);
+                if (params.optimization.undistort) {
+                    auto expanded = expand_panorama_views(*scene_, source_cameras, params.optimization.pose_opt);
+                    if (!expanded)
+                        return std::unexpected(std::string(expanded.error().user_message()));
+                }
+
                 if (params.optimization.holds_out_eval_images()) {
                     for (const auto& camera : source_cameras) {
                         switch (camera->split()) {
@@ -3061,7 +3129,6 @@ namespace lfs::training {
                 return std::unexpected("No camera source available");
             }
 
-            train_frame_scale_ = camera_derived_frame_scale(source_cameras);
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());
             }
@@ -3072,9 +3139,6 @@ namespace lfs::training {
                     source_cameras, dataset_config, CameraDataset::Split::ALL);
                 val_dataset_ = std::make_shared<CameraDataset>(
                     source_cameras, dataset_config, CameraDataset::Split::ALL);
-                for (const auto& camera : source_cameras) {
-                    camera->set_split(lfs::core::CameraSplit::Train);
-                }
                 LOG_INFO("Training on all {} images and evaluating on them", train_dataset_->size());
             } else if (params.optimization.enable_eval) {
                 train_dataset_ = std::make_shared<CameraDataset>(
@@ -9234,7 +9298,12 @@ namespace lfs::training {
                     const auto& val_cameras = val_dataset_->get_cameras();
                     prior_cameras.insert(prior_cameras.end(), val_cameras.begin(), val_cameras.end());
                 }
-                ensure_training_prior_maps(params_, prior_cameras);
+                // Prior maps belong to the photograph. A view has none of its own.
+                std::erase_if(prior_cameras, [](const auto& cam) {
+                    return cam && cam->is_undistort_prepared() && is_view(cam->undistort_params());
+                });
+                if (!prior_cameras.empty())
+                    ensure_training_prior_maps(params_, prior_cameras);
             }
             if (aux_pipeline_config.load_depths) {
                 size_t cameras_with_depth = 0;
