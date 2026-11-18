@@ -132,13 +132,6 @@ namespace lfs::vis {
         return makeSplitViewPanelLayouts(total_width, settings.split_position);
     }
 
-    std::optional<glm::ivec2> SplitViewService::gtContentDimensions() const {
-        if (!hasValidGTContext()) {
-            return std::nullopt;
-        }
-        return gt_context_->dimensions;
-    }
-
     void SplitViewService::clear() {
         clearGTContext();
         pre_gt_equirectangular_ = false;

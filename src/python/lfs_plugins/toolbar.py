@@ -1777,8 +1777,6 @@ class _ViewportToolbarController:
                 or self._depth_view_controls._render_mode_selector_open()
             ),
         )
-        # The GT compare mode picker occupies the crop toolbar's slot.
-        show_crop_toolbar = gizmo_state["show_crop_toolbar"] and not gt_compare_active
 
         dirty = False
         if not gizmo_state["crop_settings_buttons"] or gt_compare_active:
@@ -1789,7 +1787,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
         dirty |= self._sync_flag("show_scale_distance_toolbar", gizmo_state["show_scale_distance_toolbar"])
         dirty |= self._sync_scale_distance()
-        dirty |= self._sync_flag("show_crop_toolbar", show_crop_toolbar)
+        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"] and not gt_compare_active)
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
         dirty |= self._sync_flag("show_crop_numeric_controls", gizmo_state["show_crop_numeric_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])

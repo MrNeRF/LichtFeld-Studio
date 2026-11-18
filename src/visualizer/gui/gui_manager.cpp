@@ -409,8 +409,7 @@ namespace lfs::vis::gui {
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
             glm::ivec2 render_size{0};
-            // GT compare shows a training camera's frame, so guides must use that camera, not the viewport's.
-            std::optional<GTRenderCamera> camera_override;
+            std::optional<GTRenderCamera> camera_override{};
 
             [[nodiscard]] bool valid() const {
                 return viewport != nullptr && size.x > 0.0f && size.y > 0.0f &&
@@ -1201,33 +1200,6 @@ namespace lfs::vis::gui {
             return panels;
         }
 
-        [[nodiscard]] std::vector<VulkanGuidePanelTarget> collectVulkanSceneGuidePanels(
-            const VisualizerImpl& viewer,
-            const ViewportLayout& viewport_layout,
-            const RenderingManager& rendering_manager) {
-            if (!rendering_manager.isGTComparisonActive()) {
-                return collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
-            }
-
-            const auto gt_camera = rendering_manager.getGTComparisonGuideCamera();
-            if (!gt_camera || gt_camera->coordinate_extent.x <= 0 || gt_camera->coordinate_extent.y <= 0) {
-                return {};
-            }
-            // Scale the compositor's letterbox the way VulkanViewportPass does, so guides share its edges.
-            const glm::vec2 scale = viewport_layout.size / glm::vec2(gt_camera->coordinate_extent);
-            const glm::ivec4& rect = gt_camera->content_rect;
-            const glm::vec2 content_min = glm::vec2(rect.x, rect.y) * scale;
-            const glm::vec2 content_max = glm::vec2(rect.x + rect.z, rect.y + rect.w) * scale;
-            return {{
-                .panel = SplitViewPanelId::Left,
-                .viewport = &viewer.getViewport(),
-                .pos = viewport_layout.pos + content_min,
-                .size = content_max - content_min,
-                .render_size = gt_camera->render_size,
-                .camera_override = gt_camera->camera,
-            }};
-        }
-
         [[nodiscard]] glm::vec2 renderToPanelScreen(const VulkanGuidePanelTarget& panel,
                                                     const glm::vec2& projected) {
             const float sx = panel.size.x / static_cast<float>(std::max(panel.render_size.x, 1));
@@ -1290,37 +1262,32 @@ namespace lfs::vis::gui {
             const glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
             const glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
 
-            float cx = static_cast<float>(std::max(panel.render_size.x, 1)) * 0.5f;
-            float cy = static_cast<float>(std::max(panel.render_size.y, 1)) * 0.5f;
-            auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+            const auto [focal_x, focal_y] = lfs::rendering::computePixelFocalLengths(
                 panel.render_size, settings.focal_length_mm);
-            if (camera && camera->intrinsics) {
-                fx = camera->intrinsics->focal_x;
-                fy = camera->intrinsics->focal_y;
-                cx = camera->intrinsics->center_x;
-                cy = camera->intrinsics->center_y;
-            }
+            const auto [fx, fy, cx, cy] = camera && camera->intrinsics
+                                              ? *camera->intrinsics
+                                              : lfs::rendering::CameraIntrinsics{focal_x, focal_y,
+                                                                                 panel.render_size.x * 0.5f,
+                                                                                 panel.render_size.y * 0.5f};
             if (orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f)) {
                 return std::nullopt;
             }
-            const float right = static_cast<float>(std::max(panel.render_size.x, 1)) - cx;
-            const float bottom = static_cast<float>(std::max(panel.render_size.y, 1)) - cy;
 
             const std::array<GuideClipPlane, 5> clip_planes =
                 orthographic
                     ? std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{ortho_scale, 0.0f, 0.0f}, cx},
-                          {{-ortho_scale, 0.0f, 0.0f}, right},
+                          {{-ortho_scale, 0.0f, 0.0f}, cx},
                           {{0.0f, -ortho_scale, 0.0f}, cy},
-                          {{0.0f, ortho_scale, 0.0f}, bottom},
+                          {{0.0f, ortho_scale, 0.0f}, cy},
                       }}
                     : std::array<GuideClipPlane, 5>{{
                           {{0.0f, 0.0f, -1.0f}, kMinViewZ},
                           {{fx, 0.0f, -cx}, 0.0f},
-                          {{-fx, 0.0f, -right}, 0.0f},
+                          {{-fx, 0.0f, cx - panel.render_size.x}, 0.0f},
                           {{0.0f, -fy, -cy}, 0.0f},
-                          {{0.0f, fy, -bottom}, 0.0f},
+                          {{0.0f, fy, cy - panel.render_size.y}, 0.0f},
                       }};
 
             const auto clipped = clipGuideSegment(view_a, view_b, clip_planes);
@@ -3476,11 +3443,19 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanSceneGuidePanels(viewer, viewport_layout, rendering_manager);
-            if (panels.empty()) {
-                return;
+            auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
+            const bool gt_compare = rendering_manager.isGTComparisonActive();
+            if (gt_compare) {
+                const auto gt = rendering_manager.getGTComparisonGuideCamera();
+                if (!gt)
+                    return;
+                auto& panel = panels.front();
+                const auto bounds = rendering_manager.getContentBounds(panel.render_size);
+                panel.pos = viewport_layout.pos + glm::vec2(bounds.x, bounds.y);
+                panel.size = {bounds.width, bounds.height};
+                panel.render_size = gt->render_size;
+                panel.camera_override = gt->camera;
             }
-            const bool gt_camera_guides = panels.front().camera_override.has_value();
 
             constexpr std::array axis_colors{
                 glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
@@ -3510,8 +3485,7 @@ namespace lfs::vis::gui {
                     }
                 }
 
-                // The orbit pivot and frustum batches belong to the free viewport camera.
-                if (gt_camera_guides) {
+                if (gt_compare) {
                     continue;
                 }
 
@@ -3532,7 +3506,7 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (scene_manager && !gt_camera_guides) {
+            if (scene_manager && !gt_compare) {
                 appendCameraFrustumOverlays(params,
                                             panels,
                                             settings,

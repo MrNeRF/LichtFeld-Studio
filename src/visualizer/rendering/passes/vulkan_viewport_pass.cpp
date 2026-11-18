@@ -2364,19 +2364,7 @@ namespace lfs::vis {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
                 VulkanSplitViewParams adjusted = params.split_view;
-                if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
-                    const float scale_x = static_cast<float>(rect.width) /
-                                          static_cast<float>(adjusted.coordinate_extent.x);
-                    const float scale_y = static_cast<float>(rect.height) /
-                                          static_cast<float>(adjusted.coordinate_extent.y);
-                    const int left = static_cast<int>(std::lround(adjusted.content_rect.x * scale_x));
-                    const int top = static_cast<int>(std::lround(adjusted.content_rect.y * scale_y));
-                    const int right = static_cast<int>(std::lround(
-                        (adjusted.content_rect.x + adjusted.content_rect.z) * scale_x));
-                    const int bottom = static_cast<int>(std::lround(
-                        (adjusted.content_rect.y + adjusted.content_rect.w) * scale_y));
-                    adjusted.content_rect = {left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
-                }
+                adjusted.content_rect = adjusted.contentRectAt({rect.width, rect.height});
                 adjusted.content_rect.x += rect.x;
                 adjusted.content_rect.y += rect.y;
                 const VkRect2D panel_rect{

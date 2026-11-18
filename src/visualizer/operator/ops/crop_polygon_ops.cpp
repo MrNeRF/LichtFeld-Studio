@@ -42,7 +42,6 @@ namespace lfs::vis::op {
         [[nodiscard]] std::optional<PanelView> resolvePanel(const glm::vec2 screen_point) {
             auto* const rm = services().renderingOrNull();
             auto* const gm = services().guiOrNull();
-            // GT compare shows a training camera, so free-camera picks would land elsewhere.
             if (!rm || !gm || !gm->getViewer() || rm->isGTComparisonActive())
                 return std::nullopt;
             const auto panel = rm->resolveViewerPanel(gm->getViewer()->getViewport(), gm->getViewportPos(),
