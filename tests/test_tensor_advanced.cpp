@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 
 #include <gtest/gtest.h>
@@ -96,6 +97,25 @@ TEST(TensorAdvancedTest, IntegerArangeIsExactPastFloat32Precision) {
     }
 }
 
+TEST(TensorAdvancedTest, IntegerArangeWritesByteResultsDirectly) {
+    constexpr int64_t end = std::numeric_limits<int64_t>::max();
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        const auto before = PinnedMemoryAllocator::instance().get_stats();
+        const auto bytes = Tensor::arange(end - 3, end, 1, device, DataType::UInt8);
+        if (device == Device::CPU) {
+            const auto after = PinnedMemoryAllocator::instance().get_stats();
+            EXPECT_EQ((after.cache_hits - before.cache_hits) + (after.cache_misses - before.cache_misses), 1u);
+        }
+        EXPECT_EQ(bytes.device(), device);
+        ASSERT_EQ(bytes.dtype(), DataType::UInt8);
+        EXPECT_EQ(bytes.bytes(), 3u);
+        EXPECT_EQ(bytes.cpu().to_vector_uint8(), (std::vector<uint8_t>{252, 253, 254}));
+        const auto descending = Tensor::arange(1, -3, -1, device, DataType::UInt8);
+        EXPECT_EQ(descending.cpu().to_vector_uint8(), (std::vector<uint8_t>{1, 0, 255, 254}));
+    }
+}
+
 TEST(TensorAdvancedTest, IntegerArangeStepsAwayEmptyAndRejectsInvalidRanges) {
     for (const DataType dtype : {DataType::Int32, DataType::Int64}) {
         for (const Device device : {Device::CPU, Device::CUDA}) {
@@ -149,6 +169,14 @@ TEST(TensorAdvancedTest, Int32ArangeFromFractionalFloatBoundsKeepsTheFloatSum) {
                              {0, 1, 1, 1, 1, 1, 1});
         expect_integer_range(arange_from_float_bounds(2.5f, -1.0f, -0.5f, device), DataType::Int32, device,
                              {2, 2, 1, 1, 0, 0, 0});
+    }
+}
+
+TEST(TensorAdvancedTest, FractionalInt32ArangeEndsAtIntMax) {
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        expect_integer_range(arange_from_float_bounds(2147483520.0f, 2147483648.0f, 63.5f, device),
+                             DataType::Int32, device, {2147483520, 2147483520, 2147483647});
     }
 }
 
