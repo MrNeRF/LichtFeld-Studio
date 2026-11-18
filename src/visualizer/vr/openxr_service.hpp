@@ -37,6 +37,10 @@ namespace lfs::vis::vr {
         // prepareOn() join one later.
         [[nodiscard]] static VulkanDeviceHooks lateJoinHooks();
         void setUnavailable(std::string reason);
+        // The runtime and its headset were found. Between two sessions the
+        // runtime is given back, so that it does not count the app as running
+        // (SteamVR would show it as the running application, and close it
+        // when it quits); start() joins it again.
         [[nodiscard]] bool available() const;
         [[nodiscard]] bool active() const;
         // The runtime has begun the session and paces frames.
@@ -47,6 +51,7 @@ namespace lfs::vis::vr {
 
         // Reads the VR preferences; the view starts at the desktop camera.
         lfs::Status start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position);
+        // Ends the session the way the runtime expects, then gives the runtime back.
         void stop();
         void recenter();
         void snapTurn(int direction);

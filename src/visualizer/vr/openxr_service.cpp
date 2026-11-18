@@ -11,10 +11,12 @@
 #include "vr_math.hpp"
 #include "vr_tracked_hands.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,6 +38,8 @@ namespace lfs::vis::vr {
         constexpr float kFistEngage = 0.64f;
         constexpr float kFistRelease = 0.5f;
         const float kHandSightGrace = glm::radians(4.0f);
+        // How long a session asked to exit is given to stop before it is destroyed.
+        constexpr std::chrono::milliseconds kSessionEndTimeout{1000};
         constexpr std::array<const char*, 9> kSessionStates = {
             "unknown", "idle", "ready", "synchronized", "visible", "focused", "stopping", "loss pending", "exiting"};
         [[nodiscard]] lfs::Error vrError(std::string message) {
@@ -91,6 +95,9 @@ namespace lfs::vis::vr {
             PFN_xrGetVulkanGraphicsRequirements2KHR graphics_requirements = nullptr;
         } vk;
         bool lost = false;
+        // The runtime was given back when the last session stopped, so that it
+        // no longer counts the app as running; start() joins it again.
+        bool given_back = false;
         std::string runtime_name;
         // A localization key and its argument; the UI localizes them when shown.
         const char* status_key = "vr.status_off";
@@ -621,6 +628,25 @@ namespace lfs::vis::vr {
             return result == XR_EVENT_UNAVAILABLE ? lfs::Status{} : check(result, "xrPollEvent");
         }
 
+        // Ends a running session before it is destroyed: asked to exit, the
+        // runtime takes it to STOPPING, where poll() ends it. A runtime that
+        // does not follow in time is left to xrDestroySession().
+        void endSession() {
+            if (!s.handle || !s.running || s.ended || lost)
+                return;
+            if (XR_FAILED(xrRequestExitSession(s.handle)))
+                return;
+            const auto deadline = std::chrono::steady_clock::now() + kSessionEndTimeout;
+            while (s.running && std::chrono::steady_clock::now() < deadline) {
+                if (!poll())
+                    return;
+                if (s.running)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (s.running)
+                LOG_WARN("The OpenXR runtime did not end the VR session when asked to");
+        }
+
         struct ControllerInput {
             glm::vec2 move{0.0f};
             glm::vec2 turn{0.0f};
@@ -1055,7 +1081,10 @@ namespace lfs::vis::vr {
 
     VulkanDeviceHooks OpenXrService::deviceHooks() {
         Impl* const p = impl_.get();
-        VulkanDeviceHooks hooks;
+        // With the extensions of a late join asked for by name: the runtime
+        // adds what it needs itself, but only what the app asks for is known
+        // to be enabled when the runtime is joined again after a session.
+        VulkanDeviceHooks hooks = lateJoinHooks();
         hooks.create_instance = [p](const VkInstanceCreateInfo& info, VkInstance& instance) {
             XrVulkanInstanceCreateInfoKHR create{XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
             create.systemId = p->system;
@@ -1129,7 +1158,9 @@ namespace lfs::vis::vr {
         p.lost = true;
     }
 
-    bool OpenXrService::available() const { return impl_->instance && impl_->system && !impl_->lost; }
+    bool OpenXrService::available() const {
+        return !impl_->lost && (impl_->given_back || (impl_->instance && impl_->system));
+    }
     bool OpenXrService::active() const { return impl_->s.handle != XR_NULL_HANDLE; }
     bool OpenXrService::running() const { return impl_->s.running; }
     const char* OpenXrService::statusKey() const { return impl_->status_key; }
@@ -1152,6 +1183,8 @@ namespace lfs::vis::vr {
             return lfs::Status::failure(vrError(LOCF(p.status_key, p.status_detail)));
         if (active())
             return {};
+        if (std::exchange(p.given_back, false) && !p.prepareReported(&context))
+            return lfs::Status::failure(vrError(LOCF(p.status_key, p.status_detail)));
         p.s.context = &context;
         auto started = p.startSession(rotation, position);
         if (!started) {
@@ -1170,6 +1203,7 @@ namespace lfs::vis::vr {
             return;
         if (s.transfer_pending)
             static_cast<void>(s.context->deviceWaitIdle());
+        p.endSession();
         const VkDevice device = s.context->device();
         p.tracked_hands.stop();
         if (s.fence)
@@ -1182,6 +1216,17 @@ namespace lfs::vis::vr {
         if (s.action_set)
             xrDestroyActionSet(s.action_set);
         s = {};
+        // A runtime counts an app as running for as long as the app holds an
+        // instance: SteamVR shows it as the running application and takes it
+        // down when it quits. The instance goes back with the session, and
+        // start() joins the runtime again.
+        const bool joinable = available();
+        p.tracked_hands.findTracking(XR_NULL_HANDLE, XR_NULL_SYSTEM_ID, false);
+        if (p.instance)
+            xrDestroyInstance(p.instance);
+        p.instance = XR_NULL_HANDLE;
+        p.system = XR_NULL_SYSTEM_ID;
+        p.given_back = joinable;
         if (available())
             p.setStatus("vr.status_ready", p.runtime_name);
     }
