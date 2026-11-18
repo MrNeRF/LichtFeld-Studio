@@ -557,8 +557,15 @@ namespace lfs::core {
     static bool path_is_under_root(const std::filesystem::path& stored,
                                    const std::filesystem::path& old_root,
                                    std::filesystem::path& relative_out) {
+        // A saved UNC root must not capture a native POSIX path that happens
+        // to spell /server/share after separator normalization.
+        if (path_to_utf8(old_root).starts_with("\\\\")) {
+            const auto text = path_to_utf8(stored);
+            if (!text.starts_with("\\\\") && !text.starts_with("//"))
+                return false;
+        }
         const auto relative =
-            stored.lexically_normal().lexically_relative(old_root.lexically_normal());
+            path_from_source_format(stored, old_root).lexically_normal().lexically_relative(path_from_source_format(old_root, old_root).lexically_normal());
         if (relative.empty()) {
             return false;
         }
