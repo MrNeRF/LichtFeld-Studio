@@ -10,6 +10,10 @@
 #include <functional>
 #include <vector>
 
+namespace lfs::core {
+    class Camera;
+}
+
 namespace lfs::preprocessing {
 
     // A lens as the rasterizer models it, at width x height pixels.
@@ -23,6 +27,9 @@ namespace lfs::preprocessing {
         int height = 0;
     };
 
+    [[nodiscard]] LensCamera make_lens_camera(const core::Camera& photograph);
+    [[nodiscard]] float lens_max_angle(const LensCamera& camera);
+
     // A square pinhole view inside the lens; `rotation` (row-major) maps camera rays into the face frame.
     struct LensFace {
         float rotation[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
@@ -32,6 +39,9 @@ namespace lfs::preprocessing {
 
     // [height, width, 3] unit camera ray through each pixel center; NaN where the lens holds no ray.
     void lens_rays(const LensCamera& camera, float* rays, cudaStream_t stream);
+
+    // Sample the same unit rays at selected pixel coordinates in the photograph.
+    void lens_rays_at(const LensCamera& camera, const float* image_xy, size_t count, float* rays, cudaStream_t stream);
 
     // A monocular estimator's answer for one square face, in the face frame.
     struct LensFaceOutputs {

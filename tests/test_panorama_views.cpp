@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera_views.hpp"
 #include "core/image_io.hpp"
-#include "core/panorama_views.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -15,6 +15,17 @@
 namespace {
     using namespace lfs::core;
     constexpr float pi = std::numbers::pi_v<float>;
+
+    std::shared_ptr<Camera> prior_panorama(const std::filesystem::path& image_path, int width = 128, int height = 64) {
+        return std::make_shared<Camera>(
+            Tensor::from_vector({0.f, -1.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CPU),
+            Tensor::zeros({3}, Device::CPU), 0, 0, 0, 0, Tensor{}, Tensor{},
+            CameraModelType::EQUIRECTANGULAR, "source.png", image_path, std::filesystem::path{}, width, height, 0);
+    }
+
+    std::vector<PinholeView> panorama_plan(int width, int height) {
+        return plan_camera_views(*prior_panorama({}, width, height), 0);
+    }
 
     Tensor direction_panorama(const int width, const int height) {
         std::vector<float> pixels(3 * width * height);
@@ -33,9 +44,9 @@ namespace {
     TEST(PanoramaUndistort, EachPixelCarriesItsOwnRay) {
         constexpr int w = 256, h = 128;
         const auto source = direction_panorama(w, h);
-        const auto views = panorama_view_params(w, h);
+        const auto views = panorama_plan(w, h);
         for (int i = 0; i < kPanoramaViewCount; ++i) {
-            const auto& p = views[i];
+            const auto& p = views[i].params;
             const auto pixels = undistort_image(source, p, nullptr).cpu().to_vector();
             float worst = 0;
             for (int y = 0; y < p.dst_height; ++y) {
@@ -57,7 +68,8 @@ namespace {
 
     TEST(PanoramaUndistort, ConstantSurvivesSeamsAndPoles) {
         const auto source = Tensor::full({1, 64, 128}, 0.625f, Device::CUDA);
-        for (const auto& p : panorama_view_params(128, 64)) {
+        for (const auto& view : panorama_plan(128, 64)) {
+            const auto& p = view.params;
             auto face = undistort_image(source, p, nullptr).cpu().to_vector();
             for (float value : face)
                 ASSERT_NEAR(value, 0.625f, 2e-6f);
@@ -74,7 +86,7 @@ namespace {
                 pixels[y * w + x] = value;
         }
         const auto source = Tensor::from_vector(pixels, {1, h, w}, Device::CUDA);
-        const auto p = prepare_undistort_params(panorama_view_params(w, h)[4], w, h, 1, 64);
+        const auto p = prepare_undistort_params(panorama_plan(w, h)[4].params, w, h, 1, 64);
         const auto face = undistort_image(source, p, nullptr).cpu().to_vector();
         double squared = 0;
         for (float value : face)
@@ -84,7 +96,8 @@ namespace {
 
     TEST(PanoramaUndistort, MaskFollowsImage) {
         const auto source = direction_panorama(128, 64).slice(0, 0, 1).contiguous();
-        for (const auto& p : panorama_view_params(128, 64)) {
+        for (const auto& view : panorama_plan(128, 64)) {
+            const auto& p = view.params;
             const auto image = undistort_image(source, p, nullptr).cpu().to_vector();
             const auto mask = undistort_mask_area(source.squeeze(0), p, nullptr).cpu().to_vector();
             ASSERT_EQ(image.size(), mask.size());
@@ -94,9 +107,9 @@ namespace {
     }
 
     TEST(PanoramaUndistort, MatchesAngularRateAtFaceCentre) {
-        const auto p = panorama_view_params(3840, 1920)[0];
+        const auto p = panorama_plan(3840, 1920)[0].params;
         EXPECT_EQ(p.dst_width, 1358);
-        EXPECT_EQ(panorama_view_params(2048, 1024)[0].dst_width, 724);
+        EXPECT_EQ(panorama_plan(2048, 1024)[0].params.dst_width, 724);
         EXPECT_FLOAT_EQ(focal2fov(p.dst_fx, p.dst_width) * 180 / pi, kPanoramaViewFovDegrees);
     }
 
@@ -113,7 +126,7 @@ namespace {
         panorama.set_split(CameraSplit::Eval);
         panorama.set_mask_tensor(Tensor::ones({63, 128}, Device::CPU));
         panorama.set_sfm_observations({{1, 2, 3, 4, 5}});
-        const auto views = make_panorama_views(panorama, 70);
+        const auto views = make_camera_views(panorama, plan_camera_views(panorama, 0), 70);
         ASSERT_EQ(views.size(), 6u);
         const std::array names{"px", "nx", "py", "ny", "pz", "nz"};
         const auto source_r = panorama.R().to_vector();
@@ -124,7 +137,7 @@ namespace {
             EXPECT_EQ(view.camera_id(), 42);
             EXPECT_EQ(view.split(), CameraSplit::Eval);
             EXPECT_EQ(view.image_name(), std::string("dir/source_") + names[i] + ".png");
-            EXPECT_EQ(panorama_image_name(view.image_name()), panorama.image_name());
+            EXPECT_EQ(photograph_image_name(view.image_name()), panorama.image_name());
             EXPECT_EQ(view.image_path(), panorama.image_path());
             EXPECT_EQ(view.mask_path(), panorama.mask_path());
             EXPECT_EQ(view.raw_mask_tensor().data_ptr(), panorama.raw_mask_tensor().data_ptr());
@@ -181,14 +194,14 @@ namespace {
             for (int x = 0; x < w; ++x)
                 pixels[y * w + x] = x < w / 2 ? 64 : 192;
         ASSERT_TRUE(save_png(path, pixels.data(), w, h, 1, 8, 0));
-        const auto views = panorama_view_params(w, h);
+        const auto views = panorama_plan(w, h);
         lfs::io::PipelinedImageLoader loader;
         lfs::io::ImageRequest request{};
         request.path = path;
         request.depth_path = path;
-        request.aux_target_width = request.aux_target_height = views.front().dst_width;
+        request.aux_target_width = request.aux_target_height = views.front().params.dst_width;
         for (const int face : {0, 1, 0}) {
-            request.params.undistort = request.undistort = &views[face];
+            request.params.undistort = request.undistort = &views[face].params;
             ++request.sequence_id;
             loader.prefetch({request});
             auto ready = loader.get();
@@ -207,13 +220,6 @@ namespace {
         EXPECT_GE(loader.get_stats().hot_path_hits, 2u);
     }
 
-    std::shared_ptr<Camera> prior_panorama(const std::filesystem::path& image_path) {
-        return std::make_shared<Camera>(
-            Tensor::from_vector({0.f, -1.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CPU),
-            Tensor::zeros({3}, Device::CPU), 0, 0, 0, 0, Tensor{}, Tensor{},
-            CameraModelType::EQUIRECTANGULAR, "source.png", image_path, std::filesystem::path{}, 128, 64, 0);
-    }
-
     TEST(PanoramaPriors, GeneratesOnceForThePhotographAndUpdatesEveryView) {
         using namespace lfs::training;
         lfs::test::licht::TemporaryDirectory temp;
@@ -222,7 +228,7 @@ namespace {
         const auto photo = prior_panorama(images / "source.png");
         std::vector<uint8_t> pixels(128 * 64);
         ASSERT_TRUE(save_png(photo->image_path(), pixels.data(), 128, 64, 1, 8, 0));
-        const auto views = make_panorama_views(*photo, 10);
+        const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
         param::TrainingParameters params;
         params.dataset.data_path = temp.path;
         params.optimization.undistort = true;
@@ -274,9 +280,9 @@ namespace {
             }
             photo->set_normal_path(temp.path / (world ? "world.png" : "camera.png"));
             ASSERT_TRUE(save_png(photo->normal_path(), pixels.data(), w, h, 3, 16, 0));
-            const auto views = make_panorama_views(*photo, 10);
+            const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
             auto dataset = std::make_shared<CameraDataset>(
-                std::vector(views.begin(), views.end()), DatasetConfig{});
+                views, DatasetConfig{});
             PipelinedAuxiliaryImageConfig aux{.load_normals = true, .normal_flip_yz = true, .normal_world_space = world};
             PipelinedDataLoader loader(dataset, RandomSampler(views.size(), 13), {}, aux);
             for (size_t face = 0; face < views.size(); ++face) {
@@ -308,7 +314,7 @@ namespace {
         using namespace lfs::training;
         using namespace lfs::training::kernels;
         const auto photo = prior_panorama({});
-        for (const auto& view : make_panorama_views(*photo, 10)) {
+        for (const auto& view : make_camera_views(*photo, plan_camera_views(*photo, 0), 10)) {
             const auto& p = view->undistort_params();
             const auto R = view->R().cpu().to_vector();
             const int w = p.dst_width - 8, h = p.dst_height - 4;

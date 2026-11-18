@@ -13,6 +13,7 @@
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
 #include "core/camera_frame_normalizer.hpp"
+#include "core/camera_views.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
@@ -29,7 +30,6 @@
 #include "core/memory_pressure.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
-#include "core/panorama_views.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -60,6 +60,7 @@
 #include "noise_infill.hpp"
 #include "normal_auto_generate.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "preprocessing/lens_priors.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat/GeometryFeatures.h"
@@ -128,49 +129,54 @@ namespace lfs::training {
         // Longest pause between retries of a step that keeps running out of VRAM.
         constexpr int kMaxStepOomBackoffMs = 2000;
 
-        lfs::Status expand_panorama_views(const lfs::core::Scene& scene,
-                                          std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
-                                          const bool pose_opt) {
+        lfs::Status expand_camera_views(const lfs::core::Scene& scene,
+                                        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+                                        const bool pose_opt) {
             using lfs::core::Camera;
             using lfs::core::kPanoramaViewCount;
-            const auto is_panorama = [](const auto& camera) {
-                return camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            };
-            const auto count = std::ranges::count_if(cameras, is_panorama);
-            if (!count)
-                return {};
-            if (pose_opt)
-                return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::Unsupported,
-                                                             .domain = lfs::ErrorDomain::Training,
-                                                             .user_message = "Pose refinement does not support panoramas split into views.",
-                                                             .detection = LFS_SOURCE_SITE_CURRENT()}));
-
             int64_t first = 0;
             for (const auto& camera : scene.getAllCameras())
                 first = std::max(first, int64_t{camera->uid()} + 1);
             std::vector<std::shared_ptr<Camera>> expanded;
-            expanded.reserve(cameras.size() + count * (kPanoramaViewCount - 1));
+            expanded.reserve(cameras.size());
+            size_t sources = 0, faces = 0;
             int min_size = std::numeric_limits<int>::max(), max_size = 0;
             for (const auto& camera : cameras) {
-                if (!is_panorama(camera)) {
+                const auto model = camera->camera_model_type();
+                float lens_limit = 0;
+                if (model == core::CameraModelType::FISHEYE || model == core::CameraModelType::THIN_PRISM_FISHEYE)
+                    lens_limit = preprocessing::lens_max_angle(preprocessing::make_lens_camera(*camera));
+                const auto plan = plan_camera_views(*camera, lens_limit);
+                if (plan.empty()) {
                     expanded.push_back(camera);
                     continue;
                 }
+                if (pose_opt)
+                    return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::Unsupported,
+                                                                 .domain = lfs::ErrorDomain::Training,
+                                                                 .user_message = "Pose refinement does not support cameras split into views.",
+                                                                 .detection = LFS_SOURCE_SITE_CURRENT()}));
+
                 const auto uid = first + int64_t{kPanoramaViewCount} * camera->uid();
-                if (camera->uid() < 0 || uid + kPanoramaViewCount - 1 > std::numeric_limits<int>::max())
+                if (camera->uid() < 0 || uid + static_cast<int>(plan.size()) - 1 > std::numeric_limits<int>::max())
                     return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
                                                                  .domain = lfs::ErrorDomain::Training,
-                                                                 .user_message = "Panorama view camera UIDs exceed the supported range.",
+                                                                 .user_message = "View camera UIDs exceed the supported range.",
                                                                  .detection = LFS_SOURCE_SITE_CURRENT()}));
-                const auto views = make_panorama_views(*camera, static_cast<int>(uid));
+                const auto views = make_camera_views(*camera, plan, static_cast<int>(uid));
                 expanded.insert(expanded.end(), views.begin(), views.end());
-                min_size = std::min(min_size, views.front()->camera_width());
-                max_size = std::max(max_size, views.front()->camera_width());
+                for (const auto& view : views) {
+                    min_size = std::min({min_size, view->camera_width(), view->camera_height()});
+                    max_size = std::max({max_size, view->camera_width(), view->camera_height()});
+                }
+                ++sources;
+                faces += views.size();
             }
-            cameras = std::move(expanded);
-            const auto face_size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
-            LOG_INFO("Split {} panoramas into {} pinhole views (face size {} px)",
-                     count, count * kPanoramaViewCount, face_size);
+            if (sources) {
+                cameras = std::move(expanded);
+                const auto size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
+                LOG_INFO("Split {} photographs into {} pinhole views (face size {} px)", sources, faces, size);
+            }
             return {};
         }
 
@@ -372,14 +378,12 @@ namespace lfs::training {
             // are independent, so fan them out; the serial version dominated
             // training startup on large scenes.
             std::vector<const lfs::core::Camera*> probe_cams;
-            const auto spherical = [](const auto& camera) {
-                return camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            };
             const size_t stride = std::max<size_t>(1, cameras.size() / kProbeViews);
             for (size_t i = 0; i < cameras.size() && probe_cams.size() < kProbeViews; i += stride) {
                 const auto* cam = cameras[i];
                 if (cam->camera_width() <= 0 || cam->camera_height() <= 0 ||
-                    (!spherical(*cam) && (cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f))) {
+                    (cam->camera_model_type() != core::CameraModelType::EQUIRECTANGULAR &&
+                     (cam->focal_x() <= 0.0f || cam->focal_y() <= 0.0f))) {
                     continue;
                 }
                 probe_cams.push_back(cam);
@@ -445,15 +449,24 @@ namespace lfs::training {
             for (const auto& raw : raw_views) {
                 NormalPriorDecodedView view;
                 view.w2c = camera_w2c_rotation_array(*raw.cam);
-                const float width = static_cast<float>(raw.cam->camera_width());
-                const float height = static_cast<float>(raw.cam->camera_height());
-                const float fx = raw.cam->focal_x();
-                const float fy = raw.cam->focal_y();
-                const float cx = raw.cam->center_x();
-                const float cy = raw.cam->center_y();
+                const auto lens = preprocessing::make_lens_camera(*raw.cam);
                 view.normals.reserve(raw.samples.size());
                 view.rays.reserve(raw.samples.size());
-                for (const auto& s : raw.samples) {
+                std::vector<float> lens_rays;
+                if (raw.cam->camera_model_type() != core::CameraModelType::PINHOLE) {
+                    std::vector<float> xy;
+                    xy.reserve(2 * raw.samples.size());
+                    for (const auto& s : raw.samples)
+                        xy.insert(xy.end(), {s.u * lens.width, s.v * lens.height});
+                    const auto pixels = core::Tensor::from_vector(xy, {raw.samples.size(), 2}, core::Device::CUDA);
+                    auto rays = core::Tensor::empty({raw.samples.size(), 3}, core::Device::CUDA);
+                    preprocessing::lens_rays_at(lens, pixels.ptr<float>(), raw.samples.size(), rays.ptr<float>(), rays.stream());
+                    lens_rays = rays.to_vector();
+                }
+                for (size_t i = 0; i < raw.samples.size(); ++i) {
+                    if (!lens_rays.empty() && !std::isfinite(lens_rays[3 * i]))
+                        continue;
+                    const auto& s = raw.samples[i];
                     std::array<float, 3> n;
                     if (result.srgb) {
                         n = {lfs::core::srgb_encoding_to_linear(s.r) * 2.0f - 1.0f,
@@ -466,12 +479,10 @@ namespace lfs::training {
                         continue;
                     }
                     view.normals.push_back(n);
-                    if (spherical(*raw.cam)) {
-                        const float lon = (s.u - 0.5f) * static_cast<float>(2 * M_PI);
-                        const float lat = (s.v - 0.5f) * static_cast<float>(M_PI);
-                        view.rays.push_back({std::cos(lat) * std::sin(lon), std::sin(lat), std::cos(lat) * std::cos(lon)});
+                    if (!lens_rays.empty()) {
+                        view.rays.push_back({lens_rays[3 * i], lens_rays[3 * i + 1], lens_rays[3 * i + 2]});
                     } else {
-                        view.rays.push_back({(s.u * width - cx) / fx, (s.v * height - cy) / fy, 1.0f});
+                        view.rays.push_back({(s.u * lens.width - lens.cx) / lens.fx, (s.v * lens.height - lens.cy) / lens.fy, 1.0f});
                     }
                 }
                 if (!view.normals.empty()) {
@@ -3107,7 +3118,7 @@ namespace lfs::training {
 
                 train_frame_scale_ = camera_derived_frame_scale(source_cameras);
                 if (params.optimization.undistort) {
-                    auto expanded = expand_panorama_views(*scene_, source_cameras, params.optimization.pose_opt);
+                    auto expanded = expand_camera_views(*scene_, source_cameras, params.optimization.pose_opt);
                     if (!expanded)
                         return std::unexpected(std::string(expanded.error().user_message()));
                 }

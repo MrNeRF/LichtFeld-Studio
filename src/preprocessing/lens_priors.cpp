@@ -5,9 +5,10 @@
 
 #include "lens_views.hpp"
 
-#include "core/camera_types.h"
+#include "core/camera.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "depth_anchor_cache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,17 @@
 #include <string>
 
 namespace lfs::preprocessing {
+    LensCamera make_lens_camera(const core::Camera& photograph) {
+        const auto projection = training::photograph_projection(photograph);
+        // Prepared cameras expose the destination grid, while maps still use the photograph's grid.
+        if (photograph.is_undistort_prepared()) {
+            const auto& p = photograph.undistort_params();
+            return {projection, p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.src_width, p.src_height};
+        }
+        return {projection, photograph.focal_x(), photograph.focal_y(), photograph.center_x(), photograph.center_y(),
+                photograph.camera_width(), photograph.camera_height()};
+    }
+
     namespace {
 
         using lfs::core::Device;

@@ -7,6 +7,7 @@
 #include "../noise_infill.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
+#include "core/camera_views.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
@@ -14,7 +15,6 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
-#include "core/panorama_views.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -727,7 +727,7 @@ namespace lfs::training {
                 if (mask_folder) {
                     const auto mask_path = mask_folder->find(
                         scaled_undistort && is_view(*scaled_undistort)
-                            ? lfs::core::panorama_image_name(camera.image_name())
+                            ? lfs::core::photograph_image_name(camera.image_name())
                             : camera.image_name());
                     if (mask_path.empty())
                         return evaluation_error(std::format("no evaluation mask for '{}' in the mask folder",
