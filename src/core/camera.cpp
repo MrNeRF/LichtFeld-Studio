@@ -249,6 +249,8 @@ namespace lfs::core {
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
           _normal_path(std::move(other._normal_path)),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -324,6 +326,8 @@ namespace lfs::core {
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
             _normal_path = std::move(other._normal_path);
+            _depth_prior_size = other._depth_prior_size;
+            _normal_prior_size = other._normal_prior_size;
             _has_alpha = other._has_alpha;
             _has_image = other._has_image;
             _split = other._split;
@@ -392,6 +396,8 @@ namespace lfs::core {
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
           _normal_path(other._normal_path),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -652,12 +658,14 @@ namespace lfs::core {
 
     void Camera::set_depth_path(std::filesystem::path path) {
         _depth_path = std::move(path);
+        _depth_prior_size = {};
         _depth_quantization_step = -1.0f;
         release_depth_cache();
     }
 
     void Camera::set_normal_path(std::filesystem::path path) {
         _normal_path = std::move(path);
+        _normal_prior_size = {};
         release_normal_cache();
     }
 

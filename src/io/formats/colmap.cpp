@@ -3215,6 +3215,9 @@ namespace lfs::io {
                     static_cast<int>(img.camera_id),
                     depth_path,
                     normal_path);
+                // The probed prior sizes size the loader's slots: the priors travel at their own size.
+                camera->set_prior_sizes({output.depth_sizes[0], output.depth_sizes[1]},
+                                        {output.normal_sizes[0], output.normal_sizes[1]});
 
                 const auto undistort_it = undistort_cache.find(img.camera_id);
                 if (undistort_it != undistort_cache.end() && undistort_it->second) {

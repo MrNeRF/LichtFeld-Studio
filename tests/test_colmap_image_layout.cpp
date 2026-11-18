@@ -679,6 +679,11 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
             const auto rgb = camera->load_and_get_image(1, 120);
             ASSERT_EQ(rgb.shape()[1], 79u);
             ASSERT_EQ(rgb.shape()[2], 120u);
+            // The loader's slots are sized from the priors' own size.
+            EXPECT_EQ(camera->depth_prior_size().width, 77);
+            EXPECT_EQ(camera->depth_prior_size().height, 51);
+            EXPECT_EQ(camera->normal_prior_size().width, 77);
+            EXPECT_EQ(camera->normal_prior_size().height, 51);
             lfs::io::PipelinedLoaderConfig config;
             config.io_threads = 1;
             config.cold_process_threads = 1;

@@ -973,19 +973,28 @@ namespace lfs::training {
                 if (loads_mask) {
                     bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
                 }
+                const size_t pixels = lfs::core::saturating_multiply(width, height);
+                size_t slot_bytes = lfs::core::saturating_multiply(pixels, bytes_per_pixel);
+
+                // Depth and normals travel at their own size; an unknown size counts as the photo's.
+                const auto prior_pixels = [pixels](const lfs::core::Camera::PriorSize size) {
+                    return size.width > 0 && size.height > 0
+                               ? lfs::core::saturating_multiply(static_cast<size_t>(size.width),
+                                                                static_cast<size_t>(size.height))
+                               : pixels;
+                };
                 if (aux_config.load_depths && cam->has_depth()) {
-                    bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
+                    slot_bytes = lfs::core::saturating_add(
+                        slot_bytes, lfs::core::saturating_multiply(prior_pixels(cam->depth_prior_size()), sizeof(float)));
                 }
                 if (aux_config.load_normals && cam->has_normal()) {
                     // Cached normal decode retains float HWC input beside float CHW output.
-                    bytes_per_pixel = lfs::core::saturating_add(
-                        bytes_per_pixel, size_t{6} * sizeof(float));
+                    slot_bytes = lfs::core::saturating_add(
+                        slot_bytes, lfs::core::saturating_multiply(prior_pixels(cam->normal_prior_size()),
+                                                                   size_t{6} * sizeof(float)));
                 }
 
-                const size_t pixels = lfs::core::saturating_multiply(width, height);
-                estimate.max_slot_bytes = std::max(
-                    estimate.max_slot_bytes,
-                    lfs::core::saturating_multiply(pixels, bytes_per_pixel));
+                estimate.max_slot_bytes = std::max(estimate.max_slot_bytes, slot_bytes);
             }
 
             return estimate;
