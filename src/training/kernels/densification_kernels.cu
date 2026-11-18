@@ -153,10 +153,8 @@ namespace lfs::training::kernels {
         new_scale[scale_idxs.y] = scale[scale_idxs.y] + logf(cross_axis_scale);
         new_scale[scale_idxs.z] = scale[scale_idxs.z] + logf(cross_axis_scale);
 
-        // Adjust opacity according to LAS algorithm
-        float sig = sigmoid(opacity);
-        float raw_sig = sig * opacity_scale;
-        float new_opacity = inverse_sigmoid(raw_sig);
+        // Both children get opacity_scale x the parent's opacity; 1 keeps the raw value exactly.
+        float new_opacity = opacity_scale == 1.0f ? opacity : inverse_sigmoid(sigmoid(opacity) * opacity_scale);
 
         // Compute offset for first split (copy 0)
         // Directly in global coordinates

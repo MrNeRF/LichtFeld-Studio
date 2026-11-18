@@ -45,7 +45,7 @@ namespace lfs::training::kernels {
      * @param shN_dim SH higher degree dimension
      * @param stream CUDA stream
      * @param cross_axis_scale Factor on the two shorter axes (the long axis is halved)
-     * @param opacity_scale Factor on both children's opacity
+     * @param opacity_scale Factor on both children's opacity (1 keeps the parent's)
      */
     inline constexpr float LONG_AXIS_SPLIT_CROSS_AXIS_SCALE = 0.85f;
     inline constexpr float LONG_AXIS_SPLIT_OPACITY_SCALE = 0.6f;

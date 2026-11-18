@@ -33,7 +33,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 class MRNFStrategyTest_NeedGuidedGrowthAtTheCap_Test;
 class MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
 class MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
-class MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndDimsTheOpacity_Test;
+class MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndTheOpacity_Test;
 class MRNFStrategyTest_RetireQuotaTakesTheLowestPeaksAndKeepsLargeCoveredSplats_Test;
 class MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
@@ -162,7 +162,7 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_NeedGuidedGrowthAtTheCap_Test;
         friend class ::MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
         friend class ::MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
-        friend class ::MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndDimsTheOpacity_Test;
+        friend class ::MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndTheOpacity_Test;
         friend class ::MRNFStrategyTest_RetireQuotaTakesTheLowestPeaksAndKeepsLargeCoveredSplats_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);

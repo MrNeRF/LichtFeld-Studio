@@ -31,7 +31,7 @@ class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 class MRNFStrategyTest_NeedGuidedGrowthAtTheCap_Test;
 class MRNFStrategyTest_RefineErrorIsTheCompressedViewMean_Test;
 class MRNFStrategyTest_GrowthExchangeRanksByContributionPerView_Test;
-class MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndDimsTheOpacity_Test;
+class MRNFStrategyTest_SplitAtTheCapKeepsTheWidthAndTheOpacity_Test;
 class MRNFStrategyTest_RetireQuotaTakesTheLowestPeaksAndKeepsLargeCoveredSplats_Test;
 
 #include "core/camera.hpp"
@@ -2813,12 +2813,12 @@ TEST(MRNFStrategyTest, DecayScalesByReach) {
     EXPECT_GT(reach_o[2], plain_o[2]);
 }
 
-// At the cap both children keep the parent's width (long axis halved) at 0.75x its opacity; below the
+// At the cap both children keep the parent's width (long axis halved) and its opacity; below the
 // cap the split is today's (0.85 width, 0.6x opacity).
-TEST(MRNFStrategyTest, SplitAtTheCapKeepsTheWidthAndDimsTheOpacity) {
+TEST(MRNFStrategyTest, SplitAtTheCapKeepsTheWidthAndTheOpacity) {
     constexpr size_t n = 200;
     const auto raw_of = [](const float alpha) { return std::log(alpha / (1.0f - alpha)); };
-    for (const auto [cap, cross, opacity] : {std::tuple{200, 1.0f, 0.375f}, std::tuple{1000, 0.85f, 0.3f}}) {
+    for (const auto [cap, cross, opacity] : {std::tuple{200, 1.0f, 0.5f}, std::tuple{1000, 0.85f, 0.3f}}) {
         SCOPED_TRACE(cap);
         auto data = create_mrnf_test_splat_data(static_cast<int>(n), 0);
         MRNF strategy(data);
@@ -2838,6 +2838,8 @@ TEST(MRNFStrategyTest, SplitAtTheCapKeepsTheWidthAndDimsTheOpacity) {
             EXPECT_NEAR(scales[3 * row], std::log(0.5f), 1e-6f) << row;
             EXPECT_NEAR(scales[3 * row + 1], std::log(cross), 1e-6f) << row;
             EXPECT_NEAR(raw[row], raw_of(opacity), 1e-5f) << row;
+            if (cap == 200)
+                EXPECT_EQ(raw[row], 0.0f) << row; // the parent's raw opacity, bit for bit
         }
         EXPECT_EQ(children, 4u);
     }

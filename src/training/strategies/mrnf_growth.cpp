@@ -4,7 +4,7 @@
 
 // MRNF growth at the splat cap. Growth draws by NEED, the per-view refine error relative to its mean.
 // Once the model is full, each refine also frees the splats that contribute least per view (growth exchange) so
-// growth keeps working until grow_until_iter, and every split keeps its width.
+// growth keeps working until grow_until_iter, and every split keeps its width and opacity.
 
 #include "core/assert.hpp"
 #include "kernels/densification_kernels.hpp"
@@ -31,9 +31,9 @@ namespace lfs::training {
         constexpr float MRNF_NEED_ERROR_MAX = 20.0f;
         // Floor of a victim candidate's view count as a share of the training views (at least one view).
         constexpr double MRNF_EXCHANGE_VIEW_FLOOR_SHARE = 0.05;
-        // Split at the cap: scale of the cross axes (1 keeps them) and of each half's opacity.
+        // Split at the cap: scale of the cross axes and of each half's opacity; 1 keeps the parent's.
         constexpr float MRNF_CAP_SPLIT_CROSS_SCALE = 1.0f;
-        constexpr float MRNF_CAP_SPLIT_OPACITY_SCALE = 0.75f;
+        constexpr float MRNF_CAP_SPLIT_OPACITY_SCALE = 1.0f;
 
     } // namespace
 
@@ -202,8 +202,8 @@ namespace lfs::training {
     }
 
     // Split at the cap: a split must not thin the surface it refines, so the cross axes keep
-    // their size while the long axis halves, and both halves dim to MRNF_CAP_SPLIT_OPACITY_SCALE of the
-    // parent. Returns {cross-axis scale, opacity scale}.
+    // their size while the long axis halves, and both halves keep the parent's opacity.
+    // Returns {cross-axis scale, opacity scale}.
     std::pair<float, float> MRNF::split_scales(const bool at_cap) {
         if (at_cap) {
             return {MRNF_CAP_SPLIT_CROSS_SCALE, MRNF_CAP_SPLIT_OPACITY_SCALE};
