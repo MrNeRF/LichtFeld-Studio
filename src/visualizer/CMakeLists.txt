@@ -28,6 +28,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         vr/openxr_runtimes.cpp
         vr/openxr_service.cpp
         vr/vr_hand_renderer.cpp
+        vr/vr_tracked_hands.cpp
 
         # Project session chapters
         project/session_state.cpp

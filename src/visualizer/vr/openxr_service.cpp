@@ -4,13 +4,11 @@
 #include "openxr_service.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
-#include "internal/resource_paths.hpp"
 #include "openxr_runtimes.hpp"
 #include "preferences.hpp"
 #include "rendering/vulkan_wait.hpp"
-#include "vr_hand_model.hpp"
-#include "vr_hand_renderer.hpp"
 #include "vr_math.hpp"
+#include "vr_tracked_hands.hpp"
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -21,7 +19,6 @@
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
-#include <vk_mem_alloc.h>
 
 namespace lfs::vis::vr {
 
@@ -31,13 +28,6 @@ namespace lfs::vis::vr {
         // A grip holds the scene from kGripEngage until it relaxes to kGripRelease.
         constexpr float kGripEngage = 0.6f;
         constexpr float kGripRelease = 0.4f;
-        // Linear colors of the light of a hand, and of a hand that holds the scene.
-        const glm::vec3 kHandColor{0.05f, 0.17f, 0.78f};
-        const glm::vec3 kHandGripColor{1.00f, 0.62f, 0.22f};
-        // Meters: hands are drawn from 2 cm in front of the eye out to 20 m.
-        constexpr float kHandNear = 0.02f;
-        constexpr float kHandFar = 20.0f;
-        static_assert(kHandJointCount == XR_HAND_JOINT_COUNT_EXT);
         constexpr std::array<const char*, 9> kSessionStates = {
             "unknown", "idle", "ready", "synchronized", "visible", "focused", "stopping", "loss pending", "exiting"};
         [[nodiscard]] lfs::Error vrError(std::string message) {
@@ -92,13 +82,6 @@ namespace lfs::vis::vr {
             PFN_xrGetVulkanGraphicsDevice2KHR graphics_device = nullptr;
             PFN_xrGetVulkanGraphicsRequirements2KHR graphics_requirements = nullptr;
         } vk;
-        // Hand joints from the runtime, when it tracks hands (XR_EXT_hand_tracking).
-        struct HandTracking {
-            PFN_xrCreateHandTrackerEXT create = nullptr;
-            PFN_xrLocateHandJointsEXT locate = nullptr;
-            bool data_sources = false; // XR_EXT_hand_tracking_data_source is enabled
-            [[nodiscard]] bool available() const { return create && locate; }
-        } hand_tracking;
         bool lost = false;
         std::string runtime_name;
         // A localization key and its argument; the UI localizes them when shown.
@@ -116,12 +99,11 @@ namespace lfs::vis::vr {
             XrSwapchain swapchain = XR_NULL_HANDLE;
             glm::ivec2 size{0};
             std::vector<XrSwapchainImageVulkan2KHR> images;
-            std::vector<VkImageView> views; // one per image, only when hands are drawn
             std::uint32_t index = 0;
             bool acquired = false; // acquired and waited, so it must be released
-            // Tracking space to clip space, and where the eye is, this frame.
-            glm::mat4 view_projection{1.0f};
-            glm::vec3 position{0.0f};
+            // Where the eye is and what it sees this frame: the hands are
+            // drawn from it.
+            TrackedHands::EyePose pose;
         };
         struct Session {
             VulkanContext* context = nullptr;
@@ -135,18 +117,6 @@ namespace lfs::vis::vr {
             XrAction grab = XR_NULL_HANDLE, hand_pose = XR_NULL_HANDLE;
             std::array<XrPath, 2> hands{XR_NULL_PATH, XR_NULL_PATH};
             std::array<XrSpace, 2> hand_spaces{XR_NULL_HANDLE, XR_NULL_HANDLE};
-            std::array<XrHandTrackerEXT, 2> hand_trackers{XR_NULL_HANDLE, XR_NULL_HANDLE};
-            // The left eye with the hands on it, for the desktop mirror: people
-            // watching the window see the hands as well.
-            struct MirrorCopy {
-                VkImage image = VK_NULL_HANDLE;
-                VmaAllocation allocation = VK_NULL_HANDLE;
-                VkImageView target_view = VK_NULL_HANDLE;  // sRGB: the hands are drawn through it
-                VkImageView display_view = VK_NULL_HANDLE; // the eye images' own encoding: the desktop samples it
-                glm::ivec2 size{0};
-                bool drawn = false; // holds this frame's left eye
-                bool shown = false; // the desktop may still be reading it
-            } mirror_copy;
             XrSessionState state = XR_SESSION_STATE_UNKNOWN;
             bool running = false;
             bool ended = false;
@@ -168,20 +138,13 @@ namespace lfs::vis::vr {
             SnapTurnHysteresis snap;
             std::array<bool, 2> gripping{false, false};
             std::array<HandSmoother, 2> steady;
-            // The hands as they are drawn.
-            std::array<HandPoseSmoother, 2> drawn_hands;
-            XrTime hands_time = 0;
             GrabManipulation grab_motion;
             XrTime last_time = 0;
             std::optional<XrEventDataReferenceSpaceChangePending> space_change;
         } s;
-        // Alive with the session; kept apart from it because they are not copied.
-        HandRenderer hand_renderer;
-        std::array<std::vector<HandVertex>, 2> hand_meshes;
-        std::vector<HandVertex> hand_scratch;
-        // Left, right: the bundled hand models, read once.
-        std::array<std::optional<HandModel>, 2> hand_models;
-        bool hand_models_read = false;
+        // The hands of the session; kept apart from it because they are not
+        // copied.
+        TrackedHands tracked_hands;
 
         [[nodiscard]] lfs::Status check(const XrResult result, const std::string_view what) const {
             if (XR_SUCCEEDED(result))
@@ -293,23 +256,7 @@ namespace lfs::vis::vr {
                 return st;
             runtime_name = properties.runtimeName;
 
-            hand_tracking = {};
-            if (hands) {
-                XrSystemHandTrackingPropertiesEXT hand_properties{XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT};
-                XrSystemProperties system_properties{XR_TYPE_SYSTEM_PROPERTIES};
-                system_properties.next = &hand_properties;
-                const auto optional = [this](auto& function, const char* const name) {
-                    return XR_SUCCEEDED(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&function)));
-                };
-                if (XR_SUCCEEDED(xrGetSystemProperties(instance, system, &system_properties)) &&
-                    hand_properties.supportsHandTracking &&
-                    optional(hand_tracking.create, "xrCreateHandTrackerEXT") &&
-                    optional(hand_tracking.locate, "xrLocateHandJointsEXT")) {
-                    hand_tracking.data_sources = hand_data_sources;
-                } else {
-                    hand_tracking = {};
-                }
-            }
+            tracked_hands.findTracking(hands ? instance : XR_NULL_HANDLE, system, hand_data_sources);
             return {};
         }
 
@@ -610,181 +557,15 @@ namespace lfs::vis::vr {
             s.rig.scene_units_per_meter = preferences.scene_units_per_meter;
             move_speed = preferences.move_speed;
             show_hands = preferences.show_hands;
-            startHands();
+            std::array<std::vector<VkImage>, 2> images;
+            std::array<TrackedHands::Eye, 2> eyes;
+            for (std::size_t i = 0; i < s.eyes.size(); ++i) {
+                for (const auto& image : s.eyes[i].images)
+                    images[i].push_back(image.image);
+                eyes[i] = {images[i], s.eyes[i].size};
+            }
+            tracked_hands.start(context, s.handle, eyes);
             return {};
-        }
-
-        // The hands are an extra: when anything here fails, the session goes on
-        // without them.
-        void startHands() {
-            if (!hand_tracking.available())
-                return;
-            readHandModels();
-            if (!hand_models[0] && !hand_models[1]) {
-                LOG_WARN("VR hands: the hand models are missing from the assets");
-                return;
-            }
-            for (std::size_t i = 0; i < s.hand_trackers.size(); ++i) {
-                XrHandTrackerCreateInfoEXT create{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
-                create.hand = i == 0 ? XR_HAND_LEFT_EXT : XR_HAND_RIGHT_EXT;
-                create.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
-                // A hand around a controller counts too: the runtime then poses
-                // its fingers from the buttons and sticks they touch.
-                std::array<XrHandTrackingDataSourceEXT, 2> sources{XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT,
-                                                                   XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT};
-                XrHandTrackingDataSourceInfoEXT source_info{XR_TYPE_HAND_TRACKING_DATA_SOURCE_INFO_EXT};
-                source_info.requestedDataSourceCount = static_cast<std::uint32_t>(sources.size());
-                source_info.requestedDataSources = sources.data();
-                if (hand_tracking.data_sources)
-                    create.next = &source_info;
-                if (auto st = check(hand_tracking.create(s.handle, &create, &s.hand_trackers[i]), "xrCreateHandTrackerEXT"); !st) {
-                    LOG_WARN("VR hands: {}", st.error().user_message());
-                    s.hand_trackers[i] = XR_NULL_HANDLE;
-                }
-            }
-            if (!s.hand_trackers[0] && !s.hand_trackers[1])
-                return;
-
-            auto& context = *s.context;
-            for (auto& eye : s.eyes) {
-                for (const auto& image : eye.images) {
-                    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-                    view.image = image.image;
-                    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                    view.format = VK_FORMAT_R8G8B8A8_SRGB;
-                    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkImageView handle = VK_NULL_HANDLE;
-                    if (auto st = checkVk(vkCreateImageView(context.device(), &view, nullptr, &handle), "vkCreateImageView(VR eye)"); !st) {
-                        LOG_WARN("VR hands: {}", st.error().user_message());
-                        return;
-                    }
-                    eye.views.push_back(handle);
-                }
-            }
-            if (auto st = hand_renderer.init(context, VK_FORMAT_R8G8B8A8_SRGB, glm::max(s.eyes[0].size, s.eyes[1].size)); !st) {
-                LOG_WARN("VR hands: {}", st.error().user_message());
-                return;
-            }
-            LOG_INFO("VR hands: drawn from the runtime's hand tracking");
-
-            // The eye images hold display-encoded bits in a plain RGBA8 image.
-            auto& mirror = s.mirror_copy;
-            VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-            image.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
-            image.imageType = VK_IMAGE_TYPE_2D;
-            image.format = VK_FORMAT_R8G8B8A8_UNORM;
-            image.extent = {static_cast<std::uint32_t>(s.eyes[0].size.x), static_cast<std::uint32_t>(s.eyes[0].size.y), 1};
-            image.mipLevels = image.arrayLayers = 1;
-            image.samples = VK_SAMPLE_COUNT_1_BIT;
-            image.tiling = VK_IMAGE_TILING_OPTIMAL;
-            image.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-            image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo allocation{};
-            allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            auto created = checkVk(vmaCreateImage(context.allocator(), &image, &allocation, &mirror.image, &mirror.allocation, nullptr),
-                                   "vmaCreateImage(VR mirror)");
-            for (const auto& [format, view] : {std::pair{VK_FORMAT_R8G8B8A8_SRGB, &mirror.target_view},
-                                               std::pair{VK_FORMAT_R8G8B8A8_UNORM, &mirror.display_view}}) {
-                if (!created)
-                    break;
-                VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-                info.image = mirror.image;
-                info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                info.format = format;
-                info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                created = checkVk(vkCreateImageView(context.device(), &info, nullptr, view), "vkCreateImageView(VR mirror)");
-            }
-            if (created) {
-                mirror.size = s.eyes[0].size;
-            } else {
-                // Without it the hands still show in the headset.
-                LOG_WARN("VR hands are not mirrored on the desktop: {}", created.error().user_message());
-                destroyMirrorCopy();
-            }
-        }
-
-        void readHandModels() {
-            if (std::exchange(hand_models_read, true))
-                return;
-            constexpr std::array<const char*, 2> names = {"vr/hand_left.glb", "vr/hand_right.glb"};
-            for (std::size_t i = 0; i < names.size(); ++i) {
-                hand_models[i].reset();
-                try {
-                    auto mesh = lfs::io::load_skinned_mesh(getAssetPath(names[i]));
-                    if (!mesh) {
-                        LOG_WARN("VR hands: could not read {}: {}", names[i], mesh.error().format());
-                        continue;
-                    }
-                    hand_models[i] = handModelFromSkinnedMesh(std::move(*mesh));
-                    if (!hand_models[i])
-                        LOG_WARN("VR hands: {} has no bone for some of the hand joints", names[i]);
-                } catch (const std::exception& error) {
-                    // Not bundled: this hand is not drawn.
-                    LOG_WARN("VR hands: could not read {}: {}", names[i], error.what());
-                }
-            }
-        }
-
-        void destroyMirrorCopy() {
-            auto& mirror = s.mirror_copy;
-            const VkDevice device = s.context->device();
-            for (const VkImageView view : {mirror.target_view, mirror.display_view}) {
-                if (view)
-                    vkDestroyImageView(device, view, nullptr);
-            }
-            if (mirror.image)
-                vmaDestroyImage(s.context->allocator(), mirror.image, mirror.allocation);
-            mirror = {};
-        }
-
-        // Builds this frame's hands from the joints the runtime tracks.
-        void updateHands() {
-            if (!hand_renderer.ready())
-                return;
-            const float dt = s.hands_time ? std::clamp(static_cast<float>(static_cast<double>(s.display_time - s.hands_time) * 1e-9), 0.0f, 0.05f)
-                                          : 0.0f;
-            s.hands_time = s.display_time;
-            std::array<glm::vec3, 2> colors{};
-            for (std::size_t i = 0; i < hand_meshes.size(); ++i) {
-                hand_meshes[i].clear();
-                colors[i] = s.gripping[i] ? kHandGripColor : kHandColor;
-                const auto joints = show_hands && hand_models[i] ? locateHand(i) : std::nullopt;
-                if (!joints) {
-                    // A hand that comes back starts where it is, not where it was.
-                    s.drawn_hands[i].reset();
-                    continue;
-                }
-                // Only where the joints are is used: see handPoseFromJoints().
-                const HandPose pose = s.drawn_hands[i].update(handPoseFromJoints(*joints), dt);
-                appendSkinnedHand(hand_meshes[i], *hand_models[i], pose, hand_scratch);
-            }
-            hand_renderer.setHands({hand_meshes[0], hand_meshes[1]}, colors);
-        }
-
-        // Where the runtime tracks the joints of the left (0) or right (1) hand
-        // for this frame; nothing while it does not track them all.
-        [[nodiscard]] std::optional<HandJoints> locateHand(const std::size_t hand) const {
-            if (!s.hand_trackers[hand])
-                return std::nullopt;
-            std::array<XrHandJointLocationEXT, XR_HAND_JOINT_COUNT_EXT> located{};
-            XrHandJointLocationsEXT locations{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
-            locations.jointCount = static_cast<std::uint32_t>(located.size());
-            locations.jointLocations = located.data();
-            XrHandJointsLocateInfoEXT locate{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT};
-            locate.baseSpace = s.space;
-            locate.time = s.display_time;
-            if (XR_FAILED(hand_tracking.locate(s.hand_trackers[hand], &locate, &locations)) || !locations.isActive)
-                return std::nullopt;
-            HandJoints joints;
-            for (std::size_t joint = 0; joint < joints.size(); ++joint) {
-                if (!(located[joint].locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT))
-                    return std::nullopt;
-                joints[joint] = vr::position(located[joint].pose);
-            }
-            if (!handJointsValid(joints))
-                return std::nullopt;
-            return joints;
         }
 
         lfs::Status poll() {
@@ -1025,48 +806,16 @@ namespace lfs::vis::vr {
                 region.extent = {static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y), 1};
                 vkCmdCopyImage(s.command, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             };
-            const auto hands = [&](const Eye& eye, const VkImageView target) {
-                hand_renderer.record(s.command, {target, eye.size, eye.view_projection, eye.position});
-            };
-            // With hands, the left eye passes through an image of our own, which
+            // With hands, the left eye passes through an image of theirs, which
             // the desktop mirror then shows: the scene with the hands on it.
-            auto& mirror = s.mirror_copy;
-            mirror.drawn = hand_renderer.hasHands() && mirror.image && mirror.size == s.eyes[0].size;
-            if (mirror.drawn) {
-                constexpr VkPipelineStageFlags2 draw_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                constexpr VkAccessFlags2 draw_access = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                const auto move = [&](const VkImageLayout from, const VkImageLayout to,
-                                      const VkPipelineStageFlags2 src_stage, const VkAccessFlags2 src_access,
-                                      const VkPipelineStageFlags2 dst_stage, const VkAccessFlags2 dst_access) {
-                    const auto barrier = imageBarrier(mirror.image, from, to, src_stage, src_access, dst_stage, dst_access);
-                    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    dependency.imageMemoryBarrierCount = 1;
-                    dependency.pImageMemoryBarriers = &barrier;
-                    vkCmdPipelineBarrier2(s.command, &dependency);
-                };
-                move(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                     all, 0, copy_stage, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                copy(sources[0].external_image, mirror.image, mirror.size);
-                move(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     copy_stage, VK_ACCESS_2_TRANSFER_WRITE_BIT, draw_stage, draw_access);
-                hands(s.eyes[0], mirror.target_view);
-                move(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     draw_stage, draw_access, copy_stage, VK_ACCESS_2_TRANSFER_READ_BIT);
-                copy(mirror.image, s.eyes[0].images[s.eyes[0].index].image, mirror.size);
-                move(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     copy_stage, VK_ACCESS_2_TRANSFER_READ_BIT, all, memory);
-            }
-            for (std::size_t i = mirror.drawn ? 1 : 0; i < sources.size(); ++i)
+            const bool mirrored = tracked_hands.recordMirroredEye(
+                s.command, sources[0].external_image, s.eyes[0].images[s.eyes[0].index].image, s.eyes[0].pose);
+            for (std::size_t i = mirrored ? 1 : 0; i < sources.size(); ++i)
                 copy(sources[i].external_image, s.eyes[i].images[s.eyes[i].index].image, s.eyes[i].size);
             barriers(after);
             // The hands go over the scene, straight onto the headset images.
-            if (hand_renderer.hasHands()) {
-                for (std::size_t i = mirror.drawn ? 1 : 0; i < s.eyes.size(); ++i) {
-                    const auto& eye = s.eyes[i];
-                    if (eye.index < eye.views.size())
-                        hands(eye, eye.views[eye.index]);
-                }
-            }
+            for (std::size_t i = mirrored ? 1 : 0; i < s.eyes.size(); ++i)
+                tracked_hands.record(s.command, i, s.eyes[i].index, s.eyes[i].pose);
             if (auto st = checkVk(vkEndCommandBuffer(s.command), "vkEndCommandBuffer(VR)"); !st)
                 return st;
 
@@ -1115,16 +864,15 @@ namespace lfs::vis::vr {
                 return false;
             if (auto st = navigate(head.pose, s.display_time, move); !st)
                 return st.error();
-            updateHands();
+            tracked_hands.update(s.space, s.display_time, s.gripping, show_hands);
 
             std::array<lfs::rendering::FrameView, 2> frame_views;
             for (std::size_t i = 0; i < views.size(); ++i) {
                 const auto& fov = views[i].fov;
-                s.eyes[i].position = vr::position(views[i].pose);
-                s.eyes[i].view_projection =
-                    eyeViewProjection({fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown},
-                                      vr::orientation(views[i].pose), s.eyes[i].position, kHandNear, kHandFar);
-                const auto intrinsics = eyeIntrinsics({fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown}, s.eyes[i].size);
+                s.eyes[i].pose = {{fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown},
+                                  vr::orientation(views[i].pose),
+                                  vr::position(views[i].pose)};
+                const auto intrinsics = eyeIntrinsics(s.eyes[i].pose.fov, s.eyes[i].size);
                 if (!intrinsics)
                     return false;
                 const auto pose = s.rig.cameraPose(vr::orientation(views[i].pose), vr::position(views[i].pose));
@@ -1164,15 +912,14 @@ namespace lfs::vis::vr {
                 eye.acquired = false;
             }
             s.mirror = (*eyes)[0];
-            if (s.mirror_copy.drawn) {
+            if (const auto with_hands = tracked_hands.mirror()) {
                 // Already complete: the copy was waited for.
-                s.mirror.external_image = s.mirror_copy.image;
-                s.mirror.external_image_view = s.mirror_copy.display_view;
+                s.mirror.external_image = with_hands->image;
+                s.mirror.external_image_view = with_hands->view;
                 s.mirror.external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 s.mirror.completion_semaphore = VK_NULL_HANDLE;
                 s.mirror.completion_value = 0;
-                s.mirror.alloc_size = s.mirror_copy.size;
-                s.mirror_copy.shown = true;
+                s.mirror.alloc_size = with_hands->size;
             }
             return true;
         }
@@ -1379,14 +1126,7 @@ namespace lfs::vis::vr {
         if (s.transfer_pending)
             static_cast<void>(s.context->deviceWaitIdle());
         const VkDevice device = s.context->device();
-        p.hand_renderer.shutdown();
-        if (s.mirror_copy.shown)
-            static_cast<void>(s.context->waitForSubmittedFrames());
-        p.destroyMirrorCopy();
-        for (auto& eye : s.eyes) {
-            for (const VkImageView view : eye.views)
-                vkDestroyImageView(device, view, nullptr);
-        }
+        p.tracked_hands.stop();
         if (s.fence)
             vkDestroyFence(device, s.fence, nullptr);
         if (s.pool)
