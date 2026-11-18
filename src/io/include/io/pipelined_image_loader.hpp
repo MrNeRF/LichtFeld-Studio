@@ -142,6 +142,9 @@ namespace lfs::io {
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
+        // Depth and normals keep the prior files' own size (undistorted, if the
+        // camera undistorts); consumers enlarge them to prior_target_* with
+        // lfs::core::fit_depth_prior / fit_normal_prior.
         std::optional<lfs::core::Tensor> depth;  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal; // Optional normals [3,H,W], float32 in [-1,1]
         // Depth and normal record readiness on different worker streams, so
@@ -150,6 +153,9 @@ namespace lfs::io {
         CUevent_st* normal_ready_event = nullptr;
         std::vector<std::shared_ptr<void>> decoded_frame_leases;
         std::string error; // Non-empty for a failed primary image request
+        // The request's aux_target_* (0 when unset): the size depth and normals were enlarged to before.
+        int prior_target_width = 0;
+        int prior_target_height = 0;
     };
 
     // Terminal, exactly-once outcome for one accepted prefetch() sequence.
@@ -340,6 +346,8 @@ namespace lfs::io {
             size_t mask_bytes = 0;
             size_t depth_bytes = 0;
             size_t normal_bytes = 0;
+            int prior_target_width = 0;
+            int prior_target_height = 0;
         };
 
         using PendingPairMap = std::unordered_map<size_t, PendingPair>;
@@ -484,10 +492,18 @@ namespace lfs::io {
                                  void* cuda_stream,
                                  const LoadParams& params);
 
+        // Depth and normal priors are cached at their own size. Read as they are,
+        // they keep the file's samples (NormalSamples* before the prior transform,
+        // which every cached visit runs again); undistorted priors are cached as the
+        // undistortion left them (Depth, DepthFloat, Normal).
         enum class SidecarCacheFormat : uint8_t {
-            Depth,
-            DepthFloat,
-            Normal
+            Depth,              // lossless 16-bit J2K of [0,1] depth
+            DepthFloat,         // raw float32 depth
+            Normal,             // lossless 16-bit J2K of normals as (n+1)/2
+            Depth8,             // lossless 8-bit J2K of the depth file's samples
+            NormalSamples8,     // raw RGB bytes of an 8-bit normal file (nvJPEG2000 can hang on 8-bit RGB)
+            NormalSamples16,    // lossless 16-bit J2K of the normal file's RGB samples
+            NormalSamplesFloat, // raw float32 RGB samples of the normal file
         };
 
         std::string make_sidecar_key(const PrefetchedImage& item, SidecarCacheFormat kind) const;
@@ -499,6 +515,10 @@ namespace lfs::io {
         lfs::core::Tensor decode_cached_sidecar(NvCodecImageLoader& nvcodec,
                                                 const PrefetchedImage& item,
                                                 void* cuda_stream);
+        // A decoded depth or normal cache entry, as the first visit delivered it.
+        lfs::core::Tensor finish_cached_sidecar(const PrefetchedImage& item,
+                                                lfs::core::Tensor decoded,
+                                                cudaStream_t stream) const;
         CUevent_st* record_sidecar_ready_event(cudaStream_t stream);
         std::pair<int, int> sidecar_target_size(const PrefetchedImage& item, int src_w, int src_h) const;
 

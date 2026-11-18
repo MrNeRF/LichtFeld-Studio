@@ -199,6 +199,12 @@ namespace lfs::training {
         CUevent_st* normal_ready_event = nullptr;
         // Ring-backed tensors must never outlive this keepalive handle.
         std::shared_ptr<void> decoded_frame_keepalive = {};
+        // Pipelined depth and normals keep their own size; they are enlarged to this
+        // size, the camera's when they were requested (0: the render's), where the loss reads them.
+        int prior_target_width = 0;
+        int prior_target_height = 0;
+        // False when depth came from the camera's own loader, at the camera's size.
+        bool depth_own_size = false;
     };
 
     /// Camera dataset configuration
@@ -435,6 +441,8 @@ namespace lfs::training {
                 };
                 example.decoded_frame_keepalive = std::make_shared<
                     std::vector<std::shared_ptr<void>>>(std::move(ready.decoded_frame_leases));
+                example.prior_target_width = ready.prior_target_width;
+                example.prior_target_height = ready.prior_target_height;
                 ready.depth_ready_event = nullptr;
                 ready.normal_ready_event = nullptr;
 
@@ -458,6 +466,7 @@ namespace lfs::training {
                 }
                 if (ready.depth && ready.depth->is_valid()) {
                     example.depth = std::move(*ready.depth);
+                    example.depth_own_size = true;
                 } else if (aux_config_.load_depths && cam->has_depth()) {
                     auto depth = cam->load_and_get_depth(
                         dataset_->get_resize_factor(),

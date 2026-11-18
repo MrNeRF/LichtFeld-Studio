@@ -694,11 +694,28 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
             for (size_t sequence = 0; sequence < 2; ++sequence) {
                 request.sequence_id = sequence;
                 pipeline.prefetch({request});
-                const auto ready = pipeline.get();
+                auto ready = pipeline.get();
                 ASSERT_TRUE(ready.error.empty()) << ready.error;
                 ASSERT_TRUE(ready.depth.has_value());
                 ASSERT_TRUE(ready.normal.has_value());
-                ASSERT_NO_FATAL_FAILURE(check(*ready.depth, *ready.normal));
+                for (auto* const event : {&ready.depth_ready_event, &ready.normal_ready_event}) {
+                    if (*event) {
+                        ASSERT_EQ(cudaEventSynchronize(*event), cudaSuccess);
+                        ASSERT_EQ(cudaEventDestroy(*event), cudaSuccess);
+                        *event = nullptr;
+                    }
+                }
+                // The priors arrive at their own size and reach the training size where the loss reads them.
+                ASSERT_EQ(ready.depth->shape(), lfs::core::TensorShape({51, 77}));
+                ASSERT_EQ(ready.normal->shape(), lfs::core::TensorShape({3, 51, 77}));
+                ASSERT_EQ(ready.prior_target_width, 120);
+                ASSERT_EQ(ready.prior_target_height, 79);
+                const bool resample_always = !camera->is_undistort_prepared();
+                ASSERT_NO_FATAL_FAILURE(check(
+                    lfs::core::fit_depth_prior(*ready.depth, ready.prior_target_height, ready.prior_target_width,
+                                               79, 120, resample_always),
+                    lfs::core::fit_normal_prior(*ready.normal, ready.prior_target_height, ready.prior_target_width,
+                                                79, 120, resample_always)));
             }
             // Both loaders must retain their existing failure codes.
             write_derived_image(dataset / "normals/frame.png", source, 32, 32);

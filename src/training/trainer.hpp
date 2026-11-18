@@ -875,6 +875,11 @@ namespace lfs::training {
         lfs::core::Tensor pipelined_mask_;
         lfs::core::Tensor pipelined_depth_;
         lfs::core::Tensor pipelined_normal_;
+        // Pipelined priors keep their own size: the size their request asked for, which the loss
+        // enlarges them to, and whether the depth came so (not from the camera's own loader).
+        int pipelined_prior_target_width_ = 0;
+        int pipelined_prior_target_height_ = 0;
+        bool pipelined_depth_own_size_ = false;
 
         // Bilateral grid for appearance modeling (optional)
         std::unique_ptr<BilateralGrid> bilateral_grid_;
