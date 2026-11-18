@@ -2237,9 +2237,8 @@ namespace lfs::training {
         if (current_size == 0)
             return 0;
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        const size_t free_count_val = static_cast<size_t>(active_region.sum_scalar());
-        return current_size - free_count_val;
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return current_size - active_region.count_nonzero();
     }
 
     size_t MRNF::free_count() const {
@@ -2251,8 +2250,8 @@ namespace lfs::training {
         if (current_size == 0)
             return 0;
 
-        auto active_region = _free_mask.slice(0, 0, current_size);
-        return static_cast<size_t>(active_region.sum_scalar());
+        const auto active_region = _free_mask.slice(0, 0, current_size);
+        return active_region.count_nonzero();
     }
 
     lfs::core::Tensor MRNF::get_active_indices() const {
