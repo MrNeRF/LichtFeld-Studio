@@ -123,7 +123,7 @@
   "scale_decay": 0.0020000000949949026,
   "scale_reg": 0.009999999776482582,
   "scale_reg_decay_power": 0.4000000059604645,
-  "scaling_lr": 0.019999999552965164,
+  "scaling_lr": 0.008280159905552864,
   "scaling_lr_end": 0.004999999888241291,
   "screen_share_penalty": 0.8470849990844727,
   "sh_degree": 3,

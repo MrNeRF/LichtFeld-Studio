@@ -1336,7 +1336,7 @@ namespace lfs::core {
             p.screen_share_penalty = 0.847085f;
             p.means_lr = 2.17871e-5f;
             p.refine_every = 163;
-            p.scaling_lr = 0.02f;
+            p.scaling_lr = 0.00828016f;
             p.rotation_lr = 0.0015f;
             p.opacity_reg = 0.0f;
             p.scale_reg = 0.01f;

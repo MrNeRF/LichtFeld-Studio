@@ -679,7 +679,7 @@ namespace {
         EXPECT_FLOAT_EQ(params.screen_share_penalty, 0.847085f);
         EXPECT_FLOAT_EQ(params.means_lr, 2.17871e-5f);
         EXPECT_EQ(params.refine_every, 163u);
-        EXPECT_FLOAT_EQ(params.scaling_lr, 0.02f);
+        EXPECT_FLOAT_EQ(params.scaling_lr, 0.00828016f);
         EXPECT_EQ(params.grow_until_iter, 27'500u);
         EXPECT_FLOAT_EQ(params.rotation_lr, 0.0015f);
         EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
