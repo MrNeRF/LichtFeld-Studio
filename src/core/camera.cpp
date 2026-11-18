@@ -1148,6 +1148,10 @@ namespace lfs::core {
     }
 
     void Camera::set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream) {
+        set_pose(R, T, stream, nullptr);
+    }
+
+    void Camera::set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream, const float* shared_centre) {
         auto R_cpu = R.cpu().contiguous();
         auto T_cpu = T.cpu().contiguous();
         if (R_cpu.numel() != 9 || T_cpu.numel() != 3)
@@ -1157,12 +1161,15 @@ namespace lfs::core {
         const std::array<float, 16> w2c{r[0], r[1], r[2], t[0], r[3], r[4], r[5], t[1],
                                         r[6], r[7], r[8], t[2], 0.0f, 0.0f, 0.0f, 1.0f};
         std::array<float, 3> centre{};
-        for (int j = 0; j < 3; ++j)
-            centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+        if (!shared_centre) {
+            for (int j = 0; j < 3; ++j)
+                centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+            shared_centre = centre.data();
+        }
         LFS_CUDA_TRY(cudaMemcpyAsync(_world_view_transform.ptr<float>(), w2c.data(), sizeof(w2c),
                                      cudaMemcpyHostToDevice, stream),
                      stream, "camera pose upload");
-        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), centre.data(), sizeof(centre),
+        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), shared_centre, sizeof(centre),
                                      cudaMemcpyHostToDevice, stream),
                      stream, "camera position upload");
         LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, "camera pose upload sync");

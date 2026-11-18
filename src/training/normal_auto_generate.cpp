@@ -4,10 +4,10 @@
 
 #include "normal_auto_generate.hpp"
 
+#include "core/camera_views.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/source_site.hpp"
 #include "io/filesystem_utils.hpp"
 #include "preprocessing/preprocess.hpp"
 
@@ -18,7 +18,6 @@
 #include <format>
 #include <optional>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -244,32 +243,25 @@ namespace lfs::training {
         const std::span<const std::shared_ptr<lfs::core::Camera>> scene,
         const PriorMapEstimator& estimator) {
         using Camera = lfs::core::Camera;
-        std::unordered_map<std::filesystem::path, std::shared_ptr<Camera>> sources;
-        for (const auto& camera : scene)
-            if (camera)
-                sources.emplace(camera->image_path(), camera);
-
         std::vector<std::shared_ptr<Camera>> photographs;
         std::unordered_set<const Camera*> included;
         std::vector<std::pair<Camera*, Camera*>> views;
         size_t training_count = 0;
         const std::array splits{train, val};
         for (size_t i = 0; i < splits.size(); ++i) {
-            for (const auto& camera : splits[i]) {
-                if (!camera || !camera->is_undistort_prepared() || !is_view(camera->undistort_params())) {
-                    photographs.push_back(camera);
-                    continue;
+            auto groups = lfs::core::group_camera_views(splits[i], scene);
+            if (!groups)
+                return std::move(groups).error();
+            for (const auto& [photo, drawn] : *groups) {
+                for (const auto& camera : drawn) {
+                    if (camera == photo) {
+                        photographs.push_back(camera);
+                    } else {
+                        if (included.insert(photo.get()).second)
+                            photographs.push_back(photo);
+                        views.emplace_back(camera.get(), photo.get());
+                    }
                 }
-                const auto found = sources.find(camera->image_path());
-                if (found == sources.end())
-                    return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
-                                            .domain = lfs::ErrorDomain::Training,
-                                            .user_message = "A pinhole view has no photograph in the scene",
-                                            .detection = LFS_SOURCE_SITE_CURRENT()});
-                const auto& source = found->second;
-                views.emplace_back(camera.get(), source.get());
-                if (included.insert(source.get()).second)
-                    photographs.push_back(source);
             }
             if (i == 0)
                 training_count = photographs.size();

@@ -5,7 +5,7 @@
 ## When to Use
 Use 3DGUT when your COLMAP camera model is not PINHOLE or SIMPLE_PINHOLE.
 
-An equirectangular panorama can also train without 3DGUT when you set `--undistort`. Training sees each panorama through six pinhole views cut from the image. A fisheye lens that sees a hemisphere or more, such as one lens of a 360 camera, is trained through five views in the same way; a narrower fisheye keeps its single undistorted view. `--pose-opt` is unavailable for these views.
+An equirectangular panorama can also train without 3DGUT when you set `--undistort`. Training sees each panorama through six pinhole views cut from the image. A fisheye lens that sees a hemisphere or more, such as one lens of a 360 camera, is trained through five views in the same way; a narrower fisheye keeps its single undistorted view.
 
 :::warning
 RealityScan (formerly RealityCapture) may export datasets whose images are already undistorted while the COLMAP metadata still reports a distorted camera model. LFS automatically normalizes zero-distortion pinhole-family models during import, but stale non-pinhole metadata can still produce incorrect 3DGUT results.

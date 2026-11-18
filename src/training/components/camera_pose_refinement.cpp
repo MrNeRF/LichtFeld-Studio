@@ -68,11 +68,11 @@ namespace lfs::training {
         }
 
         // Moves the camera to the row-major 4x4 world-to-camera pose w2c.
-        void set_camera_pose(lfs::core::Camera& camera, const float* w2c, cudaStream_t stream) {
+        void set_camera_pose(lfs::core::Camera& camera, const float* w2c, cudaStream_t stream, const float* centre) {
             camera.set_pose(
                 Tensor::from_vector({w2c[0], w2c[1], w2c[2], w2c[4], w2c[5], w2c[6], w2c[8], w2c[9], w2c[10]}, {3, 3},
                                     Device::CPU),
-                Tensor::from_vector({w2c[3], w2c[7], w2c[11]}, {3}, Device::CPU), stream);
+                Tensor::from_vector({w2c[3], w2c[7], w2c[11]}, {3}, Device::CPU), stream, centre);
         }
 
         struct Spread {
@@ -86,100 +86,128 @@ namespace lfs::training {
         }
     } // namespace
 
-    CameraPoseOffsets::CameraPoseOffsets(std::vector<std::shared_ptr<lfs::core::Camera>> cameras)
-        : cameras_(std::move(cameras)) {
-        const size_t n = cameras_.size();
-        start_host_.reserve(n * 16);
-        for (size_t row = 0; row < n; ++row) {
-            const auto& camera = *cameras_[row];
-            row_of_uid_[camera.uid()] = static_cast<int>(row);
-            const auto w2c = camera.world_view_transform().cpu().contiguous().to_vector();
+    CameraPoseOffsets::CameraPoseOffsets(std::vector<core::CameraViewGroup> groups)
+        : groups_(std::move(groups)) {
+        const size_t rows = groups_.size();
+        size_t max_draws = 0;
+        start_host_.reserve(rows * 16);
+        constexpr std::array<float, 9> identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
+        for (size_t row = 0; row < rows; ++row) {
+            const auto& [owner, drawn] = groups_[row];
+            const auto w2c = owner->world_view_transform().cpu().contiguous().to_vector();
             if (w2c.size() != 16)
-                throw std::runtime_error(std::format("camera '{}' has no 4x4 world-to-camera transform", camera.image_name()));
+                throw std::runtime_error(std::format("camera '{}' has no 4x4 world-to-camera transform", owner->image_name()));
             start_host_.insert(start_host_.end(), w2c.begin(), w2c.end());
+            first_draw_.push_back(static_cast<int>(rotations_host_.size() / 9));
+            max_draws = std::max(max_draws, drawn.size());
+            for (const auto& camera : drawn) {
+                draw_of_uid_.emplace(camera->uid(), DrawIndex{static_cast<int>(row), static_cast<int>(rotations_host_.size() / 9)});
+                const float* rotation = camera == owner ? identity.data() : camera->undistort_params().view_rotation;
+                rotations_host_.insert(rotations_host_.end(), rotation, rotation + 9);
+            }
         }
-        const size_t rows = std::max<size_t>(n, 1);
         start_ = Tensor::from_vector(start_host_, {rows, 16}, Device::CUDA);
+        rotations_ = Tensor::from_vector(rotations_host_, {rotations_host_.size() / 9, 9}, Device::CUDA);
         offsets_ = Tensor::zeros({rows, 6}, Device::CUDA);
         adam_m_ = Tensor::zeros({rows, 6}, Device::CUDA);
         adam_v_ = Tensor::zeros({rows, 6}, Device::CUDA);
         steps_ = Tensor::zeros({rows}, Device::CUDA);
         grad_w2c_ = Tensor::zeros({16}, Device::CUDA);
         grad_cam_position_ = Tensor::zeros({3}, Device::CUDA);
-        refined_w2c_ = Tensor::zeros({16}, Device::CUDA);
+        refined_w2c_ = Tensor::zeros({max_draws, 16}, Device::CUDA);
         refined_cam_position_ = Tensor::zeros({3}, Device::CUDA);
     }
 
-    int CameraPoseOffsets::row_of(const lfs::core::Camera& camera) const {
-        const auto it = row_of_uid_.find(camera.uid());
-        if (it == row_of_uid_.end())
-            throw std::logic_error(std::format("camera '{}' has no pose offset", camera.image_name()));
-        return it->second;
-    }
-
-    void CameraPoseOffsets::step(const int row, const float lr_rotation, const float lr_translation,
+    void CameraPoseOffsets::step(const core::Camera& camera, const float lr_rotation, const float lr_translation,
                                  cudaStream_t stream) {
+        const auto it = draw_of_uid_.find(camera.uid());
+        if (it == draw_of_uid_.end())
+            throw std::logic_error(std::format("camera '{}' has no pose offset", camera.image_name()));
+        const auto [row, draw] = it->second;
+        const auto& drawn = groups_[row].drawn;
         kernels::CameraPoseAdamStep adam;
         adam.row = row;
+        adam.draw = draw;
+        adam.first_draw = first_draw_[row];
+        adam.draw_count = static_cast<int>(drawn.size());
         adam.lr_rotation = lr_rotation;
         adam.lr_translation = lr_translation;
+        stream = stream ? stream : core::getCurrentCUDAStream();
         kernels::launch_camera_pose_adam_step(
             start_.ptr<float>(), offsets_.ptr<float>(), adam_m_.ptr<float>(), adam_v_.ptr<float>(), steps_.ptr<float>(),
-            grad_w2c_.ptr<float>(), grad_cam_position_.ptr<float>(), refined_w2c_.ptr<float>(),
+            rotations_.ptr<float>(), grad_w2c_.ptr<float>(), grad_cam_position_.ptr<float>(), refined_w2c_.ptr<float>(),
             refined_cam_position_.ptr<float>(), adam, stream);
-        cameras_[row]->set_device_pose(refined_w2c_.ptr<float>(), refined_cam_position_.ptr<float>(), stream);
+        for (size_t i = 0; i < drawn.size(); ++i)
+            drawn[i]->set_device_pose(refined_w2c_.ptr<float>() + 16 * i, refined_cam_position_.ptr<float>(), stream);
         stream_ = stream;
     }
 
     CameraPoseOffsets::HostState CameraPoseOffsets::download() const {
         LFS_CUDA_TRY(cudaStreamSynchronize(stream_), stream_, "camera pose download");
         HostState state{offsets_.cpu().to_vector(), steps_.cpu().to_vector()};
-        state.offsets.resize(cameras_.size() * 6);
-        state.steps.resize(cameras_.size());
+        state.offsets.resize(groups_.size() * 6);
+        state.steps.resize(groups_.size());
         return state;
+    }
+
+    void CameraPoseOffsets::set_row_pose(size_t row, const float* pose) {
+        const auto& [owner, drawn] = groups_[row];
+        float centre[3];
+        for (int j = 0; j < 3; ++j)
+            centre[j] = -(pose[j] * pose[3] + pose[4 + j] * pose[7] + pose[8 + j] * pose[11]);
+        set_camera_pose(*owner, pose, stream_, centre);
+        for (size_t i = 0; i < drawn.size(); ++i) {
+            if (drawn[i] == owner)
+                continue;
+            float view_pose[16];
+            camera_pose::rotate_rows<true>(rotations_host_.data() + 9 * (first_draw_[row] + i), pose, view_pose);
+            set_camera_pose(*drawn[i], view_pose, stream_, centre);
+        }
     }
 
     void CameraPoseOffsets::commit() {
         const auto state = download();
-        for (size_t row = 0; row < cameras_.size(); ++row) {
+        for (size_t row = 0; row < groups_.size(); ++row) {
             const float* off = state.offsets.data() + 6 * row;
-            if (std::none_of(off, off + 6, [](const float x) { return x != 0.0f; }))
+            if (state.steps[row] == 0.0f)
                 continue;
             float w2c[16], centre[3];
             camera_pose::compose(start_pose(static_cast<int>(row)), off, w2c, centre);
-            set_camera_pose(*cameras_[row], w2c, stream_);
+            set_row_pose(row, w2c);
         }
     }
 
     void CameraPoseOffsets::restore_start_poses() {
         LFS_CUDA_TRY(cudaStreamSynchronize(stream_), stream_, "camera pose restore");
-        for (size_t row = 0; row < cameras_.size(); ++row)
-            set_camera_pose(*cameras_[row], start_pose(static_cast<int>(row)), stream_);
+        for (size_t row = 0; row < groups_.size(); ++row)
+            set_row_pose(row, start_pose(static_cast<int>(row)));
     }
 
     lfs::Result<std::unique_ptr<CameraPoseRefinement>> CameraPoseRefinement::create(
-        std::vector<std::shared_ptr<lfs::core::Camera>> cameras, const int iterations) {
-        if (cameras.empty())
+        std::vector<core::CameraViewGroup> groups, const int iterations) {
+        if (groups.empty())
             return pose_error(lfs::ErrorCode::FailedPrecondition, "--pose-opt: there are no training cameras",
                               LFS_SOURCE_SITE_CURRENT());
-        for (const auto& camera : cameras) {
-            if (camera->camera_model_type() != lfs::core::CameraModelType::PINHOLE && !camera->is_undistort_prepared())
-                return pose_error(lfs::ErrorCode::Unsupported,
-                                  std::format("--pose-opt needs pinhole cameras or --undistort ('{}' is not a pinhole camera)",
-                                              camera->image_name()),
-                                  LFS_SOURCE_SITE_CURRENT());
+        for (const auto& group : groups) {
+            for (const auto& camera : group.drawn) {
+                if (camera->camera_model_type() != core::CameraModelType::PINHOLE && !camera->is_undistort_prepared())
+                    return pose_error(lfs::ErrorCode::Unsupported,
+                                      std::format("--pose-opt needs pinhole cameras or --undistort ('{}' is not a pinhole camera)",
+                                                  camera->image_name()),
+                                      LFS_SOURCE_SITE_CURRENT());
+            }
         }
-        return std::make_unique<CameraPoseRefinement>(std::move(cameras), iterations);
+        return std::make_unique<CameraPoseRefinement>(std::move(groups), iterations);
     }
 
-    CameraPoseRefinement::CameraPoseRefinement(std::vector<std::shared_ptr<lfs::core::Camera>> cameras,
+    CameraPoseRefinement::CameraPoseRefinement(std::vector<core::CameraViewGroup> groups,
                                                const int iterations)
-        : offsets_(std::move(cameras)),
+        : offsets_(std::move(groups)),
           iterations_(iterations),
           start_(iterations / 10),
           hold_(iterations / 2) {
         LOG_INFO("Pose refinement: {} training cameras, from iteration {}, full rate until {}, 1/128 of it at {}",
-                 offsets_.cameras().size(), start_, hold_, iterations_);
+                 offsets_.groups().size(), start_, hold_, iterations_);
     }
 
     float CameraPoseRefinement::rate(const int iteration) const {
@@ -197,7 +225,7 @@ namespace lfs::training {
         const float r = rate(iteration);
         if (r <= 0.0f)
             return;
-        offsets_.step(offsets_.row_of(camera), kRotationLr * r, kTranslationLr * r, stream);
+        offsets_.step(camera, kRotationLr * r, kTranslationLr * r, stream);
     }
 
     bool CameraPoseRefinement::reports_at(const int iteration) const {
@@ -207,7 +235,7 @@ namespace lfs::training {
     std::string CameraPoseRefinement::summary(const int iteration) const {
         const auto state = offsets_.download();
         std::vector<double> moves, turns;
-        for (size_t row = 0; row < offsets_.cameras().size(); ++row) {
+        for (size_t row = 0; row < offsets_.groups().size(); ++row) {
             if (state.steps[row] <= 0.0f)
                 continue;
             const float* off = state.offsets.data() + 6 * row;
@@ -218,7 +246,7 @@ namespace lfs::training {
         const auto turn = spread(turns);
         return std::format("Pose refinement at {}: rate x{:.3g}, {} of {} cameras updated; move median {:.5f} / p90 {:.5f} / "
                            "max {:.5f} units, turn median {:.4f} / p90 {:.4f} / max {:.4f} deg",
-                           iteration, rate(iteration), moves.size(), offsets_.cameras().size(), move.median, move.p90,
+                           iteration, rate(iteration), moves.size(), offsets_.groups().size(), move.median, move.p90,
                            move.max, turn.median, turn.p90, turn.max);
     }
 
@@ -230,13 +258,13 @@ namespace lfs::training {
                                                    std::format("cannot write '{}'", lfs::core::path_to_utf8(path)),
                                                    LFS_SOURCE_SITE_CURRENT()));
         out << "name\tupdates\tmove_units\tturn_deg\tmove_x\tmove_y\tmove_z\tturn_x_deg\tturn_y_deg\tturn_z_deg\n";
-        for (size_t row = 0; row < offsets_.cameras().size(); ++row) {
+        for (size_t row = 0; row < offsets_.groups().size(); ++row) {
             const float* off = state.offsets.data() + 6 * row;
             const float* start = offsets_.start_pose(static_cast<int>(row));
             const auto move = to_world(start, off + 3);
             const auto turn = to_world(start, off);
             out << std::format("{}\t{:.0f}\t{:.7f}\t{:.6f}\t{:.7f}\t{:.7f}\t{:.7f}\t{:.6f}\t{:.6f}\t{:.6f}\n",
-                               offsets_.cameras()[row]->image_name(), state.steps[row], norm3(off + 3),
+                               offsets_.groups()[row].photograph->image_name(), state.steps[row], norm3(off + 3),
                                norm3(off) * kRadToDeg, move[0], move[1], move[2], turn[0] * kRadToDeg,
                                turn[1] * kRadToDeg, turn[2] * kRadToDeg);
         }
@@ -247,11 +275,11 @@ namespace lfs::training {
         return {};
     }
 
-    RefittedCameraPoses::RefittedCameraPoses(std::vector<std::shared_ptr<lfs::core::Camera>> cameras,
+    RefittedCameraPoses::RefittedCameraPoses(std::vector<core::CameraViewGroup> groups,
                                              lfs::core::SplatData& model,
                                              lfs::core::Tensor& background,
                                              const Settings& settings)
-        : offsets_(std::move(cameras)) {
+        : offsets_(std::move(groups)) {
         try {
             refit(model, background, settings);
         } catch (...) {
@@ -264,19 +292,25 @@ namespace lfs::training {
                                     const Settings& settings) {
         losses::PhotometricLoss loss;
         auto& loader = lfs::io::CacheLoader::getInstance();
-        for (size_t row = 0; row < offsets_.cameras().size(); ++row) {
-            auto& camera = *offsets_.cameras()[row];
-            if (!camera.image_size_loaded())
-                camera.load_image_size(settings.resize_factor, settings.max_width);
-            const auto target = loader.load_cached_image(
-                camera.image_path(),
-                lfs::io::LoadParams{
-                    .resize_factor = settings.resize_factor,
-                    .max_width = settings.max_width,
-                    .cuda_stream = lfs::core::getCurrentCUDAStream(),
-                    .undistort = camera.is_undistort_prepared() ? &camera.undistort_params() : nullptr,
-                });
+        for (const auto& group : offsets_.groups()) {
+            std::vector<Tensor> targets;
+            for (const auto& camera : group.drawn) {
+                if (!camera->image_size_loaded())
+                    camera->load_image_size(settings.resize_factor, settings.max_width);
+                auto target = loader.load_cached_image(
+                    camera->image_path(),
+                    lfs::io::LoadParams{
+                        .resize_factor = settings.resize_factor,
+                        .max_width = settings.max_width,
+                        .cuda_stream = lfs::core::getCurrentCUDAStream(),
+                        .undistort = camera->is_undistort_prepared() ? &camera->undistort_params() : nullptr,
+                    });
+                targets.push_back(target.device() == Device::CUDA ? std::move(target) : target.to(Device::CUDA));
+            }
             for (int k = 0; k < kRefitSteps; ++k) {
+                const auto draw = k % group.drawn.size();
+                auto& camera = *group.drawn[draw];
+                const auto& target = targets[draw];
                 auto forward = fast_rasterize_forward(camera, model, background, 0, 0, 0, 0, settings.mip_filter, {},
                                                       /*render_normal=*/false, /*render_depth=*/false,
                                                       /*dilation_scale=*/1.0f, /*update_screen_share=*/false);
@@ -292,7 +326,7 @@ namespace lfs::training {
                 fast_rasterize_camera_backward(ctx, photometric->second.grad_image, model, offsets_.grad_w2c(),
                                                offsets_.grad_cam_position());
                 const float r = pose_rate(k, 0, kRefitSteps / 2, kRefitSteps - 1);
-                offsets_.step(static_cast<int>(row), kRotationLr * r, kTranslationLr * r, backward_stream);
+                offsets_.step(camera, kRotationLr * r, kTranslationLr * r, backward_stream);
             }
         }
     }

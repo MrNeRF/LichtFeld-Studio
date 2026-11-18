@@ -130,8 +130,7 @@ namespace lfs::training {
         constexpr int kMaxStepOomBackoffMs = 2000;
 
         lfs::Status expand_camera_views(const lfs::core::Scene& scene,
-                                        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
-                                        const bool pose_opt) {
+                                        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
             using lfs::core::Camera;
             using lfs::core::kPanoramaViewCount;
             int64_t first = 0;
@@ -151,12 +150,6 @@ namespace lfs::training {
                     expanded.push_back(camera);
                     continue;
                 }
-                if (pose_opt)
-                    return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::Unsupported,
-                                                                 .domain = lfs::ErrorDomain::Training,
-                                                                 .user_message = "Pose refinement does not support cameras split into views.",
-                                                                 .detection = LFS_SOURCE_SITE_CURRENT()}));
-
                 const auto uid = first + int64_t{kPanoramaViewCount} * camera->uid();
                 if (camera->uid() < 0 || uid + static_cast<int>(plan.size()) - 1 > std::numeric_limits<int>::max())
                     return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
@@ -3118,7 +3111,7 @@ namespace lfs::training {
 
                 train_frame_scale_ = camera_derived_frame_scale(source_cameras);
                 if (params.optimization.undistort) {
-                    auto expanded = expand_camera_views(*scene_, source_cameras, params.optimization.pose_opt);
+                    auto expanded = expand_camera_views(*scene_, source_cameras);
                     if (!expanded)
                         return std::unexpected(std::string(expanded.error().user_message()));
                 }
@@ -3264,8 +3257,19 @@ namespace lfs::training {
             }
 
             pose_refinement_.reset();
+            held_out_pose_groups_.clear();
             if (params.optimization.pose_opt) {
-                auto refinement = CameraPoseRefinement::create(train_dataset_->get_cameras(),
+                const auto scene_cameras = scene_->getAllCameras();
+                auto train = core::group_camera_views(train_dataset_->get_cameras(), scene_cameras);
+                if (!train)
+                    return std::unexpected(std::string(train.error().user_message()));
+                if (val_dataset_ && !params.optimization.eval_all) {
+                    auto held_out = core::group_camera_views(val_dataset_->get_cameras(), scene_cameras);
+                    if (!held_out)
+                        return std::unexpected(std::string(held_out.error().user_message()));
+                    held_out_pose_groups_ = std::move(*held_out);
+                }
+                auto refinement = CameraPoseRefinement::create(std::move(*train),
                                                                static_cast<int>(params.optimization.iterations));
                 if (!refinement)
                     return std::unexpected(std::string(refinement.error().user_message()));
@@ -9055,7 +9059,7 @@ namespace lfs::training {
         // The training cameras moved with the model; score the held-out views from where they fit it best.
         std::optional<RefittedCameraPoses> refit;
         if (pose_refinement_ && val_dataset_ && !params_.optimization.eval_all) {
-            refit.emplace(val_dataset_->get_cameras(), strategy_->get_model(), background_,
+            refit.emplace(held_out_pose_groups_, strategy_->get_model(), background_,
                           RefittedCameraPoses::Settings{
                               .resize_factor = params_.dataset.resize_factor,
                               .max_width = params_.dataset.max_width,
@@ -9064,7 +9068,7 @@ namespace lfs::training {
                           });
             std::unique_lock render_lock(render_mutex_);
             refit->apply();
-            LOG_INFO("Refitted {} held-out cameras to the model before scoring them", val_dataset_->get_cameras().size());
+            LOG_INFO("Refitted {} held-out cameras to the model before scoring them", held_out_pose_groups_.size());
         }
         auto restore_poses = makeScopeGuard([this, &refit] {
             if (refit) {
