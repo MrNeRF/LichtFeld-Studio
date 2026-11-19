@@ -10,6 +10,7 @@
 #include "core/tensor_completion.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/morton_contraction.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "metal_families.hpp"
 #include "metal_kernels.hpp"
@@ -38,7 +39,9 @@ namespace lfs::training {
         }
 
         struct CodeParams {
-            uint64_t means, lo, hi, codes;
+            uint64_t means, codes;
+            float centre[3];
+            float inv_radius;
             uint32_t count;
         };
 
@@ -52,12 +55,17 @@ namespace lfs::training {
             if (n == 0)
                 return {};
             const Tensor dense = means.contiguous();
-            const Tensor lo = dense.min(0);
-            const Tensor hi = dense.max(0);
+            // The shared contraction frame from a strided sample of the means, as on CUDA and Vulkan.
+            const size_t stride = morton::contraction_sample_stride(n);
+            const Tensor sample = dense.slice(0, 0, n, stride).contiguous().cpu();
+            const auto frame = morton::contraction_frame({sample.ptr<float>(), sample.numel()});
             Tensor keys = Tensor::empty({n}, Device::GPU, DataType::Float32);
-            const CodeParams params{mk::address(dense), mk::address(lo), mk::address(hi), mk::address(keys),
+            const CodeParams params{mk::address(dense),
+                                    mk::address(keys),
+                                    {frame.centre[0], frame.centre[1], frame.centre[2]},
+                                    1.0f / frame.radius,
                                     static_cast<uint32_t>(n)};
-            mk::launch_items("morton_codes", params, {&dense, &lo, &hi, &keys}, n);
+            mk::launch_items("morton_codes", params, {&dense, &keys}, n);
             // Codes are below 2^30, so their bits read as finite non-negative
             // floats that order like the integers. The float sort is stable, as
             // thrust's radix sort by key is.

@@ -1010,6 +1010,47 @@ namespace {
         }
     }
 
+    // MortonReorderTest.DistantOutliersKeepTheNearPointsSpreadOverManyCells (test_morton_reorder.cpp, which only CUDA
+    // builds) on this backend: a few splats far outside the scene must not stretch the grid until the rest shares a
+    // handful of cells, or neighbouring rows would sit far apart in space.
+    TEST_P(PortableAdamShMorton, DistantOutliersKeepTheNearPointsSpreadOverManyCells) {
+        constexpr size_t kNear = 32768;
+        constexpr size_t kFar = 8;
+        std::mt19937 rng(7);
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        std::vector<float> means;
+        means.reserve((kNear + kFar) * 3);
+        for (size_t i = 0; i < kNear * 3; ++i)
+            means.push_back(unit(rng));
+        for (size_t i = 0; i < kFar; ++i) {
+            const float sign = (i % 2 == 0) ? 1.0f : -1.0f;
+            means.insert(means.end(), {sign * 1e5f, sign * 2e5f * static_cast<float>(i + 1), -sign * 5e4f});
+        }
+        const size_t n = kNear + kFar;
+        const Tensor permutation = morton->permutation(Tensor::from_vector(means, {n, 3}, Device::GPU));
+        ASSERT_EQ(permutation.dtype(), DataType::Int64);
+        const std::vector<int64_t> order = host<int64_t>(permutation);
+        ASSERT_EQ(order.size(), n);
+        double step_sum = 0.0;
+        size_t steps = 0;
+        int64_t previous = -1;
+        for (const int64_t row : order) {
+            if (row >= static_cast<int64_t>(kNear))
+                continue;
+            if (previous >= 0) {
+                const float* a = means.data() + previous * 3;
+                const float* b = means.data() + row * 3;
+                step_sum += std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
+                                      (a[2] - b[2]) * (a[2] - b[2]));
+                ++steps;
+            }
+            previous = row;
+        }
+        ASSERT_EQ(steps, kNear - 1);
+        // Unsorted, consecutive near points lie about 0.66 apart; sorted over a fine grid a few hundredths.
+        EXPECT_LT(step_sum / static_cast<double>(steps), 0.1);
+    }
+
     // joint_permute_{contiguous,shN}_{bounds,encode}_cu
     void host_permute_joint(const Codes& src, const std::vector<float>& src_bounds, const std::vector<int64_t>& perm,
                             Codes& dst, std::vector<float>& dst_bounds, int n, uint32_t width, bool swizzled) {

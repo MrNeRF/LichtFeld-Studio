@@ -18,11 +18,15 @@ static uint morton_part1by2(uint x) {
     return x;
 }
 
-static uint morton_axis(const float v, const float lo, const float hi) {
-    const float length = hi - lo;
-    // The CUDA side divides on the host.
-    const float mul = length == 0.0f ? 0.0f : precise::divide(1024.0f, length);
-    const float t = (v - lo) * mul;
+// The contracted code space of lfs/training/morton_contraction.hpp, as in CUDA's morton_encode_kernel: with the
+// host's frame, p = (x - centre) / radius, and p * (2 - 1/|p|) / |p| beyond the unit ball, on 10 bits per axis over
+// [-2, 2]^3.
+constant constexpr float kMortonContractedHalfExtent = 2.0f;
+
+static uint morton_axis(const float v) {
+    const float origin = -kMortonContractedHalfExtent;
+    const float mul = 1024.0f / (2.0f * kMortonContractedHalfExtent);
+    const float t = (v - origin) * mul;
     if (!(t > 0.0f))
         return 0u;
     return min(1023u, uint(t));
@@ -30,19 +34,29 @@ static uint morton_axis(const float v, const float lo, const float hi) {
 
 struct MortonCodeParams {
     device const float* means;
-    device const float* lo;
-    device const float* hi;
     device uint* codes;
+    float centre_x;
+    float centre_y;
+    float centre_z;
+    float inv_radius;
     uint count;
 };
 
 kernel void morton_codes(constant MortonCodeParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= p.count)
         return;
-    const uint x = morton_axis(p.means[i * 3 + 0], p.lo[0], p.hi[0]);
-    const uint y = morton_axis(p.means[i * 3 + 1], p.lo[1], p.hi[1]);
-    const uint z = morton_axis(p.means[i * 3 + 2], p.lo[2], p.hi[2]);
-    p.codes[i] = (morton_part1by2(z) << 2) + (morton_part1by2(y) << 1) + morton_part1by2(x);
+    float x = (p.means[i * 3 + 0] - p.centre_x) * p.inv_radius;
+    float y = (p.means[i * 3 + 1] - p.centre_y) * p.inv_radius;
+    float z = (p.means[i * 3 + 2] - p.centre_z) * p.inv_radius;
+    const float r = precise::sqrt(x * x + y * y + z * z);
+    if (r > 1.0f) {
+        const float f = precise::divide(2.0f - precise::divide(1.0f, r), r);
+        x *= f;
+        y *= f;
+        z *= f;
+    }
+    p.codes[i] = (morton_part1by2(morton_axis(z)) << 2) + (morton_part1by2(morton_axis(y)) << 1) +
+                 morton_part1by2(morton_axis(x));
 }
 
 // `width` is attributes per row, or float4 slots per primitive when swizzled.
