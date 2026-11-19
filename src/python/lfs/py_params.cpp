@@ -1363,7 +1363,8 @@ namespace lfs::python {
                 "Fits a small, smooth warp to every training photo that absorbs what the calibration missed "
                 "(rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that "
                 "disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step "
-                "count; evaluation then scores each held-out view after aligning the render to the photo.")
+                "count; evaluation scores each held-out view as rendered and, in addition, after aligning the render "
+                "to the photo.")
             .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },

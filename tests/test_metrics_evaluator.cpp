@@ -14,6 +14,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
+#include "training/components/calibration_correction.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/eval_image_labels.hpp"
 #include "training/metrics/eval_mask.hpp"
@@ -30,6 +31,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
@@ -37,6 +39,7 @@
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <torch/torch.h>
@@ -2186,9 +2189,10 @@ TEST(MetricsEvaluator, IgnoredPaintCannotChangeSidecarAlphaOrFolderScores) {
     std::filesystem::remove_all(tmp);
 }
 
-TEST(MetricsEvaluator, CalibrationCorrectionScoresTheAlignedRenderOnlyWhenEnabled) {
+TEST(MetricsEvaluator, CalibrationCorrectionAddsAlignedScoresBesideThePlainOnes) {
     ensure_image_loader();
     const auto tmp = std::filesystem::temp_directory_path() / "lfs_eval_calibration_scoring";
+    std::filesystem::remove_all(tmp);
     std::filesystem::create_directories(tmp);
     constexpr int w = 128, h = 96;
     const auto signal = [](int x, int y, int c) {
@@ -2202,7 +2206,8 @@ TEST(MetricsEvaluator, CalibrationCorrectionScoresTheAlignedRenderOnlyWhenEnable
                 const auto value = signal(x + 2, y, c);
                 reference[(y * w + x) * 3 + c] = value;
                 expected[(c * h + y) * w + x] = float(value) / 255.f;
-                prediction[(c * h + y) * w + x] = float(signal(x, y, c)) / 255.f;
+                // Off the 8-bit grid, so rounding the render twice would change the aligned scores.
+                prediction[(c * h + y) * w + x] = (float(signal(x, y, c)) + .45f * float(std::sin(.9 * x + 1.3 * y + c))) / 255.f;
             }
     const auto path = tmp / "frame.png";
     ASSERT_TRUE(lfs::core::save_png(path, reference.data(), w, h, 3, 8, 0));
@@ -2210,21 +2215,141 @@ TEST(MetricsEvaluator, CalibrationCorrectionScoresTheAlignedRenderOnlyWhenEnable
     auto dataset = std::make_shared<CameraDataset>(std::vector{camera}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto source = Tensor::from_vector(prediction, {3, h, w}, Device::CUDA);
     auto target = Tensor::from_vector(expected, {3, h, w}, Device::CUDA);
-    const float nominal = lfs::training::PSNR{}.compute(source, target);
+    const auto photo = lfs::training::image_for_metrics(target, 8);
+    const float nominal = lfs::training::PSNR{}.compute(lfs::training::image_for_metrics(source, 8), photo);
     auto render = [&](Camera&, Camera&, float) -> lfs::Result<lfs::training::EvaluationRenderResult> {
         return lfs::training::EvaluationRenderResult{.output = {.image = source}};
     };
-    for (bool enabled : {false, true}) {
-        auto params = make_eval_params(tmp);
+    const auto read_text = [](const std::filesystem::path& file) {
+        std::ifstream in(file, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    const auto csv_lines = [&](const std::filesystem::path& dir) {
+        std::vector<std::string> lines;
+        std::istringstream text(read_text(dir / "metrics.csv"));
+        for (std::string line; std::getline(text, line);)
+            lines.push_back(line);
+        return lines;
+    };
+    const auto fields = [](const std::string& line) {
+        std::vector<std::string> out;
+        std::istringstream text(line);
+        for (std::string field; std::getline(text, field, ',');)
+            out.push_back(field);
+        if (line.ends_with(','))
+            out.emplace_back();
+        return out;
+    };
+
+    std::array<EvalMetrics, 2> results;
+    for (const bool enabled : {false, true}) {
+        auto params = make_eval_params(tmp / (enabled ? "on" : "off"));
         params.optimization.calibration_correction = enabled;
+        std::filesystem::create_directories(params.dataset.output_path);
         MetricsEvaluator evaluator(params);
-        auto result = evaluator.evaluate_views(1, dataset, {.render = render}, Tensor::zeros({3}, Device::CUDA));
-        ASSERT_TRUE(result.valid);
-        if (enabled)
-            EXPECT_GT(result.psnr, nominal + 10.f);
-        else
-            EXPECT_FLOAT_EQ(result.psnr, nominal);
-        EXPECT_EQ(result.alignment_summary.empty(), !enabled);
+        results[enabled] = evaluator.evaluate_views(1, dataset, {.render = render}, Tensor::zeros({3}, Device::CUDA));
+        evaluator.save_report();
+        ASSERT_TRUE(results[enabled].valid);
+        ASSERT_EQ(results[enabled].views.size(), 1u);
+        EXPECT_EQ(results[enabled].alignment_summary.empty(), !enabled);
     }
+    const auto& off = results[0];
+    const auto& on = results[1];
+
+    // The headline scores are the plain ones, bit for bit.
+    EXPECT_FLOAT_EQ(off.psnr, nominal);
+    EXPECT_EQ(std::bit_cast<uint32_t>(on.psnr), std::bit_cast<uint32_t>(off.psnr));
+    EXPECT_EQ(std::bit_cast<uint32_t>(on.ssim), std::bit_cast<uint32_t>(off.ssim));
+    EXPECT_EQ(on.lpips, off.lpips);
+    EXPECT_EQ(on.views[0].psnr, off.views[0].psnr);
+    EXPECT_EQ(on.views[0].ssim, off.views[0].ssim);
+    EXPECT_FALSE(off.psnr_aligned || off.ssim_aligned || off.lpips_aligned);
+    EXPECT_FALSE(off.views[0].psnr_aligned || off.views[0].ssim_aligned);
+
+    // The aligned scores are those of the render as rendered, aligned onto the photograph and rounded onto its grid
+    // once; rounding before the alignment as well gives other scores.
+    const auto aligned_scores = [&](const Tensor& render_image) {
+        lfs::core::Tensor displacement;
+        const auto aligned = lfs::training::image_for_metrics(
+            lfs::training::CalibrationCorrection::align_for_scoring(render_image, photo, {}, displacement), 8);
+        return std::pair{lfs::training::PSNR{1.0f}.compute(aligned, photo),
+                         lfs::training::SSIM{true}.compute_evaluation(aligned, photo, {}, false, "frame.png")};
+    };
+    const auto [rounded_once_psnr, rounded_once_ssim] = aligned_scores(source);
+    const float rounded_twice_psnr = aligned_scores(lfs::training::image_for_metrics(source, 8)).first;
+    ASSERT_TRUE(on.psnr_aligned && on.ssim_aligned);
+    EXPECT_EQ(*on.psnr_aligned, rounded_once_psnr);
+    EXPECT_NE(*on.psnr_aligned, rounded_twice_psnr);
+    // The SSIM reduction is not bitwise reproducible across separately computed maps.
+    EXPECT_NEAR(*on.ssim_aligned, rounded_once_ssim, 2e-6f);
+    EXPECT_GT(*on.psnr_aligned, nominal + 10.f);
+    EXPECT_GT(*on.ssim_aligned, on.ssim);
+    EXPECT_EQ(on.views[0].psnr_aligned, on.psnr_aligned);
+    EXPECT_EQ(on.views[0].ssim_aligned, on.ssim_aligned);
+    EXPECT_NE(on.alignment_summary.find(std::format("PSNR: {:.4f}", *on.psnr_aligned)), std::string::npos);
+
+    // metrics.csv gains exactly the three aligned columns at its end.
+    const auto off_csv = csv_lines(tmp / "off");
+    const auto on_csv = csv_lines(tmp / "on");
+    ASSERT_EQ(off_csv.size(), 2u);
+    ASSERT_EQ(on_csv.size(), 2u);
+    EXPECT_EQ(off_csv[0], EvalMetrics::to_csv_header());
+    EXPECT_EQ(on_csv[0], off_csv[0] + ",psnr_aligned,ssim_aligned,lpips_aligned");
+    const auto off_row = fields(off_csv[1]);
+    const auto on_row = fields(on_csv[1]);
+    ASSERT_EQ(on_row.size(), off_row.size() + 3);
+    for (size_t i = 0; i < off_row.size(); ++i)
+        if (i != 4) // time_per_image
+            EXPECT_EQ(on_row[i], off_row[i]) << i;
+    EXPECT_EQ(on_row[off_row.size()], std::format("{:.6f}", *on.psnr_aligned));
+    EXPECT_EQ(on_row[off_row.size() + 1], std::format("{:.6f}", *on.ssim_aligned));
+
+    // The per-image record and the report carry them too; without the option nothing mentions them.
+    const auto on_json = nlohmann::json::parse(read_text(tmp / "on" / "per_image_metrics.json"));
+    const auto& evaluation = on_json.at("frame.png").at("evaluations").at(0);
+    EXPECT_FLOAT_EQ(evaluation.at("psnr").get<float>(), on.psnr);
+    EXPECT_FLOAT_EQ(evaluation.at("psnr_aligned").get<float>(), *on.psnr_aligned);
+    EXPECT_FLOAT_EQ(evaluation.at("ssim_aligned").get<float>(), *on.ssim_aligned);
+    EXPECT_TRUE(evaluation.contains("lpips_aligned"));
+    EXPECT_EQ(read_text(tmp / "off" / "per_image_metrics.json").find("aligned"), std::string::npos);
+    EXPECT_NE(read_text(tmp / "on" / "metrics_report.txt").find("Aligned PSNR: "), std::string::npos);
+    EXPECT_EQ(read_text(tmp / "off" / "metrics_report.txt").find("Aligned"), std::string::npos);
+
+    // With pixel sets, only the headline set gets aligned scores, and every set's plain scores, FLIP among them,
+    // are those of the plain render.
+    std::filesystem::create_directories(tmp / "masks");
+    std::vector<uint8_t> keep(w * h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            keep[y * w + x] = x < 80 ? 255 : 0;
+    ASSERT_TRUE(lfs::core::save_png(tmp / "masks" / "frame.png", keep.data(), w, h, 1, 8, 0));
+    std::array<EvalMetrics, 2> sets;
+    for (const bool enabled : {false, true}) {
+        auto params = make_eval_params(tmp / (enabled ? "sets_on" : "sets_off"));
+        params.optimization.calibration_correction = enabled;
+        params.optimization.eval_flip = true;
+        params.optimization.eval_mask = "masks:" + (tmp / "masks").string();
+        params.optimization.eval_mask_report = "mask,unmasked,inverted";
+        std::filesystem::create_directories(params.dataset.output_path);
+        MetricsEvaluator evaluator(params);
+        ASSERT_TRUE(evaluator.install_eval_mask_source({0, 0, 0}).has_value());
+        sets[enabled] = evaluator.evaluate_views(1, dataset, {.render = render}, Tensor::zeros({3}, Device::CUDA));
+        ASSERT_TRUE(sets[enabled].valid);
+        ASSERT_EQ(sets[enabled].views.size(), 1u);
+    }
+    for (const auto set : lfs::core::param::kEvalPixelSets) {
+        SCOPED_TRACE(lfs::core::param::eval_pixel_set_name(set));
+        const auto& plain = sets[0].views[0].sets[set];
+        const auto& with_alignment = sets[1].views[0].sets[set];
+        ASSERT_TRUE(plain && with_alignment);
+        EXPECT_EQ(with_alignment->psnr, plain->psnr);
+        EXPECT_EQ(with_alignment->ssim, plain->ssim);
+        EXPECT_EQ(with_alignment->flip, plain->flip);
+        EXPECT_FALSE(plain->psnr_aligned);
+        EXPECT_EQ(with_alignment->psnr_aligned.has_value(), set == lfs::core::param::EvalPixelSet::Mask);
+        EXPECT_EQ(with_alignment->ssim_aligned.has_value(), set == lfs::core::param::EvalPixelSet::Mask);
+    }
+    ASSERT_TRUE(sets[1].views[0].psnr_aligned);
+    EXPECT_GT(*sets[1].views[0].psnr_aligned, *sets[1].views[0].psnr + 10.f);
     std::filesystem::remove_all(tmp);
 }

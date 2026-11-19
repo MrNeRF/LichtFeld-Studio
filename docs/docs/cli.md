@@ -89,7 +89,7 @@ combined with `--gut`. At the end of training `pose_refinement.tsv` lists each c
 `cameras_refined/` holds the cameras as a COLMAP model. [Refined camera poses](features/evaluation.md#refined-camera-poses)
 describes how evaluation scores the held-out cameras.
 
-`--calibration-correction` fits a smooth image displacement for each training camera to absorb small calibration errors. It starts at step 1000 scaled by `--steps-scaler`. Training checkpoints retain the correction. During evaluation, the option fits a fresh alignment of each render onto its held-out photograph before scoring. It also works with `eval` on models trained with any calibration setting.
+`--calibration-correction` fits a smooth image displacement for each training camera to absorb small calibration errors. It starts at step 1000 scaled by `--steps-scaler`. Training checkpoints retain the correction. With the option, evaluation reports the plain scores as without it and, in addition, scores after a fresh alignment of each render onto its held-out photograph: `psnr_aligned`, `ssim_aligned` and `lpips_aligned`, the last columns of `metrics.csv`, fields of each image's evaluation in `per_image_metrics.json`, and an `Aligned` line in `metrics_report.txt` and in the log. It also works with `eval` on models trained with any calibration setting.
 
 ## Run a Python script
 
