@@ -1719,9 +1719,11 @@ namespace lfs::vis::gui {
         setCachedClass(slot.selection_checkbox, "mixed", checkbox_mixed);
         setCachedInnerRml(slot.selection_checkbox, checkbox_mixed ? "\u2212" : "");
 
+        const bool keyframe = row.type == core::NodeType::KEYFRAME;
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
-        setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
-        setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
+        setCachedProperty(slot.delete_icon, "display", row.can_delete || keyframe ? "inline" : "none");
+        setCachedClass(slot.delete_icon, "trash-disabled",
+                       keyframe ? snapshot.locked : row.can_delete && !row.delete_enabled);
 
         setCachedAttribute(slot.training_toggle_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.training_toggle_icon, "display", row.can_toggle_training ? "inline" : "none");
@@ -2084,6 +2086,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
+            if (node->type == core::NodeType::KEYFRAME) {
+                if (node->keyframe && !static_cast<bool>(node->locked))
+                    cmd::SequencerDeleteKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
+                return;
+            }
             const auto snapshot_it = node_snapshots_.find(node_id);
             if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
                 return;
