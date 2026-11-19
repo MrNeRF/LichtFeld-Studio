@@ -2734,10 +2734,10 @@ namespace lfs::vis::project {
         clearPendingExplicitPreview();
         document_.reset();
         cleanupRecoverySession();
-        // The user explicitly discarded unsaved changes at exit; delete
-        // the autosave overlay only after the write thread has joined and
-        // the document/recovery locks are released. Emergency ForceExit
-        // paths (X11 error, interrupt) never set
+        // The user discarded unsaved changes at exit, or closed a clean
+        // session; delete the autosave overlay only after the write thread
+        // has joined and the document/recovery locks are released.
+        // Emergency ForceExit paths (X11 error, interrupt) never set
         // close_discard_requested_, so crash recovery survives.
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(
@@ -9874,8 +9874,10 @@ namespace lfs::vis::project {
         if (!hasDirtyProject()) {
             // Window-close X / File-Exit of a clean session: Skip any
             // unanswered recovery offer and drop the untitled scratch.
-            // Emergency ForceExit never reaches this function, so crash
-            // files survive an X11/interrupt teardown.
+            // Otherwise the session's own autosave holds nothing unsaved,
+            // so teardown removes it like a Discard exit. Emergency
+            // ForceExit never reaches this function, so crash files
+            // survive an X11/interrupt teardown.
             if (recovery_prompt_pending_ &&
                 pending_recovery_candidate_) {
                 ++recovery_prompt_generation_;
@@ -9883,6 +9885,8 @@ namespace lfs::vis::project {
                     *pending_recovery_candidate_;
                 handleRecoverySkip(candidate);
                 recovery_prompt_pending_ = false;
+            } else {
+                markCloseDiscardRequested();
             }
             removeScratchAutosave();
             return CloseSaveStatus::NotDirty;
