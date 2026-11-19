@@ -892,6 +892,12 @@ namespace lfs::training {
         lfs::core::Tensor pipelined_mask_;
         lfs::core::Tensor pipelined_depth_;
         lfs::core::Tensor pipelined_normal_;
+        // Whether the pipelined depth and normals travelled at their own size, and the size their
+        // request named, which the loss fits them to.
+        int pipelined_prior_target_width_ = 0;
+        int pipelined_prior_target_height_ = 0;
+        bool pipelined_depth_own_size_ = false;
+        bool pipelined_normal_own_size_ = false;
 
         // Bilateral grid for appearance modeling (optional)
         std::unique_ptr<BilateralGrid> bilateral_grid_;

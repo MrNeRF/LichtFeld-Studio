@@ -248,6 +248,18 @@ namespace lfs::core {
         bool has_normal() const noexcept {
             return !_normal_path.empty() && lfs::core::native_fs::exists(_normal_path);
         }
+        // A prior file's size as the dataset loader read it at admission; 0 x 0 when
+        // unknown. Changing the file's path forgets it.
+        struct PriorSize {
+            int width = 0;
+            int height = 0;
+        };
+        PriorSize depth_prior_size() const noexcept { return _depth_prior_size; }
+        PriorSize normal_prior_size() const noexcept { return _normal_prior_size; }
+        void set_prior_sizes(const PriorSize depth, const PriorSize normal) noexcept {
+            _depth_prior_size = depth;
+            _normal_prior_size = normal;
+        }
         bool has_alpha() const noexcept { return _has_alpha; }
         void set_has_alpha(bool v) noexcept { _has_alpha = v; }
         // Set at dataset load when the bound image file is absent. Independent of
@@ -325,6 +337,8 @@ namespace lfs::core {
         std::filesystem::path _mask_path;
         std::filesystem::path _depth_path;
         std::filesystem::path _normal_path;
+        PriorSize _depth_prior_size;
+        PriorSize _normal_prior_size;
         bool _has_alpha = false;
         bool _has_image = true;
         CameraSplit _split = CameraSplit::Train;

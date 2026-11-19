@@ -199,6 +199,12 @@ namespace lfs::training {
         CUevent_st* normal_ready_event = nullptr;
         // Ring-backed tensors must never outlive this keepalive handle.
         std::shared_ptr<void> decoded_frame_keepalive = {};
+        // Pipelined depth or normals that travelled at their own size; the loss fits them to
+        // this size, the camera's when they were requested (0: the render's).
+        int prior_target_width = 0;
+        int prior_target_height = 0;
+        bool depth_own_size = false;
+        bool normal_own_size = false;
     };
 
     /// Camera dataset configuration
@@ -378,6 +384,27 @@ namespace lfs::training {
         bool mask_keep_high_band = false;
     };
 
+    // A depth or normal prior travels at its own size only when that size is known, the camera is not
+    // undistorted and the prior holds no more pixels than the target it would be resized to; every
+    // other prior is resized to the target by the pipelined loader.
+    [[nodiscard]] inline bool prior_keeps_own_size(const lfs::core::Camera& cam,
+                                                   const lfs::core::Camera::PriorSize prior,
+                                                   const int target_width, const int target_height) {
+        return !cam.is_undistort_prepared() && prior.width > 0 && prior.height > 0 &&
+               target_width > 0 && target_height > 0 &&
+               static_cast<int64_t>(prior.width) * prior.height <= static_cast<int64_t>(target_width) * target_height;
+    }
+
+    // Pixels the pipelined loader's slot holds for a depth or normal prior of `cam`.
+    [[nodiscard]] inline size_t pipelined_prior_pixels(const lfs::core::Camera& cam,
+                                                       const lfs::core::Camera::PriorSize prior) {
+        const int width = std::max(cam.image_width(), 0);
+        const int height = std::max(cam.image_height(), 0);
+        return prior_keeps_own_size(cam, prior, width, height)
+                   ? static_cast<size_t>(prior.width) * static_cast<size_t>(prior.height)
+                   : static_cast<size_t>(width) * static_cast<size_t>(height);
+    }
+
     // Pipelined DataLoader with GPU batch JPEG decoding
     template <typename Sampler>
     class PipelinedDataLoader {
@@ -435,6 +462,8 @@ namespace lfs::training {
                 };
                 example.decoded_frame_keepalive = std::make_shared<
                     std::vector<std::shared_ptr<void>>>(std::move(ready.decoded_frame_leases));
+                example.prior_target_width = ready.prior_target_width;
+                example.prior_target_height = ready.prior_target_height;
                 ready.depth_ready_event = nullptr;
                 ready.normal_ready_event = nullptr;
 
@@ -458,6 +487,7 @@ namespace lfs::training {
                 }
                 if (ready.depth && ready.depth->is_valid()) {
                     example.depth = std::move(*ready.depth);
+                    example.depth_own_size = ready.depth_own_size;
                 } else if (aux_config_.load_depths && cam->has_depth()) {
                     auto depth = cam->load_and_get_depth(
                         dataset_->get_resize_factor(),
@@ -468,6 +498,7 @@ namespace lfs::training {
                 }
                 if (ready.normal && ready.normal->is_valid()) {
                     example.normal = std::move(*ready.normal);
+                    example.normal_own_size = ready.normal_own_size;
                 }
 
                 return example;
@@ -554,9 +585,13 @@ namespace lfs::training {
             }
             if (aux_config_.load_depths && cam->has_depth()) {
                 request.depth_path = cam->depth_path();
+                request.depth_own_size = prior_keeps_own_size(*cam, cam->depth_prior_size(),
+                                                              request.aux_target_width, request.aux_target_height);
             }
             if (aux_config_.load_normals && cam->has_normal()) {
                 request.normal_path = cam->normal_path();
+                request.normal_own_size = prior_keeps_own_size(*cam, cam->normal_prior_size(),
+                                                               request.aux_target_width, request.aux_target_height);
                 request.normal_flip_yz = aux_config_.normal_flip_yz;
                 request.normal_srgb = aux_config_.normal_srgb;
                 const auto rotation = camera_idx < aux_config_.normal_rotation_by_source.size()
