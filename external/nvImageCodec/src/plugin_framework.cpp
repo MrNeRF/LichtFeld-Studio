@@ -153,19 +153,24 @@ namespace nvimgcodec {
 #endif
     }
 
-    std::string BuildDefaultExtensionsPathFromSoDir(const fs::path& so_dir) {
-        // Default extension discovery follows the directory containing the loaded
-        // nvImageCodec runtime library:
-        //
-        //   Package type                 libnvimgcodec lives in           extensions live in
-        //   ---------------------------- -------------------------------- -----------------------------
-        //   Linux deb/rpm               <prefix>/lib*/libnvimgcodec/<cuda>/ <so_dir>/extensions/
-        //   Linux conda package          $CONDA_PREFIX/lib/libnvimgcodec/<cuda>/ <so_dir>/extensions/
-        //   Linux Python wheel           <pkgdir>/                        <pkgdir>/extensions/
-        //   Windows MSI installer        <prefix>/bin/<cuda>/             <so_dir>/extensions/
-        //   Windows conda package        $CONDA_PREFIX/Library/bin/<cuda>/ <so_dir>/extensions/
-        //   Windows Python wheel         <pkgdir>/                        <pkgdir>/extensions/
-        return (so_dir / "extensions").generic_string();
+    // Portable layout: <libdir>/extensions (priority). Installed layout also
+    // tries parent-of-lib64/bin + extensions for package installs.
+    std::string BuildDefaultExtensionsPathFromSoDir(const fs::path& lib_dir) {
+        const fs::path portable_path = lib_dir / "extensions";
+
+        fs::path installed_path = lib_dir;
+#if defined(_WIN32) || defined(_WIN64)
+        if (installed_path.filename() == "bin") {
+            installed_path = installed_path.parent_path();
+        }
+#else
+        if (installed_path.filename() == "lib64") {
+            installed_path = installed_path.parent_path();
+        }
+#endif
+        installed_path /= "extensions";
+
+        return portable_path.generic_string() + GetPathSeparator() + installed_path.generic_string();
     }
 
 #if defined(__linux__) || defined(__linux) || defined(linux) || defined(_LINUX)
