@@ -7,8 +7,11 @@
 #include "event_bridge.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -21,7 +24,34 @@ namespace lfs::training {
         IterationStart,
         PreOptimizerStep,
         PostStep,
-        TrainingEnd
+        TrainingEnd,
+        SaveStart,
+        SaveEnd
+    };
+
+    // What kind of save the trainer writes.
+    enum class SaveType { Save,
+                          Autosave,
+                          Standalone,
+                          Final,
+                          Stopped,
+                          Emergency };
+
+    // One project file the trainer writes, or refuses to. SaveStart fills snapshot_id, path,
+    // type and the trainer's state; SaveEnd also how the write ended. Both carry the same
+    // snapshot_id, the one the save's checkpoint is stored under in the file.
+    struct SaveRecord {
+        std::string snapshot_id;
+        std::string path;
+        SaveType type = SaveType::Save;
+        // The trainer's state as the save began, for an end heard once the trainer is gone.
+        bool is_paused = false;
+        int iterations = 0;
+        bool ok = false;
+        std::string error;
+        std::uint64_t generation = 0;
+        std::uint64_t bytes = 0;
+        double seconds = 0.0;
     };
 
     struct ControlHookHash {
@@ -42,6 +72,8 @@ namespace lfs::training {
         bool is_refining = false;
         Trainer* trainer = nullptr;
         TrainingOutcome terminal_outcome = TrainingOutcome::Unspecified;
+        // SaveStart and SaveEnd only: the save, whose iteration is `iteration`.
+        std::shared_ptr<const SaveRecord> save;
     };
 
     class LFS_BRIDGE_API ControlBoundary {
