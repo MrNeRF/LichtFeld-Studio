@@ -14,6 +14,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -607,6 +608,122 @@ namespace lfs::io {
 
         [[nodiscard]] bool has_normal_dirs() const { return has_dirs(); }
     };
+
+    // Strips trailing '.' and separator components so lexically_relative matches child paths.
+    [[nodiscard]] inline std::filesystem::path normalize_dir_path(const std::filesystem::path& path) {
+        if (path.empty())
+            return {};
+        auto normalized = lfs::core::native_fs::display_path(path).lexically_normal();
+        while (normalized.has_relative_path() &&
+               (normalized.filename().empty() || normalized.filename() == ".")) {
+            normalized = normalized.parent_path();
+        }
+        return normalized;
+    }
+
+    namespace detail {
+        [[nodiscard]] inline std::filesystem::path strictly_relative_to(
+            const std::filesystem::path& target,
+            const std::filesystem::path& base) {
+            if (target.empty() || base.empty())
+                return {};
+            const auto rel = target.lexically_relative(base);
+            const auto generic = lfs::core::path_to_generic_utf8(rel);
+            if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
+                return {};
+            return rel;
+        }
+
+        [[nodiscard]] inline std::filesystem::path external_sidecar_relative_path(
+            const std::filesystem::path& norm_image) {
+            std::filesystem::path external("_external");
+            if (norm_image.has_root_name()) {
+                std::string component;
+                for (const char ch : lfs::core::path_to_generic_utf8(norm_image.root_name())) {
+                    if (ch == '/' || ch == '\\') {
+                        if (!component.empty()) {
+                            external /= lfs::core::utf8_to_path(component);
+                            component.clear();
+                        }
+                    } else if (ch != ':' && ch != '?' && ch != '*') {
+                        component.push_back(ch);
+                    }
+                }
+                if (!component.empty())
+                    external /= lfs::core::utf8_to_path(component);
+            }
+            if (norm_image.has_relative_path())
+                external /= norm_image.relative_path();
+            else if (!norm_image.filename().empty())
+                external /= norm_image.filename();
+            return external;
+        }
+    } // namespace detail
+
+    // Canonical relative path shared by prior/sidecar generation and lookup:
+    // 1) relative to images_dir when inside it,
+    // 2) relative to dataset_root when inside the dataset outside images_dir,
+    // 3) under "_external/" when outside dataset_root so distinct files never collide.
+    [[nodiscard]] inline std::filesystem::path sidecar_relative_path(
+        const std::filesystem::path& image_path,
+        const std::filesystem::path& dataset_root,
+        const std::filesystem::path& images_dir = {}) {
+        if (image_path.empty())
+            return {};
+
+        const auto abs_normalized = [](const std::filesystem::path& path) {
+            if (path.empty())
+                return std::filesystem::path{};
+            std::error_code ec;
+            const auto abs = std::filesystem::absolute(path, ec);
+            return lfs::core::native_fs::display_path(ec ? path : abs).lexically_normal();
+        };
+
+        const auto norm_image = abs_normalized(image_path);
+        const auto norm_images_dir =
+            images_dir.empty() ? std::filesystem::path{} : normalize_dir_path(abs_normalized(images_dir));
+        const auto norm_root =
+            dataset_root.empty() ? std::filesystem::path{} : normalize_dir_path(abs_normalized(dataset_root));
+
+        if (auto rel = detail::strictly_relative_to(norm_image, norm_images_dir); !rel.empty())
+            return rel;
+        if (auto rel = detail::strictly_relative_to(norm_image, norm_root); !rel.empty())
+            return rel;
+        return detail::external_sidecar_relative_path(norm_image);
+    }
+
+    // Resolves a sidecar for an image, disambiguating matching basenames with the shared
+    // canonical relative path (and suffix subpaths below leading dataset folders).
+    [[nodiscard]] inline FileLookupResult lookup_sidecar(
+        const SidecarDirCache& cache,
+        const std::filesystem::path& image_path,
+        const std::string& image_name,
+        const std::filesystem::path& dataset_root,
+        const std::filesystem::path& images_dir = {}) {
+        auto original = cache.lookup(image_name);
+        if (!original.ambiguous() || image_path.empty())
+            return original;
+
+        auto relative = sidecar_relative_path(image_path, dataset_root, images_dir);
+        if (relative.empty())
+            return original;
+
+        if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+            return result;
+
+        if (lfs::core::path_to_utf8(*relative.begin()) == "_external")
+            return original;
+
+        // Sidecars can mirror either the dataset root or a suffix below leading image folders.
+        while (std::distance(relative.begin(), relative.end()) > 2) {
+            relative = relative.lexically_relative(*relative.begin());
+            if (relative.empty())
+                break;
+            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
+                return result;
+        }
+        return original;
+    }
 
     inline bool paths_equivalent_or_lexically_equal(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
         if (lhs.empty() || rhs.empty()) {

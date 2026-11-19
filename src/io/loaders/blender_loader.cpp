@@ -40,29 +40,6 @@ namespace lfs::io {
                 relative = relative.lexically_relative(*relative.begin());
             return lfs::core::path_to_utf8(relative);
         }
-
-        FileLookupResult lookup_sidecar(const SidecarDirCache& cache,
-                                        const std::filesystem::path& image_path,
-                                        const std::string& image_name,
-                                        const std::filesystem::path& absolute_dataset_path) {
-            auto original = cache.lookup(image_name);
-            if (!original.ambiguous())
-                return original;
-
-            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
-            if (relative.empty() || *relative.begin() == "..")
-                return original;
-
-            // Preserve existing matches; use the frame's directories only to resolve ambiguity.
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-
-            // Sidecars can mirror either the dataset root or the leading image folder.
-            relative = relative.lexically_relative(*relative.begin());
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-            return original;
-        }
     } // namespace
 
     // Import types from lfs::core for convenience

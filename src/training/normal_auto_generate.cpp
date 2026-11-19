@@ -39,80 +39,20 @@ namespace lfs::training {
             }
         }
 
-        // Strips trailing '.' and separator components so lexically_relative matches child paths.
-        [[nodiscard]] std::filesystem::path normalize_dir_path(const std::filesystem::path& path) {
-            if (path.empty())
-                return {};
-            auto normalized = path.lexically_normal();
-            while (normalized.has_relative_path() &&
-                   (normalized.filename().empty() || normalized.filename() == ".")) {
-                normalized = normalized.parent_path();
-            }
-            return normalized;
-        }
-
         [[nodiscard]] std::filesystem::path resolve_dataset_root(const std::filesystem::path& data_path) {
             std::error_code ec;
             auto root = std::filesystem::absolute(data_path, ec);
-            root = normalize_dir_path(ec ? data_path : root);
+            root = lfs::io::normalize_dir_path(ec ? data_path : root);
             if (lfs::io::safe_is_regular_file(root))
-                root = normalize_dir_path(root.parent_path());
+                root = lfs::io::normalize_dir_path(root.parent_path());
             return root;
         }
 
-        [[nodiscard]] std::string common_camera_images_folder(
-            const std::filesystem::path& dataset_root,
-            const std::span<const std::shared_ptr<lfs::core::Camera>> cameras) {
-            if (dataset_root.empty())
-                return {};
-
-            bool have_common = false;
-            std::filesystem::path common_dir;
-            for (const auto& cam : cameras) {
-                if (!cam || !cam->has_image() || cam->image_path().empty())
-                    continue;
-                std::error_code ec;
-                const auto abs_img = std::filesystem::absolute(cam->image_path(), ec).lexically_normal();
-                if (ec)
-                    continue;
-                const auto rel = abs_img.lexically_relative(dataset_root);
-                const auto generic = lfs::core::path_to_generic_utf8(rel);
-                if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
-                    return ".";
-
-                const auto rel_dir = normalize_dir_path(rel.parent_path());
-                if (!have_common) {
-                    common_dir = rel_dir;
-                    have_common = true;
-                } else {
-                    std::filesystem::path prefix;
-                    auto it1 = common_dir.begin();
-                    const auto end1 = common_dir.end();
-                    auto it2 = rel_dir.begin();
-                    const auto end2 = rel_dir.end();
-                    while (it1 != end1 && it2 != end2 && *it1 == *it2) {
-                        prefix /= *it1;
-                        ++it1;
-                        ++it2;
-                    }
-                    common_dir = normalize_dir_path(prefix);
-                }
-                if (common_dir.empty())
-                    return ".";
-            }
-            if (!have_common || common_dir.empty())
-                return ".";
-            return lfs::core::path_to_generic_utf8(common_dir);
-        }
-
         [[nodiscard]] std::string training_images_folder(
-            const lfs::core::param::TrainingParameters& params,
-            const std::filesystem::path& dataset_root,
-            const std::span<const std::shared_ptr<lfs::core::Camera>> cameras) {
-            if (!params.dataset.images.empty())
-                return params.dataset.images;
-            const auto inferred = common_camera_images_folder(dataset_root, cameras);
-            return inferred.empty() ? std::string(kOriginalImagesFolder) : inferred;
+            const lfs::core::param::TrainingParameters& params) {
+            return params.dataset.images.empty()
+                       ? std::string(kOriginalImagesFolder)
+                       : params.dataset.images;
         }
 
         // Full-res images/ is the COLMAP original_width/height source. Maps written
@@ -151,31 +91,17 @@ namespace lfs::training {
             return dataset_root / fallback;
         }
 
-        [[nodiscard]] std::filesystem::path relative_image_or_fallback(
-            const std::filesystem::path& image_path,
-            const std::string& image_name,
-            const std::filesystem::path& base_dir) {
-            std::error_code ec;
-            const auto norm_image_path = image_path.empty()
-                                             ? std::filesystem::path{}
-                                             : std::filesystem::absolute(image_path, ec).lexically_normal();
-            if (!norm_image_path.empty() && !ec && !base_dir.empty()) {
-                const auto rel = norm_image_path.lexically_relative(base_dir);
-                const auto generic = lfs::core::path_to_generic_utf8(rel);
-                if (!rel.empty() && generic != "." && generic != ".." && !generic.starts_with("../"))
-                    return rel;
-            }
-            auto fallback = lfs::core::utf8_to_path(image_name);
-            return fallback.empty() ? image_path.filename() : fallback;
-        }
-
         [[nodiscard]] std::filesystem::path relative_prior_filename(
             const std::filesystem::path& image_path,
             const std::string& image_name,
             const std::filesystem::path& dataset_root,
-            const std::string& images_folder) {
-            const auto images_dir = normalize_dir_path(dataset_root / lfs::core::utf8_to_path(images_folder));
-            auto rel = relative_image_or_fallback(image_path, image_name, images_dir);
+            const std::filesystem::path& images_dir) {
+            auto rel = lfs::io::sidecar_relative_path(image_path, dataset_root, images_dir);
+            if (rel.empty()) {
+                rel = lfs::core::utf8_to_path(image_name);
+                if (rel.empty())
+                    rel = image_path.filename();
+            }
             rel.replace_extension(".png");
             return rel;
         }
@@ -188,48 +114,41 @@ namespace lfs::training {
             if (source_folder == training_folder)
                 return cam.image_path();
 
-            const auto training_dir = normalize_dir_path(dataset_root / lfs::core::utf8_to_path(training_folder));
-            const auto source_dir = normalize_dir_path(dataset_root / lfs::core::utf8_to_path(source_folder));
-            return source_dir / relative_image_or_fallback(cam.image_path(), cam.image_name(), training_dir);
-        }
-
-        [[nodiscard]] lfs::io::FileLookupResult lookup_prior_map(
-            const lfs::io::SidecarDirCache& cache,
-            const lfs::core::Camera& cam,
-            const std::filesystem::path& dataset_root) {
-            auto result = cache.lookup(cam.image_name());
-            if (!result.ambiguous() || cam.image_path().empty())
-                return result;
-
-            std::error_code ec;
-            const auto abs_img = std::filesystem::absolute(cam.image_path(), ec).lexically_normal();
-            if (ec)
-                return result;
-            auto relative = abs_img.lexically_relative(dataset_root);
-            if (relative.empty() || *relative.begin() == "..")
-                return result;
-
-            if (auto exact = cache.lookup(lfs::core::path_to_utf8(relative)); exact.found())
-                return exact;
-
-            relative = relative.lexically_relative(*relative.begin());
-            if (!relative.empty()) {
-                if (auto trimmed = cache.lookup(lfs::core::path_to_utf8(relative)); trimmed.found())
-                    return trimmed;
+            const auto training_dir = lfs::io::normalize_dir_path(
+                dataset_root / lfs::core::utf8_to_path(training_folder));
+            const auto source_dir = lfs::io::normalize_dir_path(
+                dataset_root / lfs::core::utf8_to_path(source_folder));
+            std::filesystem::path rel;
+            if (!cam.image_path().empty() && !training_dir.empty()) {
+                std::error_code ec;
+                const auto abs_cam = std::filesystem::absolute(cam.image_path(), ec);
+                const auto norm_cam = lfs::core::native_fs::display_path(ec ? cam.image_path() : abs_cam).lexically_normal();
+                rel = norm_cam.lexically_relative(training_dir);
+                const auto generic = lfs::core::path_to_generic_utf8(rel);
+                if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
+                    rel.clear();
             }
-            return result;
+            if (rel.empty()) {
+                rel = lfs::core::utf8_to_path(cam.image_name());
+                if (rel.empty())
+                    rel = cam.image_path().filename();
+            }
+            return source_dir / rel;
         }
 
         void associate_depth_maps(
             std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
-            const std::filesystem::path& dataset_root) {
+            const std::filesystem::path& dataset_root,
+            const std::filesystem::path& images_dir) {
             lfs::io::DepthDirCache cache(dataset_root);
             if (!cache.has_depth_dirs())
                 return;
             for (const auto& cam : cameras) {
                 if (!cam || cam->has_depth())
                     continue;
-                if (auto lookup = lookup_prior_map(cache, *cam, dataset_root); lookup.found()) {
+                if (auto lookup = lfs::io::lookup_sidecar(
+                        cache, cam->image_path(), cam->image_name(), dataset_root, images_dir);
+                    lookup.found()) {
                     cam->set_depth_path(std::move(lookup.path));
                 }
             }
@@ -237,14 +156,17 @@ namespace lfs::training {
 
         void associate_normal_maps(
             std::span<const std::shared_ptr<lfs::core::Camera>> cameras,
-            const std::filesystem::path& dataset_root) {
+            const std::filesystem::path& dataset_root,
+            const std::filesystem::path& images_dir) {
             lfs::io::NormalDirCache cache(dataset_root);
             if (!cache.has_normal_dirs())
                 return;
             for (const auto& cam : cameras) {
                 if (!cam || cam->has_normal())
                     continue;
-                if (auto lookup = lookup_prior_map(cache, *cam, dataset_root); lookup.found()) {
+                if (auto lookup = lfs::io::lookup_sidecar(
+                        cache, cam->image_path(), cam->image_name(), dataset_root, images_dir);
+                    lookup.found()) {
                     cam->set_normal_path(std::move(lookup.path));
                 }
             }
@@ -418,10 +340,10 @@ namespace lfs::training {
         }
 
         const auto dataset_root = resolve_dataset_root(params.dataset.data_path);
-        const auto training_folder = training_images_folder(params, dataset_root, cameras);
-        const auto source_folder = params.dataset.images.empty()
-                                       ? training_folder
-                                       : resolve_generation_images_folder(dataset_root, training_folder);
+        const auto training_folder = training_images_folder(params);
+        const auto source_folder = resolve_generation_images_folder(dataset_root, training_folder);
+        const auto source_images_dir = lfs::io::normalize_dir_path(
+            dataset_root / lfs::core::utf8_to_path(source_folder));
         const auto depth_dir = resolve_output_dir(dataset_root, lfs::io::DEPTH_SEARCH_FOLDERS, "depth");
         const auto normal_dir = resolve_output_dir(dataset_root, lfs::io::NORMAL_SEARCH_FOLDERS, "normals");
 
@@ -436,7 +358,7 @@ namespace lfs::training {
                 continue;
             const auto image_path = resolve_generation_image_path(
                 *cam, dataset_root, training_folder, source_folder);
-            const auto rel = relative_prior_filename(image_path, cam->image_name(), dataset_root, source_folder);
+            const auto rel = relative_prior_filename(image_path, cam->image_name(), dataset_root, source_images_dir);
             jobs.push_back(PriorMapJob{
                 .image_path = image_path,
                 .depth_output_path = needs_depth ? depth_dir / rel : std::filesystem::path{},
@@ -455,9 +377,12 @@ namespace lfs::training {
             LOG_INFO("{} auto-generate: generating maps for {} images from '{}' "
                      "at original resolution for {} training cameras (training folder '{}')",
                      kind, jobs.size(), source_folder, cameras.size(), training_folder);
-        } else {
+        } else if (lfs::io::safe_is_directory(source_images_dir)) {
             LOG_INFO("{} auto-generate: generating maps for {} images from '{}' for {} training cameras",
                      kind, jobs.size(), source_folder, cameras.size());
+        } else {
+            LOG_INFO("{} auto-generate: generating maps for {} images for {} training cameras",
+                     kind, jobs.size(), cameras.size());
         }
 
         lfs::core::events::state::DatasetLoadStarted{.path = dataset_root}.emit();
@@ -492,9 +417,9 @@ namespace lfs::training {
                                                         lfs::core::path_to_utf8(depth_dir.filename()),
                                                         lfs::core::path_to_utf8(normal_dir.filename()), jobs, progress);
         if (generate_depth)
-            associate_depth_maps(cameras, dataset_root);
+            associate_depth_maps(cameras, dataset_root, source_images_dir);
         if (generate_normal)
-            associate_normal_maps(cameras, dataset_root);
+            associate_normal_maps(cameras, dataset_root, source_images_dir);
         count_prior_maps(cameras, outcome);
 
         const double elapsed_s = std::chrono::duration<double>(
