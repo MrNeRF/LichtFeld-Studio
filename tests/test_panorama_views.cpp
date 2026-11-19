@@ -2,15 +2,72 @@
 
 #include "core/camera_views.hpp"
 #include "core/image_io.hpp"
+#include "core/scene.hpp"
+#include "core/splat_data.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
 #include "training/depth_anchor/depth_anchor_cache.hpp"
 #include "training/normal_auto_generate.hpp"
+#include "training/popspa_cameras.hpp"
+#include "training/strategies/strategy_factory.hpp"
+#include "training/trainer.hpp"
+#include <format>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <numbers>
+#include <random>
+
+namespace lfs::training {
+    struct TrainerCameraLossTestAccess {
+        // Records one loss per drawn camera and publishes the colours.
+        static void record(Trainer& trainer, const std::vector<std::shared_ptr<core::Camera>>& drawn,
+                           const std::vector<float>& losses) {
+            ASSERT_TRUE(trainer.initialize_camera_loss_heatmap(drawn));
+            for (size_t i = 0; i < drawn.size(); ++i)
+                trainer.update_camera_loss_heatmap(*drawn[i], core::Tensor::full({1}, losses[i], core::Device::CUDA));
+            // The first call starts the copy of the losses, the second publishes it.
+            trainer.maybe_publish_camera_loss_heatmap(0, true);
+            trainer.maybe_publish_camera_loss_heatmap(0, true);
+        }
+    };
+
+    struct TrainerViewIdTestAccess {
+        // Expands `cameras` as training does and makes them the training set.
+        static void train_through_views(Trainer& trainer, std::vector<std::shared_ptr<core::Camera>>& cameras) {
+            trainer.params_.optimization.use_bilateral_grid = true;
+            trainer.params_.optimization.use_ppisp = true;
+            ASSERT_TRUE(expand_camera_views(*trainer.scene_, cameras, &trainer.legacy_view_uids_));
+            trainer.train_dataset_ = std::make_shared<CameraDataset>(cameras, DatasetConfig{});
+        }
+        static std::unique_ptr<BilateralGrid>& grid(Trainer& trainer) { return trainer.bilateral_grid_; }
+        static std::unique_ptr<PPISP>& ppisp(Trainer& trainer) { return trainer.ppisp_; }
+        static const std::unordered_map<int, int>& legacy(const Trainer& trainer) { return trainer.legacy_view_uids_; }
+        static void adopt(Trainer& trainer) { trainer.adopt_legacy_view_uids(); }
+        // Leaves the views of `photograph` out of the training set, as a held-out split does.
+        static void hold_out(Trainer& trainer, const int photograph) {
+            auto cameras = trainer.train_dataset_->get_cameras();
+            std::erase_if(cameras, [&](const auto& camera) { return camera->photograph_uid() == photograph; });
+            trainer.train_dataset_ = std::make_shared<CameraDataset>(cameras, DatasetConfig{});
+        }
+    };
+
+    struct TrainerDepthAnchorTestAccess {
+        // Fits the anchors of the drawn cameras as training does at start; the strategy is handed back.
+        static std::unordered_map<int, kernels::DepthAnchor> fit(
+            Trainer& trainer, const core::param::TrainingParameters& params,
+            std::vector<std::shared_ptr<core::Camera>> drawn, std::unique_ptr<IStrategy>& strategy) {
+            trainer.params_ = params;
+            trainer.train_dataset_ = std::make_shared<CameraDataset>(drawn, DatasetConfig{});
+            trainer.strategy_ = std::move(strategy);
+            trainer.fitDepthAnchors(drawn.size());
+            strategy = std::move(trainer.strategy_);
+            return trainer.depth_anchors_;
+        }
+    };
+} // namespace lfs::training
 
 namespace {
     using namespace lfs::core;
@@ -81,7 +138,8 @@ namespace {
         std::vector<float> pixels(w * h);
         for (int x = 0; x < w; ++x) {
             const float lon = ((x + 0.5f) / w - 0.5f) * (2 * pi);
-            const float value = 0.5f + 0.5f * std::sin(60 * 2 * pi * lon);
+            // Eight columns per period: above the Nyquist rate of every pixel of a 64 pixel polar face.
+            const float value = 0.5f + 0.5f * std::sin(256 * lon);
             for (int y = 0; y < h; ++y)
                 pixels[y * w + x] = value;
         }
@@ -452,6 +510,368 @@ namespace {
             const auto output = undistort_image(source, p, nullptr).cpu().to_vector();
             for (size_t k = 0; k < indices.size(); ++k)
                 EXPECT_NEAR(output[indices[k]], expected[i][k], 3.e-6f);
+        }
+    }
+
+    std::shared_ptr<Camera> ordinary_camera(const std::filesystem::path& image_path, const std::string& name, int uid) {
+        return std::make_shared<Camera>(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), 64, 64, 64, 32,
+                                        Tensor{}, Tensor{}, CameraModelType::PINHOLE, name, image_path,
+                                        std::filesystem::path{}, 128, 64, uid);
+    }
+
+    // Fails if evaluating on all images, which hands the same cameras in as training and validation lists, lists an
+    // ordinary photograph twice and generates its maps twice.
+    TEST(PanoramaPriors, EvaluatingAllImagesListsEachPhotographOnce) {
+        using namespace lfs::training;
+        lfs::test::licht::TemporaryDirectory temp;
+        const auto images = temp.path / "images";
+        std::filesystem::create_directory(images);
+        const auto photo = prior_panorama(images / "source.png");
+        const auto ordinary = ordinary_camera(images / "plain.png", "plain.png", 1);
+        std::vector<uint8_t> pixels(128 * 64);
+        for (const auto& camera : {photo, ordinary})
+            ASSERT_TRUE(save_png(camera->image_path(), pixels.data(), 128, 64, 1, 8, 0));
+        auto cameras = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
+        cameras.push_back(ordinary);
+        param::TrainingParameters params;
+        params.dataset.data_path = temp.path;
+        params.optimization.use_depth_loss = true;
+        params.optimization.depth_auto_generate = true;
+        params.optimization.depth_loss_weight = 1;
+        std::vector<std::filesystem::path> generated;
+        const auto sources = prepare_training_prior_maps(
+            params, cameras, cameras, std::array{photo, ordinary},
+            [&](std::span<const PriorMapJob> jobs, const PriorMapProgress&) {
+                for (const auto& job : jobs) {
+                    generated.push_back(job.image_path);
+                    std::filesystem::create_directories(job.depth_output_path.parent_path());
+                    EXPECT_TRUE(save_png(job.depth_output_path, pixels.data(), 128, 64, 1, 8, 0));
+                }
+                return lfs::Status{}.into_expected();
+            });
+        ASSERT_TRUE(sources);
+        EXPECT_EQ(*sources, (std::vector{photo, ordinary}));
+        EXPECT_EQ(generated, (std::vector{photo->image_path(), ordinary->image_path()}));
+    }
+
+    // Fails if views are matched to their photograph by image path: of two scene cameras with one path, the views of
+    // the second would be attributed to the first.
+    TEST(PanoramaViews, ViewsFindTheirOwnPhotographWhenPathsAreShared) {
+        const auto first = prior_panorama("shared.png");
+        const auto second = std::make_shared<Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::from_vector({1.f, 0.f, 0.f}, {3}, Device::CPU), 0, 0, 0, 0, Tensor{},
+            Tensor{}, CameraModelType::EQUIRECTANGULAR, "source.png", "shared.png", std::filesystem::path{}, 128, 64, 1);
+        auto drawn = make_camera_views(*first, plan_camera_views(*first, 0), 10);
+        const auto more = make_camera_views(*second, plan_camera_views(*second, 0), 16);
+        drawn.insert(drawn.end(), more.begin(), more.end());
+        const auto groups = group_camera_views(drawn, std::array{first, second});
+        ASSERT_TRUE(groups);
+        ASSERT_EQ(groups->size(), 2u);
+        for (size_t i = 0; i < 2; ++i) {
+            EXPECT_EQ((*groups)[i].photograph, i == 0 ? first : second);
+            EXPECT_EQ((*groups)[i].drawn, std::vector(drawn.begin() + 6 * i, drawn.begin() + 6 * (i + 1)));
+        }
+    }
+
+    // Fails if the loss colours stay keyed by the views a photograph is trained through: the scene asks with the
+    // photograph, which then never gets a colour. Its colour comes from the mean of its views' losses; ordinary
+    // cameras keep the colour of their own loss.
+    TEST(PanoramaViews, PhotographTrainedThroughViewsShowsTheMeanLossOfItsViews) {
+        Scene scene;
+        const auto photo = prior_panorama({});
+        const auto best = ordinary_camera({}, "best.png", 1);
+        const auto worst = ordinary_camera({}, "worst.png", 2);
+        for (const auto& camera : {photo, best, worst})
+            scene.addCamera(camera->image_name(), NULL_NODE, camera);
+        auto drawn = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
+        drawn.push_back(best);
+        drawn.push_back(worst);
+        lfs::training::Trainer trainer(scene);
+        ASSERT_NO_FATAL_FAILURE(lfs::training::TrainerCameraLossTestAccess::record(
+            trainer, drawn, {.1f, .2f, .3f, .1f, .2f, .3f, .1f, .3f}));
+        std::vector<std::array<float, 3>> colors;
+        ASSERT_TRUE(trainer.fillCameraLossColors({photo, best, worst}, colors));
+        ASSERT_EQ(colors.size(), 3u);
+        const std::array<std::array<float, 3>, 3> expected{{{.5f, .5f, .2f}, {.1f, .84f, .24f}, {.9f, .16f, .16f}}};
+        for (size_t i = 0; i < 3; ++i)
+            for (int c = 0; c < 3; ++c)
+                EXPECT_NEAR(colors[i][c], expected[i][c], 1e-5) << i;
+    }
+
+    // Fails if the anchors of a run with views are fingerprinted and fitted over the views: the cache prepared over
+    // the photographs never matches and the run overwrites it. A view takes its photograph's anchor.
+    TEST(PanoramaPriors, ViewsReuseTheAnchorCacheOfTheirPhotographs) {
+        using namespace lfs::training;
+        lfs::test::licht::TemporaryDirectory temp;
+        const auto photo = prior_panorama(temp.path / "images" / "source.png");
+        photo->set_depth_path(temp.path / "depth" / "source.png");
+        std::filesystem::create_directories(photo->depth_path().parent_path());
+        std::vector<uint16_t> depth(128 * 64);
+        for (size_t i = 0; i < depth.size(); ++i)
+            depth[i] = static_cast<uint16_t>(20000 + 7 * (i % 128) + 60 * (i / 128));
+        ASSERT_TRUE(save_png(photo->depth_path(), depth.data(), 128, 64, 1, 16, 0));
+        Scene scene;
+        scene.addCamera(photo->image_name(), NULL_NODE, photo);
+
+        std::mt19937 rng(3);
+        std::normal_distribution<float> gauss;
+        std::vector<float> points;
+        for (int i = 0; i < 2000; ++i) {
+            const glm::vec3 p = 3.f * glm::normalize(glm::vec3{gauss(rng), gauss(rng), gauss(rng)});
+            points.insert(points.end(), {p.x, p.y, p.z});
+        }
+        const auto means = Tensor::from_vector(points, {2000, 3}, Device::CUDA);
+        SplatData model(0, means, Tensor::zeros({2000, 1, 3}, Device::CUDA), Tensor::zeros({2000, 0, 3}, Device::CUDA),
+                        Tensor::zeros({2000, 3}, Device::CUDA), Tensor::zeros({2000, 4}, Device::CUDA),
+                        Tensor::zeros({2000}, Device::CUDA), 1.0f);
+        auto created = StrategyFactory::instance().create("mcmc", model);
+        ASSERT_TRUE(created) << created.error();
+        auto strategy = std::move(*created);
+
+        // What `preprocess` writes over the scene's photographs, with an anchor no fit would produce.
+        const auto sidecar = depthAnchorSidecarPath({photo});
+        kernels::DepthAnchor marker{.valid = true, .model = 0, .scale = 7, .shift = .5f, .corr = .9f, .samples = 999};
+        marker.disparity = {.valid = true, .scale = 7, .shift = .5f, .corr = .9f, .samples = 999};
+        ASSERT_TRUE(writeDepthAnchorSidecar(sidecar, {{photo->image_name(), marker}}, computeAnchorFingerprint(means, {photo})));
+        const auto prepared = lfs::test::licht::read_file_bytes(sidecar);
+
+        param::TrainingParameters params;
+        params.optimization.use_depth_loss = true;
+        params.optimization.depth_loss_weight = 1;
+        params.optimization.depth_loss_mode = "ssi-disparity";
+        const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
+        Trainer trainer(scene);
+        for (const auto& drawn : {views, views, std::vector{photo}}) {
+            const auto anchors = TrainerDepthAnchorTestAccess::fit(trainer, params, drawn, strategy);
+            EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), prepared);
+            ASSERT_EQ(anchors.size(), drawn.size());
+            for (const auto& camera : drawn) {
+                ASSERT_TRUE(anchors.contains(camera->uid()));
+                EXPECT_EQ(anchors.at(camera->uid()).disparity.scale, 7);
+                EXPECT_EQ(anchors.at(camera->uid()).disparity.samples, 999);
+            }
+        }
+    }
+
+    // Fails if area resampling takes a fixed number of samples per face pixel: toward a pole one face pixel spans
+    // 1 / cos(latitude) times as many columns of the panorama, so a pattern along the longitude that the samples
+    // average out on the equator aliases there. Measured where cos(latitude) < 0.25, where every face pixel spans
+    // several periods of the pattern and its exact average is the mean.
+    TEST(PanoramaUndistort, PolarFacesAttenuateFrequenciesAboveFaceNyquist) {
+        constexpr int w = 2048, h = 1024;
+        std::vector<float> pixels(w * h);
+        for (int x = 0; x < w; ++x) {
+            const float lon = ((x + 0.5f) / w - 0.5f) * (2 * pi);
+            const float value = 0.5f + 0.5f * std::sin(256 * lon);
+            for (int y = 0; y < h; ++y)
+                pixels[y * w + x] = value;
+        }
+        const auto source = Tensor::from_vector(pixels, {h, w}, Device::CUDA);
+        for (const int face : {2, 3}) {
+            const auto p = prepare_undistort_params(panorama_plan(w, h)[face].params, w, h, 1, 64);
+            const auto mask = undistort_mask_area(source, p, nullptr).cpu().to_vector();
+            double squared = 0, worst = 0;
+            int count = 0;
+            for (int y = 0; y < p.dst_height; ++y)
+                for (int x = 0; x < p.dst_width; ++x) {
+                    const float u = (x + 0.5f - p.dst_cx) / p.dst_fx;
+                    const float v = (y + 0.5f - p.dst_cy) / p.dst_fy;
+                    const auto* r = p.view_rotation;
+                    const glm::vec3 ray{r[0] * u + r[1] * v + r[2], r[3] * u + r[4] * v + r[5], r[6] * u + r[7] * v + r[8]};
+                    if (std::hypot(ray.x, ray.z) / glm::length(ray) >= 0.25f)
+                        continue;
+                    const double error = mask[y * p.dst_width + x] - 0.5;
+                    squared += error * error;
+                    worst = std::max(worst, std::abs(error));
+                    ++count;
+                }
+            ASSERT_GT(count, 100);
+            std::cout << "face " << face << ": " << count << " pixels, rms " << std::sqrt(squared / count) << ", worst "
+                      << worst << "\n";
+            EXPECT_LT(std::sqrt(squared / count), 0.01) << face;
+            EXPECT_LT(worst, 0.02) << face;
+        }
+    }
+
+    std::shared_ptr<Camera> photograph(const CameraModelType model, const int uid) {
+        const bool fisheye = model == CameraModelType::FISHEYE;
+        // An equidistant fisheye whose image circle reaches 90 degrees at the border.
+        const float focal = fisheye ? 128 / (pi / 2) : 0;
+        const auto name = std::format("photo{}.png", uid);
+        return std::make_shared<Camera>(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), focal, focal,
+                                        fisheye ? 128.f : 0.f, fisheye ? 128.f : 0.f,
+                                        fisheye ? Tensor::zeros({4}, Device::CPU) : Tensor{}, Tensor{}, model, name,
+                                        name, std::filesystem::path{}, 256, fisheye ? 256 : 128, uid);
+    }
+
+    // Fails if view ids are spaced by the photograph uid (first + 6 * uid): everything sized by the largest camera id
+    // then holds up to six unused slots per camera. Every scene photograph that is split, trained or not, takes a
+    // block of exactly its view count, in ascending uid order, after the largest scene uid.
+    TEST(PanoramaViews, ViewIdsAreConsecutiveBlocksOfTheScenePhotographs) {
+        Scene scene;
+        std::vector<std::shared_ptr<Camera>> all;
+        for (const auto& [model, uid] : std::initializer_list<std::pair<CameraModelType, int>>{
+                 {CameraModelType::EQUIRECTANGULAR, 0},
+                 {CameraModelType::FISHEYE, 1},
+                 {CameraModelType::PINHOLE, 2},
+                 {CameraModelType::EQUIRECTANGULAR, 3},
+                 {CameraModelType::PINHOLE, 4}}) {
+            all.push_back(photograph(model, uid));
+            scene.addCamera(all.back()->image_name(), NULL_NODE, all.back());
+        }
+        std::vector<std::shared_ptr<Camera>> cameras(all.begin() + 1, all.end());
+        ASSERT_TRUE(lfs::training::expand_camera_views(scene, cameras));
+        std::vector<int> uids;
+        for (const auto& camera : cameras)
+            uids.push_back(camera->uid());
+        EXPECT_EQ(uids, (std::vector<int>{11, 12, 13, 14, 15, 2, 16, 17, 18, 19, 20, 21, 4}));
+        for (const auto& camera : cameras) {
+            // Ids 11 to 15 are views of photograph 1, 16 to 21 of photograph 3.
+            const int uid = camera->uid();
+            EXPECT_EQ(camera->photograph_uid(), uid >= 16 ? 3 : (uid >= 11 ? 1 : uid));
+        }
+    }
+
+    // Fails if per-camera state of a checkpoint whose views carry the ids of earlier versions is used as is: the
+    // bilateral grid would give views the rows of other cameras, PPISP and POPSpa would not find their frames. PPISP
+    // frames are renamed and keep their parameters, the bilateral grid restarts, the POPSpa fingerprint matches.
+    TEST(PanoramaViews, CheckpointWithEarlierViewIdsMapsOrRestartsPerCameraState) {
+        using lfs::training::TrainerViewIdTestAccess;
+        Scene scene;
+        std::vector<std::shared_ptr<Camera>> all;
+        for (const auto& [model, uid] : std::initializer_list<std::pair<CameraModelType, int>>{
+                 {CameraModelType::EQUIRECTANGULAR, 0},
+                 {CameraModelType::FISHEYE, 1},
+                 {CameraModelType::PINHOLE, 2},
+                 {CameraModelType::EQUIRECTANGULAR, 3},
+                 {CameraModelType::PINHOLE, 4}}) {
+            all.push_back(photograph(model, uid));
+            scene.addCamera(all.back()->image_name(), NULL_NODE, all.back());
+        }
+        // The views of photograph 3 had ids 5 + 6 * 3 + view; those of photograph 1 keep theirs.
+        const std::unordered_map<int, int> earlier{{16, 23}, {17, 24}, {18, 25}, {19, 26}, {20, 27}, {21, 28}};
+        constexpr int earlier_slots = 29, slots = 22;
+        const auto rgb = Tensor::full({3, 8, 8}, 0.5f, Device::CUDA);
+
+        for (const bool written_before : {true, false}) {
+            SCOPED_TRACE(written_before);
+            lfs::training::Trainer trainer(scene);
+            std::vector<std::shared_ptr<Camera>> cameras(all.begin() + 1, all.end());
+            ASSERT_NO_FATAL_FAILURE(TrainerViewIdTestAccess::train_through_views(trainer, cameras));
+            EXPECT_EQ(TrainerViewIdTestAccess::legacy(trainer), earlier);
+            const auto saved_id = [&](const Camera& camera) {
+                return written_before && earlier.contains(camera.uid()) ? earlier.at(camera.uid()) : camera.uid();
+            };
+            // What a load of the checkpoint leaves: its grid and its PPISP with its frame ids, each frame with its
+            // own exposure.
+            auto& grid = TrainerViewIdTestAccess::grid(trainer);
+            grid = std::make_unique<lfs::training::BilateralGrid>(written_before ? earlier_slots : slots, 4, 4, 2, 100);
+            auto& ppisp = TrainerViewIdTestAccess::ppisp(trainer);
+            ppisp = std::make_unique<lfs::training::PPISP>(100);
+            std::vector<std::pair<int, float>> exposures;
+            for (const auto& camera : cameras) {
+                ppisp->register_frame(saved_id(*camera), camera->camera_id());
+                exposures.emplace_back(saved_id(*camera), 0.1f * static_cast<float>(exposures.size()));
+            }
+            ppisp->finalize();
+            ppisp->seed_exposure(exposures);
+            std::vector<std::vector<float>> colours;
+            for (const auto& camera : cameras)
+                colours.push_back(ppisp->apply(rgb, camera->camera_id(), saved_id(*camera)).cpu().to_vector());
+            const auto* loaded_ppisp = ppisp.get();
+
+            TrainerViewIdTestAccess::adopt(trainer);
+            ASSERT_TRUE(grid);
+            EXPECT_EQ(grid->num_images(), slots);
+            // The loaded grid is 4 cells wide, a restarted one takes the run's size.
+            EXPECT_EQ(grid->grid_width() == 4, !written_before);
+            ASSERT_EQ(ppisp.get(), loaded_ppisp);
+            for (size_t i = 0; i < cameras.size(); ++i) {
+                ASSERT_TRUE(ppisp->is_known_frame(cameras[i]->uid())) << cameras[i]->uid();
+                EXPECT_EQ(ppisp->apply(rgb, cameras[i]->camera_id(), cameras[i]->uid()).cpu().to_vector(), colours[i]);
+            }
+
+            // The POPSpa fingerprint saved over the cameras with the checkpoint's ids.
+            const auto saved_views = make_camera_views(*all[3], plan_camera_views(*all[3], 0), written_before ? 23 : 16);
+            std::vector<Camera*> current, saved;
+            for (const auto& camera : cameras) {
+                current.push_back(camera.get());
+                saved.push_back(camera->photograph_uid() == 3 ? saved_views[camera->uid() - 16].get() : camera.get());
+            }
+            const auto saved_fingerprint = lfs::training::sort_and_fingerprint_popspa_cameras(saved);
+            EXPECT_EQ(lfs::training::sort_and_fingerprint_popspa_cameras(current) == saved_fingerprint, !written_before);
+            EXPECT_EQ(lfs::training::sort_and_fingerprint_popspa_cameras(current, &TrainerViewIdTestAccess::legacy(trainer)) ==
+                          saved_fingerprint,
+                      written_before);
+        }
+    }
+
+    // A resumed run may hold out photographs its checkpoint trained on. Their frames are renamed with the others:
+    // left alone, the earlier ids of one photograph's views are the ids the next photograph's views have now.
+    TEST(PanoramaViews, CheckpointFramesOfHeldOutViewsAreRenamedToo) {
+        using lfs::training::TrainerViewIdTestAccess;
+        Scene scene;
+        std::vector<std::shared_ptr<Camera>> cameras;
+        for (const int uid : {0, 1, 2, 3}) {
+            cameras.push_back(photograph(uid == 0 ? CameraModelType::PINHOLE : CameraModelType::EQUIRECTANGULAR, uid));
+            scene.addCamera(cameras.back()->image_name(), NULL_NODE, cameras.back());
+        }
+        lfs::training::Trainer trainer(scene);
+        ASSERT_NO_FATAL_FAILURE(TrainerViewIdTestAccess::train_through_views(trainer, cameras));
+        const auto& earlier = TrainerViewIdTestAccess::legacy(trainer);
+        // Photograph 1 had the ids 10..15, which photograph 2 has now.
+        ASSERT_EQ(earlier.size(), 18u);
+        ASSERT_EQ(earlier.at(4), 10);
+        ASSERT_EQ(earlier.at(10), 16);
+        const auto saved_id = [&](const Camera& camera) {
+            const auto it = earlier.find(camera.uid());
+            return it == earlier.end() ? camera.uid() : it->second;
+        };
+        const auto rgb = Tensor::full({3, 8, 8}, 0.5f, Device::CUDA);
+        auto& ppisp = TrainerViewIdTestAccess::ppisp(trainer);
+        ppisp = std::make_unique<lfs::training::PPISP>(100);
+        std::vector<std::pair<int, float>> exposures;
+        for (const auto& camera : cameras) {
+            ppisp->register_frame(saved_id(*camera), camera->camera_id());
+            exposures.emplace_back(saved_id(*camera), 0.1f * static_cast<float>(exposures.size()));
+        }
+        ppisp->finalize();
+        ppisp->seed_exposure(exposures);
+        std::vector<std::vector<float>> colours;
+        for (const auto& camera : cameras)
+            colours.push_back(ppisp->apply(rgb, camera->camera_id(), saved_id(*camera)).cpu().to_vector());
+        const auto* loaded = ppisp.get();
+
+        TrainerViewIdTestAccess::hold_out(trainer, 1);
+        TrainerViewIdTestAccess::adopt(trainer);
+        ASSERT_EQ(ppisp.get(), loaded);
+        for (size_t i = 0; i < cameras.size(); ++i) {
+            ASSERT_TRUE(ppisp->is_known_frame(cameras[i]->uid())) << cameras[i]->uid();
+            EXPECT_EQ(ppisp->apply(rgb, cameras[i]->camera_id(), cameras[i]->uid()).cpu().to_vector(), colours[i])
+                << cameras[i]->uid();
+        }
+    }
+
+    // Crossing a pole moves a tap by half the width, which for an odd width falls between two columns. So close to
+    // the pole that offset spans a negligible angle: each pixel of the polar faces still carries its own ray.
+    TEST(PanoramaUndistort, OddWidthPolarFacesCarryTheirOwnRays) {
+        constexpr int w = 255, h = 128;
+        const auto source = direction_panorama(w, h);
+        const auto views = panorama_plan(w, h);
+        for (const int face : {2, 3}) {
+            const auto& p = views[face].params;
+            const auto pixels = undistort_image(source, p, nullptr).cpu().to_vector();
+            float worst = 0;
+            for (int y = 0; y < p.dst_height; ++y)
+                for (int x = 0; x < p.dst_width; ++x) {
+                    const float u = (x + 0.5f - p.dst_cx) / p.dst_fx;
+                    const float v = (y + 0.5f - p.dst_cy) / p.dst_fy;
+                    const auto ray = glm::normalize(face == 2 ? glm::vec3{-u, 1, v} : glm::vec3{u, -1, v});
+                    for (int c = 0; c < 3; ++c)
+                        worst = std::max(worst, std::abs(pixels[(c * p.dst_height + y) * p.dst_width + x] -
+                                                         (0.5f + 0.5f * ray[c])));
+                }
+            EXPECT_LT(worst, 0.001f) << face;
         }
     }
 } // namespace

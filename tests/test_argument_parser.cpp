@@ -239,7 +239,8 @@ TEST(ArgumentParserTest, EvalHelpDescribesTheEvaluationOptions) {
     ASSERT_TRUE(parsed);
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
     for (const char* flag : {"--eval-all", "--eval-mask", "--eval-mask-report", "--eval-mask-opacity", "--eval-flip",
-                             "--eval-green-infill", "--noise-infill-mesh", "--no-save-eval-images"})
+                             "--eval-green-infill", "--noise-infill-mesh", "--no-save-eval-images",
+                             "--no-calibration-correction"})
         EXPECT_NE(help.find(flag), std::string::npos) << flag;
     EXPECT_NE(help.find("opaque green filling the inside of a mesh"), std::string::npos) << help;
 }
@@ -345,6 +346,7 @@ TEST(ArgumentParserTest, CompareSubcommandParsesAndRejectsTrainedModelMasks) {
     EXPECT_TRUE(evaluation.eval_flip);
     EXPECT_TRUE(evaluation.enable_save_eval_images);
     EXPECT_EQ(evaluation.eval_bit_depth, lfs::core::param::EvalBitDepth::Sixteen);
+    EXPECT_FALSE(evaluation.calibration_correction);
     EXPECT_EQ(mode->params.output_path, std::filesystem::weakly_canonical(directory) / "test_compare");
 
     for (const std::vector<const char*>& bad : std::vector<std::vector<const char*>>{
@@ -3404,19 +3406,53 @@ TEST(ArgumentParserTest, JoinedShortIterationValueIsUsed) {
     EXPECT_TRUE((*parsed)->cli_iterations_set);
 }
 
-TEST(ArgumentParserTest, CalibrationCorrectionIsOptInAndRoundTrips) {
+// Catches calibration correction losing its default, its off switch for training and eval, or the recorded
+// override that makes the switch win over a resumed run's own setting.
+TEST(ArgumentParserTest, CalibrationCorrectionIsOnByDefaultAndTurnsOff) {
     using lfs::core::param::OptimizationParameters;
+    for (const auto& defaults : {OptimizationParameters{}, OptimizationParameters::mrnf_defaults(),
+                                 OptimizationParameters::mcmc_defaults(), OptimizationParameters::igs_plus_defaults()})
+        EXPECT_TRUE(defaults.calibration_correction);
     OptimizationParameters defaults;
-    EXPECT_FALSE(defaults.calibration_correction);
     EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000);
     defaults.steps_scaler = .7506f;
     EXPECT_EQ(defaults.calibration_correction_start_iteration(), 751);
+    // Zero or below means no step scaling, and the correction never starts on the untrained scene.
+    for (const float unscaled : {0.f, -1.f}) {
+        defaults.steps_scaler = unscaled;
+        EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000) << unscaled;
+    }
+    defaults.steps_scaler = 1e-4f;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1);
+
     const auto data = make_test_path("calibration_args");
-    const char* argv[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--calibration-correction"};
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const char* plain[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str()};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(plain)), plain);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.calibration_correction);
+    EXPECT_FALSE((*parsed)->overrides.has_optimization_key("calibration_correction"));
+
+    const char* off[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--no-calibration-correction"};
+    parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(off)), off);
     ASSERT_TRUE(parsed) << parsed.error();
     const auto& opt = (*parsed)->optimization;
-    EXPECT_TRUE(opt.calibration_correction);
-    EXPECT_TRUE(OptimizationParameters::from_json(opt.to_json()).calibration_correction);
+    EXPECT_FALSE(opt.calibration_correction);
+    EXPECT_FALSE(OptimizationParameters::from_json(opt.to_json()).calibration_correction);
     EXPECT_TRUE((*parsed)->overrides.has_optimization_key("calibration_correction"));
+
+    const char* removed[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--calibration-correction"};
+    EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(removed)), removed));
+
+    const auto project = std::filesystem::path(data) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const auto output_text = (std::filesystem::path(data) / "eval").string();
+    const char* eval[]{"LichtFeld-Studio", "eval", project_text.c_str(), "-o", output_text.c_str(),
+                       "--no-calibration-correction"};
+    const auto evaluated = lfs::core::args::parse_args(static_cast<int>(std::size(eval)), eval);
+    ASSERT_TRUE(evaluated) << evaluated.error();
+    const auto* mode = std::get_if<lfs::core::args::TrainingMode>(&*evaluated);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_FALSE(mode->params->optimization.calibration_correction);
+    EXPECT_TRUE(mode->params->overrides.has_optimization_key("calibration_correction"));
 }

@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
+#include "core/image_loader.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -17,13 +18,16 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <numbers>
 #include <random>
 #include <vector>
@@ -317,37 +321,246 @@ TEST(CameraPoseOffsetsTest, DrawnViewsShareOneMovingPhotograph) {
     }
 }
 
+namespace {
+    constexpr int kPanoramaWidth = 1024;
+    constexpr int kPanoramaHeight = 512;
+
+    // Splats two to three units away on every side of the origin, so each panorama view sees some.
+    SplatData make_surrounding_scene() {
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+        std::vector<float> means, sh0, shN, scales, rotations, opacities;
+        for (int axis = 0; axis < 3; ++axis) {
+            for (const float side : {-1.0f, 1.0f}) {
+                for (int k = 0; k < 14; ++k) {
+                    std::array<float, 3> mean{1.3f * u(rng), 1.3f * u(rng), 1.3f * u(rng)};
+                    mean[axis] = side * (2.5f + 0.4f * u(rng));
+                    means.insert(means.end(), mean.begin(), mean.end());
+                    sh0.insert(sh0.end(), {1.5f * u(rng), 1.5f * u(rng), 1.5f * u(rng)});
+                    shN.insert(shN.end(), 9, 0.0f);
+                    scales.insert(scales.end(), {-2.0f + 0.3f * u(rng), -2.0f + 0.3f * u(rng), -2.0f + 0.3f * u(rng)});
+                    rotations.insert(rotations.end(), {1.0f, 0.4f * u(rng), 0.4f * u(rng), 0.4f * u(rng)});
+                    opacities.push_back(1.5f + 0.5f * u(rng));
+                }
+            }
+        }
+        const size_t n = opacities.size();
+        return SplatData(1,
+                         Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
+                         Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::CUDA),
+                         Tensor::from_vector(shN, {n, size_t{3}, size_t{3}}, Device::CUDA),
+                         Tensor::from_vector(scales, {n, size_t{3}}, Device::CUDA),
+                         Tensor::from_vector(rotations, {n, size_t{4}}, Device::CUDA),
+                         Tensor::from_vector(opacities, {n, size_t{1}}, Device::CUDA),
+                         1.0f);
+    }
+
+    Pose identity_pose() {
+        return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    }
+
+    Pose moved_pose(const std::array<float, 6>& offset) {
+        const Pose start = identity_pose();
+        Pose w2c;
+        float centre[3];
+        cp::compose(start.data(), offset.data(), w2c.data(), centre);
+        return w2c;
+    }
+
+    std::shared_ptr<Camera> make_photograph(const Pose& w2c, const std::filesystem::path& image,
+                                            const std::filesystem::path& mask) {
+        const auto base = make_camera(w2c);
+        return std::make_shared<Camera>(base.R(), base.T(), 1, 1, kPanoramaWidth / 2, kPanoramaHeight / 2, Tensor{},
+                                        Tensor{}, CameraModelType::EQUIRECTANGULAR, "photo.png", image, mask,
+                                        kPanoramaWidth, kPanoramaHeight, 1);
+    }
+
+    // Float [C, H, W] at a continuous pixel position (pixel k spans [k, k + 1]), clamped at the border.
+    float sample(const std::vector<float>& image, const int width, const int height, const int channel, float x,
+                 float y) {
+        x = std::clamp(x - 0.5f, 0.0f, width - 1.0f);
+        y = std::clamp(y - 0.5f, 0.0f, height - 1.0f);
+        const int x0 = std::min(static_cast<int>(x), width - 2), y0 = std::min(static_cast<int>(y), height - 2);
+        const float fx = x - x0, fy = y - y0;
+        const auto at = [&](const int px, const int py) { return image[(channel * height + py) * width + px]; };
+        return (1 - fy) * ((1 - fx) * at(x0, y0) + fx * at(x0 + 1, y0)) + fy * ((1 - fx) * at(x0, y0 + 1) + fx * at(x0 + 1, y0 + 1));
+    }
+
+    // The 8-bit equirectangular photograph of `scene` taken at `w2c`: every panorama pixel shows its ray in the
+    // render of the panorama view facing most along it, the inverse of the lookup the views load the photograph
+    // through (core/cuda/undistort/distortion_model.cuh).
+    std::vector<uint8_t> photograph_scene(const Pose& w2c, SplatData& scene, Tensor& background) {
+        const auto photo = make_photograph(w2c, {}, {});
+        const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 100);
+        std::vector<std::vector<float>> renders;
+        for (const auto& view : views)
+            renders.push_back(fast_rasterize(*view, scene, background).image.cpu().contiguous().to_vector());
+        constexpr float pi = std::numbers::pi_v<float>;
+        std::vector<uint8_t> pixels(size_t{kPanoramaWidth} * kPanoramaHeight * 3);
+        for (int j = 0; j < kPanoramaHeight; ++j) {
+            for (int i = 0; i < kPanoramaWidth; ++i) {
+                const float lon = (i + 0.5f - kPanoramaWidth / 2.0f) * (2 * pi / kPanoramaWidth);
+                const float lat = (j + 0.5f - kPanoramaHeight / 2.0f) * (pi / kPanoramaHeight);
+                const float ray[3] = {std::cos(lat) * std::sin(lon), std::sin(lat), std::cos(lat) * std::cos(lon)};
+                size_t best = 0;
+                float facing = -2.0f;
+                for (size_t v = 0; v < views.size(); ++v) {
+                    const float* r = views[v]->undistort_params().view_rotation;
+                    const float along = r[2] * ray[0] + r[5] * ray[1] + r[8] * ray[2];
+                    if (along > facing) {
+                        facing = along;
+                        best = v;
+                    }
+                }
+                const auto& p = views[best]->undistort_params();
+                const float* r = p.view_rotation;
+                const float x = (r[0] * ray[0] + r[3] * ray[1] + r[6] * ray[2]) / facing * p.dst_fx + p.dst_cx;
+                const float y = (r[1] * ray[0] + r[4] * ray[1] + r[7] * ray[2]) / facing * p.dst_fy + p.dst_cy;
+                for (int c = 0; c < 3; ++c) {
+                    const float value = sample(renders[best], p.dst_width, p.dst_height, c, x, y);
+                    pixels[(static_cast<size_t>(j) * kPanoramaWidth + i) * 3 + c] =
+                        static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+                }
+            }
+        }
+        return pixels;
+    }
+
+    // Rotation (degrees) and centre distance between a fitted world-to-camera pose and the true one.
+    std::pair<double, double> pose_error(const std::vector<float>& fitted, const Pose& truth) {
+        double trace = 0.0;
+        std::array<double, 3> a{}, b{};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                trace += double(fitted[4 * i + j]) * truth[4 * i + j];
+                a[j] -= double(fitted[4 * i + j]) * fitted[4 * i + 3];
+                b[j] -= double(truth[4 * i + j]) * truth[4 * i + 3];
+            }
+        }
+        const double turn = std::acos(std::clamp((trace - 1.0) / 2.0, -1.0, 1.0)) * 180.0 / std::numbers::pi;
+        return {turn, std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])};
+    }
+
+    void ensure_image_loader() {
+        if (has_image_loader())
+            return;
+        set_image_loader([](const ImageLoadParams& p) {
+            return lfs::io::CacheLoader::getInstance().load_cached_image(
+                p.path, {.resize_factor = p.resize_factor,
+                         .max_width = p.max_width,
+                         .cuda_stream = p.stream,
+                         .output_uint8 = p.output_uint8,
+                         .skip_blob_cache = p.skip_blob_cache,
+                         .mask_grayscale = p.mask_grayscale});
+        });
+    }
+} // namespace
+
+// The held-out photograph is photographed at the true pose and starts from a moved one. The refit draws it through its
+// six panorama views, brings it back toward the true pose, leaves the scene's cameras alone until apply(), and keeps
+// the photograph out of the image cache. A region the dataset's mask leaves out shows the scene from elsewhere and
+// must not pull the pose.
 TEST(CameraPoseOffsetsTest, HeldOutPhotographIsFittedAndRestoredThroughItsViews) {
     if (!cuda_available())
         GTEST_SKIP() << "CUDA not available";
+    ensure_image_loader();
     lfs::test::licht::TemporaryDirectory temp;
-    const auto path = temp.path / "photo.png";
-    constexpr int w = 96, h = 48;
-    std::vector<uint8_t> pixels(w * h * 3, 128);
-    ASSERT_TRUE(save_png(path, pixels.data(), w, h, 3, 8, 0));
-    const auto base = make_camera(start_pose());
-    const auto photo = std::make_shared<Camera>(base.R(), base.T(), 1, 1, w / 2, h / 2, Tensor{}, Tensor{},
-                                                CameraModelType::EQUIRECTANGULAR, "photo.png", path,
-                                                std::filesystem::path{}, w, h, 1);
-    const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
-    auto groups = group_camera_views(views, std::array{photo});
-    ASSERT_TRUE(groups);
-    const auto initial = photo->world_view_transform().cpu().to_vector();
-    auto scene = make_scene();
+    auto scene = make_surrounding_scene();
     auto background = Tensor::zeros({3}, Device::CUDA);
+    const Pose truth = identity_pose();
+    const auto true_pixels = photograph_scene(truth, scene, background);
+    const auto elsewhere = photograph_scene(moved_pose({0.0f, 0.03f, 0.0f, 0.2f, 0.0f, 0.1f}), scene, background);
+    constexpr std::array<float, 6> moved{0.005f, -0.004f, 0.003f, 0.025f, -0.02f, 0.015f};
+
+    // A third of the panorama around the forward direction shows the scene from elsewhere; the mask leaves it out.
+    const auto contradicted = [](const int i) { return std::abs(i + 0.5f - kPanoramaWidth / 2.0f) < kPanoramaWidth / 6.0f; };
+    auto contradicting_pixels = true_pixels;
+    std::vector<uint8_t> mask(size_t{kPanoramaWidth} * kPanoramaHeight, 255);
+    for (int j = 0; j < kPanoramaHeight; ++j) {
+        for (int i = 0; i < kPanoramaWidth; ++i) {
+            if (!contradicted(i))
+                continue;
+            const size_t pixel = static_cast<size_t>(j) * kPanoramaWidth + i;
+            mask[pixel] = 0;
+            for (int c = 0; c < 3; ++c)
+                contradicting_pixels[pixel * 3 + c] = elsewhere[pixel * 3 + c];
+        }
+    }
+    const auto mask_path = temp.path / "masks" / "photo.png";
+    std::filesystem::create_directories(mask_path.parent_path());
+    ASSERT_TRUE(save_png(mask_path, mask.data(), kPanoramaWidth, kPanoramaHeight, 1, 8, 0));
+
     auto& cache = lfs::io::CacheLoader::getInstance(true);
     cache.reset_cache();
-    cache.update_cache_params(true, static_cast<int>(views.size()), lfs::io::DEFAULT_MIN_FREE_GB,
+    cache.update_cache_params(true, kPanoramaViewCount, lfs::io::DEFAULT_MIN_FREE_GB,
                               lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO, false, 1);
-    RefittedCameraPoses refit(*groups, scene, background, {.lambda_dssim = 0.0f});
-    refit.apply();
-    const auto fitted = photo->world_view_transform().cpu().to_vector();
-    EXPECT_NE(fitted, initial);
-    expect_drawn_poses(views, fitted.data(), photo->cam_position().cpu().to_vector().data(), true);
-    refit.restore();
-    EXPECT_EQ(photo->world_view_transform().cpu().to_vector(), initial);
-    expect_drawn_poses(views, initial.data(), photo->cam_position().cpu().to_vector().data(), true);
-    cache.reset_cache();
+    const auto fit = [&](const std::vector<uint8_t>& pixels, const lfs::core::param::MaskMode mode) {
+        const auto path = temp.path / "photo.png";
+        EXPECT_TRUE(save_png(path, pixels.data(), kPanoramaWidth, kPanoramaHeight, 3, 8, 0));
+        const auto photo = make_photograph(moved_pose(moved), path, mask_path);
+        const auto views = make_camera_views(*photo, plan_camera_views(*photo, 0), 10);
+        auto groups = group_camera_views(views, std::array{photo});
+        EXPECT_TRUE(groups);
+        const auto initial = photo->world_view_transform().cpu().to_vector();
+        std::vector<std::vector<float>> initial_views;
+        for (const auto& view : views)
+            initial_views.push_back(view->world_view_transform().cpu().to_vector());
+        cache.reset_cache();
+        cache.update_cache_params(true, static_cast<int>(views.size()), lfs::io::DEFAULT_MIN_FREE_GB,
+                                  lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO, false, 1);
+
+        RefittedCameraPoses refit(*groups, scene, background, {.mask_mode = mode});
+        EXPECT_EQ(photo->world_view_transform().cpu().to_vector(), initial) << "the refit moved the scene's camera";
+        for (size_t v = 0; v < views.size(); ++v)
+            EXPECT_EQ(views[v]->world_view_transform().cpu().to_vector(), initial_views[v])
+                << "the refit moved view " << v << " before apply()";
+
+        // A cached photograph would come back unchanged after the file changes.
+        const std::vector<uint8_t> black(pixels.size(), 0);
+        EXPECT_TRUE(save_png(path, black.data(), kPanoramaWidth, kPanoramaHeight, 3, 8, 0));
+        const auto reloaded = cache.load_cached_image(path, {.cuda_stream = getCurrentCUDAStream(),
+                                                             .undistort = &views.front()->undistort_params()});
+        EXPECT_EQ(reloaded.to(Device::CUDA).max().item<float>(), 0.0f) << "the held-out photograph entered the image cache";
+        cache.reset_cache();
+
+        refit.apply();
+        const auto fitted = photo->world_view_transform().cpu().to_vector();
+        expect_drawn_poses(views, fitted.data(), photo->cam_position().cpu().to_vector().data(), true);
+        refit.restore();
+        EXPECT_EQ(photo->world_view_transform().cpu().to_vector(), initial);
+        expect_drawn_poses(views, initial.data(), photo->cam_position().cpu().to_vector().data(), true);
+        return std::pair{pose_error(initial, truth), pose_error(fitted, truth)};
+    };
+
+    // The photograph is drawn on the panorama grid the views load it through.
+    {
+        const auto path = temp.path / "photo.png";
+        ASSERT_TRUE(save_png(path, true_pixels.data(), kPanoramaWidth, kPanoramaHeight, 3, 8, 0));
+        const auto photo = make_photograph(truth, path, {});
+        for (const auto& view : make_camera_views(*photo, plan_camera_views(*photo, 0), 10)) {
+            const auto loaded = cache.load_cached_image(path, {.cuda_stream = getCurrentCUDAStream(),
+                                                               .undistort = &view->undistort_params(),
+                                                               .skip_blob_cache = true})
+                                    .to(Device::CUDA);
+            const auto rendered = fast_rasterize(*view, scene, background).image;
+            EXPECT_LT((loaded - rendered).abs().mean().item<float>(), 0.01f) << view->image_name();
+        }
+    }
+
+    using lfs::core::param::MaskMode;
+    const auto [start, clean] = fit(true_pixels, MaskMode::None);
+    std::cout << std::format("start {:.4f} deg {:.5f} units; clean fit {:.4f} deg {:.5f} units\n", start.first,
+                             start.second, clean.first, clean.second);
+    EXPECT_LT(clean.first, 0.5 * start.first) << "the fit does not turn the photograph back";
+    EXPECT_LT(clean.second, 0.5 * start.second) << "the fit does not move the photograph back";
+
+    const auto masked = fit(contradicting_pixels, MaskMode::Ignore).second;
+    const auto unmasked = fit(contradicting_pixels, MaskMode::None).second;
+    std::cout << std::format("masked fit {:.4f} deg {:.5f} units; unmasked fit {:.4f} deg {:.5f} units\n", masked.first,
+                             masked.second, unmasked.first, unmasked.second);
+    EXPECT_LT(masked.first, 0.5 * start.first) << "the masked region pulls the rotation";
+    EXPECT_LT(masked.second, 0.5 * start.second) << "the masked region pulls the position";
+    EXPECT_GT(unmasked.second, 2.0 * masked.second) << "the contradicting region must pull an unmasked fit";
 }
 
 TEST(CameraPoseOffsetsTest, TableAndExportUseTheScenePhotograph) {

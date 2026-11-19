@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
@@ -501,6 +502,39 @@ namespace {
             auto old_json = params.to_json();
             old_json.erase("keep_all_checkpoints");
             EXPECT_FALSE(OptimizationParameters::from_json(old_json).keep_all_checkpoints);
+        }
+    }
+
+    // Catches a run saved before calibration correction existed picking it up on resume, or a parameter file
+    // without the key missing the default.
+    TEST_F(TrainingParametersTest, CalibrationCorrectionStaysOffForRunsSavedWithoutIt) {
+        for (const auto& defaults : {OptimizationParameters::mcmc_defaults(), OptimizationParameters::mrnf_defaults(),
+                                     OptimizationParameters::igs_plus_defaults()}) {
+            SCOPED_TRACE(defaults.strategy);
+            ASSERT_TRUE(defaults.calibration_correction);
+            auto stored = defaults.to_json();
+            EXPECT_TRUE(OptimizationParameters::from_json(stored).calibration_correction);
+            stored["calibration_correction"] = false;
+            EXPECT_FALSE(OptimizationParameters::from_json(stored).calibration_correction);
+            stored.erase("calibration_correction");
+            EXPECT_FALSE(OptimizationParameters::from_json(stored).calibration_correction);
+
+            // The parameters of a .resume checkpoint and of a project's embedded checkpoint.
+            const auto checkpoint = nlohmann::json{{"optimization", stored}}.dump();
+            EXPECT_FALSE(lfs::core::parse_checkpoint_params_json(checkpoint).optimization.calibration_correction);
+            EXPECT_FALSE(lfs::core::parse_checkpoint_params_json(stored.dump()).optimization.calibration_correction);
+
+            // A parameter file is no saved run.
+            const auto path = std::filesystem::temp_directory_path() /
+                              ("lfs_calibration_correction_" + defaults.strategy + ".json");
+            std::ofstream(path) << nlohmann::json{{"optimization", stored}}.dump();
+            const auto config = lfs::core::param::read_optim_params_from_json(path);
+            ASSERT_TRUE(config) << config.error();
+            EXPECT_TRUE(config->calibration_correction);
+            const auto imported = lfs::core::param::read_training_parameters_from_json(path);
+            ASSERT_TRUE(imported) << imported.error().detail();
+            EXPECT_TRUE(imported->optimization.calibration_correction);
+            std::filesystem::remove(path);
         }
     }
 

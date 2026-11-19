@@ -4,12 +4,18 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -227,6 +233,84 @@ namespace {
             EXPECT_EQ(sw[base + 2u], 0.0f) << "tail .z p=" << p;
             EXPECT_EQ(sw[base + 3u], 0.0f) << "tail .w p=" << p;
         }
+    }
+
+    // A model built from canonical SH that is still uploading on a non-blocking
+    // stream must swizzle the uploaded values. The upload is held behind a host
+    // gate until the constructor has returned, so a swizzle that does not wait
+    // for the upload's stream reads the buffer before the copy lands.
+    TEST(ShSwizzleLayout, ConstructionWaitsForTheCanonicalUploadStream) {
+        using namespace lfs::core;
+        constexpr size_t N = 4099;
+        constexpr size_t K = 15;
+        std::vector<float> coefficients(N * K * 3);
+        for (size_t i = 0; i < coefficients.size(); ++i)
+            coefficients[i] = 0.25f + static_cast<float>(i % 4093) / 64.0f;
+        const auto make_model = [&](const std::vector<float>& values) {
+            return std::make_unique<SplatData>(
+                3, Tensor::zeros({N, 3}, Device::CUDA), Tensor::zeros({N, 1, 3}, Device::CUDA),
+                Tensor::from_vector(values, {N, K, 3}, Device::CUDA),
+                Tensor::zeros({N, 3}, Device::CUDA), Tensor::ones({N, 4}, Device::CUDA),
+                Tensor::zeros({N, 1}, Device::CUDA), 1.0f);
+        };
+
+        cudaStream_t producer{};
+        cudaStream_t gate_holder{};
+        cudaEvent_t gate{};
+        ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&gate_holder, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaEventCreateWithFlags(&gate, cudaEventDisableTiming), cudaSuccess);
+        std::atomic<bool> released{false};
+        std::atomic<bool> constructed{false};
+        struct OpenGate {
+            std::atomic<bool>& flag;
+            ~OpenGate() { flag.store(true, std::memory_order_release); }
+        } open_on_exit{released};
+        std::unique_ptr<SplatData> model;
+        {
+            CUDAStreamGuard guard(producer);
+            // Load the kernels and fill the device and pinned caches first, so
+            // the gated construction below has nothing that waits on the device.
+            // Other values, so a reused buffer cannot already hold the expected ones.
+            make_model(std::vector<float>(coefficients.size(), -1.0f)).reset();
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+            ASSERT_EQ(cudaLaunchHostFunc(
+                          gate_holder,
+                          [](void* flag) {
+                              while (!static_cast<std::atomic<bool>*>(flag)->load(std::memory_order_acquire)) {
+                              }
+                          },
+                          &released),
+                      cudaSuccess);
+            ASSERT_EQ(cudaEventRecord(gate, gate_holder), cudaSuccess);
+            ASSERT_EQ(cudaStreamWaitEvent(producer, gate, 0), cudaSuccess);
+            // Opens the gate even if construction blocks on the gated stream.
+            std::thread opener([&] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                while (!constructed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
+                released.store(true, std::memory_order_release);
+            });
+            model = make_model(coefficients);
+            const bool gate_held = !released.load(std::memory_order_acquire);
+            constructed.store(true, std::memory_order_release);
+            opener.join();
+            ASSERT_TRUE(gate_held) << "construction waited for the gated stream, so the test cannot observe the order";
+        }
+        const auto canonical = model->shN_canonical_cpu();
+        ASSERT_EQ(canonical.numel(), coefficients.size());
+        size_t mismatches = 0;
+        for (size_t i = 0; i < coefficients.size(); ++i)
+            mismatches += canonical.ptr<float>()[i] != coefficients[i];
+        EXPECT_EQ(mismatches, 0u);
+
+        model.reset();
+        ASSERT_EQ(cudaStreamSynchronize(producer), cudaSuccess);
+        CudaMemoryPool::instance().release_stream(producer);
+        EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+        EXPECT_EQ(cudaStreamDestroy(gate_holder), cudaSuccess);
+        EXPECT_EQ(cudaEventDestroy(gate), cudaSuccess);
     }
 
 } // namespace

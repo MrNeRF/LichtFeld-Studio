@@ -233,6 +233,7 @@ namespace lfs::vis::gui {
         void collectHierarchyIds(core::NodeId node_id,
                                  std::unordered_set<core::NodeId>& ids) const;
         void handlePrimaryClick(core::NodeId node_id);
+        [[nodiscard]] bool selectionContainsOnlyCamerasInGroup(core::NodeId node_id) const;
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
         bool selectKeyboardRow(size_t row_index, bool extend, bool toggle);

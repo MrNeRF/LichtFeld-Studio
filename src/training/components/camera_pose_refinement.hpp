@@ -5,6 +5,7 @@
 
 #include "core/camera_views.hpp"
 #include "core/error.hpp"
+#include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -46,6 +47,8 @@ namespace lfs::training {
             std::vector<float> steps;   // [N]
         };
         [[nodiscard]] HostState download() const;
+        // R and T to the poses `state` (a download() of offsets on the same groups) holds, as commit() does.
+        void commit(const HostState& state);
         // Start pose of `row`, row-major 4x4 world-to-camera.
         [[nodiscard]] const float* start_pose(int row) const { return start_host_.data() + 16 * row; }
 
@@ -103,7 +106,9 @@ namespace lfs::training {
     };
 
     // Fits each held-out photograph to the frozen model, cycling through its views for a fixed number of steps, so a model trained
-    // with --pose-opt is scored from where its views fit. apply() and restore() move R and T as commit() does.
+    // with --pose-opt is scored from where its views fit. The fit draws private copies of the cameras and compares them
+    // with the pixels training would use (the dataset's masks applied); the cameras themselves move only in apply() and
+    // restore(), which move R and T as commit() does.
     class RefittedCameraPoses {
     public:
         struct Settings {
@@ -111,19 +116,29 @@ namespace lfs::training {
             int max_width = 0;
             float lambda_dssim = 0.2f;
             bool mip_filter = false;
+            // The dataset's masks, as training applies them.
+            lfs::core::param::MaskMode mask_mode = lfs::core::param::MaskMode::None;
+            bool invert_masks = false;
+            float mask_threshold = 0.5f;
+            bool use_alpha_as_mask = false;
         };
 
         RefittedCameraPoses(std::vector<core::CameraViewGroup> groups,
                             lfs::core::SplatData& model,
                             lfs::core::Tensor& background,
                             const Settings& settings);
-        void apply() { offsets_.commit(); }
+        void apply() { offsets_.commit(fitted_); }
         void restore() { offsets_.restore_start_poses(); }
 
     private:
-        void refit(lfs::core::SplatData& model, lfs::core::Tensor& background, const Settings& settings);
+        // The fitted offset of one photograph.
+        [[nodiscard]] static CameraPoseOffsets::HostState refit(const core::CameraViewGroup& group,
+                                                                lfs::core::SplatData& model,
+                                                                lfs::core::Tensor& background,
+                                                                const Settings& settings);
 
         CameraPoseOffsets offsets_;
+        CameraPoseOffsets::HostState fitted_;
     };
 
     // The scene's cameras as COLMAP sparse files in output_sparse_path, written over the dataset's model.

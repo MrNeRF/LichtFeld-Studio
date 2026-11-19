@@ -1719,9 +1719,11 @@ namespace lfs::vis::gui {
         setCachedClass(slot.selection_checkbox, "mixed", checkbox_mixed);
         setCachedInnerRml(slot.selection_checkbox, checkbox_mixed ? "\u2212" : "");
 
+        const bool keyframe = row.type == core::NodeType::KEYFRAME;
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
-        setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
-        setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
+        setCachedProperty(slot.delete_icon, "display", row.can_delete || keyframe ? "inline" : "none");
+        setCachedClass(slot.delete_icon, "trash-disabled",
+                       keyframe ? snapshot.locked : row.can_delete && !row.delete_enabled);
 
         setCachedAttribute(slot.training_toggle_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.training_toggle_icon, "display", row.can_toggle_training ? "inline" : "none");
@@ -2084,6 +2086,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
+            if (node->type == core::NodeType::KEYFRAME) {
+                if (node->keyframe && !static_cast<bool>(node->locked))
+                    cmd::SequencerDeleteKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
+                return;
+            }
             const auto snapshot_it = node_snapshots_.find(node_id);
             if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
                 return;
@@ -2282,6 +2289,18 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
+    bool SceneGraphElement::selectionContainsOnlyCamerasInGroup(const core::NodeId node_id) const {
+        const auto group = node_snapshots_.find(node_id);
+        if (group == node_snapshots_.end() || group->second.type != core::NodeType::CAMERA_GROUP || selected_ids_.empty())
+            return false;
+
+        return std::ranges::all_of(selected_ids_, [this, node_id](const core::NodeId id) {
+            const auto selected = node_snapshots_.find(id);
+            return selected != node_snapshots_.end() && selected->second.type == core::NodeType::CAMERA &&
+                   selected->second.parent_id == node_id;
+        });
+    }
+
     void SceneGraphElement::handleSecondaryClick(const core::NodeId node_id,
                                                  const float mouse_x,
                                                  const float mouse_y) {
@@ -2290,7 +2309,7 @@ namespace lfs::vis::gui {
             return;
 
         focusTree();
-        if (!selected_ids_.contains(node_id)) {
+        if (!selected_ids_.contains(node_id) && !selectionContainsOnlyCamerasInGroup(node_id)) {
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
@@ -3135,7 +3154,8 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        if (selected_ids_.size() > 1) {
+        const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
+        if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
             const auto groupable_selection = selectedDraggableNodeIds();
@@ -3229,12 +3249,10 @@ namespace lfs::vis::gui {
                             prefixedAction(std::format("set_easing:{}:{}", node->keyframe->keyframe_index, i)),
                             false, true, node->keyframe->easing == i));
                     }
-                    if (node->keyframe->keyframe_index > 0) {
-                        items.push_back(makeAction(
-                            tr(string_keys::Scene::DELETE_ITEM),
-                            prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
-                            true));
-                    }
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::DELETE_ITEM),
+                        prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
+                        true));
                 }
                 break;
             case core::NodeType::KEYFRAME_GROUP:
@@ -3244,12 +3262,12 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::CAMERA_GROUP:
                 if (has_camera_target(*node)) {
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::ENABLE_ALL_TRAINING),
-                        prefixedAction(std::format("enable_all_train:{}", node_id))));
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::DISABLE_ALL_TRAINING),
-                        prefixedAction(std::format("disable_all_train:{}", node_id))));
+                    if (selected_cameras_in_group) {
+                        items.push_back(makeAction(tr(string_keys::Scene::ENABLE_ALL_TRAINING),
+                                                   prefixedAction("enable_all_selected_train")));
+                        items.push_back(makeAction(tr(string_keys::Scene::DISABLE_ALL_TRAINING),
+                                                   prefixedAction("disable_all_selected_train")));
+                    }
                     items.push_back(makeAction(tr("scene.invert_camera_selection"),
                                                prefixedAction(std::format("invert_group_train:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.enable_all_cameras"),
@@ -3426,7 +3444,10 @@ namespace lfs::vis::gui {
 
         const std::string& kind = parts[0];
         if (kind == "select_hierarchy") {
-            selectHierarchyFromSelection();
+            if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
+                selectHierarchy(context_menu_node_id_);
+            else
+                selectHierarchyFromSelection();
             return;
         }
         if (kind == "group_selected") {
@@ -3488,10 +3509,6 @@ namespace lfs::vis::gui {
             cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
         } else if (kind == "add_kf") {
             cmd::SequencerAddKeyframe{}.emit();
-        } else if ((kind == "enable_all_train" || kind == "disable_all_train") && parts.size() >= 2) {
-            core::NodeId group_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], group_id))
-                toggleChildrenTraining(group_id, kind == "enable_all_train");
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
             core::NodeId group_id = core::NULL_NODE;
             if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {

@@ -635,7 +635,9 @@ namespace lfs::core {
         }
 
         int OptimizationParameters::calibration_correction_start_iteration() const {
-            return static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * steps_scaler));
+            // A scaler of zero or below means no step scaling; the field never starts on the untrained scene.
+            const float scaler = steps_scaler > 0.f ? steps_scaler : 1.f;
+            return std::max(1, static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * scaler)));
         }
 
         void OptimizationParameters::apply_step_scaling() {
@@ -1426,21 +1428,33 @@ namespace lfs::core {
             return mrnf_defaults();
         }
 
-        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
-            OptimizationParameters params;
-            if (json.contains("strategy")) {
-                const auto strategy = json.at("strategy").get<std::string>();
-                if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
-                    params = defaults_for_strategy(canonical);
-                } else {
-                    LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+        namespace {
+            // The strategy's defaults with every stored value applied.
+            OptimizationParameters optimization_from_json(const nlohmann::json& json) {
+                OptimizationParameters params;
+                if (json.contains("strategy")) {
+                    const auto strategy = json.at("strategy").get<std::string>();
+                    if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
+                        params = OptimizationParameters::defaults_for_strategy(canonical);
+                    } else {
+                        LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+                    }
                 }
+                apply_optimization_json_overlay(params, json, false);
+                params.eval_mask = normalize_eval_mask(params.eval_mask);
+                // Legacy GUI saves recorded the image factor in steps_scaler.
+                if (!stored_image_count_scaler(json, params.steps_scaler))
+                    params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+                return params;
             }
-            apply_optimization_json_overlay(params, json, false);
-            params.eval_mask = normalize_eval_mask(params.eval_mask);
-            // Legacy GUI saves recorded the image factor in steps_scaler.
-            if (!stored_image_count_scaler(json, params.steps_scaler))
-                params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+        } // namespace
+
+        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
+            auto params = optimization_from_json(json);
+            // Parameters stored without this key were saved by a build that had no calibration correction, so the run
+            // they belong to trained without it and keeps it off when resumed.
+            if (!json.contains("calibration_correction"))
+                params.calibration_correction = false;
             return params;
         }
 
@@ -1508,7 +1522,8 @@ namespace lfs::core {
                         return std::unexpected(*error);
                 }
 
-                auto params = OptimizationParameters::from_json(opt_json);
+                // A parameter file is no saved run: a key it leaves out takes the strategy's default.
+                auto params = optimization_from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
                     return std::unexpected("Invalid optimization parameters: " + error);
                 if (opt_json.is_object() && !opt_json.empty())

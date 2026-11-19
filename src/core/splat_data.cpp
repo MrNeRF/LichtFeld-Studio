@@ -387,23 +387,33 @@ namespace {
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
+        // The reorder runs on the stream of the buffer it writes. The source may
+        // still be filling on its own home stream (uploads are asynchronous there),
+        // so that stream first waits for the source, which also keeps the source's
+        // storage from being reused before the kernel has read it.
         const size_t n_floats = sh_swizzled_float_count(n_primitives, layout_coeffs_rest);
         if (dst_swizzled.dtype() == DataType::Float32) {
+            const cudaStream_t stream = dst_swizzled.stream();
+            prepare_inputs_for_stream({&src_cuda}, stream);
             reorder_sh_to_swizzled(src_cuda.ptr<float>(),
                                    dst_swizzled.ptr<float>(),
                                    n_primitives,
                                    src_coeffs_rest,
-                                   layout_coeffs_rest);
+                                   layout_coeffs_rest,
+                                   stream);
             return;
         }
         // IEEE f16 float4-swizzle destination.
         Tensor staging = Tensor::zeros({n_floats}, Device::CUDA, DataType::Float32);
+        prepare_inputs_for_stream({&src_cuda}, staging.stream());
         reorder_sh_to_swizzled(src_cuda.ptr<float>(),
                                staging.ptr<float>(),
                                n_primitives,
                                src_coeffs_rest,
-                               layout_coeffs_rest);
+                               layout_coeffs_rest,
+                               staging.stream());
         Tensor half = staging.to(DataType::Float16);
+        half.sync_to_stream(dst_swizzled.stream());
         const size_t nbytes = std::min(static_cast<size_t>(dst_swizzled.numel()), n_floats) *
                               sizeof(std::uint16_t);
         cudaMemcpyAsync(dst_swizzled.data_ptr(), half.data_ptr(), nbytes,

@@ -4,6 +4,7 @@
 #include "lens_views.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/distortion_model.hpp"
 #include "training/rasterization/gsplat/Cameras.cuh"
 
 #include <cmath>
@@ -236,12 +237,10 @@ namespace lfs::preprocessing {
     } // namespace
 
     float lens_max_angle(const LensCamera& camera) {
-        float limit = 0.0f;
-        with_lens_model(camera, [&](const auto& model) {
-            if constexpr (requires { model.max_angle; })
-                limit = model.max_angle;
-        });
-        return limit;
+        const auto model = static_cast<lfs::core::CameraModelType>(camera.projection.model);
+        if (model != lfs::core::CameraModelType::FISHEYE && model != lfs::core::CameraModelType::THIN_PRISM_FISHEYE)
+            return 0.0f;
+        return static_cast<float>(lfs::core::fisheye_radial_limit(camera.projection.radial));
     }
 
     void lens_rays(const LensCamera& camera, float* rays, cudaStream_t stream) {
