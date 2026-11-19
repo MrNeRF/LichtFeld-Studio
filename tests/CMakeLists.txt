@@ -1189,6 +1189,7 @@ if(NOT LFS_HAS_CUDA)
         test_camera_priors_portable.cpp
         test_undistort_portable.cpp
         test_pipelined_loader_backends.cpp
+        test_masked_image_fill_host.cpp
         test_viewer_no_cuda.cpp
         test_lod_page_cache.cpp
         test_colmap_text_images.cpp
@@ -1692,6 +1693,7 @@ set(TEST_FILES
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
     test_pipelined_loader_backends.cpp
+    test_masked_image_fill_host.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
     test_image_sharpen.cpp
