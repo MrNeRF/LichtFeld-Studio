@@ -4215,15 +4215,9 @@ namespace lfs::vis {
         } else if (render_point_cloud &&
                    (!has_visible_gaussian_model || hasRenderableGaussians(model)) &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
-            // Brush edits mutate sh0 in place — same tensor pointer but new
-            // contents. Invalidate the derived-colors cache so the next frame
-            // re-derives + re-uploads.
-            if ((frame_dirty & DirtyFlag::SPLATS) != 0) {
-                point_cloud_colors_cache_key_ = nullptr;
-                point_cloud_colors_cache_size_ = 0;
-                point_cloud_colors_cache_ = lfs::core::Tensor{};
-                ++point_cloud_data_revision_;
-            }
+            // Edits write splat data in place behind the same tensor pointers; each one
+            // advances point_cloud_data_revision_ (markDirty with SPLATS).
+            const std::uint64_t data_revision = point_cloud_data_revision_.load(std::memory_order_relaxed);
             std::vector<glm::mat4> point_cloud_transforms_storage;
             const std::vector<glm::mat4>* transforms_for_request = nullptr;
             if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
@@ -4234,9 +4228,6 @@ namespace lfs::vis {
             }
             auto pc_request = buildPointCloudRenderRequest(
                 frame_ctx, render_size, *transforms_for_request);
-            if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
-                ++point_cloud_preview_selection_revision_;
-            }
 
             // Vulkan-native path: skip CUDA staging, drive an external VkImage
             // straight through the same plumbing the VkSplat backend uses.
@@ -4260,6 +4251,7 @@ namespace lfs::vis {
                         sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
                     if (sh0_key != point_cloud_colors_cache_key_ ||
                         sh0_count != point_cloud_colors_cache_size_ ||
+                        data_revision != point_cloud_colors_cache_revision_ ||
                         !point_cloud_colors_cache_.is_valid()) {
                         try {
                             point_cloud_colors_cache_ =
@@ -4270,6 +4262,7 @@ namespace lfs::vis {
                         }
                         point_cloud_colors_cache_key_ = sh0_key;
                         point_cloud_colors_cache_size_ = sh0_count;
+                        point_cloud_colors_cache_revision_ = data_revision;
                     }
                     splat_positions = model->get_means();
                     positions_ptr = &splat_positions;
@@ -4284,8 +4277,8 @@ namespace lfs::vis {
                     fillPointCloudVulkanRequest(vk_req, pc_request, frame_settings);
                 vk_req.positions = positions_ptr;
                 vk_req.colors = colors_ptr;
-                vk_req.positions_revision = point_cloud_data_revision_;
-                vk_req.colors_revision = point_cloud_data_revision_;
+                vk_req.positions_revision = data_revision;
+                vk_req.colors_revision = data_revision;
                 if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
                     model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
@@ -4294,8 +4287,8 @@ namespace lfs::vis {
                     // silent cache reuse after densify/compact.
                     vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
-                vk_req.selection_revision = point_cloud_preview_selection_revision_;
-                vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
+                vk_req.selection_revision = point_cloud_preview_selection_revision_.load(std::memory_order_relaxed);
+                vk_req.preview_selection_revision = vk_req.selection_revision;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(

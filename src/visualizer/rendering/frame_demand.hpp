@@ -32,7 +32,7 @@ namespace lfs::vis {
         CameraMotion,
         CameraSettle,
         SceneChange,
-        SettingsChange,
+        SettingsChange, // Declares that no splat data and no selection was written.
         Selection,
         Overlay,
         ViewportResize,
