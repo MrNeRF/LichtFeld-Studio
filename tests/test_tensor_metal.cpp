@@ -4,6 +4,8 @@
 // Metal backend conformance: every operation runs on Metal and on the CPU
 // reference or the Vulkan backend, and they must agree.
 
+#include "core/camera.hpp"
+#include "core/camera_views.hpp"
 #include "core/nn/ops.hpp"
 #include "core/rad_dequant_math.hpp"
 #include "core/sh_layout.hpp"
@@ -30,12 +32,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <numbers>
 #include <numeric>
 #include <random>
 #include <set>
@@ -1865,6 +1871,99 @@ namespace {
                             1.0e-6f, 1.0e-6f);
         expect_same_on_both([&] { return internal::resize_image_prior_tensor(normals.to(Device::GPU), 23, 97, true); },
                             1.0e-6f, 1.0e-6f);
+    }
+
+    struct ViewSource {
+        std::shared_ptr<Camera> camera;
+        float lens_limit;
+    };
+
+    // Panoramas of even and odd width, whose faces sample across the seam and both poles, and
+    // fisheye lenses whose side faces reach the image edge.
+    std::vector<ViewSource> view_sources() {
+        const auto camera = [](const CameraModelType model, const float focal, const int width, const int height,
+                               Tensor radial, Tensor tangential) {
+            return std::make_shared<Camera>(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), focal, focal,
+                                            width / 2.0f, height / 2.0f, std::move(radial), std::move(tangential), model,
+                                            "view.png", std::filesystem::path{}, std::filesystem::path{}, width, height, 0);
+        };
+        const float reach = 95.0f * std::numbers::pi_v<float> / 180.0f;
+        const auto coefficients = [](std::vector<float> values) {
+            const size_t count = values.size();
+            return Tensor::from_vector(std::move(values), {count}, Device::CPU);
+        };
+        return {{camera(CameraModelType::EQUIRECTANGULAR, 0.0f, 128, 64, {}, {}), 0.0f},
+                {camera(CameraModelType::EQUIRECTANGULAR, 0.0f, 127, 64, {}, {}), 0.0f},
+                {camera(CameraModelType::FISHEYE, 48.0f / reach, 96, 96, coefficients({0.02f, -0.003f, 0.0002f, 0.00001f}), {}),
+                 std::sqrt(2.0f) * reach},
+                {camera(CameraModelType::THIN_PRISM_FISHEYE, 48.0f / reach, 96, 96,
+                        coefficients({0.02f, -0.003f, 0.0002f, 0.00001f}), coefficients({0.008f, -0.005f, 0.003f, -0.006f})),
+                 std::sqrt(2.0f) * reach}};
+    }
+
+    // Equal NaN placement and finite values within `tolerance`.
+    void expect_view_warp(const Tensor& actual, const Tensor& expected, const float tolerance, const char* what) {
+        ASSERT_EQ(actual.shape(), expected.shape());
+        const auto a = actual.cpu().to_vector(), b = expected.cpu().to_vector();
+        float worst = 0.0f;
+        size_t nan_mismatches = 0;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::isnan(a[i]) || std::isnan(b[i]))
+                nan_mismatches += std::isnan(a[i]) != std::isnan(b[i]);
+            else
+                worst = std::max(worst, std::abs(a[i] - b[i]));
+        }
+        EXPECT_EQ(nan_mismatches, 0u) << what;
+        EXPECT_LE(worst, tolerance) << what;
+    }
+
+    // Each source type and filter of the warp maps camera views like the host reference: Float32 and
+    // UInt8 images through the Lanczos filter, and masks, depths and normals through the area filter.
+    TEST_F(TensorMetal, CameraViewWarpsMatchTheHostReference) {
+        const GpuBackendScope scope(GpuBackend::Metal);
+        unsigned seed = 900;
+        for (const auto& source : view_sources()) {
+            const auto views = plan_camera_views(*source.camera, source.lens_limit);
+            ASSERT_FALSE(views.empty());
+            const size_t width = views.front().params.src_width, height = views.front().params.src_height;
+            const size_t plane = width * height;
+            const Tensor image = random_tensor(3 * plane, 0.0f, 1.0f, seed++).reshape(TensorShape{3, height, width});
+            std::vector<uint8_t> byte_values(3 * plane);
+            std::mt19937 generator(seed++);
+            for (auto& value : byte_values)
+                value = uint8_t(generator() % 256);
+            const Tensor bytes = Tensor::from_blob(byte_values.data(), {3, height, width}, Device::CPU, DataType::UInt8).clone();
+            // Invalid taps: zero, negative or NaN masks and depths, NaN normals. The area filter renormalizes
+            // over valid taps, so two invalid neighbours would make it jump across their shared edge, and a
+            // last-bit difference in a sample position could land on either side. Invalid pixels therefore
+            // stay isolated, also across the seam, and off the rows that the poles reflect into one another.
+            auto mask_values = random_tensor(plane, 0.05f, 1.0f, seed++).to_vector();
+            auto depth_values = random_tensor(plane, 0.5f, 3.0f, seed++).to_vector();
+            auto normal_values = random_tensor(3 * plane, -0.5f, 0.5f, seed++).to_vector();
+            const std::array invalid{0.0f, -0.25f, std::numeric_limits<float>::quiet_NaN()};
+            for (size_t y = 0; y < height; ++y)
+                for (size_t x = 0; x < width; ++x) {
+                    const size_t i = y * width + x;
+                    // Normals around +z keep their averages long, so normalizing them does not amplify rounding.
+                    normal_values[2 * plane + i] += 1.0f;
+                    if (x % 5 != 2 || y % 3 != 1)
+                        continue;
+                    mask_values[i] = depth_values[i] = invalid[(x / 5 + y / 3) % invalid.size()];
+                    normal_values[i] = std::numeric_limits<float>::quiet_NaN();
+                }
+            const Tensor mask = Tensor::from_vector(mask_values, {height, width}, Device::CPU);
+            const Tensor depth = Tensor::from_vector(depth_values, {height, width}, Device::CPU);
+            const Tensor normals = Tensor::from_vector(normal_values, {3, height, width}, Device::CPU);
+            for (const auto& view : views) {
+                const auto& p = view.params;
+                SCOPED_TRACE(::testing::Message() << "model " << int(p.model_type) << " width " << p.src_width << " view " << view.suffix);
+                expect_view_warp(undistort_image(to_metal(image), p, nullptr), undistort_image(image, p, nullptr), 2.0e-5f, "float");
+                expect_view_warp(undistort_image(to_metal(bytes), p, nullptr), undistort_image(bytes, p, nullptr), 2.0e-5f, "bytes");
+                expect_view_warp(undistort_mask_area(to_metal(mask), p, nullptr), undistort_mask_area(mask, p, nullptr), 2.0e-5f, "mask");
+                expect_view_warp(undistort_depth_area(to_metal(depth), p, nullptr), undistort_depth_area(depth, p, nullptr), 2.0e-5f, "depth");
+                expect_view_warp(undistort_normal_area(to_metal(normals), p, nullptr), undistort_normal_area(normals, p, nullptr), 2.0e-5f, "normal");
+            }
+        }
     }
 
     TEST_F(TensorMetal, ShCodecMatchesVulkan) {
