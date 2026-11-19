@@ -105,6 +105,10 @@ namespace lfs::training {
         /// Check if a frame UID is registered
         bool is_known_frame(int uid) const;
 
+        /// Gives frames new uids (old -> new; others keep theirs). False, and nothing changes, if two frames would
+        /// share a uid.
+        [[nodiscard]] bool rename_frames(const std::unordered_map<int, int>& renamed);
+
         /// Check if a camera ID is registered
         bool is_known_camera(int camera_id) const;
 

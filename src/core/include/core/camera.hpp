@@ -262,6 +262,8 @@ namespace lfs::core {
         }
         int uid() const noexcept { return _uid; }
         int camera_id() const noexcept { return _camera_id; }
+        // The scene camera a pinhole view is cut from; any other camera is its own photograph.
+        int photograph_uid() const noexcept { return _photograph_uid.value_or(_uid); }
 
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
@@ -299,6 +301,7 @@ namespace lfs::core {
         friend class Scene;
         int _uid = -1;
         int _camera_id = 0;
+        std::optional<int> _photograph_uid;
         float _focal_x = 0.f;
         float _focal_y = 0.f;
         float _center_x = 0.f;

@@ -104,10 +104,11 @@ namespace lfs::core {
 
     lfs::Result<std::vector<CameraViewGroup>> group_camera_views(
         std::span<const std::shared_ptr<Camera>> drawn, std::span<const std::shared_ptr<Camera>> scene) {
-        std::unordered_map<std::filesystem::path, std::shared_ptr<Camera>> sources;
+        // Keyed by uid, not image path: scene cameras may share a path.
+        std::unordered_map<int, std::shared_ptr<Camera>> sources;
         for (const auto& camera : scene)
-            if (camera)
-                sources.emplace(camera->image_path(), camera);
+            if (camera && !sources.emplace(camera->uid(), camera).second)
+                sources[camera->uid()] = nullptr;
 
         std::vector<CameraViewGroup> groups;
         std::unordered_map<const Camera*, size_t> rows;
@@ -116,11 +117,16 @@ namespace lfs::core {
                 continue;
             auto owner = camera;
             if (camera->is_undistort_prepared() && is_view(camera->undistort_params())) {
-                const auto found = sources.find(camera->image_path());
+                const auto found = sources.find(camera->photograph_uid());
                 if (found == sources.end())
                     return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
                                             .domain = lfs::ErrorDomain::Training,
                                             .user_message = "A pinhole view has no photograph in the scene",
+                                            .detection = LFS_SOURCE_SITE_CURRENT()});
+                if (!found->second)
+                    return lfs::make_error({.code = lfs::ErrorCode::FailedPrecondition,
+                                            .domain = lfs::ErrorDomain::Training,
+                                            .user_message = "Several scene cameras share the uid of a pinhole view's photograph",
                                             .detection = LFS_SOURCE_SITE_CURRENT()});
                 owner = found->second;
             }

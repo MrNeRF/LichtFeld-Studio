@@ -238,6 +238,36 @@ namespace {
         }
     }
 
+    // Fails if the planner caps the lens at the image radius over the focal length, which is the reach of an
+    // equidistant lens only: a lens that compresses toward its rim reaches further than that.
+    TEST(FisheyeViews, CompressingLensReachingTheHorizonGetsFiveViews) {
+        // r = f sin(theta) to the ninth order: the image circle touches the border at 90 degrees.
+        const OpenCvFisheyeCamera k{{128, 128}, {128, 128}, {256, 256}, {-1.f / 6, 1.f / 120, -1.f / 5040, 1.f / 362880}};
+        const auto plan = plan_with_native_limit(*camera(k));
+        ASSERT_EQ(plan.size(), 5u);
+        for (const auto& face : plan) {
+            const auto& p = face.params;
+            for (int y = 0; y < p.dst_height; ++y)
+                for (int x = 0; x < p.dst_width; ++x) {
+                    const auto mapped = detail::source_position(x + .5f, y + .5f, p);
+                    ASSERT_GE(mapped.x, -.5f);
+                    ASSERT_LT(mapped.x, p.src_width - .5f);
+                    ASSERT_GE(mapped.y, -.5f);
+                    ASSERT_LT(mapped.y, p.src_height - .5f);
+                }
+        }
+    }
+
+    // Fails if the turning point of the lens is searched for from one Newton seed near 90 degrees: with k4 set, it
+    // lands on a later turning point and the planner samples the fold of the lens between the two.
+    TEST(FisheyeViews, LensLimitIsTheFirstTurningPoint) {
+        // The radial slope 1 + 3 k1 t^2 + 5 k2 t^4 + 7 k3 t^6 + 9 k4 t^8 vanishes at 70 and at 89 degrees.
+        const OpenCvFisheyeCamera k{{100, 100}, {128, 128}, {256, 256}, {-.19480130f, -.040408247f, .010150730f, .0019281994f}};
+        const auto source = camera(k);
+        EXPECT_NEAR(lfs::preprocessing::lens_max_angle(lfs::preprocessing::make_lens_camera(*source)), 70 * degree, 1e-4);
+        EXPECT_TRUE(plan_with_native_limit(*source).empty());
+    }
+
     TEST(FisheyeViews, ThresholdFollowsTheMostClippedAzimuth) {
         auto k = prism;
         std::vector<float> rays;

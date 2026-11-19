@@ -173,4 +173,33 @@ namespace lfs::core::detail {
 
 } // namespace lfs::core::detail
 
+namespace lfs::core {
+
+    // The angle off the axis at which the radial polynomial of a fisheye, theta (1 + k1 theta^2 + k2 theta^4 +
+    // k3 theta^6 + k4 theta^8), stops increasing, or pi if it increases all the way: beyond it the lens folds rays
+    // back onto radii it already holds. The slope is scanned from the axis for its first sign change, so a later
+    // turning point is never taken for it, and the crossing is refined by bisection. k holds k1..k4.
+    inline double fisheye_radial_limit(const float* k) {
+        constexpr double pi = 3.14159265358979323846;
+        const auto slope = [k](const double theta) {
+            const double s = theta * theta;
+            return 1.0 + s * (3.0 * k[0] + s * (5.0 * k[1] + s * (7.0 * k[2] + s * 9.0 * k[3])));
+        };
+        constexpr int steps = 4096;
+        for (int i = 1; i <= steps; ++i) {
+            double hi = pi * i / steps;
+            if (slope(hi) > 0.0)
+                continue;
+            double lo = pi * (i - 1) / steps;
+            for (int j = 0; j < 64; ++j) {
+                const double mid = 0.5 * (lo + hi);
+                (slope(mid) > 0.0 ? lo : hi) = mid;
+            }
+            return lo;
+        }
+        return pi;
+    }
+
+} // namespace lfs::core
+
 #undef LFS_DISTORTION_HD

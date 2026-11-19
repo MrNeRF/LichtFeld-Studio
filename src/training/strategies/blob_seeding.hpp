@@ -7,6 +7,8 @@
 #include "kernels/blob_seeding.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <span>
 #include <stop_token>
 #include <unordered_set>
 #include <vector>
@@ -23,6 +25,12 @@ namespace lfs::training {
         std::vector<float> log_scales; // [n], isotropic
         [[nodiscard]] size_t size() const { return log_scales.size(); }
     };
+
+    // Up to `count` neighbours of every view for the depth sweep ([views, count], -1 padded): the other views that look
+    // within 90 degrees of it, sit far enough away for a pixel of parallax at its nearest swept depth, and share the
+    // most reference points (`visible` holds `words` bits per view).
+    [[nodiscard]] std::vector<int> select_sweep_neighbors(std::span<const kernels::blob_seeding::SweepView> views,
+                                                          std::span<const uint64_t> visible, size_t words, int count);
 
     // Small bright or dark blobs (lamps, sockets, distant lights) often have no SfM point and
     // growth only splits the surface behind them, so they never get a Gaussian of their own.
