@@ -59,6 +59,13 @@ namespace lfs::io::cuda {
         size_t channels,
         cudaStream_t stream = nullptr);
 
+    // uint8 [0, 255] -> uint16 [0, 65535] as a 16-bit decode widens 8-bit samples (v * 257), any layout
+    void launch_uint8_to_uint16(
+        const uint8_t* input,
+        uint16_t* output,
+        size_t elements,
+        cudaStream_t stream = nullptr);
+
     // Fused kernel: uint16 HWC [0, 65535] -> float32 HWC [0,1]
     void launch_uint16_hwc_to_float32_hwc(
         const uint16_t* input,
