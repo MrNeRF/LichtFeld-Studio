@@ -2027,10 +2027,13 @@ namespace lfs::vis {
             if (readback_config.capture_float_color) {
                 // Consume the owned, synchronized float band before raster scratch
                 // is reused. The existing byte pipeline remains asynchronous.
+                // Like it, keep only the band's interior rows, without the halo.
                 auto image = scene_renderer_->readLinearColorImage(preview_render_target_);
                 if (!image)
                     return std::move(image).error();
-                output.slice(0, size_t(tile_y), size_t(tile_y + tile_height)).copy_from(**image);
+                const auto interior = size_t(tile_y - render_y);
+                output.slice(0, size_t(tile_y), size_t(tile_y + tile_height))
+                    .copy_from((**image).slice(0, interior, interior + size_t(tile_height)));
                 tile_y += tile_height;
                 continue;
             }
