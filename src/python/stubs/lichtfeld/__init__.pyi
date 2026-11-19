@@ -657,6 +657,9 @@ def reset_camera() -> None:
 def set_vr_active(active: bool) -> None:
     """Enter or exit VR viewing"""
 
+def detect_vr() -> None:
+    """Look again for a VR headset that was connected after startup"""
+
 def recenter_vr() -> None:
     """Put the VR view back at the desktop camera"""
 

@@ -98,6 +98,7 @@ class PreferencesPanel(Panel):
         "resolution_scale": 0.7,
         "scene_units_per_meter": 1.0,
         "move_speed": 1.5,
+        "show_hands": True,
     }
 
     EXPANDABLE_SECTIONS = (
@@ -130,6 +131,8 @@ class PreferencesPanel(Panel):
         self._theme_catalog = []
         self._theme_families = []
         self._language_catalog = []
+        self._vr_runtime_catalog = [("", "")]
+        self._vr_runtime_selected = ""
         self._last_state = None
         self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
@@ -205,6 +208,7 @@ class PreferencesPanel(Panel):
             model.bind("vr_" + key, lambda k=key: lf.ui.get_vr_preferences()[k],
                        lambda value, k=key: self._set_vr_preference(k, value))
         model.bind_func("vr_status", lambda: lf.ui.get_vr_state()["status"])
+        model.bind("vr_runtime_idx", self._vr_runtime_index, self._set_vr_runtime_index)
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
@@ -377,6 +381,7 @@ class PreferencesPanel(Panel):
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
         model.bind_record_list("languages")
+        model.bind_record_list("vr_runtimes")
         model.bind_record_list("navigation_modes")
         model.bind_record_list("file_associations")
         self._handle = model.get_handle()
@@ -541,6 +546,7 @@ class PreferencesPanel(Panel):
             families.values(), key=lambda family: (family["order"], family["name"])
         )
         self._language_catalog = list(lf.ui.get_languages())
+        self._load_vr_runtimes()
         if not self._handle:
             return
         self._handle.update_record_list(
@@ -600,6 +606,13 @@ class PreferencesPanel(Panel):
             [
                 {"index": str(index), "label": name}
                 for index, (_code, name) in enumerate(self._language_catalog)
+            ],
+        )
+        self._handle.update_record_list(
+            "vr_runtimes",
+            [
+                {"index": str(index), "label": name}
+                for index, (_manifest, name) in enumerate(self._vr_runtime_catalog)
             ],
         )
         self._handle.update_record_list(
@@ -1010,10 +1023,46 @@ class PreferencesPanel(Panel):
     def _set_vr_preference(self, key, value, persist=True):
         preferences = lf.ui.get_vr_preferences()
         # Range inputs snap in float32; three decimals cover every VR step.
-        preferences[key] = bool(value) if key == "enabled" else round(float(value), 3)
+        is_switch = isinstance(self.VR_PREFERENCE_DEFAULTS[key], bool)
+        preferences[key] = bool(value) if is_switch else round(float(value), 3)
         lf.ui.set_vr_preferences(*(preferences[name] for name in self.VR_PREFERENCE_DEFAULTS), persist=persist)
         if self._handle:
             self._handle.dirty("vr_" + key)
+
+    def _load_vr_runtimes(self):
+        runtimes = lf.ui.get_vr_runtimes()
+        active = runtimes["active"]
+        automatic = (lf.ui.tr("preferences.vr_runtime_automatic_named").format(active)
+                     if active else lf.ui.tr("preferences.vr_runtime_automatic"))
+        catalog = [("", automatic)]
+        catalog += [(runtime["manifest"], runtime["name"]) for runtime in runtimes["installed"]]
+        selected = runtimes["selected"]
+        # A chosen runtime that was since uninstalled stays listed: the choice must show.
+        if selected and all(manifest != selected for manifest, _name in catalog):
+            catalog.append((selected, selected))
+        self._vr_runtime_catalog = catalog
+        self._vr_runtime_selected = selected
+
+    def _vr_runtime_index(self):
+        for index, (manifest, _name) in enumerate(self._vr_runtime_catalog):
+            if manifest == self._vr_runtime_selected:
+                return str(index)
+        return "0"
+
+    def _set_vr_runtime_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if not 0 <= index < len(self._vr_runtime_catalog):
+            return
+        manifest = self._vr_runtime_catalog[index][0]
+        if manifest == self._vr_runtime_selected:
+            return
+        lf.ui.set_vr_runtime(manifest)
+        self._vr_runtime_selected = manifest
+        if self._handle:
+            self._handle.dirty("vr_runtime_idx")
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1881,6 +1930,8 @@ class PreferencesPanel(Panel):
                 self._keymap.reset_to_default()
             if section in ("input", "input_vr"):
                 lf.ui.set_vr_preferences(*self.VR_PREFERENCE_DEFAULTS.values())
+                lf.ui.set_vr_runtime("")
+                self._vr_runtime_selected = ""
             if section in ("input", "input_gamepad"):
                 self._gamepad_test.deactivate(release_discovery=False)
                 reset_error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
@@ -1937,7 +1988,7 @@ class PreferencesPanel(Panel):
             self._handle.dirty("new_project_align_grid")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
-            for key in (*self.VR_PREFERENCE_DEFAULTS, "status"):
+            for key in (*self.VR_PREFERENCE_DEFAULTS, "status", "runtime_idx"):
                 self._handle.dirty("vr_" + key)
             self._handle.dirty("camera_browse_repeat")
             self._handle.dirty("camera_browse_repeat_rate")

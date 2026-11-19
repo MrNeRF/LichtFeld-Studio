@@ -2416,7 +2416,24 @@ namespace lfs::vis {
                                    0,
                                    sizeof(scene_push),
                                    &scene_push);
+                const bool crop = params.scene_image_crop_to_fill && valid.x > 0 && valid.y > 0 &&
+                                  rect.width > 0 && rect.height > 0;
+                if (crop) {
+                    // A centered viewport larger than the panel: the scissor,
+                    // still the panel, cuts off what overflows.
+                    const float scale = std::max(static_cast<float>(rect.width) / static_cast<float>(valid.x),
+                                                 static_cast<float>(rect.height) / static_cast<float>(valid.y));
+                    VkViewport viewport{};
+                    viewport.width = static_cast<float>(valid.x) * scale;
+                    viewport.height = static_cast<float>(valid.y) * scale;
+                    viewport.x = static_cast<float>(rect.x) + (static_cast<float>(rect.width) - viewport.width) * 0.5f;
+                    viewport.y = static_cast<float>(rect.y) + (static_cast<float>(rect.height) - viewport.height) * 0.5f;
+                    viewport.maxDepth = 1.0f;
+                    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+                }
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
+                if (crop)
+                    bindViewport(command_buffer, rect);
             }
         }
 
