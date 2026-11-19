@@ -186,10 +186,10 @@ namespace lfs::core {
         // A hemisphere needs the far edge on the horizon even when there is no outward margin.
         if (reach >= std::numbers::pi / 2)
             beta = std::max(beta, std::numbers::pi / 2);
-        double far = std::tan(beta - tilt);
+        double outer = std::tan(beta - tilt);
         // Below the horizon the far corners lie farther off-axis than the edge midpoint.
         if (reach < std::numbers::pi / 2) {
-            double lo = 0, hi = far;
+            double lo = 0, hi = outer;
             for (int i = 0; i < 32; ++i) {
                 const double u = (lo + hi) / 2;
                 const double z = std::cos(tilt) - u * std::sin(tilt);
@@ -198,9 +198,9 @@ namespace lfs::core {
                 else
                     hi = u;
             }
-            far = lo;
+            outer = lo;
         }
-        const int along_size = std::max(1, int(std::floor(focal * (std::tan(45 * degree) + far))));
+        const int along_size = std::max(1, int(std::floor(focal * (std::tan(45 * degree) + outer))));
         const int across_size = std::max(1, int(std::floor(2 * focal * across)));
         for (int i = 0; i < 4; ++i) {
             const bool horizontal = i < 2;
@@ -210,7 +210,7 @@ namespace lfs::core {
                                                       ? std::array<float, 9>{c, 0, t, 0, 1, 0, -t, 0, c}
                                                       : std::array<float, 9>{1, 0, 0, 0, c, t, 0, -t, c};
             std::copy(rotation.begin(), rotation.end(), p.view_rotation);
-            const float centre = sign > 0 ? along_size - focal * far : focal * far;
+            const float centre = sign > 0 ? along_size - focal * outer : focal * outer;
             p.dst_width = horizontal ? along_size : across_size;
             p.dst_height = horizontal ? across_size : along_size;
             p.dst_cx = horizontal ? centre : across_size / 2.f;
