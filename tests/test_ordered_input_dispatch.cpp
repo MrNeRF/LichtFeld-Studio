@@ -3807,29 +3807,16 @@ namespace lfs::vis {
         EXPECT_NE(html.find("scene_panel:go_to_camera:42"), std::string::npos);
         for (const auto id : {empty, empty_nested}) {
             html = open_menu(id);
-            EXPECT_EQ(html.find("scene_panel:enable_all_train:"), std::string::npos);
-            EXPECT_EQ(html.find("scene_panel:disable_all_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:enable_group_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:disable_group_train:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
         }
         html = open_menu(full);
-        EXPECT_NE(html.find("scene_panel:enable_all_train:"), std::string::npos);
-        EXPECT_NE(html.find("scene_panel:disable_all_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:enable_group_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:disable_group_train:"), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
+        EXPECT_EQ(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
-        auto* menu_context = manager().getContext("global_context_menu");
-        ASSERT_NE(menu_context, nullptr);
-        auto* doc = menu_context->GetDocument(0);
-        ASSERT_NE(doc, nullptr);
-        auto* disable = doc->QuerySelector("[data-ctx-action='scene_panel:disable_all_train:" + std::to_string(full) + "']");
-        ASSERT_NE(disable, nullptr);
-        disable->DispatchEvent("click", {});
-        panel.preload(ctx);
-        EXPECT_FALSE(scene.getNodeById(child)->training_enabled);
-        open_menu(full);
-        auto* enable = doc->QuerySelector("[data-ctx-action='scene_panel:enable_all_train:" + std::to_string(full) + "']");
-        ASSERT_NE(enable, nullptr);
-        enable->DispatchEvent("click", {});
-        panel.preload(ctx);
-        EXPECT_TRUE(scene.getNodeById(child)->training_enabled);
 
         scene_manager.selectNodesById({empty, empty_nested});
         html = open_menu(empty);
@@ -3839,6 +3826,88 @@ namespace lfs::vis {
         html = open_menu(empty);
         EXPECT_NE(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
         EXPECT_NE(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(child)->training_enabled);
+    }
+
+    TEST_F(ScenePanelRefreshTest, CameraGroupMenuPreservesChildSelectionAndTrainingTargets) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto first = addCamera(scene, "First", group, {}, 61);
+        const auto second = addCamera(scene, "Second", group, {}, 62);
+        const auto untouched = addCamera(scene, "Untouched", group, {}, 63);
+        const auto other_group = scene.addCameraGroup("Other cameras", core::NULL_NODE, 0);
+        const auto other_camera = addCamera(scene, "Other", other_group, {}, 64);
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+
+        for (const auto& selection : {std::vector<core::NodeId>{first},
+                                      std::vector<core::NodeId>{first, second}}) {
+            scene_manager.selectNodesById(selection);
+            const auto selected_before = scene_manager.getSelectedNodeIds();
+            auto* document = openCameraMenu(panel, ctx, group);
+            ASSERT_NE(document, nullptr);
+            EXPECT_EQ(scene_manager.getSelectedNodeIds(), selected_before);
+            EXPECT_NE(document->GetInnerRML().find("scene_panel:disable_group_train:" + std::to_string(group)), std::string::npos);
+            for (const bool enabled : {false, true}) {
+                const auto action = enabled ? "enable_all_selected_train" : "disable_all_selected_train";
+                auto* item = document->QuerySelector("[data-ctx-action='scene_panel:" + std::string(action) + "']");
+                ASSERT_NE(item, nullptr);
+                item->DispatchEvent("click", {});
+                panel.preload(ctx);
+                EXPECT_EQ(scene.getNodeById(first)->training_enabled, enabled);
+                EXPECT_EQ(scene.getNodeById(second)->training_enabled, selection.size() == 1 || enabled);
+                EXPECT_TRUE(scene.getNodeById(untouched)->training_enabled);
+                EXPECT_TRUE(scene.getNodeById(other_camera)->training_enabled);
+                EXPECT_EQ(scene_manager.getSelectedNodeIds(), selected_before);
+                document = openCameraMenu(panel, ctx, group);
+                ASSERT_NE(document, nullptr);
+            }
+        }
+
+        // A different group's menu must retain normal right-click selection semantics.
+        auto* document = openCameraMenu(panel, ctx, other_group);
+        ASSERT_NE(document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{other_group});
+        EXPECT_EQ(document->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(first)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(second)->training_enabled);
+
+        scene_manager.selectNodesById({first, other_camera});
+        document = openCameraMenu(panel, ctx, group);
+        ASSERT_NE(document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{group});
+        EXPECT_EQ(document->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+
+        // Group-wide actions remain available and operate independently of tree selection.
+        scene_manager.selectNodesById({first, second});
+        for (const bool enabled : {false, true}) {
+            document = openCameraMenu(panel, ctx, group);
+            ASSERT_NE(document, nullptr);
+            const auto action = enabled ? "enable_group_train:" : "disable_group_train:";
+            auto* item = document->QuerySelector("[data-ctx-action='scene_panel:" + std::string(action) + std::to_string(group) + "']");
+            ASSERT_NE(item, nullptr);
+            item->DispatchEvent("click", {});
+            panel.preload(ctx);
+            auto& tasks = viewer_->getGuiManager()->asyncTasks();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto status = tasks.cameraSelectionStatus();
+            ASSERT_TRUE(status.has_value());
+            while (status->running() && std::chrono::steady_clock::now() < deadline) {
+                tasks.pollCameraSelectionCompletion();
+                std::this_thread::yield();
+                status = tasks.cameraSelectionStatus();
+                ASSERT_TRUE(status.has_value());
+            }
+            ASSERT_EQ(status->status, JobStatus::Completed) << status->error;
+            EXPECT_EQ(scene.getNodeById(first)->training_enabled, enabled);
+            EXPECT_EQ(scene.getNodeById(second)->training_enabled, enabled);
+            EXPECT_EQ(scene.getNodeById(untouched)->training_enabled, enabled);
+            EXPECT_TRUE(scene.getNodeById(other_camera)->training_enabled);
+            const auto selected = scene_manager.getSelectedNodeIds();
+            EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()), (std::set<core::NodeId>{first, second}));
+        }
     }
 
     TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {
