@@ -71,8 +71,11 @@ namespace lfs::vis {
         lfs::Result<float> readDepth(const SceneRenderer::DepthSampleRequest&) const;
         // Ticket storage retains GPU staging, never a host destination after abandon.
         static bool nativeTicket(uint64_t ticket) { return (ticket >> 63) != 0; }
+        // Color copies source rows [source_y, source_y + source_height) to (x, y);
+        // 0 height reads through the last row. Depth always copies the whole image.
         lfs::Result<uint64_t> submitReadback(RenderTargetId,
-                                             core::Tensor&, int x, int y, bool depth) const;
+                                             core::Tensor&, int x, int y, bool depth,
+                                             int source_y = 0, int source_height = 0) const;
         lfs::Result<SceneRenderer::ReadbackTicketStatus> pollReadback(uint64_t, bool wait) const;
         void abandonReadback(uint64_t) const;
         size_t outstandingReadbacks() const;
