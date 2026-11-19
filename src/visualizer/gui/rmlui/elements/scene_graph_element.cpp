@@ -2282,6 +2282,18 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
+    bool SceneGraphElement::hasSelectedCamerasInGroup(const core::NodeId node_id) const {
+        const auto group = node_snapshots_.find(node_id);
+        if (group == node_snapshots_.end() || group->second.type != core::NodeType::CAMERA_GROUP || selected_ids_.empty())
+            return false;
+
+        return std::ranges::all_of(selected_ids_, [this, node_id](const core::NodeId id) {
+            const auto selected = node_snapshots_.find(id);
+            return selected != node_snapshots_.end() && selected->second.type == core::NodeType::CAMERA &&
+                   selected->second.parent_id == node_id;
+        });
+    }
+
     void SceneGraphElement::handleSecondaryClick(const core::NodeId node_id,
                                                  const float mouse_x,
                                                  const float mouse_y) {
@@ -2290,7 +2302,7 @@ namespace lfs::vis::gui {
             return;
 
         focusTree();
-        if (!selected_ids_.contains(node_id)) {
+        if (!selected_ids_.contains(node_id) && !hasSelectedCamerasInGroup(node_id)) {
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
@@ -3135,7 +3147,8 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        if (selected_ids_.size() > 1) {
+        const bool selected_cameras_in_group = hasSelectedCamerasInGroup(node_id);
+        if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
             const auto groupable_selection = selectedDraggableNodeIds();
@@ -3244,12 +3257,12 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::CAMERA_GROUP:
                 if (has_camera_target(*node)) {
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::ENABLE_ALL_TRAINING),
-                        prefixedAction(std::format("enable_all_train:{}", node_id))));
-                    items.push_back(makeAction(
-                        tr(string_keys::Scene::DISABLE_ALL_TRAINING),
-                        prefixedAction(std::format("disable_all_train:{}", node_id))));
+                    if (selected_cameras_in_group) {
+                        items.push_back(makeAction(tr(string_keys::Scene::ENABLE_ALL_TRAINING),
+                                                   prefixedAction("enable_all_selected_train")));
+                        items.push_back(makeAction(tr(string_keys::Scene::DISABLE_ALL_TRAINING),
+                                                   prefixedAction("disable_all_selected_train")));
+                    }
                     items.push_back(makeAction(tr("scene.invert_camera_selection"),
                                                prefixedAction(std::format("invert_group_train:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.enable_all_cameras"),
@@ -3426,7 +3439,10 @@ namespace lfs::vis::gui {
 
         const std::string& kind = parts[0];
         if (kind == "select_hierarchy") {
-            selectHierarchyFromSelection();
+            if (hasSelectedCamerasInGroup(context_menu_node_id_))
+                selectHierarchy(context_menu_node_id_);
+            else
+                selectHierarchyFromSelection();
             return;
         }
         if (kind == "group_selected") {
@@ -3488,10 +3504,6 @@ namespace lfs::vis::gui {
             cmd::SequencerDeleteKeyframe{.keyframe_index = static_cast<size_t>(std::stoul(parts[1]))}.emit();
         } else if (kind == "add_kf") {
             cmd::SequencerAddKeyframe{}.emit();
-        } else if ((kind == "enable_all_train" || kind == "disable_all_train") && parts.size() >= 2) {
-            core::NodeId group_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], group_id))
-                toggleChildrenTraining(group_id, kind == "enable_all_train");
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
             core::NodeId group_id = core::NULL_NODE;
             if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {
