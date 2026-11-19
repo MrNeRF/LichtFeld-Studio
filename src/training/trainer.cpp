@@ -10675,7 +10675,7 @@ namespace lfs::training {
         if (!saved_header)
             return std::unexpected(saved_header.error());
         if (!calibration_correction_ && (params_.optimization.calibration_correction ||
-                                         core::has_flag(saved_header->flags, core::CheckpointFlags::HAS_CALIBRATION_CORRECTION))) {
+                                         checkpoint_has_calibration_correction(source, source_bytes, *saved_header))) {
             if (auto init = initialize_calibration_correction(); !init)
                 return std::unexpected(std::string(init.error().user_message()));
         }
