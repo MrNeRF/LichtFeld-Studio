@@ -1626,12 +1626,20 @@ namespace lfs::io {
                 AVPixelFormat decoded_software_format = AV_PIX_FMT_NONE;
                 struct CandidateFrame {
                     std::vector<uint8_t> rgb;
-                    std::filesystem::path filename;
                     double score = 0.0;
                     double timestamp = 0.0;
                     int source_frame = 0;
                 };
-                std::vector<CandidateFrame> window_candidates;
+                CandidateFrame window_best;
+                const auto retain_window_candidate = [&](const double score) {
+                    // Keep the first maximum, matching max_element's tie-breaking.
+                    if (!window_best.rgb.empty() && score <= window_best.score)
+                        return;
+                    window_best.rgb.assign(cpu_contiguous_buffer, cpu_contiguous_buffer + frame_size);
+                    window_best.score = score;
+                    window_best.timestamp = current_frame_time;
+                    window_best.source_frame = current_src_frame;
+                };
                 int current_window_idx = 0;
                 int window_skip_counter = 0;
                 int in_window_frame_count = 0;
@@ -1762,17 +1770,13 @@ namespace lfs::io {
                 };
 
                 auto flush_window = [&]() {
-                    if (window_candidates.empty())
+                    if (window_best.rgb.empty())
                         return;
-                    const auto best = std::max_element(
-                        window_candidates.begin(), window_candidates.end(),
-                        [](const CandidateFrame& a, const CandidateFrame& b) {
-                            return a.score < b.score;
-                        });
+                    const auto* const best = &window_best;
                     std::filesystem::path fname = generate_filename(best->source_frame);
                     if (!reserve_output_filename(fname, best->source_frame)) {
                         finish_selected_frame();
-                        window_candidates.clear();
+                        window_best.rgb.clear();
                         window_skip_counter = 0;
                         return;
                     }
@@ -1826,7 +1830,7 @@ namespace lfs::io {
                         }
                     }
                     finish_selected_frame();
-                    window_candidates.clear();
+                    window_best.rgb.clear();
                     window_skip_counter = 0;
                 };
 
@@ -1873,13 +1877,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                retain_window_candidate(frame_score);
                                 return;
                             }
                             if (params.sharpness.threshold > 0.0 && frame_score < params.sharpness.threshold) {
@@ -1962,13 +1960,7 @@ namespace lfs::io {
                             frame_score = computeSharpnessScore(
                                 cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
-                                CandidateFrame cf;
-                                cf.rgb.assign(cpu_contiguous_buffer,
-                                              cpu_contiguous_buffer + frame_size);
-                                cf.score = frame_score;
-                                cf.timestamp = current_frame_time;
-                                cf.source_frame = current_src_frame;
-                                window_candidates.push_back(std::move(cf));
+                                retain_window_candidate(frame_score);
                                 return;
                             }
                             if (params.sharpness.threshold > 0.0 && frame_score < params.sharpness.threshold) {
@@ -2082,13 +2074,7 @@ namespace lfs::io {
                             cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
 
                         if (params.sharpness.window_mode) {
-                            CandidateFrame cf;
-                            cf.rgb.assign(cpu_contiguous_buffer,
-                                          cpu_contiguous_buffer + frame_size);
-                            cf.score = frame_score;
-                            cf.timestamp = current_frame_time;
-                            cf.source_frame = current_src_frame;
-                            window_candidates.push_back(std::move(cf));
+                            retain_window_candidate(frame_score);
                             return;
                         }
 
