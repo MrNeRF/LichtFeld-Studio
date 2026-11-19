@@ -27,6 +27,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -178,6 +179,48 @@ namespace lfs::training {
     using lfs::core::CheckpointFlags;
     using lfs::core::CheckpointHeader;
     using lfs::core::has_flag;
+
+    namespace {
+        // The calibration correction field follows the parameter JSON: this tag, the byte length of the
+        // tensor, then the tensor. Readers locate the JSON by its header offset and require the state to
+        // end there, so builds without the field never read these bytes and load the file unchanged.
+        constexpr uint32_t CALIBRATION_CORRECTION_TAG = 0x4C464343; // "LFCC"
+
+        // On true, `file` is positioned after the tag.
+        bool seek_calibration_correction_block(std::istream& file, const CheckpointHeader& header,
+                                               const uint64_t file_size) {
+            uint32_t tag = 0;
+            const uint64_t start = header.params_json_offset + header.params_json_size;
+            if (header.params_json_size == 0 || file_size - start < sizeof(tag))
+                return false;
+            file.clear();
+            file.seekg(static_cast<std::streamoff>(start));
+            file.read(reinterpret_cast<char*>(&tag), sizeof(tag));
+            return file && tag == CALIBRATION_CORRECTION_TAG;
+        }
+
+        lfs::core::Tensor read_calibration_correction_block(std::istream& file, const uint64_t file_size) {
+            uint64_t bytes = 0;
+            lfs::core::serialization_detail::read_exact(file, &bytes, sizeof(bytes), "calibration correction length");
+            const auto start = file.tellg();
+            if (start == std::streampos(-1) || bytes > file_size - static_cast<uint64_t>(std::streamoff(start)))
+                throw std::runtime_error("block is cut short");
+            std::string payload(bytes, '\0');
+            lfs::core::serialization_detail::read_exact(file, payload.data(), bytes, "calibration correction");
+            std::istringstream block(payload, std::ios::binary);
+            lfs::core::Tensor field;
+            block >> field;
+            if (block.tellg() != std::streampos(static_cast<std::streamoff>(bytes)))
+                throw std::runtime_error("block length does not match its tensor");
+            return field;
+        }
+    } // namespace
+
+    bool checkpoint_has_calibration_correction(std::istream& source, const uint64_t source_bytes,
+                                               const CheckpointHeader& header) {
+        return has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION) ||
+               seek_calibration_correction_block(source, header, source_bytes);
+    }
 
     namespace {
         // This cursor visits existing checkpoint sections without materializing the
@@ -414,14 +457,12 @@ namespace lfs::training {
                     header.flags |
                     CheckpointFlags::HAS_PPISP_CONTROLLER;
 
-            if (params.optimization.calibration_correction && calibration_correction)
-                header.flags = header.flags | CheckpointFlags::HAS_CALIBRATION_CORRECTION;
-
             const auto header_pos = destination.tellp();
             if (save_popspa)
                 header.flags = header.flags | CheckpointFlags::HAS_POPSPA;
-            // Only POPSpa state needs the newer layout; keep other checkpoints
-            // readable by builds that predate it.
+            // Only POPSpa state needs the newer layout; other checkpoints keep the
+            // older version and flags so builds that predate it read them. The
+            // calibration correction field adds no flag (it follows the JSON).
             header.version = save_popspa ? lfs::core::CHECKPOINT_VERSION_HAS_POPSPA
                                          : lfs::core::CHECKPOINT_VERSION_FIELDWISE_CONFIGS;
             if (header_pos == std::streampos(-1)) {
@@ -480,9 +521,6 @@ namespace lfs::training {
                     return std::move(serialized).error();
                 popspa_optimizer->serialize(destination);
             }
-            if (has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION))
-                destination << calibration_correction->field();
-
             const auto params_pos = destination.tellp();
             if (params_pos == std::streampos(-1)) {
                 return checkpoint_stream_error(
@@ -540,10 +578,26 @@ namespace lfs::training {
             destination.write(
                 params_text.data(),
                 static_cast<std::streamsize>(params_text.size()));
+            const auto json_end = destination.tellp();
+            if (params.optimization.calibration_correction && calibration_correction) {
+                const uint32_t tag = CALIBRATION_CORRECTION_TAG;
+                destination.write(reinterpret_cast<const char*>(&tag), sizeof(tag));
+                const auto length_pos = destination.tellp();
+                uint64_t bytes = 0;
+                destination.write(reinterpret_cast<const char*>(&bytes), sizeof(bytes));
+                destination << calibration_correction->field();
+                const auto block_end = destination.tellp();
+                bytes = static_cast<uint64_t>(block_end - length_pos) - sizeof(bytes);
+                destination.seekp(length_pos);
+                destination.write(reinterpret_cast<const char*>(&bytes), sizeof(bytes));
+                destination.seekp(block_end);
+            }
             const auto end_pos = destination.tellp();
             if (!destination ||
+                json_end == std::streampos(-1) ||
                 end_pos == std::streampos(-1) ||
-                end_pos < params_pos) {
+                json_end < params_pos ||
+                end_pos < json_end) {
                 return checkpoint_stream_error(
                     lfs::ErrorCode::DataLoss,
                     "Cannot serialize checkpoint: destination write failed",
@@ -554,7 +608,7 @@ namespace lfs::training {
                 static_cast<std::uint64_t>(
                     static_cast<std::streamoff>(params_pos));
             header.params_json_size =
-                static_cast<std::uint64_t>(end_pos - params_pos);
+                static_cast<std::uint64_t>(json_end - params_pos);
             destination.seekp(header_pos);
             destination.write(
                 reinterpret_cast<const char*>(&header),
@@ -935,18 +989,13 @@ namespace lfs::training {
                 loaded_params.optimization.enable_sparsity = false;
             }
 
+            // Files with the flag carry the field as a bare tensor in front of the parameter JSON.
             core::Tensor loaded_correction;
             if (has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION)) {
-                if (calibration_correction) {
+                if (calibration_correction)
                     file >> loaded_correction;
-                    if (loaded_correction.shape() != calibration_correction->field().shape() ||
-                        loaded_correction.dtype() != core::DataType::Float32) {
-                        LOG_WARN("Calibration correction checkpoint grid or camera count differs; starting from zero");
-                        loaded_correction = {};
-                    }
-                } else {
+                else
                     core::serialization_detail::skip_serialized_tensor(file);
-                }
             }
 
             // Reserve capacity for densification after the checkpoint params are resolved.
@@ -960,6 +1009,25 @@ namespace lfs::training {
             } else if (!file) {
                 throw std::runtime_error("Invalid checkpoint: truncated serialized state");
             }
+
+            // The field only continues a fit, so a damaged block costs the field and nothing else.
+            if (calibration_correction && !has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION) &&
+                seek_calibration_correction_block(file, header, file_size)) {
+                try {
+                    loaded_correction = read_calibration_correction_block(file, file_size);
+                } catch (const std::exception& error) {
+                    LOG_WARN("Calibration correction checkpoint block is damaged ({}); starting from zero", error.what());
+                    loaded_correction = {};
+                }
+            }
+            if (calibration_correction && loaded_correction.is_valid() &&
+                (loaded_correction.shape() != calibration_correction->field().shape() ||
+                 loaded_correction.dtype() != core::DataType::Float32)) {
+                LOG_WARN("Calibration correction checkpoint grid or camera count differs; starting from zero");
+                loaded_correction = {};
+            }
+            if (loaded_correction.is_valid())
+                loaded_correction = loaded_correction.cuda();
 
             const size_t max_cap = static_cast<size_t>(loaded_params.optimization.max_cap);
             if (max_cap > loaded_model.size()) {
@@ -1002,7 +1070,7 @@ namespace lfs::training {
             }
             if (calibration_correction) {
                 if (loaded_correction.is_valid())
-                    calibration_correction->field() = loaded_correction.cuda();
+                    calibration_correction->field() = std::move(loaded_correction);
                 else
                     calibration_correction->field().zero_();
             }

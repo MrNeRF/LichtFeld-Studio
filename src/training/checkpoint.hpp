@@ -66,6 +66,10 @@ namespace lfs::training {
         const AdamOptimizer* popspa_optimizer = nullptr,
         const CalibrationCorrection* calibration_correction = nullptr);
 
+    /// True when the checkpoint carries a calibration correction field. Moves the read position of `source`.
+    [[nodiscard]] bool checkpoint_has_calibration_correction(
+        std::istream& source, std::uint64_t source_bytes, const lfs::core::CheckpointHeader& header);
+
     /// Import a standalone legacy checkpoint.
     std::expected<int, std::string> load_checkpoint(
         const std::filesystem::path& path,
@@ -93,7 +97,8 @@ namespace lfs::training {
     /// POPSpa destinations must both be supplied or both null. The supplied Adam
     /// must reference strategy.get_model(); only its owned state is adopted.
     /// Null destinations still consume and validate the complete POPSpa payload.
-    /// A checkpoint without a calibration correction leaves `calibration_correction` at its zero field.
+    /// A checkpoint without a calibration correction, or with a damaged one, leaves `calibration_correction` at
+    /// its zero field.
     CheckpointLoadResult load_checkpoint(
         std::istream& source,
         std::uint64_t source_bytes,
