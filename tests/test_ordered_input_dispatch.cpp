@@ -3867,8 +3867,20 @@ namespace lfs::vis {
                 EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
             ASSERT_TRUE(history.redo().success);
             EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size() - indices.size());
+            for (size_t i = 0; i < ids.size(); ++i)
+                EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr,
+                          std::ranges::find(indices, i) != indices.end());
             ASSERT_TRUE(history.undo().success);
         }
+        history.clear();
+        scene_manager.selectNode(scene.getNode("Keyframe 1")->id);
+        refresh();
+        tree->Blur();
+        EXPECT_FALSE(tree->IsPseudoClassSet("focus"));
+        ASSERT_TRUE(panel.requestDeleteSelectionIfAvailable());
+        EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[0]), nullptr);
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
         history.clear();
         const auto first = scene.getNode("Keyframe 1")->id;
         const auto group = scene.getNode("Keyframes")->id;
