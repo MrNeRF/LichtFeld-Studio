@@ -5164,6 +5164,97 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
     }
 
     TEST_F(VisualizerImplResetTest,
+           CleanCloseDeletesAutosaveSidecarOnTeardown) {
+        const auto& temporary = temporary_.path;
+        const auto project_path =
+            temporary / "clean-exit.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        auto options = projectOptions();
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                }));
+            // A view setting change autosaves without making the project dirty.
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            viewer.input_controller_->setViewer(&viewer);
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            auto* const rendering = viewer.getRenderingManager();
+            ASSERT_NE(rendering, nullptr);
+            auto render_settings = rendering->getSettings();
+            render_settings.render_scale = 0.7F;
+            ASSERT_TRUE(rendering->updateSettingsFromUser(render_settings));
+            viewer.projectMarkSessionChapterCommitted("VIEW");
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    return !viewer.jobs().anyRunning(
+                        JobType::ProjectWrite);
+                }));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+            const auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            ASSERT_FALSE(info->dirty);
+
+            viewer.requestApplicationClose();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_TRUE(viewer.allowclose());
+        }
+        EXPECT_FALSE(std::filesystem::exists(sidecar));
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                project_path));
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TeardownLooksUpNoMissingLocalizationKeys) {
+        // A missing key is reported once per process; start from a clean slate.
+        lfs::event::LocalizationManager::getInstance().reset();
+        std::mutex warnings_mutex;
+        std::vector<std::string> warnings;
+        struct HandlerGuard {
+            lfs::core::LogHandlerToken token;
+            ~HandlerGuard() { lfs::core::Logger::get().remove_log_handler(token); }
+        } const guard{lfs::core::Logger::get().add_log_handler(
+            [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn &&
+                    message.find("Missing localization key") != std::string_view::npos) {
+                    const std::lock_guard lock(warnings_mutex);
+                    warnings.emplace_back(message);
+                }
+            })};
+        {
+            VisualizerImpl viewer(projectOptions());
+            ASSERT_NE(viewer.getGuiManager(), nullptr);
+        }
+        const std::lock_guard lock(warnings_mutex);
+        EXPECT_TRUE(warnings.empty()) << warnings.front();
+    }
+
+    TEST_F(VisualizerImplResetTest,
            DiscardSwitchDeletesOldProjectAutosaveSidecar) {
         const auto& temporary = temporary_.path;
         const auto old_path =

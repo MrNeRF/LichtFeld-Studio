@@ -121,6 +121,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
     class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
     class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+    class VisualizerImplResetTest_CleanCloseDeletesAutosaveSidecarOnTeardown_Test;
     class VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
     class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
     class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
@@ -480,6 +481,7 @@ namespace lfs::vis::project {
         friend class lfs::vis::VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         friend class lfs::vis::VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
         friend class lfs::vis::VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+        friend class lfs::vis::VisualizerImplResetTest_CleanCloseDeletesAutosaveSidecarOnTeardown_Test;
         friend class lfs::vis::VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class lfs::vis::VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;
