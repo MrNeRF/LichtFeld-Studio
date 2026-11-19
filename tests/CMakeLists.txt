@@ -1214,6 +1214,10 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_parity.cpp
             test_flip.cpp
             test_masked_ssim_metrics.cpp
+            test_mask_rgb_cache.cpp
+            test_panorama_views.cpp
+            test_fisheye_views.cpp
+            gut_camera_model_host.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp

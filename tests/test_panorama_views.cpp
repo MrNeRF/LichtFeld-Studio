@@ -4,6 +4,7 @@
 
 #include "core/camera_views.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
 #include "training/dataset.hpp"
@@ -197,7 +198,7 @@ namespace {
                 pixels[y * w + x] = x < w / 2 ? 64 : 192;
         ASSERT_TRUE(save_png(path, pixels.data(), w, h, 1, 8, 0));
         const auto views = panorama_plan(w, h);
-        lfs::io::PipelinedImageLoader loader;
+        lfs::io::PipelinedImageLoader loader({.backend = default_gpu_backend()});
         lfs::io::ImageRequest request{};
         request.path = path;
         request.depth_path = path;
@@ -217,7 +218,9 @@ namespace {
             EXPECT_NEAR(rgb.mean().item<float>() / scale, expected, 0.005);
             EXPECT_NEAR(ready.depth->mean().item<float>(), expected, 0.005);
         }
-        EXPECT_GE(loader.get_stats().hot_path_hits, 2u);
+        // The third request finds the first rotation's entries. The CUDA loader also caches the
+        // depth sidecar; the portable loaders cache the warped image only and decode sidecars again.
+        EXPECT_GE(loader.get_stats().hot_path_hits, default_gpu_backend() == GpuBackend::CUDA ? 2u : 1u);
     }
 
     TEST(PanoramaPriors, GeneratesOnceForThePhotographAndUpdatesEveryView) {
@@ -284,7 +287,7 @@ namespace {
             auto dataset = std::make_shared<CameraDataset>(
                 views, DatasetConfig{});
             PipelinedAuxiliaryImageConfig aux{.load_normals = true, .normal_flip_yz = true, .normal_world_space = world};
-            PipelinedDataLoader loader(dataset, RandomSampler(views.size(), 13), {}, aux);
+            PipelinedDataLoader loader(dataset, RandomSampler(views.size(), 13), {.backend = default_gpu_backend()}, aux);
             for (size_t face = 0; face < views.size(); ++face) {
                 auto example = loader.next();
                 ASSERT_TRUE(example && example->normal);

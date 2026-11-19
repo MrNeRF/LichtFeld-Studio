@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 // The branch-aware undistort inverse of #3610 on the portable paths: image_warp.slang on Vulkan and
-// Metal, which also serves the crop and CPU images.
+// Metal, which also serves the crop and CPU images. The forward resampling tests at the end run on
+// the session's tensor backend, so builds without CUDA cover them as well.
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <format>
 #include <gtest/gtest.h>
+#include <numbers>
 #include <utility>
 #include <vector>
 
@@ -241,4 +243,206 @@ namespace {
 
     INSTANTIATE_TEST_SUITE_P(Backends, UndistortInversePortable, testing::Values(GpuBackend::Vulkan, GpuBackend::Metal),
                              [](const auto& info) { return info.param == GpuBackend::Metal ? "Metal" : "Vulkan"; });
+
+    double lanczos3(const double x) {
+        const double absolute_x = std::abs(x);
+        if (absolute_x >= 3.0)
+            return 0.0;
+        if (absolute_x < 1.0e-12)
+            return 1.0;
+        const double pi_x = std::numbers::pi * x;
+        return std::sin(pi_x) / pi_x * std::sin(pi_x / 3.0) / (pi_x / 3.0);
+    }
+
+    float reconstruct_lanczos3(
+        const std::vector<float>& source,
+        const int width,
+        const int height,
+        const double sample_x,
+        const double sample_y) {
+        const int begin_x = static_cast<int>(std::ceil(sample_x - 3.0));
+        const int end_x = static_cast<int>(std::floor(sample_x + 3.0));
+        const int begin_y = static_cast<int>(std::ceil(sample_y - 3.0));
+        const int end_y = static_cast<int>(std::floor(sample_y + 3.0));
+        double value = 0.0;
+        double weight_sum = 0.0;
+        for (int y = begin_y; y <= end_y; ++y) {
+            const double wy = lanczos3(sample_y - static_cast<double>(y));
+            for (int x = begin_x; x <= end_x; ++x) {
+                const double weight = wy * lanczos3(sample_x - static_cast<double>(x));
+                if (x < 0 || x >= width || y < 0 || y >= height)
+                    continue;
+                value += weight * source[static_cast<size_t>(y) * width + x];
+                weight_sum += weight;
+            }
+        }
+        return std::abs(weight_sum) > 1.0e-12
+                   ? static_cast<float>(value / weight_sum)
+                   : 0.0f;
+    }
+
+    std::vector<float> oracle_undistort_lanczos3_8x8(
+        const std::vector<float>& source,
+        const UndistortParams& params) {
+        constexpr int quadrature = 8;
+        std::vector<float> result(
+            static_cast<size_t>(params.dst_width) * params.dst_height, 0.0f);
+        for (int oy = 0; oy < params.dst_height; ++oy) {
+            for (int ox = 0; ox < params.dst_width; ++ox) {
+                double value = 0.0;
+                for (int qy = 0; qy < quadrature; ++qy) {
+                    for (int qx = 0; qx < quadrature; ++qx) {
+                        const double px = ox + (qx + 0.5) / quadrature;
+                        const double py = oy + (qy + 0.5) / quadrature;
+                        const float nx = static_cast<float>((px - params.dst_cx) / params.dst_fx);
+                        const float ny = static_cast<float>((py - params.dst_cy) / params.dst_fy);
+                        const auto [dx, dy] = distort(nx, ny, params);
+                        const double sx = dx * params.src_fx + params.src_cx - 0.5;
+                        const double sy = dy * params.src_fy + params.src_cy - 0.5;
+                        value += reconstruct_lanczos3(
+                            source, params.src_width, params.src_height, sx, sy);
+                    }
+                }
+                result[static_cast<size_t>(oy) * params.dst_width + ox] =
+                    static_cast<float>(value / (quadrature * quadrature));
+            }
+        }
+        return result;
+    }
+
+    double laplacian_energy(
+        const float* const image, const int width, const int height) {
+        double energy = 0.0;
+        size_t samples = 0;
+        for (int y = 1; y + 1 < height; ++y) {
+            for (int x = 1; x + 1 < width; ++x) {
+                const size_t index = static_cast<size_t>(y) * width + x;
+                const double laplacian =
+                    -4.0 * image[index] + image[index - 1] + image[index + 1] +
+                    image[index - width] + image[index + width];
+                energy += laplacian * laplacian;
+                ++samples;
+            }
+        }
+        return energy / static_cast<double>(samples);
+    }
+
+    // Catches a fixed sample lattice aliasing under strong minification: with eight samples per axis over
+    // 32 source pixels, every sample lands on the same phase of a four-pixel stripe pattern.
+    TEST(UndistortResampling, StrongMinificationAveragesTheWholeFootprint) {
+        constexpr int source_width = 512;
+        constexpr int source_height = 64;
+        constexpr int factor = 32;
+        UndistortParams params{};
+        params.model_type = CameraModelType::PINHOLE;
+        params.src_width = source_width;
+        params.src_height = source_height;
+        params.src_fx = params.src_fy = 400.0f;
+        params.src_cx = 0.5f * source_width;
+        params.src_cy = 0.5f * source_height;
+        params.dst_width = source_width / factor;
+        params.dst_height = source_height / factor;
+        params.dst_fx = params.dst_fy = params.src_fx / factor;
+        params.dst_cx = params.src_cx / factor;
+        params.dst_cy = params.src_cy / factor;
+
+        std::vector<float> stripes(static_cast<size_t>(source_width) * source_height);
+        for (size_t i = 0; i < stripes.size(); ++i)
+            stripes[i] = (i % 4 == 1 || i % 4 == 2) ? 1.0f : 0.0f;
+        const auto input = Tensor::from_vector(
+            stripes, {1, static_cast<size_t>(source_height), static_cast<size_t>(source_width)}, Device::GPU);
+        const auto output = undistort_image(input, params, nullptr).cpu().contiguous();
+        ASSERT_EQ(output.numel(), static_cast<size_t>(params.dst_width * params.dst_height));
+        const float* const values = output.ptr<float>();
+        for (size_t i = 0; i < output.numel(); ++i)
+            EXPECT_NEAR(values[i], 0.5f, 0.02f) << i;
+    }
+    TEST(UndistortResampling, MatchesEightByEightOracle) {
+        const auto native = compute_undistort_params(
+            187.5f, 187.5f, 96.0f, 54.0f, 192, 108,
+            Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+            Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+            CameraModelType::PINHOLE, 0.0f);
+        const auto params = prepare_undistort_params(native, 192, 108, 1, 120);
+
+        std::vector<float> source(static_cast<size_t>(params.src_width) * params.src_height);
+        for (int y = 0; y < params.src_height; ++y) {
+            for (int x = 0; x < params.src_width; ++x) {
+                const float value = 0.5f + 0.22f * std::sin(2.0f * std::numbers::pi_v<float> * 0.18f * x) +
+                                    0.17f * std::cos(2.0f * std::numbers::pi_v<float> * 0.11f * y);
+                source[static_cast<size_t>(y) * params.src_width + x] = std::clamp(value, 0.0f, 1.0f);
+            }
+        }
+        const auto reference = oracle_undistort_lanczos3_8x8(source, params);
+        const auto input = Tensor::from_vector(
+            source, {1, static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
+            Device::GPU);
+        const auto output = undistort_image(input, params, nullptr).cpu().contiguous();
+        const float* const actual = output.ptr<float>();
+        double squared_error = 0.0;
+        for (size_t i = 0; i < reference.size(); ++i) {
+            const double difference = static_cast<double>(actual[i]) - reference[i];
+            squared_error += difference * difference;
+        }
+        const double psnr = -10.0 * std::log10(squared_error / static_cast<double>(reference.size()));
+        const double hf_ratio = laplacian_energy(actual, params.dst_width, params.dst_height) /
+                                laplacian_energy(reference.data(), params.dst_width, params.dst_height);
+        EXPECT_GE(psnr, 58.0);
+        EXPECT_GE(hf_ratio, 0.95);
+        EXPECT_LE(hf_ratio, 1.10);
+    }
+
+    TEST(UndistortResampling, CpuLanczosPreservesZerosAndNearIntegerBorderWeights) {
+        const std::vector<float> source = {0.2f, 0.3f, 0.4f,
+                                           0.8f, 0.7f, 0.6f,
+                                           0.4f, 0.5f, 0.6f};
+        const auto input = Tensor::from_vector(source, {1, 3, 3}, Device::CPU);
+        UndistortParams p{};
+        p.model_type = CameraModelType::PINHOLE;
+        p.src_width = p.src_height = 3;
+        p.dst_width = p.dst_height = 1;
+        // Keep the entire output footprint at the same float source coordinate.
+        p.src_fx = p.src_fy = 1.0e-9f;
+        p.dst_fx = p.dst_fy = 1.0f;
+        p.dst_cx = p.dst_cy = 0.5f;
+        p.src_cx = 1.5f;
+        for (const float y : {-1.0f, -1.00000286102294921875f, -0.99999713897705078125f}) {
+            SCOPED_TRACE(y);
+            p.src_cy = y + 0.5f;
+            const float value = undistort_image(input, p, nullptr).item<float>();
+            if (y == -1.0f) {
+                // All in-bounds taps are sinc zeros; use the nearest border pixel.
+                EXPECT_NEAR(value, source[1], 1.0e-6f);
+            } else {
+                EXPECT_NEAR(value, reconstruct_lanczos3(source, 3, 3, 1.0, y), 1.0e-6f);
+            }
+        }
+    }
+
+    TEST(UndistortResampling, PreservesConstantWithDistortionAndBorderRenormalization) {
+        const auto native = compute_undistort_params(
+            62.5f, 62.5f, 32.0f, 20.0f, 64, 40,
+            Tensor::from_vector({0.10f, -0.33f, 0.85f}, {3}, Device::CPU),
+            Tensor::from_vector({0.001f, -0.001f}, {2}, Device::CPU),
+            CameraModelType::PINHOLE, 0.0f);
+        const auto params = prepare_undistort_params(native, 64, 40, 1, 40);
+        const auto source = Tensor::ones({3, 40, 64}, Device::GPU) * 0.625f;
+        const auto output = undistort_image(source, params, nullptr);
+        EXPECT_LE((output - 0.625f).abs().max().item<float>(), 2.0e-5f);
+    }
+
+    TEST(UndistortResampling, IdentityIsExact) {
+        UndistortParams params{};
+        params.src_width = params.dst_width = 37;
+        params.src_height = params.dst_height = 23;
+        params.src_fx = params.dst_fx = 31.25f;
+        params.src_fy = params.dst_fy = 30.75f;
+        params.src_cx = params.dst_cx = 18.25f;
+        params.src_cy = params.dst_cy = 11.75f;
+        params.model_type = CameraModelType::PINHOLE;
+        const auto source = Tensor::randn({3, 23, 37}, Device::GPU);
+        const auto output = undistort_image(source, params, nullptr);
+        const auto difference = (source - output).abs().max().item<float>();
+        EXPECT_EQ(difference, 0.0f);
+    }
 } // namespace

@@ -2809,7 +2809,10 @@ namespace lfs::core::internal {
     }
 
     Tensor MetalBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, const bool mask,
-                                            ExecContext) {
+                                            ExecContext execution) {
+        // image_resample knows no view rotation and no panorama taps; views take the warp, as on Vulkan.
+        if (p.view)
+            return image_warp(input, p, mask ? 1 : 0, false, nullptr, execution);
         LFS_FACADE_TRACE(image_undistort);
         ResampleParams params{.src_fx = p.src_fx,
                               .src_fy = p.src_fy,
