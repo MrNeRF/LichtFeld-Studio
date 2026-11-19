@@ -1917,6 +1917,32 @@ namespace {
         EXPECT_LE(worst, tolerance) << what;
     }
 
+    // The backend undistort entry follows Vulkan's: a camera view goes through the warp, because the
+    // ordinary resampler knows no view rotation and no panorama taps.
+    TEST_F(TensorMetal, ImageUndistortRoutesCameraViewsThroughTheWarp) {
+        const GpuBackendScope scope(GpuBackend::Metal);
+        unsigned seed = 880;
+        for (const auto& source : view_sources()) {
+            const auto views = plan_camera_views(*source.camera, source.lens_limit);
+            ASSERT_FALSE(views.empty());
+            for (const auto& view : views) {
+                const auto& p = view.params;
+                SCOPED_TRACE(::testing::Message() << "model " << int(p.model_type) << " width " << p.src_width << " view " << view.suffix);
+                ASSERT_TRUE(is_view(p));
+                const Tensor image = to_metal(random_tensor(size_t(3) * p.src_width * p.src_height, 0.0f, 1.0f, seed++)
+                                                  .reshape(TensorShape{3, size_t(p.src_height), size_t(p.src_width)}));
+                for (const bool mask : {false, true}) {
+                    const Tensor input = mask ? image.slice(0, 0, 1).squeeze(0).contiguous() : image;
+                    auto& ops = internal::backend_ops_for(input);
+                    const auto undistorted = ops.image_undistort(input, p, mask, {});
+                    const auto warped = ops.image_warp(input, p, mask ? 1 : 0, false, nullptr, {});
+                    ASSERT_EQ(undistorted.shape(), warped.shape());
+                    EXPECT_EQ(undistorted.cpu().to_vector(), warped.cpu().to_vector()) << "mask " << mask;
+                }
+            }
+        }
+    }
+
     // Each source type and filter of the warp maps camera views like the host reference: Float32 and
     // UInt8 images through the Lanczos filter, and masks, depths and normals through the area filter.
     TEST_F(TensorMetal, CameraViewWarpsMatchTheHostReference) {
