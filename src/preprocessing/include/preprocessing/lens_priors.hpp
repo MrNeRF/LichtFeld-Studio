@@ -28,6 +28,8 @@ namespace lfs::preprocessing {
     };
 
     [[nodiscard]] LensCamera make_lens_camera(const core::Camera& photograph);
+    // How far off the axis a fisheye's radial polynomial keeps increasing (pi if it always does), for the view
+    // planner, which finds the image border itself; 0 for any other lens.
     [[nodiscard]] float lens_max_angle(const LensCamera& camera);
 
     // A square pinhole view inside the lens; `rotation` (row-major) maps camera rays into the face frame.

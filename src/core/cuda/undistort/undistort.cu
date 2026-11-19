@@ -38,6 +38,8 @@ namespace lfs::core {
         constexpr float COLMAP_MIN_SCALE = 0.2f;
         constexpr float COLMAP_MAX_SCALE = 2.0f;
         constexpr int AREA_QUADRATURE = 8;
+        // Bound on area samples per axis of a panorama face pixel near a pole, where the columns converge.
+        constexpr int MAX_POLAR_QUADRATURE = 64;
         constexpr int LANCZOS_RADIUS = 3;
         constexpr int OUTPUT_TILE_ROWS = 256;
         constexpr float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
@@ -575,20 +577,36 @@ namespace lfs::core {
             if (ox >= params.dst_width || oy >= params.dst_height)
                 return;
 
+            const bool panorama = params.model_type == CameraModelType::EQUIRECTANGULAR;
+            int samples = quadrature;
+            if (panorama) {
+                // A face pixel spans 1 / cos(latitude) as many panorama columns as rows, so it takes that many more
+                // samples per axis to keep one per column it covers.
+                const float nx = (static_cast<float>(ox) + 0.5f - params.dst_cx) / params.dst_fx;
+                const float ny = (static_cast<float>(oy) + 0.5f - params.dst_cy) / params.dst_fy;
+                const auto* r = params.view_rotation;
+                const float x = r[0] * nx + r[1] * ny + r[2];
+                const float y = r[3] * nx + r[4] * ny + r[5];
+                const float z = r[6] * nx + r[7] * ny + r[8];
+                const float cos_latitude = hypotf(x, z) / sqrtf(x * x + y * y + z * z);
+                const float columns = fmaxf(params.src_fx / params.dst_fx, params.src_fy / params.dst_fy) /
+                                      fmaxf(cos_latitude, 1.0f / MAX_POLAR_QUADRATURE);
+                samples = max(quadrature, min(MAX_POLAR_QUADRATURE, static_cast<int>(ceilf(columns))));
+            }
             float result[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float valid_samples = 0.0f;
             const int input_plane = params.src_width * params.src_height;
-            for (int qy = 0; qy < quadrature; ++qy) {
-                for (int qx = 0; qx < quadrature; ++qx) {
+            for (int qy = 0; qy < samples; ++qy) {
+                for (int qx = 0; qx < samples; ++qx) {
                     const float pixel_x = static_cast<float>(ox) +
-                                          (static_cast<float>(qx) + 0.5f) / quadrature;
+                                          (static_cast<float>(qx) + 0.5f) / samples;
                     const float pixel_y = static_cast<float>(oy) +
-                                          (static_cast<float>(qy) + 0.5f) / quadrature;
+                                          (static_cast<float>(qy) + 0.5f) / samples;
                     const float2 source = source_position(pixel_x, pixel_y, params);
                     if (mode == AreaFilterMode::DEPTH) {
                         const float sample = bilinear_sample_renormalized(
                             src, params.src_width, params.src_height, params.src_width,
-                            source.x, source.y, true, params.model_type == CameraModelType::EQUIRECTANGULAR);
+                            source.x, source.y, true, panorama);
                         if (sample > 0.0f && isfinite(sample)) {
                             result[0] += sample;
                             valid_samples += 1.0f;
@@ -598,7 +616,7 @@ namespace lfs::core {
                             result[channel] += bilinear_sample_renormalized(
                                 src + channel * input_plane,
                                 params.src_width, params.src_height, params.src_width,
-                                source.x, source.y, false, params.model_type == CameraModelType::EQUIRECTANGULAR);
+                                source.x, source.y, false, panorama);
                         }
                         valid_samples += 1.0f;
                     }

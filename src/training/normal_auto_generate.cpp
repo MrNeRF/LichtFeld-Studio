@@ -253,15 +253,12 @@ namespace lfs::training {
             if (!groups)
                 return std::move(groups).error();
             for (const auto& [photo, drawn] : *groups) {
-                for (const auto& camera : drawn) {
-                    if (camera == photo) {
-                        photographs.push_back(camera);
-                    } else {
-                        if (included.insert(photo.get()).second)
-                            photographs.push_back(photo);
+                // Evaluating on all images hands the same cameras in as both lists.
+                if (included.insert(photo.get()).second)
+                    photographs.push_back(photo);
+                for (const auto& camera : drawn)
+                    if (camera != photo)
                         views.emplace_back(camera.get(), photo.get());
-                    }
-                }
             }
             if (i == 0)
                 training_count = photographs.size();

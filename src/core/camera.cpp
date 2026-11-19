@@ -204,6 +204,7 @@ namespace lfs::core {
             params.dst_fx, params.dst_fy, params.dst_cx, params.dst_cy, Tensor{}, Tensor{},
             CameraModelType::PINHOLE, image_name, _image_path, _mask_path,
             params.dst_width, params.dst_height, uid, _camera_id, _depth_path, _normal_path);
+        view->_photograph_uid = _uid;
         view->_split = _split;
         view->_has_alpha = _has_alpha;
         view->_has_image = _has_image;
@@ -235,6 +236,7 @@ namespace lfs::core {
           _FoVy(other._FoVy),
           _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),
@@ -310,6 +312,7 @@ namespace lfs::core {
             _FoVy = other._FoVy;
             _uid = other._uid;
             _camera_id = other._camera_id;
+            _photograph_uid = other._photograph_uid;
             _focal_x = other._focal_x;
             _focal_y = other._focal_y;
             _center_x = other._center_x;
@@ -378,6 +381,7 @@ namespace lfs::core {
     Camera::Camera(const Camera& other, const Tensor& transform)
         : _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),

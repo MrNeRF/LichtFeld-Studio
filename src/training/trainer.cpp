@@ -124,55 +124,78 @@
 
 namespace lfs::training {
 
+    lfs::Status expand_camera_views(const lfs::core::Scene& scene,
+                                    std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+                                    std::unordered_map<int, int>* legacy_uids) {
+        using lfs::core::Camera;
+        using lfs::core::kPanoramaViewCount;
+        auto photographs = scene.getAllCameras();
+        int64_t first = 0;
+        for (const auto& camera : photographs)
+            first = std::max(first, int64_t{camera->uid()} + 1);
+        // Every scene photograph that is split, trained or not, takes a block of exactly its view count after the
+        // largest scene uid, in ascending uid order: the ids depend on the scene alone, so a resumed run rebuilds them.
+        std::ranges::sort(photographs, {}, [](const auto& camera) { return camera->uid(); });
+        std::unordered_map<const Camera*, std::pair<int64_t, std::vector<lfs::core::PinholeView>>> blocks;
+        int64_t next = first;
+        for (const auto& camera : photographs) {
+            const auto model = camera->camera_model_type();
+            float lens_limit = 0;
+            if (model == core::CameraModelType::FISHEYE || model == core::CameraModelType::THIN_PRISM_FISHEYE)
+                lens_limit = preprocessing::lens_max_angle(preprocessing::make_lens_camera(*camera));
+            auto plan = plan_camera_views(*camera, lens_limit);
+            if (plan.empty())
+                continue;
+            if (camera->uid() < 0 || next + static_cast<int64_t>(plan.size()) - 1 > std::numeric_limits<int>::max())
+                return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
+                                                             .domain = lfs::ErrorDomain::Training,
+                                                             .user_message = "View camera UIDs exceed the supported range.",
+                                                             .detection = LFS_SOURCE_SITE_CURRENT()}));
+            const auto count = static_cast<int64_t>(plan.size());
+            blocks.emplace(camera.get(), std::pair{next, std::move(plan)});
+            next += count;
+        }
+        std::vector<std::shared_ptr<Camera>> expanded;
+        expanded.reserve(cameras.size());
+        size_t sources = 0, faces = 0;
+        int min_size = std::numeric_limits<int>::max(), max_size = 0;
+        for (const auto& camera : cameras) {
+            const auto block = blocks.find(camera.get());
+            if (block == blocks.end()) {
+                expanded.push_back(camera);
+                continue;
+            }
+            const auto& [uid, plan] = block->second;
+            const auto views = make_camera_views(*camera, plan, static_cast<int>(uid));
+            if (legacy_uids) {
+                // The ids checkpoints of earlier versions index the per-camera state of these views by.
+                const int64_t legacy = first + int64_t{kPanoramaViewCount} * camera->uid();
+                for (const auto& view : views)
+                    if (const int64_t id = legacy + (view->uid() - uid);
+                        id != view->uid() && id <= std::numeric_limits<int>::max())
+                        legacy_uids->emplace(view->uid(), static_cast<int>(id));
+            }
+            expanded.insert(expanded.end(), views.begin(), views.end());
+            for (const auto& view : views) {
+                min_size = std::min({min_size, view->camera_width(), view->camera_height()});
+                max_size = std::max({max_size, view->camera_width(), view->camera_height()});
+            }
+            ++sources;
+            faces += views.size();
+        }
+        if (sources) {
+            cameras = std::move(expanded);
+            const auto size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
+            LOG_INFO("Split {} photographs into {} pinhole views (face size {} px)", sources, faces, size);
+        }
+        return {};
+    }
+
     namespace {
         // Extra free VRAM densification keeps after each recovered OOM.
         constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
         // Longest pause between retries of a step that keeps running out of VRAM.
         constexpr int kMaxStepOomBackoffMs = 2000;
-
-        lfs::Status expand_camera_views(const lfs::core::Scene& scene,
-                                        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
-            using lfs::core::Camera;
-            using lfs::core::kPanoramaViewCount;
-            int64_t first = 0;
-            for (const auto& camera : scene.getAllCameras())
-                first = std::max(first, int64_t{camera->uid()} + 1);
-            std::vector<std::shared_ptr<Camera>> expanded;
-            expanded.reserve(cameras.size());
-            size_t sources = 0, faces = 0;
-            int min_size = std::numeric_limits<int>::max(), max_size = 0;
-            for (const auto& camera : cameras) {
-                const auto model = camera->camera_model_type();
-                float lens_limit = 0;
-                if (model == core::CameraModelType::FISHEYE || model == core::CameraModelType::THIN_PRISM_FISHEYE)
-                    lens_limit = preprocessing::lens_max_angle(preprocessing::make_lens_camera(*camera));
-                const auto plan = plan_camera_views(*camera, lens_limit);
-                if (plan.empty()) {
-                    expanded.push_back(camera);
-                    continue;
-                }
-                const auto uid = first + int64_t{kPanoramaViewCount} * camera->uid();
-                if (camera->uid() < 0 || uid + static_cast<int>(plan.size()) - 1 > std::numeric_limits<int>::max())
-                    return lfs::Status::failure(lfs::make_error({.code = lfs::ErrorCode::BoundsViolation,
-                                                                 .domain = lfs::ErrorDomain::Training,
-                                                                 .user_message = "View camera UIDs exceed the supported range.",
-                                                                 .detection = LFS_SOURCE_SITE_CURRENT()}));
-                const auto views = make_camera_views(*camera, plan, static_cast<int>(uid));
-                expanded.insert(expanded.end(), views.begin(), views.end());
-                for (const auto& view : views) {
-                    min_size = std::min({min_size, view->camera_width(), view->camera_height()});
-                    max_size = std::max({max_size, view->camera_width(), view->camera_height()});
-                }
-                ++sources;
-                faces += views.size();
-            }
-            if (sources) {
-                cameras = std::move(expanded);
-                const auto size = min_size == max_size ? std::to_string(min_size) : std::format("{}-{}", min_size, max_size);
-                LOG_INFO("Split {} photographs into {} pinhole views (face size {} px)", sources, faces, size);
-            }
-            return {};
-        }
 
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
@@ -1287,6 +1310,62 @@ namespace lfs::training {
             return lfs::Status::failure(std::move(slots).error());
         calibration_correction_ = std::make_unique<CalibrationCorrection>(*slots);
         return {};
+    }
+
+    void Trainer::adopt_legacy_view_uids() {
+        if (legacy_view_uids_.empty() || !train_dataset_)
+            return;
+        const auto legacy = [&](const int uid) {
+            const auto it = legacy_view_uids_.find(uid);
+            return it == legacy_view_uids_.end() ? uid : it->second;
+        };
+        // Both id schemes keep the order of the views and no view's id exceeds its earlier one, so the slot count
+        // tells them apart: equal counts mean equal ids.
+        if (bilateral_grid_) {
+            const auto slots = camera_slot_count();
+            int legacy_slots = 0;
+            for (const auto& camera : scene_->getAllCameras())
+                legacy_slots = std::max(legacy_slots, camera->uid() + 1);
+            for (const auto& dataset : {train_dataset_, val_dataset_})
+                if (dataset)
+                    for (const auto& camera : dataset->get_cameras())
+                        legacy_slots = std::max(legacy_slots, legacy(camera->uid()) + 1);
+            if (slots && bilateral_grid_->num_images() != *slots && bilateral_grid_->num_images() == legacy_slots) {
+                LOG_WARN("The checkpoint's bilateral grid indexes pinhole views by the ids of an earlier version; "
+                         "restarting the bilateral grid");
+                bilateral_grid_.reset();
+                if (auto init = initialize_bilateral_grid(); !init)
+                    LOG_WARN("Failed to restart the bilateral grid: {}", init.error());
+            }
+        }
+        // PPISP numbers its frames in training order, which the ids do not change: renaming the frames maps them.
+        if (ppisp_) {
+            const auto& cameras = train_dataset_->get_cameras();
+            const auto known = [&](const auto& id) {
+                return std::ranges::all_of(cameras, [&](const auto& camera) { return ppisp_->is_known_frame(id(camera->uid())); });
+            };
+            // Earlier ids show as a frame beyond every id of this run, or as training views that are only known by
+            // their earlier ids.
+            const auto slots = camera_slot_count();
+            const bool beyond = slots && std::ranges::any_of(legacy_view_uids_, [&](const auto& ids) {
+                                    return ids.second >= *slots && ppisp_->is_known_frame(ids.second);
+                                });
+            if (beyond || (!known(std::identity{}) && known(legacy))) {
+                // Every view of the run is renamed, the held-out ones too: left alone, their earlier ids are the
+                // ids other views have now.
+                std::unordered_map<int, int> renamed;
+                for (const auto& [uid, earlier] : legacy_view_uids_)
+                    renamed.emplace(earlier, uid);
+                if (ppisp_->rename_frames(renamed)) {
+                    LOG_INFO("PPISP: mapped {} pinhole views from the ids of an earlier version", renamed.size());
+                } else {
+                    LOG_WARN("The checkpoint's PPISP frames cannot be mapped to the pinhole views; restarting PPISP");
+                    ppisp_.reset();
+                    if (auto init = initialize_ppisp(); !init)
+                        LOG_WARN("Failed to restart PPISP: {}", init.error());
+                }
+            }
+        }
     }
 
     std::expected<void, std::string> Trainer::initialize_bilateral_grid() {
@@ -2654,7 +2733,20 @@ namespace lfs::training {
 
         // Prefer a precomputed sidecar (written by `preprocess` or a prior run);
         // fall back to fitting here and write it through so the next run is fast.
-        const auto& cameras = train_dataset_->get_cameras();
+        // Anchors belong to photographs: a view's prior is resampled from its photograph's map, which the estimator
+        // scaled as a whole, so a view takes its photograph's anchor. Fitting the photographs also keeps the sidecar
+        // the one `preprocess` writes and a run without views reads.
+        std::vector<lfs::core::CameraViewGroup> photographs;
+        if (auto grouped = lfs::core::group_camera_views(train_dataset_->get_cameras(), scene_->getAllCameras())) {
+            photographs = std::move(*grouped);
+        } else {
+            for (const auto& cam : train_dataset_->get_cameras())
+                photographs.push_back({cam, {cam}});
+        }
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        cameras.reserve(photographs.size());
+        for (const auto& group : photographs)
+            cameras.push_back(group.photograph);
         const auto sidecar = depthAnchorSidecarPath(cameras);
 
         nvtxRangePush("depth_anchors/fingerprint");
@@ -2690,13 +2782,16 @@ namespace lfs::training {
 
         nvtxRangePush("depth_anchors/resolve");
         size_t processed = 0;
-        for (const auto& cam : cameras) {
-            if (!cam || !cam->has_depth()) {
-                continue;
-            }
-            ++processed;
-            if (const auto it = raw.find(cam->image_name()); it != raw.end()) {
-                depth_anchors_[cam->uid()] = it->second;
+        for (const auto& [photograph, drawn] : photographs) {
+            const auto it = raw.find(photograph->image_name());
+            for (const auto& cam : drawn) {
+                if (!cam || !cam->has_depth()) {
+                    continue;
+                }
+                ++processed;
+                if (it != raw.end()) {
+                    depth_anchors_[cam->uid()] = it->second;
+                }
             }
         }
 
@@ -2808,19 +2903,19 @@ namespace lfs::training {
                 continue;
             }
 
-            const auto it = heatmap->uid_to_slot.find(camera->uid());
-            if (it == heatmap->uid_to_slot.end()) {
+            const auto it = heatmap->photograph_to_entry.find(camera->photograph_uid());
+            if (it == heatmap->photograph_to_entry.end()) {
                 continue;
             }
 
-            const size_t slot = it->second;
-            if (slot >= heatmap->published_colors.size() ||
-                slot >= heatmap->published_valid.size() ||
-                !heatmap->published_valid[slot]) {
+            const size_t entry = it->second;
+            if (entry >= heatmap->published_colors.size() ||
+                entry >= heatmap->published_valid.size() ||
+                !heatmap->published_valid[entry]) {
                 continue;
             }
 
-            colors[i] = heatmap->published_colors[slot];
+            colors[i] = heatmap->published_colors[entry];
         }
 
         return true;
@@ -2856,6 +2951,9 @@ namespace lfs::training {
             const size_t slot = heatmap->camera_uids.size();
             heatmap->camera_uids.push_back(uid);
             heatmap->uid_to_slot.emplace(uid, slot);
+            const auto entry = heatmap->photograph_to_entry.try_emplace(
+                camera->photograph_uid(), heatmap->photograph_to_entry.size());
+            heatmap->slot_entry.push_back(entry.first->second);
         }
 
         if (heatmap->camera_uids.empty()) {
@@ -2866,8 +2964,8 @@ namespace lfs::training {
         heatmap->latest_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CUDA);
         heatmap->ema_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CUDA);
         heatmap->ema_loss_stage_cpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CPU);
-        heatmap->published_colors.resize(heatmap->camera_uids.size());
-        heatmap->published_valid.assign(heatmap->camera_uids.size(), 0u);
+        heatmap->published_colors.resize(heatmap->photograph_to_entry.size());
+        heatmap->published_valid.assign(heatmap->photograph_to_entry.size(), 0u);
 
         if (const cudaError_t err = cudaStreamCreateWithFlags(&heatmap->copy_stream, cudaStreamNonBlocking);
             err != cudaSuccess) {
@@ -2924,15 +3022,30 @@ namespace lfs::training {
             return;
         }
 
-        const size_t count = heatmap->camera_uids.size();
         const float* ema_ptr = heatmap->ema_loss_stage_cpu.ptr<float>();
+        // An entry's loss is the mean running loss of its slots that have one. The views of a photograph cover it
+        // about evenly, so their mean stands for the whole photograph; any other camera keeps its own loss.
+        const size_t count = heatmap->photograph_to_entry.size();
+        std::vector<double> sums(count, 0.0);
+        std::vector<int> terms(count, 0);
+        for (size_t slot = 0; slot < heatmap->camera_uids.size(); ++slot) {
+            const float loss = ema_ptr[slot];
+            if (!std::isfinite(loss) || loss < 0.0f)
+                continue;
+            sums[heatmap->slot_entry[slot]] += loss;
+            ++terms[heatmap->slot_entry[slot]];
+        }
+        std::vector<float> losses(count, -1.0f);
+        for (size_t i = 0; i < count; ++i)
+            if (terms[i] > 0)
+                losses[i] = static_cast<float>(sums[i] / terms[i]);
 
         float min_loss = std::numeric_limits<float>::infinity();
         float max_loss = -std::numeric_limits<float>::infinity();
         size_t seen_count = 0;
 
         for (size_t i = 0; i < count; ++i) {
-            const float loss = ema_ptr[i];
+            const float loss = losses[i];
             if (!std::isfinite(loss) || loss < 0.0f) {
                 continue;
             }
@@ -2949,7 +3062,7 @@ namespace lfs::training {
             const float inv_span = degenerate_span ? 0.0f : 1.0f / (max_loss - min_loss);
 
             for (size_t i = 0; i < count; ++i) {
-                const float loss = ema_ptr[i];
+                const float loss = losses[i];
                 if (!std::isfinite(loss) || loss < 0.0f) {
                     continue;
                 }
@@ -3147,8 +3260,9 @@ namespace lfs::training {
                 }
 
                 train_frame_scale_ = camera_derived_frame_scale(source_cameras);
+                legacy_view_uids_.clear();
                 if (params.optimization.undistort) {
-                    auto expanded = expand_camera_views(*scene_, source_cameras);
+                    auto expanded = expand_camera_views(*scene_, source_cameras, &legacy_view_uids_);
                     if (!expanded)
                         return std::unexpected(std::string(expanded.error().user_message()));
                 }
@@ -10728,6 +10842,7 @@ namespace lfs::training {
         if (!result) {
             return result;
         }
+        adopt_legacy_view_uids();
         if (!params_.optimization.calibration_correction)
             calibration_correction_.reset();
         if (ppisp_) {
