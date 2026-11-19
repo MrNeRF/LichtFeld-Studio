@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -119,6 +120,8 @@ namespace lfs::vis {
             keyframe_easing_changed_callback_ = std::move(callback);
         }
         bool removeKeyframeById(sequencer::KeyframeId id);
+        // Groups removals into one undo step and emits one list-change event if any key was removed.
+        bool removeKeyframesById(std::span<const sequencer::KeyframeId> ids);
         bool removeSelectedKeyframe();
         void setKeyframeRemovedCallback(std::function<void(const sequencer::Keyframe&, float)> callback) {
             keyframe_removed_callback_ = std::move(callback);

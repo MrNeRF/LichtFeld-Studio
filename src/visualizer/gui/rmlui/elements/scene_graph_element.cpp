@@ -33,7 +33,6 @@
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -2088,14 +2087,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
-            if (node->type == core::NodeType::KEYFRAME) {
-                if (node->keyframe && !static_cast<bool>(node->locked))
-                    cmd::SequencerDeleteKeyframe{.keyframe_index = node->keyframe->keyframe_index}.emit();
-                return;
+            if (node->type != core::NodeType::KEYFRAME) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
+                    return;
             }
-            const auto snapshot_it = node_snapshots_.find(node_id);
-            if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
-                return;
             requestDeleteNodes({node_id});
         } else if (action == "toggle-training") {
             if (node->type == core::NodeType::CAMERA) {
@@ -3027,13 +3023,7 @@ namespace lfs::vis::gui {
                 keyframe_ids.push_back(keyframe->id);
             }
             // Resolve stable IDs before deletion shifts indices and rebuilds scene nodes.
-            op::TransactionGuard transaction(keyframe_ids.size() == 1 ? "Delete Keyframe" : "Delete Keyframes");
-            bool removed_any = false;
-            for (const auto id : keyframe_ids)
-                removed_any |= controller.removeKeyframeById(id);
-            transaction.commit();
-            if (removed_any)
-                state::KeyframeListChanged{.count = controller.timeline().realKeyframeCount()}.emit();
+            controller.removeKeyframesById(keyframe_ids);
             return;
         }
         std::vector<core::Uuid> node_uuids;
