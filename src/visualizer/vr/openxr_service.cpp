@@ -4,14 +4,20 @@
 #include "openxr_service.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "openxr_runtimes.hpp"
 #include "preferences.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "vr_hand_model.hpp"
 #include "vr_math.hpp"
+#include "vr_tracked_hands.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <optional>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <openxr/openxr.h>
@@ -22,6 +28,18 @@ namespace lfs::vis::vr {
     namespace {
         constexpr XrViewConfigurationType kStereo = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
         const float kSnapTurnRadians = glm::radians(30.0f);
+        // A grip holds the scene from kGripEngage until it relaxes to kGripRelease.
+        constexpr float kGripEngage = 0.6f;
+        constexpr float kGripRelease = 0.4f;
+        // A bare hand holds it from the fist it closes, kFistEngage of
+        // fistClosure(), until it opens to kFistRelease, and only where the
+        // user sees the hand: one that leaves the view lets go, once
+        // kHandSightGrace past its edge.
+        constexpr float kFistEngage = 0.64f;
+        constexpr float kFistRelease = 0.5f;
+        const float kHandSightGrace = glm::radians(4.0f);
+        // How long a session asked to exit is given to stop before it is destroyed.
+        constexpr std::chrono::milliseconds kSessionEndTimeout{1000};
         constexpr std::array<const char*, 9> kSessionStates = {
             "unknown", "idle", "ready", "synchronized", "visible", "focused", "stopping", "loss pending", "exiting"};
         [[nodiscard]] lfs::Error vrError(std::string message) {
@@ -77,6 +95,9 @@ namespace lfs::vis::vr {
             PFN_xrGetVulkanGraphicsRequirements2KHR graphics_requirements = nullptr;
         } vk;
         bool lost = false;
+        // The runtime was given back when the last session stopped, so that it
+        // no longer counts the app as running; start() joins it again.
+        bool given_back = false;
         std::string runtime_name;
         // A localization key and its argument; the UI localizes them when shown.
         const char* status_key = "vr.status_off";
@@ -86,6 +107,7 @@ namespace lfs::vis::vr {
             status_detail = std::move(detail);
         }
         float move_speed = VrPreferences{}.move_speed;
+        bool show_hands = VrPreferences{}.show_hands;
 
         // Alive between start() and stop().
         struct Eye {
@@ -94,6 +116,9 @@ namespace lfs::vis::vr {
             std::vector<XrSwapchainImageVulkan2KHR> images;
             std::uint32_t index = 0;
             bool acquired = false; // acquired and waited, so it must be released
+            // Where the eye is and what it sees this frame: the hands are
+            // drawn from it.
+            TrackedHands::EyePose pose;
         };
         struct Session {
             VulkanContext* context = nullptr;
@@ -103,6 +128,10 @@ namespace lfs::vis::vr {
             XrActionSet action_set = XR_NULL_HANDLE;
             XrAction move = XR_NULL_HANDLE, turn = XR_NULL_HANDLE;
             XrAction up = XR_NULL_HANDLE, down = XR_NULL_HANDLE, center = XR_NULL_HANDLE;
+            // Read once per hand through its subaction path: left, right.
+            XrAction grab = XR_NULL_HANDLE, hand_pose = XR_NULL_HANDLE;
+            std::array<XrPath, 2> hands{XR_NULL_PATH, XR_NULL_PATH};
+            std::array<XrSpace, 2> hand_spaces{XR_NULL_HANDLE, XR_NULL_HANDLE};
             XrSessionState state = XR_SESSION_STATE_UNKNOWN;
             bool running = false;
             bool ended = false;
@@ -122,9 +151,18 @@ namespace lfs::vis::vr {
             bool center_down = false;
             int pending_turns = 0;
             SnapTurnHysteresis snap;
+            std::array<bool, 2> gripping{false, false};
+            std::array<HandSmoother, 2> steady;
+            // Left, right: whether the hand was bare when last tracked: a bare
+            // hand grabs with a fist, not with the grip of a controller.
+            std::array<bool, 2> bare_hands{false, false};
+            GrabManipulation grab_motion;
             XrTime last_time = 0;
             std::optional<XrEventDataReferenceSpaceChangePending> space_change;
         } s;
+        // The hands of the session; kept apart from it because they are not
+        // copied.
+        TrackedHands tracked_hands;
 
         [[nodiscard]] lfs::Status check(const XrResult result, const std::string_view what) const {
             if (XR_SUCCEEDED(result))
@@ -148,7 +186,11 @@ namespace lfs::vis::vr {
             return s.context->withGraphicsQueue(std::forward<Call>(call));
         }
 
-        lfs::Status prepare() {
+        // Finds the runtime and the headset. At startup the runtime then creates
+        // the Vulkan instance and device itself, through deviceHooks(). An app
+        // that already runs passes its context: its device is kept, when it has
+        // what the runtime asks for.
+        lfs::Status prepare(const VulkanContext* const running = nullptr) {
             std::uint32_t count = 0;
             if (auto st = check(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr),
                                 "No OpenXR runtime found");
@@ -159,52 +201,160 @@ namespace lfs::vis::vr {
                                 "Could not query your OpenXR runtime");
                 !st)
                 return st;
-            if (std::ranges::none_of(extensions, [](const XrExtensionProperties& extension) {
-                    return std::strcmp(extension.extensionName, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME) == 0;
-                }))
-                return lfs::Status::failure(vrError("Your OpenXR runtime does not support Vulkan rendering."));
+            const auto offered = [&extensions](const char* const name) {
+                return std::ranges::any_of(extensions, [name](const XrExtensionProperties& extension) {
+                    return std::strcmp(extension.extensionName, name) == 0;
+                });
+            };
+            const char* const vulkan = running ? XR_KHR_VULKAN_ENABLE_EXTENSION_NAME : XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
+            if (!offered(vulkan)) {
+                return lfs::Status::failure(vrError(
+                    running ? "Your OpenXR runtime can only be joined when LichtFeld Studio starts. Restart it with the headset connected."
+                            : "Your OpenXR runtime does not support Vulkan rendering."));
+            }
 
-            const char* const enabled[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+            std::vector<const char*> enabled{vulkan};
+            // Optional: the hands are drawn when the runtime tracks them.
+            const bool hands = offered(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+            const bool hand_data_sources = hands && offered(XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
+            if (hands)
+                enabled.push_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+            if (hand_data_sources)
+                enabled.push_back(XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
             XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
             copyName(create.applicationInfo.applicationName, "LichtFeld Studio");
             create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-            create.enabledExtensionCount = 1;
-            create.enabledExtensionNames = enabled;
+            create.enabledExtensionCount = static_cast<std::uint32_t>(enabled.size());
+            create.enabledExtensionNames = enabled.data();
             if (auto st = check(xrCreateInstance(&create, &instance), "Could not start your OpenXR runtime"); !st)
                 return st;
             XrSystemGetInfo system_info{XR_TYPE_SYSTEM_GET_INFO};
             system_info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
             if (auto st = check(xrGetSystem(instance, &system_info, &system),
-                                "No headset found; connect it before starting LichtFeld Studio");
+                                running ? "No headset found; connect it and try again"
+                                        : "No headset found; connect it before starting LichtFeld Studio");
                 !st)
                 return st;
 
             const auto load = [this](auto& function, const char* name) {
                 return check(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&function)), name);
             };
-            for (auto st : {load(vk.create_instance, "xrCreateVulkanInstanceKHR"),
-                            load(vk.create_device, "xrCreateVulkanDeviceKHR"),
-                            load(vk.graphics_device, "xrGetVulkanGraphicsDevice2KHR"),
-                            load(vk.graphics_requirements, "xrGetVulkanGraphicsRequirements2KHR")}) {
-                if (!st)
+            XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
+            if (running) {
+                PFN_xrGetVulkanGraphicsRequirementsKHR requirements_of = nullptr;
+                if (auto st = load(requirements_of, "xrGetVulkanGraphicsRequirementsKHR"); !st)
+                    return st;
+                if (auto st = check(requirements_of(instance, system, &requirements),
+                                    "Could not read the headset's Vulkan requirements");
+                    !st)
+                    return st;
+                if (auto st = checkRunningDevice(*running); !st)
+                    return st;
+            } else {
+                for (auto st : {load(vk.create_instance, "xrCreateVulkanInstanceKHR"),
+                                load(vk.create_device, "xrCreateVulkanDeviceKHR"),
+                                load(vk.graphics_device, "xrGetVulkanGraphicsDevice2KHR"),
+                                load(vk.graphics_requirements, "xrGetVulkanGraphicsRequirements2KHR")}) {
+                    if (!st)
+                        return st;
+                }
+                if (auto st = check(vk.graphics_requirements(instance, system, &requirements),
+                                    "Could not read the headset's Vulkan requirements");
+                    !st)
                     return st;
             }
-            XrGraphicsRequirementsVulkan2KHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
-            if (auto st = check(vk.graphics_requirements(instance, system, &requirements),
-                                "Could not read the headset's Vulkan requirements");
-                !st)
-                return st;
-            constexpr XrVersion vulkan = XR_MAKE_VERSION(1, 3, 0);
-            if (vulkan < requirements.minApiVersionSupported)
+            constexpr XrVersion vulkan_version = XR_MAKE_VERSION(1, 3, 0);
+            if (vulkan_version < requirements.minApiVersionSupported)
                 return lfs::Status::failure(vrError("Your OpenXR runtime requires a Vulkan version newer than 1.3."));
-            if (vulkan > requirements.maxApiVersionSupported)
+            if (vulkan_version > requirements.maxApiVersionSupported)
                 LOG_WARN("The OpenXR runtime was tested with a Vulkan version below 1.3; using Vulkan 1.3");
 
             XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
             if (auto st = check(xrGetInstanceProperties(instance, &properties), "xrGetInstanceProperties"); !st)
                 return st;
             runtime_name = properties.runtimeName;
+
+            tracked_hands.findTracking(hands ? instance : XR_NULL_HANDLE, system, hand_data_sources);
             return {};
+        }
+
+        // XR_KHR_vulkan_enable lets an app keep the Vulkan device it runs on, as
+        // long as it is the headset's GPU and has the extensions the runtime
+        // lists. Anything else can only be set up when the app starts.
+        [[nodiscard]] lfs::Status checkRunningDevice(const VulkanContext& context) const {
+            PFN_xrGetVulkanGraphicsDeviceKHR device_of = nullptr;
+            PFN_xrGetVulkanInstanceExtensionsKHR instance_extensions_of = nullptr;
+            PFN_xrGetVulkanDeviceExtensionsKHR device_extensions_of = nullptr;
+            const auto load = [this](auto& function, const char* name) {
+                return check(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&function)), name);
+            };
+            for (auto st : {load(device_of, "xrGetVulkanGraphicsDeviceKHR"),
+                            load(instance_extensions_of, "xrGetVulkanInstanceExtensionsKHR"),
+                            load(device_extensions_of, "xrGetVulkanDeviceExtensionsKHR")}) {
+                if (!st)
+                    return st;
+            }
+            std::string missing;
+            // The runtime lists the names in one string, separated by spaces.
+            const auto collect = [&](const auto list, const char* const what, const auto enabled) -> lfs::Status {
+                std::uint32_t size = 0;
+                if (auto st = check(list(instance, system, 0, &size, nullptr), what); !st)
+                    return st;
+                std::string names(size, '\0');
+                if (auto st = check(list(instance, system, size, &size, names.data()), what); !st)
+                    return st;
+                std::string_view rest(names.c_str());
+                while (!rest.empty()) {
+                    const std::size_t end = std::min(rest.find(' '), rest.size());
+                    const std::string_view name = rest.substr(0, end);
+                    rest.remove_prefix(std::min(end + 1, rest.size()));
+                    if (name.empty() || enabled(name))
+                        continue;
+                    missing += missing.empty() ? "" : ", ";
+                    missing += name;
+                }
+                return {};
+            };
+            // In the order the extension sets: the runtime uses the instance's
+            // extensions to find the device, and the device to list its own.
+            if (auto st = collect(instance_extensions_of, "xrGetVulkanInstanceExtensionsKHR",
+                                  [&](const std::string_view name) { return context.instanceExtensionEnabled(name); });
+                !st)
+                return st;
+            const auto restart = [&missing] {
+                return lfs::Status::failure(vrError(std::format(
+                    "The headset needs graphics features that are only set up when LichtFeld Studio starts ({}). Restart it with the headset connected.",
+                    missing)));
+            };
+            if (!missing.empty())
+                return restart();
+            VkPhysicalDevice physical = VK_NULL_HANDLE;
+            if (auto st = check(device_of(instance, system, context.instance(), &physical), "xrGetVulkanGraphicsDeviceKHR"); !st)
+                return st;
+            if (physical != context.physicalDevice())
+                return lfs::Status::failure(vrError("The headset is on another GPU than the one LichtFeld Studio renders on."));
+            if (auto st = collect(device_extensions_of, "xrGetVulkanDeviceExtensionsKHR",
+                                  [&](const std::string_view name) { return context.deviceExtensionEnabled(name); });
+                !st)
+                return st;
+            if (!missing.empty())
+                return restart();
+            return {};
+        }
+
+        // prepare(), with the outcome as the status line.
+        bool prepareReported(const VulkanContext* const running) {
+            if (auto prepared = prepare(running); !prepared) {
+                setStatus("vr.status_unavailable", std::string(prepared.error().user_message()));
+                if (instance)
+                    xrDestroyInstance(instance);
+                instance = XR_NULL_HANDLE;
+                system = XR_NULL_SYSTEM_ID;
+                return false;
+            }
+            setStatus("vr.status_ready", runtime_name);
+            LOG_INFO("OpenXR runtime ready: {}{}", runtime_name, running ? ", joined after startup" : "");
+            return true;
         }
 
         [[nodiscard]] lfs::Result<XrPath> path(const std::string& value) const {
@@ -220,11 +370,19 @@ namespace lfs::vis::vr {
             copyName(set_info.localizedActionSetName, "Navigation");
             if (auto st = check(xrCreateActionSet(instance, &set_info, &s.action_set), "xrCreateActionSet"); !st)
                 return st;
+            constexpr std::array<const char*, 2> hand_names = {"/user/hand/left", "/user/hand/right"};
+            for (std::size_t i = 0; i < hand_names.size(); ++i) {
+                auto hand = path(hand_names[i]);
+                if (!hand)
+                    return lfs::Status::failure(hand.error());
+                s.hands[i] = *hand;
+            }
             struct ActionSpec {
                 XrAction* action;
                 const char* name;
                 const char* label;
                 XrActionType type;
+                bool per_hand = false;
             };
             const ActionSpec actions[] = {
                 {&s.move, "move", "Move", XR_ACTION_TYPE_VECTOR2F_INPUT},
@@ -232,38 +390,50 @@ namespace lfs::vis::vr {
                 {&s.up, "up", "Move up", XR_ACTION_TYPE_BOOLEAN_INPUT},
                 {&s.down, "down", "Move down", XR_ACTION_TYPE_BOOLEAN_INPUT},
                 {&s.center, "recenter", "Recenter", XR_ACTION_TYPE_BOOLEAN_INPUT},
+                {&s.grab, "grab", "Grab the scene", XR_ACTION_TYPE_FLOAT_INPUT, true},
+                {&s.hand_pose, "hand_pose", "Hand pose", XR_ACTION_TYPE_POSE_INPUT, true},
             };
             for (const auto& spec : actions) {
                 XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
                 copyName(info.actionName, spec.name);
                 copyName(info.localizedActionName, spec.label);
                 info.actionType = spec.type;
+                if (spec.per_hand) {
+                    info.countSubactionPaths = static_cast<std::uint32_t>(s.hands.size());
+                    info.subactionPaths = s.hands.data();
+                }
                 if (auto st = check(xrCreateAction(s.action_set, &info, spec.action), "xrCreateAction"); !st)
                     return st;
             }
 
-            // Left hand moves and recenters; right hand turns and climbs.
+            // Left hand moves and recenters; right hand turns and climbs. Either
+            // grip grabs the scene.
             struct ProfileSpec {
                 const char* profile;
                 const char* axis;
                 const char* recenter;
                 const char* up;
                 const char* down;
+                const char* grab;
             };
             constexpr ProfileSpec profiles[] = {
-                {"/interaction_profiles/oculus/touch_controller", "thumbstick", "thumbstick/click", "a/click", "x/click"},
-                {"/interaction_profiles/valve/index_controller", "thumbstick", "thumbstick/click", "a/click", "a/click"},
-                {"/interaction_profiles/htc/vive_controller", "trackpad", "menu/click", "trigger/click", "trigger/click"},
+                {"/interaction_profiles/oculus/touch_controller", "thumbstick", "thumbstick/click", "a/click", "x/click", "squeeze/value"},
+                {"/interaction_profiles/valve/index_controller", "thumbstick", "thumbstick/click", "a/click", "a/click", "squeeze/value"},
+                {"/interaction_profiles/htc/vive_controller", "trackpad", "menu/click", "trigger/click", "trigger/click", "squeeze/click"},
             };
             const std::string left = "/user/hand/left/input/";
             const std::string right = "/user/hand/right/input/";
             for (const auto& profile : profiles) {
-                const std::array<std::pair<XrAction, std::string>, 5> components{{
+                const std::array<std::pair<XrAction, std::string>, 9> components{{
                     {s.move, left + profile.axis},
                     {s.turn, right + profile.axis},
                     {s.center, left + profile.recenter},
                     {s.up, right + profile.up},
                     {s.down, left + profile.down},
+                    {s.grab, left + profile.grab},
+                    {s.grab, right + profile.grab},
+                    {s.hand_pose, left + "grip/pose"},
+                    {s.hand_pose, right + "grip/pose"},
                 }};
                 std::array<XrActionSuggestedBinding, std::tuple_size_v<decltype(components)>> bindings{};
                 for (std::size_t i = 0; i < bindings.size(); ++i) {
@@ -289,7 +459,17 @@ namespace lfs::vis::vr {
             XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
             attach.countActionSets = 1;
             attach.actionSets = &s.action_set;
-            return check(xrAttachSessionActionSets(s.handle, &attach), "xrAttachSessionActionSets");
+            if (auto st = check(xrAttachSessionActionSets(s.handle, &attach), "xrAttachSessionActionSets"); !st)
+                return st;
+            for (std::size_t i = 0; i < s.hands.size(); ++i) {
+                XrActionSpaceCreateInfo space{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+                space.action = s.hand_pose;
+                space.subactionPath = s.hands[i];
+                space.poseInActionSpace.orientation.w = 1.0f;
+                if (auto st = check(xrCreateActionSpace(s.handle, &space, &s.hand_spaces[i]), "xrCreateActionSpace"); !st)
+                    return st;
+            }
+            return {};
         }
 
         lfs::Status startSession(const glm::mat3& rotation, const glm::vec3& position) {
@@ -394,6 +574,15 @@ namespace lfs::vis::vr {
             s.start_position = position;
             s.rig.scene_units_per_meter = preferences.scene_units_per_meter;
             move_speed = preferences.move_speed;
+            show_hands = preferences.show_hands;
+            std::array<std::vector<VkImage>, 2> images;
+            std::array<TrackedHands::Eye, 2> eyes;
+            for (std::size_t i = 0; i < s.eyes.size(); ++i) {
+                for (const auto& image : s.eyes[i].images)
+                    images[i].push_back(image.image);
+                eyes[i] = {images[i], s.eyes[i].size};
+            }
+            tracked_hands.start(context, s.handle, eyes);
             return {};
         }
 
@@ -439,15 +628,40 @@ namespace lfs::vis::vr {
             return result == XR_EVENT_UNAVAILABLE ? lfs::Status{} : check(result, "xrPollEvent");
         }
 
+        // Ends a running session before it is destroyed: asked to exit, the
+        // runtime takes it to STOPPING, where poll() ends it. A runtime that
+        // does not follow in time is left to xrDestroySession().
+        void endSession() {
+            if (!s.handle || !s.running || s.ended || lost)
+                return;
+            if (XR_FAILED(xrRequestExitSession(s.handle)))
+                return;
+            const auto deadline = std::chrono::steady_clock::now() + kSessionEndTimeout;
+            while (s.running && std::chrono::steady_clock::now() < deadline) {
+                if (!poll())
+                    return;
+                if (s.running)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (s.running)
+                LOG_WARN("The OpenXR runtime did not end the VR session when asked to");
+        }
+
         struct ControllerInput {
             glm::vec2 move{0.0f};
             glm::vec2 turn{0.0f};
             bool up = false;
             bool down = false;
             bool center = false;
+            // Left, right: how far the grip is squeezed, and the hand when tracked.
+            struct Hand {
+                float grip = 0.0f;
+                std::optional<GrabHand> pose;
+            };
+            std::array<Hand, 2> hands;
         };
 
-        [[nodiscard]] lfs::Result<ControllerInput> readControllers() const {
+        [[nodiscard]] lfs::Result<ControllerInput> readControllers(const XrTime time) const {
             const XrActiveActionSet active{s.action_set, XR_NULL_PATH};
             XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
             sync.countActiveActionSets = 1;
@@ -472,6 +686,24 @@ namespace lfs::vis::vr {
                     return st.error();
                 *value = state.isActive ? glm::vec2(state.currentState.x, state.currentState.y) : glm::vec2(0.0f);
             }
+            for (std::size_t i = 0; i < s.hands.size(); ++i) {
+                XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+                info.action = s.grab;
+                info.subactionPath = s.hands[i];
+                XrActionStateFloat state{XR_TYPE_ACTION_STATE_FLOAT};
+                if (auto st = check(xrGetActionStateFloat(s.handle, &info, &state), "xrGetActionStateFloat"); !st)
+                    return st.error();
+                if (!state.isActive)
+                    continue;
+                input.hands[i].grip = state.currentState;
+                XrSpaceLocation hand{XR_TYPE_SPACE_LOCATION};
+                if (auto st = check(xrLocateSpace(s.hand_spaces[i], s.space, time, &hand), "xrLocateSpace"); !st)
+                    return st.error();
+                constexpr XrSpaceLocationFlags hand_valid =
+                    XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+                if ((hand.locationFlags & hand_valid) == hand_valid)
+                    input.hands[i].pose = GrabHand{vr::position(hand.pose), vr::orientation(hand.pose)};
+            }
             return input;
         }
 
@@ -495,17 +727,61 @@ namespace lfs::vis::vr {
 
             const bool focused = s.state == XR_SESSION_STATE_FOCUSED;
             ControllerInput input;
+            std::array<std::optional<GrabHand>, 2> held;
             if (focused) {
-                auto read = readControllers();
+                auto read = readControllers(time);
                 if (!read)
                     return lfs::Status::failure(read.error());
                 input = *read;
                 s.recenter_pending |= input.center && !s.center_down;
                 s.center_down = input.center;
+                for (std::size_t i = 0; i < held.size(); ++i) {
+                    const auto& hand = input.hands[i];
+                    std::optional<GrabHand> pose = hand.pose;
+                    bool squeezed = hand.grip >= (s.gripping[i] ? kGripRelease : kGripEngage);
+                    if (const auto& tracked = tracked_hands.hand(i); tracked && tracked->bare) {
+                        // A bare hand grabs with a fist, closed where the user
+                        // sees it. The runtime, which makes a controller of
+                        // the hand, takes fingers that come near each other
+                        // for a grip and keeps the grip of a hand its cameras
+                        // have lost: only the grip pose is taken from it, so
+                        // that the hand holds the scene as a controller does.
+                        s.bare_hands[i] = true;
+                        const float closure = fistClosure(tracked->joints);
+                        const float margin = s.gripping[i] ? -kHandSightGrace : 0.0f;
+                        const bool seen = std::any_of(s.eyes.begin(), s.eyes.end(), [&](const Eye& eye) {
+                            return eyeSees(eye.pose.fov, eye.pose.orientation, eye.pose.position, tracked->joints[0], margin);
+                        });
+                        squeezed = seen && closure >= (s.gripping[i] ? kFistRelease : kFistEngage);
+                        if (!pose)
+                            pose = grabHandFromJoints(tracked->joints);
+                        if (squeezed != s.gripping[i]) {
+                            LOG_DEBUG("VR hands: {} fist {} at {:.2f}{}", i == 0 ? "left" : "right",
+                                      squeezed ? "closed" : "let go", closure, seen ? "" : ", out of sight");
+                        }
+                    } else if (tracked) {
+                        s.bare_hands[i] = false;
+                    } else if (s.bare_hands[i]) {
+                        // A bare hand that is no longer tracked lets go. It
+                        // counts as bare until the grip reads as released, in
+                        // case a controller has been picked up meanwhile.
+                        squeezed = false;
+                        s.bare_hands[i] = hand.grip >= kGripRelease;
+                    }
+                    s.gripping[i] = pose && squeezed;
+                    if (s.gripping[i])
+                        held[i] = s.steady[i].update(*pose, dt);
+                    else
+                        s.steady[i].reset();
+                }
             } else {
                 s.snap.reset();
                 s.center_down = false;
                 s.pending_turns = 0;
+                s.gripping = {};
+                for (auto& steady : s.steady)
+                    steady.reset();
+                s.grab_motion.reset();
             }
             if (s.recenter_pending) {
                 s.rig.recenter(head_orientation, head_position, s.start_orientation, s.start_position);
@@ -515,6 +791,7 @@ namespace lfs::vis::vr {
             if (!focused)
                 return {};
 
+            s.grab_motion.update(s.rig, held[0], held[1]);
             const int turns = s.pending_turns + s.snap.update(input.turn.x);
             s.pending_turns = 0;
             if (turns != 0)
@@ -590,15 +867,23 @@ namespace lfs::vis::vr {
                 vkCmdPipelineBarrier2(s.command, &dependency);
             };
             barriers(before);
-            for (std::size_t i = 0; i < sources.size(); ++i) {
-                VkImageCopy copy{};
-                copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                copy.dstSubresource = copy.srcSubresource;
-                copy.extent = {static_cast<std::uint32_t>(s.eyes[i].size.x), static_cast<std::uint32_t>(s.eyes[i].size.y), 1};
-                vkCmdCopyImage(s.command, sources[i].external_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               s.eyes[i].images[s.eyes[i].index].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-            }
+            const auto copy = [this](const VkImage from, const VkImage to, const glm::ivec2 size) {
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = region.srcSubresource;
+                region.extent = {static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y), 1};
+                vkCmdCopyImage(s.command, from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            };
+            // With hands, the left eye passes through an image of theirs, which
+            // the desktop mirror then shows: the scene with the hands on it.
+            const bool mirrored = tracked_hands.recordMirroredEye(
+                s.command, sources[0].external_image, s.eyes[0].images[s.eyes[0].index].image, s.eyes[0].pose);
+            for (std::size_t i = mirrored ? 1 : 0; i < sources.size(); ++i)
+                copy(sources[i].external_image, s.eyes[i].images[s.eyes[i].index].image, s.eyes[i].size);
             barriers(after);
+            // The hands go over the scene, straight onto the headset images.
+            for (std::size_t i = mirrored ? 1 : 0; i < s.eyes.size(); ++i)
+                tracked_hands.record(s.command, i, s.eyes[i].index, s.eyes[i].pose);
             if (auto st = checkVk(vkEndCommandBuffer(s.command), "vkEndCommandBuffer(VR)"); !st)
                 return st;
 
@@ -645,13 +930,20 @@ namespace lfs::vis::vr {
             if (count != 2 || (view_state.viewStateFlags & views_valid) != views_valid ||
                 (head.locationFlags & head_valid) != head_valid)
                 return false;
+            for (std::size_t i = 0; i < views.size(); ++i) {
+                const auto& fov = views[i].fov;
+                s.eyes[i].pose = {{fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown},
+                                  vr::orientation(views[i].pose),
+                                  vr::position(views[i].pose)};
+            }
+            tracked_hands.locate(s.space, s.display_time);
             if (auto st = navigate(head.pose, s.display_time, move); !st)
                 return st.error();
+            tracked_hands.update(s.display_time, s.gripping, show_hands);
 
             std::array<lfs::rendering::FrameView, 2> frame_views;
             for (std::size_t i = 0; i < views.size(); ++i) {
-                const auto& fov = views[i].fov;
-                const auto intrinsics = eyeIntrinsics({fov.angleLeft, fov.angleRight, fov.angleUp, fov.angleDown}, s.eyes[i].size);
+                const auto intrinsics = eyeIntrinsics(s.eyes[i].pose.fov, s.eyes[i].size);
                 if (!intrinsics)
                     return false;
                 const auto pose = s.rig.cameraPose(vr::orientation(views[i].pose), vr::position(views[i].pose));
@@ -691,6 +983,15 @@ namespace lfs::vis::vr {
                 eye.acquired = false;
             }
             s.mirror = (*eyes)[0];
+            if (const auto with_hands = tracked_hands.mirror()) {
+                // Already complete: the copy was waited for.
+                s.mirror.external_image = with_hands->image;
+                s.mirror.external_image_view = with_hands->view;
+                s.mirror.external_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                s.mirror.completion_semaphore = VK_NULL_HANDLE;
+                s.mirror.completion_value = 0;
+                s.mirror.alloc_size = with_hands->size;
+            }
             return true;
         }
 
@@ -766,22 +1067,24 @@ namespace lfs::vis::vr {
 
     bool OpenXrService::prepare() {
         auto& p = *impl_;
-        if (auto prepared = p.prepare(); !prepared) {
-            p.setStatus("vr.status_unavailable", std::string(prepared.error().user_message()));
-            if (p.instance)
-                xrDestroyInstance(p.instance);
-            p.instance = XR_NULL_HANDLE;
-            p.system = XR_NULL_SYSTEM_ID;
-            return false;
-        }
-        p.setStatus("vr.status_ready", p.runtime_name);
-        LOG_INFO("OpenXR runtime ready: {}", p.runtime_name);
-        return true;
+        // Before the first OpenXR call: the loader picks its runtime then.
+        if (const std::string runtime = UserPreferences::instance().vrRuntime();
+            !runtime.empty() && !useOpenXrRuntime(runtime))
+            LOG_WARN("The OpenXR runtime chosen for VR is gone ({}); using the system's active runtime", runtime);
+        return p.prepareReported(nullptr);
+    }
+
+    bool OpenXrService::prepareOn(const VulkanContext& context) {
+        auto& p = *impl_;
+        return available() || (!p.lost && p.prepareReported(&context));
     }
 
     VulkanDeviceHooks OpenXrService::deviceHooks() {
         Impl* const p = impl_.get();
-        VulkanDeviceHooks hooks;
+        // With the extensions of a late join asked for by name: the runtime
+        // adds what it needs itself, but only what the app asks for is known
+        // to be enabled when the runtime is joined again after a session.
+        VulkanDeviceHooks hooks = lateJoinHooks();
         hooks.create_instance = [p](const VkInstanceCreateInfo& info, VkInstance& instance) {
             XrVulkanInstanceCreateInfoKHR create{XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
             create.systemId = p->system;
@@ -811,13 +1114,53 @@ namespace lfs::vis::vr {
         return hooks;
     }
 
+    VulkanDeviceHooks OpenXrService::lateJoinHooks() {
+        // What OpenXR runtimes list for XR_KHR_vulkan_enable: sharing images
+        // with their compositor. Runtimes look these up under their extension
+        // names, so being part of Vulkan 1.3 does not stand in for enabling
+        // them. Enabling one that goes unused costs nothing.
+        VulkanDeviceHooks hooks;
+        hooks.wanted_instance_extensions = {
+            "VK_KHR_get_physical_device_properties2",
+            "VK_KHR_external_memory_capabilities",
+            "VK_KHR_external_semaphore_capabilities",
+            "VK_KHR_external_fence_capabilities",
+            "VK_NV_external_memory_capabilities",
+        };
+        hooks.wanted_device_extensions = {
+            "VK_KHR_dedicated_allocation",
+            "VK_KHR_get_memory_requirements2",
+            "VK_KHR_bind_memory2",
+            "VK_KHR_maintenance1",
+            "VK_KHR_image_format_list",
+            "VK_KHR_timeline_semaphore",
+            "VK_KHR_external_memory",
+            "VK_KHR_external_semaphore",
+            "VK_KHR_external_fence",
+            "VK_KHR_external_memory_win32",
+            "VK_KHR_external_semaphore_win32",
+            "VK_KHR_external_fence_win32",
+            "VK_KHR_win32_keyed_mutex",
+            "VK_KHR_external_memory_fd",
+            "VK_KHR_external_semaphore_fd",
+            "VK_KHR_external_fence_fd",
+            "VK_NV_dedicated_allocation",
+            "VK_NV_external_memory",
+            "VK_NV_external_memory_win32",
+            "VK_NV_win32_keyed_mutex",
+        };
+        return hooks;
+    }
+
     void OpenXrService::setUnavailable(std::string reason) {
         auto& p = *impl_;
         p.setStatus("vr.status_unavailable", std::move(reason));
         p.lost = true;
     }
 
-    bool OpenXrService::available() const { return impl_->instance && impl_->system && !impl_->lost; }
+    bool OpenXrService::available() const {
+        return !impl_->lost && (impl_->given_back || (impl_->instance && impl_->system));
+    }
     bool OpenXrService::active() const { return impl_->s.handle != XR_NULL_HANDLE; }
     bool OpenXrService::running() const { return impl_->s.running; }
     const char* OpenXrService::statusKey() const { return impl_->status_key; }
@@ -832,6 +1175,7 @@ namespace lfs::vis::vr {
             impl_->s.pending_turns += direction;
     }
     void OpenXrService::setMoveSpeed(const float meters_per_second) { impl_->move_speed = meters_per_second; }
+    void OpenXrService::setShowHands(const bool show) { impl_->show_hands = show; }
 
     lfs::Status OpenXrService::start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position) {
         auto& p = *impl_;
@@ -839,6 +1183,8 @@ namespace lfs::vis::vr {
             return lfs::Status::failure(vrError(LOCF(p.status_key, p.status_detail)));
         if (active())
             return {};
+        if (std::exchange(p.given_back, false) && !p.prepareReported(&context))
+            return lfs::Status::failure(vrError(LOCF(p.status_key, p.status_detail)));
         p.s.context = &context;
         auto started = p.startSession(rotation, position);
         if (!started) {
@@ -857,7 +1203,9 @@ namespace lfs::vis::vr {
             return;
         if (s.transfer_pending)
             static_cast<void>(s.context->deviceWaitIdle());
+        p.endSession();
         const VkDevice device = s.context->device();
+        p.tracked_hands.stop();
         if (s.fence)
             vkDestroyFence(device, s.fence, nullptr);
         if (s.pool)
@@ -868,6 +1216,17 @@ namespace lfs::vis::vr {
         if (s.action_set)
             xrDestroyActionSet(s.action_set);
         s = {};
+        // A runtime counts an app as running for as long as the app holds an
+        // instance: SteamVR shows it as the running application and takes it
+        // down when it quits. The instance goes back with the session, and
+        // start() joins the runtime again.
+        const bool joinable = available();
+        p.tracked_hands.findTracking(XR_NULL_HANDLE, XR_NULL_SYSTEM_ID, false);
+        if (p.instance)
+            xrDestroyInstance(p.instance);
+        p.instance = XR_NULL_HANDLE;
+        p.system = XR_NULL_SYSTEM_ID;
+        p.given_back = joinable;
         if (available())
             p.setStatus("vr.status_ready", p.runtime_name);
     }

@@ -368,6 +368,12 @@ namespace lfs::core {
             // Refines every training camera's pose with the model (training/components/camera_pose_refinement.hpp).
             bool pose_opt = false;
 
+            // Aligns each training photo to the render with a smooth per-photo displacement field before the loss
+            // (training/components/calibration_correction.hpp), from calibration_correction_start_iteration() on.
+            bool calibration_correction = true;
+            static constexpr int CALIBRATION_CORRECTION_START_ITER = 1000;
+            [[nodiscard]] int calibration_correction_start_iteration() const;
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;
@@ -444,6 +450,7 @@ namespace lfs::core {
             std::string config_file = "";
 
             void scale_steps(float ratio);
+            [[nodiscard]] OptimizationParameters scaled_to_iterations(size_t target) const;
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
@@ -456,6 +463,8 @@ namespace lfs::core {
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
+            // Reads stored parameters: a key left out takes the strategy's default, except that calibration
+            // correction stays off, since such parameters were saved before the option existed.
             static OptimizationParameters from_json(const nlohmann::json& j);
 
             [[nodiscard]] std::string validate() const;
@@ -771,8 +780,9 @@ namespace lfs::core {
             std::filesystem::path output_path;
             std::filesystem::path colmap_path; // Cameras of a reference folder that is no COLMAP dataset
             // The eval_* options and enable_save_eval_images as in training; undistort says that test images
-            // without cameras of their own were rendered with the undistorted reference cameras.
-            OptimizationParameters evaluation{.enable_save_eval_images = false};
+            // without cameras of their own were rendered with the undistorted reference cameras. The test images
+            // are scored as given, without calibration correction's aligned scores.
+            OptimizationParameters evaluation{.enable_save_eval_images = false, .calibration_correction = false};
             bool no_download = false;
         };
 

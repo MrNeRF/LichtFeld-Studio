@@ -85,7 +85,8 @@ namespace lfs::vis {
         lfs::core::TensorShape shape,
         lfs::core::DataType dtype,
         std::size_t capacity,
-        const char* debug_name);
+        const char* debug_name,
+        VkBufferUsageFlags extra_usage = 0);
 
     // Build a SplatTensorAllocator that hands out tensor views into a single
     // CUDA-exportable VMM block imported into Vulkan. Each tensor carries a

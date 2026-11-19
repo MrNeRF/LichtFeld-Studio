@@ -1,14 +1,17 @@
-# Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
-# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 find_package(Python COMPONENTS Interpreter)
 set(PYTHONINTERP_FOUND ${Python_Interpreter_FOUND})
@@ -106,8 +109,8 @@ if (BUILD_NVTIFF_EXT)
         include(FetchContent)
         FetchContent_Declare(
            nvtiff_headers
-           URL      https://developer.download.nvidia.com/compute/nvtiff/redist/libnvtiff/linux-x86_64/libnvtiff-linux-x86_64-0.8.0.82_cuda12-archive.tar.xz
-           URL_HASH SHA512=6eea339a73a1ea306532a5f75b8a7b959ce7653c805cac855e050d5a00073a4bd46d3d69e8d84a367e42199495b634bb855fe99234cbe2d828b19df93a00ac25
+           URL      https://developer.download.nvidia.com/compute/nvtiff/redist/libnvtiff/linux-x86_64/libnvtiff-linux-x86_64-0.9.0.86_cuda12-archive.tar.xz
+           URL_HASH SHA512=3e57f823129ed60c7b4177b0cdfba32630272ba8610d8d57eabb4f4e8336fbabe3213f1b006f0cde4507fa19a2bb90cc91ae4ee0e253c0ccee6a6fddb7d3afde
            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
         )
         FetchContent_MakeAvailable(nvtiff_headers)

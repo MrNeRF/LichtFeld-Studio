@@ -129,7 +129,8 @@ namespace lfs::io {
             int quality = 100,
             void* cuda_stream = nullptr);
 
-        // Encode Float32 CUDA RGB to lossless 16-bit JPEG2000.
+        // Encode CUDA RGB to lossless 16-bit JPEG2000: Float32 [0,1] scaled to uint16, or
+        // uint16 samples (in a Float16 container) as they are.
         // layout is HWC [H,W,3] or CHW [3,H,W] and is not inferred from the shape.
         // CHW is permuted once to interleaved RGB. Contiguous HWC is not copied.
         std::vector<uint8_t> encode_to_jpeg2k(

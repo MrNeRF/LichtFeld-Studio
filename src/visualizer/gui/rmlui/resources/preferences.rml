@@ -567,6 +567,16 @@
               <span class="slider-value">{{ vr_move_speed | format_float(1) }}</span>
             </div>
           </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.vr_show_hands_help">
+            <span class="preferences-label">@tr:preferences.vr_show_hands</span>
+            <input type="checkbox" data-checked="vr_show_hands" />
+          </div>
+          <div class="preferences-row" data-tooltip="preferences.vr_runtime_help">
+            <span class="preferences-label">@tr:preferences.vr_runtime</span>
+            <select class="preferences-select" data-value="vr_runtime_idx">
+              <option data-for="runtime : vr_runtimes" data-attr-value="runtime.index">{{ runtime.label }}</option>
+            </select>
+          </div>
           <span class="preferences-description">{{ vr_status }}</span>
         </div>
       </div>

@@ -20,6 +20,7 @@
 #include <cuda_runtime.h>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 namespace nvimgcodec {
@@ -40,7 +41,11 @@ namespace nvimgcodec {
 
     const char* getErrorString(Status);
 
-    class Exception : public std::exception {
+    // Derives from std::runtime_error, not std::exception directly: the thunks at the C boundary now
+    // catch std::exception, but plenty of handlers inside the extensions and parsers still narrow to
+    // std::runtime_error, and an exception that escaped one of those would skip the per-sample
+    // imageReady() call and stall the batch.
+    class Exception : public std::runtime_error {
     public:
         explicit Exception(
             Status eStatus, const std::string& rMessage = "", const std::string& rLoc = "");

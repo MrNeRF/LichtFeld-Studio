@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 #include "kernel_stream.hpp"
@@ -110,9 +111,25 @@ namespace lfs::training::kernels {
             }
         }
 
-        template <bool Weighted>
+        struct RayDistanceDepth {
+            const float* values;
+            DepthRayGrid grid;
+            int stride;
+
+            __device__ float scale_for_ray(const float value, const size_t idx) const {
+                const int x = static_cast<int>(idx % stride);
+                const int y = static_cast<int>(idx / stride);
+                return value * grid.ray_length(x, y);
+            }
+
+            __device__ float operator[](const size_t idx) const {
+                return scale_for_ray(values[idx], idx);
+            }
+        };
+
+        template <bool Weighted, typename Depth>
         __global__ void depth_loss_stats_primary_kernel(
-            const float* __restrict__ rendered_depth_accum,
+            const Depth rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
             const float* __restrict__ pixel_weight,
@@ -167,9 +184,9 @@ namespace lfs::training::kernels {
             finals[slots::kMeanExpectedDepth] = static_cast<float>(mean_e);
         }
 
-        template <bool Weighted>
+        template <bool Weighted, typename Depth>
         __global__ void depth_loss_stats_inverse_kernel(
-            const float* __restrict__ rendered_depth_accum,
+            const Depth rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
             const float* __restrict__ pixel_weight,
@@ -259,10 +276,10 @@ namespace lfs::training::kernels {
             float delta;
         };
 
-        template <bool Weighted>
+        template <bool Weighted, typename Depth>
         __device__ __forceinline__ PixelSample load_sample(
             const size_t idx,
-            const float* __restrict__ rendered_depth_accum,
+            const Depth rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
             const float* __restrict__ pixel_weight,
@@ -306,9 +323,9 @@ namespace lfs::training::kernels {
             return s;
         }
 
-        template <bool Weighted>
+        template <bool Weighted, typename Depth>
         __global__ void depth_loss_grad_kernel(
-            const float* __restrict__ rendered_depth_accum,
+            const Depth rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
             const float* __restrict__ pixel_weight,
@@ -423,7 +440,10 @@ namespace lfs::training::kernels {
                 if (c.ok && gp != 0.0f) {
                     const float dp_de = -c.p * c.p;
                     const float g = weight * inv_norm * gp * dp_de;
-                    grad_depth[idx] = g / c.alpha;
+                    float dz = g / c.alpha;
+                    if constexpr (std::is_same_v<Depth, RayDistanceDepth>)
+                        dz = rendered_depth_accum.scale_for_ray(dz, idx);
+                    grad_depth[idx] = dz;
                     grad_alpha[idx] = -g * c.e / c.alpha;
                 } else {
                     grad_depth[idx] = 0.0f;
@@ -527,7 +547,11 @@ namespace lfs::training::kernels {
                 const float z = r3.x * x + r3.y * y + r3.z * zw + r3.w;
                 const float xc = r1.x * x + r1.y * y + r1.z * zw + r1.w;
                 const float yc = r2.x * x + r2.y * y + r2.z * zw + r2.w;
-                const float depth = projection.model == CameraModelType::PINHOLE ? z : sqrtf(xc * xc + yc * yc + z * z);
+                if (projection.pinhole_ray_distance && !(z > near_plane))
+                    continue;
+                const float depth = projection.model == CameraModelType::PINHOLE && !projection.pinhole_ray_distance
+                                        ? z
+                                        : sqrtf(xc * xc + yc * yc + z * z);
                 if (!(depth > near_plane) || !isfinite(depth))
                     continue;
                 const float2 uv = project_anchor(projection, xc, yc, z, fx, fy, cx, cy, width, height);
@@ -893,9 +917,9 @@ namespace lfs::training::kernels {
     }
 
     namespace {
-        template <bool Weighted>
+        template <bool Weighted, typename Depth>
         void launch_depth_loss_impl(
-            const float* rendered_depth_accum,
+            const Depth rendered_depth_accum,
             const float* rendered_alpha_accum,
             const float* target_depth,
             float* grad_depth,
@@ -992,43 +1016,26 @@ namespace lfs::training::kernels {
         const float prior_quantization_step,
         const DepthAnchor* anchor,
         cudaStream_t stream,
-        const float* pixel_weight) {
+        const float* pixel_weight,
+        const DepthRayGrid* ray_grid) {
         stream = resolve_stream(stream);
-        if (pixel_weight) {
-            launch_depth_loss_impl<true>(
-                rendered_depth_accum,
-                rendered_alpha_accum,
-                target_depth,
-                grad_depth,
-                grad_alpha,
-                loss_out,
-                partial_sums,
-                width,
-                height,
-                weight,
-                gradient_term_weight,
-                prior_quantization_step,
-                anchor,
-                pixel_weight,
-                stream);
-        } else {
-            launch_depth_loss_impl<false>(
-                rendered_depth_accum,
-                rendered_alpha_accum,
-                target_depth,
-                grad_depth,
-                grad_alpha,
-                loss_out,
-                partial_sums,
-                width,
-                height,
-                weight,
-                gradient_term_weight,
-                prior_quantization_step,
-                anchor,
-                nullptr,
-                stream);
-        }
+        const auto launch = [&](const auto depth) {
+            if (pixel_weight) {
+                launch_depth_loss_impl<true>(
+                    depth, rendered_alpha_accum, target_depth, grad_depth, grad_alpha, loss_out,
+                    partial_sums, width, height, weight, gradient_term_weight, prior_quantization_step,
+                    anchor, pixel_weight, stream);
+            } else {
+                launch_depth_loss_impl<false>(
+                    depth, rendered_alpha_accum, target_depth, grad_depth, grad_alpha, loss_out,
+                    partial_sums, width, height, weight, gradient_term_weight, prior_quantization_step,
+                    anchor, nullptr, stream);
+            }
+        };
+        if (ray_grid)
+            launch(RayDistanceDepth{rendered_depth_accum, *ray_grid, width});
+        else
+            launch(rendered_depth_accum);
     }
 
 } // namespace lfs::training::kernels

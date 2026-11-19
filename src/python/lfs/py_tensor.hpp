@@ -224,10 +224,8 @@ namespace lfs::python {
         static PyTensor full(const std::vector<int64_t>& shape, float value,
                              const std::string& device = "cuda",
                              const std::string& dtype = "float32");
-        static PyTensor arange(float end);
-        static PyTensor arange(float start, float end, float step = 1.0f,
-                               const std::string& device = "cuda",
-                               const std::string& dtype = "float32");
+        static PyTensor arange(nb::handle start, nb::handle end, nb::handle step,
+                               const std::string& device, const std::string& dtype);
         static PyTensor linspace(float start, float end, int64_t steps,
                                  const std::string& device = "cuda",
                                  const std::string& dtype = "float32");

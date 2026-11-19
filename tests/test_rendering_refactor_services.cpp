@@ -553,6 +553,24 @@ namespace lfs::vis {
         }
     };
 
+    TEST_F(RenderingManagerEventsTest, GTContentBoundsFollowDisplayedLetterboxAtReducedScale) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        manager.updateSettings(settings);
+        RenderingManager::VulkanMeshFrame frame;
+        frame.split_view.enabled = true;
+        frame.split_view.coordinate_extent = {320, 180};
+        frame.split_view.content_rect = {20, 0, 279, 180};
+        manager.setVulkanMeshFrame(std::move(frame));
+
+        const auto bounds = manager.getContentBounds({1281, 721});
+        EXPECT_EQ(bounds.x, 80);
+        EXPECT_EQ(bounds.x + bounds.width, 1197);
+        EXPECT_EQ(bounds.y, 0);
+        EXPECT_EQ(bounds.height, 721);
+    }
+
     TEST(SplitViewServiceTest, ToggleGtComparisonRestoresPreviousProjectionMode) {
         SplitViewService service;
         RenderSettings settings;

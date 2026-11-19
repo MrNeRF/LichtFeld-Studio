@@ -387,23 +387,33 @@ namespace {
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
+        // The reorder runs on the stream of the buffer it writes. The source may
+        // still be filling on its own home stream (uploads are asynchronous there),
+        // so that stream first waits for the source, which also keeps the source's
+        // storage from being reused before the kernel has read it.
         const size_t n_floats = sh_swizzled_float_count(n_primitives, layout_coeffs_rest);
         if (dst_swizzled.dtype() == DataType::Float32) {
+            const cudaStream_t stream = dst_swizzled.stream();
+            prepare_inputs_for_stream({&src_cuda}, stream);
             reorder_sh_to_swizzled(src_cuda.ptr<float>(),
                                    dst_swizzled.ptr<float>(),
                                    n_primitives,
                                    src_coeffs_rest,
-                                   layout_coeffs_rest);
+                                   layout_coeffs_rest,
+                                   stream);
             return;
         }
         // IEEE f16 float4-swizzle destination.
         Tensor staging = Tensor::zeros({n_floats}, Device::CUDA, DataType::Float32);
+        prepare_inputs_for_stream({&src_cuda}, staging.stream());
         reorder_sh_to_swizzled(src_cuda.ptr<float>(),
                                staging.ptr<float>(),
                                n_primitives,
                                src_coeffs_rest,
-                               layout_coeffs_rest);
+                               layout_coeffs_rest,
+                               staging.stream());
         Tensor half = staging.to(DataType::Float16);
+        half.sync_to_stream(dst_swizzled.stream());
         const size_t nbytes = std::min(static_cast<size_t>(dst_swizzled.numel()), n_floats) *
                               sizeof(std::uint16_t);
         cudaMemcpyAsync(dst_swizzled.data_ptr(), half.data_ptr(), nbytes,
@@ -451,6 +461,27 @@ namespace {
                shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest);
     }
 
+    // Deswizzles the first n rows of an fp32 swizzled buffer into a new canonical
+    // [n, rest, 3] tensor. The kernel runs on the legacy stream, where callers that
+    // read the result through its raw pointer expect it, once that stream has waited
+    // for the buffer's home stream. The result is homed on the legacy stream too, so
+    // tensor readers on other streams wait for the kernel.
+    [[nodiscard]] lfs::core::Tensor canonical_from_swizzled(const lfs::core::Tensor& swizzled,
+                                                            const size_t n,
+                                                            const uint32_t rest) {
+        using namespace lfs::core;
+        constexpr cudaStream_t legacy_stream = nullptr;
+        Tensor canonical;
+        {
+            const CUDAStreamGuard guard(legacy_stream);
+            canonical = Tensor::empty({n, static_cast<size_t>(rest), SH_CHANNELS}, swizzled.device());
+        }
+        prepare_inputs_for_stream({&swizzled}, legacy_stream);
+        undo_reorder_sh_from_swizzled(swizzled.ptr<float>(), canonical.ptr<float>(), n, rest, rest,
+                                      legacy_stream);
+        return canonical;
+    }
+
     // src_rest_hint == 0: same-layout grow/verify (capacity-padded buffers are
     // already complete — no-op). src_rest_hint > 0: forced relayout from the
     // caller-KNOWN old topology; element-count inference is never used to pick
@@ -489,10 +520,13 @@ namespace {
             Tensor grown = Tensor::zeros_direct(TensorShape({need}), need_cap, Device::CUDA,
                                                 DataType::Float16);
             if (shN.numel() > 0) {
+                // The copy runs on the grown buffer's home stream, after its zero fill
+                // there, once that stream has waited for the old buffer's writers.
                 const size_t copy_n = std::min(static_cast<size_t>(shN.numel()), need);
+                const cudaStream_t stream = prepare_inputs_for_stream({&shN}, grown.stream());
                 cudaMemcpyAsync(grown.data_ptr(), shN.data_ptr(),
                                 copy_n * sizeof(std::uint16_t),
-                                cudaMemcpyDeviceToDevice, shN.stream());
+                                cudaMemcpyDeviceToDevice, stream);
             }
             grown.set_name(shN.name().empty() ? "splat.shN" : shN.name());
             shN = std::move(grown);
@@ -518,12 +552,7 @@ namespace {
 
         Tensor old_canonical;
         if (shN.is_valid() && shN.numel() > 0 && n > 0 && old_layout_rest > 0) {
-            old_canonical = Tensor::empty({n, static_cast<size_t>(old_layout_rest), SH_CHANNELS}, shN.device());
-            undo_reorder_sh_from_swizzled(shN.ptr<float>(),
-                                          old_canonical.ptr<float>(),
-                                          n,
-                                          old_layout_rest,
-                                          old_layout_rest);
+            old_canonical = canonical_from_swizzled(shN, n, old_layout_rest);
         }
 
         Tensor resized = allocate_swizzled_shN(n, cap, layout_coeffs_rest);
@@ -819,12 +848,7 @@ namespace lfs::core {
                 const size_t expected_for_requested_degree = sh_swizzled_float_count(n, layout_coeffs_rest);
                 if (stored_rest > 0 && stored_rest != layout_coeffs_rest &&
                     static_cast<size_t>(_shN.numel()) == sh_swizzled_float_count(n, stored_rest)) {
-                    Tensor old_canonical = Tensor::empty({n, static_cast<size_t>(stored_rest), SH_CHANNELS}, _shN.device());
-                    undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
-                                                  old_canonical.ptr<float>(),
-                                                  n,
-                                                  stored_rest,
-                                                  stored_rest);
+                    Tensor old_canonical = canonical_from_swizzled(_shN, n, stored_rest);
                     Tensor resized = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
                     const auto copy_rest = std::min(stored_rest, layout_coeffs_rest);
                     reorder_canonical_into_swizzled(old_canonical,
@@ -1138,13 +1162,7 @@ namespace lfs::core {
             }
             return out;
         }
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
-        undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
-                                      out.ptr<float>(),
-                                      n,
-                                      static_cast<uint32_t>(k),
-                                      static_cast<uint32_t>(k));
-        return out;
+        return canonical_from_swizzled(_shN, n, static_cast<uint32_t>(k));
     }
 
     Tensor SplatData::clone_shN_storage() const {
@@ -1810,8 +1828,11 @@ namespace lfs::core {
             if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
                 const size_t elem_bytes = dtype_size(t.dtype());
                 if (elem_bytes > 0) {
-                    cudaMemcpy(grown.data_ptr(), t.data_ptr(),
-                               t.numel() * elem_bytes, cudaMemcpyDeviceToDevice);
+                    // Copy on the grown buffer's home stream once it has waited for
+                    // the writers of the old one.
+                    const cudaStream_t stream = prepare_inputs_for_stream({&t}, grown.stream());
+                    cudaMemcpyAsync(grown.data_ptr(), t.data_ptr(),
+                                    t.numel() * elem_bytes, cudaMemcpyDeviceToDevice, stream);
                 }
             }
             if (!t.name().empty())
@@ -2096,8 +2117,10 @@ namespace lfs::core {
                                                     layout_rest, layout_rest);
                 } else {
                     gathered_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
+                    const cudaStream_t stream =
+                        prepare_inputs_for_stream({&_shN, &kept_indices}, gathered_shN.stream());
                     shN_swizzled_gather_self(_shN.ptr<float>(), gathered_shN.ptr<float>(),
-                                             kept_indices.ptr<int>(), new_size, 0, layout_rest);
+                                             kept_indices.ptr<int>(), new_size, 0, layout_rest, stream);
                 }
             }
 

@@ -20,7 +20,8 @@ namespace lfs::core::param {
         PropertyGroupBuilder<OptimizationParameters>("optimization", "Optimization")
             // Training control
             .size_prop(&OptimizationParameters::iterations,
-                       "iterations", "Max Iterations", d.iterations, 1, 1000000,
+                       "iterations", "Max Iterations", d.iterations, 1,
+                       static_cast<size_t>(std::numeric_limits<int>::max()),
                        "Maximum number of training iterations")
             .json_required()
             .locale("training_params.iterations")
@@ -699,6 +700,17 @@ namespace lfs::core::param {
                        "Refine the training camera poses during training; the refined poses replace the cameras' own")
             .locale("training_params.pose_opt")
             .tooltip("training.tooltip.pose_opt")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::calibration_correction,
+                       "calibration_correction", "Calibration Correction", d.calibration_correction,
+                       "Fits a small, smooth warp to every training photo that absorbs what the calibration missed "
+                       "(rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that "
+                       "disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step "
+                       "count; evaluation scores each held-out view as rendered and, in addition, after aligning the render "
+                       "to the photo.")
+            .locale("training_params.calibration_correction")
+            .tooltip("training.tooltip.calibration_correction")
+            .flags(PROP_ADVANCED)
             .all_strategies()
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,

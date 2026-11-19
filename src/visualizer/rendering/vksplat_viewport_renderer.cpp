@@ -4,6 +4,7 @@
 
 #include "vksplat_viewport_renderer.hpp"
 #include "core/native_fs.hpp"
+#include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"
@@ -7755,6 +7756,8 @@ namespace lfs::vis {
         if (x < 0 || y < 0 || x >= output.size.x || y >= output.size.y) {
             return -1.0f;
         }
+        if (request.require_exact_depth && !output.full_exact_depth)
+            return PointCloudVulkanRenderer::kDepthSamplePending;
         // Wait until graphics submits that may still fragment-sample this depth
         // image have retired (serial watermark). Producer timeline below covers
         // the independent compute queue.
@@ -8719,6 +8722,8 @@ namespace lfs::vis {
         ring_.publishCompletion(ring_slot, completion_value);
         auto& updated_output = ring_.slotAt(outputSlotIndex(output_slot), ring_slot);
         updated_output.completion_value = completion_value;
+        updated_output.full_exact_depth = (request.depth_view || request.normal_view || request.require_exact_depth) &&
+                                          request.exact_depth_sample_mask.empty();
         return RenderResult{
             .image = updated_output.image.image,
             .image_view = updated_output.image.view,
@@ -9953,6 +9958,8 @@ namespace lfs::vis {
         ring_.publishCompletion(ring_slot, completion_value);
         auto& output = ring_.slotAt(outputSlotIndex(output_slot), ring_slot);
         output.completion_value = completion_value;
+        output.full_exact_depth = (request.depth_view || request.normal_view || request.require_exact_depth) &&
+                                  request.exact_depth_sample_mask.empty();
         const std::uint64_t lod_page_generation =
             lod_request_active && lod_page_cache_.configured()
                 ? lod_page_cache_.snapshot().generation

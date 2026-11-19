@@ -419,7 +419,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3177,6 +3177,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "set_vr_active", [](const bool active) { lfs::core::events::cmd::SetVrActive{.active = active}.emit(); },
         nb::arg("active"), "Enter or exit VR viewing");
+    m.def(
+        "detect_vr", []() { lfs::core::events::cmd::DetectVr{}.emit(); },
+        "Look again for a VR headset that was connected after startup");
     m.def(
         "recenter_vr", []() { lfs::core::events::cmd::RecenterVr{}.emit(); },
         "Put the VR view back at the desktop camera");

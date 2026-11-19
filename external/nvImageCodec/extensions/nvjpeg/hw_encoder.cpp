@@ -17,6 +17,7 @@
 #define NOMINMAX
 #include "hw_encoder.h"
 #include "errors_handling.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "imgproc/pinned_buffer.h"
 #include "log.h"
@@ -55,7 +56,7 @@ namespace nvjpeg {
                 XM_CHECK_NULL(encoder);
                 auto handle = reinterpret_cast<HwEncoderImpl*>(encoder);
                 return handle->canEncode(code_stream, image, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_PROCESSING_STATUS_FAIL;
             }
         }
@@ -68,7 +69,7 @@ namespace nvjpeg {
                 XM_CHECK_NULL(encoder);
                 auto handle = reinterpret_cast<HwEncoderImpl*>(encoder);
                 return handle->encode(code_stream, image, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXECUTION_FAILED;
             }
         }
@@ -119,6 +120,12 @@ namespace nvjpeg {
             }
 
             ~PerThreadResources() {
+                // See imgproc/exit_guard.h: at process exit, CUDA/nvJPEG may already
+                // be tearing down, so skip the teardown calls and intentionally
+                // leak instead of risking a segfault.
+                if (nvimgcodec::IsProcessExiting()) {
+                    return;
+                }
                 if (stream_ && state_) {
                     XM_NVJPEG_LOG_DESTROY(nvjpegEncoderStateDestroy(state_));
                 }
@@ -282,6 +289,9 @@ namespace nvjpeg {
             if (!nvimgcodec::check_planes_consistency(framework_, plugin_id_, image_info)) {
                 status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_TYPE_UNSUPPORTED;
             }
+            if (!nvimgcodec::check_orientation_supported(framework_, plugin_id_, image_info, out_image_info)) {
+                status |= NVIMGCODEC_PROCESSING_STATUS_ORIENTATION_UNSUPPORTED;
+            }
 
             // Hardware only support images with even dimensions at most 16384 x 16384
             uint32_t w = image_info.plane_info[0].width;
@@ -311,6 +321,7 @@ namespace nvjpeg {
     HwEncoderImpl::HwEncoderImpl(
         const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
         : framework_(framework), plugin_id_(plugin_id), device_allocator_{nullptr, nullptr, nullptr}, pinned_allocator_{nullptr, nullptr, nullptr}, exec_params_(exec_params), options_(options) {
+        (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any encoder lives
         if (exec_params->device_allocator && exec_params->device_allocator->device_malloc && exec_params->device_allocator->device_free) {
             device_allocator_.dev_ctx = exec_params->device_allocator->device_ctx;
             device_allocator_.dev_malloc = exec_params->device_allocator->device_malloc;
@@ -376,7 +387,9 @@ namespace nvjpeg {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "jpeg_destroy_encoder");
             per_thread_.clear();
-            if (handle_)
+            // See imgproc/exit_guard.h: skip nvjpegDestroy at process exit, since the
+            // nvJPEG library may already be tearing down.
+            if (handle_ && !nvimgcodec::IsProcessExiting())
                 XM_NVJPEG_LOG_DESTROY(nvjpegDestroy(handle_));
         } catch (const NvJpegException& e) {
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not properly destroy nvjpeg encoder - " << e.info());

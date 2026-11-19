@@ -1830,7 +1830,7 @@ namespace lfs::vis {
                               vulkan_external_viewport_image_view_, vulkan_external_viewport_image_layout_,
                               vulkan_external_viewport_image_generation_, vulkan_viewport_image_size_,
                               vulkan_viewport_image_alloc_size_, vulkan_viewport_coordinate_size_, vulkan_viewport_image_flip_y_,
-                              vulkan_gt_comparison_content_size_, split_view_image_generation_, split_left_image_generation_,
+                              split_view_image_generation_, split_left_image_generation_,
                               split_right_image_generation_, split_left_source_, split_left_source_size_, split_left_source_camera_uid_,
                               split_left_source_undistorted_, split_right_source_size_, gt_async_held_display_,
                               vksplat_stale_frame_guard_, parked_arena_retry_, last_logged_vksplat_render_error_,
@@ -1917,7 +1917,15 @@ namespace lfs::vis {
     }
 
     void RenderingManager::configureSurfacePicking(FrameContext& frame) const {
-        frame.exact_surface_picking = exact_surface_picking_;
+        constexpr DirtyMask camera_flags = DirtyFlag::CAMERA | DirtyFlag::OVERLAY;
+        const bool camera_only = (frame.frame_dirty & DirtyFlag::CAMERA) &&
+                                 !(frame.frame_dirty & ~camera_flags);
+        // Camera motion needs color, not a new full-image exact-depth replay.
+        // A pending point request marks VIEWPORT and still obtains exact depth.
+        frame.exact_surface_picking = exact_surface_picking_ &&
+                                      (!camera_only || frame.training_active || frame.deterministic_export ||
+                                       splitViewUsesGTComparison(frame.settings.split_view_mode) ||
+                                       splitViewUsesPLYComparison(frame.settings.split_view_mode));
     }
 
     RenderingManager::VulkanFrameResult RenderingManager::drawVulkanFrame(const RenderContext& context) {
@@ -2779,7 +2787,7 @@ namespace lfs::vis {
         lfs::rendering::FrameMetadata rendered_metadata{};
         std::string render_error;
         bool rendered_image_contains_ground_truth = false;
-        glm::ivec2 rendered_gt_content_size{0, 0};
+        std::optional<GTComparisonGuideCamera> rendered_gt_camera;
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         // Mesh shown on each PLY-comparison side; null where that side is a splat node.
@@ -3904,7 +3912,9 @@ namespace lfs::vis {
                                     make_split_panel(compare_panel, frame_settings.split_position, 1.0f, false);
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
-                                rendered_gt_content_size = gt_size;
+                                if (render_camera) {
+                                    rendered_gt_camera = GTComparisonGuideCamera{*render_camera, render_gt_size};
+                                }
                                 std::string mode_label = "GT Compare";
                                 const char* left_name = "Ground Truth";
                                 const char* right_name = "Rendered";
@@ -4207,15 +4217,9 @@ namespace lfs::vis {
         } else if (render_point_cloud &&
                    (!has_visible_gaussian_model || hasRenderableGaussians(model)) &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
-            // Brush edits mutate sh0 in place — same tensor pointer but new
-            // contents. Invalidate the derived-colors cache so the next frame
-            // re-derives + re-uploads.
-            if ((frame_dirty & DirtyFlag::SPLATS) != 0) {
-                point_cloud_colors_cache_key_ = nullptr;
-                point_cloud_colors_cache_size_ = 0;
-                point_cloud_colors_cache_ = lfs::core::Tensor{};
-                ++point_cloud_data_revision_;
-            }
+            // Edits write splat data in place behind the same tensor pointers; each one
+            // advances point_cloud_data_revision_ (markDirty with SPLATS).
+            const std::uint64_t data_revision = point_cloud_data_revision_.load(std::memory_order_relaxed);
             std::vector<glm::mat4> point_cloud_transforms_storage;
             const std::vector<glm::mat4>* transforms_for_request = nullptr;
             if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
@@ -4226,9 +4230,6 @@ namespace lfs::vis {
             }
             auto pc_request = buildPointCloudRenderRequest(
                 frame_ctx, render_size, *transforms_for_request);
-            if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
-                ++point_cloud_preview_selection_revision_;
-            }
 
             // Vulkan-native path: skip CUDA staging, drive an external VkImage
             // straight through the same plumbing the VkSplat backend uses.
@@ -4252,6 +4253,7 @@ namespace lfs::vis {
                         sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
                     if (sh0_key != point_cloud_colors_cache_key_ ||
                         sh0_count != point_cloud_colors_cache_size_ ||
+                        data_revision != point_cloud_colors_cache_revision_ ||
                         !point_cloud_colors_cache_.is_valid()) {
                         try {
                             point_cloud_colors_cache_ =
@@ -4262,6 +4264,7 @@ namespace lfs::vis {
                         }
                         point_cloud_colors_cache_key_ = sh0_key;
                         point_cloud_colors_cache_size_ = sh0_count;
+                        point_cloud_colors_cache_revision_ = data_revision;
                     }
                     splat_positions = model->get_means();
                     positions_ptr = &splat_positions;
@@ -4276,8 +4279,8 @@ namespace lfs::vis {
                     fillPointCloudVulkanRequest(vk_req, pc_request, frame_settings);
                 vk_req.positions = positions_ptr;
                 vk_req.colors = colors_ptr;
-                vk_req.positions_revision = point_cloud_data_revision_;
-                vk_req.colors_revision = point_cloud_data_revision_;
+                vk_req.positions_revision = data_revision;
+                vk_req.colors_revision = data_revision;
                 if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
                     model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
@@ -4286,8 +4289,8 @@ namespace lfs::vis {
                     // silent cache reuse after densify/compact.
                     vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
-                vk_req.selection_revision = point_cloud_preview_selection_revision_;
-                vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
+                vk_req.selection_revision = point_cloud_preview_selection_revision_.load(std::memory_order_relaxed);
+                vk_req.preview_selection_revision = vk_req.selection_revision;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(
@@ -4714,7 +4717,6 @@ namespace lfs::vis {
                                     vulkan_viewport_image_size_ = render_result.size;
                                     vulkan_viewport_image_alloc_size_ = render_result.size;
                                     vulkan_viewport_image_flip_y_ = render_result.flip_y;
-                                    vulkan_gt_comparison_content_size_ = {0, 0};
                                     viewport_artifact_service_.updateFromImageOutput(
                                         corrected_image, metadata, render_result.size, true);
                                     if (transparent_viewer_compositing) {
@@ -4998,6 +5000,7 @@ namespace lfs::vis {
              pending_split_view.enabled);
         if (publish_gpu_pass) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
+            gpu_mesh_frame.gt_camera = rendered_gt_camera;
             populate_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test sources. Independent split views
@@ -5040,8 +5043,6 @@ namespace lfs::vis {
         if (!rendered_image && publish_gpu_pass) {
             vksplat_stale_frame_guard_.onSuccess();
             clearVulkanViewportImageState(render_size, false);
-            vulkan_gt_comparison_content_size_ =
-                rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
             FrameResources split_info_resources;
             if (rendered_split_info) {
                 split_info_resources.split_view_executed = true;
@@ -5087,33 +5088,7 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        // content_rect is authored in coordinate_extent
-                        // space; the capture tensor is current_size. Match
-                        // recordScenePass: per-edge rounding into output pixels.
-                        // Capture has no on-screen viewport offset.
-                        if (capture_params.coordinate_extent.x > 0 &&
-                            capture_params.coordinate_extent.y > 0 &&
-                            capture_params.coordinate_extent != current_size) {
-                            const float scale_x =
-                                static_cast<float>(current_size.x) /
-                                static_cast<float>(capture_params.coordinate_extent.x);
-                            const float scale_y =
-                                static_cast<float>(current_size.y) /
-                                static_cast<float>(capture_params.coordinate_extent.y);
-                            const int left = static_cast<int>(
-                                std::lround(capture_params.content_rect.x * scale_x));
-                            const int top = static_cast<int>(
-                                std::lround(capture_params.content_rect.y * scale_y));
-                            const int right = static_cast<int>(std::lround(
-                                (capture_params.content_rect.x + capture_params.content_rect.z) *
-                                scale_x));
-                            const int bottom = static_cast<int>(std::lround(
-                                (capture_params.content_rect.y + capture_params.content_rect.w) *
-                                scale_y));
-                            capture_params.content_rect = {
-                                left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
-                            capture_params.coordinate_extent = current_size;
-                        }
+                        capture_params.content_rect = capture_params.contentRectAt(current_size);
                         return composeSplitViewCpu(capture_params, current_size);
                     },
                     rendered_metadata,
@@ -5287,8 +5262,6 @@ namespace lfs::vis {
         vulkan_viewport_image_alloc_size_ = render_size;
         vulkan_viewport_coordinate_size_ = current_size;
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
-        vulkan_gt_comparison_content_size_ =
-            rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();

@@ -109,4 +109,33 @@ namespace nvimgcodec {
         }
     }
 
+    // Returns true iff both `image_info.orientation` (the input image being encoded) and
+    // `out_image_info.orientation` (the requested output code stream) are the identity orientation
+    // (no rotation, no flips). On the first non-identity orientation found, logs a warning and
+    // returns false; the caller is responsible for OR-ing
+    // NVIMGCODEC_PROCESSING_STATUS_ORIENTATION_UNSUPPORTED into its status on a false return.
+    //
+    // Intended for canEncode implementations: no encoder extension applies orientation (rotates
+    // or flips pixels, or writes an orientation tag) to its output, so a caller-supplied
+    // non-identity orientation - on either side - must be rejected rather than silently ignored.
+    inline bool check_orientation_supported(
+        const nvimgcodecFrameworkDesc_t* framework,
+        const char* plugin_id,
+        const nvimgcodecImageInfo_t& image_info,
+        const nvimgcodecImageInfo_t& out_image_info) {
+        const auto& orientation = image_info.orientation;
+        if (orientation.rotated != 0 || orientation.flip_x || orientation.flip_y) {
+            log_image_info_check_warning(framework, plugin_id,
+                                         "Non-identity orientation (rotation/flip) is not supported by this encoder");
+            return false;
+        }
+        const auto& out_orientation = out_image_info.orientation;
+        if (out_orientation.rotated != 0 || out_orientation.flip_x || out_orientation.flip_y) {
+            log_image_info_check_warning(framework, plugin_id,
+                                         "Non-identity output orientation (rotation/flip) is not supported by this encoder");
+            return false;
+        }
+        return true;
+    }
+
 } // namespace nvimgcodec

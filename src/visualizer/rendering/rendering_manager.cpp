@@ -256,6 +256,13 @@ namespace lfs::vis {
     }
 
     void RenderingManager::markDirty(const DirtyMask flags, const FrameReason reason, std::string detail) {
+        // Splat data or selection may have changed in place unless the reason is SettingsChange.
+        if (reason != FrameReason::SettingsChange) {
+            if ((flags & DirtyFlag::SPLATS) != 0)
+                point_cloud_data_revision_.fetch_add(1, std::memory_order_relaxed);
+            if ((flags & DirtyFlag::SELECTION) != 0)
+                point_cloud_preview_selection_revision_.fetch_add(1, std::memory_order_relaxed);
+        }
         frame_demand_ledger_.request(FrameRequest{.reason = reason,
                                                   .scope = FrameScope::View,
                                                   .views = 1,
@@ -615,7 +622,6 @@ namespace lfs::vis {
         vulkan_viewport_image_size_ = size;
         vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         vulkan_viewport_image_flip_y_ = flip_y;
-        vulkan_gt_comparison_content_size_ = {0, 0};
     }
 
     void RenderingManager::releaseSceneRenderResources() {
@@ -859,7 +865,7 @@ namespace lfs::vis {
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
             }
-            markDirty(dirty_flags, lfs::vis::FrameReason::SceneChange);
+            markDirty(dirty_flags, lfs::vis::FrameReason::SettingsChange);
         }
 
         if (lod_request_changed && lod_controller_) {

@@ -6,9 +6,12 @@
 
 #include "core/crop_polygon.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
@@ -124,6 +127,23 @@ namespace lfs::vis {
                 return *this;
             }
         };
+
+        // A per-point input. `shared` is memory CUDA writes and Vulkan reads, so a
+        // refresh is a device copy instead of a host round trip; `staged` is the
+        // host-staged fallback. At most one of them is live.
+        struct PointBuffer {
+            lfs::core::Tensor shared;
+            ManagedBuffer staged;
+        };
+
+        [[nodiscard]] VkDescriptorBufferInfo binding(const PointBuffer& input) {
+            if (input.shared.is_valid()) {
+                const auto storage = std::static_pointer_cast<VulkanExternalTensorStorage>(
+                    input.shared.external_storage_owner());
+                return {storage->vkBuffer(), storage->vkOffset(), storage->bytes()};
+            }
+            return {input.staged.buffer, 0, input.staged.size};
+        }
 
         void destroyBuffer(VmaAllocator allocator, ManagedBuffer& buf) {
             if (!buf.vram_scope.empty() && !buf.vram_label.empty()) {
@@ -396,18 +416,6 @@ namespace lfs::vis {
             pc.counts[3] = max_point_size;
         }
 
-        // Copy a [N, 3] float Tensor (CPU or CUDA) to a contiguous host buffer.
-        bool tensorToHost(const lfs::core::Tensor& t, std::vector<float>& out) {
-            if (!t.is_valid() || t.ndim() != 2 || t.size(1) != 3) {
-                return false;
-            }
-            const auto host = t.to(lfs::core::Device::CPU).contiguous();
-            const std::size_t n = static_cast<std::size_t>(host.size(0)) * 3;
-            out.resize(n);
-            std::memcpy(out.data(), host.ptr<float>(), n * sizeof(float));
-            return true;
-        }
-
         // A drawable polygon crop: 3 to 64 outline vertices.
         [[nodiscard]] bool hasCropPolygon(const PointCloudVulkanRenderer::RenderRequest& req) {
             return req.crop_polygon && req.crop_polygon->vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
@@ -417,19 +425,6 @@ namespace lfs::vis {
         [[nodiscard]] bool hasPointMask(const lfs::core::Tensor* const mask,
                                         const std::size_t n_points) {
             return mask != nullptr && mask->is_valid() && mask->numel() == n_points;
-        }
-
-        [[nodiscard]] std::vector<std::uint32_t> maskTensorToUint32Host(
-            const lfs::core::Tensor& mask) {
-            const auto host = mask.to(lfs::core::DataType::UInt8)
-                                  .to(lfs::core::Device::CPU)
-                                  .contiguous();
-            const auto* const src = host.ptr<std::uint8_t>();
-            std::vector<std::uint32_t> out(static_cast<std::size_t>(host.numel()));
-            for (std::size_t i = 0; i < out.size(); ++i) {
-                out[i] = static_cast<std::uint32_t>(src[i]);
-            }
-            return out;
         }
 
     } // namespace
@@ -451,14 +446,14 @@ namespace lfs::vis {
         // Cached input buffers — point clouds rarely change, so we re-upload only
         // when the cache key (tensor pointer / size) changes.
         struct InputCache {
-            ManagedBuffer positions;
-            ManagedBuffer colors;
+            PointBuffer positions;
+            PointBuffer colors;
             ManagedBuffer transforms;
             ManagedBuffer transform_indices;
             ManagedBuffer visibility;
-            ManagedBuffer deleted_mask;
-            ManagedBuffer selection_mask;
-            ManagedBuffer preview_selection_mask;
+            PointBuffer deleted_mask;
+            PointBuffer selection_mask;
+            PointBuffer preview_selection_mask;
             ManagedBuffer selection_colors;
             ManagedBuffer crop_polygon;
 
@@ -500,6 +495,11 @@ namespace lfs::vis {
 
         // One-time staging buffers, kept around so we don't reallocate per upload.
         std::vector<ManagedBuffer> pending_stagings;
+
+        // Non-blocking stream for device copies so uploads never serialize
+        // with training on the legacy default stream.
+        lfs::rendering::CudaVulkanUploadStream upload_stream;
+        bool device_copy_failed = false;
 
         // Output slots: each owns its own color + depth attachment.
         struct OutputSlotResources {
@@ -1480,14 +1480,16 @@ namespace lfs::vis {
             for (auto& s : slots) {
                 destroySlot(s);
             }
-            destroyBuffer(allocator, cache.positions);
-            destroyBuffer(allocator, cache.colors);
+            for (PointBuffer* const input : {&cache.positions, &cache.colors, &cache.deleted_mask,
+                                             &cache.selection_mask, &cache.preview_selection_mask}) {
+                input->shared = {};
+                destroyBuffer(allocator, input->staged);
+            }
+            upload_stream.reset();
+            device_copy_failed = false;
             destroyBuffer(allocator, cache.transforms);
             destroyBuffer(allocator, cache.transform_indices);
             destroyBuffer(allocator, cache.visibility);
-            destroyBuffer(allocator, cache.deleted_mask);
-            destroyBuffer(allocator, cache.selection_mask);
-            destroyBuffer(allocator, cache.preview_selection_mask);
             destroyBuffer(allocator, cache.selection_colors);
             destroyBuffer(allocator, cache.crop_polygon);
             destroyBuffer(allocator, placeholder);
@@ -1518,6 +1520,65 @@ namespace lfs::vis {
             allocator = VK_NULL_HANDLE;
         }
 
+        // Uploads `src` as `dtype`: a device copy into `dst.shared` when possible, else
+        // host staging into `dst.staged`. No copy is in flight when this returns, and a
+        // failed synchronise fails the frame.
+        [[nodiscard]] lfs::Result<void> uploadPoints(VkCommandBuffer cb,
+                                                     const lfs::core::Tensor& src,
+                                                     const lfs::core::DataType dtype,
+                                                     const VkBufferUsageFlags usage,
+                                                     PointBuffer& dst,
+                                                     const char* const what) {
+            const auto failure = [what](std::string detail) {
+                return lfs::Result<void>::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = "Point-cloud upload failed.",
+                    .detail = std::format("{}: {}", what, detail),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            };
+            bool copied = false;
+            if (!device_copy_failed && context->externalMemoryInteropEnabled()) {
+                try {
+                    if (!upload_stream.valid() && !upload_stream.init()) {
+                        throw std::runtime_error(upload_stream.lastError());
+                    }
+                    if (!dst.shared.is_valid() || !(dst.shared.shape() == src.shape()) ||
+                        dst.shared.dtype() != dtype) {
+                        dst.shared = {};
+                        auto tensor = makeVulkanExternalTensor(*context, src.shape(), dtype, src.size(0),
+                                                               std::format("point_cloud.{}", what).c_str(), usage);
+                        if (!tensor) {
+                            throw std::runtime_error(tensor.error());
+                        }
+                        tensor->set_stream(upload_stream.stream());
+                        dst.shared = std::move(*tensor);
+                    }
+                    // The trainer read epoch is installed on the current (render) stream.
+                    lfs::core::waitForCUDAStream(upload_stream.stream(), lfs::core::getCurrentCUDAStream());
+                    dst.shared.copy_from(src);
+                    copied = true;
+                } catch (const std::exception& e) {
+                    LOG_WARN("Point-cloud {} device copy failed, using host staging: {}", what, e.what());
+                    device_copy_failed = true;
+                }
+                if (upload_stream.valid() && !upload_stream.synchronize()) {
+                    return failure(std::format("upload stream synchronize failed: {}", upload_stream.lastError()));
+                }
+            }
+            if (copied) {
+                destroyBuffer(allocator, dst.staged);
+                return {};
+            }
+            dst.shared = {};
+            const auto host = (src.dtype() == dtype ? src : src.to(dtype)).to(lfs::core::Device::CPU).contiguous();
+            if (auto r = uploadInto(cb, usage, host.data_ptr(), host.bytes(), dst.staged, what); !r) {
+                return failure(std::move(r.error()));
+            }
+            return {};
+        }
+
         std::expected<void, std::string> uploadIfChanged(VkCommandBuffer cb,
                                                          const RenderRequest& req) {
             if (!req.positions || !req.colors) {
@@ -1543,16 +1604,11 @@ namespace lfs::vis {
             const void* pos_key = req.positions->ptr<float>();
             if (pos_key != cache.cached_positions_ptr || cache.cached_positions_count != n_points ||
                 cache.cached_positions_revision != req.positions_revision ||
-                cache.positions.buffer == VK_NULL_HANDLE) {
-                std::vector<float> host;
-                if (!tensorToHost(*req.positions, host)) {
-                    return std::unexpected<std::string>("Failed to read positions to CPU");
-                }
-                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                        host.data(), host.size() * sizeof(float),
-                                        cache.positions, "positions");
+                binding(cache.positions).buffer == VK_NULL_HANDLE) {
+                if (auto r = uploadPoints(cb, *req.positions, lfs::core::DataType::Float32,
+                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, cache.positions, "positions");
                     !r) {
-                    return r;
+                    return std::unexpected(std::string(r.error().detail()));
                 }
                 cache.cached_positions_ptr = pos_key;
                 cache.cached_positions_count = n_points;
@@ -1567,22 +1623,18 @@ namespace lfs::vis {
             const lfs::core::DataType col_dtype = req.colors->dtype();
             if (col_key != cache.cached_colors_ptr || cache.cached_colors_count != n_points ||
                 cache.cached_colors_revision != req.colors_revision ||
-                cache.cached_colors_dtype != col_dtype || cache.colors.buffer == VK_NULL_HANDLE) {
+                cache.cached_colors_dtype != col_dtype ||
+                binding(cache.colors).buffer == VK_NULL_HANDLE) {
                 const lfs::core::Tensor colors_f32 =
                     col_dtype == lfs::core::DataType::Float32
                         ? *req.colors
                         : (col_dtype == lfs::core::DataType::UInt8
                                ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
                                : req.colors->to(lfs::core::DataType::Float32));
-                std::vector<float> host;
-                if (!tensorToHost(colors_f32, host)) {
-                    return std::unexpected<std::string>("Failed to read colors to CPU");
-                }
-                if (auto r = uploadInto(cb, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                                        host.data(), host.size() * sizeof(float),
-                                        cache.colors, "colors");
+                if (auto r = uploadPoints(cb, colors_f32, lfs::core::DataType::Float32,
+                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, cache.colors, "colors");
                     !r) {
-                    return r;
+                    return std::unexpected(std::string(r.error().detail()));
                 }
                 cache.cached_colors_ptr = col_key;
                 cache.cached_colors_count = n_points;
@@ -1691,7 +1743,7 @@ namespace lfs::vis {
 
             const auto upload_mask_if_changed =
                 [&](const lfs::core::Tensor* const mask,
-                    ManagedBuffer& buffer,
+                    PointBuffer& buffer,
                     const char* const what,
                     const void*& cached_ptr,
                     std::size_t& cached_id,
@@ -1711,22 +1763,16 @@ namespace lfs::vis {
                 const void* const mask_ptr = mask;
                 const std::size_t mask_id = mask->debug_id();
                 const bool changed =
-                    buffer.buffer == VK_NULL_HANDLE ||
+                    binding(buffer).buffer == VK_NULL_HANDLE ||
                     cached_ptr != mask_ptr ||
                     cached_id != mask_id ||
                     cached_count != n_points ||
                     (cached_revision && *cached_revision != revision);
                 if (changed) {
-                    auto host = maskTensorToUint32Host(*mask);
-                    if (host.size() != n_points) {
-                        return std::unexpected<std::string>(
-                            std::format("{} mask size mismatch", what));
-                    }
-                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                            host.data(), host.size() * sizeof(std::uint32_t),
-                                            buffer, what);
+                    if (auto r = uploadPoints(cb, mask->flatten(), lfs::core::DataType::Int32,
+                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer, what);
                         !r) {
-                        return std::unexpected(r.error());
+                        return std::unexpected(std::string(r.error().detail()));
                     }
                     cached_ptr = mask_ptr;
                     cached_id = mask_id;
@@ -1822,15 +1868,6 @@ namespace lfs::vis {
             VkBuffer visibility_buf = (cache.cached_n_visibility > 0)
                                           ? cache.visibility.buffer
                                           : placeholder.buffer;
-            VkBuffer deleted_buf = (cache.cached_deleted_mask_count > 0)
-                                       ? cache.deleted_mask.buffer
-                                       : placeholder.buffer;
-            VkBuffer selection_buf = (cache.cached_selection_mask_count > 0)
-                                         ? cache.selection_mask.buffer
-                                         : placeholder.buffer;
-            VkBuffer preview_selection_buf = (cache.cached_preview_selection_mask_count > 0)
-                                                 ? cache.preview_selection_mask.buffer
-                                                 : placeholder.buffer;
             const bool has_selection_colors =
                 cache.cached_selection_colors_valid &&
                 cache.selection_colors.buffer != VK_NULL_HANDLE;
@@ -1846,14 +1883,14 @@ namespace lfs::vis {
             infos[kBindingTransformIndices].range = VK_WHOLE_SIZE;
             infos[kBindingVisibility].buffer = visibility_buf;
             infos[kBindingVisibility].range = VK_WHOLE_SIZE;
-            infos[kBindingSelectionMask].buffer = selection_buf;
-            infos[kBindingSelectionMask].range = VK_WHOLE_SIZE;
-            infos[kBindingPreviewSelectionMask].buffer = preview_selection_buf;
-            infos[kBindingPreviewSelectionMask].range = VK_WHOLE_SIZE;
+            const VkDescriptorBufferInfo unused{placeholder.buffer, 0, VK_WHOLE_SIZE};
+            infos[kBindingSelectionMask] =
+                cache.cached_selection_mask_count > 0 ? binding(cache.selection_mask) : unused;
+            infos[kBindingPreviewSelectionMask] =
+                cache.cached_preview_selection_mask_count > 0 ? binding(cache.preview_selection_mask) : unused;
             infos[kBindingSelectionColors].buffer = selection_colors_buf;
             infos[kBindingSelectionColors].range = VK_WHOLE_SIZE;
-            infos[kBindingDeletedMask].buffer = deleted_buf;
-            infos[kBindingDeletedMask].range = VK_WHOLE_SIZE;
+            infos[kBindingDeletedMask] = cache.cached_deleted_mask_count > 0 ? binding(cache.deleted_mask) : unused;
             infos[kBindingCropPolygon].buffer = crop_polygon_buf;
             infos[kBindingCropPolygon].range = VK_WHOLE_SIZE;
 
@@ -1977,18 +2014,20 @@ namespace lfs::vis {
 
             updateDescriptorSet(hasCropPolygon(req));
 
-            VkDeviceSize zero_offsets[2] = {0, 0};
-            VkBuffer vbufs[2] = {cache.positions.buffer, cache.colors.buffer};
+            const VkDescriptorBufferInfo positions = binding(cache.positions);
+            const VkDescriptorBufferInfo colors = binding(cache.colors);
+            VkDeviceSize vbuf_offsets[2] = {positions.offset, colors.offset};
+            VkBuffer vbufs[2] = {positions.buffer, colors.buffer};
             if (vbufs[0] == VK_NULL_HANDLE || vbufs[1] == VK_NULL_HANDLE ||
                 cache.cached_positions_count > std::numeric_limits<std::uint32_t>::max() ||
-                cache.positions.size < cache.cached_positions_count * sizeof(float) * 3u ||
-                cache.colors.size < cache.cached_positions_count * sizeof(float) * 3u) {
+                positions.range < cache.cached_positions_count * sizeof(float) * 3u ||
+                colors.range < cache.cached_positions_count * sizeof(float) * 3u) {
                 const std::string error = std::format(
                     "Point-cloud draw requires non-null vertex buffers, a 32-bit vertex count, and allocations large enough for all vertices (positions_buffer={:#x}, positions_size={}, colors_buffer={:#x}, colors_size={}, vertex_count={}, maximum_vertex_count={}, required_positions_bytes={}, required_colors_bytes={}) ({}:{})",
                     vkHandleValue(vbufs[0]),
-                    cache.positions.size,
+                    positions.range,
                     vkHandleValue(vbufs[1]),
-                    cache.colors.size,
+                    colors.range,
                     cache.cached_positions_count,
                     std::numeric_limits<std::uint32_t>::max(),
                     cache.cached_positions_count * sizeof(float) * 3u,
@@ -2067,7 +2106,7 @@ namespace lfs::vis {
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 
-            vkCmdBindVertexBuffers(command_buffer, 0, 2, vbufs, zero_offsets);
+            vkCmdBindVertexBuffers(command_buffer, 0, 2, vbufs, vbuf_offsets);
 
             // 64 is the lower bound of Vulkan's guaranteed pointSizeRange; the
             // shader clamps gl_PointSize to this so very-near points don't

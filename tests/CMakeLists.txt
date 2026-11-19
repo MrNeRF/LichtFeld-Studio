@@ -943,6 +943,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_calibration_correction.cpp
     test_camera_pose_gradient.cpp
     test_ray_depth_step.cpp
     test_color_variance.cpp
@@ -1005,6 +1006,7 @@ set(TEST_FILES
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_normal_prior_decode.cpp
+    test_prior_own_size.cpp
     test_normal_auto_generate.cpp
     test_lens_priors.cpp
     test_metrics_evaluator.cpp
@@ -1072,6 +1074,8 @@ set(TEST_FILES
     test_camera_thumbnail_policy.cpp
     test_apriltag_scene_scale.cpp
     test_undistort.cpp
+    test_panorama_views.cpp
+    test_fisheye_views.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp

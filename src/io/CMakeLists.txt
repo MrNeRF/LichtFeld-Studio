@@ -317,6 +317,7 @@ add_library(lfs_io STATIC
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
         loaders/mesh_loader.cpp
+        loaders/skinned_mesh_loader.cpp
         mesh/openmesh_bridge.hpp
         mesh/openmesh_bridge.cpp
         mesh/texture_loader.hpp

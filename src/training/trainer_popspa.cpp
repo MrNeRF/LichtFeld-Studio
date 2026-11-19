@@ -52,7 +52,8 @@ namespace lfs::training {
 
     } // namespace
 
-    uint64_t sort_and_fingerprint_popspa_cameras(std::vector<core::Camera*>& cameras) {
+    uint64_t sort_and_fingerprint_popspa_cameras(std::vector<core::Camera*>& cameras,
+                                                 const std::unordered_map<int, int>* identity_uids) {
         std::sort(cameras.begin(), cameras.end(), [](const auto* a, const auto* b) { return a->uid() < b->uid(); });
         uint64_t hash = 14695981039346656037ULL;
         const auto append = [&hash](const void* data, size_t size) {
@@ -63,7 +64,11 @@ namespace lfs::training {
             }
         };
         for (const auto* cam : cameras) {
-            const std::string identity = std::format("{}:{}:{}:{}:{}:{};", cam->uid(), cam->camera_id(),
+            int uid = cam->uid();
+            if (identity_uids)
+                if (const auto it = identity_uids->find(uid); it != identity_uids->end())
+                    uid = it->second;
+            const std::string identity = std::format("{}:{}:{}:{}:{}:{};", uid, cam->camera_id(),
                                                      core::path_to_utf8(cam->image_path()), cam->image_width(), cam->image_height(),
                                                      static_cast<int>(cam->camera_model_type()));
             append(identity.data(), identity.size());
@@ -234,7 +239,13 @@ namespace lfs::training {
                 popspa_completed_iteration_.store(completed_iteration, std::memory_order_release);
                 LOG_INFO("POPSpa: {} rows, target {}, {} score views", model.size(), config.target_count, cameras.size());
             } else {
-                LFS_ASSERT_MSG(popspa_controller_.config().camera_fingerprint == fingerprint &&
+                // A checkpoint of an earlier version fingerprints the views by the ids it gave them; both id schemes
+                // keep the order of the views, so the saved per-view state still lines up.
+                const uint64_t saved = popspa_controller_.config().camera_fingerprint;
+                const bool same_cameras = saved == fingerprint ||
+                                          (!legacy_view_uids_.empty() &&
+                                           saved == sort_and_fingerprint_popspa_cameras(cameras, &legacy_view_uids_));
+                LFS_ASSERT_MSG(same_cameras &&
                                    popspa_controller_.score_view_count() == cameras.size() &&
                                    popspa_controller_.state_size() == model.size(),
                                std::format("POPSpa resume must match camera identity and model rows (saved_views={}, views={}, saved_rows={}, rows={})",

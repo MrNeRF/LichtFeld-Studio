@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <vector>
@@ -95,6 +96,7 @@ namespace lfs::training::kernels {
         float radial[6] = {};
         float tangential[2] = {};
         float thin_prism[4] = {};
+        bool pinhole_ray_distance = false;
     };
 
     [[nodiscard]] std::vector<float2> collect_depth_anchor_samples(
@@ -119,6 +121,16 @@ namespace lfs::training::kernels {
     [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(const std::vector<float2>& pairs);
 
     [[nodiscard]] size_t depth_loss_partial_count(size_t num_pixels);
+
+    struct DepthRayGrid {
+        float fx, fy, cx, cy;
+
+        __host__ __device__ float ray_length(const int x, const int y) const {
+            const float nx = (static_cast<float>(x) + 0.5f - cx) / fx;
+            const float ny = (static_cast<float>(y) + 0.5f - cy) / fy;
+            return sqrtf(nx * nx + ny * ny + 1.0f);
+        }
+    };
 
     // Scale-and-shift-invariant depth supervision on alpha-normalized expected
     // depth in inverse-depth space using a fixed per-camera anchor alignment.
@@ -146,6 +158,7 @@ namespace lfs::training::kernels {
         float prior_quantization_step = 0.0f,
         const DepthAnchor* anchor = nullptr,
         cudaStream_t stream = nullptr,
-        const float* pixel_weight = nullptr);
+        const float* pixel_weight = nullptr,
+        const DepthRayGrid* ray_grid = nullptr);
 
 } // namespace lfs::training::kernels

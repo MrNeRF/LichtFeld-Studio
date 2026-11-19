@@ -23,6 +23,7 @@
 #include "iimage.h"
 #include "iimage_encoder.h"
 #include "iimage_encoder_factory.h"
+#include "imgproc/convert_kernel_gpu.h"
 #include "imgproc/copy_image.h"
 #include "imgproc/exception.h"
 #include "imgproc/type_utils.h"
@@ -37,6 +38,7 @@
 #include <mutex>
 #include <numeric>
 #include <nvtx3/nvtx3.hpp>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace nvimgcodec {
@@ -69,15 +71,99 @@ namespace nvimgcodec {
         return promise.getFuture();
     }
 
+    namespace {
+
+        // nvTIFF, and potentially other codecs, can only consume interleaved samples. These two helpers
+        // describe the one layout conversion the core is willing to perform on the caller's behalf.
+        // Restricted to planar RGB/BGR: LaunchConvertNormKernel has no YUV to RGB path, and P_Y is
+        // already identical to its interleaved form.
+        bool isPlanarRgbLike(const nvimgcodecImageInfo_t& info) {
+            if (info.sample_format != NVIMGCODEC_SAMPLEFORMAT_P_RGB && info.sample_format != NVIMGCODEC_SAMPLEFORMAT_P_BGR) {
+                return false;
+            }
+            // Exactly three single-channel planes. The tag alone is not enough: the BMP parser reports
+            // P_RGB for any num_planes != 1, so a 32bpp BMP arrives as a 4-plane P_RGB image. Feeding
+            // that to makeInterleaved() would build an I_RGB descriptor with 4 channels, which is not a
+            // valid I_RGB image.
+            if (info.num_planes != 3) {
+                return false;
+            }
+            for (uint32_t p = 0; p < info.num_planes; ++p) {
+                if (info.plane_info[p].num_channels != 1) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        nvimgcodecImageInfo_t makeInterleaved(const nvimgcodecImageInfo_t& in) {
+            nvimgcodecImageInfo_t out = in;
+            out.sample_format = in.sample_format == NVIMGCODEC_SAMPLEFORMAT_P_RGB ? NVIMGCODEC_SAMPLEFORMAT_I_RGB
+                                                                                  : NVIMGCODEC_SAMPLEFORMAT_I_BGR;
+            out.num_planes = 1;
+            out.plane_info[0] = in.plane_info[0];
+            out.plane_info[0].num_channels = in.num_planes;
+            out.plane_info[0].row_stride = static_cast<size_t>(out.plane_info[0].width) *
+                                           out.plane_info[0].num_channels * TypeSize(out.plane_info[0].sample_type);
+            return out;
+        }
+
+    } // namespace
+
     nvimgcodecProcessingStatus_t ImageGenericEncoder::canProcessImpl(Entry& sample, ProcessorEntry* processor, int tid) noexcept {
-        NVIMGCODEC_LOG_TRACE(this->logger_, tid << ": " << sample.processor->id_ << " canEncode #" << sample.sample_idx);
-        nvimgcodecProcessingStatus_t status;
+        NVIMGCODEC_LOG_TRACE(this->logger_, tid << ": " << processor->id_ << " canEncode #" << sample.sample_idx);
+        auto ask = [&](ProcessorEntry* proc) {
+            nvimgcodecProcessingStatus_t s = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
+            bool can_encode = proc->instance_->canEncode(sample.code_stream->getCodeStreamDesc(), sample.getImageDesc(),
+                                                         static_cast<const nvimgcodecEncodeParams_t*>(sample.params), &s, tid);
+            // A refusal must not be mistaken for acceptance, even if the encoder left no reason for it.
+            if (!can_encode && (s == NVIMGCODEC_PROCESSING_STATUS_SUCCESS || s == NVIMGCODEC_PROCESSING_STATUS_UNKNOWN))
+                s = NVIMGCODEC_PROCESSING_STATUS_FAIL;
+            return s;
+        };
         try {
-            sample.processor->instance_->canEncode(
-                sample.code_stream->getCodeStreamDesc(), sample.getImageDesc(),
-                static_cast<const nvimgcodecEncodeParams_t*>(sample.params), &status, tid);
+            // Once a sample has been committed to the interleaved layout, only a GPU encoder may take
+            // it: the interleaving runs on the GPU and hands the encoder a device buffer. The sample
+            // can still be moved to a fallback after this processor accepted (completeSetup() reassigns
+            // over sample_count_hint_ in image_generic_codec.h), and the tiff chain really does fall
+            // back from nvTIFF to the CPU-only opencv encoder -- so declining here is what keeps that
+            // reassignment from happening, rather than catching it later.
+            if (sample.convert_to_interleaved && processor->backend_kind_ == NVIMGCODEC_BACKEND_KIND_CPU_ONLY) {
+                return NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED;
+            }
+            nvimgcodecProcessingStatus_t status = ask(processor);
             NVIMGCODEC_LOG_DEBUG(
-                this->logger_, tid << ": " << sample.processor->id_ << " canEncode #" << sample.sample_idx << " returned " << status);
+                this->logger_, tid << ": " << processor->id_ << " canEncode #" << sample.sample_idx << " returned " << status);
+
+            // If the encoder turned the sample down over its layout, offer the interleaved equivalent
+            // and let the core interleave before encode(). Only the layout is renegotiated; any other
+            // reason for rejection is returned untouched so encoder selection still sees it.
+            //
+            // Each reason is one distinctive bit ORed with bit 0, which every non-UNKNOWN status
+            // carries -- FAIL is 0x3, CODEC_UNSUPPORTED 0xb, and so on. A plain `status & layout_bits`
+            // would therefore match nearly every rejection, so test that the distinctive bits
+            // themselves are present.
+            const bool layout_rejected = (status & NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED) ==
+                                             NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED ||
+                                         (status & NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED) ==
+                                             NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED;
+            if (status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS && layout_rejected &&
+                processor->backend_kind_ != NVIMGCODEC_BACKEND_KIND_CPU_ONLY && isPlanarRgbLike(sample.image_info)) {
+                const auto planar_info = sample.image_info;
+                sample.image_info = makeInterleaved(planar_info);
+                const nvimgcodecProcessingStatus_t retry = ask(processor);
+                if (retry == NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                    // Committed rather than probed-and-reverted: later fallback probes for this sample
+                    // then evaluate the same layout, so whichever encoder is finally selected agrees
+                    // with convert_to_interleaved. Every encoder that accepts planar RGB also accepts
+                    // interleaved RGB, so committing cannot lose an otherwise viable candidate.
+                    sample.convert_to_interleaved = true;
+                    NVIMGCODEC_LOG_DEBUG(this->logger_,
+                                         tid << ": " << processor->id_ << " #" << sample.sample_idx << " accepted after interleaving");
+                    return retry;
+                }
+                sample.image_info = planar_info;
+            }
             return status;
         } catch (const std::exception& e) {
             NVIMGCODEC_LOG_ERROR(logger_, "Exception during canEncode: " << e.what());
@@ -118,6 +204,43 @@ namespace nvimgcodec {
                    input_info.buffer_kind == NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
         bool h2d =
             processor->backend_kind_ != NVIMGCODEC_BACKEND_KIND_CPU_ONLY && input_info.buffer_kind == NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_HOST;
+
+        // Layout conversion negotiated in canProcessImpl(): interleave into a dedicated device buffer
+        // and hand the encoder that instead. output_info already describes the interleaved layout, so
+        // only its buffer has to be filled in. Never taken for a CPU-only backend -- canProcessImpl()
+        // does not offer the conversion there, since LaunchConvertNormKernel is CUDA-only.
+        if (sample.convert_to_interleaved) {
+            // Belt and braces for the guard in canProcessImpl(). Not an assert: with NDEBUG this would
+            // otherwise fall through and hand a device buffer to a CPU-only encoder. Throwing rather
+            // than returning false, because processImpl() ignores this function's return value and
+            // calls encode() regardless -- false has always meant "no copy was needed". processImpl()
+            // catches this and reports NVIMGCODEC_PROCESSING_STATUS_FAIL for the sample.
+            if (processor->backend_kind_ == NVIMGCODEC_BACKEND_KIND_CPU_ONLY) {
+                throw std::logic_error("CPU-only encoder selected for a sample requiring GPU interleaving");
+            }
+            auto& t = per_thread_[tid];
+            nvimgcodecImageInfo_t src_info = input_info;
+            if (h2d) {
+                // The kernel reads through a device pointer, so a host input is staged first. This
+                // uses the regular ring buffer; the interleaved result goes to convert_buffer.
+                auto& device_buffer = t.device_buffers[t.device_buffer_idx];
+                t.device_buffer_idx = (t.device_buffer_idx + 1) % t.device_buffers.size();
+                for (unsigned int c = 0; c < src_info.num_planes; ++c) {
+                    auto& pi = src_info.plane_info[c];
+                    pi.row_stride = static_cast<size_t>(pi.width) * TypeSize(pi.sample_type) * pi.num_channels;
+                }
+                device_buffer.resize(GetBufferSize(src_info), output_info.cuda_stream);
+                src_info.buffer = device_buffer.data;
+                src_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                CopyImage(src_info, input_info, cudaMemcpyHostToDevice, output_info.cuda_stream);
+            }
+            t.convert_buffer.resize(GetBufferSize(output_info), output_info.cuda_stream);
+            output_info.buffer = t.convert_buffer.data;
+            output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+            NVIMGCODEC_LOG_DEBUG(logger_, "interleaving planar input before encode");
+            LaunchConvertNormKernel(output_info, src_info, output_info.cuda_stream);
+            return true;
+        }
 
         // restore original stride in case we don't need to copy
         for (unsigned int c = 0; c < output_info.num_planes; ++c) {

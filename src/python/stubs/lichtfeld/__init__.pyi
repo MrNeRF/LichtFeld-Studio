@@ -657,6 +657,9 @@ def reset_camera() -> None:
 def set_vr_active(active: bool) -> None:
     """Enter or exit VR viewing"""
 
+def detect_vr() -> None:
+    """Look again for a VR headset that was connected after startup"""
+
 def recenter_vr() -> None:
     """Put the VR view back at the desktop camera"""
 
@@ -886,12 +889,12 @@ class Tensor:
 
     @overload
     @staticmethod
-    def arange(end: float) -> Tensor:
+    def arange(end: int | float, *, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
         """Create 1D tensor with values from 0 to end"""
 
     @overload
     @staticmethod
-    def arange(start: float, end: float, step: float = 1.0, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
+    def arange(start: int | float, end: int | float, step: int | float = 1, device: str = 'cuda', dtype: str = 'float32') -> Tensor:
         """Create 1D tensor with values from start to end"""
 
     @staticmethod
@@ -2150,6 +2153,9 @@ class OptimizationParams:
     def builtin_default(self, name: str) -> object:
         """Get the built-in default for the active method and step scaling"""
 
+    def set_scaled_iterations(self, target: int) -> None:
+        """Set the iteration limit and rescale its schedule together"""
+
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 
@@ -2548,6 +2554,15 @@ class OptimizationParams:
 
     @pose_opt.setter
     def pose_opt(self, arg: bool, /) -> None: ...
+
+    @property
+    def calibration_correction(self) -> bool:
+        """
+        Fits a small, smooth warp to every training photo that absorbs what the calibration missed (rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step count; evaluation scores each held-out view as rendered and, in addition, after aligning the render to the photo.
+        """
+
+    @calibration_correction.setter
+    def calibration_correction(self, arg: bool, /) -> None: ...
 
     @property
     def ppisp(self) -> bool:

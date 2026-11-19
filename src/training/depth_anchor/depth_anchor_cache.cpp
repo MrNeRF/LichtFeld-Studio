@@ -91,10 +91,8 @@ namespace lfs::training {
 
     } // namespace
 
-    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
+    kernels::DepthCameraProjection photograph_projection(const lfs::core::Camera& cam) {
         kernels::DepthCameraProjection p;
-        if (cam.is_undistort_prepared())
-            return p;
         p.model = static_cast<int>(cam.camera_model_type());
         auto copy = [](const lfs::core::Tensor& tensor, float* out, size_t count) {
             if (!tensor.is_valid() || !tensor.numel())
@@ -108,6 +106,20 @@ namespace lfs::training {
         else
             copy(cam.tangential_distortion(), p.tangential, 2);
         return p;
+    }
+
+    kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam) {
+        if (cam.is_undistort_prepared())
+            return {.pinhole_ray_distance = is_view(cam.undistort_params())};
+        return photograph_projection(cam);
+    }
+
+    std::optional<kernels::DepthRayGrid> depth_prior_ray_grid(
+        const lfs::core::Camera& cam, const int tile_x, const int tile_y) {
+        if (!cam.is_undistort_prepared() || !is_view(cam.undistort_params()))
+            return std::nullopt;
+        const auto [fx, fy, cx, cy] = cam.get_intrinsics();
+        return kernels::DepthRayGrid{fx, fy, cx - tile_x, cy - tile_y};
     }
 
     RawDepthAnchorMap computeRawDepthAnchors(
@@ -369,6 +381,12 @@ namespace lfs::training {
             hash_scalar(hash, cam->camera_height());
             const auto projection = depth_camera_projection(*cam);
             hash_scalar(hash, projection.model);
+            if (projection.pinhole_ray_distance) {
+                hash_scalar(hash, projection.pinhole_ray_distance);
+                const auto& params = cam->undistort_params();
+                for (const float v : params.view_rotation)
+                    hash_scalar(hash, v);
+            }
             for (float v : projection.radial)
                 hash_scalar(hash, v);
             for (float v : projection.tangential)

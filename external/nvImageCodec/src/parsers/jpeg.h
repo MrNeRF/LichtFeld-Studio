@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <array>
 #include <nvimgcodec.h>
 #include <vector>
 namespace nvimgcodec {
@@ -25,6 +26,8 @@ namespace nvimgcodec {
     public:
         explicit JPEGParserPlugin(const nvimgcodecFrameworkDesc_t* framework);
         nvimgcodecParserDesc_t* getParserDesc();
+        static constexpr const char* codecName() { return "jpeg"; }
+        static constexpr std::array<const char*, 2> fileExtensions() { return {{".jpg", ".jpeg"}}; }
 
     private:
         struct Parser {

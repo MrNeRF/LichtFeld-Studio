@@ -9,6 +9,9 @@ namespace lfs::training::kernels {
 
     struct CameraPoseAdamStep {
         int row = 0;
+        int draw = 0;
+        int first_draw = 0;
+        int draw_count = 1;
         float lr_rotation = 0.0f;    // radians per step
         float lr_translation = 0.0f; // scene units per step
         float beta1 = 0.9f;
@@ -17,7 +20,7 @@ namespace lfs::training::kernels {
     };
 
     // One Adam step of camera `row`'s offset (offsets, adam_m, adam_v [N, 6], steps [N]) from the rasterizer's gradient of
-    // the pose it drew, compose(w2c0[row], offset) (camera_pose_math.hpp). Writes the refined pose to w2c [16] and
+    // the pose it drew, compose(w2c0[row], offset) (camera_pose_math.hpp). Writes the refined pose to w2c [draw_count, 16] and
     // cam_position [3]. Skips a non-finite gradient.
     void launch_camera_pose_adam_step(
         const float* w2c0,
@@ -25,6 +28,7 @@ namespace lfs::training::kernels {
         float* adam_m,
         float* adam_v,
         float* steps,
+        const float* draw_to_owner,
         const float* grad_w2c,
         const float* grad_cam_position,
         float* w2c,

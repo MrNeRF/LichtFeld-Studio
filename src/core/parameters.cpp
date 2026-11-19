@@ -564,36 +564,80 @@ namespace lfs::core {
             }
         } // namespace
 
-        void OptimizationParameters::scale_steps(const float ratio) {
-            const auto apply = [ratio](const size_t v) {
-                return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
-            };
-            // Intervals must stay at least one step, or a short --iter run fails validation.
-            const auto apply_interval = [&apply](const size_t v) { return std::max<size_t>(1, apply(v)); };
-            iterations = apply(iterations);
-            start_refine = apply(start_refine);
-            stop_refine = apply(stop_refine);
-            reset_every = apply_interval(reset_every);
-            refine_every = apply_interval(refine_every);
-            morton_reorder_interval = apply(morton_reorder_interval);
-            sh_degree_interval = apply_interval(sh_degree_interval);
-            grow_until_iter = apply(grow_until_iter);
-            color_variance_warmup_iters = apply(color_variance_warmup_iters);
-
-            for (auto* steps : {&eval_steps, &save_steps}) {
-                std::set<size_t> unique;
-                for (const auto s : *steps) {
-                    if (const size_t scaled = apply(s); scaled > 0)
-                        unique.insert(scaled);
+        namespace {
+            template <typename Scale>
+            void scale_schedule(OptimizationParameters& p, Scale scale) {
+                const auto interval = [&](size_t v) { return std::max<size_t>(1, scale(v)); };
+                p.iterations = scale(p.iterations);
+                p.start_refine = scale(p.start_refine);
+                p.stop_refine = scale(p.stop_refine);
+                p.reset_every = interval(p.reset_every);
+                p.refine_every = interval(p.refine_every);
+                p.morton_reorder_interval = scale(p.morton_reorder_interval);
+                p.sh_degree_interval = interval(p.sh_degree_interval);
+                p.grow_until_iter = scale(p.grow_until_iter);
+                p.color_variance_warmup_iters = scale(p.color_variance_warmup_iters);
+                for (auto* steps : {&p.eval_steps, &p.save_steps}) {
+                    std::set<size_t> unique;
+                    for (const size_t step : *steps) {
+                        if (const size_t scaled = scale(step); scaled > 0)
+                            unique.insert(scaled);
+                    }
+                    steps->assign(unique.begin(), unique.end());
                 }
-                steps->assign(unique.begin(), unique.end());
             }
+        } // namespace
+
+        void OptimizationParameters::scale_steps(const float ratio) {
+            scale_schedule(*this, [ratio](const size_t step) {
+                const float product = static_cast<float>(step) * ratio;
+                if (!std::isfinite(product) || product >= 0x1p63f || product < -0x1p63f)
+                    return std::numeric_limits<size_t>::max();
+                return static_cast<size_t>(std::llround(product));
+            });
+        }
+
+        OptimizationParameters OptimizationParameters::scaled_to_iterations(const size_t target) const {
+            constexpr uint64_t limit = std::numeric_limits<int>::max();
+            if (!iterations || iterations > limit || !target || target > limit)
+                throw std::invalid_argument("Iteration count is outside the trainer range");
+            const float previous_factor = steps_scaler > 0.0f ? steps_scaler : 1.0f;
+            const double factor = previous_factor * (static_cast<double>(target) / iterations);
+            if (!std::isfinite(factor) || factor > std::numeric_limits<float>::max())
+                throw std::invalid_argument("Step scaling factor is outside the supported range");
+            auto scaled = *this;
+            scaled.steps_scaler = static_cast<float>(factor);
+            const float legacy_ratio = scaled.steps_scaler / previous_factor;
+            const uint64_t half = iterations / 2;
+            // Largest input whose rounded product still fits a signed trainer step.
+            const uint64_t last_reachable = ((limit + 1) * iterations - 1 - half) / target;
+            const auto unreachable = [&](size_t step) { return step > last_reachable; };
+            std::erase_if(scaled.eval_steps, unreachable);
+            std::erase_if(scaled.save_steps, unreachable);
+            scale_schedule(scaled, [&](const size_t step) {
+                if (unreachable(step))
+                    throw std::invalid_argument("Scaled step exceeds the trainer limit");
+                if (step == iterations)
+                    return target;
+                const uint64_t value = (static_cast<uint64_t>(step) * target + half) / iterations;
+                constexpr size_t consecutive_float_integers = size_t{1} << std::numeric_limits<float>::digits;
+                if (std::max({iterations, target, step}) <= consecutive_float_integers && value <= consecutive_float_integers)
+                    return static_cast<size_t>(std::llround(static_cast<float>(step) * legacy_ratio));
+                return static_cast<size_t>(value);
+            });
+            return scaled;
         }
 
         float OptimizationParameters::color_variance_weight_at(const int iteration) const {
             return iteration > 0 && static_cast<size_t>(iteration) > color_variance_warmup_iters
                        ? color_variance_weight
                        : 0.0f;
+        }
+
+        int OptimizationParameters::calibration_correction_start_iteration() const {
+            // A scaler of zero or below means no step scaling; the field never starts on the untrained scene.
+            const float scaler = steps_scaler > 0.f ? steps_scaler : 1.f;
+            return std::max(1, static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * scaler)));
         }
 
         void OptimizationParameters::apply_step_scaling() {
@@ -619,7 +663,10 @@ namespace lfs::core {
         bool OptimizationParameters::normal_supervision_active(const int iter) const {
             if (!use_normal_loss)
                 return false;
-            const float total_f = static_cast<float>(std::max(1, resolved_total_iterations()));
+            const int total = std::max(1, resolved_total_iterations());
+            if (normal_start_fraction == 1.0f)
+                return iter >= total;
+            const float total_f = static_cast<float>(total);
             const int start_iter = static_cast<int>(normal_start_fraction * total_f);
             if (iter < start_iter)
                 return false;
@@ -652,8 +699,8 @@ namespace lfs::core {
                 return ppisp_controller_activation_step;
 
             const float clamped_scaler = std::max(steps_scaler, 1.0f);
-            const int tail_iters = static_cast<int>(std::lround(5000.0f * clamped_scaler));
-            return std::max(0, total_iterations - tail_iters);
+            const double tail = std::round(static_cast<double>(5000.0f * clamped_scaler));
+            return tail >= total_iterations ? 0 : total_iterations - static_cast<int>(tail);
         }
 
         bool is_eval_mask_box(const std::string_view spec) {
@@ -907,6 +954,10 @@ namespace lfs::core {
             }
             if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
                 return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
+            for (const auto* steps : {&eval_steps, &save_steps}) {
+                if (std::ranges::find(*steps, std::numeric_limits<size_t>::max()) != steps->end())
+                    return "Evaluation and save steps must fit the supported step range";
+            }
             if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
                 return std::format("refine_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, refine_every);
             if (morton_reorder_interval > MAX_ITERATION_VALUE)
@@ -1376,21 +1427,33 @@ namespace lfs::core {
             return mrnf_defaults();
         }
 
-        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
-            OptimizationParameters params;
-            if (json.contains("strategy")) {
-                const auto strategy = json.at("strategy").get<std::string>();
-                if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
-                    params = defaults_for_strategy(canonical);
-                } else {
-                    LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+        namespace {
+            // The strategy's defaults with every stored value applied.
+            OptimizationParameters optimization_from_json(const nlohmann::json& json) {
+                OptimizationParameters params;
+                if (json.contains("strategy")) {
+                    const auto strategy = json.at("strategy").get<std::string>();
+                    if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
+                        params = OptimizationParameters::defaults_for_strategy(canonical);
+                    } else {
+                        LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
+                    }
                 }
+                apply_optimization_json_overlay(params, json, false);
+                params.eval_mask = normalize_eval_mask(params.eval_mask);
+                // Legacy GUI saves recorded the image factor in steps_scaler.
+                if (!stored_image_count_scaler(json, params.steps_scaler))
+                    params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+                return params;
             }
-            apply_optimization_json_overlay(params, json, false);
-            params.eval_mask = normalize_eval_mask(params.eval_mask);
-            // Legacy GUI saves recorded the image factor in steps_scaler.
-            if (!stored_image_count_scaler(json, params.steps_scaler))
-                params.image_count_scaler = params.steps_scaler > 0.f ? params.steps_scaler : 1.f;
+        } // namespace
+
+        OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
+            auto params = optimization_from_json(json);
+            // Parameters stored without this key were saved by a build that had no calibration correction, so the run
+            // they belong to trained without it and keeps it off when resumed.
+            if (!json.contains("calibration_correction"))
+                params.calibration_correction = false;
             return params;
         }
 
@@ -1458,7 +1521,8 @@ namespace lfs::core {
                         return std::unexpected(*error);
                 }
 
-                auto params = OptimizationParameters::from_json(opt_json);
+                // A parameter file is no saved run: a key it leaves out takes the strategy's default.
+                auto params = optimization_from_json(opt_json);
                 if (auto error = params.validate(); !error.empty())
                     return std::unexpected("Invalid optimization parameters: " + error);
                 if (opt_json.is_object() && !opt_json.empty())

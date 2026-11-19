@@ -87,6 +87,7 @@ set(CORE_SOURCES
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
+        camera_views.cpp
         collision_volume.cpp
         collision_walk.cpp
         collision_voxelization.cpp
