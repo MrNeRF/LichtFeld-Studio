@@ -300,13 +300,13 @@ TEST(CalibrationScoring, ContradictionOutsideMaskHasNoInfluenceAtAnyLevel) {
 
 // A brightness difference over a weak gradient is not misalignment, and no fit may run away.
 TEST(CalibrationScoring, BrightnessOffsetIsNotAShiftAndDisplacementIsBounded) {
-    std::vector<float> sky(3 * scoring_width * scoring_height), far(sky.size());
+    std::vector<float> sky(3 * scoring_width * scoring_height), shifted(sky.size());
     for (int c = 0; c < 3; ++c)
         for (int y = 0; y < scoring_height; ++y)
             for (int x = 0; x < scoring_width; ++x) {
                 const size_t i = (static_cast<size_t>(c) * scoring_height + y) * scoring_width + x;
                 sky[i] = .45f + .1f * x / scoring_width + .05f * y / scoring_height;
-                far[i] = scene_value(x + 60.f, y, c);
+                shifted[i] = scene_value(x + 60.f, y, c);
             }
     const auto ramp = Tensor::from_vector(sky, {3, scoring_height, scoring_width}, Device::CUDA);
     Tensor field;
@@ -314,7 +314,7 @@ TEST(CalibrationScoring, BrightnessOffsetIsNotAShiftAndDisplacementIsBounded) {
     EXPECT_LT(field.abs().max().item<float>(), .5f);
 
     CalibrationCorrection::align_for_scoring(
-        scoring_image(false), Tensor::from_vector(far, {3, scoring_height, scoring_width}, Device::CUDA), {}, field);
+        scoring_image(false), Tensor::from_vector(shifted, {3, scoring_height, scoring_width}, Device::CUDA), {}, field);
     const auto moved = field.to_vector();
     float reach = 0;
     for (size_t i = 0; i < moved.size(); i += 2)
