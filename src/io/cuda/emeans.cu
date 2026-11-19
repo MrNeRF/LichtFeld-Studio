@@ -1548,6 +1548,9 @@ namespace lfs::io {
             const int n,
             const int k) {
             auto shN_gpu = as_cuda_contiguous(shN_swizzled);
+            // The kernels below read the rows on the legacy stream; wait there for
+            // the stream that wrote them.
+            shN_gpu.sync_to_stream(nullptr);
             const auto* d_shN = reinterpret_cast<const float4*>(shN_gpu.ptr<float>());
             constexpr int SLOTS = (N_DIMS + 3) / 4;
 
