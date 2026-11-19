@@ -124,10 +124,9 @@ namespace lfs::training {
             if (!std::isfinite(percentile) || percentile < 0.0f || percentile > 1.0f)
                 throw std::invalid_argument(
                     std::format("MRNF bounds percentile must be finite and within [0, 1], got {}", percentile));
-            const float low_pct = (1.0f - percentile) / 2.0f;
-            const float high_pct = 1.0f - low_pct;
-            const auto low = static_cast<uint32_t>(low_pct * static_cast<float>(n - 1));
-            const auto high = static_cast<uint32_t>(high_pct * static_cast<float>(n - 1));
+            const auto [low_rank, high_rank] = lfs::gpu_ops::percentile_bound_ranks(n, percentile);
+            const auto low = static_cast<uint32_t>(low_rank);
+            const auto high = static_cast<uint32_t>(high_rank);
             constexpr std::array<uint32_t, 6> offsets{0, 0, 1, 1, 2, 2};
             const std::array<uint32_t, 6> ranks{low, high, low, high, low, high};
             const auto values = mk::selected_values(mk::radix_select(means, n, 3, false, offsets, ranks), 6);

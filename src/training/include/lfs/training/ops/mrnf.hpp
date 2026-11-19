@@ -5,9 +5,11 @@
 
 #include "lfs/training/ops/types.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace lfs::training {
     struct GumbelTopKScratch;
@@ -31,6 +33,18 @@ namespace lfs::gpu_ops {
         float median_size = 0.f;
         float max_extent = 0.f;
     };
+
+    // The ranks of the low and high percentile bound among n >= 1 sorted values, as CUDA's
+    // mrnf_strategy::percentile_bounds_ranks gives them. The product runs in double: past 2^24 a float
+    // no longer holds n - 1 exactly, and rounding it up put the high rank at n, one past the last value.
+    [[nodiscard]] inline std::pair<size_t, size_t> percentile_bound_ranks(const size_t n, const float percentile) {
+        const size_t last = n - 1;
+        const auto rank = [last](const double fraction) {
+            return std::min(last, static_cast<size_t>(fraction * static_cast<double>(last)));
+        };
+        const double low = (1.0 - static_cast<double>(percentile)) * 0.5;
+        return {rank(low), rank(1.0 - low)};
+    }
 
     struct MrnfNoiseParams {
         uint64_t seed = 0;
