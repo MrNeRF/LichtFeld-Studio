@@ -3812,6 +3812,90 @@ namespace lfs::vis {
         history.clear();
     }
 
+    TEST_F(ScenePanelRefreshTest, SelectionBarDeletesKeyframesAsOneUndoableOperation) {
+        auto& scene_manager = *viewer_->getSceneManager();
+        auto& scene = scene_manager.getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        const auto other = scene.addGroup("Other");
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        panel.preload(ctx);
+        auto* context = manager().getContext("scene_panel_native");
+        ASSERT_NE(context, nullptr);
+        auto* document = context->GetDocument(0);
+        document->Show();
+        auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+        ASSERT_NE(tree, nullptr);
+        tree->SetProperty("height", "500px");
+        auto* remove = document->GetElementById("selection-delete");
+        ASSERT_NE(remove, nullptr);
+        auto refresh = [&] {
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            panel.preload(ctx);
+            panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload, .width = 400, .height = 600}, ctx);
+            context->Update();
+        };
+        auto& history = op::undoHistory();
+        for (const auto& indices : {std::vector<size_t>{0}, {0, 2}, {0, 1, 2}}) {
+            history.clear();
+            std::vector<core::NodeId> selected;
+            for (const auto index : indices)
+                selected.push_back(scene.getNode(std::format("Keyframe {}", index + 1))->id);
+            scene_manager.selectNodesById(selected);
+            refresh();
+            EXPECT_FALSE(remove->IsClassSet("disabled"));
+            remove->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size() - indices.size());
+            for (size_t i = 0; i < ids.size(); ++i)
+                EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr,
+                          std::ranges::find(indices, i) != indices.end());
+            EXPECT_NE(scene.getNodeById(other), nullptr);
+            refresh();
+            EXPECT_TRUE(scene_manager.getSelectedNodeIds().empty());
+            ASSERT_EQ(history.undoCount(), 1u);
+            ASSERT_TRUE(history.undo().success);
+            for (const auto id : ids)
+                EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size() - indices.size());
+            for (size_t i = 0; i < ids.size(); ++i)
+                EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr,
+                          std::ranges::find(indices, i) != indices.end());
+            ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+        scene_manager.selectNode(scene.getNode("Keyframe 1")->id);
+        refresh();
+        tree->Blur();
+        EXPECT_FALSE(tree->IsPseudoClassSet("focus"));
+        ASSERT_TRUE(panel.requestDeleteSelectionIfAvailable());
+        EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[0]), nullptr);
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
+        history.clear();
+        const auto first = scene.getNode("Keyframe 1")->id;
+        const auto group = scene.getNode("Keyframes")->id;
+        for (const auto& selected : {std::vector<core::NodeId>{first, other}, {group}, {first}}) {
+            scene.setNodeLocked("Keyframe 1", selected.size() == 1 && selected.front() == first);
+            scene_manager.selectNodesById(selected);
+            refresh();
+            EXPECT_TRUE(remove->IsClassSet("disabled"));
+            remove->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), ids.size());
+            EXPECT_NE(scene.getNodeById(other), nullptr);
+            EXPECT_EQ(history.undoCount(), 0u);
+        }
+    }
+
     TEST_F(ScenePanelRefreshTest, UnchangedPanelStaysIdle) {
         auto& scene = viewer_->getSceneManager()->getScene();
         scene.addGroup("Existing");
