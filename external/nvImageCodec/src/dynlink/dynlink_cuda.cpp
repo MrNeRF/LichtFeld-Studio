@@ -16,58 +16,62 @@
  */
 
 #include "dynlink_cuda.h"
-#include "library_loader.h"
-#include <mutex>
 #include <stdio.h>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include "library_loader.h"
 namespace {
 
 #if defined(__linux__) || defined(__linux) || defined(linux) || defined(_LINUX)
-    static const char __CudaLibName[] = "libcuda.so";
-    static const char __CudaLibName1[] = "libcuda.so.1";
+static const char __CudaLibName[] = "libcuda.so";
+static const char __CudaLibName1[] = "libcuda.so.1";
 #elif defined(_WIN32) || defined(_WIN64)
-    static const char __CudaLibName[] = "libcuda.dll";
-    static const char __CudaLibName1[] = "nvcuda.dll";
+static const char __CudaLibName[] = "libcuda.dll";
+static const char __CudaLibName1[] = "nvcuda.dll";
 #endif
 
-    nvimgcodec::ILibraryLoader::LibraryHandle loadCudaLibrary() {
-        nvimgcodec::LibraryLoader lib_loader;
-        nvimgcodec::ILibraryLoader::LibraryHandle ret = nullptr;
-        ret = lib_loader.loadLibrary(__CudaLibName1);
+nvimgcodec::ILibraryLoader::LibraryHandle loadCudaLibrary()
+{
+    nvimgcodec::LibraryLoader lib_loader;
+    nvimgcodec::ILibraryLoader::LibraryHandle ret = nullptr;
+    ret = lib_loader.loadLibrary(__CudaLibName1);
+    if (!ret) {
+        ret = lib_loader.loadLibrary(__CudaLibName);
+
         if (!ret) {
-            ret = lib_loader.loadLibrary(__CudaLibName);
-
-            if (!ret) {
 #if defined(__linux__) || defined(__linux) || defined(linux) || defined(_LINUX)
-                fprintf(stderr, "dlopen libcuda.so failed!. Please install GPU dirver");
+            fprintf(stderr, "dlopen libcuda.so failed!. Please install GPU dirver");
 #elif defined(_WIN32) || defined(_WIN64)
-                fprintf(stderr, "LoadLibrary nvcuda.dll failed!. Please install GPU dirver");
+            fprintf(stderr, "LoadLibrary nvcuda.dll failed!. Please install GPU dirver");
 #endif
-            }
         }
-        return ret;
     }
+    return ret;
+}
 
 } // namespace
 
-void* CudaLoadSymbol(const char* name) {
+void* CudaLoadSymbol(const char* name)
+{
     static nvimgcodec::ILibraryLoader::LibraryHandle cudaDrvLib = loadCudaLibrary();
     nvimgcodec::LibraryLoader lib_loader;
     try {
-        void* ret = cudaDrvLib ? lib_loader.getFuncAddress(cudaDrvLib, name) : nullptr;
+        void *ret = cudaDrvLib ? lib_loader.getFuncAddress(cudaDrvLib, name) : nullptr;
         return ret;
     } catch (...) {
         return nullptr;
     }
 }
 
-bool cuInitChecked() {
+bool cuInitChecked()
+{
     static CUresult res = cuInit(0);
     return res == CUDA_SUCCESS;
 }
 
-bool cuIsSymbolAvailable(const char* name) {
+bool cuIsSymbolAvailable(const char* name)
+{
     static std::mutex symbol_mutex;
     static std::unordered_map<std::string, void*> symbol_map;
     std::lock_guard<std::mutex> lock(symbol_mutex);

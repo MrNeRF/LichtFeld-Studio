@@ -16,4 +16,4 @@
  */
 #pragma once
 
-bool nvtiffIsSymbolAvailable(const char* name);
+bool nvtiffIsSymbolAvailable(const char *name);

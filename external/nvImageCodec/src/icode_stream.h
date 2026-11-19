@@ -17,28 +17,30 @@
 
 #pragma once
 
-#include <memory>
 #include <nvimgcodec.h>
+#include <nvimgcodec.h>
+#include <memory>
 #include <string>
 
 namespace nvimgcodec {
 
-    class CodecRegistry;
-    class ICodec;
+class CodecRegistry;
+class ICodec;
 
-    class ICodeStream {
-    public:
-        virtual ~ICodeStream() = default;
-        virtual void parseFromFile(const std::string& file_name) = 0;
-        virtual void parseFromMem(const unsigned char* data, size_t size) = 0;
-        virtual void setOutputToFile(const char* file_name) = 0;
-        virtual void setOutputToHostMem(void* ctx, nvimgcodecResizeBufferFunc_t get_buffer_func) = 0;
-        virtual nvimgcodecStatus_t getCodeStreamInfo(nvimgcodecCodeStreamInfo_t* codestream_info) = 0;
-        virtual nvimgcodecStatus_t getImageInfo(nvimgcodecImageInfo_t* image_info) = 0;
-        virtual nvimgcodecStatus_t setImageInfo(const nvimgcodecImageInfo_t* image_info) = 0;
-        virtual std::string getCodecName() const = 0;
-        virtual ICodec* getCodec() const = 0;
-        virtual nvimgcodecIoStreamDesc_t* getInputStreamDesc() = 0;
-        virtual nvimgcodecCodeStreamDesc_t* getCodeStreamDesc() = 0;
-    };
+class ICodeStream
+{
+  public:
+    virtual ~ICodeStream() = default;
+    virtual void parseFromFile(const std::string& file_name) = 0;
+    virtual void parseFromMem(const unsigned char* data, size_t size) = 0;
+    virtual void setOutputToFile(const char* file_name) = 0;
+    virtual void setOutputToHostMem(void* ctx, nvimgcodecResizeBufferFunc_t get_buffer_func) = 0;
+    virtual nvimgcodecStatus_t getCodeStreamInfo(nvimgcodecCodeStreamInfo_t* codestream_info) = 0;
+    virtual nvimgcodecStatus_t getImageInfo(nvimgcodecImageInfo_t* image_info) = 0;
+    virtual nvimgcodecStatus_t setImageInfo(const nvimgcodecImageInfo_t* image_info) = 0;
+    virtual std::string getCodecName() const = 0;
+    virtual ICodec* getCodec() const = 0;
+    virtual nvimgcodecIoStreamDesc_t* getInputStreamDesc() = 0;
+    virtual nvimgcodecCodeStreamDesc_t* getCodeStreamDesc() = 0;
+};
 } // namespace nvimgcodec

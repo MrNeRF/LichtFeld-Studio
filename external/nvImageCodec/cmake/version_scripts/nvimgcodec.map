@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Linker version script for libnvimgcodec.so.
+#
+# The allowlist below is exactly the set of NVIMGCODECAPI functions declared in
+# include/nvimgcodec.h and defined by this library (i.e. every declaration in the
+# public header except nvimgcodecExtensionModuleEntry, which extensions define
+# rather than consume). Everything else -- in particular the libstdc++
+# vague-linkage weak symbols emitted by our own translation units -- is demoted to
+# LOCAL so it never reaches .dynsym.
+#
+# The version node is anonymous on purpose: a named node would tag every retained
+# export with an @@VERSION suffix, which is an ABI-visible change for existing
+# consumers. Keep it anonymous so the exported names stay byte-identical.
+#
+# Adding a new public API function? Add it here too. tools/check_exported_symbols.sh
+# fails the build if this list and the actual export table disagree.
+
+{
+    global:
+        nvimgcodecCodeStreamCreateFromFile;
+        nvimgcodecCodeStreamCreateFromHostMem;
+        nvimgcodecCodeStreamCreateToFile;
+        nvimgcodecCodeStreamCreateToHostMem;
+        nvimgcodecCodeStreamDestroy;
+        nvimgcodecCodeStreamGetCodeStreamInfo;
+        nvimgcodecCodeStreamGetImageInfo;
+        nvimgcodecCodeStreamGetSubCodeStream;
+        nvimgcodecDebugMessengerCreate;
+        nvimgcodecDebugMessengerDestroy;
+        nvimgcodecDecoderCanDecode;
+        nvimgcodecDecoderCreate;
+        nvimgcodecDecoderDecode;
+        nvimgcodecDecoderDestroy;
+        nvimgcodecDecoderGetMetadata;
+        nvimgcodecEncoderCanEncode;
+        nvimgcodecEncoderCreate;
+        nvimgcodecEncoderDestroy;
+        nvimgcodecEncoderEncode;
+        nvimgcodecExtensionCreate;
+        nvimgcodecExtensionDestroy;
+        nvimgcodecExtensionGetExtensionDesc;
+        nvimgcodecFutureDestroy;
+        nvimgcodecFutureGetProcessingStatus;
+        nvimgcodecFutureWaitForAll;
+        nvimgcodecGetExtensions;
+        nvimgcodecGetFrameworkDesc;
+        nvimgcodecGetProperties;
+        nvimgcodecImageCreate;
+        nvimgcodecImageDestroy;
+        nvimgcodecImageGetImageInfo;
+        nvimgcodecInstanceCreate;
+        nvimgcodecInstanceDestroy;
+
+    local:
+        *;
+};

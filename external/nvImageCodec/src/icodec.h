@@ -17,36 +17,45 @@
 
 #pragma once
 
-#include <memory>
 #include <nvimgcodec.h>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace nvimgcodec {
 
-    class IImageParser;
-    class IImageEncoder;
-    class IImageDecoder;
-    class IImageParserFactory;
-    class IImageEncoderFactory;
-    class IImageDecoderFactory;
+class IImageParser;
+class IImageEncoder;
+class IImageDecoder;
+class IImageParserFactory;
+class IImageEncoderFactory;
+class IImageDecoderFactory;
 
-    class ICodec {
-    public:
-        virtual ~ICodec() = default;
+class ICodec
+{
+  public:
+    virtual ~ICodec() = default;
 
-        virtual const std::string& name() const = 0;
+    virtual const std::string& name() const = 0;
+    virtual bool hasRegistrations() const = 0;
 
-        virtual std::unique_ptr<IImageParser> createParser(nvimgcodecCodeStreamDesc_t* code_stream) const = 0;
-        virtual int getDecodersNum() const = 0;
-        virtual IImageDecoderFactory* getDecoderFactory(int index) const = 0;
-        virtual int getEncodersNum() const = 0;
-        virtual IImageEncoderFactory* getEncoderFactory(int index) const = 0;
+    virtual std::unique_ptr<IImageParser> createParser(nvimgcodecCodeStreamDesc_t* code_stream) const = 0;
+    virtual std::vector<IImageParserFactory*> getParserFactories() const = 0;
+    virtual std::vector<IImageDecoderFactory*> getDecoderFactories() const = 0;
+    virtual std::vector<IImageEncoderFactory*> getEncoderFactories() const = 0;
 
-        virtual void registerEncoderFactory(std::unique_ptr<IImageEncoderFactory> factory, float priority) = 0;
-        virtual void unregisterEncoderFactory(const std::string encoder_id) = 0;
-        virtual void registerDecoderFactory(std::unique_ptr<IImageDecoderFactory> factory, float priority) = 0;
-        virtual void unregisterDecoderFactory(const std::string decoder_id) = 0;
-        virtual void registerParserFactory(std::unique_ptr<IImageParserFactory> factory, float priority) = 0;
-        virtual void unregisterParserFactory(const std::string parser_id) = 0;
-    };
+    virtual void registerEncoderFactory(std::unique_ptr<IImageEncoderFactory> factory, float priority) = 0;
+    virtual bool unregisterEncoderFactory(const nvimgcodecEncoderDesc_t* desc) = 0;
+    virtual void registerDecoderFactory(std::unique_ptr<IImageDecoderFactory> factory, float priority) = 0;
+    virtual bool unregisterDecoderFactory(const nvimgcodecDecoderDesc_t* desc) = 0;
+    virtual void registerParserFactory(std::unique_ptr<IImageParserFactory> factory, float priority) = 0;
+    virtual bool unregisterParserFactory(const nvimgcodecParserDesc_t* desc) = 0;
+
+    virtual void registerFileExtension(const std::string& file_extension) = 0;
+    virtual void unregisterFileExtension(const std::string& file_extension) = 0;
+    virtual const std::vector<std::string>& getFileExtensions() const = 0;
+    virtual bool hasFileExtension(const std::string& file_extension) const = 0;
+    virtual bool isDefaultFileExtension(const std::string& file_extension) const = 0;
+    virtual void setDefaultFileExtension(const std::string& file_extension, bool is_default) = 0;
+};
 } // namespace nvimgcodec

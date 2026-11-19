@@ -17,31 +17,33 @@
 
 #pragma once
 
-#include <cmath>
-#include <future>
 #include <nvimgcodec.h>
 #include <nvjpeg.h>
-#include <optional>
+#include <cmath>
+#include <future>
 #include <vector>
+#include <optional>
 
 namespace nvjpeg {
 
-    class NvJpegHwDecoderPlugin {
-    public:
-        explicit NvJpegHwDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
-        nvimgcodecDecoderDesc_t* getDecoderDesc();
-        static bool isPlatformSupported();
+class NvJpegHwDecoderPlugin
+{
+  public:
+    explicit NvJpegHwDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
+    nvimgcodecDecoderDesc_t* getDecoderDesc();
+    static bool isPlatformSupported();
 
-    private:
-        nvimgcodecStatus_t create(
-            nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+  private:
 
-        static nvimgcodecStatus_t static_create(
-            void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+    nvimgcodecStatus_t create(
+        nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
 
-        static constexpr const char* plugin_id_ = "nvjpeg_hw_decoder";
-        nvimgcodecDecoderDesc_t decoder_desc_;
-        const nvimgcodecFrameworkDesc_t* framework_;
-    };
+    static nvimgcodecStatus_t static_create(
+        void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+
+    static constexpr const char* plugin_id_ = "nvjpeg_hw_decoder";
+    nvimgcodecDecoderDesc_t decoder_desc_;
+    const nvimgcodecFrameworkDesc_t* framework_;
+};
 
 } // namespace nvjpeg

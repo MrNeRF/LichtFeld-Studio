@@ -17,24 +17,25 @@
 
 #pragma once
 
-#include "iimage_parser.h"
-#include <memory>
 #include <nvimgcodec.h>
+#include <memory>
 #include <string>
+#include "iimage_parser.h"
 
 namespace nvimgcodec {
-    class ImageParser : public IImageParser {
-    public:
-        explicit ImageParser(const nvimgcodecParserDesc_t* desc);
-        ~ImageParser() override;
-        std::string getParserId() const override;
-        std::string getCodecName() const override;
-        nvimgcodecStatus_t getCodeStreamInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecCodeStreamInfo_t* codestream_info) override;
-        nvimgcodecStatus_t getImageInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageInfo_t* image_info) override;
+class ImageParser : public IImageParser
+{
+  public:
+    explicit ImageParser(const nvimgcodecParserDesc_t* desc);
+    ~ImageParser() override;
+    std::string getParserId() const override;
+    std::string getCodecName() const override;
+    nvimgcodecStatus_t getCodeStreamInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecCodeStreamInfo_t* codestream_info) override;
+    nvimgcodecStatus_t getImageInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageInfo_t* image_info) override;
 
-    private:
-        const nvimgcodecParserDesc_t* parser_desc_;
-        nvimgcodecParser_t parser_;
-    };
+  private:
+    const nvimgcodecParserDesc_t* parser_desc_;
+    nvimgcodecParser_t parser_;
+};
 
 } // namespace nvimgcodec

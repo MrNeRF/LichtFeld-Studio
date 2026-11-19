@@ -17,35 +17,36 @@
 
 #pragma once
 
-#include "file_io_stream.h"
 #include <atomic>
-#include <mutex>
 #include <vector>
+#include "file_io_stream.h"
+#include <mutex>
 
 namespace nvimgcodec {
 
-    class StdFileIoStream : public FileIoStream {
-    public:
-        explicit StdFileIoStream(const std::string& path, bool to_write);
-        void close() override;
-        std::shared_ptr<void> get(size_t n_bytes) override;
-        size_t read(void* buffer, size_t n_bytes) override;
-        size_t write(void* buffer, size_t n_bytes) override;
-        size_t putc(unsigned char ch) override;
-        void seek(size_t pos, int whence = SEEK_SET) override;
-        size_t tell() const override;
-        size_t size() const override;
-        void* map(size_t offset, size_t size) const override; // current implementation is not real mmap, just read the file into memory and for write it returns nullptr
+class StdFileIoStream : public FileIoStream
+{
+  public:
+    explicit StdFileIoStream(const std::string& path, bool to_write);
+    void close() override;
+    std::shared_ptr<void> get(size_t n_bytes) override;
+    size_t read(void* buffer, size_t n_bytes) override;
+    size_t write(void* buffer, size_t n_bytes) override;
+    size_t putc(unsigned char ch) override;
+    void seek(size_t pos, int whence = SEEK_SET) override;
+    size_t tell() const override;
+    size_t size() const override;
+    void* map(size_t offset, size_t size) const override; //current implementation is not real mmap, just read the file into memory and for write it returns nullptr
 
-        ~StdFileIoStream() override { StdFileIoStream::close(); }
+    ~StdFileIoStream() override { StdFileIoStream::close(); }
 
-    private:
-        std::string path_;
-        FILE* fp_;
-        // for map
-        mutable std::mutex mutex_;
-        mutable std::vector<uint8_t> buffer_;
-        mutable std::atomic<uint8_t*> buffer_data_{nullptr};
-        bool to_write_ = false;
-    };
-} // namespace nvimgcodec
+  private:
+    std::string path_;
+    FILE* fp_;
+    // for map
+    mutable std::mutex mutex_;
+    mutable std::vector<uint8_t> buffer_;
+    mutable std::atomic<uint8_t*> buffer_data_{nullptr};
+    bool to_write_ = false;
+};
+} //nvimgcodec

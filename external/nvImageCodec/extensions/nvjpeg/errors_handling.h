@@ -15,51 +15,51 @@
  * limitations under the License.
  */
 
-#include "exception.h"
 #include <map>
+#include "exception.h"
 #pragma once
 
 #define WHERE(call_str) std::string(call_str) + " at " + std::string(__FILE__) + ":" + std::to_string(__LINE__)
 
-#define XM_CHECK_NULL(ptr)                                                                                \
-    {                                                                                                     \
-        if (!ptr)                                                                                         \
+#define XM_CHECK_NULL(ptr)                                                                                                            \
+    {                                                                                                                                 \
+        if (!ptr)                                                                                                                     \
             throw NvJpegException::FromNvJpegError(NVJPEG_STATUS_INVALID_PARAMETER, WHERE("null check")); \
     }
 
-#define XM_CHECK_CUDA(call)                                                  \
-    {                                                                        \
-        cudaError_t _e = (call);                                             \
-        if (_e != cudaSuccess) {                                             \
-            cudaGetLastError(); /* clean that error for any further calls */ \
-            throw NvJpegException::FromCUDAError(_e, WHERE(#call));          \
-        }                                                                    \
+#define XM_CHECK_CUDA(call)                                                                     \
+    {                                                                                           \
+        cudaError_t _e = (call);                                                                \
+        if (_e != cudaSuccess) {                                                                \
+            cudaGetLastError(); /* clean that error for any further calls */                    \
+            throw NvJpegException::FromCUDAError(_e, WHERE(#call));                             \
+        }                                                                                       \
     }
 
-#define XM_CHECK_NVJPEG(call)                                         \
-    {                                                                 \
-        nvjpegStatus_t _e = (call);                                   \
-        if (_e != NVJPEG_STATUS_SUCCESS) {                            \
+#define XM_CHECK_NVJPEG(call)                                                                     \
+    {                                                                                             \
+        nvjpegStatus_t _e = (call);                                                               \
+        if (_e != NVJPEG_STATUS_SUCCESS) {                                                        \
             throw NvJpegException::FromNvJpegError(_e, WHERE(#call)); \
-        }                                                             \
+        }                                                                                         \
     }
 
-#define XM_NVJPEG_LOG_DESTROY(call)                                        \
-    {                                                                      \
-        nvjpegStatus_t _e = (call);                                        \
-        if (_e != NVJPEG_STATUS_SUCCESS) {                                 \
-            std::stringstream _error;                                      \
+#define XM_NVJPEG_LOG_DESTROY(call)                                                                    \
+    {                                                                                                  \
+        nvjpegStatus_t _e = (call);                                                                    \
+        if (_e != NVJPEG_STATUS_SUCCESS) {                                                             \
+            std::stringstream _error;                                                                  \
             auto err = NvJpegException::FromNvJpegError(_e, WHERE(#call)); \
-            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, err.what());      \
-        }                                                                  \
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, err.what());                                  \
+        }                                                                                              \
     }
 
-#define XM_CUDA_LOG_DESTROY(call)                                            \
-    {                                                                        \
-        cudaError_t _e = (call);                                             \
-        if (_e != cudaSuccess) {                                             \
-            cudaGetLastError(); /* clean that error for any further calls */ \
-            auto err = NvJpegException::FromCUDAError(_e, WHERE(#call));     \
-            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, err.what());        \
-        }                                                                    \
+#define XM_CUDA_LOG_DESTROY(call)                                                                    \
+    {                                                                                                \
+        cudaError_t _e = (call);                                                                     \
+        if (_e != cudaSuccess) {                                                                     \
+            cudaGetLastError(); /* clean that error for any further calls */                         \
+            auto err = NvJpegException::FromCUDAError(_e, WHERE(#call));                             \
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, err.what());                                \
+        }                                                                                            \
     }

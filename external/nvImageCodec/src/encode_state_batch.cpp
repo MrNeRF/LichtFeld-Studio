@@ -15,13 +15,14 @@
  * limitations under the License.
  */
 
-#include "encode_state_batch.h"
 #include <memory>
+#include "encode_state_batch.h"
 
 namespace nvimgcodec {
 
-    void EncodeStateBatch::setPromise(std::shared_ptr<ProcessingResultsPromise> promise) {
-        promise_ = std::move(promise);
-    }
+void EncodeStateBatch::setPromise(std::shared_ptr<ProcessingResultsPromise> promise)
+{
+    promise_ = std::move(promise);
+}
 
 } // namespace nvimgcodec

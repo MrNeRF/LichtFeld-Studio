@@ -21,21 +21,23 @@
 
 namespace nvimgcodec {
 
-    class FileIoStream : public IoStream {
-    public:
-        static std::unique_ptr<FileIoStream> open(
-            const std::string& uri, bool read_ahead, bool use_mmap, bool to_write);
+class FileIoStream : public IoStream
+{
+  public:
+    static std::unique_ptr<FileIoStream> open(
+        const std::string& uri, bool read_ahead, bool use_mmap, bool to_write);
 
-        virtual void close() = 0;
-        virtual std::shared_ptr<void> get(size_t n_bytes) = 0;
-        virtual ~FileIoStream() = default;
+    virtual void close()                         = 0;
+    virtual std::shared_ptr<void> get(size_t n_bytes) = 0;
+    virtual ~FileIoStream()                   = default;
 
-    protected:
-        explicit FileIoStream(const std::string& path)
-            : path_(path) {
-        }
+  protected:
+    explicit FileIoStream(const std::string& path)
+        : path_(path)
+    {
+    }
 
-        std::string path_;
-    };
+    std::string path_;
+};
 
 } // namespace nvimgcodec

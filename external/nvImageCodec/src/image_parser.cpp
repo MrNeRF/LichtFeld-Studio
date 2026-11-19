@@ -20,32 +20,38 @@
 
 namespace nvimgcodec {
 
-    ImageParser::ImageParser(const nvimgcodecParserDesc_t* desc)
-        : parser_desc_(desc) {
-        parser_desc_->create(parser_desc_->instance, &parser_);
-    }
+ImageParser::ImageParser(const nvimgcodecParserDesc_t* desc)
+    : parser_desc_(desc)
+{
+    parser_desc_->create(parser_desc_->instance, &parser_);
+}
 
-    ImageParser::~ImageParser() {
-        parser_desc_->destroy(parser_);
-    }
-    std::string ImageParser::getParserId() const {
-        return parser_desc_->id;
-    }
+ImageParser::~ImageParser()
+{
+    parser_desc_->destroy(parser_);
+}
+std::string ImageParser::getParserId() const
+{
+    return parser_desc_->id;
+}
 
-    std::string ImageParser::getCodecName() const {
-        return parser_desc_->codec;
-    }
+std::string ImageParser::getCodecName() const
+{
+    return parser_desc_->codec;
+}
 
-    nvimgcodecStatus_t ImageParser::getCodeStreamInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecCodeStreamInfo_t* codestream_info) {
-        assert(code_stream);
-        assert(parser_desc_->getCodeStreamInfo);
-        return parser_desc_->getCodeStreamInfo(parser_, codestream_info, code_stream);
-    }
+nvimgcodecStatus_t ImageParser::getCodeStreamInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecCodeStreamInfo_t* codestream_info)
+{
+    assert(code_stream);
+    assert(parser_desc_->getCodeStreamInfo);
+    return parser_desc_->getCodeStreamInfo(parser_, codestream_info, code_stream);
+}
 
-    nvimgcodecStatus_t ImageParser::getImageInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageInfo_t* image_info) {
-        assert(code_stream);
-        assert(parser_desc_->getImageInfo);
-        return parser_desc_->getImageInfo(parser_, image_info, code_stream);
-    }
+nvimgcodecStatus_t ImageParser::getImageInfo(nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageInfo_t* image_info)
+{
+    assert(code_stream);
+    assert(parser_desc_->getImageInfo);
+    return parser_desc_->getImageInfo(parser_, image_info, code_stream);
+}
 
 } // namespace nvimgcodec

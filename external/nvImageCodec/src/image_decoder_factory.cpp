@@ -16,32 +16,42 @@
  */
 #include "image_decoder_factory.h"
 
+#include <cassert>
 #include "code_stream.h"
 #include "image.h"
 #include "image_decoder.h"
-#include <cassert>
 
 namespace nvimgcodec {
 
-    ImageDecoderFactory::ImageDecoderFactory(const nvimgcodecDecoderDesc_t* desc)
-        : decoder_desc_(desc) {
-    }
+ImageDecoderFactory::ImageDecoderFactory(const nvimgcodecDecoderDesc_t* desc)
+    : decoder_desc_(desc)
+{
+}
 
-    std::string ImageDecoderFactory::getDecoderId() const {
-        return decoder_desc_->id;
-    }
+std::string ImageDecoderFactory::getDecoderId() const
+{
+    return decoder_desc_->id;
+}
 
-    std::string ImageDecoderFactory::getCodecName() const {
-        return decoder_desc_->codec;
-    }
+std::string ImageDecoderFactory::getCodecName() const
+{
+    return decoder_desc_->codec;
+}
 
-    nvimgcodecBackendKind_t ImageDecoderFactory::getBackendKind() const {
-        return decoder_desc_->backend_kind;
-    }
+nvimgcodecBackendKind_t ImageDecoderFactory::getBackendKind() const
+{
+    return decoder_desc_->backend_kind;
+}
 
-    std::unique_ptr<IImageDecoder> ImageDecoderFactory::createDecoder(
-        const nvimgcodecExecutionParams_t* exec_params, const char* options) const {
-        return std::make_unique<ImageDecoder>(decoder_desc_, exec_params, options);
-    }
+const nvimgcodecDecoderDesc_t* ImageDecoderFactory::getDecoderDesc() const
+{
+    return decoder_desc_;
+}
+
+std::unique_ptr<IImageDecoder> ImageDecoderFactory::createDecoder(
+    const nvimgcodecExecutionParams_t* exec_params, const char* options) const
+{
+    return std::make_unique<ImageDecoder>(decoder_desc_, exec_params, options);
+}
 
 } // namespace nvimgcodec

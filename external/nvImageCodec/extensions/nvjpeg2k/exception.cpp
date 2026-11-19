@@ -17,35 +17,36 @@
 
 #include "exception.h"
 
-const std::map<nvjpeg2kStatus_t, nvimgcodecStatus_t> nvjpeg2k_to_nvimgcodec_error_map =
-    {{NVJPEG2K_STATUS_SUCCESS, NVIMGCODEC_STATUS_SUCCESS},
-     {NVJPEG2K_STATUS_NOT_INITIALIZED, NVIMGCODEC_STATUS_EXTENSION_NOT_INITIALIZED},
-     {NVJPEG2K_STATUS_INVALID_PARAMETER, NVIMGCODEC_STATUS_EXTENSION_INVALID_PARAMETER},
-     {NVJPEG2K_STATUS_INTERNAL_ERROR, NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR},
-     {NVJPEG2K_STATUS_IMPLEMENTATION_NOT_SUPPORTED, NVIMGCODEC_STATUS_EXTENSION_IMPLEMENTATION_NOT_SUPPORTED},
-     {NVJPEG2K_STATUS_EXECUTION_FAILED, NVIMGCODEC_STATUS_EXTENSION_EXECUTION_FAILED},
-     {NVJPEG2K_STATUS_BAD_JPEG, NVIMGCODEC_STATUS_EXTENSION_BAD_CODE_STREAM},
-     {NVJPEG2K_STATUS_ALLOCATOR_FAILURE, NVIMGCODEC_STATUS_EXTENSION_ALLOCATOR_FAILURE},
-     {NVJPEG2K_STATUS_JPEG_NOT_SUPPORTED, NVIMGCODEC_STATUS_EXTENSION_CODESTREAM_UNSUPPORTED}};
+const std::map<nvjpeg2kStatus_t, nvimgcodecStatus_t> nvjpeg2k_to_nvimgcodec_error_map = 
+    {{NVJPEG2K_STATUS_SUCCESS, NVIMGCODEC_STATUS_SUCCESS},    
+    {NVJPEG2K_STATUS_NOT_INITIALIZED, NVIMGCODEC_STATUS_EXTENSION_NOT_INITIALIZED},
+    {NVJPEG2K_STATUS_INVALID_PARAMETER, NVIMGCODEC_STATUS_EXTENSION_INVALID_PARAMETER},
+    {NVJPEG2K_STATUS_INTERNAL_ERROR, NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR},    
+    {NVJPEG2K_STATUS_IMPLEMENTATION_NOT_SUPPORTED, NVIMGCODEC_STATUS_EXTENSION_IMPLEMENTATION_NOT_SUPPORTED},
+    {NVJPEG2K_STATUS_EXECUTION_FAILED, NVIMGCODEC_STATUS_EXTENSION_EXECUTION_FAILED},
+    {NVJPEG2K_STATUS_BAD_JPEG, NVIMGCODEC_STATUS_EXTENSION_BAD_CODE_STREAM},    
+    {NVJPEG2K_STATUS_ALLOCATOR_FAILURE, NVIMGCODEC_STATUS_EXTENSION_ALLOCATOR_FAILURE},
+    {NVJPEG2K_STATUS_JPEG_NOT_SUPPORTED, NVIMGCODEC_STATUS_EXTENSION_CODESTREAM_UNSUPPORTED}};
 
 namespace StatusStrings {
-    const std::string sExtNotInit = "not initialized";
-    const std::string sExtInvalidParam = "Invalid parameter";
-    const std::string sExtBadJpeg = "Bad jpeg";
-    const std::string sExtJpegUnSupp = "Jpeg not supported";
-    const std::string sExtAllocFail = "allocator failure";
-    const std::string sExtIntErr = "internal error";
-    const std::string sExtImplNA = "implementation not supported";
-    const std::string sExtExeFailed = "execution failed";
-    const std::string sExtCudaCallError = "cuda call error";
+const std::string sExtNotInit        = "not initialized";
+const std::string sExtInvalidParam   = "Invalid parameter";
+const std::string sExtBadJpeg        = "Bad jpeg";
+const std::string sExtJpegUnSupp     = "Jpeg not supported";
+const std::string sExtAllocFail      = "allocator failure";
+const std::string sExtIntErr         = "internal error";
+const std::string sExtImplNA         = "implementation not supported";
+const std::string sExtExeFailed      = "execution failed";
+const std::string sExtCudaCallError  = "cuda call error";
 } // namespace StatusStrings
 
-const char* getErrorString(nvjpeg2kStatus_t eStatus_) {
-    switch (eStatus_) {
+const char* getErrorString(nvjpeg2kStatus_t eStatus_)
+{
+    switch (eStatus_) {        
     case NVJPEG2K_STATUS_ALLOCATOR_FAILURE:
         return StatusStrings::sExtAllocFail.c_str();
     case NVJPEG2K_STATUS_BAD_JPEG:
-        return StatusStrings::sExtBadJpeg.c_str();
+        return StatusStrings::sExtBadJpeg.c_str();      
     case NVJPEG2K_STATUS_JPEG_NOT_SUPPORTED:
         return StatusStrings::sExtJpegUnSupp.c_str();
     case NVJPEG2K_STATUS_EXECUTION_FAILED:
@@ -60,10 +61,12 @@ const char* getErrorString(nvjpeg2kStatus_t eStatus_) {
         return StatusStrings::sExtNotInit.c_str();
     default:
         return StatusStrings::sExtIntErr.c_str();
+
     }
 }
 
-NvJpeg2kException NvJpeg2kException::FromNvJpeg2kError(nvjpeg2kStatus_t status, const std::string& where) {
+NvJpeg2kException NvJpeg2kException::FromNvJpeg2kError(nvjpeg2kStatus_t status, const std::string& where)
+{
     auto nvimgcodec_status = NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
     auto it = nvjpeg2k_to_nvimgcodec_error_map.find(status);
     if (it != nvjpeg2k_to_nvimgcodec_error_map.end()) {
@@ -76,8 +79,11 @@ NvJpeg2kException NvJpeg2kException::FromNvJpeg2kError(nvjpeg2kStatus_t status, 
     return {nvimgcodec_status, ss.str()};
 }
 
-NvJpeg2kException NvJpeg2kException::FromCUDAError(cudaError_t status, const std::string& where) {
+NvJpeg2kException NvJpeg2kException::FromCUDAError(cudaError_t status, const std::string& where)
+{
     std::stringstream ss;
     ss << "CUDA error #" << static_cast<int>(status) << " when running " << where;
     return {NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR, ss.str()};
 }
+
+

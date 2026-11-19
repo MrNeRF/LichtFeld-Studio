@@ -22,25 +22,26 @@
 
 namespace nvimgcodec {
 
-    CUdevice get_stream_device(cudaStream_t stream);
+CUdevice get_stream_device(cudaStream_t stream);
 
-    // Check if the device (and current driver) associated with the given stream
-    // can use asynchronous memory allocations and deallocations
-    bool can_use_async_mem_ops(cudaStream_t stream);
+// Check if the device (and current driver) associated with the given stream
+// can use asynchronous memory allocations and deallocations
+bool can_use_async_mem_ops(cudaStream_t stream);
 
-    // Retrieve the device id associated with the cudaStream_t
-    int get_stream_device_id(cudaStream_t stream);
+// Retrieve the device id associated with the cudaStream_t
+int get_stream_device_id(cudaStream_t stream);
 
-    // Same as `get_stream_device_id` but swallows exceptions and returns -1 on
-    // error. Useful in `noexcept` contexts (e.g. `shared_ptr` deleters) where a
-    // missing device id should make a subsequent `DeviceGuard(-1)` a no-op rather
-    // than propagate through destructors.
-    inline int safe_get_stream_device_id(cudaStream_t stream) noexcept {
-        try {
-            return get_stream_device_id(stream);
-        } catch (...) {
-            return -1;
-        }
+// Same as `get_stream_device_id` but swallows exceptions and returns -1 on
+// error. Useful in `noexcept` contexts (e.g. `shared_ptr` deleters) where a
+// missing device id should make a subsequent `DeviceGuard(-1)` a no-op rather
+// than propagate through destructors.
+inline int safe_get_stream_device_id(cudaStream_t stream) noexcept
+{
+    try {
+        return get_stream_device_id(stream);
+    } catch (...) {
+        return -1;
     }
+}
 
 } // namespace nvimgcodec

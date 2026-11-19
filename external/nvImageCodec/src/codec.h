@@ -19,7 +19,9 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "iimage_decoder_factory.h"
 #include "iimage_encoder_factory.h"
@@ -29,32 +31,43 @@
 
 namespace nvimgcodec {
 
-    class IImageParser;
-    class IImageEncoder;
-    class IImageDecoder;
-    class ILogger;
+class IImageParser;
+class IImageEncoder;
+class IImageDecoder;
+class ILogger;
 
-    class Codec : public ICodec {
-    public:
-        explicit Codec(ILogger* logger, const char* name);
-        const std::string& name() const override;
-        std::unique_ptr<IImageParser> createParser(nvimgcodecCodeStreamDesc_t* code_stream) const override;
-        int getDecodersNum() const override;
-        IImageDecoderFactory* getDecoderFactory(int index) const override;
-        int getEncodersNum() const override;
-        IImageEncoderFactory* getEncoderFactory(int index) const override;
-        void registerEncoderFactory(std::unique_ptr<IImageEncoderFactory> factory, float priority) override;
-        void unregisterEncoderFactory(const std::string encoder_id) override;
-        void registerDecoderFactory(std::unique_ptr<IImageDecoderFactory> factory, float priority) override;
-        void unregisterDecoderFactory(const std::string decoder_id) override;
-        void registerParserFactory(std::unique_ptr<IImageParserFactory> factory, float priority) override;
-        void unregisterParserFactory(const std::string parser_id) override;
+class Codec : public ICodec
+{
+  public:
+    explicit Codec(ILogger* logger, const char* name);
+    const std::string& name() const override;
+    bool hasRegistrations() const override;
+    std::unique_ptr<IImageParser> createParser(nvimgcodecCodeStreamDesc_t* code_stream) const override;
+    std::vector<IImageParserFactory*> getParserFactories() const override;
+    std::vector<IImageDecoderFactory*> getDecoderFactories() const override;
+    std::vector<IImageEncoderFactory*> getEncoderFactories() const override;
+    void registerEncoderFactory(std::unique_ptr<IImageEncoderFactory> factory, float priority) override;
+    bool unregisterEncoderFactory(const nvimgcodecEncoderDesc_t* desc) override;
+    void registerDecoderFactory(std::unique_ptr<IImageDecoderFactory> factory, float priority) override;
+    bool unregisterDecoderFactory(const nvimgcodecDecoderDesc_t* desc) override;
+    void registerParserFactory(std::unique_ptr<IImageParserFactory> factory, float priority) override;
+    bool unregisterParserFactory(const nvimgcodecParserDesc_t* desc) override;
 
-    private:
-        ILogger* logger_;
-        std::string name_;
-        std::multimap<float, std::unique_ptr<IImageParserFactory>> parsers_;
-        std::multimap<float, std::unique_ptr<IImageEncoderFactory>> encoders_;
-        std::multimap<float, std::unique_ptr<IImageDecoderFactory>> decoders_;
-    };
+    void registerFileExtension(const std::string& file_extension) override;
+    void unregisterFileExtension(const std::string& file_extension) override;
+    const std::vector<std::string>& getFileExtensions() const override;
+    bool hasFileExtension(const std::string& file_extension) const override;
+    bool isDefaultFileExtension(const std::string& file_extension) const override;
+    void setDefaultFileExtension(const std::string& file_extension, bool is_default) override;
+
+  private:
+    ILogger* logger_;
+    std::string name_;
+    std::multimap<float, std::unique_ptr<IImageParserFactory>> parsers_;
+    std::multimap<float, std::unique_ptr<IImageEncoderFactory>> encoders_;
+    std::multimap<float, std::unique_ptr<IImageDecoderFactory>> decoders_;
+    std::vector<std::string> file_extensions_;
+    std::map<std::string, int> file_extension_refcount_;
+    std::set<std::string> default_file_extensions_;
+};
 } // namespace nvimgcodec

@@ -20,14 +20,14 @@
 
 namespace nvjpeg2k {
 
-    Nvjpeg2kVersion get_nvjpeg2k_version() {
-        Nvjpeg2kVersion v;
-        if (NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(MAJOR_VERSION, &v.major_ver) &&
-            NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(MINOR_VERSION, &v.minor_ver) &&
-            NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(PATCH_LEVEL, &v.patch_ver)) {
-            v.valid = true;
-        }
-        return v;
+Nvjpeg2kVersion get_nvjpeg2k_version() {
+    Nvjpeg2kVersion v;
+    if (NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(MAJOR_VERSION, &v.major_ver) &&
+        NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(MINOR_VERSION, &v.minor_ver) &&
+        NVJPEG2K_STATUS_SUCCESS == nvjpeg2kGetProperty(PATCH_LEVEL, &v.patch_ver)) {
+        v.valid = true;
     }
+    return v;
+}
 
-} // namespace nvjpeg2k
+}

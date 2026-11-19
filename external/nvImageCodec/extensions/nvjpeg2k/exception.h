@@ -18,20 +18,28 @@
 #pragma once
 
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <map>
 #include <nvimgcodec.h>
 #include <nvjpeg2k.h>
-#include <sstream>
-#include <string>
 
 const char* getErrorString(nvjpeg2kStatus_t);
 
-class NvJpeg2kException : public std::exception {
-public:
+// Derives from std::runtime_error, not std::exception directly: the static_* thunks that form this
+// extension's C boundary catch std::runtime_error, and an exception escaping them would skip the
+// per-sample imageReady() call and stall the batch.
+class NvJpeg2kException : public std::runtime_error
+{
+  public:
     static NvJpeg2kException FromNvJpeg2kError(nvjpeg2kStatus_t status, const std::string& where);
     static NvJpeg2kException FromCUDAError(cudaError_t status, const std::string& where);
-    NvJpeg2kException(nvimgcodecStatus_t status, std::string info) noexcept
-        : std::exception(), status_(status), info_(info) {}
+    NvJpeg2kException(nvimgcodecStatus_t status, std::string info)
+      : std::runtime_error(info)
+      , status_(status)
+      , info_(info)
+    {}
 
     inline virtual ~NvJpeg2kException() noexcept {}
 
@@ -39,7 +47,7 @@ public:
     const std::string& info() const { return info_; }
     nvimgcodecStatus_t nvimgcodecStatus() const { return status_; }
 
-private:
+  private:
     nvimgcodecStatus_t status_ = NVIMGCODEC_STATUS_SUCCESS;
     std::string info_;
 };

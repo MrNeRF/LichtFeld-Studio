@@ -22,6 +22,6 @@
 
 namespace nvimgcodec {
 
-    void LaunchConvertNormKernel(const nvimgcodecImageInfo_t& out_info, const nvimgcodecImageInfo_t& in_info, cudaStream_t stream);
+void LaunchConvertNormKernel(const nvimgcodecImageInfo_t& out_info, const nvimgcodecImageInfo_t& in_info, cudaStream_t stream);
 
-} // namespace nvimgcodec
+}  // namespace nvimgcodec

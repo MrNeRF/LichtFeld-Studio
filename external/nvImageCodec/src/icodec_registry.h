@@ -17,24 +17,32 @@
 
 #pragma once
 
+#include <nvimgcodec.h>
 #include <map>
 #include <memory>
-#include <nvimgcodec.h>
 #include <string>
+#include <vector>
 
 namespace nvimgcodec {
 
-    class ICodec;
-    class IImageParser;
+class ICodec;
+class IImageParser;
 
-    class ICodecRegistry {
-    public:
-        virtual ~ICodecRegistry() = default;
-        virtual void registerCodec(std::unique_ptr<ICodec> codec) = 0;
-        virtual std::unique_ptr<IImageParser> getParser(
-            nvimgcodecCodeStreamDesc_t* code_stream) const = 0;
-        virtual ICodec* getCodecByName(const char* name) = 0;
-        virtual size_t getCodecsCount() const = 0;
-        virtual ICodec* getCodecByIndex(size_t i) = 0;
-    };
+class ICodecRegistry
+{
+  public:
+    virtual ~ICodecRegistry() = default;
+    virtual void registerCodec(std::unique_ptr<ICodec> codec) = 0;
+    virtual std::unique_ptr<IImageParser> getParser(
+        nvimgcodecCodeStreamDesc_t* code_stream) const = 0;
+    virtual ICodec* getCodecByName(const char* name) = 0;
+    virtual size_t getCodecsCount() const = 0;
+    virtual ICodec* getCodecByIndex(size_t i) = 0;
+
+    virtual void registerFileExtension(const std::string& file_extension, const std::string& codec_name, bool is_default) = 0;
+    virtual void unregisterFileExtension(const std::string& file_extension, const std::string& codec_name) = 0;
+    virtual std::vector<std::string> getCodecNames(const std::string& file_extension) const = 0;
+    virtual std::vector<std::string> getFileExtensions() const = 0;
+    virtual std::vector<std::string> getFileExtensions(const std::string& codec_name) const = 0;
+};
 } // namespace nvimgcodec

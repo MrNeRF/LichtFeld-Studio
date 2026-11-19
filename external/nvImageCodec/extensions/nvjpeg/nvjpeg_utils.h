@@ -17,20 +17,20 @@
 
 #pragma once
 
-#include "utils/library_version.h"
 #include <nvjpeg.h>
+#include "utils/library_version.h"
 
 namespace nvjpeg {
 
-    using NvjpegVersion = nvimgcodec::LibraryVersion;
+using NvjpegVersion = nvimgcodec::LibraryVersion;
 
-    constexpr NvjpegVersion LOSSLESS_JPEG_FIX_VERSION{13, 0, 2};
+constexpr NvjpegVersion LOSSLESS_JPEG_FIX_VERSION {13, 0, 2};
 
-    // Get the current nvJPEG library version
-    NvjpegVersion get_nvjpeg_version();
+// Get the current nvJPEG library version
+NvjpegVersion get_nvjpeg_version();
 
-    constexpr NvjpegVersion ROI_FANCY_UPSAMPLING_FIX_VERSION{13, 2, 0};
+constexpr NvjpegVersion ROI_FANCY_UPSAMPLING_FIX_VERSION {13, 2, 0};
 
-    unsigned int get_nvjpeg_flags(const NvjpegVersion& version, bool fancy_upsampling = true, unsigned int extra_flags = 0);
+unsigned int get_nvjpeg_flags(const NvjpegVersion& version, bool fancy_upsampling = true, unsigned int extra_flags = 0);
 
-} // namespace nvjpeg
+}

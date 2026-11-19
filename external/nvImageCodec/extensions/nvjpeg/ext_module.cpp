@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-#include "nvjpeg_ext.h"
 #include <nvimgcodec.h>
+#include "nvjpeg_ext.h"
 
-nvimgcodecStatus_t nvimgcodecExtensionModuleEntry(nvimgcodecExtensionDesc_t* ext_desc) {
+nvimgcodecStatus_t nvimgcodecExtensionModuleEntry(nvimgcodecExtensionDesc_t* ext_desc)
+{
     return get_nvjpeg_extension_desc(ext_desc);
 }

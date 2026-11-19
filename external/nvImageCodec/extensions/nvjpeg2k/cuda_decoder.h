@@ -17,34 +17,35 @@
 
 #pragma once
 
-#include "error_handling.h"
-#include <condition_variable>
-#include <future>
-#include <memory>
-#include <mutex>
 #include <nvimgcodec.h>
 #include <nvjpeg2k.h>
+#include <memory>
+#include <vector>
+#include <future>
+#include <mutex>
 #include <optional>
 #include <queue>
-#include <vector>
+#include <condition_variable>
+#include "error_handling.h"
 
 namespace nvjpeg2k {
 
-    class NvJpeg2kDecoderPlugin {
-    public:
-        explicit NvJpeg2kDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
-        nvimgcodecDecoderDesc_t* getDecoderDesc();
+class NvJpeg2kDecoderPlugin
+{
+  public:
+    explicit NvJpeg2kDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
+    nvimgcodecDecoderDesc_t* getDecoderDesc();
 
-    private:
-        nvimgcodecStatus_t create(
-            nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+  private:
+    nvimgcodecStatus_t create(
+        nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
 
-        static nvimgcodecStatus_t static_create(
-            void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+    static nvimgcodecStatus_t static_create(
+        void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
 
-        static constexpr const char* plugin_id_ = "nvjpeg2k_decoder";
-        nvimgcodecDecoderDesc_t decoder_desc_;
-        const nvimgcodecFrameworkDesc_t* framework_;
-    };
+    static constexpr const char* plugin_id_ = "nvjpeg2k_decoder";
+    nvimgcodecDecoderDesc_t decoder_desc_;
+    const nvimgcodecFrameworkDesc_t* framework_;
+};
 
 } // namespace nvjpeg2k

@@ -70,66 +70,70 @@ if ("${CUDA_TARGET_ARCHS}" STREQUAL "")
 endif()
 
 # Find if passing `flags` to CUDA compiler producess success or failure
+# Unix only
+#
+# Equivalent to dry-running preprocessing on /dev/null as .cu file
+# and checking the exit code
+# $ nvcc ${flags} --dryrun -E -x cu /dev/null
+# or
+# $ clang++ ${flags} -E -x cuda /dev/null
 #
 # @param out_status   TRUE iff exit code is 0, FALSE otherwise
 # @param flags        flags to check
 # @return out_status
 function(CUDA_check_cudacc_flag out_status compiler flags)
-  # Only support checking the current CMAKE_CUDA_COMPILER using try_compile.
-  # This ensures we use the correct toolchain environment (fixing PATH issues on Windows
-  # where cl.exe might not be in the global PATH but is known to the CMake generator).
-  if("${compiler}" STREQUAL "${CMAKE_CUDA_COMPILER}")
-    # Generate a unique cache variable name based on the flags to implement result caching.
-    string(REGEX REPLACE "[^a-zA-Z0-9_]+" "_" flag_var "CUDA_FLAG_SUPPORTED_${flags}")
-
-    # Return cached result if available to speed up subsequent configuration runs.
-    if(DEFINED ${flag_var})
-      set(${out_status} ${${flag_var}} PARENT_SCOPE)
-      return()
-    endif()
-
-    set(source_file "${CMAKE_CURRENT_BINARY_DIR}/check_cuda_flag.cu")
-    if(NOT EXISTS "${source_file}")
-      file(WRITE "${source_file}" "int main() { return 0; }\n")
-    endif()
-
-    # Use try_compile to check the flag
-    # This actually attempts to compile a tiny file with the flag, which is the
-    # most reliable way to verify support.
-    try_compile(compilation_result
-      SOURCES "${source_file}"
-      CMAKE_FLAGS -DCOMPILE_DEFINITIONS="${flags}"
-                  )
-
-    # Save the result to the cache and return it.
-    set(${flag_var} ${compilation_result} CACHE INTERNAL "Check CUDA flag ${flags}")
-    set(${out_status} ${compilation_result} PARENT_SCOPE)
+  if (${compiler} MATCHES "clang")
+    set(preprocess_empty_cu_file "-E" "-x" "cuda" "/dev/null")
   else()
-     # Fallback for compilers that don't match the current project compiler.
+    set(preprocess_empty_cu_file "--dryrun" "-E" "-x" "cu" "/dev/null")
+  endif()
+  set(cudacc_command ${flags} ${preprocess_empty_cu_file})
+  # Run the compiler and check the exit status
+  execute_process(COMMAND ${compiler} ${cudacc_command}
+                  RESULT_VARIABLE tmp_out_status
+                  OUTPUT_QUIET
+                  ERROR_QUIET
+                  )
+  if (${tmp_out_status} EQUAL 0)
+    set(${out_status} TRUE PARENT_SCOPE)
+  else()
     set(${out_status} FALSE PARENT_SCOPE)
   endif()
 endfunction()
 
 # Given the list of arch values, check which are supported by
 #
-# @param out_arch_values_allowed  List of arch values supported by the specified compiler
+# Each value may optionally carry a standard CMAKE_CUDA_ARCHITECTURES "-real" or
+# "-virtual" suffix (e.g. "90a-real", "121-virtual") as produced by conda-forge's
+# global build config or by CUDA_get_cmake_cuda_archs() below. That suffix only
+# selects real vs. virtual code generation for the architecture and is not part
+# of the sm_ identifier the compiler expects, so it is stripped before checking
+# support and the returned values are the bare architecture identifiers.
+#
+# @param out_arch_values_allowed  List of (suffix-stripped) arch values supported by the
+#                                 specified compiler
 # @param compiler                 What compiler to use for this check
-# @param arch_values_to_check     List of values to be checked against the specified compiler
-#                                 for example: 60;61;70;75
+# @param arch_values_to_check     List of values to be checked against the specified compiler,
+#                                 for example: 60;61;70;75 or 90a-real;100f-real;121-virtual
 # @return out_arch_values_allowed
 function(CUDA_find_supported_arch_values out_arch_values_allowed compiler arch_values_to_check)
   # allow the user to pass the list like a normal variable
   set(arch_list ${arch_values_to_check} ${ARGN})
-  foreach(arch IN LISTS arch_list ITEMS)
+  set(out_list "")
+  foreach(arch IN LISTS arch_list)
+    string(REGEX REPLACE "-(real|virtual)$" "" stripped_arch "${arch}")
     if (${compiler} MATCHES "clang")
-      CUDA_check_cudacc_flag(supported ${compiler} "--cuda-gpu-arch=sm_${arch}")
+      CUDA_check_cudacc_flag(supported ${compiler} "--cuda-gpu-arch=sm_${stripped_arch}")
     else()
-      CUDA_check_cudacc_flag(supported ${compiler} "-arch=sm_${arch}")
+      CUDA_check_cudacc_flag(supported ${compiler} "-arch=sm_${stripped_arch}")
     endif()
     if (supported)
-      set(out_list ${out_list} ${arch})
+      set(out_list ${out_list} ${stripped_arch})
     endif()
   endforeach(arch)
+  if (out_list)
+    list(REMOVE_DUPLICATES out_list)
+  endif()
   set(${out_arch_values_allowed} ${out_list} PARENT_SCOPE)
 endfunction()
 

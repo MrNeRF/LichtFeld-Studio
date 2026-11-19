@@ -15,32 +15,42 @@
  * limitations under the License.
  */
 #include "image_parser_factory.h"
-#include "image_parser.h"
 #include <cassert>
 #include <iostream>
+#include "image_parser.h"
 
 namespace nvimgcodec {
 
-    ImageParserFactory::ImageParserFactory(const nvimgcodecParserDesc_t* desc)
-        : parser_desc_(desc) {
-    }
-    std::string ImageParserFactory::getParserId() const {
-        return parser_desc_->id;
-    }
+ImageParserFactory::ImageParserFactory(const nvimgcodecParserDesc_t* desc)
+    : parser_desc_(desc)
+{
+}
+std::string ImageParserFactory::getParserId() const
+{
+    return parser_desc_->id;
+}
 
-    std::string ImageParserFactory::getCodecName() const {
-        return parser_desc_->codec;
-    }
+std::string ImageParserFactory::getCodecName() const
+{
+    return parser_desc_->codec;
+}
 
-    std::unique_ptr<IImageParser> ImageParserFactory::createParser() const {
-        return std::make_unique<ImageParser>(parser_desc_);
-    }
+const nvimgcodecParserDesc_t* ImageParserFactory::getParserDesc() const
+{
+    return parser_desc_;
+}
 
-    bool ImageParserFactory::canParse(nvimgcodecCodeStreamDesc_t* code_stream) {
-        assert(code_stream);
-        int result = 0;
-        parser_desc_->canParse(parser_desc_->instance, &result, code_stream);
-        return result;
-    }
+std::unique_ptr<IImageParser> ImageParserFactory::createParser() const
+{
+    return std::make_unique<ImageParser>(parser_desc_);
+}
+
+bool ImageParserFactory::canParse(nvimgcodecCodeStreamDesc_t* code_stream)
+{
+    assert(code_stream);
+    int result = 0;
+    parser_desc_->canParse(parser_desc_->instance, &result, code_stream);
+    return result;
+}
 
 } // namespace nvimgcodec

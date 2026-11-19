@@ -17,41 +17,41 @@
 
 #pragma once
 
-#include "logger.h"
-#include <iostream>
 #include <nvimgcodec.h>
+#include <iostream>
 #include <sstream>
 #include <string>
+#include "logger.h"
 
 namespace nvimgcodec {
 
 #ifdef NDEBUG
-#define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_INFO
+    #define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_INFO
 #else
-#define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE
+    #define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE
 #endif
 
 #define NVIMGCODEC_LOG(logger, svr, type, msg) \
-    do {                                       \
+    do {                                      \
         if (svr >= NVIMGCODEC_SEVERITY) {      \
-            std::stringstream ss{};            \
-            ss << msg;                         \
-            logger->log(svr, type, ss.str());  \
-        }                                      \
+            std::stringstream ss{};           \
+            ss << msg;                        \
+            logger->log(svr, type, ss.str()); \
+        }                                     \
     } while (0)
 
 #ifdef NDEBUG
 
-#define NVIMGCODEC_LOG_TRACE(...)
-#define NVIMGCODEC_LOG_DEBUG(...)
+    #define NVIMGCODEC_LOG_TRACE(...)
+    #define NVIMGCODEC_LOG_DEBUG(...)
 
 #else
 
-#define NVIMGCODEC_LOG_TRACE(logger, ...) \
-    NVIMGCODEC_LOG(logger, NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE, NVIMGCODEC_DEBUG_MESSAGE_CATEGORY_GENERAL, __VA_ARGS__)
+    #define NVIMGCODEC_LOG_TRACE(logger, ...) \
+        NVIMGCODEC_LOG(logger, NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE, NVIMGCODEC_DEBUG_MESSAGE_CATEGORY_GENERAL, __VA_ARGS__)
 
-#define NVIMGCODEC_LOG_DEBUG(logger, ...) \
-    NVIMGCODEC_LOG(logger, NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_DEBUG, NVIMGCODEC_DEBUG_MESSAGE_CATEGORY_GENERAL, __VA_ARGS__)
+    #define NVIMGCODEC_LOG_DEBUG(logger, ...) \
+        NVIMGCODEC_LOG(logger, NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_DEBUG, NVIMGCODEC_DEBUG_MESSAGE_CATEGORY_GENERAL, __VA_ARGS__)
 
 #endif
 
@@ -67,4 +67,5 @@ namespace nvimgcodec {
 #define NVIMGCODEC_LOG_FATAL(logger, ...) \
     NVIMGCODEC_LOG(logger, NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_FATAL, NVIMGCODEC_DEBUG_MESSAGE_CATEGORY_GENERAL, __VA_ARGS__)
 
-} // namespace nvimgcodec
+
+} //namespace nvimgcodec

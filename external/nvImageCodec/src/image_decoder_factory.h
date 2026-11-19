@@ -17,25 +17,27 @@
 
 #pragma once
 
-#include "iimage_decoder_factory.h"
-#include <memory>
 #include <nvimgcodec.h>
+#include <memory>
 #include <string>
+#include "iimage_decoder_factory.h"
 
 namespace nvimgcodec {
 
-    class IImageDecoder;
+class IImageDecoder;
 
-    class ImageDecoderFactory : public IImageDecoderFactory {
-    public:
-        explicit ImageDecoderFactory(const nvimgcodecDecoderDesc_t* desc);
-        std::string getDecoderId() const override;
-        std::string getCodecName() const override;
-        nvimgcodecBackendKind_t getBackendKind() const override;
-        std::unique_ptr<IImageDecoder> createDecoder(
-            const nvimgcodecExecutionParams_t* exec_params, const char* options) const override;
+class ImageDecoderFactory : public IImageDecoderFactory
+{
+  public:
+    explicit ImageDecoderFactory(const nvimgcodecDecoderDesc_t* desc);
+    std::string getDecoderId() const override;
+    std::string getCodecName() const override;
+    nvimgcodecBackendKind_t getBackendKind() const override;
+    const nvimgcodecDecoderDesc_t* getDecoderDesc() const override;
+    std::unique_ptr<IImageDecoder> createDecoder(
+        const nvimgcodecExecutionParams_t* exec_params, const char* options) const override;
 
-    private:
-        const nvimgcodecDecoderDesc_t* decoder_desc_;
-    };
+  private:
+    const nvimgcodecDecoderDesc_t* decoder_desc_;
+};
 } // namespace nvimgcodec

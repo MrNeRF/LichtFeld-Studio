@@ -24,24 +24,25 @@
 
 namespace nvimgcodec {
 
-    std::unique_ptr<FileIoStream> FileIoStream::open(
-        const std::string& uri, bool read_ahead, bool use_mmap, bool to_write) {
-        std::string processed_uri;
+std::unique_ptr<FileIoStream> FileIoStream::open(
+    const std::string& uri, bool read_ahead, bool use_mmap, bool to_write)
+{
+    std::string processed_uri;
 
-        if (uri.find("file://") == 0) {
-            processed_uri = uri.substr(std::string("file://").size());
-        } else {
-            processed_uri = uri;
-        }
+    if (uri.find("file://") == 0) {
+        processed_uri = uri.substr(std::string("file://").size());
+    } else {
+        processed_uri = uri;
+    }
 
 #if defined(__linux) || defined(__linux__) || defined(linux)
-        if (use_mmap) {
-            return std::unique_ptr<FileIoStream>(new MmapedFileIoStream(processed_uri, read_ahead));
-        }
-#else
-#pragma message("mmap disabled: not supported by platform")
-#endif
-        return std::unique_ptr<FileIoStream>(new StdFileIoStream(processed_uri, to_write));
+    if (use_mmap) {
+        return std::unique_ptr<FileIoStream>(new MmapedFileIoStream(processed_uri, read_ahead));
     }
+#else
+    #pragma message ( "mmap disabled: not supported by platform" )
+#endif
+    return std::unique_ptr<FileIoStream>(new StdFileIoStream(processed_uri, to_write));
+}
 
 } // namespace nvimgcodec

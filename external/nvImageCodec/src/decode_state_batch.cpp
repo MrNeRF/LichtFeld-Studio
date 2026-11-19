@@ -18,8 +18,9 @@
 
 namespace nvimgcodec {
 
-    void DecodeStateBatch::setPromise(std::shared_ptr<ProcessingResultsPromise> promise) {
-        promise_ = std::move(promise);
-    }
+void DecodeStateBatch::setPromise(std::shared_ptr<ProcessingResultsPromise> promise)
+{
+    promise_ = std::move(promise);
+}
 
 } // namespace nvimgcodec

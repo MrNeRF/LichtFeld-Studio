@@ -18,6 +18,7 @@ set(EXT_LIBRARY_NAME nvjpeg2k_ext)
 set(EXT_SRCS
   nvjpeg2k_ext.cpp
   cuda_encoder.cpp
+  encoder_output.cpp
   cuda_decoder.cpp
   exception.cpp
   nvjpeg2k_utils.cpp
@@ -26,6 +27,7 @@ set(EXT_SRCS
 set(EXT_HEADERS
   cuda_decoder.h
   cuda_encoder.h
+  encoder_output.h
   error_handling.h
   exception.h
   log.h
@@ -38,6 +40,9 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 add_library(${EXT_LIBRARY_NAME}_obj OBJECT ${EXT_SRCS} ${EXT_HEADERS})
 add_library(${EXT_LIBRARY_NAME} SHARED $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static> ext_module.cpp)
+
+nvimgcodec_apply_version_script(${EXT_LIBRARY_NAME} extension.map)
+
 add_library(${EXT_LIBRARY_NAME}_static STATIC $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
 
 if (WITH_DYNAMIC_CUDA)
@@ -53,10 +58,8 @@ if(NOT WITH_DYNAMIC_NVJPEG2K)
 else()
   target_link_libraries(${EXT_LIBRARY_NAME}
     PRIVATE dynlink_nvjpeg2k)
-  if(UNIX)
-    target_link_libraries(${EXT_LIBRARY_NAME}
-      PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
-  endif()
+  target_link_libraries(${EXT_LIBRARY_NAME}
+    PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
 endif()
 
 target_link_libraries(${EXT_LIBRARY_NAME} PUBLIC
@@ -69,24 +72,13 @@ if(UNIX)
   set_target_properties(${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     VERSION ${PROJECT_VERSION}
-    BUILD_RPATH "$ORIGIN;$ORIGIN/.."
-    INSTALL_RPATH "$ORIGIN;$ORIGIN/.."
     NO_SONAME OFF)
 else()
-  # Windows: set explicit output directories for multi-config generators
-  # Must set per-config properties to prevent config subdirectory being added
   set_target_properties(${EXT_LIBRARY_NAME} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     VERSION ${PROJECT_VERSION}
     OUTPUT_NAME ${EXT_LIBRARY_NAME}_${PROJECT_VERSION_MAJOR}
     ARCHIVE_OUTPUT_NAME ${EXT_LIBRARY_NAME})
-  # Set per-config output directories to flatten structure for multi-config generators
-  foreach(_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
-    set_target_properties(${EXT_LIBRARY_NAME} PROPERTIES
-      "RUNTIME_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
-      "LIBRARY_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
-      "ARCHIVE_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}")
-  endforeach()
 endif()
 
 if(UNIX)

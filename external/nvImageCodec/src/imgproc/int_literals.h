@@ -17,73 +17,73 @@
 
 #pragma once
 
-#include "imgproc/host_dev.h"
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include "imgproc/host_dev.h"
 
 namespace nvimgcodec {
 
-    using size_t = std::size_t;
-    using ssize_t = std::make_signed_t<size_t>;
+using size_t = std::size_t;
+using ssize_t = std::make_signed_t<size_t>;
 
-    namespace literal {
+namespace literal {
 
-        NVIMGCODEC_HOST_DEV
-        constexpr ssize_t operator""_z(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr ssize_t operator ""_z(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr size_t operator""_uz(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr size_t operator ""_uz(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr size_t operator""_zu(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr size_t operator ""_zu(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr int8_t operator""_i8(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr int8_t operator ""_i8(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr uint8_t operator""_u8(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr uint8_t operator ""_u8(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr int16_t operator""_i16(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr int16_t operator ""_i16(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr uint16_t operator""_u16(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr uint16_t operator ""_u16(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr int32_t operator""_i32(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr int32_t operator ""_i32(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr uint32_t operator""_u32(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr uint32_t operator ""_u32(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr int64_t operator""_i64(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr int64_t operator ""_i64(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-        NVIMGCODEC_HOST_DEV
-        constexpr uint64_t operator""_u64(unsigned long long x) { // NOLINT(runtime/int)
-            return x;
-        }
+NVIMGCODEC_HOST_DEV
+constexpr uint64_t operator ""_u64(unsigned long long x) {  // NOLINT(runtime/int)
+    return x;
+}
 
-    } // namespace literal
-    using namespace literal; // NOLINT
-} // namespace nvimgcodec
+}  // namespace literal
+using namespace literal;  // NOLINT
+}  // namespace nvimgcodec

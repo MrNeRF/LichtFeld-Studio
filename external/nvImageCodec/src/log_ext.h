@@ -22,9 +22,9 @@
 #include <string>
 
 #ifdef NDEBUG
-#define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_INFO
+    #define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_INFO
 #else
-#define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE
+    #define NVIMGCODEC_SEVERITY NVIMGCODEC_DEBUG_MESSAGE_SEVERITY_TRACE
 #endif
 
 #define NVIMGCODEC_LOG(framework, id, svr, type, msg)                                                                                      \
@@ -34,7 +34,7 @@
             ss << msg;                                                                                                                     \
             std::string msg_str{ss.str()};                                                                                                 \
             nvimgcodecDebugMessageData_t data{NVIMGCODEC_STRUCTURE_TYPE_DEBUG_MESSAGE_DATA, sizeof(nvimgcodecDebugMessageData_t), nullptr, \
-                                              msg_str.c_str(), 0, nullptr, id, NVIMGCODEC_VER};                                            \
+                msg_str.c_str(), 0, nullptr, id, NVIMGCODEC_VER};                                                                          \
             framework->log(framework->instance, svr, type, &data);                                                                         \
         }                                                                                                                                  \
     } while (0)

@@ -22,26 +22,25 @@
 
 namespace nvimgcodec {
 
-    /**
-     * @brief Find TIFF info extension in struct_next chain.
-     * @param info Pointer to the CodeStreamInfo structure.
-     * @return Pointer to the TIFF extension if found, nullptr otherwise.
-     */
-    template <typename T>
-    inline auto findInfoTiffExt(T* info) -> std::conditional_t<std::is_const_v<T>,
-                                                               const nvimgcodecCodeStreamInfoTiffExt_t*, nvimgcodecCodeStreamInfoTiffExt_t*> {
-        if (!info)
-            return nullptr;
-        void* ext_ptr = info->struct_next;
-        while (ext_ptr != nullptr) {
-            auto* base = static_cast<std::conditional_t<std::is_const_v<T>,
-                                                        const nvimgcodecCodeStreamInfoTiffExt_t*, nvimgcodecCodeStreamInfoTiffExt_t*>>(ext_ptr);
-            if (base->struct_type == NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO) {
-                return base;
-            }
-            ext_ptr = base->struct_next;
+/**
+ * @brief Find TIFF info extension in struct_next chain.
+ * @param info Pointer to the CodeStreamInfo structure.
+ * @return Pointer to the TIFF extension if found, nullptr otherwise.
+ */
+template <typename T>
+inline auto findInfoTiffExt(T* info) -> std::conditional_t<std::is_const_v<T>,
+    const nvimgcodecCodeStreamInfoTiffExt_t*, nvimgcodecCodeStreamInfoTiffExt_t*> {
+    if (!info) return nullptr;
+    void* ext_ptr = info->struct_next;
+    while (ext_ptr != nullptr) {
+        auto* base = static_cast<std::conditional_t<std::is_const_v<T>,
+            const nvimgcodecCodeStreamInfoTiffExt_t*, nvimgcodecCodeStreamInfoTiffExt_t*>>(ext_ptr);
+        if (base->struct_type == NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO) {
+            return base;
         }
-        return nullptr;
+        ext_ptr = base->struct_next;
     }
+    return nullptr;
+}
 
 } // namespace nvimgcodec

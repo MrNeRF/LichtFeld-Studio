@@ -29,4 +29,4 @@ namespace nvimgcodec {
 #endif
 #endif
 
-} // namespace nvimgcodec
+}  // namespace nvimgcodec

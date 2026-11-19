@@ -15,30 +15,40 @@
  * limitations under the License.
  */
 #include "image_encoder_factory.h"
+#include <cassert>
 #include "code_stream.h"
 #include "image.h"
 #include "image_encoder.h"
-#include <cassert>
 namespace nvimgcodec {
 
-    ImageEncoderFactory::ImageEncoderFactory(const nvimgcodecEncoderDesc_t* desc)
-        : encoder_desc_(desc) {
-    }
+ImageEncoderFactory::ImageEncoderFactory(const nvimgcodecEncoderDesc_t* desc)
+    : encoder_desc_(desc)
+{
+}
 
-    std::string ImageEncoderFactory::getCodecName() const {
-        return encoder_desc_->codec;
-    }
+std::string ImageEncoderFactory::getCodecName() const
+{
+    return encoder_desc_->codec;
+}
 
-    std::string ImageEncoderFactory::getEncoderId() const {
-        return encoder_desc_->id;
-    }
+std::string ImageEncoderFactory::getEncoderId() const
+{
+    return encoder_desc_->id;
+}
 
-    nvimgcodecBackendKind_t ImageEncoderFactory::getBackendKind() const {
-        return encoder_desc_->backend_kind;
-    }
+nvimgcodecBackendKind_t ImageEncoderFactory::getBackendKind() const
+{
+    return encoder_desc_->backend_kind;
+}
 
-    std::unique_ptr<IImageEncoder> ImageEncoderFactory::createEncoder(
-        const nvimgcodecExecutionParams_t* exec_params, const char* options) const {
-        return std::make_unique<ImageEncoder>(encoder_desc_, exec_params, options);
-    }
+const nvimgcodecEncoderDesc_t* ImageEncoderFactory::getEncoderDesc() const
+{
+    return encoder_desc_;
+}
+
+std::unique_ptr<IImageEncoder> ImageEncoderFactory::createEncoder(
+    const nvimgcodecExecutionParams_t* exec_params, const char* options) const
+{
+    return std::make_unique<ImageEncoder>(encoder_desc_, exec_params, options);
+}
 } // namespace nvimgcodec

@@ -77,25 +77,27 @@ endif()
 
 option(BUILD_LIBRARY "Build library" ON)
 log_option_value(BUILD_LIBRARY)
-option(BUILD_TEST "Build tests" OFF)
+option(BUILD_TEST "Build tests" ON)
 log_option_value(BUILD_TEST)
-option(BUILD_SAMPLES "Build samples" OFF)
+option(BUILD_SAMPLES "Build samples" ON)
 log_option_value(BUILD_SAMPLES)
 option(BUILD_CVCUDA_SAMPLES "Build CVCUDA samples" OFF)
 log_option_value(BUILD_CVCUDA_SAMPLES)
 option(BUILD_DOCS "Build documentation" OFF)
+option(NVIMGCODEC_PYTHON_VERSIONS_STRICT
+       "Fail the configure if an interpreter listed in PYTHON_VERSIONS is missing" OFF)
 log_option_value(BUILD_DOCS)
 option(BUILD_EXTENSIONS "Build extensions modules" ON)
 log_option_value(BUILD_EXTENSIONS)
 
 option(BUILD_NVJPEG_EXT "Build nvjpeg extensions module" ON)
 option(BUILD_NVJPEG2K_EXT "Build nvjpeg2k extensions module" ON)
-option(BUILD_NVTIFF_EXT "Build nvtiff extensions module" OFF)
-option(BUILD_NVBMP_EXT "Build nvbmp extensions module" OFF)
-option(BUILD_NVPNM_EXT "Build nvpnm extensions module" OFF)
-option(BUILD_LIBJPEG_TURBO_EXT "Build libjpeg-turbo extensions module" OFF)
-option(BUILD_LIBTIFF_EXT "Build libtiff extensions module" OFF)
-option(BUILD_OPENCV_EXT "Build opencv extensions module" OFF)
+option(BUILD_NVTIFF_EXT "Build nvtiff extensions module" ON)
+option(BUILD_NVBMP_EXT "Build nvbmp extensions module" ON)
+option(BUILD_NVPNM_EXT "Build nvpnm extensions module" ON)
+option(BUILD_LIBJPEG_TURBO_EXT "Build libjpeg-turbo extensions module" ON)
+option(BUILD_LIBTIFF_EXT "Build libtiff extensions module" ON)
+option(BUILD_OPENCV_EXT "Build opencv extensions module" ON)
 
 if (NOT BUILD_EXTENSIONS)
     set(BUILD_NVJPEG_EXT OFF CACHE BOOL "Disable BUILD_NVJPEG_EXT because BUILD_EXTENSIONS is disabled" FORCE)
@@ -123,7 +125,7 @@ endif()
 log_option_value(SKIP_NVTIFF_WITH_NVCOMP_TESTS)
 expose_via_preprocessor_macro(SKIP_NVTIFF_WITH_NVCOMP_TESTS)
 
-option(BUILD_PYTHON "Build Python binding" OFF)
+option(BUILD_PYTHON "Build Python binding" ON)
 log_option_value(BUILD_PYTHON)
 
 option(NVIMGCODEC_COPY_LIBS_TO_PYTHON_DIR "Move nvimgcodec from install prefix to the python directory" ON)
@@ -288,6 +290,74 @@ else()
     set(NVIMGCODEC_EXTENSIONS_TO_LIBDIR_RPATH "$ORIGIN/${NVIMGCODEC_EXTENSIONS_RPATH_TO_LIBDIR}")
 endif()
 
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+else()
+    set(CPACK_GENERATOR "TGZ;DEB")
+
+    set(CPACK_COMPONENTS_GROUPING IGNORE)
+
+    # Debian options
+    set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS true)
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION ON)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS off)
+    set(CPACK_DEBIAN_COMPRESSION_TYPE xz)
+
+    # Create several .debs, one for each component
+    set(CPACK_DEB_COMPONENT_INSTALL ON)
+
+    # Archive options
+    set(CPACK_ARCHIVE_THREADS 0) # use all cores
+    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+endif()
+
+set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
+set(CPACK_PACKAGE_VENDOR "NVIDIA CORPORATION")
+set(CPACK_PACKAGE_CONTACT "nvImageCodec Support https://github.com/NVIDIA/nvImageCodec")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GPU Accelerated Image Codecs library")
+set(CPACK_PACKAGE_VERSION "${NVIMGCODEC_VERSION_WITH_BUILD}${PROJECT_VERSION_SUFFIX}")
+set(CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
+set(CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
+set(CPACK_PACKAGE_VERSION_TWEAK "${BUILD_ID}")
+set(CPACK_PACKAGE_VERSION_SUFFIX "${PROJECT_VERSION_SUFFIX}")
+#set(PROJECT_VERSION "${PROJECT_VERSION}${PROJECT_VERSION_SUFFIX}")
+# we split the file name components with '-', so the version component can't
+# have this character, let's replace it by '_'
+string(REPLACE "-" "_" tmp ${CPACK_PACKAGE_VERSION})
+set(NVIMGCODEC_VERSION_BUILD "${tmp}-${NVIMGCODEC_BUILD_SUFFIX}")
+set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${NVIMGCODEC_VERSION_BUILD}")
+set(CPACK_STRIP_FILES TRUE)
+set(CPACK_PROJECT_CONFIG_FILE ${CMAKE_SOURCE_DIR}/cmake/Package.cmake)
+set(CPACK_COMPONENTS_ALL lib tests samples)
+
+if(UNIX)
+    set(NVIMGCODEC_DEBIAN_PACKAGE_SUFFIX "cuda${CUDA_VERSION_MAJOR}")
+    set(NVIMGCODEC_LD_SO_CONF_NAME "${CPACK_PACKAGE_NAME}-${CUDA_VERSION_MAJOR}.conf")
+    option(NVIMGCODEC_INSTALL_LD_SO_CONF "Install nvImageCodec ld.so.conf.d drop-in" ON)
+    if(NVIMGCODEC_INSTALL_LD_SO_CONF)
+        configure_file(cpack/ld.so.conf.in cpack/ld.so.conf @ONLY)
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cpack/ld.so.conf
+            DESTINATION "/etc/ld.so.conf.d"
+            RENAME ${NVIMGCODEC_LD_SO_CONF_NAME}
+            COMPONENT lib)
+    endif()
+    configure_file(cpack/debian_lib_postinst.in cpack/lib/postinst @ONLY)
+    configure_file(cpack/debian_lib_postrm.in cpack/lib/postrm @ONLY)
+
+    set(CPACK_DEBIAN_LIB_PACKAGE_CONTROL_EXTRA
+        "${CMAKE_CURRENT_BINARY_DIR}/cpack/lib/postinst"
+        "${CMAKE_CURRENT_BINARY_DIR}/cpack/lib/postrm")
+
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.3.1-6), libstdc++6 (>=6.0)")
+
+    set(CPACK_DEBIAN_LIB_PACKAGE_NAME "lib${PROJECT_NAME}-${NVIMGCODEC_DEBIAN_PACKAGE_SUFFIX}")
+    set(CPACK_DEBIAN_TESTS_PACKAGE_NAME "${PROJECT_NAME}-tests-${NVIMGCODEC_DEBIAN_PACKAGE_SUFFIX}")
+    set(CPACK_DEBIAN_SAMPLES_PACKAGE_NAME "${PROJECT_NAME}-samples-${NVIMGCODEC_DEBIAN_PACKAGE_SUFFIX}")
+endif()
+
+include (CPack)
+
 include(cmake/CUDA_utils.cmake)
 
 set(USED_CUDA_COMPILER ${CMAKE_CUDA_COMPILER})
@@ -386,7 +456,7 @@ if(BUILD_EXTENSIONS)
     add_subdirectory(extensions)
 endif()
 
-if(UNIX)
+if(UNIX AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/coverity.sh")
 add_custom_target(coverity COMMAND ../coverity.sh
   WORKING_DIRECTORY
     ${CMAKE_CURRENT_BINARY_DIR}

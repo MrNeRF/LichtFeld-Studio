@@ -44,61 +44,69 @@ else()
 endif()
 set(_@PROJECT_NAME@_header_names "nvimgcodec.h")
 
+# The three directory searches below all use find_path() anchored to this config
+# file: NO_DEFAULT_PATH keeps CMAKE_PREFIX_PATH, the system prefixes and the
+# environment out of the search, so a second nvimgcodec installation elsewhere on
+# the machine can never satisfy the lookup for *this* one. find_path() always
+# writes a cache entry, so each result is copied into a normal variable and the
+# cache entry is cleared again - otherwise a value cached by an earlier
+# find_package() of a different installation would win before the search runs.
+# The plain unset() before each probe matters too: find_path() short-circuits on a
+# pre-existing *normal* variable of the same name and returns it without searching,
+# and unset(... CACHE) does not clear that.
+# (find_path's NO_CACHE option would do this directly but needs CMake >= 3.21,
+# which is newer than some consumers.)
+#
+# Ancestors of the config dir, nearest first. The number of levels from the
+# config dir up to the tree holding "include"/"bin" is NOT fixed:
+#   * plain / RPM:        <prefix>/lib(64)/libnvimgcodec/<major>/cmake/nvimgcodec  -> 5 up
+#   * Debian multiarch:   adds the <arch> tuple                                    -> 6 up
+#   * Windows installer:  nests under a version folder and drops "libnvimgcodec",
+#                         e.g. <root>/v0.9/lib/<major>/cmake/nvimgcodec           -> 4 up
+# so the ancestor list is passed as HINTS and the nearest match wins.
+set(_@PROJECT_NAME@_hints "")
+set(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_config_dir}")
+foreach(_up RANGE 7)
+    list(APPEND _@PROJECT_NAME@_hints "${_@PROJECT_NAME@_anc}")
+    get_filename_component(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_anc}" DIRECTORY)
+endforeach()
+
 # Resolve the library directory. The cmake package dir is always installed as
 # "<libdir>/cmake/nvimgcodec", so the library dir is two levels up in every
-# supported layout (tarball, plain install, Debian multiarch, RPM); "." is a
-# defensive fallback for a flat layout where libs sit next to the config file.
-set(@PROJECT_NAME@_LIB_DIR "@PROJECT_NAME@_LIB_DIR-NOTFOUND")
-foreach(_suffix "../.." ".")
-    get_filename_component(_cand "${_@PROJECT_NAME@_config_dir}/${_suffix}" ABSOLUTE)
-    foreach(_name IN LISTS _@PROJECT_NAME@_lib_names)
-        if(EXISTS "${_cand}/${_name}")
-            set(@PROJECT_NAME@_LIB_DIR "${_cand}")
-            break()
-        endif()
-    endforeach()
-    if(@PROJECT_NAME@_LIB_DIR)
-        break()
-    endif()
-endforeach()
+# supported layout (tarball, plain install, Debian multiarch, RPM). This search
+# is anchored to the config dir alone (not the ancestor list built above,
+# which the include/bin searches use), so "../.." is the only way it reaches
+# that directory. A "." suffix is not needed for the flat-layout fallback:
+# find_path() always tries each HINTS entry bare in addition to every
+# PATH_SUFFIXES combination, so the config dir itself is already checked.
+unset(_@PROJECT_NAME@_lib_dir)
+unset(_@PROJECT_NAME@_lib_dir CACHE)
+find_path(_@PROJECT_NAME@_lib_dir
+    NAMES ${_@PROJECT_NAME@_lib_names}
+    HINTS "${_@PROJECT_NAME@_config_dir}"
+    PATH_SUFFIXES "../.."
+    NO_DEFAULT_PATH)
+set(@PROJECT_NAME@_LIB_DIR "${_@PROJECT_NAME@_lib_dir}")
+unset(_@PROJECT_NAME@_lib_dir CACHE)
 if(NOT @PROJECT_NAME@_LIB_DIR)
     message(FATAL_ERROR
         "nvimgcodec: unable to locate the library directory (containing one of: "
         "${_@PROJECT_NAME@_lib_names}) relative to \"${CMAKE_CURRENT_LIST_DIR}\".")
 endif()
+get_filename_component(@PROJECT_NAME@_LIB_DIR "${@PROJECT_NAME@_LIB_DIR}" ABSOLUTE)
 
-# Resolve the include directory. The number of parent levels from the config
-# dir up to the tree that holds "include" is NOT fixed:
-#   * plain / RPM:        <prefix>/lib(64)/libnvimgcodec/<major>/cmake/nvimgcodec  -> 5 up
-#   * Debian multiarch:   adds the <arch> tuple                                    -> 6 up
-#   * Windows installer:  nests under a version folder and drops "libnvimgcodec",
-#                         e.g. <root>/v0.9/lib/<major>/cmake/nvimgcodec           -> 4 up
-# So instead of hardcoding depths we walk up the ancestors of the config dir and
-# look for an "include" tree containing the public header. At each level the
-# versioned layout (<dir>/include/nvimgcodec/<major>, used by Debian/RPM) is
-# probed before the flat one (<dir>/include) so the more specific tree wins;
-# this matches the "most specific first" ordering of the binary-dir search
-# below. The nearest ancestor wins overall.
-set(@PROJECT_NAME@_INCLUDE_DIR "@PROJECT_NAME@_INCLUDE_DIR-NOTFOUND")
-set(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_config_dir}")
-foreach(_up RANGE 7)
-    foreach(_sub "include/nvimgcodec/@CUDA_VERSION_MAJOR@" "include")
-        get_filename_component(_cand "${_@PROJECT_NAME@_anc}/${_sub}" ABSOLUTE)
-        foreach(_name IN LISTS _@PROJECT_NAME@_header_names)
-            if(EXISTS "${_cand}/${_name}")
-                set(@PROJECT_NAME@_INCLUDE_DIR "${_cand}")
-                break()
-            endif()
-        endforeach()
-        if(@PROJECT_NAME@_INCLUDE_DIR)
-            break()
-        endif()
-    endforeach()
-    if(@PROJECT_NAME@_INCLUDE_DIR)
-        break()
-    endif()
-    get_filename_component(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_anc}" DIRECTORY)
-endforeach()
+# Resolve the include directory. The versioned layout
+# (<dir>/include/nvimgcodec/<major>, used by Debian/RPM) is probed before the
+# flat one so the more specific tree wins.
+unset(_@PROJECT_NAME@_include_dir)
+unset(_@PROJECT_NAME@_include_dir CACHE)
+find_path(_@PROJECT_NAME@_include_dir
+    NAMES ${_@PROJECT_NAME@_header_names}
+    HINTS ${_@PROJECT_NAME@_hints}
+    PATH_SUFFIXES "include/nvimgcodec/@CUDA_VERSION_MAJOR@" "include"
+    NO_DEFAULT_PATH)
+set(@PROJECT_NAME@_INCLUDE_DIR "${_@PROJECT_NAME@_include_dir}")
+unset(_@PROJECT_NAME@_include_dir CACHE)
 if(NOT @PROJECT_NAME@_INCLUDE_DIR)
     message(FATAL_ERROR
         "nvimgcodec: unable to locate the include directory (containing "
@@ -107,36 +115,26 @@ endif()
 
 # Resolve the runtime binary directory (optional: the CLI tools / runtime DLL
 # may not be present). Layout is bin/nvimgcodec/<cuda_major> on Unix and
-# bin/<cuda_major> on Windows. Walk the ancestors like the include search above
-# so the varying nesting depth (incl. the Windows version folder) is handled.
-set(@PROJECT_NAME@_BIN_DIR "")
+# bin/<cuda_major> on Windows; the more specific suffix is probed first so it
+# wins over the flat redist layout at the same level.
 if(WIN32)
-    # Installer nests the runtime DLL under bin/<major>; the redist archive uses
-    # a flat bin/ (the archive name already carries the CUDA version). Probe the
-    # more specific one first so it wins when both could match at a given level.
     set(_@PROJECT_NAME@_bin_subs "bin/@CUDA_VERSION_MAJOR@" "bin")
 else()
     set(_@PROJECT_NAME@_bin_subs "bin/nvimgcodec/@CUDA_VERSION_MAJOR@" "bin")
 endif()
-set(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_config_dir}")
-foreach(_up RANGE 7)
-    foreach(_sub IN LISTS _@PROJECT_NAME@_bin_subs)
-        get_filename_component(_cand "${_@PROJECT_NAME@_anc}/${_sub}" ABSOLUTE)
-        foreach(_name IN LISTS _@PROJECT_NAME@_bin_names)
-            if(EXISTS "${_cand}/${_name}")
-                set(@PROJECT_NAME@_BIN_DIR "${_cand}")
-                break()
-            endif()
-        endforeach()
-        if(@PROJECT_NAME@_BIN_DIR)
-            break()
-        endif()
-    endforeach()
-    if(@PROJECT_NAME@_BIN_DIR)
-        break()
-    endif()
-    get_filename_component(_@PROJECT_NAME@_anc "${_@PROJECT_NAME@_anc}" DIRECTORY)
-endforeach()
+unset(_@PROJECT_NAME@_bin_dir)
+unset(_@PROJECT_NAME@_bin_dir CACHE)
+find_path(_@PROJECT_NAME@_bin_dir
+    NAMES ${_@PROJECT_NAME@_bin_names}
+    HINTS ${_@PROJECT_NAME@_hints}
+    PATH_SUFFIXES ${_@PROJECT_NAME@_bin_subs}
+    NO_DEFAULT_PATH)
+if(_@PROJECT_NAME@_bin_dir)
+    set(@PROJECT_NAME@_BIN_DIR "${_@PROJECT_NAME@_bin_dir}")
+else()
+    set(@PROJECT_NAME@_BIN_DIR "")
+endif()
+unset(_@PROJECT_NAME@_bin_dir CACHE)
 
 # Extension directories are deterministic relative to the resolved dirs:
 #   * runtime extension modules:  <libdir>/extensions   (Unix)
@@ -157,9 +155,7 @@ unset(_@PROJECT_NAME@_bin_names)
 unset(_@PROJECT_NAME@_header_names)
 unset(_@PROJECT_NAME@_bin_subs)
 unset(_@PROJECT_NAME@_anc)
-unset(_cand)
-unset(_name)
-unset(_suffix)
+unset(_@PROJECT_NAME@_hints)
 unset(_up)
 
 # ---------------------------------------------------------------------------
@@ -173,5 +169,16 @@ unset(_up)
 # imported target resolve correctly even after distro/installer repackaging
 # relocates the files to a different on-disk layout.
 # ---------------------------------------------------------------------------
+# nvimgcodec::nvimgcodec_static carries CUDA::cuda_driver on its INTERFACE, so the CUDAToolkit
+# imported targets should exist before the targets file is included.
+#
+# Deliberately NOT find_dependency(): that forwards REQUIRED, which would make
+# find_package(nvimgcodec) fail outright on any host without the CUDA toolkit dev files - a
+# runtime-only container, say - even for a consumer that only links the shared library and never
+# touches the static target. Only the static target needs the driver stub, so the lookup is soft:
+# CUDA::cuda_driver is left undefined and the error surfaces at generate time, naming the target,
+# but only if something actually links nvimgcodec::nvimgcodec_static.
+find_package(CUDAToolkit QUIET)
+
 include("${CMAKE_CURRENT_LIST_DIR}/@TARGETS_EXPORT_NAME@.cmake")
 check_required_components("@PROJECT_NAME@")

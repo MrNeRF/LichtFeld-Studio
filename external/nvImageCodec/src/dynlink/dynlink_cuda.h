@@ -20,4 +20,4 @@
 #include <cuda.h>
 
 bool cuInitChecked();
-bool cuIsSymbolAvailable(const char* name);
+bool cuIsSymbolAvailable(const char *name);

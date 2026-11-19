@@ -17,33 +17,33 @@
 
 #pragma once
 
-#include "iimage.h"
 #include <memory>
 #include <nvimgcodec.h>
+#include "iimage.h"
 
 namespace nvimgcodec {
 
-    class Image : public IImage {
-    public:
-        explicit Image();
-        ~Image() override;
-        void setIndex(int index) override;
-        int getIndex() override;
-        void setImageInfo(const nvimgcodecImageInfo_t* image_info) override;
-        void getImageInfo(nvimgcodecImageInfo_t* image_info) override;
-        std::shared_ptr<ProcessingResultsPromise> getPromise() override;
-        void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) override;
-        nvimgcodecImageDesc_t* getImageDesc() override;
+class Image : public IImage
+{
+  public:
+    explicit Image();
+    ~Image() override;
+    void setIndex(int index) override;
+    int getIndex() override;
+    void setImageInfo(const nvimgcodecImageInfo_t* image_info) override;
+    void getImageInfo(nvimgcodecImageInfo_t* image_info) override;
+    std::shared_ptr<ProcessingResultsPromise> getPromise() override;
+    void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) override;
+    nvimgcodecImageDesc_t* getImageDesc() override;
+  private:
+    nvimgcodecStatus_t imageReady(nvimgcodecProcessingStatus_t processing_status);
 
-    private:
-        nvimgcodecStatus_t imageReady(nvimgcodecProcessingStatus_t processing_status);
-
-        static nvimgcodecStatus_t static_get_image_info(void* instance, nvimgcodecImageInfo_t* result);
-        static nvimgcodecStatus_t static_image_ready(
-            void* instance, nvimgcodecProcessingStatus_t processing_status);
-        int index_;
-        nvimgcodecImageInfo_t image_info_;
-        nvimgcodecImageDesc_t image_desc_;
-        std::shared_ptr<ProcessingResultsPromise> promise_;
-    };
+    static nvimgcodecStatus_t static_get_image_info(void* instance, nvimgcodecImageInfo_t* result);
+    static nvimgcodecStatus_t static_image_ready(
+        void* instance, nvimgcodecProcessingStatus_t processing_status);
+    int index_;
+    nvimgcodecImageInfo_t image_info_;
+    nvimgcodecImageDesc_t image_desc_;
+    std::shared_ptr<ProcessingResultsPromise> promise_;
+};
 } // namespace nvimgcodec

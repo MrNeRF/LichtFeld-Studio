@@ -17,31 +17,31 @@
 
 #pragma once
 
-#include "imgproc/geom/box.h"
-#include "imgproc/host_dev.h"
 #include <vector>
+#include "imgproc/host_dev.h"
+#include "imgproc/geom/box.h"
 
 namespace nvimgcodec {
 
-    /**
-     * Defines region of interest.
-     * 0 dimension is interpreted along x axis (horizontal)
-     * 1 dimension is interpreted along y axis (vertical)
-     *
-     *            image.x ->
-     *          +--------------------------------+
-     *          |                                |
-     *          |   roi.lo    roi.x              |
-     *  image.y |         +-----+                |
-     *       |  |    roi.y|     |                |
-     *       v  |         +-----+ roi.hi         |
-     *          |                                |
-     *          +--------------------------------+
-     *
-     * Additionally, by definition, ROI is top-left inclusive and bottom-right exclusive.
-     * That means, that `Roi.lo` point is included in actual ROI and `Roi.hi` point isn't.
-     */
-    template <int ndims>
-    using Roi = Box<ndims, int>;
+/**
+ * Defines region of interest.
+ * 0 dimension is interpreted along x axis (horizontal)
+ * 1 dimension is interpreted along y axis (vertical)
+ *
+ *            image.x ->
+ *          +--------------------------------+
+ *          |                                |
+ *          |   roi.lo    roi.x              |
+ *  image.y |         +-----+                |
+ *       |  |    roi.y|     |                |
+ *       v  |         +-----+ roi.hi         |
+ *          |                                |
+ *          +--------------------------------+
+ *
+ * Additionally, by definition, ROI is top-left inclusive and bottom-right exclusive.
+ * That means, that `Roi.lo` point is included in actual ROI and `Roi.hi` point isn't.
+ */
+template <int ndims>
+using Roi = Box<ndims, int>;
 
-} // namespace nvimgcodec
+}  // namespace nvimgcodec

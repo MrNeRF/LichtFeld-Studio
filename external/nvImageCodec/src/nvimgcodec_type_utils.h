@@ -20,6 +20,7 @@
 
 #include "nvimgcodec.h"
 
-inline size_t sample_type_to_bytes_per_element(nvimgcodecSampleDataType_t sample_type) {
-    return static_cast<unsigned int>(sample_type) >> (8 + 3);
+inline size_t sample_type_to_bytes_per_element(nvimgcodecSampleDataType_t sample_type)
+{
+    return static_cast<unsigned int>(sample_type)>> (8+3);
 }

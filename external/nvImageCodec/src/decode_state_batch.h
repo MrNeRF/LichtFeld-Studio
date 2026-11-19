@@ -17,19 +17,19 @@
 
 #pragma once
 
-#include "idecode_state.h"
 #include <memory>
 #include <nvimgcodec.h>
+#include "idecode_state.h"
 
 namespace nvimgcodec {
 
-    class DecodeStateBatch : public IDecodeState {
-    public:
-        DecodeStateBatch() = default;
-        ~DecodeStateBatch() override = default;
-        void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) override;
-
-    private:
-        std::shared_ptr<ProcessingResultsPromise> promise_;
-    };
+class DecodeStateBatch : public IDecodeState
+{
+  public:
+    DecodeStateBatch() = default;
+    ~DecodeStateBatch() override = default;
+    void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) override;
+  private:
+    std::shared_ptr<ProcessingResultsPromise> promise_;
+};
 } // namespace nvimgcodec

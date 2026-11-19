@@ -23,25 +23,26 @@
 
 namespace nvimgcodec {
 
-    void fill_out_of_bounds_region(
-        const nvimgcodecImageInfo_t& target_image_info,
-        uint32_t original_image_width, uint32_t original_image_height, // dimensions of image before applying roi
-        const nvimgcodecRegion_t& region);
+void fill_out_of_bounds_region(
+    const nvimgcodecImageInfo_t& target_image_info,
+    uint32_t original_image_width, uint32_t original_image_height, // dimensions of image before applying roi
+    const nvimgcodecRegion_t& region
+);
 
-    inline bool is_region_out_of_bounds(const nvimgcodecRegion_t& region, uint32_t original_image_width, uint32_t original_image_height) {
-        if (region.ndim == 0)
-            return false;
-        assert(region.ndim == 2);
-        return region.start[0] < 0 ||
-               region.start[1] < 0 ||
-               region.end[0] < 0 || // to prevent overflow when casting to uint
-               static_cast<uint32_t>(region.end[0]) > original_image_height ||
-               region.end[1] < 0 || // to prevent overflow when casting to uint
-               static_cast<uint32_t>(region.end[1]) > original_image_width;
-    }
+inline bool is_region_out_of_bounds(const nvimgcodecRegion_t& region, uint32_t original_image_width, uint32_t original_image_height) {
+    if (region.ndim == 0)
+        return false;
+    assert(region.ndim == 2);
+    return region.start[0] < 0 ||
+            region.start[1] < 0 ||
+            region.end[0] < 0 || // to prevent overflow when casting to uint
+            static_cast<uint32_t>(region.end[0]) > original_image_height ||
+            region.end[1] < 0 || // to prevent overflow when casting to uint
+            static_cast<uint32_t>(region.end[1]) > original_image_width;
+}
 
-    // If region out of bounds fill is supported will return an empty string. Otherwise will return an error message.
-    // Should only be called if region is out of bounds (which can be checked with is_region_out_of_bounds())
-    std::string verify_region_fill_support(const nvimgcodecRegion_t& region, const nvimgcodecImageInfo_t& target_image_info);
+// If region out of bounds fill is supported will return an empty string. Otherwise will return an error message.
+// Should only be called if region is out of bounds (which can be checked with is_region_out_of_bounds())
+std::string verify_region_fill_support(const nvimgcodecRegion_t& region, const nvimgcodecImageInfo_t& target_image_info);
 
-} // namespace nvimgcodec
+}  // namespace nvimgcodec

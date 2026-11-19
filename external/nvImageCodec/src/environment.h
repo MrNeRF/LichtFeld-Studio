@@ -17,19 +17,21 @@
 
 #pragma once
 
-#include "ienvironment.h"
 #include <cstdlib>
 #include <string>
+#include "ienvironment.h"
 
 namespace nvimgcodec {
 
-    class Environment : public IEnvironment {
-    public:
-        virtual ~Environment() = default;
-        std::string getVariable(const std::string& env_var) override {
-            char* v = std::getenv(env_var.c_str());
-            return v ? std::string(v) : "";
-        };
+class Environment : public IEnvironment
+{
+  public:
+    virtual ~Environment() = default;
+    std::string getVariable(const std::string& env_var) override
+    {
+        char* v = std::getenv(env_var.c_str());
+        return v ? std::string(v) : "";
     };
+};
 
 } // namespace nvimgcodec
