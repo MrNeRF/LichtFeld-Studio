@@ -2,24 +2,31 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Depth and normal priors travel at their own size and are enlarged where the
-// loss reads them (#4092). The fit must give the numbers the loader's
-// enlargement and the loss's old resize gave.
+// Depth and normal priors no larger than their target travel at their own size
+// and are fitted where the loss reads them. The fit must give the numbers the
+// loader's resize and the loss's Lanczos give a prior resized in the loader.
 
 #include <gtest/gtest.h>
 
+#include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "io/nvcodec_image_loader.hpp"
+#include "training/dataset.hpp"
 
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -145,14 +152,12 @@ TEST(PriorOwnSize, FitDepthGivesTheLoadersEnlargement) {
     const auto prior = depth_prior(23, 37);
     const auto loader_output = host(lfs::core::resize_depth_prior(prior, 46, 74));
     // The loader enlarged to the request's size, which the render normally has.
-    expect_same(host(lfs::core::fit_depth_prior(prior, 46, 74, 46, 74, true)), loader_output);
+    expect_same(host(lfs::core::fit_depth_prior(prior, 46, 74, 46, 74)), loader_output);
     // A request of 0 x 0 means the render's size.
-    expect_same(host(lfs::core::fit_depth_prior(prior, 0, 0, 46, 74, true)), loader_output);
+    expect_same(host(lfs::core::fit_depth_prior(prior, 0, 0, 46, 74)), loader_output);
     // A prior read at the request's size still passes the prior resize, as in the loader.
-    expect_same(host(lfs::core::fit_depth_prior(prior, 23, 37, 23, 37, true)),
+    expect_same(host(lfs::core::fit_depth_prior(prior, 23, 37, 23, 37)),
                 host(lfs::core::resize_depth_prior(prior, 23, 37)));
-    // An undistorted prior that already has the request's size is used as it is.
-    expect_same(host(lfs::core::fit_depth_prior(prior, 23, 37, 23, 37, false)), host(prior));
 }
 
 TEST(PriorOwnSize, EnlargementMatchesTheKernelWrittenOutOnTheCpu) {
@@ -167,7 +172,7 @@ TEST(PriorOwnSize, EnlargementMatchesTheKernelWrittenOutOnTheCpu) {
         SCOPED_TRACE(scale);
         const int dh = 16 * scale;
         const int dw = 32 * scale;
-        const auto gpu_depth = host(lfs::core::fit_depth_prior(depth, dh, dw, dh, dw, true));
+        const auto gpu_depth = host(lfs::core::fit_depth_prior(depth, dh, dw, dh, dw));
         const auto cpu_depth = cpu_prior_resize(host(depth), 1, 32, 16, dw, dh);
         ASSERT_EQ(gpu_depth.size(), cpu_depth.size());
         for (size_t i = 0; i < cpu_depth.size(); ++i) {
@@ -176,7 +181,7 @@ TEST(PriorOwnSize, EnlargementMatchesTheKernelWrittenOutOnTheCpu) {
             else
                 ASSERT_NEAR(gpu_depth[i], cpu_depth[i], 1e-5f * std::abs(cpu_depth[i])) << "depth " << i;
         }
-        const auto gpu_normal = host(lfs::core::fit_normal_prior(normal, dh, dw, dh, dw, true));
+        const auto gpu_normal = host(lfs::core::fit_normal_prior(normal, dh, dw, dh, dw));
         const auto cpu_normal = cpu_prior_resize(host(normal), 3, 32, 16, dw, dh);
         ASSERT_EQ(gpu_normal.size(), cpu_normal.size());
         for (size_t i = 0; i < cpu_normal.size(); ++i) {
@@ -192,11 +197,10 @@ TEST(PriorOwnSize, FitNormalGivesTheLoadersEnlargement) {
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA device required";
     const auto prior = normal_prior(23, 37);
-    expect_same(host(lfs::core::fit_normal_prior(prior, 46, 74, 46, 74, true)),
+    expect_same(host(lfs::core::fit_normal_prior(prior, 46, 74, 46, 74)),
                 host(lfs::core::resize_normal_prior(prior, 46, 74)));
-    expect_same(host(lfs::core::fit_normal_prior(prior, 23, 37, 23, 37, true)),
+    expect_same(host(lfs::core::fit_normal_prior(prior, 23, 37, 23, 37)),
                 host(lfs::core::resize_normal_prior(prior, 23, 37)));
-    expect_same(host(lfs::core::fit_normal_prior(prior, 23, 37, 23, 37, false)), host(prior));
 }
 
 TEST(PriorOwnSize, FitKeepsTheOldNumbersWhenTheCameraSizeChangedAfterTheRequest) {
@@ -205,11 +209,118 @@ TEST(PriorOwnSize, FitKeepsTheOldNumbersWhenTheCameraSizeChangedAfterTheRequest)
     // The loader enlarged to the requested 46 x 74, then the loss resized that to
     // the 31 x 50 render with Lanczos.
     const auto depth = depth_prior(23, 37);
-    expect_same(host(lfs::core::fit_depth_prior(depth, 46, 74, 31, 50, true)),
+    expect_same(host(lfs::core::fit_depth_prior(depth, 46, 74, 31, 50)),
                 host(lfs::core::lanczos_resize_grayscale(lfs::core::resize_depth_prior(depth, 46, 74), 31, 50, 2)));
     const auto normal = normal_prior(23, 37);
-    expect_same(host(lfs::core::fit_normal_prior(normal, 46, 74, 31, 50, true)),
+    expect_same(host(lfs::core::fit_normal_prior(normal, 46, 74, 31, 50)),
                 host(lfs::core::lanczos_resize_float_chw(lfs::core::resize_normal_prior(normal, 46, 74), 31, 50, 2)));
+}
+
+// The fit only enqueues the prior resize on the stream it is given. An input made on another
+// stream and dropped by the caller right after the call must survive until that resize has read
+// it: the resize waits behind a host gate while the input's block goes back to the producer
+// stream, which overwrites it before the gate opens.
+TEST(PriorOwnSize, FitKeepsItsInputUntilItsStreamHasReadIt) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    using namespace lfs::core;
+    // 768 KiB, above the slab allocator's threshold, so the block comes from the stream-ordered pool.
+    constexpr size_t H = 384;
+    constexpr size_t W = 512;
+    cudaStream_t producer{};
+    cudaStream_t consumer{};
+    cudaStream_t gate_holder{};
+    cudaEvent_t gate{};
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&gate_holder, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaEventCreateWithFlags(&gate, cudaEventDisableTiming), cudaSuccess);
+    std::atomic<bool> released{false};
+    std::atomic<bool> returned{false};
+    struct OpenGate {
+        std::atomic<bool>& flag;
+        ~OpenGate() { flag.store(true, std::memory_order_release); }
+    } open_on_exit{released};
+    Tensor expected;
+    Tensor fitted;
+    bool reused = false;
+    bool gate_held = false;
+    {
+        const CUDAStreamGuard guard(producer);
+        Tensor input = depth_prior(H, W);
+        ASSERT_EQ(input.stream(), producer);
+        expected = resize_depth_prior(input, H, W, producer);
+        // The fit's output is allocated on the consumer stream, so the producer stream never waits for
+        // the gated one to reuse a block of it.
+        const auto fit_on_consumer = [&] {
+            const CUDAStreamGuard on_consumer(consumer);
+            return fit_depth_prior(input, H, W, H, W, consumer);
+        };
+        // Load the kernel and fill the pool first, so the gated call has nothing that waits on the device.
+        (void)fit_on_consumer();
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        void* const block = input.data_ptr();
+
+        ASSERT_EQ(cudaLaunchHostFunc(
+                      gate_holder,
+                      [](void* flag) {
+                          while (!static_cast<std::atomic<bool>*>(flag)->load(std::memory_order_acquire)) {
+                          }
+                      },
+                      &released),
+                  cudaSuccess);
+        ASSERT_EQ(cudaEventRecord(gate, gate_holder), cudaSuccess);
+        ASSERT_EQ(cudaStreamWaitEvent(consumer, gate, 0), cudaSuccess);
+        // Opens the gate even if something below blocks on the gated stream.
+        std::thread opener([&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            released.store(true, std::memory_order_release);
+        });
+        fitted = fit_on_consumer();
+        input = Tensor();
+        // NaN bytes, which the prior resize treats as invalid depth.
+        Tensor sentinel = Tensor::empty({H, W}, Device::CUDA, DataType::Float32);
+        ASSERT_EQ(cudaMemsetAsync(sentinel.data_ptr(), 0xFF, sentinel.bytes(), producer), cudaSuccess);
+        reused = sentinel.data_ptr() == block;
+        // Unless the producer stream waits for the resize, the sentinel lands while the gate holds.
+        const auto settle = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (cudaStreamQuery(producer) == cudaErrorNotReady && std::chrono::steady_clock::now() < settle)
+            std::this_thread::yield();
+        gate_held = !released.load(std::memory_order_acquire);
+        returned.store(true, std::memory_order_release);
+        opener.join();
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+    const auto result = host(fitted);
+    fitted = Tensor();
+    CudaMemoryPool::instance().release_stream(producer);
+    CudaMemoryPool::instance().release_stream(consumer);
+    EXPECT_EQ(cudaStreamDestroy(producer), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(consumer), cudaSuccess);
+    EXPECT_EQ(cudaStreamDestroy(gate_holder), cudaSuccess);
+    EXPECT_EQ(cudaEventDestroy(gate), cudaSuccess);
+    ASSERT_TRUE(gate_held) << "the fit waited for the gated stream, so the test cannot observe the order";
+    if (!reused)
+        GTEST_SKIP() << "the pool did not hand the input's block back, so the test cannot observe the order";
+    expect_same(result, host(expected));
+}
+
+// The loader's slot estimate charges a prior at its own size only when the prior travels so;
+// a prior larger than the image is resized to the image's size and charged at it.
+TEST(PriorOwnSize, SlotChargesPriorsLargerThanTheImageAtTheImagesSize) {
+    lfs::core::Camera camera;
+    camera.set_image_dimensions(1237, 822);
+    const size_t image = size_t{1237} * 822;
+    camera.set_prior_sizes({4946, 3286}, {4946, 3286});
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, camera.depth_prior_size()), image);
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, camera.normal_prior_size()), image);
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, {1238, 822}), image);
+    // No larger than the image: its own size. Unknown: the image's.
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, {1237, 822}), image);
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, {618, 411}), size_t{618} * 411);
+    EXPECT_EQ(lfs::training::pipelined_prior_pixels(camera, {}), image);
 }
 
 namespace {

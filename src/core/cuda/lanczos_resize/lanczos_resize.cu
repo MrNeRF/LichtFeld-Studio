@@ -10,6 +10,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_memory_guard.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lanczos_resize.hpp"
 
 #include <cmath>
@@ -684,6 +685,9 @@ namespace lfs::core {
             input.ndim() != (Channels == 1 ? 2 : 3) || (Channels == 3 && input.size(0) != 3)) {
             throw std::invalid_argument("Prior resize requires contiguous CUDA float depth [H,W] or normals [3,H,W]");
         }
+        // Orders the input's stream before the kernel and records the input's use on `stream`, so the
+        // caller may drop the input as soon as this returns.
+        prepare_inputs_for_stream({&input}, stream);
         const int h = static_cast<int>(input.size(input.ndim() - 2));
         const int w = static_cast<int>(input.size(input.ndim() - 1));
         const auto shape = Channels == 1
@@ -711,17 +715,13 @@ namespace lfs::core {
 
     template <int Channels>
     Tensor fit_prior(const Tensor& input, int request_h, int request_w, const int render_h, const int render_w,
-                     const bool resample_always, cudaStream_t stream) {
+                     cudaStream_t stream) {
         if (request_h <= 0 || request_w <= 0) {
             request_h = render_h;
             request_w = render_w;
         }
-        const auto height = [](const Tensor& t) { return static_cast<int>(t.size(t.ndim() - 2)); };
-        const auto width = [](const Tensor& t) { return static_cast<int>(t.size(t.ndim() - 1)); };
-        Tensor fitted = input;
-        if (resample_always || height(fitted) != request_h || width(fitted) != request_w)
-            fitted = resize_prior<Channels>(fitted, request_h, request_w, stream, false);
-        if (height(fitted) != render_h || width(fitted) != render_w) {
+        Tensor fitted = resize_prior<Channels>(input, request_h, request_w, stream, false);
+        if (request_h != render_h || request_w != render_w) {
             fitted = Channels == 1 ? lanczos_resize_grayscale(fitted, render_h, render_w, 2, stream)
                                    : lanczos_resize_float_chw(fitted, render_h, render_w, 2, stream);
         }
@@ -729,13 +729,13 @@ namespace lfs::core {
     }
 
     Tensor fit_depth_prior(const Tensor& input, const int request_h, const int request_w, const int render_h,
-                           const int render_w, const bool resample_always, cudaStream_t stream) {
-        return fit_prior<1>(input, request_h, request_w, render_h, render_w, resample_always, stream);
+                           const int render_w, cudaStream_t stream) {
+        return fit_prior<1>(input, request_h, request_w, render_h, render_w, stream);
     }
 
     Tensor fit_normal_prior(const Tensor& input, const int request_h, const int request_w, const int render_h,
-                            const int render_w, const bool resample_always, cudaStream_t stream) {
-        return fit_prior<3>(input, request_h, request_w, render_h, render_w, resample_always, stream);
+                            const int render_w, cudaStream_t stream) {
+        return fit_prior<3>(input, request_h, request_w, render_h, render_w, stream);
     }
 
 } // namespace lfs::core

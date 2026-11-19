@@ -209,8 +209,12 @@ TEST_P(PipelinedNormalDecode, PreservesSamplesTransformsAndCache) {
     request.normal_world_to_camera = rotation;
     request.aux_target_width = transform ? normal_width / 2 : normal_width;
     request.aux_target_height = transform ? normal_height / 2 : normal_height;
-    // What the loader delivered before priors kept their own size, and what its cache gave on later
-    // visits: (n+1)/2 rounded to 16 bits after the resize, decoded as n = 2v - 1 and, normals alone
+    // A prior larger than its target is resized to it by the loader, which caches the result;
+    // one no larger travels at its own size and the loss enlarges it.
+    const bool own_size = !transform;
+    request.normal_own_size = own_size;
+    // What the loader delivers for a larger prior, and what its cache gives on later visits:
+    // (n+1)/2 rounded to 16 bits after the resize, decoded as n = 2v - 1 and, normals alone
     // taking the unpaired path, renormalized by a same-size prior pass (zero below length 0.5).
     const auto reference = resize_normal_prior(Tensor::from_vector(expected, {3, normal_height, normal_width}, Device::CUDA),
                                                request.aux_target_height, request.aux_target_width)
@@ -241,6 +245,18 @@ TEST_P(PipelinedNormalDecode, PreservesSamplesTransformsAndCache) {
             ASSERT_EQ(cudaEventDestroy(ready->normal_ready_event), cudaSuccess);
             ready->normal_ready_event = nullptr;
         }
+        EXPECT_EQ(ready->normal_own_size, own_size);
+        if (!own_size) {
+            ASSERT_EQ(ready->normal->shape(), (TensorShape({3, size_t(request.aux_target_height),
+                                                            size_t(request.aux_target_width)})));
+            const auto values = ready->normal->cpu().to_vector();
+            const auto& visit_reference = pass == 0 ? reference : old_cached;
+            for (size_t i = 0; i < values.size(); ++i)
+                ASSERT_NEAR(values[i], visit_reference[i], 2e-6f) << "sample " << i;
+            std::filesystem::remove(normal_path);
+            ++request.sequence_id;
+            continue;
+        }
         // The normals arrive transformed at their own size, with the size to enlarge them to.
         ASSERT_EQ(ready->normal->shape(), (TensorShape({3, normal_height, normal_width})));
         EXPECT_EQ(ready->prior_target_width, request.aux_target_width);
@@ -251,7 +267,7 @@ TEST_P(PipelinedNormalDecode, PreservesSamplesTransformsAndCache) {
         else
             ASSERT_EQ(delivered, first_visit) << "a cached visit must deliver what the first visit delivered";
         const auto values = fit_normal_prior(*ready->normal, request.aux_target_height, request.aux_target_width,
-                                             request.aux_target_height, request.aux_target_width, true)
+                                             request.aux_target_height, request.aux_target_width)
                                 .cpu()
                                 .to_vector();
         ASSERT_EQ(values.size(), reference.size());

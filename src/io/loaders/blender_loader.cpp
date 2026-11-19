@@ -408,7 +408,7 @@ namespace lfs::io {
                         0,
                         depth_path,
                         normal_path);
-                    // The probed prior sizes size the loader's slots: the priors travel at their own size.
+                    // The probed prior sizes decide whether the priors travel at their own size, and size the loader's slots.
                     cam->set_prior_sizes(depth_size, normal_size);
 
                     cam->set_has_image(info._has_image);

@@ -3215,7 +3215,7 @@ namespace lfs::io {
                     static_cast<int>(img.camera_id),
                     depth_path,
                     normal_path);
-                // The probed prior sizes size the loader's slots: the priors travel at their own size.
+                // The probed prior sizes decide whether the priors travel at their own size, and size the loader's slots.
                 camera->set_prior_sizes({output.depth_sizes[0], output.depth_sizes[1]},
                                         {output.normal_sizes[0], output.normal_sizes[1]});
 

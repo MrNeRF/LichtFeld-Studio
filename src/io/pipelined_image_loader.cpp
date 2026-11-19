@@ -917,6 +917,8 @@ namespace lfs::io {
                 it->second.normal_expected = req.normal_path.has_value();
                 it->second.prior_target_width = req.aux_target_width;
                 it->second.prior_target_height = req.aux_target_height;
+                it->second.depth_own_size = req.depth_own_size && !req.undistort;
+                it->second.normal_own_size = req.normal_own_size && !req.undistort;
                 accepted_sequences_.fetch_add(1, std::memory_order_relaxed);
                 in_flight_.fetch_add(1, std::memory_order_acq_rel);
             }
@@ -1599,12 +1601,14 @@ namespace lfs::io {
     std::string PipelinedImageLoader::make_sidecar_key(
         const PrefetchedImage& item,
         const SidecarCacheFormat kind) const {
-        // Priors are cached at their own size, so the size they are enlarged to is not part of the key.
         std::ostringstream key;
         key << lfs::core::path_to_utf8(item.path)
             << (kind == SidecarCacheFormat::Depth ? ":depth" : ":normal")
             << ":rf" << item.params.resize_factor
             << ":mw" << item.params.max_width;
+        // A prior resized to its target depends on that size; one at its own size does not.
+        if (!item.prior_own_size)
+            key << ":tw" << item.aux_target_width << ":th" << item.aux_target_height;
         if (item.undistort) {
             const auto& u = *item.undistort;
             key << ":ud4"
@@ -1655,12 +1659,12 @@ namespace lfs::io {
 
         try {
             std::vector<uint8_t> bytes;
-            // Priors are cached at their own size, as lossless HT J2K or raw. Read as
-            // they are, they keep the file's samples (8-bit stays 8-bit) and cached
-            // visits repeat the first visit's decode-side transform exactly.
-            // Undistorted depth [H,W] is quantized as round(v*65535); undistorted
-            // normals [3,H,W] in [-1,1] are mapped to HWC [0,1] as (n+1)/2 before
-            // the same u16 quantization, which hot decode reverses with <= 1/65535 loss.
+            // Priors at their own size keep the file's samples (8-bit stays 8-bit), as
+            // lossless HT J2K or raw, and cached visits repeat the first visit's
+            // decode-side transform exactly. Resized priors are stored after their
+            // resize/undistort/prior transforms: depth [H,W] quantized as round(v*65535),
+            // normals [3,H,W] in [-1,1] mapped to HWC [0,1] as (n+1)/2 before the same
+            // u16 quantization, which hot decode reverses with <= 1/65535 loss.
             if (raw) {
                 if (kind != SidecarCacheFormat::DepthFloat && (tensor.ndim() != 3 || tensor.shape()[2] != 3)) {
                     throw std::runtime_error("Normal sample cache expects [H,W,3] tensor");
@@ -1734,8 +1738,15 @@ namespace lfs::io {
         if (item.is_normal && is_raw_normal_cache(bytes, U8_NORMAL_MAGIC))
             return finish_cached_sidecar(item, decode_raw_normal_cache(bytes, lfs::core::DataType::UInt8, stream), stream);
         // J2K: 8-bit depth decodes to UInt8, 16-bit samples to Float32 [0,1].
-        return finish_cached_sidecar(
+        auto sidecar = finish_cached_sidecar(
             item, nvcodec.decode_jpeg2k_16bit_from_memory_gpu(bytes, cuda_stream, false, true), stream);
+        if (item.is_normal && !item.prior_own_size) {
+            // Decoded on its own, a resized normal map passes a same-size prior resize, which
+            // renormalizes it; the paired decode leaves it as decoded.
+            sidecar = lfs::core::resize_normal_prior(sidecar, static_cast<int>(sidecar.shape()[1]),
+                                                     static_cast<int>(sidecar.shape()[2]), stream);
+        }
+        return sidecar;
     }
 
     lfs::core::Tensor PipelinedImageLoader::finish_cached_sidecar(const PrefetchedImage& item,
@@ -1766,8 +1777,8 @@ namespace lfs::io {
             lfs::core::TensorShape({size_t{3}, height, width}),
             lfs::core::Device::CUDA,
             DataType::Float32);
-        if (item.undistort) {
-            // Undistorted normals are cached after their transform, as (n+1)/2.
+        if (!item.prior_own_size) {
+            // Resized normals are cached after their transform, as (n+1)/2.
             cuda::launch_jpeg2k_hwc_to_normal_chw(
                 decoded.ptr<float>(), normal.ptr<float>(), height, width, stream);
         } else if (decoded.dtype() == DataType::UInt8) {
@@ -2320,6 +2331,8 @@ namespace lfs::io {
             .error = {},
             .prior_target_width = pair.prior_target_width,
             .prior_target_height = pair.prior_target_height,
+            .depth_own_size = pair.depth_own_size,
+            .normal_own_size = pair.normal_own_size,
         };
         pair.depth_ready_event = nullptr;
         pair.normal_ready_event = nullptr;
@@ -2463,6 +2476,7 @@ namespace lfs::io {
                 depth_result.undistort = request.undistort;
                 depth_result.aux_target_width = request.aux_target_width;
                 depth_result.aux_target_height = request.aux_target_height;
+                depth_result.prior_own_size = request.depth_own_size && !request.undistort;
                 depth_result.cache_key = make_sidecar_key(depth_result, SidecarCacheFormat::Depth);
                 if (auto cached = load_cached_jpeg_blob(depth_result.cache_key)) {
                     depth_result.jpeg_data = std::move(cached);
@@ -2505,6 +2519,7 @@ namespace lfs::io {
                 normal_result.undistort = request.undistort;
                 normal_result.aux_target_width = request.aux_target_width;
                 normal_result.aux_target_height = request.aux_target_height;
+                normal_result.prior_own_size = request.normal_own_size && !request.undistort;
                 normal_result.cache_key = make_sidecar_key(normal_result, SidecarCacheFormat::Normal);
                 if (auto cached = load_cached_jpeg_blob(normal_result.cache_key)) {
                     normal_result.jpeg_data = std::move(cached);
@@ -3334,17 +3349,17 @@ namespace lfs::io {
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
 
                         if (item.is_depth) {
-                            // Depth keeps its own size; the trainer enlarges it where the loss reads it
-                            // (#4092). Read as it is, it is cached as decoded, 8-bit samples as 8-bit.
-                            if (!item.undistort && gpu_gray.dtype() == lfs::core::DataType::UInt8)
+                            // At its own size, depth is cached as decoded, 8-bit samples as 8-bit, and
+                            // the trainer fits it where the loss reads it.
+                            if (item.prior_own_size && gpu_gray.dtype() == lfs::core::DataType::UInt8)
                                 depth_samples_u8 = gpu_gray;
                             if (gpu_gray.dtype() == lfs::core::DataType::UInt8)
                                 gpu_gray = gpu_gray.to(lfs::core::DataType::Float32).div(255.0f);
-                            if (item.undistort) {
-                                aux_tensor = lfs::core::resize_depth_prior(gpu_gray, target_h, target_w, aux_stream);
-                            } else {
+                            if (item.prior_own_size) {
                                 aux_tensor = std::move(gpu_gray);
                                 (void)aux_tensor.ptr<float>(); // materialized before the ready event
+                            } else {
+                                aux_tensor = lfs::core::resize_depth_prior(gpu_gray, target_h, target_w, aux_stream);
                             }
                         } else if (target_w != src_w || target_h != src_h) {
                             aux_tensor = lfs::core::lanczos_resize_grayscale(gpu_gray, target_h, target_w, 2, aux_stream, true);
@@ -3408,6 +3423,13 @@ namespace lfs::io {
                         }
                         aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold);
                     } else {
+                        if (!item.prior_own_size && item.aux_target_width > 0 && item.aux_target_height > 0 &&
+                            aux_tensor.ndim() == 2 &&
+                            (static_cast<int>(aux_tensor.shape()[1]) != item.aux_target_width ||
+                             static_cast<int>(aux_tensor.shape()[0]) != item.aux_target_height)) {
+                            aux_tensor = lfs::core::resize_depth_prior(
+                                aux_tensor, item.aux_target_height, item.aux_target_width, aux_stream);
+                        }
                         aux_tensor = aux_tensor.contiguous();
                     }
                     if (item.is_mask) {
@@ -3492,10 +3514,10 @@ namespace lfs::io {
                         }
                     }
 
-                    // Normals keep their own size; the trainer enlarges them where the loss reads
-                    // them (#4092). Read as they are, the cache keeps the file's samples (8-bit stays
-                    // 8-bit) and every cached visit repeats the transform below.
-                    if (!item.undistort) {
+                    // At their own size, normals are cached as the file's samples (8-bit stays
+                    // 8-bit), every cached visit repeats the transform below, and the trainer fits
+                    // them where the loss reads them.
+                    if (item.prior_own_size) {
                         write_sidecar_cache(*nvcodec, gpu_staging, item,
                                             normal_float   ? SidecarCacheFormat::NormalSamplesFloat
                                             : normal_16bit ? SidecarCacheFormat::NormalSamples16
@@ -3503,12 +3525,7 @@ namespace lfs::io {
                                             sidecar_stream);
                     }
 
-                    cuda::NormalPriorTransform prior_transform;
-                    prior_transform.srgb = item.normal_srgb;
-                    prior_transform.flip_yz = item.normal_flip_yz;
-                    prior_transform.world_to_camera = item.normal_transform_world_to_camera;
-                    std::copy(item.normal_world_to_camera.begin(),
-                              item.normal_world_to_camera.end(), prior_transform.w2c);
+                    const auto prior_transform = normal_prior_transform(item);
 
                     auto normal_tensor = lfs::core::Tensor::empty(
                         lfs::core::TensorShape(
@@ -3533,13 +3550,15 @@ namespace lfs::io {
                             prior_transform, sidecar_stream);
                     }
 
-                    if (item.undistort) {
-                        // Normalized at its own size, then undistorted, and cached as such.
+                    if (!item.prior_own_size) {
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
                         normal_tensor = lfs::core::resize_normal_prior(normal_tensor, target_h, target_w, sidecar_stream);
-                        if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
-                            throw std::runtime_error("Normal preprocessing produced an invalid tensor");
-                        }
+                    }
+
+                    if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
+                        throw std::runtime_error("Normal preprocessing produced an invalid tensor");
+                    }
+                    if (item.undistort) {
                         const auto scaled = lfs::core::prepare_undistort_params(
                             *item.undistort,
                             static_cast<int>(normal_tensor.shape()[2]),
@@ -3550,11 +3569,19 @@ namespace lfs::io {
                         normal_tensor = lfs::core::undistort_normal_area(
                             normal_tensor, scaled, sidecar_stream);
                     }
+
+                    if (!item.prior_own_size && item.aux_target_width > 0 && item.aux_target_height > 0 &&
+                        normal_tensor.ndim() == 3 &&
+                        (static_cast<int>(normal_tensor.shape()[2]) != item.aux_target_width ||
+                         static_cast<int>(normal_tensor.shape()[1]) != item.aux_target_height)) {
+                        normal_tensor = lfs::core::resize_normal_prior(
+                            normal_tensor, item.aux_target_height, item.aux_target_width, sidecar_stream);
+                    }
                     normal_tensor = normal_tensor.contiguous();
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
                         throw std::runtime_error("Normal preprocessing produced an invalid tensor");
                     }
-                    if (item.undistort)
+                    if (!item.prior_own_size)
                         write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarCacheFormat::Normal, sidecar_stream);
                     auto ready_event = record_sidecar_ready_event(sidecar_stream);
 

@@ -126,6 +126,12 @@ namespace lfs::io {
         std::array<float, 9> normal_world_to_camera{};
         int aux_target_width = 0;
         int aux_target_height = 0;
+        // The depth or normal prior travels at its file's size and the consumer
+        // fits it to aux_target_* (lfs::core::fit_depth_prior / fit_normal_prior);
+        // otherwise the loader resizes it to aux_target_*. Undistorted requests
+        // always resize.
+        bool depth_own_size = false;
+        bool normal_own_size = false;
         MaskParams mask_params;
         bool extract_alpha_as_mask = false;
         bool alpha_is_transparency = false;
@@ -142,9 +148,8 @@ namespace lfs::io {
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
-        // Depth and normals keep the prior files' own size (undistorted, if the
-        // camera undistorts); consumers enlarge them to prior_target_* with
-        // lfs::core::fit_depth_prior / fit_normal_prior.
+        // Depth and normals arrive at the request's aux_target_* size, or at their
+        // file's size when depth_own_size / normal_own_size below is set.
         std::optional<lfs::core::Tensor> depth;  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal; // Optional normals [3,H,W], float32 in [-1,1]
         // Depth and normal record readiness on different worker streams, so
@@ -153,9 +158,11 @@ namespace lfs::io {
         CUevent_st* normal_ready_event = nullptr;
         std::vector<std::shared_ptr<void>> decoded_frame_leases;
         std::string error; // Non-empty for a failed primary image request
-        // The request's aux_target_* (0 when unset): the size depth and normals were enlarged to before.
+        // The request's aux_target_* (0 when unset), which own-size priors are fitted to.
         int prior_target_width = 0;
         int prior_target_height = 0;
+        bool depth_own_size = false;
+        bool normal_own_size = false;
     };
 
     // Terminal, exactly-once outcome for one accepted prefetch() sequence.
@@ -309,7 +316,8 @@ namespace lfs::io {
             std::array<float, 9> normal_world_to_camera{};
             int aux_target_width = 0;
             int aux_target_height = 0;
-            MaskParams mask_params; // Invert/threshold params (only used if is_mask)
+            bool prior_own_size = false; // depth or normal travels at its file's size
+            MaskParams mask_params;      // Invert/threshold params (only used if is_mask)
             bool alpha_as_mask = false;
             bool alpha_is_transparency = false;
             MaskParams alpha_mask_params;
@@ -348,6 +356,8 @@ namespace lfs::io {
             size_t normal_bytes = 0;
             int prior_target_width = 0;
             int prior_target_height = 0;
+            bool depth_own_size = false;
+            bool normal_own_size = false;
         };
 
         using PendingPairMap = std::unordered_map<size_t, PendingPair>;
@@ -492,10 +502,11 @@ namespace lfs::io {
                                  void* cuda_stream,
                                  const LoadParams& params);
 
-        // Depth and normal priors are cached at their own size. Read as they are,
-        // they keep the file's samples (NormalSamples* before the prior transform,
-        // which every cached visit runs again); undistorted priors are cached as the
-        // undistortion left them (Depth, DepthFloat, Normal).
+        // Priors resized to the request's target are cached at that size after their
+        // transform and undistortion (Depth, DepthFloat, Normal). Priors at their own
+        // size keep the file's samples (Depth8, NormalSamples*, before the normal
+        // transform, which every cached visit runs again), 16-bit and float depth
+        // as Depth and DepthFloat.
         enum class SidecarCacheFormat : uint8_t {
             Depth,              // lossless 16-bit J2K of [0,1] depth
             DepthFloat,         // raw float32 depth

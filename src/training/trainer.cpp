@@ -998,22 +998,15 @@ namespace lfs::training {
                 }
                 const size_t pixels = lfs::core::saturating_multiply(width, height);
                 size_t slot_bytes = lfs::core::saturating_multiply(pixels, bytes_per_pixel);
-
-                // Depth and normals travel at their own size; an unknown size counts as the photo's.
-                const auto prior_pixels = [pixels](const lfs::core::Camera::PriorSize size) {
-                    return size.width > 0 && size.height > 0
-                               ? lfs::core::saturating_multiply(static_cast<size_t>(size.width),
-                                                                static_cast<size_t>(size.height))
-                               : pixels;
-                };
                 if (aux_config.load_depths && cam->has_depth()) {
                     slot_bytes = lfs::core::saturating_add(
-                        slot_bytes, lfs::core::saturating_multiply(prior_pixels(cam->depth_prior_size()), sizeof(float)));
+                        slot_bytes, lfs::core::saturating_multiply(pipelined_prior_pixels(*cam, cam->depth_prior_size()),
+                                                                   sizeof(float)));
                 }
                 if (aux_config.load_normals && cam->has_normal()) {
                     // Cached normal decode retains float HWC input beside float CHW output.
                     slot_bytes = lfs::core::saturating_add(
-                        slot_bytes, lfs::core::saturating_multiply(prior_pixels(cam->normal_prior_size()),
+                        slot_bytes, lfs::core::saturating_multiply(pipelined_prior_pixels(*cam, cam->normal_prior_size()),
                                                                    size_t{6} * sizeof(float)));
                 }
 
@@ -1122,6 +1115,7 @@ namespace lfs::training {
         pipelined_prior_target_width_ = 0;
         pipelined_prior_target_height_ = 0;
         pipelined_depth_own_size_ = false;
+        pipelined_normal_own_size_ = false;
 
         photometric_loss_ = {};
         loss_accumulator_ = {};
@@ -4017,6 +4011,7 @@ namespace lfs::training {
         pipelined_prior_target_width_ = 0;
         pipelined_prior_target_height_ = 0;
         pipelined_depth_own_size_ = false;
+        pipelined_normal_own_size_ = false;
         photometric_loss_ = {};
         loss_accumulator_ = {};
         depth_loss_scalar_ = {};
@@ -7900,11 +7895,10 @@ namespace lfs::training {
                                     const int render_h = static_cast<int>(rendered_depth.shape()[0]);
                                     const int render_w = static_cast<int>(rendered_depth.shape()[1]);
                                     if (depth_own_size) {
-                                        // Pipelined priors keep their own size: enlarged here as the loader
-                                        // did, then as before if the render differs from that size.
+                                        // Depth that travelled at its own size gets the loader's resize here.
                                         target_depth = lfs::core::fit_depth_prior(
                                             target_depth, pipelined_prior_target_height_, pipelined_prior_target_width_,
-                                            render_h, render_w, !cam->is_undistort_prepared(), depth_stream);
+                                            render_h, render_w, depth_stream);
                                     } else if (target_depth.shape()[0] != rendered_depth.shape()[0] ||
                                                target_depth.shape()[1] != rendered_depth.shape()[1]) {
                                         target_depth = lfs::core::lanczos_resize_grayscale(
@@ -8005,7 +7999,7 @@ namespace lfs::training {
                             bool normal_own_size = false;
                             if (pipelined_normal_.is_valid() && pipelined_normal_.numel() > 0) {
                                 target_normal = pipelined_normal_;
-                                normal_own_size = true;
+                                normal_own_size = pipelined_normal_own_size_;
                             } else if (cam->has_normal()) {
                                 target_normal = cam->load_and_get_normal(
                                     params_.dataset.resize_factor,
@@ -8042,11 +8036,10 @@ namespace lfs::training {
                                 const int render_w = static_cast<int>(rendered_normal.shape()[2]);
 
                                 if (normal_own_size && target_normal.ndim() == 3) {
-                                    // Pipelined priors keep their own size: enlarged here as the loader
-                                    // did, then as before if the render differs from that size.
+                                    // Normals that travelled at their own size get the loader's resize here.
                                     target_normal = lfs::core::fit_normal_prior(
                                         target_normal, pipelined_prior_target_height_, pipelined_prior_target_width_,
-                                        render_h, render_w, !cam->is_undistort_prepared(), normal_stream);
+                                        render_h, render_w, normal_stream);
                                 } else if (target_normal.ndim() == 3 &&
                                            (target_normal.shape()[1] != rendered_normal.shape()[1] ||
                                             target_normal.shape()[2] != rendered_normal.shape()[2])) {
@@ -9875,6 +9868,7 @@ namespace lfs::training {
                 pipelined_prior_target_width_ = example.prior_target_width;
                 pipelined_prior_target_height_ = example.prior_target_height;
                 pipelined_depth_own_size_ = example.depth_own_size;
+                pipelined_normal_own_size_ = example.normal_own_size;
                 if (pipelined_depth_.is_valid()) {
                     pipelined_depth_.set_stream(training_stream_);
                 }
