@@ -3411,6 +3411,13 @@ TEST(ArgumentParserTest, CalibrationCorrectionIsOptInAndRoundTrips) {
     EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000);
     defaults.steps_scaler = .7506f;
     EXPECT_EQ(defaults.calibration_correction_start_iteration(), 751);
+    // Zero or below means no step scaling, and the correction never starts on the untrained scene.
+    for (const float unscaled : {0.f, -1.f}) {
+        defaults.steps_scaler = unscaled;
+        EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000) << unscaled;
+    }
+    defaults.steps_scaler = 1e-4f;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1);
     const auto data = make_test_path("calibration_args");
     const char* argv[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--calibration-correction"};
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);

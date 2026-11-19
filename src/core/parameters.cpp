@@ -635,7 +635,9 @@ namespace lfs::core {
         }
 
         int OptimizationParameters::calibration_correction_start_iteration() const {
-            return static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * steps_scaler));
+            // A scaler of zero or below means no step scaling; the field never starts on the untrained scene.
+            const float scaler = steps_scaler > 0.f ? steps_scaler : 1.f;
+            return std::max(1, static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * scaler)));
         }
 
         void OptimizationParameters::apply_step_scaling() {

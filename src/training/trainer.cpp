@@ -1797,9 +1797,11 @@ namespace lfs::training {
         const lfs::core::Tensor& gt_image,
         const lfs::core::param::OptimizationParameters& opt_params,
         const lfs::core::Tensor& raw_rendered, const int iteration, CalibrationCorrection* fit) {
+        // With SSIM the unmasked loss uses valid padding: pixels within 5 of the edge have no term of their own.
+        const int photometric_valid_padding = opt_params.lambda_dssim > 0 ? 5 : 0;
         const auto photometric_value_count = [&] {
             const auto h = gt_image.shape()[1], w = gt_image.shape()[2];
-            const bool padded = opt_params.lambda_dssim > 0;
+            const bool padded = photometric_valid_padding > 0;
             return float(3 * (padded && h > 10 ? h - 10 : h) * (padded && w > 10 ? w - 10 : w));
         };
         const bool use_decoupled_appearance_loss =
@@ -1819,14 +1821,16 @@ namespace lfs::training {
             }
 
             std::optional<RawGradientResidual> raw_residual;
+            const auto raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx);
             if (fit)
-                fit->accumulate(corrected, grads.grad_corrected, {}, photometric_value_count());
+                fit->accumulate(corrected, grads.grad_corrected, {}, photometric_value_count(),
+                                photometric_valid_padding, &raw_gradient);
             add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
                                   loss_tensor, grads.grad_corrected, raw_residual);
             return PhotometricLossResult{
                 .loss = loss_tensor,
                 .grad_corrected = grads.grad_corrected,
-                .raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx),
+                .raw_gradient = raw_gradient,
                 .raw_residual = raw_residual};
         }
 
@@ -1838,7 +1842,7 @@ namespace lfs::training {
         auto [loss_tensor, ctx] = *result;
         std::optional<RawGradientResidual> raw_residual;
         if (fit)
-            fit->accumulate(corrected, ctx.grad_image, {}, photometric_value_count());
+            fit->accumulate(corrected, ctx.grad_image, {}, photometric_value_count(), photometric_valid_padding);
         add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
                               loss_tensor, ctx.grad_image, raw_residual);
         return PhotometricLossResult{
@@ -2012,7 +2016,8 @@ namespace lfs::training {
             }
 
             if (fit)
-                fit->accumulate(corrected, grad_corrected, photometric_weight, mask_normalization);
+                fit->accumulate(corrected, grad_corrected, photometric_weight, mask_normalization, 0,
+                                raw_gradient ? &*raw_gradient : nullptr);
 
             // The loss already reads this normalization; epsilon alone means no contributing pixels.
             if (has_user_mask && mode == param::MaskMode::Ignore && !empty_ignore_mask_warned_ &&
@@ -6664,6 +6669,9 @@ namespace lfs::training {
                 else if (!in_popspa && core::param::is_mrnf_strategy(step_params.strategy))
                     densification_type = DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
+                // The field is applied whenever it is active, but follows the photos only while the splats do: while
+                // they are frozen for the controller distillation or sparsified, it would absorb their error instead.
+                auto* const learning_fit = update_gaussians_this_iter && !in_sparsification ? fit : nullptr;
                 const bool run_fastgs_gaussian_backward =
                     fastgs_path &&
                     update_gaussians_this_iter;
@@ -7199,18 +7207,24 @@ namespace lfs::training {
                         if (!fit)
                             return structure;
                         const auto [fx, fy, cx, cy] = cam->get_intrinsics();
+                        const auto lens = CalibrationCorrection::lens(cam->camera_model_type(), fx, fy,
+                                                                      static_cast<int>(source_gt.shape()[2]),
+                                                                      static_cast<int>(source_gt.shape()[1]));
                         const int x = fast_ctx ? fast_ctx->tile_x_offset : gsplat_ctx->render_tile_x_offset;
                         const int y = fast_ctx ? fast_ctx->tile_y_offset : gsplat_ctx->render_tile_y_offset;
-                        CalibrationCorrection::Composite stable{};
-                        if (stable_gt.data_ptr() != gt_image.data_ptr())
-                            stable = {&source_gt, &pipelined_mask_, &background_, &stable_gt};
-                        gt_tile = fit->warp(cam->uid(), fx, fy, x, y, gt_image, rendered, mask, structure,
-                                            edge_weight_map, tiles_processed == 0, stable.output ? &stable : nullptr);
+                        // A target composited over the training background is warped as foreground and alpha and
+                        // composited afterwards, so a per-pixel background stays where the render has it.
+                        const bool composited = stable_gt.data_ptr() != gt_image.data_ptr();
+                        const CalibrationCorrection::Composite composite{
+                            &pipelined_mask_, bg_image.is_valid() ? &bg_image : &bg, &background_, &stable_gt};
+                        gt_tile = fit->warp(cam->uid(), lens.fx, lens.fy, x, y, composited ? source_gt : gt_image, rendered,
+                                            mask, structure, edge_weight_map, tiles_processed == 0,
+                                            composited ? &composite : nullptr, lens.wrap);
                         corrected_structure = structure;
                         if (edge_weight_map.is_valid())
                             fused_extra_gradients.edge_weight_map = edge_weight_map.ptr<float>();
                         r_output.target_image = gt_tile;
-                        r_output.stable_target_image = stable.output ? stable_gt : gt_tile;
+                        r_output.stable_target_image = composited ? stable_gt : gt_tile;
                         return step_params.thin_structure_weight > 0.f ? structure : core::Tensor{};
                     };
 
@@ -7391,7 +7405,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    step_params, raw_loss_input, structure_map, iter, fit);
+                                    step_params, raw_loss_input, structure_map, iter, learning_fit);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7411,7 +7425,7 @@ namespace lfs::training {
                                 tile_mask_regularization_loss = result->mask_regularization_loss;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, step_params, raw_loss_input, iter, fit);
+                                    corrected_image, gt_tile, step_params, raw_loss_input, iter, learning_fit);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7460,6 +7474,9 @@ namespace lfs::training {
                                 }
                             }
                         }
+
+                        if (fit)
+                            fit->clear_outside(tile_grad);
 
                         // ISP backward for controller params
                         {
@@ -7647,7 +7664,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    step_params, raw_loss_input, structure_map, iter, fit);
+                                    step_params, raw_loss_input, structure_map, iter, learning_fit);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7670,7 +7687,7 @@ namespace lfs::training {
                                 normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
-                                    corrected_image, gt_tile, step_params, raw_loss_input, iter, fit);
+                                    corrected_image, gt_tile, step_params, raw_loss_input, iter, learning_fit);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -7726,6 +7743,9 @@ namespace lfs::training {
                                 if (!target_depth.is_contiguous()) {
                                     target_depth = target_depth.contiguous();
                                 }
+                                // The priors are registered to the photograph, so they follow it through the field.
+                                if (fit)
+                                    target_depth = fit->follow(target_depth, false);
 
                                 lfs::core::Tensor rendered_depth = output.depth;
                                 if (rendered_depth.ndim() == 3 && rendered_depth.shape()[0] == 1) {
@@ -7862,6 +7882,8 @@ namespace lfs::training {
                             }
 
                             if (target_normal.is_valid() && target_normal.numel() > 0) {
+                                if (fit)
+                                    target_normal = fit->follow(target_normal.cuda().contiguous(), true);
                                 lfs::core::Tensor rendered_normal = output.normal;
                                 if (!rendered_normal.is_contiguous()) {
                                     rendered_normal = rendered_normal.contiguous();
@@ -8295,6 +8317,11 @@ namespace lfs::training {
                         tiles_processed++;
                         nvtxRangePop();
 
+                        // Where the sample falls outside the photograph the target is the render itself: no
+                        // gradient there, neither for the appearance models nor for the splats.
+                        if (fit)
+                            fit->clear_outside(tile_grad);
+
                         // The appearance backward only needs its inputs; dropping the corrected image and each
                         // consumed input keeps one fewer full-resolution image live per stage.
                         corrected_image = {};
@@ -8355,6 +8382,8 @@ namespace lfs::training {
                             if (reported_image_loss.is_valid())
                                 reported_image_loss = reported_image_loss + residual_loss;
                         }
+                        if (fit && (tile_raw_gradient || tile_raw_residual))
+                            fit->clear_outside(raster_grad);
 
                         current_phase = StepPhase::Backward;
                         nvtxRangePush("rasterize_backward");
@@ -8429,13 +8458,12 @@ namespace lfs::training {
                     }
                 }
 
-                if (fit && tiles_processed > 0)
-                    fit->update();
-                if (calibration_correction_ && step_params.calibration_correction) {
-                    const int total = get_total_iterations();
-                    if (iter == total || iter % std::max(1, total / 15) == 0)
-                        calibration_correction_->report(iter);
-                }
+                if (learning_fit && tiles_processed > 0)
+                    learning_fit->update();
+                if (calibration_correction_ && step_params.calibration_correction &&
+                    CalibrationCorrection::report_due(iter, get_total_iterations(),
+                                                      step_params.calibration_correction_start_iteration()))
+                    calibration_correction_->report(iter);
                 if (tiles_processed == 0 && !in_popspa) {
                     if (auto degenerate = check_invisible_iteration(iter))
                         return std::move(*degenerate);
