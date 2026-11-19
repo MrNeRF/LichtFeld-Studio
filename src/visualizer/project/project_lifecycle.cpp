@@ -6018,22 +6018,20 @@ namespace lfs::vis::project {
                 const bool memory_deferred =
                     was_autosave && !disk_full &&
                     last_project_write_error_code_ ==
-                        lfs::ErrorCode::ResourceExhausted &&
-                    viewer_.getTrainerManager() &&
-                    viewer_.getTrainerManager()
-                        ->isTrainingActive() &&
-                    !autosave_memory_warning_published_;
+                        lfs::ErrorCode::ResourceExhausted;
                 if (memory_deferred) {
                     LOG_WARN(
                         "Autosave deferred: {}",
                         error);
-                    if (last_project_write_typed_error_) {
-                        publishAutosaveMemoryWarning(
-                            *last_project_write_typed_error_);
-                    } else {
-                        publishAutosaveMemoryWarning(error);
+                    if (!autosave_memory_warning_published_) {
+                        if (last_project_write_typed_error_) {
+                            publishAutosaveMemoryWarning(
+                                *last_project_write_typed_error_);
+                        } else {
+                            publishAutosaveMemoryWarning(error);
+                        }
+                        autosave_memory_warning_published_ = true;
                     }
-                    autosave_memory_warning_published_ = true;
                 } else if (!was_autosave && disk_full) {
                     LOG_ERROR(
                         "Project background write failed: {}",

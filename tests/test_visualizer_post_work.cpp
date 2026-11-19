@@ -14948,6 +14948,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         } const locale_reset;
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_FALSE(viewer.getTrainerManager() && viewer.getTrainerManager()->isTrainingActive());
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
         CapturingErrorConsumer consumer;
@@ -14963,7 +14964,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             .native = std::nullopt,
         });
         const auto settle_autosave = [&](const std::filesystem::path& destination,
-                                         const bool disk_full) {
+                                         const lfs::Error* failure) {
             const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Autosave");
             ASSERT_TRUE(handle);
             lifecycle->project_write_job_ = *handle;
@@ -14972,9 +14973,9 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             lifecycle->project_write_destination_ = destination;
             std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
             std::async(std::launch::async, [&] {
-                if (disk_full) {
-                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
-                                             lfs::ErrorCode::ResourceExhausted, full);
+                if (failure) {
+                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(*failure),
+                                             failure->code(), *failure);
                 } else {
                     viewer.jobs().finishWork(*handle, false);
                 }
@@ -14992,18 +14993,34 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             });
         };
         // Backoff retries of the same failing autosave stay quiet.
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
         EXPECT_EQ(toasts(), 1);
         // A successful autosave ends the streak.
-        settle_autosave(scratch, false);
-        settle_autosave(scratch, true);
-        settle_autosave(scratch, true);
+        settle_autosave(scratch, nullptr);
+        settle_autosave(scratch, &full);
+        settle_autosave(scratch, &full);
         EXPECT_EQ(toasts(), 2);
         // So does a new destination.
-        settle_autosave(other, true);
+        settle_autosave(other, &full);
         EXPECT_EQ(toasts(), 3);
+
+        const auto memory = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "Snapshot buffer allocation failed.",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+        const auto memory_warning = std::string(LOC("runtime.autosave_deferred_no_memory"));
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(std::ranges::count(consumer.user_messages, memory_warning), 1);
+        const auto messages = consumer.user_messages.size();
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(consumer.user_messages.size(), messages) << "memory retries stay quiet without training";
+        settle_autosave(scratch, nullptr);
+        settle_autosave(scratch, &memory);
+        EXPECT_EQ(std::ranges::count(consumer.user_messages, memory_warning), 2);
     }
 
     TEST_F(VisualizerImplResetTest,
