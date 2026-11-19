@@ -33,11 +33,13 @@
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
@@ -2898,6 +2900,7 @@ namespace lfs::vis::gui {
         state.all_training_compatible = true;
         state.all_training_enabled = true;
         state.all_delete_enabled = true;
+        bool all_keyframes = true;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
             if (it == node_snapshots_.end()) {
@@ -2905,9 +2908,11 @@ namespace lfs::vis::gui {
                 state.all_training_compatible = false;
                 state.all_training_enabled = false;
                 state.all_delete_enabled = false;
+                all_keyframes = false;
                 continue;
             }
             const NodeSnapshot& node = it->second;
+            all_keyframes = all_keyframes && node.type == core::NodeType::KEYFRAME && !node.locked;
             state.all_visible = state.all_visible && node.visible;
             state.any_visible = state.any_visible || node.visible;
             state.all_training_compatible = state.all_training_compatible && node.can_toggle_training;
@@ -2918,6 +2923,7 @@ namespace lfs::vis::gui {
                                           (node.training_enabled || node.training_mixed));
             state.all_delete_enabled = state.all_delete_enabled && node.delete_enabled;
         }
+        state.all_delete_enabled = state.all_delete_enabled || all_keyframes;
         return state;
     }
 
@@ -3005,6 +3011,31 @@ namespace lfs::vis::gui {
             return;
 
         const auto& scene = scene_manager->getScene();
+        const auto* first_node = scene.getNodeById(node_ids.front());
+        if (first_node && first_node->type == core::NodeType::KEYFRAME) {
+            auto& controller = gui->sequencer();
+            std::vector<sequencer::KeyframeId> keyframe_ids;
+            keyframe_ids.reserve(node_ids.size());
+            for (const auto id : node_ids) {
+                const auto* node = scene.getNodeById(id);
+                if (!node || node->type != core::NodeType::KEYFRAME || !node->keyframe ||
+                    static_cast<bool>(node->locked))
+                    return;
+                const auto* keyframe = controller.timeline().getKeyframe(node->keyframe->keyframe_index);
+                if (!keyframe)
+                    return;
+                keyframe_ids.push_back(keyframe->id);
+            }
+            // Resolve stable IDs before deletion shifts indices and rebuilds scene nodes.
+            op::TransactionGuard transaction(keyframe_ids.size() == 1 ? "Delete Keyframe" : "Delete Keyframes");
+            bool removed_any = false;
+            for (const auto id : keyframe_ids)
+                removed_any |= controller.removeKeyframeById(id);
+            transaction.commit();
+            if (removed_any)
+                state::KeyframeListChanged{.count = controller.timeline().realKeyframeCount()}.emit();
+            return;
+        }
         std::vector<core::Uuid> node_uuids;
         node_uuids.reserve(node_ids.size());
         std::string single_name;
