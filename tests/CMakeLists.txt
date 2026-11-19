@@ -1224,6 +1224,7 @@ if(NOT LFS_HAS_CUDA)
             test_roi_polygon_weight_map.cpp
             test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp
+            test_mrnf_counts_portable.cpp
             ${POPSPA_TEST_FILES})
         if(LFS_TENSOR_VULKAN)
             list(APPEND TEST_SOURCES
