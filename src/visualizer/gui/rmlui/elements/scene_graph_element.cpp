@@ -3249,12 +3249,10 @@ namespace lfs::vis::gui {
                             prefixedAction(std::format("set_easing:{}:{}", node->keyframe->keyframe_index, i)),
                             false, true, node->keyframe->easing == i));
                     }
-                    if (node->keyframe->keyframe_index > 0) {
-                        items.push_back(makeAction(
-                            tr(string_keys::Scene::DELETE_ITEM),
-                            prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
-                            true));
-                    }
+                    items.push_back(makeAction(
+                        tr(string_keys::Scene::DELETE_ITEM),
+                        prefixedAction(std::format("delete_kf:{}", node->keyframe->keyframe_index)),
+                        true));
                 }
                 break;
             case core::NodeType::KEYFRAME_GROUP:

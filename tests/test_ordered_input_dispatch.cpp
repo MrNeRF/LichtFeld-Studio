@@ -3774,6 +3774,11 @@ namespace lfs::vis {
         tree->SetProperty("height", "500px");
         context->SetDimensions({400, 600});
         context->Update();
+        const auto* group = scene.getNode("Keyframes");
+        ASSERT_NE(group, nullptr);
+        auto* group_trash = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(group->id) + "']");
+        ASSERT_NE(group_trash, nullptr);
+        EXPECT_EQ(group_trash->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
         auto& history = op::undoHistory();
         for (const size_t index : {1u, 0u, 2u}) {
             history.clear();
@@ -3783,6 +3788,12 @@ namespace lfs::vis {
             context->Update();
             const auto* node = scene.getNode(std::format("Keyframe {}", index + 1));
             ASSERT_NE(node, nullptr);
+            if (index == 0) {
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete_kf:0']"), nullptr);
+                menu().request({}, 0, 0);
+            }
             auto* icon = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(node->id) + "']");
             ASSERT_NE(icon, nullptr);
             EXPECT_EQ(icon->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::Inline);
