@@ -24,6 +24,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <any>
 #include <cmath>
 #include <format>
 #include <mutex>
@@ -310,14 +311,58 @@ namespace lfs::python {
             return core::param::OptimizationParameters::defaults_for_strategy(get_default_params().strategy);
         }
 
+        struct PropertyChange {
+            std::string id;
+            std::any old_value;
+            std::any new_value;
+        };
+
+        // Runs a write and returns every registered property of the group whose value it changed,
+        // so that every writer reaches on_property_change subscribers such as the training panel.
+        template <typename Object, typename F>
+        std::vector<PropertyChange> write_tracking_changes(const std::string& group_id, Object& object, F&& write) {
+            const auto* group = PropertyRegistry::instance().get_group(group_id);
+            const auto ref = PropertyObjectRef::cpp(&object);
+            std::vector<std::any> before;
+            if (group) {
+                before.reserve(group->properties.size());
+                for (const auto& meta : group->properties)
+                    before.push_back(meta.getter ? meta.getter(ref) : std::any{});
+            }
+            write(object);
+            std::vector<PropertyChange> changes;
+            for (size_t i = 0; i < before.size(); ++i) {
+                const auto& meta = group->properties[i];
+                if (!meta.getter)
+                    continue;
+                auto after = meta.getter(ref);
+                if (!meta.values_equal(before[i], after))
+                    changes.push_back({meta.id, std::move(before[i]), std::move(after)});
+            }
+            return changes;
+        }
+
+        void notify_changes(const std::string& group_id, const std::vector<PropertyChange>& changes) {
+            for (const auto& change : changes)
+                PropertyRegistry::instance().notify(group_id, change.id, change.old_value, change.new_value);
+        }
+
         template <typename F>
         void modify_params(F&& fn) {
-            auto* pm = get_parameter_manager();
-            if (!pm) {
-                fn(get_default_params());
-                return;
-            }
-            pm->modifyActiveParams(std::forward<F>(fn));
+            std::vector<PropertyChange> changes;
+            const auto write = [&](OptimizationParameters& p) {
+                changes = write_tracking_changes("optimization", p, fn);
+            };
+            if (auto* pm = get_parameter_manager())
+                pm->modifyActiveParams(write);
+            else
+                write(get_default_params());
+            notify_changes("optimization", changes);
+        }
+
+        template <typename F>
+        void modify_dataset(PyDatasetConfig& self, F&& fn) {
+            notify_changes("dataset", write_tracking_changes("dataset", self.params(), fn));
         }
 
         void set_active_strategy(const std::string_view strategy) {
@@ -501,18 +546,14 @@ namespace lfs::python {
             }
         }
 
-        std::any old_value;
         modify_params([&](auto& p) {
             auto candidate = scale_schedule ? p.scaled_to_iterations(std::any_cast<size_t>(new_value)) : p;
-            auto current_ref = PropertyObjectRef::cpp(&p);
             auto candidate_ref = PropertyObjectRef::cpp(&candidate);
-            old_value = meta->getter(current_ref);
             meta->setter(candidate_ref, new_value);
             if (const auto error = candidate.validate(); !error.empty())
                 throw std::invalid_argument(error);
             p = std::move(candidate);
         });
-        PropertyRegistry::instance().notify("optimization", prop_id, old_value, new_value);
     }
 
     nb::dict PyOptimizationParams::prop_info(const std::string& prop_id) const {
@@ -607,13 +648,10 @@ namespace lfs::python {
             (prop_id == "grow_fraction" || prop_id == "shs_lr")) {
             default_val = -1.0f;
         }
-        std::any old_value;
         modify_params([&](auto& p) {
             auto ref = PropertyObjectRef::cpp(&p);
-            old_value = meta->getter(ref);
             meta->setter(ref, default_val);
         });
-        PropertyRegistry::instance().notify("optimization", prop_id, old_value, default_val);
     }
 
     nb::list PyOptimizationParams::properties() const {
@@ -1334,17 +1372,17 @@ namespace lfs::python {
             .def_prop_rw(
                 "ppisp_exposure_from_exif",
                 [](PyOptimizationParams& self) { return self.params().ppisp_exposure_from_exif; },
-                [](PyOptimizationParams& self, bool v) { self.params().ppisp_exposure_from_exif = v; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.ppisp_exposure_from_exif = v; }); },
                 "Seed per-frame PPISP exposure from image EXIF")
             .def_prop_rw(
                 "ppisp_use_controller",
                 [](PyOptimizationParams& self) { return self.params().ppisp_use_controller; },
-                [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.ppisp_use_controller = v; }); },
                 "Enable PPISP controller for novel view synthesis")
             .def_prop_rw(
                 "ppisp_freeze_from_sidecar",
                 [](PyOptimizationParams& self) { return self.params().ppisp_freeze_from_sidecar; },
-                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_from_sidecar = v; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.ppisp_freeze_from_sidecar = v; }); },
                 "Freeze PPISP learning and reuse a PPISP sidecar during training")
             .def_prop_rw(
                 "ppisp_sidecar_path",
@@ -1368,7 +1406,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "ppisp_freeze_gaussians",
                 [](PyOptimizationParams& self) { return self.params().ppisp_freeze_gaussians_on_distill; },
-                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_gaussians_on_distill = v; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.ppisp_freeze_gaussians_on_distill = v; }); },
                 "Freeze Gaussians during controller distillation")
             .def_prop_rw(
                 "bg_mode",
@@ -1610,7 +1648,7 @@ namespace lfs::python {
                         throw std::runtime_error("Cannot edit dataset params during training");
                     if (v < 1)
                         throw std::invalid_argument("test_every must be at least 1");
-                    self.params().test_every = v;
+                    modify_dataset(self, [v](auto& c) { c.test_every = v; });
                 },
                 "Use every Nth image for testing")
             .def_prop_rw(
@@ -1620,7 +1658,7 @@ namespace lfs::python {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
                     validate_resize_factor(v);
-                    self.params().resize_factor = v;
+                    modify_dataset(self, [v](auto& c) { c.resize_factor = v; });
                 },
                 "Image resize factor (-1 = auto)")
             .def_prop_rw(
@@ -1631,7 +1669,7 @@ namespace lfs::python {
                         throw std::runtime_error("Cannot edit dataset params during training");
                     if (v < 0)
                         throw std::invalid_argument("max_width must be non-negative; 0 disables the cap");
-                    self.params().max_width = v;
+                    modify_dataset(self, [v](auto& c) { c.max_width = v; });
                 },
                 "Maximum image width in pixels; 0 disables the cap")
             .def_prop_rw(
@@ -1642,7 +1680,7 @@ namespace lfs::python {
                         throw std::runtime_error("Cannot edit dataset params during training");
                     if (v < 0)
                         throw std::invalid_argument("min_track_length must be non-negative; 0 disables filtering");
-                    self.params().min_track_length = v;
+                    modify_dataset(self, [v](auto& c) { c.min_track_length = v; });
                 },
                 "Minimum COLMAP sparse point track length; 0 disables filtering")
             .def_prop_rw(
@@ -1651,7 +1689,7 @@ namespace lfs::python {
                 [](PyDatasetConfig& self, bool v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
-                    self.params().loading_params.use_cpu_memory = v;
+                    modify_dataset(self, [v](auto& c) { c.loading_params.use_cpu_memory = v; });
                 },
                 "Cache images in CPU memory")
             .def_prop_rw(
@@ -1660,7 +1698,7 @@ namespace lfs::python {
                 [](PyDatasetConfig& self, bool v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
-                    self.params().loading_params.use_16bit_color = v;
+                    modify_dataset(self, [v](auto& c) { c.loading_params.use_16bit_color = v; });
                 },
                 "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000")
             .def_prop_rw(
