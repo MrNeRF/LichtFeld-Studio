@@ -42,14 +42,9 @@ set(NVIMGCODEC_SRCS
     thread_pool.cpp
     default_executor.cpp
     builtin_modules.cpp
-    parsers/bmp.cpp
     parsers/exif.cpp
     parsers/jpeg.cpp
     parsers/jpeg2k.cpp
-    parsers/tiff.cpp
-    parsers/png.cpp
-    parsers/pnm.cpp
-    parsers/webp.cpp
     parsers/parsers_ext_module.cpp
 )
 

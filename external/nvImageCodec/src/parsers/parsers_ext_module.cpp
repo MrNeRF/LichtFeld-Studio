@@ -17,14 +17,9 @@
 
 #include "imgproc/exception.h"
 #include "log_ext.h"
-#include "parsers/bmp.h"
 #include "parsers/codec_file_extensions.h"
 #include "parsers/jpeg.h"
 #include "parsers/jpeg2k.h"
-#include "parsers/png.h"
-#include "parsers/pnm.h"
-#include "parsers/tiff.h"
-#include "parsers/webp.h"
 #include <nvimgcodec.h>
 
 namespace nvimgcodec {
@@ -32,37 +27,17 @@ namespace nvimgcodec {
     class ParsersExtension {
     public:
         explicit ParsersExtension(const nvimgcodecFrameworkDesc_t* framework)
-            : framework_(framework), bmp_parser_plugin_(framework), jpeg_parser_plugin_(framework), jpeg2k_parser_plugin_(framework), png_parser_plugin_(framework), pnm_parser_plugin_(framework), tiff_parser_plugin_(framework), webp_parser_plugin_(framework) {
-            framework->registerParser(framework->instance, bmp_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
+            : framework_(framework), jpeg_parser_plugin_(framework), jpeg2k_parser_plugin_(framework) {
             framework->registerParser(framework->instance, jpeg_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
             framework->registerParser(framework->instance, jpeg2k_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
-            framework->registerParser(framework->instance, png_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
-            framework->registerParser(framework->instance, pnm_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
-            framework->registerParser(framework->instance, tiff_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
-            framework->registerParser(framework->instance, webp_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
-            registerCodecFileExtensions(framework, BMPParserPlugin::codecName(), BMPParserPlugin::fileExtensions());
             registerCodecFileExtensions(framework, JPEGParserPlugin::codecName(), JPEGParserPlugin::fileExtensions());
             registerCodecFileExtensions(framework, JPEG2KParserPlugin::codecName(), JPEG2KParserPlugin::fileExtensions());
-            registerCodecFileExtensions(framework, PNGParserPlugin::codecName(), PNGParserPlugin::fileExtensions());
-            registerCodecFileExtensions(framework, PNMParserPlugin::codecName(), PNMParserPlugin::fileExtensions());
-            registerCodecFileExtensions(framework, TIFFParserPlugin::codecName(), TIFFParserPlugin::fileExtensions());
-            registerCodecFileExtensions(framework, WebpParserPlugin::codecName(), WebpParserPlugin::fileExtensions());
         }
         ~ParsersExtension() {
-            unregisterCodecFileExtensions(framework_, BMPParserPlugin::codecName(), BMPParserPlugin::fileExtensions());
             unregisterCodecFileExtensions(framework_, JPEGParserPlugin::codecName(), JPEGParserPlugin::fileExtensions());
             unregisterCodecFileExtensions(framework_, JPEG2KParserPlugin::codecName(), JPEG2KParserPlugin::fileExtensions());
-            unregisterCodecFileExtensions(framework_, PNGParserPlugin::codecName(), PNGParserPlugin::fileExtensions());
-            unregisterCodecFileExtensions(framework_, PNMParserPlugin::codecName(), PNMParserPlugin::fileExtensions());
-            unregisterCodecFileExtensions(framework_, TIFFParserPlugin::codecName(), TIFFParserPlugin::fileExtensions());
-            unregisterCodecFileExtensions(framework_, WebpParserPlugin::codecName(), WebpParserPlugin::fileExtensions());
-            framework_->unregisterParser(framework_->instance, bmp_parser_plugin_.getParserDesc());
             framework_->unregisterParser(framework_->instance, jpeg_parser_plugin_.getParserDesc());
             framework_->unregisterParser(framework_->instance, jpeg2k_parser_plugin_.getParserDesc());
-            framework_->unregisterParser(framework_->instance, png_parser_plugin_.getParserDesc());
-            framework_->unregisterParser(framework_->instance, pnm_parser_plugin_.getParserDesc());
-            framework_->unregisterParser(framework_->instance, tiff_parser_plugin_.getParserDesc());
-            framework_->unregisterParser(framework_->instance, webp_parser_plugin_.getParserDesc());
         }
 
         static nvimgcodecStatus_t parsers_extension_create(void* instance, nvimgcodecExtension_t* extension, const nvimgcodecFrameworkDesc_t* framework) {
@@ -91,13 +66,8 @@ namespace nvimgcodec {
 
     private:
         const nvimgcodecFrameworkDesc_t* framework_;
-        BMPParserPlugin bmp_parser_plugin_;
         JPEGParserPlugin jpeg_parser_plugin_;
         JPEG2KParserPlugin jpeg2k_parser_plugin_;
-        PNGParserPlugin png_parser_plugin_;
-        PNMParserPlugin pnm_parser_plugin_;
-        TIFFParserPlugin tiff_parser_plugin_;
-        WebpParserPlugin webp_parser_plugin_;
     };
 
     // clang-format off
