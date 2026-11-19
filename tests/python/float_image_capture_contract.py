@@ -18,6 +18,7 @@ camera = lf.get_camera()
 settings = lf.get_render_settings()
 assert camera is not None and settings is not None
 saved = {name: settings.get(name) for name in ('color_tonemapping', 'splat_render_profile')}
+saved_display_mode = lf.get_viewport_display_mode()
 try:
     scene = lf.get_scene()
     assert scene is not None and scene.node_count == 0, 'Requires an empty disposable viewer'
@@ -116,9 +117,19 @@ try:
     assert abs(values[3][1][3] - values[4][1][3]) < 0.002, values
     small = lf.render_linear_image(32, 32, True)
     assert large[2304, 2048, :].tolist() == values[2][1]
-    print('PHASE5A_TONE_TILING_PASS', json.dumps({'tone_byte_parity': results, 'tiled_shape': list(large.shape), 'tiled_seconds': elapsed, 'seam_samples': values, 'retained_after_render': True}))
+    # The normal view renders each band with a halo of extra rows; only the
+    # band's own rows may land in the image, so the seam moves to row 4032.
+    lf.set_viewport_display_mode('normal')
+    halo = lf.render_linear_image(4096, 4608, True)
+    lf.set_viewport_display_mode(saved_display_mode)
+    assert halo.shape == (4608, 4096, 4), halo.shape
+    halo_values = [[y, halo[y, 2048, :].tolist()] for y in (4031, 4032)]
+    assert all((math.isfinite(v) for _, p in halo_values for v in p)), halo_values
+    assert abs(halo_values[0][1][3] - halo_values[1][1][3]) < 0.002, halo_values
+    print('PHASE5A_TONE_TILING_PASS', json.dumps({'tone_byte_parity': results, 'tiled_shape': list(large.shape), 'tiled_seconds': elapsed, 'seam_samples': values, 'halo_seam_samples': halo_values, 'retained_after_render': True}))
 finally:
     lf.get_scene().remove_node('phase5a-float-contract')
+    lf.set_viewport_display_mode(saved_display_mode)
     for name, value in saved.items():
         settings.set(name, value)
     lf.set_camera(camera.eye, camera.target, camera.up)
