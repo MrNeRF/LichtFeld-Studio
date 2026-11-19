@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/camera_views.hpp"
 #include "core/image_io.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "licht_test_support.hpp"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <string>
@@ -61,6 +63,9 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
     cache.update_cache_params(true, 1, lfs::io::DEFAULT_MIN_FREE_GB, lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO,
                               false, lfs::io::DEFAULT_PRINT_STATUS_FREQ);
 
+    // The loader runs its kernels on the stream the caller passes; the result must be complete wherever it is read.
+    cudaStream_t side_stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&side_stream, cudaStreamNonBlocking), cudaSuccess);
     const auto check = [&](const std::filesystem::path& path, const Tensor& decoded) {
         SCOPED_TRACE(path.extension().string());
         // Two faces share all calibration and size fields except their rotation.
@@ -68,10 +73,20 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
             for (const auto& [resize, cap] : {std::pair{1, 0}, std::pair{2, 0}, std::pair{2, 13}}) {
                 const auto grid = prepare_undistort_params(*mapping, w, h, resize, cap);
                 const auto expected = undistort_image(decoded, grid, nullptr).clamp(0.f, 1.f);
-                for (bool u8 : {false, true}) {
+                for (const auto [u8, stream] : {std::pair{false, cudaStream_t{}}, std::pair{true, cudaStream_t{}},
+                                                std::pair{false, side_stream}, std::pair{true, side_stream}}) {
                     SCOPED_TRACE(::testing::Message() << "view=" << is_view(*mapping) << " resize=" << resize
-                                                      << " max_width=" << cap << " uint8=" << u8);
-                    const lfs::io::LoadParams params{.resize_factor = resize, .max_width = cap, .undistort = mapping, .output_uint8 = u8};
+                                                      << " max_width=" << cap << " uint8=" << u8
+                                                      << " side stream=" << (stream != nullptr));
+                    cache.reset_cache();
+                    cache.update_cache_params(true, 1, lfs::io::DEFAULT_MIN_FREE_GB, lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO,
+                                              false, lfs::io::DEFAULT_PRINT_STATUS_FREQ);
+                    const lfs::io::LoadParams params{
+                        .resize_factor = resize,
+                        .max_width = cap,
+                        .cuda_stream = stream,
+                        .undistort = mapping,
+                        .output_uint8 = u8};
                     for (int visit = 0; visit < 2; ++visit) {
                         const auto image = cache.load_cached_image(path, params);
                         EXPECT_EQ(image.dtype(), u8 ? DataType::UInt8 : DataType::Float32);
@@ -98,6 +113,35 @@ TEST_F(MaskRgbCache, ImmediateLoaderUndistortsDecodedPixelsOnTheDestinationGrid)
         check(jpeg, decoder.load_image_gpu(jpeg));
     }
     cache.reset_cache();
+    ASSERT_EQ(cudaStreamDestroy(side_stream), cudaSuccess);
+}
+
+// An undistorted image decodes at its file's own depth; the result stays bit for bit the one of a 16-bit decode.
+TEST_F(MaskRgbCache, UndistortedDecodeMatchesTheSixteenBitDecode) {
+    constexpr int w = 128, h = 64;
+    std::vector<uint8_t> bytes(w * h * 3);
+    std::vector<uint16_t> words(w * h * 3);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        bytes[i] = static_cast<uint8_t>((i * 37 + i / 97) % 256);
+        words[i] = static_cast<uint16_t>((i * 7919 + i / 13) % 65536);
+    }
+    const auto eight = temp.path / "eight.png", sixteen = temp.path / "sixteen.png";
+    ASSERT_TRUE(save_png(eight, bytes.data(), w, h, 3, 8, 0));
+    ASSERT_TRUE(save_png(sixteen, words.data(), w, h, 3, 16, 0));
+    const auto lens = compute_undistort_params(84, 81, w / 2, h / 2, w, h,
+                                               Tensor::from_vector({-.18f, .04f}, {2}, Device::CPU), {},
+                                               CameraModelType::PINHOLE);
+    for (const auto& path : {eight, sixteen}) {
+        for (const bool u8 : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << path.filename().string() << " uint8=" << u8);
+            const lfs::io::LoadParams params{.resize_factor = 2, .undistort = &lens, .output_uint8 = u8};
+            const auto own_depth = lfs::io::load_rgb_image_cpu_decoded(path, params, false).cpu();
+            const auto widened = lfs::io::load_rgb_image_cpu_decoded(path, params, true).cpu();
+            ASSERT_EQ(own_depth.shape(), widened.shape());
+            ASSERT_EQ(own_depth.dtype(), widened.dtype());
+            EXPECT_EQ(std::memcmp(own_depth.data_ptr(), widened.data_ptr(), own_depth.bytes()), 0);
+        }
+    }
 }
 
 TEST_F(MaskRgbCache, IgnoredSourceColorsCannotChangeColdHotOrSpilledTargets) {
