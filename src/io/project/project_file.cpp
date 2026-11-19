@@ -238,8 +238,8 @@ namespace lfs::io::project::detail {
             case EACCES:
             case EPERM: return lfs::ErrorCode::PermissionDenied;
             case ENOSPC:
-            case EDQUOT:
-            case EFBIG: return lfs::ErrorCode::ResourceExhausted;
+            case EDQUOT: return lfs::ErrorCode::ResourceExhausted;
+            case EFBIG: return lfs::ErrorCode::BoundsViolation;
             case EAGAIN: return lfs::ErrorCode::Unavailable;
 #if EWOULDBLOCK != EAGAIN
             case EWOULDBLOCK: return lfs::ErrorCode::Unavailable;
