@@ -7,6 +7,7 @@
 #include "core/camera_metrics.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/frame_contract.hpp"
+#include "rendering/rasterizer/vulkan/src/gt_loss_heatmap.h"
 #include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <array>
@@ -318,6 +319,8 @@ namespace lfs::vis {
         size_t split_view_offset = 0;
 
         bool depth_view = false;
+        bool normal_view = false;
+        bool render_mode_controls_open = false;
         float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
         lfs::rendering::DepthVisualizationMode depth_visualization_mode =
@@ -360,6 +363,8 @@ namespace lfs::vis {
                    split_position == other.split_position &&
                    split_view_offset == other.split_view_offset &&
                    depth_view == other.depth_view &&
+                   normal_view == other.normal_view &&
+                   render_mode_controls_open == other.render_mode_controls_open &&
                    depth_view_min == other.depth_view_min &&
                    depth_view_max == other.depth_view_max &&
                    depth_visualization_mode == other.depth_visualization_mode &&
@@ -545,6 +550,24 @@ namespace lfs::vis {
         settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
     }
 
+    enum class ViewportDisplayMode {
+        RGB,
+        Depth,
+        Normal,
+    };
+
+    // Keep the legacy stored flags, resolving conflicting values in one place.
+    [[nodiscard]] inline ViewportDisplayMode viewportDisplayMode(const RenderSettings& settings) {
+        if (settings.depth_view)
+            return ViewportDisplayMode::Depth;
+        return settings.normal_view ? ViewportDisplayMode::Normal : ViewportDisplayMode::RGB;
+    }
+
+    [[nodiscard]] inline bool normalViewEnabled(const RenderSettings& settings) {
+        return viewportDisplayMode(settings) == ViewportDisplayMode::Normal &&
+               !splitViewUsesGTComparison(settings.split_view_mode);
+    }
+
     [[nodiscard]] inline bool environmentBackgroundEnabled(const RenderSettings& settings) {
         return settings.environment_mode == EnvironmentBackgroundMode::Equirectangular &&
                !settings.environment_map_path.empty();
@@ -552,7 +575,7 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool environmentBackgroundUsesTransparentViewerCompositing(
         const RenderSettings& settings) {
-        return environmentBackgroundEnabled(settings) &&
+        return environmentBackgroundEnabled(settings) && !normalViewEnabled(settings) &&
                !splitViewUsesGTComparison(settings.split_view_mode);
     }
 

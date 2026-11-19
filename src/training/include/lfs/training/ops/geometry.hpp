@@ -22,6 +22,7 @@ namespace lfs::gpu_ops {
     struct DepthParams {
         float weight, gradient_weight, prior_quantization_step;
         const training::kernels::DepthAnchor* anchor;
+        const training::kernels::DepthRayGrid* ray_grid = nullptr;
     };
     struct AnchorParams {
         Intrinsics intrinsics;
@@ -32,8 +33,28 @@ namespace lfs::gpu_ops {
     // Scratch retains the diagnostic float prefix followed by aligned double
     // statistics: depth 10+6B slots, normal/consistency 6+6B, B=min(ceil(HW/256),1024).
     struct GeometryLossOps {
-        void (*depth)(In depth, In alpha, In target, In pixel_weight,
-                      Out grad_depth, Out grad_alpha, Out loss, Out partials, const DepthParams&);
+        void (*depth_impl)(In depth, In alpha, In target, In pixel_weight,
+                           Out grad_depth, Out grad_alpha, Out loss, Out partials, const DepthParams&);
+        void depth(In depth, In alpha, In target, In pixel_weight, Out grad_depth, Out grad_alpha,
+                   Out loss, Out partials, const DepthParams& params) const {
+            if (!params.ray_grid) {
+                depth_impl(depth, alpha, target, pixel_weight, grad_depth, grad_alpha, loss, partials, params);
+                return;
+            }
+            const auto& grid = *params.ray_grid;
+            const auto height = static_cast<int>(depth.shape()[0]);
+            const auto width = static_cast<int>(depth.shape()[1]);
+            const auto x = (Tensor::arange(0.f, static_cast<float>(width), 1.f, depth.device()) +
+                            (0.5f - grid.cx)) /
+                           grid.fx;
+            const auto y = (Tensor::arange(0.f, static_cast<float>(height), 1.f, depth.device()) +
+                            (0.5f - grid.cy)) /
+                           grid.fy;
+            const auto length = (x.square().reshape({1, width}) + y.square().reshape({height, 1}) + 1.f).sqrt();
+            depth_impl(depth * length, alpha, target, pixel_weight, grad_depth, grad_alpha, loss, partials, params);
+            grad_depth.mul_(length);
+        }
+
         void (*normal)(In normal, In alpha, In target, In pixel_weight,
                        Out grad_normal, Out loss, Out partials, float weight);
         void (*consistency)(In normal, In depth, In alpha, In pixel_weight,

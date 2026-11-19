@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/distortion_model.hpp"
 #include "core/tensor_image.hpp"
 #include <algorithm>
 #include <cmath>
@@ -18,143 +19,6 @@ namespace lfs::core::internal::warp_math {
     constexpr int OUTPUT_TILE_ROWS = 256;
     constexpr float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
 
-    // COLMAP sensor/models.h (BSD-3 licensed formulas)
-    inline void apply_distortion_pinhole(
-        const float x, const float y,
-        const float* dist, const int num_dist,
-        float& dx, float& dy) {
-
-        const float r2 = x * x + y * y;
-        const float r4 = r2 * r2;
-        const float r6 = r4 * r2;
-
-        const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-        const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-        const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-        const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-        float radial = numerator;
-        if (num_dist >= 6) {
-            const float denominator =
-                1.0f + dist[3] * r2 + dist[4] * r4 + dist[5] * r6;
-            radial = numerator / denominator;
-        }
-
-        const int tangential_offset = num_dist >= 6 ? 6 : 3;
-        const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
-        const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
-
-        dx = x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x);
-        dy = y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y;
-    }
-
-    inline void apply_distortion_fisheye(
-        const float x, const float y,
-        const float* dist, const int num_dist,
-        float& dx, float& dy) {
-
-        const float r = sqrtf(x * x + y * y);
-        if (r < 1e-8f) {
-            dx = x;
-            dy = y;
-            return;
-        }
-
-        const float theta = atanf(r);
-        const float theta2 = theta * theta;
-        const float theta4 = theta2 * theta2;
-        const float theta6 = theta4 * theta2;
-        const float theta8 = theta4 * theta4;
-
-        const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-        const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-        const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-        const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-
-        const float theta_d = theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-        const float scale = theta_d / r;
-
-        dx = x * scale;
-        dy = y * scale;
-    }
-
-    inline void thin_prism_increment(
-        const float uu, const float vv,
-        const float* dist, const int num_dist,
-        float& tx, float& ty) {
-        const float p1 = num_dist > 4 ? dist[4] : 0.0f;
-        const float p2 = num_dist > 5 ? dist[5] : 0.0f;
-        const float sx1 = num_dist > 6 ? dist[6] : 0.0f;
-        const float sx2 = num_dist > 7 ? dist[7] : 0.0f;
-        const float sy1 = num_dist > 8 ? dist[8] : 0.0f;
-        const float sy2 = num_dist > 9 ? dist[9] : 0.0f;
-        const float u2 = uu * uu;
-        const float uv = uu * vv;
-        const float v2 = vv * vv;
-        const float r2 = u2 + v2;
-        const float r4 = r2 * r2;
-        tx = 2.0f * p1 * uv + p2 * (r2 + 2.0f * u2) + sx1 * r2 + sx2 * r4;
-        ty = 2.0f * p2 * uv + p1 * (r2 + 2.0f * v2) + sy1 * r2 + sy2 * r4;
-    }
-
-    inline void thin_prism_fisheye_from_theta_point(
-        const float uu, const float vv,
-        const float* dist, const int num_dist,
-        float& dx, float& dy) {
-        const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-        const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-        const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-        const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-        const float r2 = uu * uu + vv * vv;
-        const float r4 = r2 * r2;
-        const float r6 = r4 * r2;
-        const float r8 = r6 * r2;
-        const float radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
-        float tx, ty;
-        thin_prism_increment(uu, vv, dist, num_dist, tx, ty);
-        dx = uu + uu * radial + tx;
-        dy = vv + vv * radial + ty;
-    }
-
-    inline void apply_distortion_thin_prism_fisheye(
-        const float x, const float y,
-        const float* dist, const int num_dist,
-        float& dx, float& dy) {
-
-        const float r = sqrtf(x * x + y * y);
-        if (r < 1e-8f) {
-            dx = x;
-            dy = y;
-            return;
-        }
-
-        const float theta_over_r = atanf(r) / r;
-        thin_prism_fisheye_from_theta_point(
-            x * theta_over_r, y * theta_over_r, dist, num_dist, dx, dy);
-    }
-
-    inline void apply_distortion(
-        const float x, const float y,
-        const CameraModelType model,
-        const float* dist, const int num_dist,
-        float& dx, float& dy) {
-
-        switch (model) {
-        case CameraModelType::PINHOLE:
-            apply_distortion_pinhole(x, y, dist, num_dist, dx, dy);
-            break;
-        case CameraModelType::FISHEYE:
-            apply_distortion_fisheye(x, y, dist, num_dist, dx, dy);
-            break;
-        case CameraModelType::THIN_PRISM_FISHEYE:
-            apply_distortion_thin_prism_fisheye(x, y, dist, num_dist, dx, dy);
-            break;
-        default:
-            dx = x;
-            dy = y;
-            break;
-        }
-    }
-
     inline float image_sample(const float value) { return value; }
     inline float image_sample(const uint8_t value) { return static_cast<float>(value) / 255.0f; }
 
@@ -163,7 +27,7 @@ namespace lfs::core::internal::warp_math {
         const Sample* src,
         const int width, const int height, const int stride,
         const float sx, const float sy,
-        const bool positive_only = false) {
+        const bool positive_only = false, const bool panorama = false) {
         const int x0 = static_cast<int>(floorf(sx));
         const int y0 = static_cast<int>(floorf(sy));
         const float fx = sx - static_cast<float>(x0);
@@ -171,11 +35,11 @@ namespace lfs::core::internal::warp_math {
         float value = 0.0f;
         float weight_sum = 0.0f;
         for (int dy = 0; dy < 2; ++dy) {
-            const int y = y0 + dy;
             const float wy = dy == 0 ? 1.0f - fy : fy;
             for (int dx = 0; dx < 2; ++dx) {
-                const int x = x0 + dx;
-                if (x < 0 || x >= width || y < 0 || y >= height)
+                int y = y0 + dy;
+                int x = x0 + dx;
+                if (!detail::remap_tap(x, y, width, height, panorama))
                     continue;
                 const float sample = image_sample(src[y * stride + x]);
                 if (!isfinite(sample) || (positive_only && sample <= 0.0f))
@@ -190,8 +54,12 @@ namespace lfs::core::internal::warp_math {
             return value / weight_sum;
         if (positive_only)
             return 0.0f;
-        const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
-        const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
+        int nearest_x = static_cast<int>(floorf(sx + 0.5f));
+        int nearest_y = static_cast<int>(floorf(sy + 0.5f));
+        if (!detail::remap_tap(nearest_x, nearest_y, width, height, panorama)) {
+            nearest_x = min(max(nearest_x, 0), width - 1);
+            nearest_y = min(max(nearest_y, 0), height - 1);
+        }
         return image_sample(src[nearest_y * stride + nearest_x]);
     }
 
@@ -217,7 +85,7 @@ namespace lfs::core::internal::warp_math {
         const Sample* src,
         const int width, const int height, const int channels,
         const float sx, const float sy,
-        float* values, float& absolute_inside, float& absolute_full) {
+        float* values, float& absolute_inside, float& absolute_full, const bool panorama = false) {
         const int base_x = static_cast<int>(floorf(sx));
         const int base_y = static_cast<int>(floorf(sy));
         float weights_x[6];
@@ -233,12 +101,12 @@ namespace lfs::core::internal::warp_math {
         absolute_full = 0.0f;
         const int plane = width * height;
         for (int j = 0; j < 6; ++j) {
-            const int y = base_y + j - 2;
             for (int i = 0; i < 6; ++i) {
-                const int x = base_x + i - 2;
+                int y = base_y + j - 2;
+                int x = base_x + i - 2;
                 const float weight = weights_x[i] * weights_y[j];
                 absolute_full += fabsf(weight);
-                if (x < 0 || x >= width || y < 0 || y >= height)
+                if (!detail::remap_tap(x, y, width, height, panorama))
                     continue;
                 signed_inside += weight;
                 absolute_inside += fabsf(weight);
@@ -256,7 +124,7 @@ namespace lfs::core::internal::warp_math {
 
         for (int channel = 0; channel < channels; ++channel) {
             values[channel] = bilinear_sample_renormalized(
-                src + channel * plane, width, height, width, sx, sy);
+                src + channel * plane, width, height, width, sx, sy, false, panorama);
         }
         return false;
     }
@@ -280,21 +148,13 @@ namespace lfs::core::internal::warp_math {
                                       (static_cast<float>(qx) + 0.5f) / quadrature;
                 const float pixel_y = static_cast<float>(oy) +
                                       (static_cast<float>(qy) + 0.5f) / quadrature;
-                const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-                const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-                float dnx, dny;
-                apply_distortion(nx, ny, params.model_type, params.distortion,
-                                 params.num_distortion, dnx, dny);
-                // CUDA fuses this projection. Separate rounding can move a tap
-                // exactly onto a sinc zero just outside the image border.
-                const float sx = std::fma(dnx, params.src_fx, params.src_cx) - PIXEL_CENTER_OFFSET;
-                const float sy = std::fma(dny, params.src_fy, params.src_cy) - PIXEL_CENTER_OFFSET;
+                const auto [sx, sy] = detail::source_position<true>(pixel_x, pixel_y, params);
                 float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
                 float absolute_inside = 0.0f;
                 float absolute_full = 0.0f;
                 (void)lanczos3_sample(
                     src, params.src_width, params.src_height, channels,
-                    sx, sy, sample, absolute_inside, absolute_full);
+                    sx, sy, sample, absolute_inside, absolute_full, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
                 for (int channel = 0; channel < channels; ++channel)
                     result[channel] += sample[channel];
             }
@@ -334,17 +194,11 @@ namespace lfs::core::internal::warp_math {
                                       (static_cast<float>(qx) + 0.5f) / quadrature;
                 const float pixel_y = static_cast<float>(oy) +
                                       (static_cast<float>(qy) + 0.5f) / quadrature;
-                const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-                const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-                float dnx, dny;
-                apply_distortion(nx, ny, params.model_type, params.distortion,
-                                 params.num_distortion, dnx, dny);
-                const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-                const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+                const auto [sx, sy] = detail::source_position(pixel_x, pixel_y, params);
                 if (mode == AreaFilterMode::DEPTH) {
                     const float sample = bilinear_sample_renormalized(
                         src, params.src_width, params.src_height, params.src_width,
-                        sx, sy, true);
+                        sx, sy, true, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
                     if (sample > 0.0f && isfinite(sample)) {
                         result[0] += sample;
                         valid_samples += 1.0f;
@@ -354,7 +208,7 @@ namespace lfs::core::internal::warp_math {
                         result[channel] += bilinear_sample_renormalized(
                             src + channel * input_plane,
                             params.src_width, params.src_height, params.src_width,
-                            sx, sy);
+                            sx, sy, false, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
                     }
                     valid_samples += 1.0f;
                 }
@@ -394,7 +248,7 @@ namespace lfs::core::internal::warp_math {
     }
 
     inline bool is_identity_resample(const UndistortParams& params) {
-        if (params.model_type != CameraModelType::PINHOLE ||
+        if (params.view || params.model_type != CameraModelType::PINHOLE ||
             params.src_width != params.dst_width ||
             params.src_height != params.dst_height ||
             params.src_fx != params.dst_fx || params.src_fy != params.dst_fy ||

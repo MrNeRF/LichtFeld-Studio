@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <string_view>
@@ -629,36 +630,78 @@ namespace lfs::core {
         }
 
         case LoadOp::Arange: {
-            LFS_ASSERT_MSG((std::holds_alternative<std::tuple<float, float, float>>(args.args)),
+            const auto* const float_bounds = std::get_if<std::tuple<float, float, float>>(&args.args);
+            const auto* const integer_bounds = std::get_if<std::tuple<int64_t, int64_t, int64_t>>(&args.args);
+            LFS_ASSERT_MSG(float_bounds != nullptr || integer_bounds != nullptr,
                            "arange load requires start, end, and step values");
-            auto [start, end, step] = std::get<std::tuple<float, float, float>>(args.args);
-            LFS_ASSERT_MSG(args.dtype == DataType::Float32 || args.dtype == DataType::Int32,
-                           "arange supports only Float32 and Int32");
-            LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end) && std::isfinite(step),
-                           "arange bounds and step must be finite");
-            LFS_ASSERT_MSG(step != 0.0f,
-                           "arange step cannot be zero");
-            const long double extent = static_cast<long double>(end) -
-                                       static_cast<long double>(start);
-            const bool points_away = (extent > 0.0L && step < 0.0f) ||
-                                     (extent < 0.0L && step > 0.0f);
-            const long double count_value = points_away
-                                                ? 0.0L
-                                                : std::ceil(extent / static_cast<long double>(step));
-            LFS_ASSERT_MSG(std::isfinite(count_value) && count_value >= 0.0L &&
-                               count_value <=
-                                   static_cast<long double>(std::numeric_limits<size_t>::max()),
-                           "arange element count is not representable");
-            const size_t count = static_cast<size_t>(count_value);
+            const auto [start, end, step] =
+                float_bounds != nullptr ? *float_bounds : std::tuple<float, float, float>{0.0f, 0.0f, 1.0f};
+            const auto [integer_start, integer_end, integer_step] =
+                integer_bounds != nullptr ? *integer_bounds : std::tuple<int64_t, int64_t, int64_t>{0, 0, 1};
+            size_t count = 0;
+            if (float_bounds != nullptr) {
+                LFS_ASSERT_MSG(args.dtype == DataType::Float32 || args.dtype == DataType::Int32,
+                               "arange supports only Float32 and Int32");
+                LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end) && std::isfinite(step),
+                               "arange bounds and step must be finite");
+                LFS_ASSERT_MSG(step != 0.0f,
+                               "arange step cannot be zero");
+                const long double extent = static_cast<long double>(end) -
+                                           static_cast<long double>(start);
+                const bool points_away = (extent > 0.0L && step < 0.0f) ||
+                                         (extent < 0.0L && step > 0.0f);
+                const long double count_value = points_away
+                                                    ? 0.0L
+                                                    : std::ceil(extent / static_cast<long double>(step));
+                LFS_ASSERT_MSG(std::isfinite(count_value) && count_value >= 0.0L &&
+                                   count_value <=
+                                       static_cast<long double>(std::numeric_limits<size_t>::max()),
+                               "arange element count is not representable");
+                count = static_cast<size_t>(count_value);
+            } else {
+                LFS_ASSERT_MSG(args.dtype == DataType::Int32 || args.dtype == DataType::Int64 || args.dtype == DataType::UInt8,
+                               "integer arange requires an integer dtype");
+                LFS_ASSERT_MSG(integer_step != 0,
+                               "arange step cannot be zero");
+                const bool ascending = integer_step > 0;
+                if (ascending ? integer_end > integer_start : integer_end < integer_start) {
+                    const uint64_t extent = ascending
+                                                ? static_cast<uint64_t>(integer_end) - static_cast<uint64_t>(integer_start)
+                                                : static_cast<uint64_t>(integer_start) - static_cast<uint64_t>(integer_end);
+                    const uint64_t stride = ascending ? static_cast<uint64_t>(integer_step)
+                                                      : uint64_t{0} - static_cast<uint64_t>(integer_step);
+                    count = static_cast<size_t>((extent - 1) / stride + 1);
+                }
+            }
+            const bool whole_float_start_and_step = float_bounds != nullptr && std::trunc(start) == start &&
+                                                    std::trunc(step) == step;
+            const auto integer_value = [&](const size_t i) -> int64_t {
+                if (integer_bounds != nullptr) {
+                    return static_cast<int64_t>(static_cast<uint64_t>(integer_start) +
+                                                static_cast<uint64_t>(i) * static_cast<uint64_t>(integer_step));
+                }
+                if (!whole_float_start_and_step) {
+                    const double rounded = start + i * step;
+                    if (rounded >= std::numeric_limits<int32_t>::min() &&
+                        rounded <= std::numeric_limits<int32_t>::max())
+                        return static_cast<int64_t>(rounded);
+                }
+                return static_cast<int64_t>(static_cast<double>(start) +
+                                            static_cast<double>(i) * static_cast<double>(step));
+            };
             LFS_ASSERT_MSG(count == 0 ||
                                dtype_size(args.dtype) <=
                                    std::numeric_limits<size_t>::max() / count,
                            "arange allocation byte count overflow");
             if (args.dtype == DataType::Int32 && count > 0) {
-                const double last = static_cast<double>(start) +
-                                    static_cast<double>(count - 1) * static_cast<double>(step);
-                const double minimum = std::min(static_cast<double>(start), last);
-                const double maximum = std::max(static_cast<double>(start), last);
+                const double first = float_bounds != nullptr ? static_cast<double>(start)
+                                                             : static_cast<double>(integer_start);
+                const double last = float_bounds != nullptr
+                                        ? static_cast<double>(start) +
+                                              static_cast<double>(count - 1) * static_cast<double>(step)
+                                        : static_cast<double>(integer_value(count - 1));
+                const double minimum = std::min(first, last);
+                const double maximum = std::max(first, last);
                 LFS_ASSERT_MSG(minimum >= static_cast<double>(std::numeric_limits<int32_t>::lowest()) &&
                                    maximum <= static_cast<double>(std::numeric_limits<int32_t>::max()),
                                "Int32 arange values are outside the representable range");
@@ -668,6 +711,23 @@ namespace lfs::core {
                 empty_args.shape = TensorShape{0};
                 empty_args.args = std::monostate{};
                 return load(LoadOp::Empty, empty_args);
+            }
+
+            if (args.dtype != DataType::Float32) {
+                // Compute integer values before upload so indices above 2^24 survive on every backend.
+                auto values = Tensor::empty({count}, Device::CPU, args.dtype);
+                const auto fill = [&](auto* destination) {
+                    using Value = std::remove_pointer_t<decltype(destination)>;
+                    for (size_t i = 0; i < count; ++i)
+                        destination[i] = static_cast<Value>(integer_value(i));
+                };
+                switch (args.dtype) {
+                case DataType::Int64: fill(values.ptr<int64_t>()); break;
+                case DataType::Int32: fill(values.ptr<int32_t>()); break;
+                case DataType::UInt8: fill(values.ptr<uint8_t>()); break;
+                default: LFS_ASSERT_MSG(false, "Unsupported integer arange type");
+                }
+                return args.device == Device::GPU ? values.to(args.device) : values;
             }
 
             const std::optional<GpuBackend> gpu_backend =

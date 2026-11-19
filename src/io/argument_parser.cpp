@@ -104,6 +104,7 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
             OptimizationCliBinding{"--no-exposure-correction", "use_exposure_correction", Bool, true},
+            OptimizationCliBinding{"--pose-opt", "pose_opt", Bool},
             OptimizationCliBinding{"--ppisp", "ppisp", Bool},
             OptimizationCliBinding{"--no-ppisp-exif-exposure", "ppisp_exposure_from_exif", Bool, true},
             OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
@@ -838,6 +839,7 @@ namespace {
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::io::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::io::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::io::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
+            ::args::Flag pose_opt(training_group, "pose_opt", lfs::io::args::optimization_cli_help("--pose-opt"), {"pose-opt"});
             ::args::Flag no_error_map(training_group, "no_error_map", lfs::io::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::MapFlag<std::string, lfs::core::param::DensifyErrorMap> densify_error_map(
                 training_group, "densify_error_map",
@@ -1429,9 +1431,10 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path or resume
+            const bool has_scripts = python_scripts && !::args::get(python_scripts).empty();
+            // Headless scripts can run without a training source. TCP still needs one.
             // (--resume accepts both .resume checkpoints and .licht projects).
-            if (headless && !has_data_path && !has_resume) {
+            if (headless && !has_data_path && !has_resume && (!has_scripts || tcp_connection || init_path)) {
                 return std::unexpected(std::format(
                     "ERROR: Headless mode requires --data-path or --resume "
                     "(--resume file.licht counts as a project source)\n\n{}",
@@ -1725,6 +1728,7 @@ namespace {
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
                                         crop_flag = bool(crop),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
+                                        pose_opt_flag = bool(pose_opt),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
                                         ppisp_controller_flag = bool(ppisp_controller),
@@ -1913,6 +1917,7 @@ namespace {
                 setFlag(use_exposure_correction_flag, opt.use_exposure_correction);
                 if (no_exposure_correction_flag)
                     opt.use_exposure_correction = false;
+                setFlag(pose_opt_flag, opt.pose_opt);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 if (no_ppisp_exif_exposure_flag)
                     opt.ppisp_exposure_from_exif = false;
@@ -2017,7 +2022,7 @@ namespace {
                 // Python scripts
                 if (python_scripts_val) {
                     for (const auto& script : *python_scripts_val) {
-                        params.python_scripts.emplace_back(script);
+                        params.python_scripts.emplace_back(lfs::core::utf8_to_path(script));
                     }
                 }
 
@@ -2062,6 +2067,7 @@ namespace {
                 note_opt("use_bilateral_grid", use_bilateral_grid_flag);
                 note_opt("use_exposure_correction",
                          use_exposure_correction_flag || no_exposure_correction_flag);
+                note_opt("pose_opt", pose_opt_flag);
                 note_opt("use_ppisp", use_ppisp_flag || ppisp_controller_flag ||
                                           ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_use_controller", ppisp_controller_flag);
@@ -2360,11 +2366,17 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .glb (SPZ glTF), .usd, .usda, .usdc, .usdz, .rad, .resume (checkpoint),\n"
+        "          .licht (visible splat nodes of a project with their transforms and enabled crops)\n"
         "  Output: .ply, .sog, .ssog, .spz, .glb, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
+        "  Scripts:  --capabilities prints stable feature identifiers, one per line\n"
         "\n";
+
+    // Identifiers for scripts and plugins. Never reword one; add a new identifier
+    // when the behavior it names changes.
+    constexpr const char* CONVERT_CAPABILITIES = "visible-project-splats-v1\n";
 
     constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
     constexpr const char* MESH2SPLAT_HELP_FOOTER =
@@ -2426,6 +2438,7 @@ namespace {
         ::args::Flag rad_stream(parser, "stream", "RAD output: streamable Spark-compatible chunks (default)", {"stream"});
         ::args::Flag rad_none_stream(parser, "none-stream", "RAD output: native LichtFeld chunks", {"none-stream"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
+        ::args::Flag capabilities(parser, "capabilities", "Print stable feature identifiers, one per line, and exit", {"capabilities"});
 
         std::vector<std::string> args_vec(argv + 1, argv + argc);
         args_vec[0] = std::string(argv[0]) + " convert";
@@ -2438,6 +2451,11 @@ namespace {
             return io_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
             return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        if (capabilities) {
+            std::print("{}", CONVERT_CAPABILITIES);
+            return io_args::HelpMode{};
         }
 
         if (!input) {

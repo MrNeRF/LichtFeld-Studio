@@ -42,13 +42,9 @@ LensFace load_face() {
             return true;
         }
 
-        void lens_rays_kernel(const GsplatCamera model, const int width, const int height, Ptr<float, Access.ReadWrite> rays, uint tid) {
-            const uint i = tid;
-            if (i >= uint(width) * height)
-                return;
+        void store_ray(const GsplatCamera model, float2 pixel, Ptr<float, Access.ReadWrite> rays, uint i) {
             float3 ray;
-            const bool valid = pixel_ray(model, float(i % width) + 0.5f,
-                                         float(i / width) + 0.5f, ray);
+            const bool valid = pixel_ray(model, pixel.x, pixel.y, ray);
             for (int c = 0; c < 3; ++c)
                 rays[3 * i + c] = valid ? ray[c] : asfloat(0x7fc00000u);
         }
@@ -189,10 +185,21 @@ void setup(uint3 id : SV_DispatchThreadID) {
     gsplat_camera_setup(q);
 }
 [shader("compute")][numthreads(256,1,1)]
-void rays(uint3 id : SV_DispatchThreadID) { lens_rays_kernel(gsplat_camera_load(p.camera),p.width,p.height,p.a,id.x); }
+void rays(uint3 id : SV_DispatchThreadID) { if (id.x < p.pixels) store_ray(gsplat_camera_load(p.camera), float2(id.x % p.width, id.x / p.width) + 0.5f, p.a, id.x); }
 [shader("compute")][numthreads(256,1,1)]
 void sampleFace(uint3 id : SV_DispatchThreadID) { sample_face_kernel(gsplat_camera_load(p.camera),p.a,p.width,p.height,load_face(),p.b,id.x); }
 [shader("compute")][numthreads(256,1,1)]
 void projectFace(uint3 id : SV_DispatchThreadID) { project_face_kernel(gsplat_camera_load(p.camera),p.width,p.height,load_face(),p.a,p.b,p.c,p.d,p.e,p.f,id.x); }
 [shader("compute")][numthreads(256,1,1)]
 void blend(uint3 id : SV_DispatchThreadID) { blend_kernel(p.a,p.b,p.c,p.d,p.faces,p.pixels,p.e,p.f,id.x); }
+
+[shader("compute")][numthreads(256,1,1)]
+void raysAt(uint3 id : SV_DispatchThreadID) {
+    if (id.x < p.pixels)
+        store_ray(gsplat_camera_load(p.camera), float2(p.b[2 * id.x], p.b[2 * id.x + 1]), p.a, id.x);
+}
+[shader("compute")][numthreads(256,1,1)]
+void maxAngle(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0)
+        p.a[0] = gsplat_camera_load(p.camera).max_angle;
+}

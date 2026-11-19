@@ -2,11 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera_types.h"
+#include "core/image_io.hpp"
 #include "core/tensor.hpp"
-#include "preprocessing/lens_priors.hpp"
+#include "licht_test_support.hpp"
+#include "preprocessing/lens_lookup.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <numbers>
 #include <vector>
@@ -148,4 +151,45 @@ TEST(LensPriors, PanoramaCubeCoversEveryDirection) {
     EXPECT_GT(check.coverage, 0.995);
     EXPECT_LT(check.distance_error_p99, 0.01);
     EXPECT_LT(check.normal_dot_p01, -0.999);
+}
+
+TEST(LensPriors, FullResolutionImageUsesItsPanoramaLens) {
+    namespace fs = std::filesystem;
+    using namespace lfs::preprocessing;
+    lfs::test::licht::TemporaryDirectory dataset;
+    const auto full = dataset.path / "images";
+    const auto small = dataset.path / "images_2";
+    fs::create_directories(full / "a");
+    fs::create_directories(small / "a");
+    const std::vector<uint8_t> pixels(112 * 56 * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(full / "frame.png", pixels.data(), 112, 56, 3, 8, 1));
+    ASSERT_TRUE(lfs::core::save_png(small / "frame.png", pixels.data(), 56, 28, 3, 8, 1));
+    fs::copy_file(small / "frame.png", small / "a/b.png");
+    fs::copy_file(full / "frame.png", full / "a/b.png");
+    fs::copy_file(full / "frame.png", full / "b.png");
+    fs::copy_file(full / "frame.png", full / "shared.png");
+    fs::copy_file(small / "frame.png", small / "shared.png");
+    std::ofstream(dataset.path / "transforms.json") << R"({
+        "camera_model":"EQUIRECTANGULAR","w":56,"h":28,"fl_x":28,"fl_y":28,"cx":28,"cy":14,
+        "frames":[
+            {"file_path":"images_2/frame.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images_2/a/b.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images_2/shared.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images/shared.png","camera_model":"PINHOLE",
+             "transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}
+        ]
+    })";
+
+    lfs::core::param::PreprocessParameters params;
+    params.dataset_path = dataset.path;
+    for (const auto& path : {small / "frame.png", full / "frame.png", full / "a/b.png"}) {
+        SCOPED_TRACE(path);
+        const auto lens = lookup_lens_source(params, path);
+        ASSERT_TRUE(lens);
+        EXPECT_EQ(lens->projection.model, static_cast<int>(lfs::core::CameraModelType::EQUIRECTANGULAR));
+    }
+    EXPECT_FALSE(lookup_lens_source(params, full / "shared.png"));
+    EXPECT_FALSE(lookup_lens_source(params, full / "b.png"));
+    ASSERT_TRUE(fs::remove(full / "a/b.png"));
+    EXPECT_FALSE(lookup_lens_source(params, full / "a/b.png"));
 }

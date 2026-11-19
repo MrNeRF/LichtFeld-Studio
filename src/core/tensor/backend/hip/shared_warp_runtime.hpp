@@ -4,7 +4,7 @@
 int lfs_hip_shared_warp(LfsHipContext* context, LfsHipView input, uint32_t dtype, uint32_t channels,
                         uint32_t mode, LfsHipView output, const LfsHipLens* lens, LfsHipError* error) {
     // Preserve the already verified three-channel pinhole implementation exactly.
-    if (lens && lens->model_type == 0 && channels == 3 && mode == 0)
+    if (lens && !lens->view && lens->model_type == 0 && channels == 3 && mode == 0)
         return lfs_hip_warp_rgb(context, input, dtype, output, lens, error);
     return boundary(error, [&] {
         require(context && lens && lens->model_type >= 0 && lens->model_type <= 4 && channels >= 1 && channels <= 4 && mode <= 3,
@@ -21,7 +21,7 @@ int lfs_hip_shared_warp(LfsHipContext* context, LfsHipView input, uint32_t dtype
                     std::isfinite(lens->src_cx) && std::isfinite(lens->src_cy) && std::isfinite(lens->dst_cx) && std::isfinite(lens->dst_cy) &&
                     lens->num_distortion >= 0 && lens->num_distortion <= 12,
                 "Invalid HIP shared camera calibration");
-        bool identity = mode == 0 && lens->model_type == 0 && lens->src_width == lens->dst_width && lens->src_height == lens->dst_height &&
+        bool identity = !lens->view && mode == 0 && lens->model_type == 0 && lens->src_width == lens->dst_width && lens->src_height == lens->dst_height &&
                         lens->src_fx == lens->dst_fx && lens->src_fy == lens->dst_fy && lens->src_cx == lens->dst_cx && lens->src_cy == lens->dst_cy;
         for (int i = 0; i < lens->num_distortion; ++i) {
             require(std::isfinite(lens->distortion[i]), "Nonfinite HIP shared camera distortion");

@@ -59,6 +59,6 @@ set_target_properties(lfs_preprocessing PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
 )
 
-lfs_add_gpu_program(lfs_preprocessing lens_views_program SOURCE lens_views.slang COMPUTE setup rays sampleFace projectFace blend
+lfs_add_gpu_program(lfs_preprocessing lens_views_program SOURCE lens_views.slang COMPUTE setup rays raysAt maxAngle sampleFace projectFace blend
     DEPENDS "${CMAKE_SOURCE_DIR}/src/training/vulkan/shaders/gsplat_common.slangh"
             "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh")

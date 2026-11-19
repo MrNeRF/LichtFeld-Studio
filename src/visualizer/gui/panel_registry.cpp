@@ -4,6 +4,7 @@
 
 #include "gui/panel_registry.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_input.hpp"
@@ -1607,6 +1608,29 @@ apply_registered_chrome:
         return false;
     }
 
+    void PanelRegistry::suspend_input(const PanelSpace space, const std::string_view root_id) {
+        std::vector<std::shared_ptr<IPanel>> targets;
+        {
+            std::lock_guard lock(mutex_);
+            for (const auto& panel : panels_) {
+                const auto* root = &panel;
+                for (size_t depth = 0; !root->parent_id.empty() && depth < panels_.size(); ++depth) {
+                    const auto parent = std::find_if(panels_.begin(), panels_.end(), [&](const auto& candidate) {
+                        return candidate.id == root->parent_id;
+                    });
+                    if (parent == panels_.end())
+                        break;
+                    root = &*parent;
+                }
+                if (root->space == space && (root_id.empty() || root->id == root_id) && panel.panel)
+                    targets.push_back(panel.panel);
+            }
+        }
+        // Input cancellation may invoke panel callbacks: never hold the registry lock.
+        for (const auto& panel : targets)
+            panel->suspendInput();
+    }
+
     void PanelRegistry::cancel_floating_interactions() {
         std::lock_guard lock(mutex_);
         for (auto& [id, interaction] : floating_interactions_) {
@@ -2059,6 +2083,7 @@ apply_registered_chrome:
         }
 
         if (panel_to_restore) {
+            lfs::core::events::ui::RevealPanel{.id = id}.emit();
             if (auto* window = panel_to_restore->nativeWindow(); window && (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED))
                 bring_panel_to_front(id);
         }
@@ -2131,10 +2156,17 @@ apply_registered_chrome:
 
     bool PanelRegistry::bring_panel_to_front(const std::string& id) {
         std::shared_ptr<IPanel> panel;
+        bool docked = false;
         {
             std::lock_guard lock(mutex_);
             for (auto& p : panels_) {
-                if (p.id == id && p.enabled && !p.error_disabled && p.space == PanelSpace::Floating) {
+                if (p.id == id && p.enabled && !p.error_disabled) {
+                    if (p.space != PanelSpace::Floating) {
+                        docked = p.space == PanelSpace::LeftArea || p.space == PanelSpace::BottomArea || p.space == PanelSpace::MainPanelTab || p.space == PanelSpace::SceneHeader;
+                        if (docked)
+                            panel = p.panel;
+                        break;
+                    }
                     auto& interaction = ensure_floating_interaction_locked(p);
                     if (interaction.window_state == FloatingWindowState::Minimized)
                         interaction.window_state = interaction.before_minimize;
@@ -2146,6 +2178,8 @@ apply_registered_chrome:
         }
         if (!panel)
             return false;
+        if (docked)
+            lfs::core::events::ui::RevealPanel{.id = id}.emit();
         if (auto* window = panel->nativeWindow()) {
             if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)
                 SDL_RestoreWindow(window);

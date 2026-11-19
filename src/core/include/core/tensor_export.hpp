@@ -18,6 +18,8 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<Tensor, Tensor> kmeans_sh(const Tensor& shN_swizzled, int n_points, int sh_coeffs, int k,
                                                       int iterations = 10, bool fast_assignment = false);
 
+    LFS_CORE_API std::tuple<Tensor, Tensor> emeans_sh(const Tensor& source, int points, int coefficients, int clusters);
+
     // Exact (fast == false) or screened (fast == true) SH3 assignment. Screened
     // winners are the FP32 argmin; have_labels keeps a prior label as a hint.
     LFS_CORE_API void assign_sh3(const Tensor& shN_swizzled, const Tensor& centroids, const Tensor& centroid_norms,

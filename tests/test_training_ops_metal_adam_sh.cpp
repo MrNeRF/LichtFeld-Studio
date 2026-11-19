@@ -18,6 +18,7 @@
 #include "core/tensor_execution.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/morton_contraction.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -951,22 +952,32 @@ namespace {
         return x;
     }
 
-    // launch_morton_permutation: bbox, 10-bit axes, stable sort by code.
+    // launch_morton_permutation: the contracted code space of lfs/training/morton_contraction.hpp (frame from the
+    // strided sample, 10-bit axes over [-2, 2]^3), stable sort by code.
     std::vector<int64_t> host_morton(const std::vector<float>& xyz) {
+        namespace morton = lfs::training::morton;
         const size_t n = xyz.size() / 3;
-        std::array<float, 3> lo{INFINITY, INFINITY, INFINITY}, hi{-INFINITY, -INFINITY, -INFINITY};
-        for (size_t i = 0; i < n; ++i)
-            for (int a = 0; a < 3; ++a) {
-                lo[a] = std::min(lo[a], xyz[i * 3 + a]);
-                hi[a] = std::max(hi[a], xyz[i * 3 + a]);
-            }
+        const size_t stride = morton::contraction_sample_stride(n);
+        std::vector<float> sample;
+        for (size_t i = 0; i < n; i += stride)
+            sample.insert(sample.end(), xyz.begin() + static_cast<std::ptrdiff_t>(i * 3),
+                          xyz.begin() + static_cast<std::ptrdiff_t>(i * 3 + 3));
+        const morton::ContractionFrame frame = morton::contraction_frame(sample);
+        const float inv_radius = 1.0f / frame.radius;
+        constexpr float origin = -morton::kContractedHalfExtent;
+        constexpr float mul = 1024.0f / (2.0f * morton::kContractedHalfExtent);
         std::vector<uint32_t> codes(n);
         for (size_t i = 0; i < n; ++i) {
+            std::array<float, 3> p{};
+            for (int a = 0; a < 3; ++a)
+                p[a] = (xyz[i * 3 + a] - frame.centre[a]) * inv_radius;
+            const float r = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+            if (r > 1.0f)
+                for (float& v : p)
+                    v *= (2.0f - 1.0f / r) / r;
             std::array<uint32_t, 3> q{};
             for (int a = 0; a < 3; ++a) {
-                const float length = hi[a] - lo[a];
-                const float mul = length == 0.f ? 0.f : 1024.f / length;
-                const float t = (xyz[i * 3 + a] - lo[a]) * mul;
+                const float t = (p[a] - origin) * mul;
                 q[a] = t > 0.f ? std::min(1023u, static_cast<uint32_t>(t)) : 0u;
             }
             codes[i] = (part1by2(q[2]) << 2) + (part1by2(q[1]) << 1) + part1by2(q[0]);

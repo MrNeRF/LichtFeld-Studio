@@ -4,6 +4,9 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "gui/gui_manager.hpp"
 #include "licht_test_support.hpp"
+#include "p5_session_test_access.hpp"
+#include "project/session_state.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include <algorithm>
@@ -13,11 +16,15 @@
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace lfs::vis {
     class UiVisibilityTransitionTest : public ::testing::Test {
     protected:
+        float previous_dpi_ = 1.0f;
         void SetUp() override {
+            previous_dpi_ = lfs::python::get_shared_dpi_scale();
+            lfs::python::set_shared_dpi_scale(1.0f);
             if (const auto* previous = std::getenv("LFS_HOME"))
                 previous_home_ = previous;
 #ifdef _WIN32
@@ -29,6 +36,7 @@ namespace lfs::vis {
         }
 
         void TearDown() override {
+            lfs::python::set_shared_dpi_scale(previous_dpi_);
             lfs::event::EventBridge::instance().clear_all();
 #ifdef _WIN32
             (void)_putenv_s("LFS_HOME", previous_home_ ? previous_home_->c_str() : "");
@@ -64,11 +72,14 @@ namespace lfs::vis {
         gui->ui_visibility_layout_committed_ = false;
         gui->ui_visibility_target_ready_ = true;
         gui->ui_visibility_target_hidden_ = true;
+        viewer.screens().screen().setDockCollapsed(false, true);
         gui->ui_visibility_target_layout_.pos = {0.0f, 0.0f};
         gui->ui_visibility_target_layout_.size = {960.0f, 540.0f};
 
         gui->commitUiVisibilityTransitionIfFrameReady(false);
         EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_TRUE(gui->panelAnimationVisibility().ui_visible);
+        EXPECT_TRUE(viewer.screens().screen().dockCollapsed(false));
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
         EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
         EXPECT_TRUE(gui->ui_visibility_target_ready_);
@@ -76,6 +87,9 @@ namespace lfs::vis {
 
         gui->commitUiVisibilityTransitionIfFrameReady(true);
         EXPECT_TRUE(gui->ui_hidden_);
+        EXPECT_FALSE(gui->panelAnimationVisibility().ui_visible);
+        EXPECT_TRUE(viewer.screens().screen().dockCollapsed(false));
+        EXPECT_FALSE(viewer.screens().screen().dockCollapsed(true));
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(0.0f, 0.0f));
         EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(960.0f, 540.0f));
         EXPECT_FALSE(gui->ui_visibility_target_ready_);
@@ -95,6 +109,8 @@ namespace lfs::vis {
 
         gui->commitUiVisibilityTransitionIfFrameReady(true);
         EXPECT_FALSE(gui->ui_hidden_);
+        EXPECT_TRUE(gui->panelAnimationVisibility().ui_visible);
+        EXPECT_TRUE(viewer.screens().screen().dockCollapsed(false));
         EXPECT_EQ(gui->viewport_layout_.pos, glm::vec2(20.0f, 30.0f));
         EXPECT_EQ(gui->viewport_layout_.size, glm::vec2(640.0f, 480.0f));
     }
@@ -133,6 +149,49 @@ namespace lfs::vis {
         // phase before the full viewport refresh is considered complete.
         EXPECT_TRUE(rendering->isViewportResizeDeferring());
         EXPECT_TRUE(rendering->hasPendingViewportResizeSettle());
+    }
+
+    TEST_F(UiVisibilityTransitionTest, SideDockCollapseRoundTripsWithoutReplacingPreferredWidths) {
+        using namespace lfs::vis::project;
+        using lfs::test::licht::json_root;
+        using lfs::test::licht::require_result;
+        VisualizerImpl viewer(projectOptions());
+        P5SessionCaptureTestAccess::initializeInputController(viewer);
+        auto& screen = viewer.screens().screen();
+        const auto geometry = screen.save()["layout"];
+        screen.setDockCollapsed(false, true);
+        screen.setDockCollapsed(true, true);
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        auto captured = require_result(captureGuiSession(viewer, {}, bookmarks));
+        auto gui = json_root(captured.gui_layout.dom());
+        auto& spaces = gui["layouts"][0]["areas"][0]["spaces"];
+        for (const auto& space : spaces) {
+            if (space["type"] == "screen" || space["type"] == "fixed_arrangement") {
+                EXPECT_EQ(space["opaque_payload"]["left_dock_collapsed"], true);
+                EXPECT_EQ(space["opaque_payload"]["right_dock_collapsed"], true);
+            }
+        }
+        viewer.screens().resetToDefault();
+        applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
+        EXPECT_TRUE(viewer.screens().screen().dockCollapsed(false));
+        EXPECT_TRUE(viewer.screens().screen().dockCollapsed(true));
+        EXPECT_EQ(viewer.screens().screen().save()["layout"], geometry);
+        // Fixed-layout files written before dock controls default to both sides open.
+        for (auto it = spaces.begin(); it != spaces.end();) {
+            if ((*it)["type"] == "screen") {
+                it = spaces.erase(it);
+            } else {
+                if ((*it)["type"] == "fixed_arrangement") {
+                    (*it)["opaque_payload"].erase("left_dock_collapsed");
+                    (*it)["opaque_payload"].erase("right_dock_collapsed");
+                }
+                ++it;
+            }
+        }
+        captured.gui_layout = require_result(lfs::io::project::GuiLayoutChapter::parse(gui.dump()));
+        applyGuiSession(viewer, require_result(prepareGuiSessionRestore(captured)), bookmarks);
+        EXPECT_FALSE(viewer.screens().screen().dockCollapsed(false));
+        EXPECT_FALSE(viewer.screens().screen().dockCollapsed(true));
     }
 
     TEST_F(UiVisibilityTransitionTest, UiVisibilityFinishesWithoutWaitingForFullscreenGuard) {
@@ -186,6 +245,16 @@ namespace lfs::vis {
         EXPECT_FALSE(gui->ui_toggle_pending_);
         EXPECT_FALSE(gui->ui_visibility_target_hidden_);
         EXPECT_TRUE(gui->ui_visibility_target_ready_);
+        // Resizing the outer UI preserves the relative widths chosen for the editors.
+        auto& screen = viewer.screens().screen();
+        const auto preferred = screen.save()["layout"];
+        screen.setDockCollapsed(true, true);
+        const auto closed = screen.solve({0, 0, 900, 600}, {});
+        screen.setDockCollapsed(true, false);
+        const auto opened = screen.solve({0, 0, 900, 600}, {});
+        ASSERT_TRUE(closed.find(screen.activeView()) && opened.find(screen.activeView()));
+        EXPECT_GT(closed.find(screen.activeView())->rect.w, opened.find(screen.activeView())->rect.w);
+        EXPECT_EQ(screen.save()["layout"], preferred);
     }
 
 } // namespace lfs::vis

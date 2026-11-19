@@ -21,12 +21,13 @@
 namespace lfs::core::nn::models {
 
     enum class Sam2MaskOutput { OriginalResolution,
-                                LowResolutionOnly };
+                                LowResolutionOnly,
+                                RawLowResolution };
 
     struct Sam2Prediction {
         Tensor masks;          // [num_masks, H, W] fp32 logits; absent for LowResolutionOnly
         Tensor iou;            // [num_masks] fp32 predicted mask quality
-        Tensor low_res_logits; // [num_masks, 256, 256] fp32
+        Tensor low_res_logits; // [num_masks, 256, 256] fp32; unclamped for RawLowResolution
         Tensor object_pointer; // video tracking only
         Tensor object_score_logits;
     };
@@ -63,6 +64,8 @@ namespace lfs::core::nn::models {
     public:
         static lfs::Result<Sam2> load(const std::filesystem::path& weights, Device device,
                                       std::optional<DataType> compute = std::nullopt);
+        static lfs::Result<Sam2> load(const WeightFile& file, Device device,
+                                      std::optional<DataType> compute = std::nullopt);
 
         // NCHW RGB in [0, 1], any H/W. Resizes to 1024x1024 internally (squash, like the
         // official predictor), normalizes, runs the image encoder, caches embeddings.
@@ -81,6 +84,10 @@ namespace lfs::core::nn::models {
         lfs::Result<std::pair<Sam2Prediction, Sam2Taps>>
         predict_with_taps(const std::vector<Sam2PointPrompt>& points,
                           const std::optional<std::array<float, 4>>& box, bool multimask = true);
+
+        // Upsample unclamped [num_masks, 256, 256] logits for the current image.
+        // Compare low-resolution proposals first, then upsample only the selected one.
+        lfs::Result<Tensor> postprocess_masks(const Tensor& logits) const;
 
         // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
         // Video tracking runs on the CUDA tensor backend only; other backends report Unsupported.

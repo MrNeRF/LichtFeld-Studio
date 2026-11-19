@@ -9,6 +9,8 @@ struct UndistortParams {
     int num_distortion;
     // undistort_radial_branch() on the host: rays from branch_maximum on fold back.
     float branch_bound, branch_maximum;
+    int view;
+    float view_rotation[9];
 };
 struct WarpPush {
 #ifdef LFS_WARP_GPU_PROGRAM
@@ -43,6 +45,46 @@ static const float MIN_SIGNED_WEIGHT_RATIO = 1.0e-4f;
 static const float EVALUATION_MIN_COVERAGE = 0.999f;
 
 #include "distortion_model.slangh"
+
+float2 source_position(float pixel_x, float pixel_y, UndistortParams p) {
+    const float nx = (pixel_x - p.dst_cx) / p.dst_fx;
+    const float ny = (pixel_y - p.dst_cy) / p.dst_fy;
+    float dx, dy;
+    if (p.view != 0) {
+        const float3 ray = float3(
+            p.view_rotation[0] * nx + p.view_rotation[1] * ny + p.view_rotation[2],
+            p.view_rotation[3] * nx + p.view_rotation[4] * ny + p.view_rotation[5],
+            p.view_rotation[6] * nx + p.view_rotation[7] * ny + p.view_rotation[8]);
+        if (p.model_type == 3) {
+            dx = atan2(ray.x, ray.z);
+            dy = atan2(ray.y, length(ray.xz));
+        } else {
+            const float radius = length(ray.xy);
+            const float scale = radius > 0 ? atan2(radius, ray.z) / radius : 0;
+            thin_prism_fisheye_from_theta_point(ray.x * scale, ray.y * scale, p.distortion,
+                p.model_type == 2 ? min(p.num_distortion, 4) : p.num_distortion, dx, dy);
+        }
+    } else {
+        apply_distortion(nx, ny, p.model_type, p.distortion, p.num_distortion, dx, dy);
+    }
+    return float2(dx * p.src_fx + p.src_cx - 0.5f, dy * p.src_fy + p.src_cy - 0.5f);
+}
+
+    bool remap_tap(inout int x, inout int y, int width, int height, bool panorama) {
+        if (x >= 0 && x < width && y >= 0 && y < height)
+            return true;
+        if (!panorama)
+            return false;
+        while (y < 0 || y >= height) {
+            y = y < 0 ? -1 - y : height - 1 - (y - height);
+            x += width / 2;
+        }
+        x %= width;
+        if (x < 0)
+            x += width;
+        return true;
+    }
+
 
 // Mode bits 0..7 select the operation; bit 8 identifies RGB8 storage.
 // Keep WarpPush at 56 bytes on Vulkan and Metal. Vulkan byte storage uses
@@ -87,7 +129,7 @@ float bilinear_sample_renormalized(
     ImageSource src,
     const int width, const int height, const int stride,
     const float sx, const float sy,
-    const bool positive_only = false) {
+    const bool positive_only = false, const bool panorama = false) {
     const int x0 = int(floor(sx));
     const int y0 = int(floor(sy));
     const float fx = sx - float(x0);
@@ -95,11 +137,11 @@ float bilinear_sample_renormalized(
     float value = 0.0f;
     float weight_sum = 0.0f;
     for (int dy = 0; dy < 2; ++dy) {
-        const int y = y0 + dy;
         const float wy = dy == 0 ? 1.0f - fy : fy;
         for (int dx = 0; dx < 2; ++dx) {
-            const int x = x0 + dx;
-            if (x < 0 || x >= width || y < 0 || y >= height)
+            int y = y0 + dy;
+            int x = x0 + dx;
+            if (!remap_tap(x, y, width, height, panorama))
                 continue;
             const float sample = read_image_sample(src, y * stride + x);
             if (!isfinite(sample) || (positive_only && sample <= 0.0f))
@@ -114,8 +156,12 @@ float bilinear_sample_renormalized(
         return value / weight_sum;
     if (positive_only)
         return 0.0f;
-    const int nearest_x = min(max(int(floor(sx + 0.5f)), 0), width - 1);
-    const int nearest_y = min(max(int(floor(sy + 0.5f)), 0), height - 1);
+    int nearest_x = int(floor(sx + 0.5f));
+    int nearest_y = int(floor(sy + 0.5f));
+    if (!remap_tap(nearest_x, nearest_y, width, height, panorama)) {
+        nearest_x = min(max(nearest_x, 0), width - 1);
+        nearest_y = min(max(nearest_y, 0), height - 1);
+    }
     return read_image_sample(src, nearest_y * stride + nearest_x);
 }
 
@@ -136,7 +182,7 @@ bool lanczos3_sample(
     ImageSource src,
     const int width, const int height, const int channels,
     const float sx, const float sy,
-    inout float values[4], out float absolute_inside, out float absolute_full) {
+    inout float values[4], out float absolute_inside, out float absolute_full, const bool panorama = false) {
     const int base_x = int(floor(sx));
     const int base_y = int(floor(sy));
     float weights_x[6];
@@ -152,12 +198,12 @@ bool lanczos3_sample(
     absolute_full = 0.0f;
     const int plane = width * height;
     for (int j = 0; j < 6; ++j) {
-        const int y = base_y + j - 2;
         for (int i = 0; i < 6; ++i) {
-            const int x = base_x + i - 2;
+            int y = base_y + j - 2;
+            int x = base_x + i - 2;
             const float weight = weights_x[i] * weights_y[j];
             absolute_full += abs(weight);
-            if (x < 0 || x >= width || y < 0 || y >= height)
+            if (!remap_tap(x, y, width, height, panorama))
                 continue;
             signed_inside += weight;
             absolute_inside += abs(weight);
@@ -175,7 +221,7 @@ bool lanczos3_sample(
 
     for (int channel = 0; channel < channels; ++channel) {
         values[channel] = bilinear_sample_renormalized(
-            offset_image_source(src, channel * plane), width, height, width, sx, sy);
+            offset_image_source(src, channel * plane), width, height, width, sx, sy, false, panorama);
     }
     return false;
 }
@@ -197,19 +243,14 @@ void undistort_image_kernel(
                                   (float(qx) + 0.5f) / quadrature;
             const float pixel_y = float(oy) +
                                   (float(qy) + 0.5f) / quadrature;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-            float dnx, dny;
-            apply_distortion(nx, ny, params.model_type, params.distortion,
-                             params.num_distortion, dnx, dny);
-            const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-            const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+            const float2 source = source_position(pixel_x, pixel_y, params);
+            const float sx = source.x, sy = source.y;
             float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float absolute_inside = 0.0f;
             float absolute_full = 0.0f;
             lanczos3_sample(
                 src, params.src_width, params.src_height, channels,
-                sx, sy, sample, absolute_inside, absolute_full);
+                sx, sy, sample, absolute_inside, absolute_full, params.view != 0 && params.model_type == 3);
             for (int channel = 0; channel < channels; ++channel)
                 result[channel] += sample[channel];
         }
@@ -466,17 +507,12 @@ void undistort_area_kernel(
                                   (float(qx) + 0.5f) / quadrature;
             const float pixel_y = float(oy) +
                                   (float(qy) + 0.5f) / quadrature;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-            float dnx, dny;
-            apply_distortion(nx, ny, params.model_type, params.distortion,
-                             params.num_distortion, dnx, dny);
-            const float sx = dnx * params.src_fx + params.src_cx - PIXEL_CENTER_OFFSET;
-            const float sy = dny * params.src_fy + params.src_cy - PIXEL_CENTER_OFFSET;
+            const float2 source = source_position(pixel_x, pixel_y, params);
+            const float sx = source.x, sy = source.y;
             if (mode == 1) {
                 const float sample = bilinear_sample_renormalized(
                     src, params.src_width, params.src_height, params.src_width,
-                    sx, sy, true);
+                    sx, sy, true, params.view != 0 && params.model_type == 3);
                 if (sample > 0.0f && isfinite(sample)) {
                     result[0] += sample;
                     valid_samples += 1.0f;
@@ -486,7 +522,7 @@ void undistort_area_kernel(
                     result[channel] += bilinear_sample_renormalized(
                         offset_image_source(src, channel * input_plane),
                         params.src_width, params.src_height, params.src_width,
-                        sx, sy);
+                        sx, sy, false, params.view != 0 && params.model_type == 3);
                 }
                 valid_samples += 1.0f;
             }

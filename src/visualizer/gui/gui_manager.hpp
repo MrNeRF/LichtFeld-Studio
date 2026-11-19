@@ -38,6 +38,7 @@
 #include "rendering/viewport_reference_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+#include <bitset>
 
 #include <atomic>
 #include <chrono>
@@ -161,7 +162,7 @@ namespace lfs::vis {
             // Runs the overlay's Python document sync on the next frame even when no
             // store change or UI event would trigger it.
             void requestViewportOverlaySync() { rml_viewport_overlay_.requestDocumentSync(); }
-            void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
+            void focusMainPanelTab(std::string panel_id) { revealPanel(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
             [[nodiscard]] ScreenHost& screenHost() { return screen_host_; }
             [[nodiscard]] const ScreenHost& screenHost() const { return screen_host_; }
@@ -373,6 +374,8 @@ namespace lfs::vis {
                 std::chrono::steady_clock::time_point now,
                 bool training_active);
             void queueUiVisibilityToggle();
+            void queueSideDockToggle(lfs::core::SideDock side);
+            void revealPanel(const std::string& id);
             void requestUiVisibilityToggle();
             void updateUiVisibilityTransition();
             void commitUiVisibilityTransition(bool matched_frame);

@@ -613,6 +613,8 @@ namespace lfs::vis {
 
         // Depth access for tools (returns camera-space depth at pixel, or -1 if invalid).
         float getDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt, bool nonblocking = false) const;
+        // GUI-thread surface tools require exact published coverage or a pending retry.
+        float getSurfaceDepthAtPixel(int x, int y, glm::ivec2 source_size, std::optional<SplitViewPanelId> panel = std::nullopt);
         struct ExpectedDepthSampleRequest {
             ViewId view = kNoView;
             SceneManager* scene_manager = nullptr;
@@ -1323,6 +1325,7 @@ namespace lfs::vis {
         GizmoState gizmo_state_;
         bool gaussian_selection_visible_ = true;
         bool exact_surface_picking_ = false;
+        float sampleDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel, bool nonblocking, bool require_exact_depth, glm::ivec2 source_size = {0, 0}) const;
 
         lfs::event::ScopedHandler event_handlers_;
 

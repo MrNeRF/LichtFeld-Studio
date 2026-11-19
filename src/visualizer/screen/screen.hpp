@@ -94,8 +94,14 @@ namespace lfs::vis::screen {
         // a 3D view beside it.
         bool toggleSideView(AreaId view);
 
+        // Collapse exterior columns containing editors only. A column that contains a view stays visible.
+        [[nodiscard]] size_t dockColumns(bool right) const;
+        [[nodiscard]] bool dockCollapsed(bool right) const { return right ? right_collapsed_ : left_collapsed_; }
+        bool setDockCollapsed(bool right, bool collapsed);
+        bool revealDockFor(AreaId area);
+
         [[nodiscard]] LayoutGeometry solve(const Rect& bounds, const LayoutMetrics& metrics) const {
-            return layout_.solve(bounds, metrics, maximized_);
+            return layout_.solve(bounds, metrics, maximized_, left_collapsed_ ? dockColumns(false) : 0, right_collapsed_ ? dockColumns(true) : 0);
         }
 
         // Bumped by every change of layout, editors, active view or
@@ -121,6 +127,8 @@ namespace lfs::vis::screen {
         std::map<AreaId, Area> areas_;
         AreaId active_view_;
         AreaId maximized_;
+        bool left_collapsed_ = false;
+        bool right_collapsed_ = false;
         std::uint32_t next_area_ = 1;
         std::uint64_t generation_ = 1;
     };

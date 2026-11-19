@@ -74,7 +74,9 @@ namespace lfs::core::internal {
             *validity = mask.to(DataType::UInt8);
         return output;
     }
-    Tensor VulkanBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, bool mask, ExecContext) {
+    Tensor VulkanBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, bool mask, ExecContext execution) {
+        if (p.view)
+            return image_warp(input, p, mask ? 1 : 0, false, nullptr, execution);
         LFS_FACADE_TRACE(image_undistort);
         Push push{.src_fx = p.src_fx, .src_fy = p.src_fy, .src_cx = p.src_cx, .src_cy = p.src_cy, .dst_fx = p.dst_fx, .dst_fy = p.dst_fy, .dst_cx = p.dst_cx, .dst_cy = p.dst_cy, .sw = p.src_width, .sh = p.src_height, .dw = p.dst_width, .dh = p.dst_height, .model = int(p.model_type), .num_distortion = p.num_distortion, .channels = mask ? 1 : int(input.size(0))};
         std::copy_n(p.distortion, 12, push.distortion);

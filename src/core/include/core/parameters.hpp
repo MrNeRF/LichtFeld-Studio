@@ -270,6 +270,9 @@ namespace lfs::core {
             size_t sh_degree_interval = 1'000;
             float means_lr = 0.000016f;
             float means_lr_end = 0.00000016f;
+            // Bound of the per-step ray-depth move (fraction of the distance to the observing cameras),
+            // decaying with the position learning rate; 0 turns it off.
+            float ray_depth_lr = 0.01f;
             float shs_lr = 0.0025f;
             float opacity_lr = 0.025f;
             float scaling_lr = 0.005f;
@@ -383,6 +386,9 @@ namespace lfs::core {
                 return use_ppisp || use_exposure_correction;
             }
 
+            // Refines every training camera's pose with the model (training/components/camera_pose_refinement.hpp).
+            bool pose_opt = false;
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;
@@ -466,6 +472,7 @@ namespace lfs::core {
             std::string config_file = "";
 
             void scale_steps(float ratio);
+            [[nodiscard]] OptimizationParameters scaled_to_iterations(size_t target) const;
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;

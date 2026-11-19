@@ -23,6 +23,7 @@ struct GsplatRasterParams {
     uint count, width, height, tiles_x, tiles_y, mode;
     Ptr<uint, Access.ReadWrite> control;
     Ptr<float, Access.ReadWrite> normal, rays;
+    uint64_t mip;
 };
 struct ControlParams {
     Ptr<int64_t, Access.Read> ends;
@@ -81,11 +82,11 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             break;
         if (lane < 64 && batch + lane < end) {
             uint g = p.ids[batch + lane];
-            float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
+            float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), gsplat_filtered_scale(exp(gsplat_load3(p.scales, g)), p.mip, g));
             // Global-shutter rays share their origin across the whole tile.
             const float3 gro = mul(camera.origin - gsplat_load3(p.means, g), M);
             if(p.normal != 0) normals[lane]=gsplat_geometry_normal(camera,gsplat_load3(p.means,g),gsplat_load3(p.scales,g),gsplat_load4(p.quats,g));
-            opacity[lane] = gsplat_sigmoid(p.opacities[g]);
+            opacity[lane] = (gsplat_sigmoid(p.opacities[g]) * gsplat_filter_compensation(p.mip, g));
             m0[lane] = float4(M[0], gro.x);
             m1[lane] = float4(M[1], gro.y);
             m2[lane] = float4(M[2], gro.z);

@@ -28,6 +28,7 @@ class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
 class MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
 class MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
 class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
+class MRNFStrategyTest_RayDepthStateFollowsItsSplats_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -47,6 +48,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "lfs/training/ray_depth_step.cuh"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
@@ -54,6 +56,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
+#include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mrnf.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -746,6 +749,18 @@ TEST_F(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
     EXPECT_EQ(masses({0, 1, 2, 3}, 1.0f).second, 0.0f);
     EXPECT_EQ(masses({}, 1.0f), (std::pair{0.0f, 0.0f})) << "a strict share with an empty ROI draws nothing";
     EXPECT_GT(masses({}, 0.8f).second, 0.0f) << "an empty ROI hands a partial share to the rest";
+}
+
+TEST_F(MRNFStrategyTest, PercentileRankStaysInsideTheSortedValues) {
+    using mrnf_strategy::percentile_bounds_ranks;
+    using Ranks = std::pair<size_t, size_t>;
+    constexpr size_t past_float32 = (size_t{1} << 24) + 4;
+    EXPECT_EQ(percentile_bounds_ranks(past_float32, 1.0f), (Ranks{0, past_float32 - 1}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 1.0f), (Ranks{0, 19'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, std::nextafter(1.0f, 0.0f)), (Ranks{0, 19'999'998}));
+    EXPECT_EQ(percentile_bounds_ranks(20'000'000, 0.0f), (Ranks{9'999'999, 9'999'999}));
+    EXPECT_EQ(percentile_bounds_ranks(1, 1.0f), (Ranks{0, 0}));
+    EXPECT_EQ(percentile_bounds_ranks(11, 0.5f), (Ranks{2, 7}));
 }
 
 TEST_F(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
@@ -1476,6 +1491,26 @@ TEST_F(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(strategy.free_count(), 1u);
 }
 
+TEST_F(MRNFStrategyTest, FreeSlotCountIsExactPastFloat32Precision) {
+    constexpr size_t b = size_t{1} << 24;
+    const auto all_free = Tensor::ones_bool({b + 3}, Device::CUDA);
+    auto splats = create_mrnf_test_splat_data(1);
+    const auto one_mean = splats.means();
+    MRNF mrnf(splats);
+    ImprovedGSPlus igs(splats);
+    mrnf._free_mask = all_free;
+    igs._free_mask = all_free;
+    for (const size_t rows : {b + 1, b + 3}) {
+        SCOPED_TRACE(rows);
+        // A broadcast view supplies the logical row count without allocating a large model.
+        splats.means() = one_mean.expand({rows, 3});
+        EXPECT_EQ(mrnf.free_count(), rows);
+        EXPECT_EQ(mrnf.active_count(), 0u);
+        EXPECT_EQ(igs.free_count(), rows);
+        EXPECT_EQ(igs.active_count(), 0u);
+    }
+}
+
 // A refine that runs out of VRAM at any allocation must be undone to the rows
 // it started from, and the next refine must grow that model cleanly.
 TEST_F(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
@@ -2204,6 +2239,136 @@ TEST_F(MRNFStrategyTest, MortonReorderKeepsFarMaskPublished) {
     strategy.refresh_camera_hull();
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+}
+
+// Row r of the ray-depth state is tagged with the x coordinate of splat r; a reorder, a prune and a split must keep
+// the tag on its splat, and children take their parent's anchor and spread with fresh moments.
+TEST_F(MRNFStrategyTest, RayDepthStateFollowsItsSplats) {
+    constexpr int n = 10;
+    constexpr int stride = ray_depth::kStateStride;
+    auto splat = create_mrnf_test_splat_data(n, 0);
+    {
+        std::vector<float> reversed(3 * n, 0.0f);
+        for (int i = 0; i < n; ++i)
+            reversed[3 * i] = static_cast<float>(n - 1 - i);
+        splat.means().copy_from(Tensor::from_vector(reversed, TensorShape({size_t{n}, size_t{3}}), Device::CUDA));
+    }
+    auto params = vanilla_mrnf_params();
+    params.iterations = 10'000;
+    params.sh_degree_interval = 10'000;
+    params.max_cap = 32;
+    params.growth_grad_threshold = 0.5f;
+    params.grow_fraction = 1.0f;
+    params.grow_until_iter = 10'000;
+    MRNF strategy(splat);
+    strategy.initialize(params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto expect_bound = [&] {
+        ASSERT_EQ(strategy._ray_depth_state.shape()[0], static_cast<size_t>(splat.size()));
+        EXPECT_EQ(optimizer.ray_depth_state().ptr<float>(), strategy._ray_depth_state.ptr<float>());
+        EXPECT_EQ(optimizer.ray_depth_state().shape()[0], static_cast<size_t>(splat.size()));
+    };
+    ASSERT_TRUE(strategy._ray_depth_state.is_valid());
+    expect_bound();
+    for (const float value : strategy._ray_depth_state.cpu().to_vector())
+        ASSERT_EQ(value, ray_depth::kUnobserved);
+
+    const auto tag = [](const float x, const int k) { return x + 100.0f * static_cast<float>(k) + 1.0f; };
+    {
+        const auto means = splat.means().cpu().to_vector();
+        std::vector<float> rows(n * stride);
+        for (int r = 0; r < n; ++r)
+            for (int k = 0; k < stride; ++k)
+                rows[r * stride + k] = tag(means[3 * r], k);
+        strategy._ray_depth_state.copy_from(
+            Tensor::from_vector(rows, TensorShape({size_t{n}, size_t{stride}}), Device::CUDA));
+    }
+    const auto expect_tags = [&](const char* stage) {
+        SCOPED_TRACE(stage);
+        expect_bound();
+        const auto means = splat.means().cpu().to_vector();
+        const auto rows = strategy._ray_depth_state.cpu().to_vector();
+        for (size_t r = 0; r < static_cast<size_t>(splat.size()); ++r)
+            for (int k = 0; k < stride; ++k)
+                ASSERT_EQ(rows[r * stride + k], tag(means[3 * r], k)) << "row " << r << ", column " << k;
+    };
+
+    const auto reorder = morton::apply_morton_reorder(
+        splat, &optimizer, lfs::core::TensorExecutionTarget::current(), [&](const morton::RowVisitor& visit) { strategy.for_each_gaussian_row(visit); });
+    ASSERT_TRUE(reorder.applied);
+    ASSERT_NE(reorder.permutation.cpu().ptr<int64_t>()[0], 0) << "the reorder must move rows";
+    expect_tags("reorder");
+
+    const auto keep = Tensor::from_vector(std::vector<int>{1, 1, 0, 1, 1, 0, 1, 1, 1, 1}, TensorShape({size_t{n}}),
+                                          Device::CUDA)
+                          .to(DataType::Bool);
+    strategy.compact_splats(keep);
+    ASSERT_EQ(splat.size(), n - 2);
+    expect_tags("prune");
+
+    // Split rows 0 and 1: one child takes the freed row 7, the other is appended.
+    const auto rows_before = strategy._ray_depth_state.cpu().to_vector();
+    const auto freed = Tensor::from_vector(std::vector<int>{7}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy.mark_as_free(freed);
+    splat.deleted().index_put_(freed, Tensor::ones_bool({1}, Device::CUDA));
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat.size())}, Device::CUDA);
+    auto visibility = strategy.visibility_accumulator();
+    visibility.zero_();
+    const auto parents = Tensor::from_vector(std::vector<int>{0, 1}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(parents, Tensor::full({2}, 1.0f, Device::CUDA));
+    visibility.index_put_(parents, Tensor::full({2}, 1.0f, Device::CUDA));
+    const size_t size_before = splat.size();
+    strategy.grow_and_split(1, 0);
+    ASSERT_EQ(splat.size(), size_before + 1);
+    strategy.sync_ray_depth();
+    expect_bound();
+    const auto rows = strategy._ray_depth_state.cpu().to_vector();
+    const auto row = [&](const std::vector<float>& v, const size_t r, const int k) { return v[r * stride + k]; };
+    for (const size_t parent : {size_t{0}, size_t{1}}) {
+        for (int k = 0; k < 4; ++k)
+            EXPECT_EQ(row(rows, parent, k), row(rows_before, parent, k)) << "parent " << parent;
+        EXPECT_EQ(row(rows, parent, 4), 0.0f);
+        EXPECT_EQ(row(rows, parent, 5), 0.0f);
+    }
+    for (const size_t child : {size_t{7}, size_before}) {
+        const size_t parent = row(rows, child, 0) == row(rows_before, 0, 0) ? 0 : 1;
+        for (int k = 0; k < 4; ++k)
+            EXPECT_EQ(row(rows, child, k), row(rows_before, parent, k)) << "child " << child;
+        EXPECT_EQ(row(rows, child, 4), 0.0f);
+        EXPECT_EQ(row(rows, child, 5), 0.0f);
+    }
+    EXPECT_NE(row(rows, 7, 0), row(rows, size_before, 0)) << "each parent has one child";
+    for (size_t r = 2; r < size_before; ++r) {
+        if (r == 7)
+            continue;
+        for (int k = 0; k < stride; ++k)
+            EXPECT_EQ(row(rows, r, k), row(rows_before, r, k)) << "untouched row " << r;
+    }
+
+    auto off = vanilla_mrnf_params();
+    off.ray_depth_lr = 0.0f;
+    auto other = create_mrnf_test_splat_data(4, 0);
+    MRNF disabled(other);
+    disabled.initialize(off);
+    EXPECT_FALSE(disabled._ray_depth_state.is_valid());
+    EXPECT_FALSE(disabled.get_optimizer().ray_depth_state().is_valid());
+}
+
+// Built through a float32 arange, the four rows appended at B = 2^24 came out as B, B, B+2, B+4 and one row as none,
+// so ray_depth_inherit wrote an existing splat's state and read child rows past the end of the list.
+TEST_F(MRNFStrategyTest, SplitChildRowsAreExactPastFloat32Precision) {
+    constexpr int64_t b = int64_t{1} << 24;
+    const auto reused = Tensor::from_vector(std::vector<int>{7}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    const auto expect_rows = [](const Tensor& rows, const std::vector<int64_t>& expected) {
+        ASSERT_EQ(rows.dtype(), DataType::Int64);
+        ASSERT_EQ(rows.device(), Device::CUDA);
+        ASSERT_EQ(rows.shape(), TensorShape({expected.size()}));
+        EXPECT_EQ(rows.cpu().to_vector_int64(), expected);
+    };
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 4), {7, b, b + 1, b + 2, b + 3});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 1), {b});
+    expect_rows(split_child_rows(reused, static_cast<size_t>(b), 0), {7});
+    expect_rows(split_child_rows(Tensor(), static_cast<size_t>(b), 0), {});
 }
 
 TEST_F(MRNFStrategyTest, SetTrainingDatasetBeforeInitialize) {

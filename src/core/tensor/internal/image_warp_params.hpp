@@ -17,15 +17,19 @@ namespace lfs::core::internal {
         int32_t num_distortion;
         // undistort_radial_branch(): rays from branch_maximum on fold back and have no inverse.
         float branch_bound, branch_maximum;
+        int32_t view;
+        float view_rotation[9];
     };
     struct ImageWarpDispatchParams {
         uint64_t input = 0, output = 0, validity = 0, camera = 0;
         int32_t width, height, channels, mode, inverse, quadrature;
     };
-    static_assert(sizeof(ImageWarpCameraParams) == 112);
+    static_assert(sizeof(ImageWarpCameraParams) == 152);
     static_assert(offsetof(ImageWarpCameraParams, distortion) == 52);
     static_assert(offsetof(ImageWarpCameraParams, num_distortion) == 100);
     static_assert(offsetof(ImageWarpCameraParams, branch_maximum) == 108);
+    static_assert(offsetof(ImageWarpCameraParams, view) == 112);
+    static_assert(offsetof(ImageWarpCameraParams, view_rotation) == 116);
     static_assert(sizeof(ImageWarpDispatchParams) == 56);
     static_assert(offsetof(ImageWarpDispatchParams, width) == 32);
     static_assert(offsetof(ImageWarpDispatchParams, mode) == 44);
@@ -33,7 +37,8 @@ namespace lfs::core::internal {
 
     inline ImageWarpCameraParams imageWarpCameraParams(const UndistortParams& p) {
         const auto branch = undistort_radial_branch(p);
-        ImageWarpCameraParams camera{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, int32_t(p.model_type), {}, p.num_distortion, branch.bound, branch.maximum};
+        ImageWarpCameraParams camera{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, int32_t(p.model_type), {}, p.num_distortion, branch.bound, branch.maximum, p.view, {}};
+        std::copy_n(p.view_rotation, 9, camera.view_rotation);
         std::copy_n(p.distortion, 12, camera.distortion);
         return camera;
     }

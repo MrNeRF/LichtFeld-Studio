@@ -48,7 +48,9 @@ namespace lfs::training {
         int tile_height = 0,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false);
+        bool render_normal = false,
+        bool render_depth = true,
+        float dilation_scale = 1.0f);
 
     void fast_rasterize_backward(
         FastRasterizeContext& ctx,
@@ -66,10 +68,12 @@ namespace lfs::training {
         const FastGSColorVarianceLoss& color_variance = {});
 
     inline RenderOutput fast_rasterize(
-        lfs::core::Camera& camera, lfs::core::SplatData& model, lfs::core::Tensor& bg_color) {
+        lfs::core::Camera& camera, lfs::core::SplatData& model, lfs::core::Tensor& bg_color,
+        const bool mip_filter = false, const lfs::core::Tensor& bg_image = {}, const bool render_normal = false,
+        const float dilation_scale = 1.0f) {
         const auto& ops = cuda_fast_ops();
         lfs::gpu_ops::FastSaved saved{.backend = ops.create()};
-        return fast_infer(ops, saved, camera, model, bg_color, false);
+        return fast_infer(ops, saved, camera, model, bg_color, mip_filter, bg_image, render_normal, dilation_scale);
     }
 
 } // namespace lfs::training

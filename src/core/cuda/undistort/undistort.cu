@@ -78,7 +78,7 @@ namespace lfs::core::cuda {
             inverse_distortion_sample_map_kernel_impl<false>(samples, params);
         }
         bool is_identity_resample(const UndistortParams& params) {
-            if (static_cast<CameraModelType>(params.model_type) != CameraModelType::PINHOLE ||
+            if (params.view || static_cast<CameraModelType>(params.model_type) != CameraModelType::PINHOLE ||
                 params.src_width != params.dst_width ||
                 params.src_height != params.dst_height ||
                 params.src_fx != params.dst_fx || params.src_fy != params.dst_fy ||
@@ -281,17 +281,20 @@ namespace lfs::core::cuda {
 
     Tensor distort_mask_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(
             src, params, AreaFilterMode::NONNEGATIVE, stream);
     }
 
     Tensor distort_depth_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(src, params, AreaFilterMode::DEPTH, stream);
     }
 
     Tensor distort_normal_to_source_area(
         const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         return launch_distort_area_to_source(src, params, AreaFilterMode::NORMAL, stream);
     }
 
@@ -300,6 +303,7 @@ namespace lfs::core::cuda {
     }
 
     Tensor inverse_distortion_sample_map(const UndistortParams& params, cudaStream_t stream) {
+        assert(!is_view(params));
         assert(params.src_width > 0 && params.src_height > 0);
         nvtxRangePush("inverse_distortion_sample_map");
         const CUDAStreamGuard stream_guard(stream);

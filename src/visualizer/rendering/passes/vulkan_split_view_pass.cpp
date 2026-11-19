@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -67,6 +68,7 @@ namespace lfs::vis {
         // 176 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
         // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
         static_assert(sizeof(SplitPush) == 11 * 16);
+        static_assert(offsetof(SplitPush, divider) == 80);
         static_assert(sizeof(SplitPush) <= 256);
 
         // Convert a CHW float [0,1] tensor (CUDA or CPU) into a tightly packed RGBA8
@@ -1224,7 +1226,6 @@ namespace lfs::vis {
             push.background[0] = params.background.r;
             push.background[1] = params.background.g;
             push.background[2] = params.background.b;
-            push.background[3] = 1.0f;
 
             // Mirrors compositeSplitImages constants (kMinBarWidthPx etc).
             push.divider[0] = 4.0f * 0.5f;  // bar half-width

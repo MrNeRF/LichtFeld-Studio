@@ -32,6 +32,10 @@ namespace lfs::training {
         float dilation_scale = 1.0f,
         bool update_screen_share = true);
 
+    void fast_camera_backward(const lfs::gpu_ops::FastRasterOps& ops, lfs::gpu_ops::FastSaved& frame,
+                              const core::Tensor& image_gradient, const core::Tensor& normal_gradient,
+                              core::Tensor& grad_w2c, core::Tensor& grad_position);
+
     // Forward, then release the frame. The returned image aliases the saved cache.
     RenderOutput fast_infer(
         const lfs::gpu_ops::FastRasterOps& ops,

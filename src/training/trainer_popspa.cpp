@@ -264,7 +264,7 @@ namespace lfs::training {
                     RenderOutput rendered;
                     if (params_.optimization.gut) {
                         const auto& ops = *training_ops_->gsplat;
-                        const auto result = gsplat_render(ops, gsplat_saved_, *cam, model, bg, 0, 0, 0, 0, 1.0f, false,
+                        const auto result = gsplat_render(ops, gsplat_saved_, *cam, model, bg, 0, 0, 0, 0, 1.0f, params_.optimization.mip_filter,
                                                           GsplatRenderMode::RGB, image_bg, rendered);
                         if (result.code != lfs::gpu_ops::RasterResult::Code::Success)
                             return lfs::Status::failure(gsplat_raster_error(result));

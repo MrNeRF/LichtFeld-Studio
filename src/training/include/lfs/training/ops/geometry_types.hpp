@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/device/portability.cuh"
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -125,11 +127,22 @@ namespace lfs::gpu_ops {
 } // namespace lfs::gpu_ops
 
 namespace lfs::training::kernels {
+    struct DepthRayGrid {
+        float fx, fy, cx, cy;
+
+        LFS_HOST_DEVICE float ray_length(const int x, const int y) const {
+            const float nx = (static_cast<float>(x) + 0.5f - cx) / fx;
+            const float ny = (static_cast<float>(y) + 0.5f - cy) / fy;
+            return sqrtf(nx * nx + ny * ny + 1.0f);
+        }
+    };
+
     struct DepthCameraProjection {
         int model = 0; // CameraModelType: pinhole=0, fisheye=2, equi=3, thin-prism=4
         float radial[6] = {};
         float tangential[2] = {};
         float thin_prism[4] = {};
+        bool pinhole_ray_distance = false;
     };
 
     // Robust affine fits over collected samples. Host work, safe on a worker pool.

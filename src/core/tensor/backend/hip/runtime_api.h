@@ -46,7 +46,7 @@ typedef struct LfsHipDevice {
 } LfsHipDevice;
 
 /* Exact private ABI revision; check before binding any revision-specific exports. */
-#define LFS_HIP_RUNTIME_ABI_VERSION 6u
+#define LFS_HIP_RUNTIME_ABI_VERSION 7u
 LFS_HIP_API uint32_t lfs_hip_runtime_abi(void);
 LFS_HIP_API int lfs_hip_device_count(int32_t* count, LfsHipError* error);
 LFS_HIP_API int lfs_hip_device_info(int32_t ordinal, LfsHipDevice* info, LfsHipError* error);
@@ -246,6 +246,8 @@ typedef struct LfsHipLens {
     int32_t model_type;
     float distortion[12];
     int32_t num_distortion;
+    int32_t view;
+    float view_rotation[9];
 } LfsHipLens;
 typedef struct LfsHipPool {
     size_t count;

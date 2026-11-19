@@ -5,6 +5,7 @@
 
 #include "lfs/training/ops/geometry_types.hpp"
 
+#include <cmath>
 #include <cuda_runtime.h>
 #include <vector>
 

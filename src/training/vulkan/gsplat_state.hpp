@@ -6,7 +6,7 @@
 namespace lfs::training::vulkan {
     // What backward needs from the forward it follows.
     struct GsplatFrame {
-        core::Tensor means, scales, quats, opacities, camera, bg_color, bg_image;
+        core::Tensor mip, means, scales, quats, opacities, camera, bg_color, bg_image;
         core::Tensor radii, means2d, colors, tile_offsets, gaussian_ids, alpha, last_ids, depths;
         gpu_ops::GsplatRenderMode mode = gpu_ops::GsplatRenderMode::RGB;
         uint32_t count = 0, width = 0, height = 0, degree = 0, layout_rest = 0, intersections = 0;

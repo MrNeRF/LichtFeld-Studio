@@ -319,6 +319,19 @@ namespace lfs::vis::gui {
         if (!changed)
             return;
 
+        auto& registry = PanelRegistry::instance();
+        for (const auto& frame : frames_) {
+            if (geometry_.find(frame.id))
+                continue;
+            if (live_capture_area_ == frame.id)
+                cancelInput();
+            if (frame.editor == screen::editors::kProperties)
+                registry.suspend_input(PanelSpace::MainPanelTab);
+            else if (frame.editor == screen::editors::kScene)
+                registry.suspend_input(PanelSpace::SceneHeader);
+            else if (const auto panel = registry.get_panel(frame.editor); panel && isPanelEditorSpace(panel->space))
+                registry.suspend_input(panel->space, frame.editor);
+        }
         frames_.clear();
         frames_.reserve(geometry_.areas.size());
         for (const auto& g : geometry_.areas) {

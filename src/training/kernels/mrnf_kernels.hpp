@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace lfs::training::mrnf_strategy {
 
@@ -122,6 +123,8 @@ namespace lfs::training::mrnf_strategy {
         MRNFBounds* bounds,
         void* stream = nullptr);
 
+    std::pair<size_t, size_t> percentile_bounds_ranks(size_t n, float percentile);
+
     // Median of geomean(exp(scaling_raw)); out_valid is false when no usable extent remains.
     void launch_median_geomean_extent(
         const float* scaling_raw,
@@ -171,6 +174,15 @@ namespace lfs::training::mrnf_strategy {
         float far_radius,
         bool* far_out,
         size_t N,
+        void* stream = nullptr);
+
+    // Ray-depth rows (lfs/training/ray_depth_step.cuh) of split children: anchor and baseline spread from the
+    // parent, fresh moments for both, as the parent's other optimizer state is reset too.
+    void launch_ray_depth_inherit(
+        float* state,
+        const int64_t* parents,
+        const int64_t* children,
+        size_t K,
         void* stream = nullptr);
 
 } // namespace lfs::training::mrnf_strategy

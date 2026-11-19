@@ -471,9 +471,6 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::deallocate(void* ptr, const cudaStream_t stream) {
-#if LFS_HAS_CUDA
-        unretire_stream(stream);
-#endif
         if (!ptr) {
             return;
         }
@@ -494,12 +491,12 @@ namespace lfs::core {
             ++stats_.num_deallocs;
             publish_stats_locked();
 
-            // Severed streams were drained in release_stream() and may already
-            // be destroyed handles: recording on them is driver-side UAF.
-            std::erase_if(allocation.extra_streams, [this](const cudaStream_t s) {
-                return severed_streams_.contains(s);
-            });
-            caller_stream_live = !severed_streams_.contains(stream);
+            // Retired streams were drained in release_stream() and may already
+            // be destroyed handles: recording on them is driver-side UAF. The
+            // registry is shared, so a recycled handle that re-entered the API
+            // anywhere else is live again here too.
+            std::erase_if(allocation.extra_streams, is_stream_retired);
+            caller_stream_live = !is_stream_retired(stream);
         }
 
         if (caller_stream_live &&
@@ -568,9 +565,6 @@ namespace lfs::core {
             return;
         }
         std::lock_guard lock(mutex_);
-        // A handle value recorded on a live allocation is live by definition;
-        // if it matches an old severed handle, CUDA recycled the value.
-        severed_streams_.erase(stream);
         const auto it = allocated_blocks_.find(ptr);
         if (it == allocated_blocks_.end()) {
             return;
@@ -615,7 +609,9 @@ namespace lfs::core {
         for (auto& [ptr, info] : allocated_blocks_) {
             std::erase(info.extra_streams, stream);
         }
-        severed_streams_.insert(stream);
+#if LFS_HAS_CUDA
+        retire_stream(stream);
+#endif
     }
 
     void PinnedMemoryAllocator::empty_cache_impl(const bool publish_stats) {

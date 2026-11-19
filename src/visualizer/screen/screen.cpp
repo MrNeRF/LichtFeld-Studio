@@ -15,6 +15,13 @@
 namespace lfs::vis::screen {
 
     namespace {
+        template <class Predicate>
+        bool containsAreaMatching(const ScreenLayout::Node& node, const Predicate& predicate) {
+            if (node.isArea())
+                return predicate(node.area);
+            return std::ranges::any_of(node.children, [&](const auto& child) { return containsAreaMatching(child, predicate); });
+        }
+
         constexpr int kFormatVersion = 1;
 
     } // namespace
@@ -32,6 +39,8 @@ namespace lfs::vis::screen {
           layout_(other.layout_),
           active_view_(other.active_view_),
           maximized_(other.maximized_),
+          left_collapsed_(other.left_collapsed_),
+          right_collapsed_(other.right_collapsed_),
           next_area_(other.next_area_),
           generation_(other.generation_) {
         for (const auto& [id, area] : other.areas_) {
@@ -385,6 +394,42 @@ namespace lfs::vis::screen {
             maximized_ = {};
     }
 
+    size_t Screen::dockColumns(const bool right) const {
+        const auto* root = layout_.root();
+        if (!root || root->isArea() || root->axis != SplitAxis::Columns)
+            return 0;
+        size_t count = 0;
+        for (; count < root->children.size(); ++count) {
+            if (containsAreaMatching(root->children[right ? root->children.size() - 1 - count : count],
+                                     [this](AreaId area) { return isView(area); }))
+                break;
+        }
+        return count;
+    }
+
+    bool Screen::revealDockFor(AreaId area) {
+        for (const bool right : {false, true}) {
+            if (!dockCollapsed(right))
+                continue;
+            const size_t count = dockColumns(right);
+            for (size_t i = 0; i < count; ++i) {
+                const auto& children = layout_.root()->children;
+                if (containsAreaMatching(children[right ? children.size() - 1 - i : i], [area](AreaId id) { return area == id; }))
+                    return setDockCollapsed(right, false);
+            }
+        }
+        return false;
+    }
+
+    bool Screen::setDockCollapsed(bool right, bool collapsed) {
+        auto& current = right ? right_collapsed_ : left_collapsed_;
+        if (current == collapsed)
+            return false;
+        current = collapsed;
+        touch();
+        return true;
+    }
+
     nlohmann::json Screen::save() const {
         nlohmann::json areas = nlohmann::json::array();
         for (const AreaId id : layout_.areas()) {
@@ -402,6 +447,10 @@ namespace lfs::vis::screen {
                            {"layout", layout_.toJson()},
                            {"areas", std::move(areas)},
                            {"active_view", active_view_.value}};
+        if (left_collapsed_)
+            out["left_dock_collapsed"] = true;
+        if (right_collapsed_)
+            out["right_dock_collapsed"] = true;
         if (maximized_.valid())
             out["maximized"] = maximized_.value;
         return out;
@@ -420,6 +469,13 @@ namespace lfs::vis::screen {
 
         Screen screen(registry);
         screen.layout_ = std::move(*layout);
+        for (const bool right : {false, true}) {
+            if (const auto field = json.find(right ? "right_dock_collapsed" : "left_dock_collapsed"); field != json.end()) {
+                if (!field->is_boolean())
+                    return std::nullopt;
+                screen.setDockCollapsed(right, field->get<bool>());
+            }
+        }
         std::uint32_t largest = 0;
         std::set<std::string> single_instance_editors;
         for (const auto& item : *areas_it) {

@@ -33,6 +33,10 @@ namespace lfs::training {
         float* edge_score_out = nullptr;
         float* impact_sum_out = nullptr;
         float* impact_peak_out = nullptr;
+        // Optional camera gradient, set together (zeroed by the backward): dL/d(w2c) float32 [4*4], rows 0-2, and
+        // dL/d(camera position) float32 [3], the two taken as independent inputs.
+        lfs::core::Tensor grad_w2c;
+        lfs::core::Tensor grad_cam_position;
     };
 
     // SteadySplats color variance against each pixel's expected splat color, which the

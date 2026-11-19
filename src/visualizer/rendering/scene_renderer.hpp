@@ -71,6 +71,7 @@ namespace lfs::vis {
             // sample into the actual output image size for the selected slot.
             glm::ivec2 source_size{0, 0};
             RenderTargetId target{};
+            bool require_exact_depth = false;
         };
         enum class ReadbackTicketStatus : std::uint8_t {
             NotReady = 0,
@@ -103,6 +104,9 @@ namespace lfs::vis {
             core::Tensor& destination;
             glm::ivec2 offset{0, 0};
             Kind kind = Kind::Color;
+            // Color only: copy source rows [source_y, source_y + source_height); 0 height means all rows.
+            int source_y = 0;
+            int source_height = 0;
         };
         struct ReadbackStats {
             size_t outstanding = 0;
@@ -138,8 +142,9 @@ namespace lfs::vis {
         virtual std::expected<void, std::string> readOutputImageIntoCpuHwc(RenderTargetId, core::Tensor&, int, int) const = 0;
         virtual std::expected<float, std::string> sampleDepthAtPixel(const DepthSampleRequest&) const = 0;
         virtual std::expected<uint64_t, std::string> submitReadbackTicket(const ReadbackRequest&) const = 0;
-        std::expected<uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(RenderTargetId target, core::Tensor& destination, int x, int y) const {
-            return submitReadbackTicket({target, destination, {x, y}, ReadbackRequest::Kind::Color});
+        std::expected<uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(RenderTargetId target, core::Tensor& destination, int x, int y,
+                                                                                   int source_y = 0, int source_height = 0) const {
+            return submitReadbackTicket({target, destination, {x, y}, ReadbackRequest::Kind::Color, source_y, source_height});
         }
         std::expected<uint64_t, std::string> submitReadOutputDepthImageTicket(RenderTargetId target, core::Tensor& destination) const {
             return submitReadbackTicket({target, destination, {}, ReadbackRequest::Kind::Depth});

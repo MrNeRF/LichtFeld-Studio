@@ -34,9 +34,9 @@ namespace lfs::training {
             float fx, fy, cx, cy, near_plane;
             uint32_t width, height, model, samples, stride, capacity;
             std::array<float, 3> lo, hi;
-            float padding = 0;
-        } p{.fx = params.intrinsics.fx, .fy = params.intrinsics.fy, .cx = params.intrinsics.cx, .cy = params.intrinsics.cy, .near_plane = params.near_plane, .width = uint32_t(prior.shape()[1]), .height = uint32_t(prior.shape()[0]), .model = uint32_t(params.projection.model), .samples = uint32_t(samples), .stride = uint32_t(stride), .capacity = capacity, .lo = params.aabb_lo, .hi = params.aabb_hi};
-        static_assert(sizeof(Parameters) == 144 && offsetof(Parameters, padding) == 140);
+            uint32_t pinhole_ray_distance;
+        } p{.fx = params.intrinsics.fx, .fy = params.intrinsics.fy, .cx = params.intrinsics.cx, .cy = params.intrinsics.cy, .near_plane = params.near_plane, .width = uint32_t(prior.shape()[1]), .height = uint32_t(prior.shape()[0]), .model = uint32_t(params.projection.model), .samples = uint32_t(samples), .stride = uint32_t(stride), .capacity = capacity, .lo = params.aabb_lo, .hi = params.aabb_hi, .pinhole_ray_distance = params.projection.pinhole_ray_distance};
+        static_assert(sizeof(Parameters) == 144 && offsetof(Parameters, pinhole_ray_distance) == 140);
         if (p.model == 3) {
             p.fx = float(p.width);
             p.fy = float(p.height);

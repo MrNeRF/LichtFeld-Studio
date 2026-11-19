@@ -349,7 +349,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -367,7 +367,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return Json(source.*member); },
@@ -395,7 +395,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> optional_vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return vec3_json(source.*member); },
@@ -419,7 +419,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return JsonField<Owner>(
                 name,
                 [member](const Owner& source) { return vec3_json(source.*member); },
@@ -442,7 +442,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             AfterAssign after_assign = nullptr) {
@@ -540,7 +540,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -576,7 +576,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -870,6 +870,7 @@ namespace lfs::vis::project {
                 skip_if_missing(required_field("equirectangular", &RenderSettings::equirectangular)),
                 skip_if_missing(required_field("orthographic", &RenderSettings::orthographic)),
                 skip_if_missing(required_field("ortho_scale", &RenderSettings::ortho_scale)),
+                optional_field("normal_view", &RenderSettings::normal_view),
                 skip_if_missing(required_field("depth_view", &RenderSettings::depth_view)),
                 skip_if_missing(required_field("depth_view_min", &RenderSettings::depth_view_min)),
                 skip_if_missing(required_field("depth_view_max", &RenderSettings::depth_view_max)),
@@ -1818,7 +1819,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -2135,7 +2136,7 @@ namespace lfs::vis::project {
                 {"VIEW", "render_settings.ppisp_mode", integers({0, 1}), static_cast<int>(PPISP::AUTO)},
                 {"VIEW", "render_settings.environment_mode", integers({0, 1}), static_cast<int>(Environment::SolidColor)},
                 {"VIEW", "render_settings.split_view_mode", integers({0, 1, 2, 3}), static_cast<int>(SplitViewMode::Disabled)},
-                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2}), static_cast<int>(Comparison::RGB)},
+                {"VIEW", "render_settings.gt_comparison_mode", integers({0, 1, 2, 3}), static_cast<int>(Comparison::RGB)},
                 {"VIEW", "render_settings.depth_visualization_mode", integers({0, 1}), static_cast<int>(Depth::Palette)},
                 {"VIEW", "tools.selection_submode", string_parser([](const std::string_view value) {
                      return selection_submode_from_name(value).has_value();
@@ -2539,6 +2540,8 @@ namespace lfs::vis::project {
             if (const auto* default_fixed = find_space_payload(*default_gui, "fixed_arrangement"))
                 fixed_payload = *default_fixed;
         }
+        fixed_payload["left_dock_collapsed"] = screen_payload.value("left_dock_collapsed", false);
+        fixed_payload["right_dock_collapsed"] = screen_payload.value("right_dock_collapsed", false);
         fixed_payload["sequencer_visible"] = gui_manager->isSequencerVisible();
         fixed_payload["python_console_visible"] =
             window_states.contains("python_console") && window_states.at("python_console");
@@ -3578,6 +3581,10 @@ namespace lfs::vis::project {
             }
 
             if (!has_screen) {
+                viewer.screens().edit([&](screen::Screen& screen) {
+                    screen.setDockCollapsed(false, scalar<bool>(fixed, "left_dock_collapsed").value_or(false));
+                    screen.setDockCollapsed(true, scalar<bool>(fixed, "right_dock_collapsed").value_or(false));
+                });
                 gui_manager->setSequencerVisible(layout.show_sequencer);
             }
 

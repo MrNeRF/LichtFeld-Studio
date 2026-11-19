@@ -2112,7 +2112,8 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::launch_inverse_lens(StorageRef output, const UndistortParams& p, ExecContext execution) {
         queue(execution);
-        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion, p.view, {}};
+        std::copy_n(p.view_rotation, 9, lens.view_rotation);
         std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
         std::lock_guard lock(impl_->mutex);
         const auto dst = impl_->view(output, size_t(p.src_width) * p.src_height * 2 * sizeof(float));
@@ -2172,7 +2173,8 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::launch_inverse_warp(StorageRef input, StorageRef output, StorageRef validity, const UndistortParams& p, unsigned channels, unsigned mode, ExecContext execution) {
         queue(execution);
-        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion, p.view, {}};
+        std::copy_n(p.view_rotation, 9, lens.view_rotation);
         std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
         std::lock_guard lock(impl_->mutex);
         const auto src = impl_->view(input, size_t(p.dst_width) * p.dst_height * channels * 4);
@@ -2183,7 +2185,8 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::launch_shared_warp(StorageRef input, StorageRef output, const UndistortParams& p, unsigned channels, unsigned mode, ExecContext execution) {
         queue(execution);
-        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion, p.view, {}};
+        std::copy_n(p.view_rotation, 9, lens.view_rotation);
         std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
         std::lock_guard lock(impl_->mutex);
         const auto src = impl_->view(input, size_t(p.src_width) * p.src_height * channels * (input.dtype == DataType::UInt8 ? 1 : 4));
@@ -2193,7 +2196,8 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::launch_rgb_warp(StorageRef input, StorageRef output, const UndistortParams& p, ExecContext execution) {
         queue(execution);
-        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion};
+        LfsHipLens lens{p.src_fx, p.src_fy, p.src_cx, p.src_cy, p.dst_fx, p.dst_fy, p.dst_cx, p.dst_cy, p.src_width, p.src_height, p.dst_width, p.dst_height, static_cast<int32_t>(p.model_type), {}, p.num_distortion, p.view, {}};
+        std::copy_n(p.view_rotation, 9, lens.view_rotation);
         std::copy(std::begin(p.distortion), std::end(p.distortion), std::begin(lens.distortion));
         std::lock_guard lock(impl_->mutex);
         const auto src = impl_->view(input, size_t(p.src_width) * p.src_height * 3 * (input.dtype == DataType::UInt8 ? 1 : 4));

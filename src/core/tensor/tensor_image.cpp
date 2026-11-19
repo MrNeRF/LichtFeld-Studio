@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_image.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/tensor_execution.hpp"
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
@@ -103,6 +102,11 @@ namespace lfs::core::internal {
         return output;
     }
 
+    Tensor GpuBackendOps::image_warp_region(const Tensor& source, const UndistortParams& params,
+                                            int x, int y, int width, int height, ExecContext) {
+        return undistort_image_region_tensor(source, params, x, y, width, height);
+    }
+
     Tensor GpuBackendOps::image_warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse, Tensor* validity, ExecContext) {
         const GpuBackendScope scope(*gpu_backend_of(input));
         auto result = warp_image_tensor(input.cpu(), params, mode, inverse, validity).to(Device::GPU);
@@ -147,114 +151,65 @@ namespace lfs::core {
 #endif
 
 namespace lfs::core {
+    namespace {
+        Tensor warp(const Tensor& input, const UndistortParams& params, int mode, bool inverse,
+                    Tensor* validity, void* stream) {
+            LFS_ASSERT_MSG(!inverse || !params.view, "A camera view only supports forward resampling");
+            if (input.device() == Device::CPU)
+                return internal::warp_image_tensor(input, params, mode, inverse, validity);
+            const auto source = input.contiguous();
+            pin_operands({&source});
+            const auto queue = prepare_inputs_for_stream({&source}, static_cast<cudaStream_t>(stream));
+            return internal::backend_ops_for(source).image_warp(source, params, mode, inverse, validity, {queue});
+        }
+    } // namespace
+
     Tensor inverse_distortion_sample_map(const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (TensorExecutionTarget::current().backend() == GpuBackend::CUDA)
-            return cuda::inverse_distortion_sample_map(params, static_cast<cudaStream_t>(stream));
-#endif
+        LFS_ASSERT_MSG(!params.view, "A camera view only supports forward resampling");
         auto source = Tensor::empty({1}, Device::GPU);
-        return internal::backend_ops_for(source).image_warp(source, params, 4, true, nullptr, internal::ExecContext{});
+        return internal::backend_ops_for(source).image_warp(source, params, 4, true, nullptr, {static_cast<cudaStream_t>(stream)});
     }
 
-    Tensor undistort_image_region(
-        const Tensor& source, const UndistortParams& params,
-        int x, int y, int width, int height, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(source) == GpuBackend::CUDA)
-            return cuda::undistort_image_region(source, params, x, y, width, height, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::undistort_image_region_tensor(source, params, x, y, width, height);
+    Tensor undistort_image_region(const Tensor& source, const UndistortParams& params,
+                                  int x, int y, int width, int height, void* stream) {
+        if (source.device() == Device::CPU)
+            return internal::undistort_image_region_tensor(source, params, x, y, width, height);
+        return internal::backend_ops_for(source).image_warp_region(source, params, x, y, width, height, {static_cast<cudaStream_t>(stream)});
     }
 
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::undistort_image(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::undistort_image_region_tensor(src, params, 0, 0, params.dst_width, params.dst_height);
+        return undistort_image_region(src, params, 0, 0, params.dst_width, params.dst_height, stream);
     }
 
     Tensor undistort_mask(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::undistort_mask(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 1, false, nullptr);
+        return undistort_mask_area(src, params, stream);
     }
 
     Tensor undistort_mask_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::undistort_mask_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 1, false, nullptr);
+        return warp(src, params, 1, false, nullptr, stream);
     }
 
     Tensor undistort_depth_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::undistort_depth_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 2, false, nullptr);
+        return warp(src, params, 2, false, nullptr, stream);
     }
 
     Tensor undistort_normal_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::undistort_normal_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 3, false, nullptr);
+        return warp(src, params, 3, false, nullptr, stream);
     }
 
     Tensor distort_mask_to_source_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::distort_mask_to_source_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 1, true, nullptr);
+        return warp(src, params, 1, true, nullptr, stream);
     }
 
     Tensor distort_depth_to_source_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::distort_depth_to_source_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 2, true, nullptr);
+        return warp(src, params, 2, true, nullptr, stream);
     }
 
     Tensor distort_normal_to_source_area(const Tensor& src, const UndistortParams& params, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::distort_normal_to_source_area(src, params, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 3, true, nullptr);
+        return warp(src, params, 3, true, nullptr, stream);
     }
 
     Tensor distort_image_to_source(const Tensor& src, const UndistortParams& params, Tensor& validity, void* stream) {
-#if LFS_HAS_CUDA
-        if (gpu_backend_of(src) == GpuBackend::CUDA)
-            return cuda::distort_image_to_source(src, params, validity, static_cast<cudaStream_t>(stream));
-#else
-        (void)stream;
-#endif
-        return internal::warp_image_tensor(src, params, 0, true, &validity);
+        return warp(src, params, 0, true, &validity, stream);
     }
 } // namespace lfs::core

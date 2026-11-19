@@ -9,10 +9,12 @@
 
 #include "backend_kernels.hpp"
 #include "core/cuda_error.hpp"
+#include "core/gpu_kernel_module.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
+#include "nn_sampling_program.hpp"
 #include "portable_ops.hpp"
 
 #if !LFS_HAS_CUDA
@@ -69,6 +71,32 @@ namespace lfs::core::nn {
     namespace {
 
         // Backends without dedicated neural-network kernels run the portable ops.
+        struct SamplingParams {
+            uint64_t addresses[6]{};
+            uint32_t count, spatial, queries, heads, channels, points, levels, taps;
+            uint32_t in_h, in_w, out_h, out_w, horizontal, groups;
+        };
+
+        void sample_image(std::string_view operation, Tensor& output, SamplingParams p,
+                          const Tensor& data, const Tensor& bounds, const Tensor* xy = nullptr,
+                          const Tensor* weights = nullptr, const Tensor* coefficients = nullptr) {
+            LFS_ASSERT_MSG(output.numel() <= UINT32_MAX, "Image sampling output is too large");
+            p.count = uint32_t(output.numel());
+            if (!p.count)
+                return;
+            p.groups = uint32_t(std::min<size_t>(65535, (output.numel() + 255) / 256));
+            using Binding = GpuKernelModule::Binding;
+            const std::array bindings{Binding{0, &data}, Binding{8, xy}, Binding{16, weights},
+                                      Binding{24, &output, GpuKernelModule::Access::ReadWrite},
+                                      Binding{32, &bounds}, Binding{40, coefficients}};
+            auto program = GpuKernelModule::load(nn_sampling_program_entries(), *gpu_backend_of(output));
+            if (!program)
+                throw Exception(std::move(program).error());
+            auto result = (*program)->dispatch({.function = operation, .arguments = {std::as_bytes(std::span(&p, 1)), bindings}, .groups = {p.groups, 1, 1}, .group = {256, 1, 1}});
+            if (!result)
+                throw Exception(std::move(result).error());
+        }
+
         bool runs_portable(const Tensor& tensor) {
             return gpu_backend_of(tensor) != GpuBackend::CUDA;
         }
@@ -164,6 +192,73 @@ namespace lfs::core::nn {
         }
 
     } // namespace
+
+    Tensor group_norm(const Tensor& input, const Tensor& weight, const Tensor& bias,
+                      const int groups, const float eps) {
+        require_nn_tensor(input, "group_norm", "input");
+        require_nn_tensor(weight, "group_norm", "weight");
+        require_nn_tensor(bias, "group_norm", "bias");
+        require_same_dtype_device(input, weight, "group_norm", "input", "weight");
+        require_same_dtype_device(input, bias, "group_norm", "input", "bias");
+        LFS_ASSERT_MSG(input.ndim() == 4 && groups > 0 && input.size(0) > 0 && input.size(1) > 0 &&
+                           input.size(1) % size_t(groups) == 0 && input.size(2) > 0 && input.size(3) > 0,
+                       "GroupNorm expects nonempty NCHW with channels divisible by groups");
+        LFS_ASSERT_MSG(weight.ndim() == 1 && bias.ndim() == 1 &&
+                           weight.size(0) == input.size(1) && bias.size(0) == input.size(1) &&
+                           std::isfinite(eps) && eps > 0,
+                       "Invalid GroupNorm affine parameters or epsilon");
+        const auto channels = input.size(1);
+        const auto grouped = input.to(DataType::Float32).contiguous().reshape(TensorShape(std::vector<size_t>{input.size(0), size_t(groups), input.numel() / input.size(0) / size_t(groups)}));
+        const Tensor centered = grouped - grouped.mean(-1, true);
+        const Tensor variance = (centered * centered).mean(-1, true);
+        const Tensor normalized = centered / (variance + eps).sqrt();
+        const Tensor output = normalized.reshape(input.shape()) *
+                                  weight.to(DataType::Float32).reshape({1, int(channels), 1, 1}) +
+                              bias.to(DataType::Float32).reshape({1, int(channels), 1, 1});
+        return output.to(input.dtype());
+    }
+
+    Tensor deformable_attention(const Tensor& value, const Tensor& locations, const Tensor& weights,
+                                const std::span<const std::pair<int, int>> spatial_shapes) {
+        constexpr auto op = "deformable_attention";
+        require_nn_tensor(value, op, "value");
+        require_nn_tensor(locations, op, "locations");
+        require_nn_tensor(weights, op, "weights");
+        require_same_dtype_device(value, locations, op, "value", "locations");
+        require_same_dtype_device(value, weights, op, "value", "weights");
+        LFS_ASSERT_MSG(value.ndim() == 4 && locations.ndim() == 6 && weights.ndim() == 5,
+                       "Deformable attention expects BSHD, BQHLP2 and BQHLP inputs");
+        LFS_ASSERT_MSG(!spatial_shapes.empty() && spatial_shapes.size() <= 4,
+                       "Deformable attention requires one to four spatial levels");
+        std::vector<int> levels;
+        size_t spatial = 0;
+        for (size_t i = 0; i < spatial_shapes.size(); ++i) {
+            const auto [height, width] = spatial_shapes[i];
+            LFS_ASSERT_MSG(height > 0 && width > 0, "Invalid deformable spatial extent");
+            const size_t count = size_t(height) * size_t(width);
+            LFS_ASSERT_MSG(spatial <= value.size(1) && count <= value.size(1) - spatial,
+                           "Deformable spatial levels exceed the value extent");
+            LFS_ASSERT_MSG(spatial + count <= INT32_MAX, "Deformable spatial levels exceed integer indexing");
+            levels.insert(levels.end(), {height, width, static_cast<int>(spatial)});
+            spatial += count;
+        }
+        LFS_ASSERT_MSG(spatial == value.size(1) && locations.size(5) == 2 &&
+                           locations.size(0) == value.size(0) && locations.size(2) == value.size(2) &&
+                           locations.size(3) == spatial_shapes.size(),
+                       "Deformable attention spatial or batch/head mismatch");
+        for (size_t dim = 0; dim < 5; ++dim)
+            LFS_ASSERT_MSG(weights.size(dim) == locations.size(dim) && weights.size(dim) > 0,
+                           "Deformable attention sampling shape mismatch");
+        LFS_ASSERT_MSG(value.size(3) > 0, "Deformable attention requires nonempty head channels");
+        const GpuBackendScope scope(*gpu_backend_of(value));
+        const auto v = value.to(DataType::Float32).contiguous(), xy = locations.to(DataType::Float32).contiguous();
+        const auto a = weights.to(DataType::Float32).contiguous();
+        auto output = empty_like_shape(v, {value.size(0), locations.size(1), value.size(2) * value.size(3)});
+        const auto layout = Tensor::from_vector(levels, {levels.size()}, Device::GPU);
+        sample_image("sampleAttention", output, {.spatial = uint32_t(spatial), .queries = uint32_t(locations.size(1)), .heads = uint32_t(value.size(2)), .channels = uint32_t(value.size(3)), .points = uint32_t(locations.size(4)), .levels = uint32_t(spatial_shapes.size())},
+                     v, layout, &xy, &a);
+        return output.to(value.dtype());
+    }
 
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_a, bool trans_b, const Tensor* bias,
                 Activation activation, const Tensor* residual, const Tensor* scale) {
@@ -1045,6 +1140,19 @@ namespace lfs::core::nn {
         require_nn_tensor(input, "resize2d", "input");
         LFS_ASSERT_MSG(input.ndim() == 4, "resize2d expects NCHW");
         LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "resize2d output size must be positive");
+        if (mode == ResizeMode::Nearest) {
+            const GpuBackendScope scope(*gpu_backend_of(input));
+            const auto indices = [coord](int64_t size, int64_t target) {
+                std::vector<int> ids(static_cast<size_t>(target));
+                for (int64_t i = 0; target > 1 && i < target; ++i) {
+                    int64_t j = coord == CoordTransform::AlignCorners ? i * (size - 1) / (target - 1) : coord == CoordTransform::Asymmetric ? i * size / target
+                                                                                                                                            : std::max<int64_t>(0, (2 * i + 1) * size - target) / (2 * target);
+                    ids[i] = int(std::min(j, size - 1));
+                }
+                return Tensor::from_vector(ids, {ids.size()}, Device::GPU).to(DataType::Int64);
+            };
+            return input.index_select(2, indices(input.size(2), out_h)).index_select(3, indices(input.size(3), out_w));
+        }
         const Tensor in_c = input.contiguous();
         if (runs_portable(in_c)) {
             return portable::resize(in_c, out_h, out_w, mode, coord);
@@ -1063,9 +1171,10 @@ namespace lfs::core::nn {
         return out;
     }
 
-    Tensor resize2d_pil_bicubic(const Tensor& input, int out_h, int out_w) {
-        require_nn_tensor(input, "resize2d_pil_bicubic", "input");
-        require_cuda_kernels(input, "resize2d_pil_bicubic");
+    Tensor resize2d_pil(const Tensor& input, int out_h, int out_w, ResizeMode mode) {
+        require_nn_tensor(input, "resize2d_pil", "input");
+        LFS_ASSERT_MSG(mode == ResizeMode::Bilinear || mode == ResizeMode::Cubic, "PIL resampling requires bilinear or cubic filtering");
+        const GpuBackendScope scope(*gpu_backend_of(input));
         LFS_ASSERT_MSG(input.ndim() == 4 && input.dtype() == DataType::Float32,
                        "PIL resampling expects Float32 NCHW");
         LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "PIL resampling size must be positive");
@@ -1078,11 +1187,13 @@ namespace lfs::core::nn {
                 continue;
             const double scale = double(in_size) / out_size;
             const double filter_scale = std::max(1.0, scale);
-            const double support = 2 * filter_scale;
+            const double support = (mode == ResizeMode::Cubic ? 2 : 1) * filter_scale;
             const int taps = 2 * int(std::ceil(support)) + 1;
             std::vector<int> bounds(size_t(out_size) * 2), coefficients(size_t(out_size) * taps);
-            const auto cubic = [](double x) {
+            const auto filter = [mode](double x) {
                 x = std::abs(x);
+                if (mode == ResizeMode::Bilinear)
+                    return std::max(0.0, 1.0 - x);
                 if (x < 1)
                     return ((1.5 * x - 2.5) * x) * x + 1;
                 if (x < 2)
@@ -1098,7 +1209,7 @@ namespace lfs::core::nn {
                 std::vector<double> weights(size_t(end - first));
                 double total = 0;
                 for (int i = first; i < end; ++i) {
-                    weights[size_t(i - first)] = cubic((i - center + 0.5) / filter_scale);
+                    weights[size_t(i - first)] = filter((i - center + 0.5) / filter_scale);
                     total += weights[size_t(i - first)];
                 }
                 for (int i = first; i < end; ++i) {
@@ -1113,11 +1224,7 @@ namespace lfs::core::nn {
                                .to(input.device(), current.stream());
             const int height = horizontal ? in_h : out_h, width = horizontal ? out_w : in_w;
             auto output = empty_like_shape(current, {current.size(0), current.size(1), size_t(height), size_t(width)});
-            pin_operands({&current, &b, &c});
-            output.set_stream(prepare_inputs_for_stream({&current, &b, &c}, output.stream()));
-            kernels::resample_pil_axis(current.ptr<float>(), output.ptr<float>(), b.ptr<int>(), c.ptr<int>(),
-                                       taps, int(current.size(0) * current.size(1)), in_h, in_w,
-                                       height, width, horizontal, output.stream());
+            sample_image("resampleAxis", output, {.taps = uint32_t(taps), .in_h = uint32_t(in_h), .in_w = uint32_t(in_w), .out_h = uint32_t(height), .out_w = uint32_t(width), .horizontal = uint32_t(horizontal)}, current, b, nullptr, nullptr, &c);
             current = std::move(output);
         }
         return current;

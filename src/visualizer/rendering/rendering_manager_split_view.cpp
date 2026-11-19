@@ -303,9 +303,9 @@ namespace lfs::vis {
         apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
         apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
 
-        const auto load_environment = [](const ViewportEnvironment& environment) {
+        const auto load_environment = [&params](const ViewportEnvironment& environment) {
             std::shared_ptr<const lfs::rendering::EnvironmentImage> image;
-            if (environment.enabled && environment.map_path) {
+            if (!params.loss_visualization && environment.enabled && environment.map_path) {
                 auto loaded = lfs::rendering::loadEnvironmentImageShared(*environment.map_path);
                 if (loaded) {
                     image = *loaded;
@@ -328,9 +328,15 @@ namespace lfs::vis {
             output[2 * pixel_count + i] = params.background.b;
         }
 
-        const auto sample = [](const lfs::core::Tensor& tensor, const int sample_width,
-                               const int sample_height, const float u, const float v,
-                               const int channel) {
+        // The loss heatmap compares what the screen shows: panel uploads round each texel to RGBA8 before the
+        // sampler interpolates it, so the capture rounds (and clamps) the same way.
+        const auto texel_value = [&params](const float value) {
+            return params.loss_visualization ? std::floor(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f) / 255.0f
+                                             : value;
+        };
+        const auto sample = [&texel_value](const lfs::core::Tensor& tensor, const int sample_width,
+                                           const int sample_height, const float u, const float v,
+                                           const int channel) {
             const float sample_x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(sample_width) - 0.5f;
             const float sample_y = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(sample_height) - 0.5f;
             const int x0_unclamped = static_cast<int>(std::floor(sample_x));
@@ -342,8 +348,8 @@ namespace lfs::vis {
             const float tx = sample_x - static_cast<float>(x0_unclamped);
             const float ty = sample_y - static_cast<float>(y0_unclamped);
             const float* data = tensor.ptr<float>();
-            const auto at = [data, sample_width, sample_height, channel](const int x, const int y) {
-                return data[(static_cast<std::size_t>(channel) * sample_height + y) * sample_width + x];
+            const auto at = [&texel_value, data, sample_width, sample_height, channel](const int x, const int y) {
+                return texel_value(data[(static_cast<std::size_t>(channel) * sample_height + y) * sample_width + x]);
             };
             return std::lerp(std::lerp(at(x0, y0), at(x1, y0), tx),
                              std::lerp(at(x0, y1), at(x1, y1), tx), ty);
@@ -382,7 +388,7 @@ namespace lfs::vis {
                 const int local_y = static_cast<int>(v * rect_height);
                 const int y = std::clamp(panel.flip_y ? rect_height - 1 - local_y : local_y, 0, h - 1);
                 const float* pixels = std::get<0>(data).template ptr<float>();
-                return pixels[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                return texel_value(pixels[(static_cast<std::size_t>(channel) * h + y) * w + x]);
             };
             float panel_u = u;
             if (panel.normalize_x_to_panel) {
@@ -422,7 +428,7 @@ namespace lfs::vis {
                                    glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
                                    glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
             }
-            if (panel.environment.enabled) {
+            if (!params.loss_visualization && panel.environment.enabled) {
                 const auto& environment = panel.environment;
                 const auto& image = &panel == &left_panel ? left_environment : right_environment;
                 glm::vec3 background{0.0f};

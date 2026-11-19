@@ -172,6 +172,10 @@ class ViewMenu:
             menu_action(tr("toolbar.reset_home"), lf.reset_home,
                         shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESTORE_HOME)),
             menu_separator(),
+            menu_action(tr("input_settings.action.toggle_left_dock"), lambda: lf.toggle_side_dock("left"),
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_LEFT_DOCK)),
+            menu_action(tr("input_settings.action.toggle_right_dock"), lambda: lf.toggle_side_dock("right"),
+                        shortcut=keymap_shortcut(lf.keymap.Action.TOGGLE_RIGHT_DOCK)),
             # Disabled with the runtime status as tooltip where VR cannot run (no OpenXR runtime or headset,
             # or a viewer without Vulkan VR support).
             menu_action(

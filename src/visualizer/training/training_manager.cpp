@@ -1240,7 +1240,7 @@ namespace lfs::vis {
         }
 
         if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval)
-            trainer_->set_lpips_weights_path(evaluation_weights_preparer_(!trainer_->getParams().no_download));
+            trainer_->set_lpips_weights_preparer([preparer = evaluation_weights_preparer_, allow_download = !trainer_->getParams().no_download] { return preparer(allow_download); });
 
         std::optional<TrainingSceneInitializationRollback> scene_rollback;
         std::optional<lfs::training::TrainingModelGraphCapture> graph_capture;

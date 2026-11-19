@@ -60,6 +60,9 @@ namespace lfs::core {
                const std::filesystem::path& normal_path = {});
         Camera(const Camera&, const Tensor& transform);
 
+        std::shared_ptr<Camera> make_pinhole_view(const UndistortParams& params, int uid,
+                                                  const std::string& image_name) const;
+
         // Destructor to clean up CUDA stream
         ~Camera();
 
@@ -277,6 +280,10 @@ namespace lfs::core {
 
         // Translate the camera by trans in world space (cam_pos += trans, T updated accordingly)
         void translate(const Tensor& trans);
+
+        // Keep the device allocations stable for active renderer bindings.
+        void set_pose(const Tensor& rotation, const Tensor& translation);
+        void set_device_pose(const Tensor& world_to_camera, const Tensor& position);
 
         void precompute_undistortion(float blank_pixels = 0.0f);
         enum class UndistortDestination { Calibration,

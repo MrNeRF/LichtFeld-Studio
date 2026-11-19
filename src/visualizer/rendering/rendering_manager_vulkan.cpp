@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -2293,7 +2294,8 @@ namespace lfs::vis {
                         }
                     }
 
-                    if (!gt_image || !gt_image->is_valid()) {
+                    const bool gt_placeholder = !gt_image || !gt_image->is_valid();
+                    if (gt_placeholder) {
                         if (!gt_loading) {
                             LOG_DEBUG("{}",
                                       gt_error.empty() ? "GT comparison could not load ground-truth data" : gt_error);
@@ -2344,6 +2346,7 @@ namespace lfs::vis {
 
                             RenderedPanel compare_panel{};
                             std::string compare_error;
+                            bool compare_placeholder = false;
 
                             if (!gtComparisonUsesRGBReference(gt_mode)) {
                                 view_state.gt_async_refresh_pending_ |=
@@ -2626,6 +2629,7 @@ namespace lfs::vis {
                                 LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
                                 compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
                                 rendered_gt_view.reset();
+                                compare_placeholder = true;
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
@@ -2709,7 +2713,7 @@ namespace lfs::vis {
                                         .height = physical_rect.w};
                                 }
                                 pending_split_view.enabled = true;
-                                pending_split_view.loss_visualization = gtComparisonShowsLoss(gt_mode);
+                                pending_split_view.loss_visualization = gtComparisonShowsLoss(gt_mode) && !gt_placeholder && !compare_placeholder;
                                 pending_split_view.exact_texel_sampling =
                                     rendered_gt_actual_size;
                                 pending_split_view.split_position = frame_settings.split_position;

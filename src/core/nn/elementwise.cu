@@ -12,26 +12,10 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
+#include <math_constants.h>
 
 namespace lfs::core::nn::kernels {
     namespace {
-
-        __global__ void resample_pil_axis_kernel(const float* input, float* output, const int* bounds,
-                                                 const int* coefficients, int taps, int count,
-                                                 int in_h, int in_w, int out_h, int out_w, bool horizontal) {
-            const int index = int(blockIdx.x * blockDim.x + threadIdx.x);
-            if (index >= count)
-                return;
-            const int x = index % out_w, y = index / out_w % out_h, plane = index / (out_h * out_w);
-            const int target = horizontal ? x : y;
-            const int first = bounds[2 * target], length = bounds[2 * target + 1];
-            int sum = 1 << 21;
-            for (int i = 0; i < length; ++i) {
-                const int source = plane * in_h * in_w + (horizontal ? y * in_w + first + i : (first + i) * in_w + x);
-                sum += __float2int_rn(input[source] * 255.0f) * coefficients[target * taps + i];
-            }
-            output[index] = float(max(0, min(255, sum >> 22))) / 255.0f;
-        }
 
         __global__ void horizontal_distance_kernel(const float* input, float* distance, int count, int width, int radius) {
             const int i = int(blockIdx.x * blockDim.x + threadIdx.x);
@@ -351,8 +335,10 @@ namespace lfs::core::nn::kernels {
                 const int oh = (idx / out_w) % out_h;
                 const int ch = (idx / (out_w * out_h)) % c;
                 const int ni = idx / (out_w * out_h * c);
-                const float fy = device::resize_coord(oh, in_h, out_h, coord);
-                const float fx = device::resize_coord(ow, in_w, out_w, coord);
+                const float fy = mode == 0 ? static_cast<float>(device::nearest_source(oh, in_h, out_h, coord))
+                                           : device::resize_coord(oh, in_h, out_h, coord);
+                const float fx = mode == 0 ? static_cast<float>(device::nearest_source(ow, in_w, out_w, coord))
+                                           : device::resize_coord(ow, in_w, out_w, coord);
                 const float v = sample_nchw(input, n, c, in_h, in_w, ni, ch, fy, fx, mode, is_half);
                 device::st_strided(output, idx, v, is_half);
             }
@@ -472,15 +458,6 @@ namespace lfs::core::nn::kernels {
         channel_bias_kernel<<<grid, block, 0, stream>>>(nchw, bias, n, c, spatial,
                                                         dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.bias.channel");
-    }
-
-    void resample_pil_axis(const float* input, float* output, const int* bounds, const int* coefficients,
-                           int taps, int planes, int in_h, int in_w, int out_h, int out_w,
-                           bool horizontal, cudaStream_t stream) {
-        const int count = planes * out_h * out_w;
-        resample_pil_axis_kernel<<<(count + 255) / 256, 256, 0, stream>>>(
-            input, output, bounds, coefficients, taps, count, in_h, in_w, out_h, out_w, horizontal);
-        LFS_CUDA_LAUNCH_CHECK(stream, "nn.resample_pil_axis");
     }
 
     void dilate_binary_disk(const float* input, float* horizontal_distance, float* output,

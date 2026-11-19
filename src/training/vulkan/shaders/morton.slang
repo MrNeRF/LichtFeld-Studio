@@ -2,12 +2,17 @@
 
 struct Parameters {
     uint64_t means;
-    uint64_t minimum;
-    uint64_t maximum;
     uint64_t codes;
     uint64_t indices;
+    float centre_x;
+    float centre_y;
+    float centre_z;
+    float inv_radius;
     uint count;
 };
+
+// The contracted code space of lfs/training/morton_contraction.hpp: the grid spans [-2, 2]^3.
+static const float kContractedHalfExtent = 2.0;
 
 uint part1by2(uint value) {
     value &= 0x3ffu;
@@ -34,19 +39,16 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p) {
         return;
     }
     Ptr<float, Access.Read> means = (Ptr<float, Access.Read>)p.means;
-    Ptr<float, Access.Read> minimum = (Ptr<float, Access.Read>)p.minimum;
-    Ptr<float, Access.Read> maximum = (Ptr<float, Access.Read>)p.maximum;
     Ptr<uint, Access.ReadWrite> codes = (Ptr<uint, Access.ReadWrite>)p.codes;
     Ptr<uint, Access.ReadWrite> indices = (Ptr<uint, Access.ReadWrite>)p.indices;
-    const float3 lo = float3(minimum[0], minimum[1], minimum[2]);
-    const float3 hi = float3(maximum[0], maximum[1], maximum[2]);
-    const float3 extent = hi - lo;
-    const float3 mul = float3(extent.x == 0.0 ? 0.0 : 1024.0 / extent.x,
-                              extent.y == 0.0 ? 0.0 : 1024.0 / extent.y,
-                              extent.z == 0.0 ? 0.0 : 1024.0 / extent.z);
-    const uint x = quantize(means[i * 3], lo.x, mul.x);
-    const uint y = quantize(means[i * 3 + 1], lo.y, mul.y);
-    const uint z = quantize(means[i * 3 + 2], lo.z, mul.z);
-    codes[i] = (part1by2(z) << 2) + (part1by2(y) << 1) + part1by2(x);
+    float3 q = (float3(means[i * 3], means[i * 3 + 1], means[i * 3 + 2]) - float3(p.centre_x, p.centre_y, p.centre_z)) *
+               p.inv_radius;
+    const float r = sqrt(dot(q, q));
+    if (r > 1.0)
+        q *= (2.0 - 1.0 / r) / r;
+    const float origin = -kContractedHalfExtent;
+    const float mul = 1024.0 / (2.0 * kContractedHalfExtent);
+    codes[i] = (part1by2(quantize(q.z, origin, mul)) << 2) + (part1by2(quantize(q.y, origin, mul)) << 1) +
+               part1by2(quantize(q.x, origin, mul));
     indices[i] = i;
 }

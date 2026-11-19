@@ -4,6 +4,7 @@
 
 #include "metrics.hpp"
 #include "../noise_infill.hpp"
+#include "core/camera_views.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/image_io.hpp"
@@ -179,6 +180,12 @@ namespace lfs::training {
             }
         };
 
+        bool score_distorted_grid(const lfs::core::Camera& camera,
+                                  const lfs::core::param::TrainingParameters& params) {
+            return params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted &&
+                   !is_view(camera.undistort_params());
+        }
+
         lfs::io::LoadParams evaluation_load_params(const lfs::core::Camera& camera,
                                                    const lfs::core::param::TrainingParameters& params) {
             lfs::io::LoadParams load_params;
@@ -195,7 +202,7 @@ namespace lfs::training {
             load_params.decode_float = !exact_uint8;
             load_params.skip_blob_cache = true;
             if (params.optimization.undistort && camera.is_undistort_prepared() &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted)
+                !score_distorted_grid(camera, params))
                 load_params.undistort = &camera.undistort_params();
             return load_params;
         }
@@ -693,7 +700,7 @@ namespace lfs::training {
         try {
             const bool undistorted_reference =
                 params.optimization.undistort && camera.is_undistort_prepared() &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Undistorted;
+                !score_distorted_grid(camera, params);
             if (cached_inputs) {
                 inputs = *cached_inputs;
                 if (!inputs.gt_image.is_valid() || inputs.source_width <= 0 ||
@@ -744,7 +751,10 @@ namespace lfs::training {
 
             if (!cached_inputs) {
                 if (mask_folder) {
-                    const auto mask_path = mask_folder->find(camera.image_name());
+                    const auto mask_path = mask_folder->find(
+                        scaled_undistort && is_view(*scaled_undistort)
+                            ? lfs::core::photograph_image_name(camera.image_name())
+                            : camera.image_name());
                     if (mask_path.empty())
                         return evaluation_error(std::format("no evaluation mask for '{}' in the mask folder",
                                                             camera.image_name()),
@@ -753,7 +763,7 @@ namespace lfs::training {
                         mask_path, params.dataset.resize_factor, params.dataset.max_width,
                         false, params.optimization.mask_threshold, true,
                         undistorted_reference);
-                    if (inputs.user_mask.numel() != inputs.gt_image.shape()[1] * inputs.gt_image.shape()[2])
+                    if (inputs.user_mask.shape() != lfs::core::TensorShape({inputs.gt_image.shape()[1], inputs.gt_image.shape()[2]}))
                         return evaluation_error(std::format("evaluation mask '{}' does not match the image size",
                                                             lfs::core::path_to_utf8(mask_path)),
                                                 LFS_SOURCE_SITE_CURRENT());
@@ -792,8 +802,7 @@ namespace lfs::training {
             int render_height = inputs.source_height;
             float dilation_scale = 1.0f;
             const bool distorted_evaluation =
-                scaled_undistort &&
-                params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
+                scaled_undistort && !undistorted_reference;
             const bool native_gut_evaluation = distorted_evaluation && params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT;
             const bool warp_to_distorted = distorted_evaluation && !native_gut_evaluation;
             // Geometric masks follow the lens the scored image was taken with: the source lens when
@@ -1616,7 +1625,7 @@ namespace lfs::training {
                     auto& saved = _gsplat_saved != nullptr ? *_gsplat_saved : _gsplat_owned;
                     if (!saved.backend)
                         saved.backend = _gsplat_ops->create();
-                    output = gsplat_infer(*_gsplat_ops, saved, render_camera, *rendered, background, 1.0f, false,
+                    output = gsplat_infer(*_gsplat_ops, saved, render_camera, *rendered, background, 1.0f, _params.optimization.mip_filter,
                                           render_normal ? GsplatRenderMode::RGB_D_N : GsplatRenderMode::RGB_D);
                 } else {
                     if (_fast_ops == nullptr) {
@@ -1766,27 +1775,26 @@ namespace lfs::training {
         std::array<MaskSetScores, lfs::core::param::kEvalPixelSets.size()> set_scores;
         bool mask_sets_scored = false;
 
-        if (!_lpips_load_attempted && _lpips_weights_path) {
+        if (!_lpips_load_attempted && _lpips_weights_preparer) {
             _lpips_load_attempted = true;
-            const auto& weights_path = *_lpips_weights_path;
             try {
-                auto loaded = lfs::core::nn::models::Lpips::load(
-                    weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
-                if (loaded) {
-                    const auto backend = lfs::core::default_gpu_backend();
-                    const auto* lpips = training_ops(backend).lpips;
-                    if (!lpips)
-                        throw std::runtime_error(*unavailable_training_family(backend, Family::Lpips));
-                    loaded->set_dispatch(*lpips);
-                    _lpips_metric.emplace(std::move(*loaded));
-                } else {
-                    LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
-                             lfs::core::path_to_utf8(weights_path), loaded.error().detail());
+                if (auto weights = _lpips_weights_preparer()) {
+                    auto loaded = lfs::core::nn::models::Lpips::load(
+                        *weights, lfs::core::Device::GPU, lfs::core::DataType::Float16,
+                        lfs::core::nn::models::InputScaling::Identity, kEvalLpipsActivationBudget);
+                    if (loaded) {
+                        const auto backend = lfs::core::default_gpu_backend();
+                        const auto* ops = training_ops(backend).lpips;
+                        if (!ops)
+                            throw std::runtime_error(*unavailable_training_family(backend, Family::Lpips));
+                        loaded->set_dispatch(*ops);
+                        _lpips_metric.emplace(std::move(*loaded));
+                    } else {
+                        LOG_WARN("Eval: LPIPS unavailable ({})", loaded.error().detail());
+                    }
                 }
             } catch (const std::exception& e) {
-                LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
-                         lfs::core::path_to_utf8(weights_path), e.what());
+                LOG_WARN("Eval: LPIPS unavailable ({})", e.what());
             }
         }
         result.views.reserve(val_dataset_size);
@@ -1832,7 +1840,7 @@ namespace lfs::training {
             const auto prepared_validity = prepared->validity_mask;
             const bool distorted_coordinates =
                 _params.optimization.undistort && cam->is_undistort_prepared() &&
-                _params.optimization.eval_space == lfs::core::param::EvalSpace::Distorted;
+                score_distorted_grid(*cam, _params);
             view.height = static_cast<int>(gt_image.shape()[1]);
             view.width = static_cast<int>(gt_image.shape()[2]);
             view.validity_mask_applied = prepared->validity_mask_applied;

@@ -460,7 +460,15 @@ namespace lfs::python {
         }
     }
 
+    void PyOptimizationParams::set_scaled_iterations(const size_t target) {
+        set_impl("iterations", nb::cast(target), true);
+    }
+
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
+        set_impl(prop_id, std::move(value), false);
+    }
+
+    void PyOptimizationParams::set_impl(const std::string& prop_id, nb::object value, const bool scale_schedule) {
         if (prop_id == "raster_backend") {
             if (!nb::isinstance<nb::str>(value))
                 throw std::invalid_argument("Training raster_backend must be a string: 3dgs or 3dgut");
@@ -533,7 +541,7 @@ namespace lfs::python {
 
         std::any old_value;
         modify_params([&](auto& p) {
-            auto candidate = p;
+            auto candidate = scale_schedule ? p.scaled_to_iterations(std::any_cast<size_t>(new_value)) : p;
             auto current_ref = PropertyObjectRef::cpp(&p);
             auto candidate_ref = PropertyObjectRef::cpp(&candidate);
             old_value = meta->getter(current_ref);
@@ -1068,6 +1076,8 @@ namespace lfs::python {
             .def("get", &PyOptimizationParams::get, nb::arg("name"), "Get property value by name")
             .def("builtin_default", &PyOptimizationParams::builtin_default, nb::arg("name"),
                  "Get the built-in default for the active method and step scaling")
+            .def("set_scaled_iterations", &PyOptimizationParams::set_scaled_iterations, nb::arg("target"),
+                 "Set the iteration limit and rescale its schedule together")
             .def("set", &PyOptimizationParams::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             .def("__getattr__", &PyOptimizationParams::get, nb::arg("name"), "Get property value by attribute name")
             .def("prop_info", &PyOptimizationParams::prop_info, nb::arg("prop_id"),
@@ -1218,6 +1228,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_flip = v; }); },
                 "Also compute FLIP per evaluated image and save its error map next to the evaluation images")
             .def_prop_rw(
+                "eval_green_infill",
+                [](PyOptimizationParams& self) { return self.params().eval_green_infill; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_green_infill = v; }); },
+                "Also score with opaque green filling the inside of a mesh, so a see-through surface loses score")
+            .def_prop_rw(
                 "eval_mask",
                 [](PyOptimizationParams& self) { return self.params().eval_mask; },
                 [](PyOptimizationParams& self, const std::string& v) {
@@ -1264,14 +1279,17 @@ namespace lfs::python {
                 "apply_step_scaling",
                 [](PyOptimizationParams&, float new_scaler) {
                     modify_params([new_scaler](auto& opt) {
+                        auto candidate = opt;
                         const float clamped = std::max(0.0f, new_scaler);
                         const float prev = opt.steps_scaler;
-                        opt.steps_scaler = clamped;
-                        if (clamped <= 0.0f)
-                            return;
-
-                        const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
-                        opt.scale_steps(ratio);
+                        if (clamped > 0.0f) {
+                            const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
+                            candidate.scale_steps(ratio);
+                        }
+                        candidate.steps_scaler = clamped;
+                        if (const auto error = candidate.validate(); !error.empty())
+                            throw std::invalid_argument(error);
+                        opt = std::move(candidate);
                     });
                 },
                 nb::arg("new_scaler"),
@@ -1397,6 +1415,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.mip_filter = v; }); },
                 "Enable mip filtering (anti-aliasing)")
+            .def_prop_rw(
+                "pose_opt",
+                [](PyOptimizationParams& self) { return self.params().pose_opt; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.pose_opt = v; }); },
+                "Refine the training camera poses during training; the refined poses replace the cameras' own")
             .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },

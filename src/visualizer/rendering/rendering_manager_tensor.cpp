@@ -374,7 +374,7 @@ namespace lfs::vis {
                 ++view.temporal_scene_revision_;
         }
 
-        const FrameContext frame_context{
+        FrameContext frame_context{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
             .scene_manager = context.scene_manager,
@@ -388,7 +388,6 @@ namespace lfs::vis {
                                context.scene_manager->getTrainerManager()->isRunning(),
             .depth_window_drag_preview = depthWindowDragPreview(context.view),
             .gaussian_selection_visible = gaussian_selection_visible_,
-            .exact_surface_picking = exact_surface_picking_,
             .cursor_preview = view.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
@@ -396,6 +395,7 @@ namespace lfs::vis {
             .hovered_gaussian_id = view.viewport_overlay_service_.hoveredGaussianId(),
             .scene_jitter_pixels = temporal_setup.jitter_pixels,
         };
+        configureSurfacePicking(frame_context);
         const auto render_started = std::chrono::steady_clock::now();
         if (!context.preparing_import) {
             const glm::vec2 screen_position = context.viewport_region

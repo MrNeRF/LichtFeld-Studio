@@ -341,8 +341,10 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
             2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33));
 
+        float3 normalWorld = 0, gradNormal = 0;
         if (p.renderNormal != 0) {
             const float3 g_cam = screen3(back, work_idx, 10);
+            gradNormal = g_cam;
             const float3 g_world = float3(
                 w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
                 w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
@@ -351,24 +353,37 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             if (variance.x <= variance.y && variance.x <= variance.z) {
                 const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
                 const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                normalWorld = sign * float3(rotation.m11, rotation.m21, rotation.m31);
                 dL_drotation.m11 += sign * g_world.x;
                 dL_drotation.m21 += sign * g_world.y;
                 dL_drotation.m31 += sign * g_world.z;
             } else if (variance.y <= variance.z) {
                 const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
                 const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                normalWorld = sign * float3(rotation.m12, rotation.m22, rotation.m32);
                 dL_drotation.m12 += sign * g_world.x;
                 dL_drotation.m22 += sign * g_world.y;
                 dL_drotation.m32 += sign * g_world.z;
             } else {
                 const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
                 const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                normalWorld = sign * float3(rotation.m13, rotation.m23, rotation.m33);
                 dL_drotation.m13 += sign * g_world.x;
                 dL_drotation.m23 += sign * g_world.y;
                 dL_drotation.m33 += sign * g_world.z;
             }
         }
 
+        if (back.gradW2c != 0) {
+            float3 covGradient[3] = {j11 * dL_djw_r1, j22 * dL_djw_r2, j13 * dL_djw_r1 + j23 * dL_djw_r2};
+            [unroll] for (uint r = 0; r < 3; ++r) {
+                float3 dW = dL_dmean3d_cam[r] * mean3d + covGradient[r] + gradNormal[r] * normalWorld;
+                [unroll] for (uint c = 0; c < 3; ++c)
+                    atomicFloat(back.gradW2c, r * 4 + c, dW[c]);
+                atomicFloat(back.gradW2c, r * 4 + 3, dL_dmean3d_cam[r]);
+                atomicFloat(back.gradPosition, r, -dL_dmean3d_from_color[r]);
+            }
+        }
         const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
         const float dL_dqyy = -dL_drotation.m11 - dL_drotation.m33;
         const float dL_dqzz = -dL_drotation.m11 - dL_drotation.m22;

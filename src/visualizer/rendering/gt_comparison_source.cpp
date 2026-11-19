@@ -1160,7 +1160,7 @@ namespace lfs::vis {
                     std::get<GTComparisonPreviewRequest>(request);
                 try {
                     lfs::core::Tensor gt_tensor;
-                    if (preview.mode == GTComparisonMode::RGB) {
+                    if (gtComparisonUsesRGBReference(preview.mode)) {
                         std::shared_ptr<lfs::core::Tensor> retained;
                         {
                             std::lock_guard lock(gt_comparison_image_mutex_);
@@ -1196,7 +1196,7 @@ namespace lfs::vis {
                             }
                         }
                     }
-                    if (preview.mode == GTComparisonMode::RGB) {
+                    if (gtComparisonUsesRGBReference(preview.mode)) {
                         if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
                             const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
                             if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
@@ -1278,7 +1278,7 @@ namespace lfs::vis {
                     image = gt_comparison_detail::convertDisplayTensorToUInt8(image);
                     if (!image || !image->is_valid()) {
                         image.reset();
-                        error = preview.mode == GTComparisonMode::RGB
+                        error = gtComparisonUsesRGBReference(preview.mode)
                                     ? "RGB GT comparison could not load the source image"
                                 : preview.mode == GTComparisonMode::Depth
                                     ? "Depth GT comparison could not load the camera depth map"

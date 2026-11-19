@@ -763,6 +763,21 @@ namespace {
         int height_ = 900;
     };
 
+    // The render-modes button lives in the 3D view's area header; it only shows or hides the selector.
+    TEST_F(MenuBarProjectionTest, RenderModesButtonOnlyTogglesSelectorVisibility) {
+        for (const bool normals : {false, true}) {
+            view_.settings.normal_view = normals;
+            view_.settings.depth_view = !normals;
+            view_.settings.render_mode_controls_open = false;
+            for (const bool open : {true, false}) {
+                ASSERT_TRUE(lfs::vis::screen::applyViewCommand(view_, "depth", height_));
+                EXPECT_EQ(view_.settings.render_mode_controls_open, open);
+                EXPECT_EQ(view_.settings.normal_view, normals);
+                EXPECT_EQ(view_.settings.depth_view, !normals);
+            }
+        }
+    }
+
     TEST_F(MenuBarProjectionTest, EnterUsesMatchingScaleAfterRestoredOrWheelOverride) {
         for (const float stale_scale : {100.0f, 1.0f}) {
             view_.settings.ortho_scale = stale_scale;

@@ -6,7 +6,8 @@ struct Parameters {
     Ptr<uint,Access.ReadWrite> count;
     float fx,fy,cx,cy,near_plane;
     uint width,height,model,samples,stride,capacity;
-    float lo_x,lo_y,lo_z,hi_x,hi_y,hi_z,padding;
+    float lo_x,lo_y,lo_z,hi_x,hi_y,hi_z;
+    uint pinhole_ray_distance;
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> p;
 [shader("compute")][numthreads(256,1,1)]
@@ -26,7 +27,8 @@ void collect(uint3 id:SV_DispatchThreadID) {
     if(!all(isfinite(world)) || any(world<float3(p.lo_x,p.lo_y,p.lo_z)) || any(world>float3(p.hi_x,p.hi_y,p.hi_z))) return;
     GsplatCamera cam=gsplat_camera_load(p.camera);
     float3 point=mul(world,cam.R)+cam.t;
-    float depth=cam.model==kGsplatPinhole?point.z:length(point);
+    if (p.pinhole_ray_distance != 0 && !(point.z > p.near_plane)) return;
+    float depth=cam.model==kGsplatPinhole && p.pinhole_ray_distance==0?point.z:length(point);
     if(!(depth>p.near_plane) || !isfinite(depth)) return;
     float2 uv;
     if(!gsplat_camera_to_image(cam,point,uv) || !all(isfinite(uv))) return;

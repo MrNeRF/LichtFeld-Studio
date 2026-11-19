@@ -166,7 +166,7 @@ namespace lfs::vis::screen {
         // snapped to whole units so neighbouring areas never overlap or leave
         // seams. With `maximized` set, that area alone covers the bounds.
         [[nodiscard]] LayoutGeometry solve(const Rect& bounds, const LayoutMetrics& metrics,
-                                           AreaId maximized = {}) const;
+                                           AreaId maximized = {}, size_t hide_left = 0, size_t hide_right = 0) const;
 
         [[nodiscard]] nlohmann::json toJson() const;
         // Rejects malformed input as a whole; the returned layout satisfies

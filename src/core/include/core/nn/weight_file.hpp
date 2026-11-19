@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -47,6 +49,9 @@ namespace lfs::core::nn {
         WeightFile& operator=(const WeightFile&) = delete;
 
         [[nodiscard]] static lfs::Result<WeightFile> open(const std::filesystem::path& path);
+
+        // Shared across DLLs: serialize managed-cache acquisition and removal.
+        [[nodiscard]] static std::shared_ptr<std::timed_mutex> source_operation(const std::filesystem::path& path);
 
         [[nodiscard]] bool contains(std::string_view name) const;
         [[nodiscard]] std::vector<std::string> names() const;

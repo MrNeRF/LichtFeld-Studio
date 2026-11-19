@@ -97,6 +97,90 @@ namespace {
         std::filesystem::remove(path);
     }
 
+    TEST(ParameterManagerTest, ConfigImportRejectsInvalidScaledSchedule) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        const auto before = manager.copyActiveParams().to_json();
+        const auto path = unique_temp_config_path();
+        for (const float factor : {100000.0f, 1e20f}) {
+            auto config = lfs::core::param::OptimizationParameters::mcmc_defaults();
+            config.steps_scaler = factor;
+            std::ofstream(path) << config.to_json().dump();
+            const auto result = manager.importConfigFile(path);
+            EXPECT_FALSE(result);
+            if (!result) {
+                EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+                EXPECT_NE(result.error().detail().find("iterations"), std::string::npos);
+            }
+            EXPECT_EQ(manager.copyActiveParams().to_json(), before);
+            EXPECT_FALSE(manager.isDirty());
+        }
+        std::filesystem::remove(path);
+    }
+
+    TEST(ParameterManagerTest, ConfigImportRefusesUnrepresentableLockedMaximum) {
+        lfs::vis::ParameterManager source, target;
+        ASSERT_TRUE(source.ensureLoaded());
+        ASSERT_TRUE(target.ensureLoaded());
+        const auto before = target.copyActiveParams().to_json();
+        source.modifyActiveParams([](auto& params) {
+            params = params.scaled_to_iterations(std::numeric_limits<int>::max());
+        });
+        const auto path = unique_temp_config_path();
+        ASSERT_TRUE(lfs::core::param::save_training_parameters_to_json(source.createForDataset({}, {}), path));
+        const auto result = target.importConfigFile(path);
+        std::filesystem::remove(path);
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().detail().find("iterations"), std::string::npos);
+        EXPECT_EQ(target.copyActiveParams().to_json(), before);
+        EXPECT_FALSE(target.isDirty());
+    }
+
+    TEST(ParameterManagerTest, ImageScalingValidatesAllPresetsBeforePublishing) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        auto& mrnf = manager.getCurrentParams("mrnf");
+        mrnf.iterations = std::numeric_limits<int>::max();
+        const auto snapshot = [&] {
+            return std::array{manager.getCurrentParams("mcmc").to_json(), mrnf.to_json(),
+                              manager.getCurrentParams("igs+").to_json()};
+        };
+        const auto before = snapshot();
+        const auto serial = manager.dirtySerial();
+        EXPECT_THROW(manager.autoScaleSteps(600), std::invalid_argument);
+        EXPECT_EQ(snapshot(), before);
+        EXPECT_FALSE(manager.isDirty());
+        EXPECT_EQ(manager.dirtySerial(), serial);
+        mrnf.iterations = 30000;
+        manager.autoScaleSteps(600);
+        EXPECT_EQ(mrnf.iterations, 60000u);
+        EXPECT_EQ(manager.dirtySerial(), serial + 1);
+    }
+
+    TEST(ParameterManagerTest, CameraScalingRejectsWarmupRoundedToFinalIteration) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        manager.autoScaleSteps(600);
+        auto& p = manager.getCurrentParams("mrnf");
+        ASSERT_EQ(p.iterations, 60000u);
+        p.color_variance_weight = 1.0f;
+        p.color_variance_warmup_iters = 59999;
+        ASSERT_TRUE(p.validate().empty()) << p.validate();
+        const auto serial = manager.dirtySerial();
+        EXPECT_THROW(manager.autoScaleSteps(300), std::invalid_argument);
+        EXPECT_EQ(p.iterations, 60000u);
+        EXPECT_EQ(p.color_variance_warmup_iters, 59999u);
+        EXPECT_EQ(manager.dirtySerial(), serial);
+    }
+
+    TEST(ParameterManagerTest, ImageScalingPreservesOrdinaryRefineInterval) {
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        manager.autoScaleSteps(480);
+        manager.autoScaleSteps(560);
+        EXPECT_EQ(manager.getCurrentParams("mrnf").refine_every, 305u);
+    }
+
     TEST(ParameterManagerTest, PartialConfigPreservesOmittedDatasetFields) {
         lfs::vis::ParameterManager manager;
         ASSERT_TRUE(manager.ensureLoaded());

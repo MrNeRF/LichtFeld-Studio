@@ -102,6 +102,7 @@ add_subdirectory(depth_anchor)
 
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
+    ops/ray_depth.cpp
     optimizer/adam_optimizer.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp
@@ -135,6 +136,7 @@ set(TRAINING_NEW_SOURCES
     components/bilateral_grid.cpp
     components/ppisp.cpp
     components/ppisp_controller_pool.cpp
+    components/camera_pose_refinement.cpp
     components/ppisp_file.cpp
     components/popspa_controller.cpp
     control/command_api.cpp
@@ -270,6 +272,7 @@ endif()
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
 target_link_libraries(lfs_training PRIVATE lfs_geometry_camera lfs_roi_masks)
+lfs_add_gpu_program(lfs_training ray_depth_program SOURCE ops/ray_depth.slang COMPUTE propose commit)
 lfs_add_gpu_program(lfs_training popspa_program SOURCE ops/popspa.slang COMPUTE fold split shifted proxy penalty effective_rank export_float64)
 
 target_include_directories(lfs_training

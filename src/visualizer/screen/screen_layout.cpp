@@ -183,7 +183,7 @@ namespace lfs::vis::screen {
             }
         }
 
-        void solveNode(const Node& node, const Rect& rect, const LayoutMetrics& metrics, LayoutGeometry& out) {
+        void solveNode(const Node& node, const Rect& rect, const LayoutMetrics& metrics, LayoutGeometry& out, size_t first = 0, size_t hide_last = 0) {
             if (node.isArea()) {
                 out.areas.push_back({node.area, rect});
                 return;
@@ -191,13 +191,14 @@ namespace lfs::vis::screen {
             const bool columns = node.axis == SplitAxis::Columns;
             const float origin = columns ? rect.x : rect.y;
             const float extent = columns ? rect.w : rect.h;
-            const std::size_t n = node.children.size();
+            const std::size_t n = node.children.size() - first - hide_last;
             const float gaps = metrics.divider * static_cast<float>(n - 1);
 
             std::vector<float> minimums(n);
             for (std::size_t i = 0; i < n; ++i)
-                minimums[i] = minExtent(node.children[i], node.axis, metrics);
-            const auto sizes = distribute(node.weights, minimums, std::max(0.0f, extent - gaps));
+                minimums[i] = minExtent(node.children[first + i], node.axis, metrics);
+            const std::vector<float> weights(node.weights.begin() + first, node.weights.begin() + first + n);
+            const auto sizes = distribute(weights, minimums, std::max(0.0f, extent - gaps));
 
             // Edges are rounded to whole units from the running total, so the
             // children tile the rect exactly.
@@ -215,12 +216,12 @@ namespace lfs::vis::screen {
                 const float child_extent = std::max(0.0f, trail - lead);
                 const Rect child_rect = columns ? Rect{lead, rect.y, child_extent, rect.h}
                                                 : Rect{rect.x, lead, rect.w, child_extent};
-                solveNode(node.children[i], child_rect, metrics, out);
+                solveNode(node.children[first + i], child_rect, metrics, out);
 
                 if (i + 1 < n) {
                     DividerGeometry divider;
                     divider.split = node.split;
-                    divider.index = static_cast<std::uint32_t>(i);
+                    divider.index = static_cast<std::uint32_t>(first + i);
                     divider.axis = node.axis;
                     divider.rect = columns ? Rect{trail, rect.y, metrics.divider, rect.h}
                                            : Rect{rect.x, trail, rect.w, metrics.divider};
@@ -600,7 +601,7 @@ namespace lfs::vis::screen {
         return true;
     }
 
-    LayoutGeometry ScreenLayout::solve(const Rect& bounds, const LayoutMetrics& metrics, const AreaId maximized) const {
+    LayoutGeometry ScreenLayout::solve(const Rect& bounds, const LayoutMetrics& metrics, const AreaId maximized, size_t hide_left, size_t hide_right) const {
         LayoutGeometry out;
         out.bounds = bounds;
         if (!root_ || bounds.empty())
@@ -610,7 +611,9 @@ namespace lfs::vis::screen {
             out.areas.push_back({maximized, bounds});
             return out;
         }
-        solveNode(*root_, bounds, metrics, out);
+        if (root_->isArea() || root_->axis != SplitAxis::Columns || hide_left + hide_right >= root_->children.size())
+            hide_left = hide_right = 0;
+        solveNode(*root_, bounds, metrics, out, hide_left, hide_right);
         return out;
     }
 

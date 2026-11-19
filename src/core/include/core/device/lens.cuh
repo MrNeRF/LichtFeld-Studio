@@ -36,7 +36,7 @@ __device__ float bilinear_sample_renormalized(
     const T* __restrict__ src,
     const int width, const int height, const int stride,
     const float sx, const float sy,
-    const bool positive_only = false) {
+    const bool positive_only = false, const bool panorama = false) {
     const int x0 = static_cast<int>(floorf(sx));
     const int y0 = static_cast<int>(floorf(sy));
     const float fx = sx - static_cast<float>(x0);
@@ -44,11 +44,11 @@ __device__ float bilinear_sample_renormalized(
     float value = 0.0f;
     float weight_sum = 0.0f;
     for (int dy = 0; dy < 2; ++dy) {
-        const int y = y0 + dy;
         const float wy = dy == 0 ? 1.0f - fy : fy;
         for (int dx = 0; dx < 2; ++dx) {
-            const int x = x0 + dx;
-            if (x < 0 || x >= width || y < 0 || y >= height)
+            int y = y0 + dy;
+            int x = x0 + dx;
+            if (!detail::remap_tap(x, y, width, height, panorama))
                 continue;
             const float sample = normalized_sample(src[y * stride + x]);
             if (!isfinite(sample) || (positive_only && sample <= 0.0f))
@@ -63,8 +63,12 @@ __device__ float bilinear_sample_renormalized(
         return value / weight_sum;
     if (positive_only)
         return 0.0f;
-    const int nearest_x = min(max(static_cast<int>(floorf(sx + 0.5f)), 0), width - 1);
-    const int nearest_y = min(max(static_cast<int>(floorf(sy + 0.5f)), 0), height - 1);
+    int nearest_x = static_cast<int>(floorf(sx + 0.5f));
+    int nearest_y = static_cast<int>(floorf(sy + 0.5f));
+    if (!detail::remap_tap(nearest_x, nearest_y, width, height, panorama)) {
+        nearest_x = min(max(nearest_x, 0), width - 1);
+        nearest_y = min(max(nearest_y, 0), height - 1);
+    }
     return normalized_sample(src[nearest_y * stride + nearest_x]);
 }
 
@@ -88,7 +92,7 @@ __device__ bool lanczos3_sample(
     const T* __restrict__ src,
     const int width, const int height, const int channels,
     const float sx, const float sy,
-    float* values, float& absolute_inside, float& absolute_full) {
+    float* values, float& absolute_inside, float& absolute_full, const bool panorama = false) {
     const int base_x = static_cast<int>(floorf(sx));
     const int base_y = static_cast<int>(floorf(sy));
     float weights_x[6];
@@ -104,12 +108,12 @@ __device__ bool lanczos3_sample(
     absolute_full = 0.0f;
     const int plane = width * height;
     for (int j = 0; j < 6; ++j) {
-        const int y = base_y + j - 2;
         for (int i = 0; i < 6; ++i) {
-            const int x = base_x + i - 2;
+            int y = base_y + j - 2;
+            int x = base_x + i - 2;
             const float weight = weights_x[i] * weights_y[j];
             absolute_full += fabsf(weight);
-            if (x < 0 || x >= width || y < 0 || y >= height)
+            if (!detail::remap_tap(x, y, width, height, panorama))
                 continue;
             signed_inside += weight;
             absolute_inside += fabsf(weight);
@@ -127,7 +131,7 @@ __device__ bool lanczos3_sample(
 
     for (int channel = 0; channel < channels; ++channel) {
         values[channel] = bilinear_sample_renormalized(
-            src + channel * plane, width, height, width, sx, sy);
+            src + channel * plane, width, height, width, sx, sy, false, panorama);
     }
     return false;
 }
@@ -158,13 +162,7 @@ undistort_image_kernel_impl(
                                   (static_cast<float>(qx) + 0.5f) / quadrature;
             const float pixel_y = static_cast<float>(oy) +
                                   (static_cast<float>(qy) + 0.5f) / quadrature;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-            float dnx, dny;
-            apply_distortion(nx, ny, static_cast<CameraModelType>(params.model_type), params.distortion,
-                             params.num_distortion, dnx, dny);
-            const float sx = (Bounded ? fmaf(dnx, params.src_fx, params.src_cx) : dnx * params.src_fx + params.src_cx) - PIXEL_CENTER_OFFSET;
-            const float sy = (Bounded ? fmaf(dny, params.src_fy, params.src_cy) : dny * params.src_fy + params.src_cy) - PIXEL_CENTER_OFFSET;
+            const auto [sx, sy] = detail::source_position<Bounded>(pixel_x, pixel_y, params);
             float sample[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             float absolute_inside = 0.0f;
             float absolute_full = 0.0f;
@@ -174,7 +172,7 @@ undistort_image_kernel_impl(
             }
             (void)lanczos3_sample(
                 src, params.src_width, params.src_height, channels,
-                sx, sy, sample, absolute_inside, absolute_full);
+                sx, sy, sample, absolute_inside, absolute_full, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
             for (int channel = 0; channel < channels; ++channel)
                 result[channel] += sample[channel];
         }
@@ -503,13 +501,7 @@ undistort_area_kernel_impl(
                                   (static_cast<float>(qx) + 0.5f) / quadrature;
             const float pixel_y = static_cast<float>(oy) +
                                   (static_cast<float>(qy) + 0.5f) / quadrature;
-            const float nx = (pixel_x - params.dst_cx) / params.dst_fx;
-            const float ny = (pixel_y - params.dst_cy) / params.dst_fy;
-            float dnx, dny;
-            apply_distortion(nx, ny, static_cast<CameraModelType>(params.model_type), params.distortion,
-                             params.num_distortion, dnx, dny);
-            const float sx = (Bounded ? fmaf(dnx, params.src_fx, params.src_cx) : dnx * params.src_fx + params.src_cx) - PIXEL_CENTER_OFFSET;
-            const float sy = (Bounded ? fmaf(dny, params.src_fy, params.src_cy) : dny * params.src_fy + params.src_cy) - PIXEL_CENTER_OFFSET;
+            const auto [sx, sy] = detail::source_position<Bounded>(pixel_x, pixel_y, params);
             if constexpr (Bounded) {
                 if (!isfinite(sx) || !isfinite(sy) || fabsf(sx) > 1073741824.f || fabsf(sy) > 1073741824.f)
                     continue;
@@ -517,7 +509,7 @@ undistort_area_kernel_impl(
             if (mode == AreaFilterMode::DEPTH) {
                 const float sample = bilinear_sample_renormalized(
                     src, params.src_width, params.src_height, params.src_width,
-                    sx, sy, true);
+                    sx, sy, true, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
                 if (sample > 0.0f && isfinite(sample)) {
                     result[0] += sample;
                     valid_samples += 1.0f;
@@ -527,7 +519,7 @@ undistort_area_kernel_impl(
                     result[channel] += bilinear_sample_renormalized(
                         src + channel * input_plane,
                         params.src_width, params.src_height, params.src_width,
-                        sx, sy);
+                        sx, sy, false, params.view && static_cast<CameraModelType>(params.model_type) == CameraModelType::EQUIRECTANGULAR);
                 }
                 valid_samples += 1.0f;
             }

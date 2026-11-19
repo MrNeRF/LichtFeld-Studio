@@ -138,6 +138,11 @@ set(TENSOR_SOURCES
         nn/weight_file.cpp
         nn/weight_file_open.cpp
         nn/activation_arena.cpp
+        nn/models/bert_text.cpp
+        nn/models/swin_tiny.cpp
+        nn/models/llmdet_encoder.cpp
+        nn/models/llmdet_decoder.cpp
+        nn/models/llmdet.cpp
         nn/models/moge2.cpp
         nn/models/sam2.cpp
         nn/models/sam2_video.cpp
@@ -290,6 +295,7 @@ set(CORE_SOURCES
         camera.cpp
         undistort_params.cpp
         collision.cpp
+        camera_views.cpp
         collision_volume.cpp
         collision_walk.cpp
         $<$<BOOL:${LFS_HAS_CUDA}>:collision_voxelization.cpp>
@@ -377,6 +383,7 @@ target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp tensor/tensor_color.c
 lfs_add_gpu_program(lfs_core rgb_to_yuv_program SOURCE tensor/programs/rgb_to_yuv.slang COMPUTE rgbToYuv420p DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/rgb_to_yuv_math.h")
 lfs_add_gpu_program(lfs_core linear_video_program SOURCE tensor/programs/linear_video.slang COMPUTE linearVideo
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/video_sampling.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/include/core/video_color_math.h" "${CMAKE_CURRENT_SOURCE_DIR}/include/core/color_transfer.h")
+lfs_add_gpu_program(lfs_core nn_sampling_program SOURCE nn/image_sampling.slang COMPUTE sampleAttention resampleAxis)
 lfs_add_gpu_program(lfs_core vignette_program SOURCE tensor/programs/vignette.slang COMPUTE vignette)
 lfs_add_gpu_program(lfs_core mirror_centroid_program SOURCE tensor/programs/mirror_centroid.slang COMPUTE mirrorCentroid DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/core/rounded_math.slangh")
 if(LFS_TENSOR_METAL)

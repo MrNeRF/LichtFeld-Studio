@@ -139,6 +139,16 @@ namespace lfs::core::detail {
     }
 
     template <typename Scalar>
+    LFS_DISTORTION_HD inline void project_fisheye_ray(
+        Scalar x, Scalar y, Scalar z, CameraModelType model, const Scalar* dist, int count,
+        Scalar& dx, Scalar& dy) {
+        const Scalar r = std::hypot(x, y);
+        const Scalar scale = r > 0 ? std::atan2(r, z) / r : Scalar(0);
+        thin_prism_fisheye_from_theta_point(x * scale, y * scale, dist,
+                                            model == CameraModelType::FISHEYE && count > 4 ? 4 : count, dx, dy);
+    }
+
+    template <typename Scalar>
     LFS_DISTORTION_HD inline void apply_distortion(
         const Scalar x, const Scalar y,
         const CameraModelType model,
@@ -162,6 +172,50 @@ namespace lfs::core::detail {
         }
     }
 
+    struct SourcePosition {
+        float x, y;
+    };
+
+    template <bool FusedProjection = false, typename Lens>
+    LFS_DISTORTION_HD inline SourcePosition source_position(float pixel_x, float pixel_y, const Lens& p) {
+        const float nx = (pixel_x - p.dst_cx) / p.dst_fx;
+        const float ny = (pixel_y - p.dst_cy) / p.dst_fy;
+        const auto model = static_cast<CameraModelType>(p.model_type);
+        float dx, dy;
+        if (p.view) {
+            const auto* r = p.view_rotation;
+            const float x = r[0] * nx + r[1] * ny + r[2];
+            const float y = r[3] * nx + r[4] * ny + r[5];
+            const float z = r[6] * nx + r[7] * ny + r[8];
+            if (model == CameraModelType::EQUIRECTANGULAR) {
+                dx = std::atan2(x, z);
+                dy = std::atan2(y, std::hypot(x, z));
+            } else {
+                project_fisheye_ray(x, y, z, model, p.distortion, p.num_distortion, dx, dy);
+            }
+        } else {
+            apply_distortion(nx, ny, model, p.distortion, p.num_distortion, dx, dy);
+        }
+        if constexpr (FusedProjection) {
+            return {std::fma(dx, p.src_fx, p.src_cx) - 0.5f, std::fma(dy, p.src_fy, p.src_cy) - 0.5f};
+        }
+        return {dx * p.src_fx + p.src_cx - 0.5f, dy * p.src_fy + p.src_cy - 0.5f};
+    }
+
+    LFS_DISTORTION_HD inline bool remap_tap(int& x, int& y, int width, int height, bool panorama) {
+        if (x >= 0 && x < width && y >= 0 && y < height)
+            return true;
+        if (!panorama)
+            return false;
+        while (y < 0 || y >= height) {
+            y = y < 0 ? -1 - y : height - 1 - (y - height);
+            x += width / 2;
+        }
+        x %= width;
+        if (x < 0)
+            x += width;
+        return true;
+    }
 } // namespace lfs::core::detail
 
 #undef LFS_DISTORTION_HD

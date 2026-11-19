@@ -15,6 +15,7 @@ struct GsplatRasterParams {
     Ptr<float, Access.ReadWrite> rendered_depth;
     uint count, width, height, tiles_x, tiles_y, edge_factor, mode;
     Ptr<float, Access.ReadWrite> v_normal, pop_scores;
+    uint64_t mip;
 };
 float gsplat_background(GsplatRasterParams p, uint c, uint pixel) {
     return p.bg_image != 0 ? p.bg_image[c * p.width * p.height + pixel] : p.bg_color != 0 ? p.bg_color[c]
@@ -73,11 +74,11 @@ static GsplatPixel gsplat_pixel(GsplatRasterParams p, const uint i, const uint j
         float T = 1.0f;
         for (int idx = p.tile_offsets[tile]; idx <= px.bin_final; ++idx) {
             const uint g = p.gaussian_ids[idx];
-            const float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
+            const float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), gsplat_filtered_scale(exp(gsplat_load3(p.scales, g)), p.mip, g));
             const float3 gro = mul(ray.origin - gsplat_load3(p.means, g), M);
             const float3 grd = gsplat_safe_normalize(mul(ray.dir, M));
             const float3 gcrod = cross(grd, gro);
-            const float alpha = min(0.999f, gsplat_sigmoid(p.opacities[g]) * exp(-0.5f * dot(gcrod, gcrod)));
+            const float alpha = min(0.999f, (gsplat_sigmoid(p.opacities[g]) * gsplat_filter_compensation(p.mip, g)) * exp(-0.5f * dot(gcrod, gcrod)));
             if (alpha < kGsplatAlphaMin)
                 continue;
             const float next_T = T * (1.0f - alpha);
@@ -202,6 +203,7 @@ struct GsplatAccumulateParams {
     uint layout_rest;
     uint width, height;
     float flatten_weight;
+    uint64_t mip;
 };
 
 void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
@@ -209,15 +211,16 @@ void gsplat_accumulate(GsplatAccumulateParams p, uint g) {
         return;
     Ptr<float, Access.ReadWrite> v = (Ptr<float, Access.ReadWrite>)(uint64_t(p.grads) + uint64_t(g) * kGsplatGradStride * 4);
     const float3 scale = exp(gsplat_load3(p.scales, g));
+    const float3 scaleChain = p.mip != 0 ? scale * scale / gsplat_filtered_scale(scale, p.mip, g) : scale;
     for (uint k = 0; k < 3u; ++k) {
         p.means_grad[g * 3u + k] += v[k];
-        p.scaling_grad[g * 3u + k] += v[3u + k] * scale[k];
+        p.scaling_grad[g * 3u + k] += v[3u + k] * scaleChain[k];
     }
     uint axis=gsplat_normal_axis(scale);
     p.scaling_grad[g*3+axis] += p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
         p.rotation_grad[g * 4u + k] += v[6u + k];
-    p.opacity_grad[g] += v[10] * gsplat_sigmoid_derivative_from_logit(p.opacities[g]);
+    p.opacity_grad[g] += v[10] * gsplat_filter_compensation(p.mip, g) * gsplat_sigmoid_derivative_from_logit(p.opacities[g]);
 
     float basis[16];
     gsplat_sh_basis(gsplat_load3(p.means, g) - gsplat_camera_load((Ptr<float, Access.ReadWrite>)p.camera).origin, p.degree, basis);
@@ -272,10 +275,10 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
         int index = batch_end - int(lane);
         if (lane < 128 && index >= begin) {
             uint g = p.gaussian_ids[index];
-            float3 scale = exp(gsplat_load3(p.scales, g));
+            float3 scale = gsplat_filtered_scale(exp(gsplat_load3(p.scales, g)), p.mip, g);
             float4 quat = gsplat_load4(p.quats, g);
             float3x3 M = gsplat_world_to_unit(quat, scale);
-            xyzo[lane] = float4(gsplat_load3(p.means, g), gsplat_sigmoid(p.opacities[g]));
+            xyzo[lane] = float4(gsplat_load3(p.means, g), (gsplat_sigmoid(p.opacities[g]) * gsplat_filter_compensation(p.mip, g)));
             m0[lane] = float4(M[0], scale.x);
             m1[lane] = float4(M[1], scale.y);
             m2[lane] = float4(M[2], scale.z);

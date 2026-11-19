@@ -64,6 +64,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_label", &ContextMenuItem::is_label);
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
+            handle.RegisterMember("is_disabled", &ContextMenuItem::is_disabled);
             handle.RegisterMember("icon", &ContextMenuItem::icon);
             handle.RegisterMember("shortcut", &ContextMenuItem::shortcut);
         }
@@ -244,7 +245,7 @@ namespace lfs::vis::gui {
         Rml::ElementList items;
         el_ctx_menu_->GetElementsByClassName(items, "context-menu-item");
         for (auto* item : items) {
-            if (item && item->Focus())
+            if (item && !item->HasAttribute("disabled") && item->Focus())
                 break;
         }
     }
@@ -445,7 +446,7 @@ namespace lfs::vis::gui {
         }
 
         const auto action = target->GetAttribute<Rml::String>("data-ctx-action", "");
-        if (!action.empty()) {
+        if (!action.empty() && !target->HasAttribute("disabled")) {
             auto callback = owner->callback_;
             owner->hide();
             if (callback) {

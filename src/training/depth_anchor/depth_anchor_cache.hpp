@@ -40,6 +40,9 @@ namespace lfs::training {
     // disparity and depth candidates), so the caller resolves the dataset prior.
     // The optional progress callback fires once per depth camera as it is
     // projected, with (done, total_depth_cameras).
+    [[nodiscard]] std::optional<kernels::DepthRayGrid> depth_prior_ray_grid(
+        const lfs::core::Camera& cam, int tile_x, int tile_y);
+
     using DepthAnchorProgress = std::function<void(std::size_t done, std::size_t total)>;
     [[nodiscard]] RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::gpu_ops::GeometryLossOps& geometry,

@@ -7,11 +7,13 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "components/camera_pose_refinement.hpp"
 #include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "core/camera.hpp"
 #include "core/error.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_readback.hpp"
@@ -297,7 +299,7 @@ namespace lfs::training {
         void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
         // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
         [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
-        void set_lpips_weights_path(std::optional<std::filesystem::path> path);
+        void set_lpips_weights_preparer(std::function<std::optional<core::nn::WeightFile>()> preparer);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
@@ -702,6 +704,9 @@ namespace lfs::training {
         [[nodiscard]] int ppisp_camera_index(int camera_uid, int camera_id) const;
         void log_eval_appearance() const;
         void evaluate_at(int iteration, std::stop_token stop_token = {});
+        // With --pose-opt each held-out camera is refitted to the model first (RefittedCameraPoses).
+        EvalMetrics evaluate_model(int iteration, lfs::io::PipelinedImageLoader* image_loader,
+                                   std::function<bool()> on_view_boundary);
         bool service_evaluation_controls(int iteration, std::stop_token stop_token);
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] std::function<void(std::uint64_t)> release_image_cache_for_snapshot() const;
@@ -839,6 +844,8 @@ namespace lfs::training {
 
         // PPISP for physically-plausible ISP appearance modeling (optional)
         std::unique_ptr<PPISP> ppisp_;
+        // --pose-opt; null when off.
+        std::unique_ptr<CameraPoseRefinement> pose_refinement_;
         // Train-set EXIF EV mean used by seed_exposure (0.5 * (ev - mean)). Unset
         // when the seed was skipped or disabled; eval then uses exposure 0.
         std::optional<float> ppisp_exif_exposure_mean_;
@@ -1073,7 +1080,7 @@ namespace lfs::training {
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
-        std::optional<std::filesystem::path> lpips_weights_path_;
+        std::function<std::optional<core::nn::WeightFile>()> lpips_weights_preparer_;
         std::optional<lfs::Error> deferred_evaluation_error_;
         // Failed standalone --save-project-at-iter saves; they fail the run at
         // its end. Guarded by project_snapshot_mutex_: writers record their own.

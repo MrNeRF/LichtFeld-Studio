@@ -39,14 +39,16 @@ namespace lfs::training {
         const int tile_height,
         const bool mip_filter,
         const lfs::core::Tensor& bg_image,
-        const bool render_normal) {
+        const bool render_normal,
+        const bool render_depth,
+        const float dilation_scale) {
         const auto& ops = cuda_fast_ops();
         FastRasterizeContext ctx;
         ctx.saved.backend = ops.create();
         RenderOutput output;
         const auto result = fast_render(
             ops, ctx.saved, viewpoint_camera, gaussian_model, bg_color, tile_x_offset, tile_y_offset,
-            tile_width, tile_height, mip_filter, bg_image, render_normal, true, output);
+            tile_width, tile_height, mip_filter, bg_image, render_normal, render_depth, output, dilation_scale);
         if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
             return std::unexpected(fast_raster_error(result));
         }
@@ -124,6 +126,9 @@ namespace lfs::training {
                     .color_variance_weight = color_variance.weight,
                     .color_variance_loss = color_variance.loss,
                     .color_variance_pixel_weight = color_variance.pixel_weight,
+                    .ray_depth_state = prepared.ray_depth_state,
+                    .ray_depth_lr = prepared.ray_depth_lr,
+                    .ray_depth_mean_lr = prepared.ray_depth_mean_lr,
                 },
                 densification_type);
             if (!defer_optimizer_step && fastgs_adam_enabled(prepared)) {

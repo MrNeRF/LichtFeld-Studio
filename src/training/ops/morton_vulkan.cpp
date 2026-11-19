@@ -4,6 +4,7 @@
 #include "lfs/training/ops/morton_vulkan.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/morton_contraction.hpp"
 #include "lfs/training/ops/pair_sort_vulkan.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -39,7 +40,9 @@ namespace lfs::training {
         using namespace lfs::gpu_ops;
 
         struct MortonPush {
-            uint64_t means, minimum, maximum, codes, indices;
+            uint64_t means, codes, indices;
+            float centre[3];
+            float inv_radius;
             uint32_t count;
         };
         static_assert(sizeof(MortonPush) == 48);
@@ -168,25 +171,25 @@ namespace lfs::training {
             // Reordering temporarily duplicates parameter and optimizer buffers.
             core::gpu_trim_cached_memory(core::GpuBackend::Vulkan);
             const Tensor input = means.contiguous();
-            const Tensor minimum = input.min(0).contiguous();
-            const Tensor maximum = input.max(0).contiguous();
+            const size_t stride = morton::contraction_sample_stride(count);
+            const Tensor sample = input.slice(0, 0, count, stride).contiguous().cpu();
+            const auto frame = morton::contraction_frame({sample.ptr<float>(), sample.numel()});
             Tensor codes = Tensor::empty({count}, Device::GPU, DataType::UInt32);
             Tensor alternate_codes = Tensor::empty({count}, Device::GPU, DataType::UInt32);
             Tensor indices = Tensor::empty({count}, Device::GPU, DataType::UInt32);
             Tensor alternate_indices = Tensor::empty({count}, Device::GPU, DataType::UInt32);
-            const MortonPush push{vk::address(storage_ref(input)), vk::address(storage_ref(minimum)),
-                                  vk::address(storage_ref(maximum)), vk::address(storage_ref(codes)),
-                                  vk::address(storage_ref(indices)), static_cast<uint32_t>(count)};
+            const MortonPush push{vk::address(storage_ref(input)), vk::address(storage_ref(codes)), vk::address(storage_ref(indices)), {frame.centre[0], frame.centre[1], frame.centre[2]}, 1.0f / frame.radius, static_cast<uint32_t>(count)};
             const auto context = acquire_vulkan_context();
             const auto pipeline = training_pipeline(context, "morton", sizeof(push), 0);
-            const std::array reads{storage_ref(input), storage_ref(minimum), storage_ref(maximum)};
+            const std::array reads{storage_ref(input)};
             const std::array writes{storage_ref(codes), storage_ref(indices)};
             dispatch(context, pipeline, push, reads, writes, vk::dispatch_groups(*context, count));
             const bool sorted_in_a = vulkan_pair_sort({&codes, &alternate_codes, &indices, &alternate_indices},
                                                       static_cast<uint32_t>(count), 0, 30, false);
             Tensor result = Tensor::empty({count}, Device::GPU, DataType::Int64);
-            MortonPush widen{vk::address(storage_ref(sorted_in_a ? indices : alternate_indices)), 0, 0, 0,
-                             vk::address(storage_ref(result)), static_cast<uint32_t>(count)};
+            const MortonPush widen{.means = vk::address(storage_ref(sorted_in_a ? indices : alternate_indices)),
+                                   .indices = vk::address(storage_ref(result)),
+                                   .count = static_cast<uint32_t>(count)};
             const auto widen_pipeline = training_pipeline(context, "morton", sizeof(widen), 1);
             const std::array widen_reads{storage_ref(sorted_in_a ? indices : alternate_indices)};
             const std::array widen_writes{storage_ref(result)};

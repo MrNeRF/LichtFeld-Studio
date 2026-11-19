@@ -23,7 +23,7 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_export.hpp"
 #include "core/tensor_sh.hpp"
-#include "cuda/kmeans.hpp"
+#include "cuda/emeans.hpp"
 #include "formats/archive_member_names.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
@@ -1553,7 +1553,7 @@ namespace lfs::io {
             double t_archive_done_ms = 0.0;
 
             const auto join_sh_kmeans_if_started = [&]() {
-                // The k-means kernel has no cancellation token, so cancellation checkpoints must join it.
+                // The e-means kernel has no cancellation token, so cancellation checkpoints must join it.
                 if (sh_kmeans_future.valid() && !sh_kmeans_result) {
                     sh_kmeans_result.emplace(sh_kmeans_future.get());
                 }
@@ -1592,7 +1592,7 @@ namespace lfs::io {
                                1024;
                 palette_size = std::clamp(palette_size, 1, num_rows_int);
 
-                // k-means expects 1D float32 swizzled layout. Resident shN may be:
+                // e-means expects 1D float32 swizzled layout. Resident shN may be:
                 //  - Float32 swizzled
                 //  - Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
@@ -1655,13 +1655,13 @@ namespace lfs::io {
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
-                     iterations = options.kmeans_iterations, fast = options.fast_webp, export_started]() mutable {
+                     fast = options.fast_webp, export_started]() mutable {
                         const lfs::core::GpuBackendScope backend_scope(
                             *lfs::core::gpu_backend_of(shN_float_swizzled));
                         const auto started = std::chrono::steady_clock::now();
-                        auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
+                        auto [centroids, labels] = lfs::io::emeans_sh_swizzled(
                             shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                            palette_size, iterations, fast);
+                            palette_size);
                         if (fast) {
                             // Deliver CPU inputs with the future so packing can
                             // proceed without a later default-stream readback.
@@ -2092,7 +2092,7 @@ namespace lfs::io {
             std::vector<uint8_t> sh_labels_buf;
 
             if (sh_degree > 0) {
-                if (!report_progress(0.60f, "SH k-means")) {
+                if (!report_progress(0.60f, "SH e-means")) {
                     join_sh_kmeans_and_wait_for_webp_encodes();
                     return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
                 }
@@ -2125,7 +2125,7 @@ namespace lfs::io {
                 const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
                 const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
-                // Keep the full SH tensor in source layout for k-means, then regroup only
+                // Keep the full SH tensor in source layout for e-means, then regroup only
                 // the much smaller centroid table into the SOG texture/codebook layout.
                 std::vector<float> sh_centroids_grouped(actual_palette_size * sh_dims);
                 for (int i = 0; i < actual_palette_size; ++i) {

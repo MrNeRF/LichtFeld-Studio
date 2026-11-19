@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_LOSS_INLINE
+#define LFS_LOSS_VEC3 vec3
+#define LFS_LOSS_ISFINITE(value) (!(isnan(value) || isinf(value)))
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/gt_loss_heatmap.inc"
 
 layout(location = 0) in vec2 TexCoord;
 layout(location = 0) out vec4 frag_color;
@@ -25,7 +30,7 @@ layout(push_constant) uniform Push {
     // Per-panel flags packed as (left normalize, right normalize, left filter, right filter).
     vec4 panel_flags;
 
-    // Background color for letterboxed regions.
+    // Background RGB for letterboxed regions.
     vec4 background;
 
     // Divider visual constants: bar half-width, handle half-width, handle half-height,

@@ -118,7 +118,8 @@ namespace lfs::vis {
             std::expected<uint64_t, std::string> submitReadbackTicket(const ReadbackRequest& request) const override {
                 if (request.kind == ReadbackRequest::Kind::Depth)
                     return renderer_.submitReadOutputDepthImageTicket(context_, request.target, request.destination);
-                return renderer_.submitReadOutputImageIntoCpuHwcTicket(context_, request.target, request.destination, request.offset.x, request.offset.y);
+                return renderer_.submitReadOutputImageIntoCpuHwcTicket(context_, request.target, request.destination, request.offset.x, request.offset.y,
+                                                                       request.source_y, request.source_height);
             }
             std::expected<ReadbackTicketStatus, std::string> pollReadbackTicket(uint64_t ticket) const override { return renderer_.pollReadbackTicket(ticket); }
             std::expected<void, std::string> waitReadbackTicket(uint64_t ticket) const override { return renderer_.waitReadbackTicket(ticket); }

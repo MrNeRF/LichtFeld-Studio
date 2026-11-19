@@ -9,9 +9,6 @@
 #include <cstddef>
 
 namespace lfs::core::nn::kernels {
-    void resample_pil_axis(const float* input, float* output, const int* bounds, const int* coefficients,
-                           int taps, int planes, int in_h, int in_w, int out_h, int out_w,
-                           bool horizontal, cudaStream_t stream);
     void round_bfloat16(const float* input, float* output, size_t count, cudaStream_t stream);
     void dilate_binary_disk(const float* input, float* horizontal_distance, float* output,
                             int planes, int height, int width, int radius, cudaStream_t stream);

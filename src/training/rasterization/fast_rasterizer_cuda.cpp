@@ -664,7 +664,16 @@ namespace lfs::training {
         const lfs::gpu_ops::BackwardAdam& adam,
         const DensificationType densification_type) {
         auto& state = state_of(saved);
-        const auto fused_adam = fast_adam_settings(adam);
+        auto fused_adam = fast_adam_settings(adam);
+        if (adam.ray_depth_state.is_valid()) {
+            fused_adam.ray_depth_state = core::Tensor(adam.ray_depth_state).ptr<float>();
+            fused_adam.ray_depth_n = int(adam.ray_depth_state.size(0));
+            fused_adam.ray_depth_lr = adam.ray_depth_lr;
+            fused_adam.ray_depth_mean_lr = adam.ray_depth_mean_lr;
+            fused_adam.ray_depth_far_limit = 1e10f;
+        }
+        if (adam.grad_w2c.is_valid())
+            fused_adam.enabled = true;
         const float* edge_weight = edge_map.is_valid() && edge_map.numel() > 0 ? edge_map.ptr<float>() : nullptr;
         float* edge_score = edge_scores.is_valid() && edge_scores.numel() > 0 ? edge_scores.ptr<float>() : nullptr;
         const bool impact_requested = adam.impact_sum.is_valid() && adam.impact_peak.is_valid();
@@ -692,7 +701,7 @@ namespace lfs::training {
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
                                                                             &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &error_map,
                                                                             &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
-                                                                            &adam.scale_reg_loss, &adam.opacity_reg_loss, &adam.mean_step_far_mask}) {
+                                                                            &adam.scale_reg_loss, &adam.opacity_reg_loss, &adam.mean_step_far_mask, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
@@ -885,7 +894,8 @@ namespace lfs::training {
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
-            nullptr,
+            adam.grad_w2c.is_valid() ? core::Tensor(adam.grad_w2c).ptr<float>() : nullptr,
+            adam.grad_cam_position.is_valid() ? core::Tensor(adam.grad_cam_position).ptr<float>() : nullptr,
             n_primitives,
             ctx.forward_ctx.n_visible,
             ctx.active_sh_bases,
@@ -909,7 +919,7 @@ namespace lfs::training {
             variance);
         for (const core::Tensor* output : std::initializer_list<const core::Tensor*>{
                  &adam.rendered_count, &adam.erank_reg_loss, &adam.dc_reg_loss, &adam.sh_rest_reg_loss,
-                 &adam.impact_sum, &adam.impact_peak, &adam.color_variance_loss}) {
+                 &adam.impact_sum, &adam.impact_peak, &adam.color_variance_loss, &adam.grad_w2c, &adam.grad_cam_position, &adam.ray_depth_state}) {
             if (output->is_valid()) {
                 output->record_stream(stream);
                 core::bridgeStreams(stream, output->stream());
@@ -1094,6 +1104,7 @@ namespace lfs::training {
         static const lfs::gpu_ops::FastRasterOps ops{
             .create = fast_ops_create,
             .color_variance = true,
+            .camera_gradient = true,
             .forward = fast_ops_forward,
             .backward = fast_ops_backward,
             .release = fast_ops_release,

@@ -27,7 +27,8 @@ namespace lfs::training {
         float* dirs_ptr = nullptr;           // [C, N, 3]
         int32_t* tile_offsets_ptr = nullptr; // [C, tile_height, tile_width]
         int32_t* last_ids_ptr = nullptr;     // [C, H, W]
-        float* compensations_ptr = nullptr;  // [C, N] or nullptr
+        float* dilations_ptr = nullptr;
+        float* compensations_ptr = nullptr; // [C, N] or nullptr
 
         // Borrowed from the gsplat owner-held VMM intersection cache (do NOT free).
         // Valid from forward through backward for this owner; released at its cache boundary or destruction.

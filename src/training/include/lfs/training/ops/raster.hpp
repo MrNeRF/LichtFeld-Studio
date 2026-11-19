@@ -117,6 +117,9 @@ namespace lfs::gpu_ops {
         // ROI). Only backends whose FastRasterOps::color_variance is set accept it.
         float color_variance_weight = 0.f;
         Tensor color_variance_loss, color_variance_pixel_weight;
+        Tensor grad_w2c, grad_cam_position;
+        Tensor ray_depth_state;
+        float ray_depth_lr = 0.f, ray_depth_mean_lr = 0.f;
     };
 
     struct RasterResult {
@@ -139,6 +142,7 @@ namespace lfs::gpu_ops {
         State (*create)();
         // The backward implements BackwardAdam::color_variance_weight.
         bool color_variance = false;
+        bool camera_gradient = false;
 
         RasterResult (*forward)(
             FastSaved&, const SplatInputs&, In view, In camera_position,

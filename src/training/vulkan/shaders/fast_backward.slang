@@ -13,7 +13,7 @@ struct BackPush {
     uint64_t renderedCount, erankLoss, dcLoss, shLoss, scaleLoss;
     uint logScale;
     float scaleNormalizer, erankWeight, dcWeight, shWeight;
-    uint64_t impactSum, impactPeak;
+    uint64_t impactSum, impactPeak, gradW2c, gradPosition;
 };
 struct Push {
     uint64_t parameters;

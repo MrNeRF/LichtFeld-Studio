@@ -609,7 +609,17 @@ struct GsplatProjectParams {
     uint degree;
     uint layout_rest;
     uint sh_format;
+    uint64_t mip;
 };
+
+float3 gsplat_filtered_scale(float3 scale, uint64_t mip, uint i) {
+    if (mip == 0) return scale;
+    return sqrt(scale * scale + ((Ptr<float2, Access.Read>)mip)[i].x);
+}
+float gsplat_filter_compensation(uint64_t mip, uint i) {
+    if (mip == 0) return 1;
+    return ((Ptr<float2, Access.Read>)mip)[i].y;
+}
 
 struct GsplatTileRect {
     uint x0, y0, x1, y1;
@@ -677,10 +687,36 @@ void gsplat_project(GsplatProjectParams p, uint g) {
         image_mean -= cam.offset;
 
     const float det_orig = c00 * c11 - c01 * c01;
-    c00 += kGsplatEps2d;
-    c11 += kGsplatEps2d;
+    float blur = kGsplatEps2d;
+    float mipCompensation = 1;
+    if (p.mip != 0) {
+        const float3 direction = normalize(mean_c);
+        const float3 u = normalize(cross(direction, abs(direction.x) < 0.9f ? float3(1,0,0) : float3(0,1,0)));
+        float h = 1e-3f * length(mean_c);
+        float2 pu, pv;
+        float sigma2 = 0;
+        blur = 0.1f;
+        if (gsplat_camera_to_image(cam, mean_c + h * u, pu) &&
+            gsplat_camera_to_image(cam, mean_c + h * cross(direction,u), pv)) {
+            float2 ju = (pu - image_points[0]) / h, jv = (pv - image_points[0]) / h;
+            float determinant = ju.x*jv.y - jv.x*ju.y;
+            if (abs(determinant) > 0 && isfinite(blur / abs(determinant))) {
+                sigma2 = blur / abs(determinant);
+                float halfTrace = 0.5f * (dot(ju,ju) + dot(jv,jv));
+                blur = max(blur, sigma2 * (halfTrace + sqrt(max(0.f,halfTrace*halfTrace-determinant*determinant))));
+            }
+        }
+        float3 d = mul(rotation, normalize(mean-cam.origin));
+        float3 a = scale*scale, b = a + sigma2;
+        float original = dot(d*d, a.yzx*a.zxy);
+        float dilated = dot(d*d, b.yzx*b.zxy);
+        mipCompensation = dilated > 0 ? sqrt(original / dilated) : 1;
+        ((Ptr<float2, Access.ReadWrite>)p.mip)[g] = float2(sigma2, mipCompensation);
+    }
+    c00 += blur;
+    c11 += blur;
     const float det = c00 * c11 - c01 * c01;
-    const float compensation = sqrt(max(0.0f, det_orig / det));
+    const float compensation = p.mip != 0 ? mipCompensation : sqrt(max(0.0f, det_orig / det));
     if (det <= 0.0f)
         return;
     const float opacity = gsplat_sigmoid(p.opacities[g]) * compensation;

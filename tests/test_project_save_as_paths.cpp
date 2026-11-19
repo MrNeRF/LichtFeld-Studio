@@ -20,6 +20,19 @@ TEST(ProjectSaveAsPathTest, PreservesUnicodeDestinationFilename) {
         ".保存_копия.licht.saveas-fixed-token.tmp");
 }
 
+TEST(ProjectAssetPathTest, SourceRootDeterminesSavedPathSeparators) {
+    using lfs::core::path_from_source_format;
+    using lfs::core::utf8_to_path;
+    EXPECT_EQ(path_from_source_format(utf8_to_path(R"(D:\dataset\images\rig\café.png)"),
+                                      utf8_to_path(R"(D:\dataset)")),
+              utf8_to_path("D:/dataset/images/rig/café.png"));
+    EXPECT_EQ(path_from_source_format(utf8_to_path(R"(images\original)"),
+                                      utf8_to_path(R"(\\server\share\dataset)")),
+              utf8_to_path("images/original"));
+    const auto literal = utf8_to_path(R"(/dataset/images/literal\name.png)");
+    EXPECT_EQ(path_from_source_format(literal, "/dataset"), literal);
+}
+
 TEST(ProjectSaveAsPathTest, LongNamesLeaveRoomForNestedTemporaryFiles) {
     constexpr std::string_view token = "01234567-89ab-cdef-0123-456789abcdef";
     for (const size_t length : {size_t{128}, size_t{173}, size_t{240}}) {

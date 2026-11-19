@@ -4881,6 +4881,7 @@ namespace lfs::vis::gui {
                                     std::string(name), std::string(rml),
                                     inline_rcss ? std::string(inline_rcss) : std::string{});
         };
+        ops.suspend_input = [](void* host) { static_cast<RmlPanelHost*>(host)->suspendInput(); };
         ops.destroy = [](void* host) {
             if (lfs::python::on_graphics_thread()) {
                 delete static_cast<RmlPanelHost*>(host);
@@ -5837,6 +5838,54 @@ namespace lfs::vis::gui {
         }
     }
 
+    void GuiManager::revealPanel(const std::string& id) {
+        if (!viewer_)
+            return;
+        if (!viewer_->isOnViewerThread()) {
+            viewer_->postWork(VisualizerImpl::WorkItem{.run = [this, id = std::string(id)] { revealPanel(id); }, .cancel = {}});
+            return;
+        }
+        const auto panel = PanelRegistry::instance().get_panel(id);
+        if (!panel || !panel->enabled)
+            return;
+        std::string editor = panel->id;
+        if (panel->space == PanelSpace::MainPanelTab) {
+            focus_panel_name_ = id;
+            editor = screen::editors::kProperties;
+        } else if (panel->space == PanelSpace::SceneHeader) {
+            editor = screen::editors::kScene;
+        } else if (!isPanelEditorSpace(panel->space)) {
+            return;
+        }
+        bool revealed = false;
+        viewer_->screens().edit([&](screen::Screen& screen) { revealed = screen.revealDockFor(screen.findEditor(editor)); });
+        if (revealed) {
+            screen_host_.refreshLayout();
+            if (auto* rendering = viewer_->getRenderingManager())
+                rendering->markDirty(DirtyFlag::VIEWPORT, FrameReason::ViewportResize);
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
+        }
+        lfs::python::request_redraw();
+    }
+
+    void GuiManager::queueSideDockToggle(const lfs::core::SideDock side) {
+        if (!viewer_)
+            return;
+        const auto request = [this, side] {
+            const bool right = side == lfs::core::SideDock::Right;
+            viewer_->screens().edit([right](screen::Screen& screen) { screen.setDockCollapsed(right, !screen.dockCollapsed(right)); });
+            screen_host_.refreshLayout();
+            if (auto* rendering = viewer_->getRenderingManager())
+                rendering->markDirty(DirtyFlag::VIEWPORT, FrameReason::ViewportResize);
+            viewer_->projectMarkSessionChapterCommitted("GUIL");
+            lfs::python::request_redraw();
+        };
+        if (viewer_->isOnViewerThread())
+            request();
+        else
+            viewer_->postWork(VisualizerImpl::WorkItem{.run = request, .cancel = {}});
+    }
+
     void GuiManager::requestUiVisibilityToggle() {
         auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr;
         if (!wm) {
@@ -6564,6 +6613,10 @@ namespace lfs::vis::gui {
         }
         const screen::Rect work_rect{screen.work_pos.x, screen.work_pos.y, screen.work_size.x, screen.work_size.y};
         syncEditorFlags();
+        const auto& layout_screen = viewer_->screens().screen();
+        rml_viewport_overlay_.setSideDocks(
+            !ui_hidden_ && layout_screen.dockColumns(false) != 0, layout_screen.dockCollapsed(false),
+            !ui_hidden_ && layout_screen.dockColumns(true) != 0, layout_screen.dockCollapsed(true));
         if (!focus_panel_name_.empty() && screen_host_.properties().focusTab(focus_panel_name_)) {
             viewer_->screens().edit([](screen::Screen& s) { s.openEditor(screen::editors::kProperties); });
             focus_panel_name_.clear();
@@ -8018,8 +8071,16 @@ namespace lfs::vis::gui {
         });
 
         ui::FocusTrainingPanel::when([this](const auto&) {
-            focus_panel_name_ = TRAINING_PANEL_ID;
+            revealPanel(TRAINING_PANEL_ID);
             lfs::python::request_redraw();
+        });
+
+        ui::RevealPanel::when([this](const auto& event) {
+            revealPanel(event.id);
+        });
+
+        ui::ToggleSideDock::when([this](const auto& event) {
+            queueSideDockToggle(event.side);
         });
 
         ui::ToggleUI::when([this](const auto&) {
@@ -8493,7 +8554,7 @@ namespace lfs::vis::gui {
             return;
         last_pre_scene_panel_sync_generation_ = sync_generation;
 
-        if (!viewer_ || !show_main_panel_ || ui_hidden_) {
+        if (!viewer_ || ui_hidden_ || !screen_host_.isEditorVisible(screen::editors::kProperties)) {
             return;
         }
 

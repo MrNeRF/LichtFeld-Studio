@@ -3,6 +3,7 @@
 #include "dataset_scene_import_internal.hpp"
 #include <cassert>
 #include <mutex>
+#include <unordered_set>
 namespace lfs::training {
     namespace {
         int effectiveMinTrackLengthForLoad(const lfs::core::param::TrainingParameters& params) {
@@ -294,12 +295,18 @@ namespace lfs::training {
                         }
                     }
 
+                    const std::unordered_set<int> disabled(params.disabled_camera_uids.begin(), params.disabled_camera_uids.end());
+                    const auto add_camera = [&](const auto& camera, auto group) {
+                        const auto id = scene.addCamera(camera->image_name(), group, camera);
+                        if (disabled.contains(camera->uid()))
+                            scene.setCameraTrainingEnabled(id, false);
+                    };
                     const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
                     const auto train_cameras_id = scene.addCameraGroup(
                         "Training", cameras_group_id, train_count);
                     for (size_t i = 0; i < cameras.size(); ++i) {
                         if (!hold_out || (i % test_every) != 0) {
-                            scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
+                            add_camera(cameras[i], train_cameras_id);
                         }
                     }
                     if (hold_out && val_count > 0) {
@@ -307,7 +314,7 @@ namespace lfs::training {
                             "Validation", cameras_group_id, val_count);
                         for (size_t i = 0; i < cameras.size(); ++i) {
                             if ((i % test_every) == 0) {
-                                scene.addCamera(cameras[i]->image_name(), val_cameras_id, cameras[i]);
+                                add_camera(cameras[i], val_cameras_id);
                             }
                         }
                     }

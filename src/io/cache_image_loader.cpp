@@ -197,6 +197,10 @@ namespace lfs::io {
             mix_float(undistort.dst_cy * grid.scale_y);
             for (int i = 0; i < undistort.num_distortion; ++i)
                 mix_float(undistort.distortion[i]);
+            if (is_view(undistort)) {
+                for (const float value : undistort.view_rotation)
+                    mix_float(value);
+            }
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
             if (include_output_format)
@@ -215,10 +219,8 @@ namespace lfs::io {
 
     namespace {
 
-#if LFS_HAS_CUDA
         lfs::core::Tensor quantize_rgb_to_u16_grid(
-            const lfs::core::Tensor& tensor, const cudaStream_t stream) {
-            const lfs::core::CUDAStreamGuard execution_scope(stream);
+            const lfs::core::Tensor& tensor) {
             const size_t channels = tensor.shape()[0];
             const size_t height = tensor.shape()[1];
             const size_t width = tensor.shape()[2];
@@ -229,7 +231,7 @@ namespace lfs::io {
             auto restored = lfs::core::Tensor::empty(
                 {height, width, channels}, lfs::core::Device::GPU,
                 lfs::core::DataType::Float32);
-            const auto* image_ops = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA);
+            const auto* image_ops = lfs::core::shared_image_ops(*lfs::core::gpu_backend_of(tensor));
             image_ops->convert(hwc, quantized, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC,
                                height, width, channels, {});
             image_ops->convert(quantized, restored, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC,
@@ -237,7 +239,6 @@ namespace lfs::io {
             return restored.permute({2, 0, 1}).contiguous();
         }
 
-#endif
         constexpr int LANCZOS_KERNEL_SIZE = 2;
 
         // Upload completes before the borrowed decoder allocation is released.
@@ -299,6 +300,32 @@ namespace lfs::io {
             return output;
         }
 
+        lfs::core::Tensor undistort_cached_rgb(lfs::core::Tensor tensor, const LoadParams& params) {
+            using namespace lfs::core;
+            if (tensor.dtype() == DataType::UInt8) {
+                tensor = tensor.to(DataType::Float32) / 255.0f;
+            }
+            tensor = tensor.clamp(0.0f, 1.0f).contiguous();
+            const auto scaled = lfs::core::prepare_undistort_params(
+                *params.undistort,
+                static_cast<int>(tensor.shape()[2]),
+                static_cast<int>(tensor.shape()[1]),
+                params.resize_factor,
+                params.max_width);
+            tensor = lfs::core::undistort_image(
+                tensor, scaled, params.cuda_stream);
+            if (params.output_uint8) {
+                auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
+                const auto* ops = shared_image_ops(*gpu_backend_of(tensor));
+                ops->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW,
+                             tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
+                tensor = std::move(uint8_tensor);
+            } else {
+                tensor = quantize_rgb_to_u16_grid(tensor);
+            }
+            return tensor;
+        }
+
     } // namespace
 
     const char* masked_image_fill_error() {
@@ -355,10 +382,18 @@ namespace lfs::io {
             if (!data || channels != 3)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
         };
-        if (decode_16bit || params.decode_16bit) {
+        if (decode_16bit || params.decode_16bit || params.undistort) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
             const std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
             require_rgb(data, channels);
+            if (params.undistort) {
+                // The mapping consumes source pixels at their original resolution.
+                auto raw = params;
+                raw.resize_factor = 1;
+                raw.max_width = 0;
+                raw.output_uint8 = false;
+                return undistort_cached_rgb(upload_rgb_image(owned.get(), width, height, channels, raw), params);
+            }
             return upload_rgb_image(owned.get(), width, height, channels, params);
         }
         auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
@@ -798,10 +833,11 @@ namespace lfs::io {
                             jpeg_bytes, params.cuda_stream);
                         tensor = tensor.permute({2, 0, 1}).contiguous();
                         if (params.output_uint8) {
+                            // Convert on the decode's execution stream; a null request is not the legacy stream here.
+                            const lfs::core::CUDAStreamGuard execution_scope(
+                                image_execution_stream(params.cuda_stream));
                             auto uint8_tensor = Tensor::empty(
                                 tensor.shape(), Device::GPU, DataType::UInt8);
-                            const lfs::core::CUDAStreamGuard execution_scope(
-                                static_cast<cudaStream_t>(params.cuda_stream));
                             lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                             return uint8_tensor;
                         }
@@ -819,28 +855,8 @@ namespace lfs::io {
                     params.cuda_stream,
                     DecodeFormat::RGB, params.output_uint8);
 
-                if (params.undistort) {
-                    const bool restore_uint8 = params.output_uint8;
-                    if (tensor.dtype() == DataType::UInt8) {
-                        tensor = tensor.to(DataType::Float32) / 255.0f;
-                    }
-                    tensor = tensor.clamp(0.0f, 1.0f).contiguous();
-                    const auto scaled = lfs::core::prepare_undistort_params(
-                        *params.undistort,
-                        static_cast<int>(tensor.shape()[2]),
-                        static_cast<int>(tensor.shape()[1]),
-                        params.resize_factor,
-                        params.max_width);
-                    tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(tensor, scaled, false);
-                    if (restore_uint8) {
-                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
-                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
-                        tensor = std::move(uint8_tensor);
-                    } else {
-                        tensor = quantize_rgb_to_u16_grid(
-                            tensor, static_cast<cudaStream_t>(params.cuda_stream));
-                    }
-                }
+                if (params.undistort)
+                    tensor = undistort_cached_rgb(std::move(tensor), params);
 
                 if (!params.skip_blob_cache) {
                     bool should_cache = false;

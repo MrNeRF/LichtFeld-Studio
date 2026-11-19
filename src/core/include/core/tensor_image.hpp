@@ -15,7 +15,12 @@ namespace lfs::core {
         float distortion[12];
         int num_distortion;
         bool crop_solve_failed = false;
+        bool view = false;
+        // Row-major rotation from destination pinhole coordinates to the source camera.
+        float view_rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     };
+
+    inline bool is_view(const UndistortParams& params) { return params.view; }
 
     namespace detail {
         LFS_CORE_API UndistortParams initialize_undistort_params(

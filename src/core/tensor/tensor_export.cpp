@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_export.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_sh.hpp"
+#include <numbers>
+#include <optional>
+#include <random>
+#include <span>
 
 #include "core/morton.hpp"
 #include "internal/tensor_impl.hpp"
@@ -157,6 +162,262 @@ namespace lfs::core {
             require(t->device() == Device::GPU && internal::gpu_backend_tag(*t) == internal::gpu_backend_tag(shN_swizzled),
                     "assign_sh3 tensors must share one GPU backend");
         internal::backend_ops_for(shN_swizzled).assign_sh3(shN_swizzled, centroids, centroid_norms, labels, fast, have_labels, {});
+    }
+
+    namespace {
+        // The coarse vocabulary is fixed. Moving palette entries change buckets
+        // after every update, while each source row keeps its original bucket.
+        class PaletteIndex {
+            static constexpr size_t group_count = 256;
+            static constexpr size_t neighbor_count = 4;
+            size_t dims_;
+            Tensor coarse_ = Tensor::zeros({group_count, 45}, Device::CPU);
+            std::array<std::array<int, neighbor_count>, group_count> neighbors_{};
+            std::vector<int> row_groups_;
+            std::array<std::vector<int>, group_count> candidates_;
+
+            float distance(const float* a, const float* b) const {
+                float sum = 0;
+                for (size_t d = 0; d < dims_; ++d) {
+                    const float delta = a[d] - b[d];
+                    sum += delta * delta;
+                }
+                return sum;
+            }
+
+            std::vector<int> palette_groups(const Tensor& palette) const {
+                std::vector<int> groups(palette.size(0));
+                const auto* centers = palette.ptr<float>();
+                const auto* coarse = coarse_.ptr<float>();
+                tbb::parallel_for(size_t{0}, groups.size(), [&](size_t c) {
+                    float best = std::numeric_limits<float>::infinity();
+                    for (size_t g = 0; g < group_count; ++g) {
+                        const float score = distance(centers + c * 45, coarse + g * 45);
+                        if (score < best) {
+                            groups[c] = int(g);
+                            best = score;
+                        }
+                    }
+                });
+                return groups;
+            }
+
+        public:
+            PaletteIndex(const Tensor& source, const Tensor& palette, size_t n, uint32_t rest)
+                : dims_(rest * 3), row_groups_(n) {
+                auto* coarse = coarse_.ptr<float>();
+                const auto* centers = palette.ptr<float>();
+                // The palette is already a seeded sample of shuffled source rows.
+                std::copy_n(centers, group_count * 45, coarse);
+                for (int step = 0; step < 5; ++step) {
+                    const auto groups = palette_groups(palette);
+                    std::vector<double> sums(group_count * dims_);
+                    std::array<int, group_count> counts{};
+                    for (size_t c = 0; c < groups.size(); ++c) {
+                        const auto g = groups[c];
+                        ++counts[g];
+                        for (size_t d = 0; d < dims_; ++d)
+                            sums[g * dims_ + d] += centers[c * 45 + d];
+                    }
+                    for (size_t g = 0; g < group_count; ++g)
+                        if (counts[g])
+                            for (size_t d = 0; d < dims_; ++d)
+                                coarse[g * 45 + d] = float(sums[g * dims_ + d] / counts[g]);
+                }
+                for (size_t g = 0; g < group_count; ++g) {
+                    std::array<std::pair<float, int>, group_count> distances;
+                    for (size_t j = 0; j < group_count; ++j)
+                        distances[j] = {distance(coarse + g * 45, coarse + j * 45), int(j)};
+                    std::partial_sort(distances.begin(), distances.begin() + neighbor_count, distances.end());
+                    for (size_t i = 0; i < neighbor_count; ++i)
+                        neighbors_[g][i] = distances[i].second;
+                }
+                const auto gpu_coarse = coarse_.gpu();
+                const auto norms = gpu_coarse.square().sum(1);
+                constexpr size_t chunk = 65536;
+                for (size_t start = 0; start < n; start += chunk) {
+                    const auto count = std::min(n - start, chunk);
+                    auto block = Tensor::empty({swizzled_float_count(count, 15)}, Device::GPU);
+                    sh_codec(source, block, {.source_rows = n, .destination_rows = count, .count = count, .source_rest = rest, .destination_rest = 15, .source_offset = start});
+                    auto labels = Tensor::empty({count}, Device::GPU, DataType::Int32);
+                    assign_sh3(block, gpu_coarse, norms, labels, true);
+                    const auto host = labels.cpu();
+                    std::copy_n(host.ptr<int>(), count, row_groups_.data() + start);
+                }
+            }
+
+            Tensor assign(const Tensor& palette, const float* rows, std::span<const int> order) {
+                const auto groups = palette_groups(palette);
+                std::array<std::vector<int>, group_count> buckets;
+                for (size_t c = 0; c < groups.size(); ++c)
+                    buckets[groups[c]].push_back(int(c));
+                const auto& fallback = *std::find_if(buckets.begin(), buckets.end(), [](const auto& b) { return !b.empty(); });
+                for (size_t g = 0; g < group_count; ++g) {
+                    auto& list = candidates_[g];
+                    list.clear();
+                    for (int neighbor : neighbors_[g]) {
+                        const auto& bucket = buckets[neighbor];
+                        list.insert(list.end(), bucket.begin(), bucket.end());
+                    }
+                    if (list.empty())
+                        list = fallback;
+                    std::sort(list.begin(), list.end()); // Equal distances select the lowest palette index.
+                }
+                const auto* centers = palette.ptr<float>();
+                auto labels = Tensor::empty({order.size()}, Device::CPU, DataType::Int32);
+                auto* out = labels.ptr<int>();
+                tbb::parallel_for(size_t{0}, order.size(), [&](size_t i) {
+                    const auto row = order[i];
+                    const auto& list = candidates_[row_groups_[row]];
+                    int nearest = list.front();
+                    float best = std::numeric_limits<float>::infinity();
+                    for (int c : list) {
+                        const float score = distance(rows + row * dims_, centers + c * 45);
+                        if (score < best) {
+                            nearest = c;
+                            best = score;
+                        }
+                    }
+                    out[i] = nearest;
+                });
+                return labels;
+            }
+        };
+    } // namespace
+
+    std::tuple<Tensor, Tensor> emeans_sh(const Tensor& source, int points, int coefficients, int clusters) {
+        require(source.is_valid() && source.device() == Device::GPU && source.dtype() == DataType::Float32 &&
+                    points > 0 && clusters > 0 && (coefficients == 3 || coefficients == 8 || coefficients == 15) &&
+                    source.numel() >= swizzled_float_count(points, coefficients),
+                "invalid E-means palette input");
+        const GpuBackendScope scope(*gpu_backend_of(source));
+        const size_t n = points, k = std::min(points, clusters), dims = coefficients * 3;
+        const auto rest = static_cast<uint32_t>(coefficients);
+        // Accumulate each row in a fixed order and in double precision. Assignment
+        // uses the same device implementation as streaming SH export on every backend.
+        auto host_rows = Tensor::empty({n, dims}, Device::CPU);
+        sh_codec(source.cpu(), host_rows, {.destination_format = ShFormat::Canonical, .source_rows = n, .destination_rows = n, .count = n, .source_rest = rest, .destination_rest = rest});
+        if (k == n)
+            return {host_rows.gpu(), Tensor::arange(0, points, 1, Device::GPU, DataType::Int32)};
+
+        auto palette = Tensor::zeros({k, 45}, Device::CPU);
+        const float* rows = host_rows.ptr<float>();
+        float* centers = palette.ptr<float>();
+        std::vector<int> order(n);
+        std::iota(order.begin(), order.end(), 0);
+        std::mt19937 rng(2611);
+        std::shuffle(order.begin(), order.end(), rng);
+        for (size_t c = 0; c < k; ++c)
+            std::copy_n(rows + order[c] * dims, dims, centers + c * 45);
+
+        std::optional<PaletteIndex> index;
+        if (k >= 4096)
+            index.emplace(source, palette, n, rest);
+
+        const double raw_batch = (n > 2000000 ? 0.0044 : 0.035) * std::pow(k, 0.13) * std::pow(n, 0.88) * std::pow(10., 0.81);
+        const size_t batch = std::min(n, size_t{1} << std::clamp<long>(std::lround(std::log2(std::max(1., raw_batch))), 5, 30));
+        const size_t batches = n / batch;
+        const double alpha0 = std::min(1., 0.824 * std::pow(k, -0.46) * std::pow(batch, 0.90) *
+                                               std::pow(n, -0.45) * std::pow(10., -0.11));
+        std::vector<double> weights(k, 1e-10), sums(k * dims), epoch_sums(k * dims);
+        std::vector<int> counts(k), epoch_counts(k);
+        const auto assign = [&](size_t start, size_t count, const Tensor& gpu_centers, const Tensor& norms, bool shuffled) {
+            const auto ids = shuffled ? Tensor::from_vector(std::vector<int>(order.begin() + start, order.begin() + start + count),
+                                                            {count}, Device::GPU)
+                                      : Tensor{};
+            auto swizzled = Tensor::empty({swizzled_float_count(count, 15)}, Device::GPU);
+            sh_codec(source, swizzled, {.source_rows = n, .destination_rows = count, .count = count, .source_rest = rest, .destination_rest = 15, .source_offset = shuffled ? 0 : start}, shuffled ? &ids : nullptr);
+            auto labels = Tensor::empty({count}, Device::GPU, DataType::Int32);
+            assign_sh3(swizzled, gpu_centers, norms, labels, true);
+            return labels.cpu();
+        };
+        const auto accumulate = [&](size_t start, size_t count, const int* labels, bool shuffled) {
+            for (size_t i = 0; i < count; ++i) {
+                const int c = labels[i];
+                const size_t row = shuffled ? order[start + i] : start + i;
+                ++counts[c];
+                for (size_t d = 0; d < dims; ++d)
+                    sums[c * dims + d] += rows[row * dims + d];
+            }
+        };
+        const auto refit = [&](const std::vector<int>& totals, const std::vector<double>& values) {
+            for (size_t c = 0; c < k; ++c)
+                if (totals[c])
+                    for (size_t d = 0; d < dims; ++d)
+                        centers[c * 45 + d] = static_cast<float>(values[c * dims + d] / totals[c]);
+        };
+        for (int epoch = 0; k > 1 && epoch < 10; ++epoch) {
+            if (epoch)
+                std::shuffle(order.begin(), order.end(), rng);
+            for (size_t b = 0; b < batches; ++b) {
+                const size_t step = epoch * batches + b;
+                const double progress = double(step) / (10 * batches);
+                const double alpha = alpha0 * (0.1 + 0.45 * (1 + std::cos(std::numbers::pi * progress)));
+                auto gpu_centers = index ? Tensor{} : palette.gpu();
+                auto labels = index ? index->assign(palette, rows, std::span(order).subspan(b * batch, batch))
+                                    : assign(b * batch, batch, gpu_centers, gpu_centers.square().sum(1), true);
+                std::fill(counts.begin(), counts.end(), 0);
+                std::fill(sums.begin(), sums.end(), 0.);
+                accumulate(b * batch, batch, labels.ptr<int>(), true);
+                for (size_t c = 0; c < k; ++c) {
+                    const double previous = (1 - alpha) * weights[c];
+                    weights[c] = previous + alpha * counts[c];
+                    if (counts[c]) {
+                        for (size_t d = 0; d < dims; ++d) {
+                            const size_t index = c * dims + d;
+                            auto& v = centers[c * 45 + d];
+                            v = static_cast<float>((previous * v + alpha * sums[index]) / weights[c]);
+                            if (epoch == 9)
+                                epoch_sums[index] += sums[index];
+                        }
+                        if (epoch == 9)
+                            epoch_counts[c] += counts[c];
+                    }
+                }
+                if ((step + 1) % 5 == 0) {
+                    const double threshold = 0.1 * std::accumulate(weights.begin(), weights.end(), 0.) / k;
+                    std::vector<size_t> dead;
+                    std::vector<std::pair<double, size_t>> donors;
+                    std::uniform_real_distribution<double> uniform(std::numeric_limits<double>::min(), 1.);
+                    for (size_t c = 0; c < k; ++c) {
+                        if (weights[c] < threshold)
+                            dead.push_back(c);
+                        else
+                            donors.emplace_back(std::log(uniform(rng)) / weights[c], c);
+                    }
+                    std::sort(donors.rbegin(), donors.rend());
+                    for (size_t i = 0; i < std::min(dead.size(), donors.size()); ++i) {
+                        const size_t a = dead[i], b = donors[i].second;
+                        weights[a] = weights[b] *= 0.5;
+                        epoch_counts[a] = epoch_counts[b] = 0;
+                        for (size_t d = 0; d < dims; ++d) {
+                            const float offset = (d % 2 ? -1.f : 1.f) / 128;
+                            const float donor = centers[b * 45 + d];
+                            centers[a * 45 + d] = donor * (1.f + offset);
+                            centers[b * 45 + d] = donor * (1.f - offset);
+                            epoch_sums[a * dims + d] = epoch_sums[b * dims + d] = 0.;
+                        }
+                    }
+                }
+            }
+        }
+        refit(epoch_counts, epoch_sums);
+        auto gpu_centers = palette.gpu();
+        auto norms = gpu_centers.square().sum(1);
+        auto labels = Tensor::zeros({n}, Device::CPU, DataType::Int32);
+        std::fill(counts.begin(), counts.end(), 0);
+        std::fill(sums.begin(), sums.end(), 0.);
+        for (size_t start = 0; start < n; start += batch) {
+            const auto count = std::min(batch, n - start);
+            auto* output = labels.ptr<int>() + start;
+            if (k > 1) {
+                const auto local = assign(start, count, gpu_centers, norms, false);
+                std::copy_n(local.ptr<int>(), count, output);
+            }
+            accumulate(start, count, output, false);
+        }
+        refit(counts, sums);
+        return {palette.slice(1, 0, dims).contiguous().gpu(), labels.gpu()};
     }
 
     ScalarCodebook cluster_scalar(const float* data, int num_rows, int num_columns, int iterations, bool pooled) {

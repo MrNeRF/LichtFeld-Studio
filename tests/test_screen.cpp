@@ -66,6 +66,43 @@ namespace lfs::vis::screen {
         EXPECT_FLOAT_EQ(rectOf(g, scene).x, rectOf(g, properties).x);
     }
 
+    TEST_F(ScreenTest, SideDocksCollapseIndependentlyAndRestoreEditorWidths) {
+        Screen screen = Screen::makeDefault(registry);
+        const auto view = screen.activeView();
+        const auto left = screen.split(view, SplitAxis::Columns, 0.25f, true);
+        ASSERT_TRUE(screen.setEditor(left, editors::kConsole));
+        const auto scene = screen.findEditor(editors::kScene);
+        const auto properties = screen.findEditor(editors::kProperties);
+        const auto before = screen.solve(kBounds, kMetrics);
+        ASSERT_TRUE(before.find(left) && before.find(scene) && before.find(properties));
+        ASSERT_TRUE(screen.setDockCollapsed(false, true));
+        EXPECT_FALSE(screen.dockCollapsed(true));
+        const auto one = screen.solve(kBounds, kMetrics);
+        EXPECT_EQ(one.find(left), nullptr);
+        EXPECT_NE(one.find(scene), nullptr);
+        ASSERT_TRUE(screen.setDockCollapsed(true, true));
+        const auto restored = Screen::load(screen.save(), registry);
+        ASSERT_TRUE(restored.has_value());
+        EXPECT_TRUE(restored->dockCollapsed(false));
+        EXPECT_TRUE(restored->dockCollapsed(true));
+        EXPECT_EQ(restored->areas().size(), screen.areas().size());
+        const Rect narrow{0, 0, 300, 240};
+        const auto closed = restored->solve(narrow, kMetrics);
+        EXPECT_EQ(closed.find(left), nullptr);
+        EXPECT_EQ(closed.find(scene), nullptr);
+        EXPECT_EQ(closed.find(properties), nullptr);
+        EXPECT_FLOAT_EQ(rectOf(closed, view).w, narrow.w);
+        EXPECT_TRUE(screen.revealDockFor(left));
+        EXPECT_FALSE(screen.dockCollapsed(false));
+        EXPECT_TRUE(screen.dockCollapsed(true));
+        EXPECT_TRUE(screen.revealDockFor(scene));
+        const auto after = screen.solve(kBounds, kMetrics);
+        for (const auto id : {left, view, scene, properties}) {
+            EXPECT_FLOAT_EQ(rectOf(before, id).x, rectOf(after, id).x);
+            EXPECT_FLOAT_EQ(rectOf(before, id).w, rectOf(after, id).w);
+        }
+    }
+
     TEST_F(ScreenTest, CtrlSwapStartsAtSceneBottomRightAfterViewportDividerMovesLeft) {
         Screen screen = Screen::makeDefault(registry);
         const Rect bounds{0.0f, 0.0f, 1600.0f, 900.0f};
@@ -685,7 +722,7 @@ namespace lfs::vis::screen {
         s.gt_comparison_mode = GTComparisonMode::Depth;
         s.split_position = 0.3f;
         s.split_view_offset = 4;
-        s.depth_view = true;
+        s.normal_view = true;
         s.depth_view_min = 1.0f;
         s.depth_view_max = 20.0f;
         s.depth_visualization_mode = lfs::rendering::DepthVisualizationMode::Grayscale;

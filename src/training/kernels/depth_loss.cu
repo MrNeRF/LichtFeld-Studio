@@ -522,7 +522,11 @@ namespace lfs::training::kernels {
                 const float z = r3.x * x + r3.y * y + r3.z * zw + r3.w;
                 const float xc = r1.x * x + r1.y * y + r1.z * zw + r1.w;
                 const float yc = r2.x * x + r2.y * y + r2.z * zw + r2.w;
-                const float depth = projection.model == CameraModelType::PINHOLE ? z : sqrtf(xc * xc + yc * yc + z * z);
+                if (projection.pinhole_ray_distance && !(z > near_plane))
+                    continue;
+                const float depth = projection.model == CameraModelType::PINHOLE && !projection.pinhole_ray_distance
+                                        ? z
+                                        : sqrtf(xc * xc + yc * yc + z * z);
                 if (!(depth > near_plane) || !isfinite(depth))
                     continue;
                 const float2 uv = project_anchor(projection, xc, yc, z, fx, fy, cx, cy, width, height);

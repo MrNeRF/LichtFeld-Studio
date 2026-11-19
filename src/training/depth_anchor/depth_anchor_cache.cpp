@@ -91,6 +91,14 @@ namespace lfs::training {
 
     } // namespace
 
+    std::optional<kernels::DepthRayGrid> depth_prior_ray_grid(
+        const lfs::core::Camera& cam, const int tile_x, const int tile_y) {
+        if (!cam.is_undistort_prepared() || !is_view(cam.undistort_params()))
+            return std::nullopt;
+        const auto [fx, fy, cx, cy] = cam.get_intrinsics();
+        return kernels::DepthRayGrid{fx, fy, cx - tile_x, cy - tile_y};
+    }
+
     RawDepthAnchorMap computeRawDepthAnchors(
         const lfs::gpu_ops::GeometryLossOps& geometry,
         const lfs::core::Tensor& means_in,
@@ -345,6 +353,12 @@ namespace lfs::training {
             hash_scalar(hash, cam->camera_height());
             const auto projection = depth_camera_projection(*cam);
             hash_scalar(hash, projection.model);
+            if (projection.pinhole_ray_distance) {
+                hash_scalar(hash, projection.pinhole_ray_distance);
+                const auto& params = cam->undistort_params();
+                for (const float v : params.view_rotation)
+                    hash_scalar(hash, v);
+            }
             for (float v : projection.radial)
                 hash_scalar(hash, v);
             for (float v : projection.tangential)

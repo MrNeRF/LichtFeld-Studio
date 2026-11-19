@@ -58,8 +58,10 @@ float readChannel(Ptr<uint8_t, Access.Read> image, uint width, uint height,
     channel = min(channel, max(channels, 1u) - 1u);
     uint index = chw != 0 ? channel * width * height + y * width + x
                           : (y * width + x) * channels + channel;
-    return floatingPoint != 0 ? ((Ptr<float, Access.Read>)image)[index]
-                              : float(image[index]) * (1.0 / 255.0);
+    float value = floatingPoint != 0 ? ((Ptr<float, Access.Read>)image)[index]
+                                     : float(image[index]) * (1.0 / 255.0);
+    // The loss heatmap compares RGBA8 texels, as the panel uploads of the raster split view and the CPU capture do.
+    return p.lossVisualization != 0 ? floor(saturate(value) * 255.0 + 0.5) / 255.0 : value;
 }
 
 float4 sampleLinear(Ptr<uint8_t, Access.Read> image, uint width, uint height,

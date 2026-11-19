@@ -310,7 +310,7 @@ namespace lfs::vis::screen {
             s.show_rings = mode == "rings";
             s.show_center_markers = mode == "centers";
         } else if (command == "depth") {
-            s.depth_view = !s.depth_view;
+            s.render_mode_controls_open = !s.render_mode_controls_open;
         } else if (command == "projection") {
             setOrthographic(view, !s.orthographic, viewport_height);
         } else if (command.starts_with("axis:")) {
@@ -374,6 +374,7 @@ namespace lfs::vis::screen {
             {"split_position", s.split_position},
             {"split_view_offset", s.split_view_offset},
             {"depth_view", s.depth_view},
+            {"normal_view", s.normal_view},
             {"depth_view_min", s.depth_view_min},
             {"depth_view_max", s.depth_view_max},
             {"depth_visualization_mode", static_cast<int>(s.depth_visualization_mode)},
@@ -428,6 +429,7 @@ namespace lfs::vis::screen {
         r.number("split_position", s.split_position, 0.0f, 1.0f);
         r.count("split_view_offset", s.split_view_offset);
         r.boolean("depth_view", s.depth_view);
+        r.boolean("normal_view", s.normal_view);
         r.number("depth_view_min", s.depth_view_min, 0.0f, kHuge);
         r.number("depth_view_max", s.depth_view_max, 0.0f, kHuge);
         r.enumeration("depth_visualization_mode", s.depth_visualization_mode, 0,

@@ -150,6 +150,19 @@ namespace lfs::training {
         return result;
     }
 
+    void fast_camera_backward(const lfs::gpu_ops::FastRasterOps& ops, lfs::gpu_ops::FastSaved& frame,
+                              const core::Tensor& image_gradient, const core::Tensor& normal_gradient,
+                              core::Tensor& grad_w2c, core::Tensor& grad_position) {
+        core::Tensor none;
+        const lfs::gpu_ops::BackwardAdamParam disabled{none, none, none, none, none, none, none};
+        const lfs::gpu_ops::BackwardAdam adam{.groups = {disabled, disabled, disabled, disabled, disabled, disabled},
+                                              .scale_reg_loss = none,
+                                              .opacity_reg_loss = none,
+                                              .grad_w2c = grad_w2c,
+                                              .grad_cam_position = grad_position};
+        ops.backward(frame, {image_gradient, none, none, normal_gradient}, none, none, none, none, adam, DensificationType::None);
+    }
+
     RenderOutput fast_infer(
         const lfs::gpu_ops::FastRasterOps& ops,
         lfs::gpu_ops::FastSaved& saved,

@@ -4,6 +4,7 @@
 #include "lfs/training/ops/fast_vulkan.hpp"
 #include "lfs/training/ops/popspa_portable.hpp"
 #include "lfs/training/vram_ledger.hpp"
+#include "ray_depth.hpp"
 #include "vulkan/fast_state.hpp"
 #include <array>
 #include <format>
@@ -24,9 +25,9 @@ namespace lfs::training::vulkan {
             uint64_t rendered_count, erank_loss, dc_loss, sh_loss, scale_loss;
             uint32_t log_scale;
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
-            uint64_t impact_sum, impact_peak;
+            uint64_t impact_sum, impact_peak, grad_w2c, grad_position;
         };
-        static_assert(sizeof(BackPush) == 576);
+        static_assert(sizeof(BackPush) == 592);
         static_assert(offsetof(BackPush, impact_sum) == 560);
         static_assert(offsetof(BackPush, image_gradient) == 344);
         static_assert(offsetof(BackPush, densify) == 464);
@@ -71,6 +72,13 @@ namespace lfs::training::vulkan {
         auto& s = static_cast<FastState&>(*saved.backend);
         LFS_ASSERT_MSG(s.live, "Fast backward requires a live forward frame");
         auto& p = s.push;
+        auto grad_w2c = adam.grad_w2c;
+        auto grad_position = adam.grad_cam_position;
+        if (grad_w2c.is_valid()) {
+            LFS_ASSERT_MSG(grad_w2c.numel() == 16 && grad_position.numel() == 3, "Invalid camera gradient outputs");
+            grad_w2c.zero_();
+            grad_position.zero_();
+        }
         if (p.count == 0)
             return;
         for (const Tensor* tensor : std::initializer_list<const Tensor*>{&gradient.image, &gradient.alpha, &gradient.depth, &gradient.normal, &error, &edge, &scores, &densification}) {
@@ -110,6 +118,8 @@ namespace lfs::training::vulkan {
         Tensor screen_gradient = s.temporary(26, size_t(p.visible) * 16);
         BackPush b{};
         b.forward = p;
+        b.grad_w2c = address(grad_w2c);
+        b.grad_position = address(grad_position);
         b.image_gradient = address(gradient.image);
         b.alpha_gradient = address(gradient.alpha);
         b.depth_gradient = address(gradient.depth);
@@ -166,7 +176,7 @@ namespace lfs::training::vulkan {
         for (auto& t : gradients)
             if (t.numel())
                 writes.push_back(ref(t));
-        for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores,
+        for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores, &grad_w2c, &grad_position,
                                                                     impact ? &adam.impact_sum : &no_densification,
                                                                     impact ? &adam.impact_peak : &no_densification})
             if (t->is_valid() && t->numel()) {
@@ -201,6 +211,12 @@ namespace lfs::training::vulkan {
         // Read every old-state gradient and regularizer before any optimizer write.
         if (adam.opacity_reg_loss.is_valid() && b.opacity_weight > 0 && b.opacity_elements > 0)
             adam.opacity_reg_loss.add_(s.inputs[3].sigmoid().sum().unsqueeze(0) * (b.opacity_weight / float(b.opacity_elements)));
+        RayDepthStep ray;
+        if (adam.ray_depth_state.is_valid()) {
+            const auto& means = adam.groups[0];
+            ray = {.state = adam.ray_depth_state, .means = s.inputs[0], .scales = s.inputs[1], .rotations = s.inputs[2], .gradient = gradients[0], .camera = s.inputs[8], .proposals = Tensor::empty({size_t(p.count)}, Device::GPU), .frozen = means.frozen_mask, .crop = means.crop_damping_mask, .far_mask = adam.per_splat_mean_step ? adam.mean_step_far_mask : Tensor{}, .lr = adam.ray_depth_lr, .mean_lr = adam.ray_depth_mean_lr, .far_limit = 1e10f, .frozen_scale = means.frozen_lr_scale, .crop_scale = means.cropbox_lr_scale, .median_extent = adam.mean_step_median_extent};
+            ray_depth_propose(ray);
+        }
         const AdamHyper hyper{adam.beta1, adam.beta2, adam.eps};
         for (size_t slot = 0; slot < adam.groups.size(); ++slot) {
             const auto& g = adam.groups[slot];
@@ -235,6 +251,8 @@ namespace lfs::training::vulkan {
                 vulkan_fused_adam_rows(step, masks, hyper, modifiers);
             }
         }
+        if (ray.state.is_valid())
+            ray_depth_commit(ray);
         s.mark(13);
     }
 } // namespace lfs::training::vulkan
@@ -321,7 +339,7 @@ namespace lfs::training {
                 s.timer = timer;
             }
         }
-        const FastRasterOps ops{.create = create, .forward = vulkan::fast_forward, .backward = vulkan::fast_backward, .release = release, .warmup = warmup, .record_vram = record_vram, .release_caches = release_caches, .pop_scores = vulkan::fast_pop_scores};
+        const FastRasterOps ops{.create = create, .camera_gradient = true, .forward = vulkan::fast_forward, .backward = vulkan::fast_backward, .release = release, .warmup = warmup, .record_vram = record_vram, .release_caches = release_caches, .pop_scores = vulkan::fast_pop_scores};
     } // namespace
     void vulkan_fast_set_timer(gpu_ops::FastSaved& saved, core::GpuElapsed* timer) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast timing requires a created state");

@@ -51,6 +51,19 @@ namespace lfs::preprocessing {
     void lens_rays(const LensCamera& camera, core::Tensor& rays) {
         run("rays", camera, {}, {&rays}, size_t(camera.width) * camera.height);
     }
+    float lens_max_angle(const LensCamera& camera) {
+        auto angle = core::Tensor::empty({1}, core::Device::GPU);
+        run("maxAngle", camera, {}, {&angle}, 1);
+        return angle.cpu().ptr<float>()[0];
+    }
+
+    void lens_rays_at(const LensCamera& camera, const core::Tensor& image_xy, core::Tensor& rays) {
+        LFS_ASSERT_MSG(image_xy.ndim() == 2 && image_xy.shape()[1] == 2 &&
+                           rays.numel() == image_xy.shape()[0] * 3,
+                       "Invalid selected lens ray grid");
+        run("raysAt", camera, {}, {&rays, &image_xy}, image_xy.shape()[0]);
+    }
+
     void sample_lens_face(const core::Tensor& lens_rgb, const LensCamera& camera, const LensFace& face, core::Tensor& face_rgb) {
         run("sampleFace", camera, face, {&lens_rgb, &face_rgb}, size_t(face.size) * face.size);
     }

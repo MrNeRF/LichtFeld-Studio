@@ -110,6 +110,15 @@ namespace lfs::training {
         void set_per_splat_mean_step(bool enabled, float median_extent);
         // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
         void set_mean_step_far_mask(lfs::core::Tensor mask);
+        // Ray-depth coordinate (lfs/training/ray_depth_step.cuh): CUDA float32 [N, kStateStride] rows that
+        // follow the splats, and the coordinate's step bound; an empty tensor or a zero bound turns it off.
+        void set_ray_depth(lfs::core::Tensor state, float lr);
+        // Camera centre (CUDA float[3]) and far plane of the view whose gradients the next unfused step applies.
+        void set_ray_depth_view(const lfs::core::Tensor& camera_position, float far_limit) noexcept;
+        // The next step's loss compares rendered depth with an external depth target, which a move along the
+        // coordinate changes: that step leaves the coordinate and its statistics alone.
+        void skip_ray_depth_step() noexcept { ray_depth_skip_ = true; }
+        [[nodiscard]] const lfs::core::Tensor& ray_depth_state() const noexcept { return ray_depth_state_; }
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
         // Collection is independent of the hinge: refinement can still consume
@@ -217,6 +226,13 @@ namespace lfs::training {
         lfs::core::Tensor mean_step_far_mask_storage_;
         const bool* mean_step_far_mask_ = nullptr;
         int mean_step_far_mask_n_ = 0;
+        lfs::core::Tensor ray_depth_state_;
+        float ray_depth_lr_ = 0.0f;
+        lfs::core::Tensor ray_depth_camera_;
+        float ray_depth_far_limit_ = 0.0f;
+        bool ray_depth_skip_ = false;
+        // [N] between the halves of an unfused step: the proposed dt.
+        lfs::core::Tensor ray_depth_scratch_;
         const float* screen_share_max_ = nullptr;
         int screen_share_n_ = 0;
         float screen_share_limit_ = 0.0f;
@@ -234,6 +250,7 @@ namespace lfs::training {
         [[nodiscard]] lfs::gpu_ops::AdamHyper adam_hyper() const;
         [[nodiscard]] lfs::gpu_ops::AdamModifiers adam_modifiers() const;
         void validate_mean_step_far_mask();
+        [[nodiscard]] bool ray_depth_bound();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 
         // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as

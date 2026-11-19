@@ -3138,6 +3138,28 @@ namespace lfs::io::project {
         return *cached_nodes_;
     }
 
+    lfs::Result<std::optional<PublishedSplatMetadata>> SceneGraphChapter::published_splat_metadata(
+        const lfs::core::Uuid& uuid) const {
+        const auto element = dom_.array_find("nodes", uuid.to_string());
+        const auto metadata = element ? element->get_json("publication") : std::nullopt;
+        if (!metadata)
+            return std::optional<PublishedSplatMetadata>{};
+        const auto invalid = [] {
+            return fail<std::optional<PublishedSplatMetadata>>(
+                lfs::ErrorCode::DataLoss, "The published splat metadata is invalid.",
+                "Invalid publication count or SH degree", "SCNG", "nodes.publication");
+        };
+        if (!metadata->is_object() || !metadata->contains("count") ||
+            !metadata->contains("sh_degree") || !metadata->at("count").is_number_integer() ||
+            !metadata->at("sh_degree").is_number_integer())
+            return invalid();
+        const auto count = metadata->at("count").get<std::int64_t>();
+        const auto degree = metadata->at("sh_degree").get<std::int64_t>();
+        if (count <= 0 || degree < 0 || degree > 3)
+            return invalid();
+        return std::optional<PublishedSplatMetadata>{PublishedSplatMetadata{static_cast<std::uint64_t>(count), static_cast<int>(degree)}};
+    }
+
     lfs::Result<std::optional<SceneNodeRecord>> SceneGraphChapter::find(
         const lfs::core::Uuid& uuid) const {
         if (uuid.is_nil()) {
@@ -4407,6 +4429,19 @@ namespace lfs::io::project {
         params.optimization = std::move(optimization);
 
         lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
+    }
+
+    lfs::Result<std::vector<int>> disabled_camera_uids(const SceneGraphChapter& scene_graph) {
+        auto nodes = scene_graph.nodes();
+        if (!nodes) {
+            return std::move(nodes).error();
+        }
+        std::vector<int> uids;
+        for (const auto& node : *nodes) {
+            if (node.camera && !node.training_enabled)
+                uids.push_back(node.camera->uid);
+        }
+        return uids;
     }
 
 } // namespace lfs::io::project

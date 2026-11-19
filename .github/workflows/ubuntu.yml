@@ -253,6 +253,7 @@ jobs:
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
             -DBUILD_TEMPORAL_CPU_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
+            -DBUILD_VISUALIZER_TESTS=ON \
             -DBUILD_SELECTION_OUTLINE_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \

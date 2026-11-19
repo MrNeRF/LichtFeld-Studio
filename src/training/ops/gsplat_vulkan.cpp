@@ -61,6 +61,7 @@ namespace lfs::training {
             uint64_t camera, means, scales, quats, opacities, sh0, sh_rest, sh_codes, sh_bounds;
             uint64_t radii, means2d, colors, depth_keys, tile_counts;
             uint32_t count, width, height, tiles_x, tiles_y, degree, layout_rest, sh_format;
+            uint64_t mip;
         };
 
         struct BinParams {
@@ -78,11 +79,12 @@ namespace lfs::training {
             uint32_t count, width, height, tiles_x, tiles_y, mode;
             uint64_t control;
             uint64_t normal, rays;
+            uint64_t mip;
         };
         static_assert(sizeof(SetupParams) == 80 && offsetof(SetupParams, fx) == 40);
-        static_assert(sizeof(ProjectParams) == 144 && offsetof(ProjectParams, count) == 112);
+        static_assert(sizeof(ProjectParams) == 152 && offsetof(ProjectParams, count) == 112);
         static_assert(sizeof(BinParams) == 88 && offsetof(BinParams, count) == 64);
-        static_assert(sizeof(RasterParams) == 168 && offsetof(RasterParams, count) == 120);
+        static_assert(sizeof(RasterParams) == 176 && offsetof(RasterParams, count) == 120);
         static_assert(sizeof(ScanParams) == 32 && offsetof(ScanParams, count) == 24);
         struct BackParams {
             uint64_t camera, means, scales, quats, opacities, colors, bg_color, bg_image, tile_offsets, gaussian_ids;
@@ -90,8 +92,9 @@ namespace lfs::training {
             uint64_t v_depth, depths, rendered_depth;
             uint32_t count, width, height, tiles_x, tiles_y, edge_factor, mode;
             uint64_t v_normal, pop_scores;
+            uint64_t mip;
         };
-        static_assert(sizeof(BackParams) == 224 && offsetof(BackParams, count) == 176);
+        static_assert(sizeof(BackParams) == 232 && offsetof(BackParams, count) == 176);
         template <class P>
         void launch_backward(uint32_t stage, const P& p, std::initializer_list<const Tensor*> tensors, uint32_t groups) {
             std::vector<mk::StorageRef> refs;
@@ -107,9 +110,10 @@ namespace lfs::training {
             uint64_t means_grad, scaling_grad, rotation_grad, opacity_grad, sh0_grad, sh_rest_grad, grad_norms, shares;
             uint32_t count, degree, layout_rest, width, height;
             float flatten_weight;
+            uint64_t mip;
         };
 
-        static_assert(sizeof(AccumulateParams) == 144 && offsetof(AccumulateParams, count) == 120);
+        static_assert(sizeof(AccumulateParams) == 152 && offsetof(AccumulateParams, count) == 120);
         static_assert(alignof(SetupParams) == 8 && alignof(ProjectParams) == 8 && alignof(BinParams) == 8 &&
                       alignof(RasterParams) == 8 && alignof(BackParams) == 8 && alignof(AccumulateParams) == 8);
 
@@ -301,6 +305,8 @@ namespace lfs::training {
             setup.camera = mk::address(f.camera);
             launch(0, setup, {&view_matrix, &radial_d, &tangential_d, &prism_d, &f.camera}, 1);
 
+            if (params.antialiased)
+                f.mip = Tensor::zeros({count, 2}, Device::GPU);
             f.radii = reuse(state.radii, {count, 2}, DataType::Int32);
             f.means2d = reuse(state.means2d, {count, 2}, DataType::Float32);
             f.colors = reuse(state.colors, {count, 3}, DataType::Float32);
@@ -314,9 +320,10 @@ namespace lfs::training {
                     mk::address(sh_bounds), mk::address(f.radii), mk::address(f.means2d), mk::address(f.colors),
                     mk::address(depth_keys), mk::address(tile_counts), f.count, f.width, f.height, tiles_x, tiles_y,
                     degree, f.layout_rest, params.sh.storage == ops::ShStorage::Q16 ? 3u : params.sh.storage == ops::ShStorage::IeeeFloat16 ? 2u
-                                                                                                                                            : 1u};
+                                                                                                                                            : 1u,
+                    mk::address(f.mip)};
                 launch_items(1, project,
-                             {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &sh0, &sh_rest, &sh_codes,
+                             {&f.mip, &f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &sh0, &sh_rest, &sh_codes,
                               &sh_bounds, &f.radii, &f.means2d, &f.colors, &depth_keys, &tile_counts},
                              count);
             }
@@ -413,9 +420,10 @@ namespace lfs::training {
                         .control = control ? mk::address(*control) : 0,
                         .normal = mk::address(normal),
                         .rays = 0,
+                        .mip = mk::address(f.mip),
                     };
                     launch(6, raster,
-                           {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
+                           {&f.mip, &f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
                             &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &normal, &f.depths, &f.alpha, &f.last_ids},
                            std::min(tiles, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]), control, 20);
                 }
@@ -502,9 +510,10 @@ namespace lfs::training {
                 .tiles_x = tiles_x,
                 .tiles_y = tiles_y,
                 .pop_scores = mk::address(scratch),
+                .mip = mk::address(f.mip),
             };
             launch_backward(2, p,
-                            {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
+                            {&f.mip, &f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &color, &image,
                              &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &scratch, &f.depths},
                             std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
             accumulate_pop_view_scores(scores, scratch);
@@ -606,10 +615,11 @@ namespace lfs::training {
                     .edge_factor = f.mode == ops::GsplatRenderMode::RGB ? 32u : 1u,
                     .mode = static_cast<uint32_t>(f.mode),
                     .v_normal = mk::address(v_normal),
+                    .mip = mk::address(f.mip),
                 };
                 // Two pixels per thread.
                 launch_backward(0, raster,
-                                {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
+                                {&f.mip, &f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
                                  &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &f.alpha, &f.last_ids, &v_image,
                                  &v_alpha, &grads, &densification, &errors, &edges, &edge_scores, &v_depth, &v_normal, &f.depths, &state.depth},
                                 std::min(tiles_x * tiles_y, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
@@ -655,9 +665,10 @@ namespace lfs::training {
                 .width = f.width,
                 .height = f.height,
                 .flatten_weight = gradients.flatten_weight,
+                .mip = mk::address(f.mip),
             };
             launch_backward(1, accumulate,
-                            {&f.camera, &f.means, &f.scales, &f.opacities, &grads, &f.radii, &f.means2d, &means_grad,
+                            {&f.mip, &f.camera, &f.means, &f.scales, &f.opacities, &grads, &f.radii, &f.means2d, &means_grad,
                              &scaling_grad, &rotation_grad, &opacity_grad, &sh0_grad, &sh_rest_grad, &densification,
                              &max_screen_share},
                             std::min(uint32_t((count + 127) / 128), core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));

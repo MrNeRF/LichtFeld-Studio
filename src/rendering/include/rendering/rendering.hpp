@@ -303,6 +303,7 @@ namespace lfs::rendering {
         // Renderers that grow their reservation from measured demand must
         // re-render until it fits instead of publishing the overflow fallback.
         bool require_complete_output = false;
+        bool normal_view = false;
         // Occlusion consumers need per-pixel depth, not HiGS batch-leading depth.
         bool require_exact_depth = false;
         // Optional row-major bitset of 4x4 pixel regions (rounded up at edges).

@@ -632,6 +632,7 @@ if(BUILD_PORTABLE AND NOT LFS_MACOS_PORTABLE_APP)
         "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
+        PATTERN "vocab.txt.gz" PATTERN "LLMDET-LICENSE.txt" PATTERN "TRANSFORMERS-LICENSE.txt"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
@@ -642,6 +643,7 @@ else()
         "${CMAKE_CURRENT_SOURCE_DIR}/lichtfeld_sessions"
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
+        PATTERN "vocab.txt.gz" PATTERN "LLMDET-LICENSE.txt" PATTERN "TRANSFORMERS-LICENSE.txt"
     )
     if(LFS_MACOS_PORTABLE_APP)
         file(GLOB _lfs_python_helpers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.py")

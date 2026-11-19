@@ -247,6 +247,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DISABLE_FOR_TRAINING = "scene.disable_for_training";
         inline constexpr const char* ENABLE_ALL_TRAINING = "scene.enable_all_training";
         inline constexpr const char* DISABLE_ALL_TRAINING = "scene.disable_all_training";
+        inline constexpr const char* REMOVE_DISABLED_CAMERAS = "scene.remove_disabled_cameras";
         inline constexpr const char* GO_TO_KEYFRAME = "scene.go_to_keyframe";
         inline constexpr const char* UPDATE_KEYFRAME = "scene.update_keyframe";
         inline constexpr const char* SELECT_IN_TIMELINE = "scene.select_in_timeline";

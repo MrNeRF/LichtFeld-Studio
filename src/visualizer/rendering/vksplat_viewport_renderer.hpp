@@ -233,7 +233,9 @@ namespace lfs::vis {
             RenderTargetId target,
             lfs::core::Tensor& destination,
             int destination_x,
-            int destination_y) const;
+            int destination_y,
+            int source_y = 0,
+            int source_height = 0) const;
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
             VulkanContext& context,
             RenderTargetId target,
@@ -408,6 +410,7 @@ namespace lfs::vis {
             float depth_min,
             float depth_max,
             lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            bool normal_view = false,
             const _VulkanBuffer* color_override = nullptr);
 
         // The custom effect a stochastic frame projects with: the program set

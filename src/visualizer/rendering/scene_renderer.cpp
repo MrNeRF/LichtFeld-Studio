@@ -157,6 +157,9 @@ namespace lfs::vis {
             auto readOutputImageIntoCpuHwc(RenderTargetId t, core::Tensor& dst, int x, int y) const -> std::expected<void, std::string> override { return legacyMetalResult(native().readColor(t, dst, x, y)); }
             auto sampleDepthAtPixel(const DepthSampleRequest& r) const -> std::expected<float, std::string> override { return legacyMetalResult(native().readDepth(r)); }
             auto submitReadbackTicket(const ReadbackRequest& request) const -> std::expected<uint64_t, std::string> override {
+                if (request.source_y != 0 || request.source_height != 0)
+                    return std::unexpected(std::format("Metal readback of a source row range is not implemented (target={}, source_y={}, source_height={})",
+                                                       request.target.value, request.source_y, request.source_height));
                 return legacyMetalResult(native().submitReadback(request.target, request.destination, request.offset.x, request.offset.y,
                                                                  request.kind == ReadbackRequest::Kind::Depth));
             }

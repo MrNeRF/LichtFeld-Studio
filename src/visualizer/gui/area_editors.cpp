@@ -128,7 +128,7 @@ namespace lfs::vis::gui {
                              .active = mode == "centers"});
         }
         if (!compact_controls) {
-            items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "depth", .icon = "depth-map", .tooltip = LOC("view3d.depth_map"), .active = s.depth_view});
+            items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "depth", .icon = "depth-map", .tooltip = LOC("toolbar.render_modes"), .active = s.render_mode_controls_open});
             items.push_back({.kind = HeaderItem::Kind::Menu, .id = "overlays", .icon = "overlays", .tooltip = LOC("view3d.overlays"), .active = s.show_grid || s.show_coord_axes || s.show_pivot || s.show_camera_frustums});
             const auto tooltip = std::format("{} (Numpad 5)",
                                              LOC(s.orthographic ? "view3d.orthographic" : "view3d.perspective"));
@@ -197,7 +197,7 @@ namespace lfs::vis::gui {
             mode_item("view3d.rings", "display:rings", "ring", displayMode(s) == "rings");
             mode_item("view3d.centers", "display:centers", "circle-dot", displayMode(s) == "centers");
             if (area.header.w / std::max(area.header.h / 28.0f, 1.0f) < 420.0f) {
-                items.push_back({.label = LOC("view3d.depth_map"), .action = "depth", .separator_before = true, .is_active = s.depth_view});
+                items.push_back({.label = LOC("toolbar.render_modes"), .action = "depth", .separator_before = true, .is_active = s.render_mode_controls_open});
                 items.push_back({.label = LOC("view3d.overlays"),
                                  .action = "menu:overlays",
                                  .is_submenu_item = true});

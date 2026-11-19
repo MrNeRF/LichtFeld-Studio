@@ -16,7 +16,9 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "lfs/training/ray_depth_step.cuh"
 #include "lfs/training/sh_value_storage.hpp"
+#include "ops/ray_depth.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -332,6 +334,41 @@ namespace lfs::training {
         }
     }
 
+    void AdamOptimizer::set_ray_depth(lfs::core::Tensor state, const float lr) {
+        if (!state.is_valid() || state.numel() == 0 || !(lr > 0.0f)) {
+            ray_depth_state_ = {};
+            ray_depth_lr_ = 0.0f;
+            return;
+        }
+        LFS_ASSERT_MSG(state.device() == lfs::core::Device::GPU &&
+                           state.dtype() == lfs::core::DataType::Float32 && state.ndim() == 2 &&
+                           state.shape()[1] == static_cast<size_t>(ray_depth::kStateStride) &&
+                           state.is_contiguous(),
+                       "AdamOptimizer ray-depth state must be contiguous GPU float32 [N, 6]");
+        ray_depth_state_ = std::move(state);
+        ray_depth_lr_ = lr;
+    }
+
+    void AdamOptimizer::set_ray_depth_view(const lfs::core::Tensor& camera_position, const float far_limit) noexcept {
+        ray_depth_camera_ = camera_position;
+        ray_depth_far_limit_ = far_limit;
+    }
+
+    bool AdamOptimizer::ray_depth_bound() {
+        if (!ray_depth_state_.is_valid())
+            return false;
+        const auto& means = splat_data_.means();
+        const size_t n = means.is_valid() && means.ndim() > 0 ? means.shape()[0] : 0;
+        if (ray_depth_state_.shape()[0] != n) {
+            LOG_WARN("AdamOptimizer: ray-depth rows ({}) do not match the splats ({}); "
+                     "skipping the coordinate until the strategy republishes them",
+                     ray_depth_state_.shape()[0], n);
+            set_ray_depth({}, 0.0f);
+            return false;
+        }
+        return n > 0;
+    }
+
     void AdamOptimizer::set_screen_share_cap(const float* max_share, const int n,
                                              const float limit, const float penalty) {
         screen_share_max_ = max_share;
@@ -357,6 +394,8 @@ namespace lfs::training {
         LFS_TRACE("kernel.adam.step");
         validate_mean_step_far_mask();
         refresh_screen_share_buffer();
+        const auto ray_depth_camera = std::exchange(ray_depth_camera_, {});
+        const bool ray_depth_skipped = std::exchange(ray_depth_skip_, false);
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
             return;
@@ -446,7 +485,17 @@ namespace lfs::training {
                 .mean_step_scales = per_splat_mean_step_ ? splat_data_.scaling_raw() : absent_,
                 .mean_step_far = mean_step_far_mask_storage_,
             };
+            RayDepthStep ray;
+            if (!ray_depth_skipped && ray_depth_camera.is_valid() && ray_depth_bound() && steps[0].gradient.is_valid()) {
+                const size_t n = ray_depth_state_.size(0);
+                if (!ray_depth_scratch_.is_valid() || ray_depth_scratch_.numel() != n)
+                    ray_depth_scratch_ = lfs::core::Tensor::empty({n}, lfs::core::Device::GPU);
+                ray = {.state = ray_depth_state_, .means = splat_data_.means_raw(), .scales = splat_data_.scaling_raw(), .rotations = splat_data_.rotation_raw(), .gradient = steps[0].gradient, .camera = ray_depth_camera, .proposals = ray_depth_scratch_, .frozen = frozen_mask_, .crop = crop_damping_mask_, .far_mask = per_splat_mean_step_ ? mean_step_far_mask_storage_ : absent_, .lr = ray_depth_lr_, .mean_lr = float(get_param_lr(ParamType::Means)), .far_limit = ray_depth_far_limit_, .frozen_scale = frozen_lr_scale_, .crop_scale = cropbox_lr_scale_, .median_extent = mean_step_median_extent_};
+                ray_depth_propose(ray);
+            }
             adam_ops().step_batch(steps, masks, adam_hyper(), adam_modifiers());
+            if (ray.state.is_valid())
+                ray_depth_commit(ray);
         }
         step_shN(iteration, apply_sh_warmup);
     }
@@ -1102,6 +1151,9 @@ namespace lfs::training {
             .per_splat_mean_step = per_splat_mean_step_,
             .mean_step_median_extent = mean_step_median_extent_,
             .mean_step_far_mask = mean_step_far_mask_storage_,
+            .ray_depth_state = means.enabled && !ray_depth_skip_ && ray_depth_bound() ? ray_depth_state_ : absent_,
+            .ray_depth_lr = ray_depth_lr_,
+            .ray_depth_mean_lr = float(get_param_lr(ParamType::Means)),
         };
     }
 

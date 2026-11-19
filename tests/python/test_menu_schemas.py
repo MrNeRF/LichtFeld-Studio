@@ -143,6 +143,8 @@ def _install_lichtfeld_stub(monkeypatch):
             DESELECT_ALL="deselect_all",
             OPEN_PREFERENCES="open_preferences",
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
+            TOGGLE_LEFT_DOCK="toggle_left_dock",
+            TOGGLE_RIGHT_DOCK="toggle_right_dock",
             TOGGLE_PYTHON_CONSOLE="toggle_python_console",
             TOGGLE_UI="toggle_ui",
             CAMERA_RESET_HOME="camera_reset_home",
@@ -181,6 +183,7 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.set_home = lambda: state.setdefault("home_calls", []).append("set")
     lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.get_tiles_mode = lambda: state["tiles_mode"]
+    lf_stub.toggle_side_dock = lambda side: state.__setitem__("dock_toggled", side)
     lf_stub.set_vr_active = lambda active: state["vr_calls"].append(("active", active))
     lf_stub.recenter_vr = lambda: state["vr_calls"].append(("recenter",))
     lf_stub.undo = SimpleNamespace(
@@ -393,8 +396,12 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     for item in view_items[5:8]:
         item["callback"]()
     assert state["home_calls"] == ["go", "set", "reset"]
-    assert view_items[12]["label"] == "tr:main_panel.console"
-    view_items[12]["callback"]()
+    for item, side in zip(view_items[9:11], ("left", "right")):
+        assert item["label"] == f"tr:input_settings.action.toggle_{side}_dock"
+        item["callback"]()
+        assert state["dock_toggled"] == side
+    assert view_items[14]["label"] == "tr:main_panel.console"
+    view_items[14]["callback"]()
     # The tools menu already opened the console once above.
     assert state["python_console_shown"] == 2
 
@@ -423,18 +430,18 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
         monkeypatch.delitem(sys.modules, name, raising=False)
     view_mod = import_module("lfs_plugins.view_menu")
 
-    enter, recenter = view_mod.ViewMenu().menu_items()[9:11]
+    enter, recenter = view_mod.ViewMenu().menu_items()[11:13]
     assert (enter["label"], enter["enabled"], enter["tooltip"], enter["shortcut"]) == (
         "tr:menu.view.enter_vr", False, "No OpenXR runtime", "")
     assert (recenter["enabled"], recenter["shortcut"]) == (False, "R")
 
     state["vr"] = {"available": True, "active": False, "status": "Ready"}
-    enter = view_mod.ViewMenu().menu_items()[9]
+    enter = view_mod.ViewMenu().menu_items()[11]
     assert enter["enabled"] and "tooltip" not in enter
     enter["callback"]()
 
     state["vr"]["active"] = True
-    exit_vr, recenter = view_mod.ViewMenu().menu_items()[9:11]
+    exit_vr, recenter = view_mod.ViewMenu().menu_items()[11:13]
     assert (exit_vr["label"], exit_vr["shortcut"]) == ("tr:input_settings.action.exit_vr", "Escape")
     assert recenter["enabled"]
     exit_vr["callback"]()
