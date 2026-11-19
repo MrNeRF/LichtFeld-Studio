@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 using namespace lfs;
 static void require(bool ok, const char* message) {
@@ -686,6 +687,41 @@ static void run(bool compare_vulkan) {
                 first_ticket = *ticket;
             require(adapter->waitReadbackTicket(*ticket).has_value(), "Adapter ticket delivery failed");
             require(rgb.ptr<float>()[center] > .5f, "Native adapter export lost splat");
+        }
+        {
+            // A tiled preview reads each band's rows into their place in the
+            // whole image. Seams at rows 30 and 34 cut through the splat.
+            auto whole = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
+            const auto whole_ticket = adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, whole, 0, 0);
+            require(whole_ticket.has_value() && adapter->waitReadbackTicket(*whole_ticket).has_value(), "Adapter whole-image readback failed");
+            const float* const reference = whole.ptr<float>();
+            require(reference[(29 * 96 + 48) * 3] != reference[48 * 3] && reference[(34 * 96 + 48) * 3] != reference[48 * 3],
+                    "Row-range seams do not cross the splat");
+            // Source rows [first, first + rows) land at destination row first + 3, column 1;
+            // 0 rows reads through the last row.
+            auto joined = Tensor::full({64 + 5, 96 + 2, 3}, -1.f, Device::CPU);
+            for (const auto [first, rows] : {std::pair{0, 30}, std::pair{30, 4}, std::pair{34, 0}}) {
+                const auto band = adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, joined, 1, first + 3, first, rows);
+                require(band.has_value() && adapter->waitReadbackTicket(*band).has_value(), "Adapter row-range readback failed");
+            }
+            for (size_t y = 0; y < 64 + 5; ++y)
+                for (size_t x = 0; x < 96 + 2; ++x)
+                    for (size_t c = 0; c < 3; ++c) {
+                        const bool inside = y >= 3 && y < 64 + 3 && x >= 1 && x < 96 + 1;
+                        const float expected = inside ? reference[((y - 3) * 96 + x - 1) * 3 + c] : -1.f;
+                        require(joined.ptr<float>()[(y * (96 + 2) + x) * 3 + c] == expected,
+                                "Row-range bands differ from the whole image or wrote outside their rows");
+                    }
+            auto short_destination = Tensor::empty({8, 96, 3}, Device::CPU, core::DataType::Float32);
+            require(!adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, joined, 0, 0, 60, 8).has_value(),
+                    "Row range past the image end was accepted");
+            require(!adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, joined, 0, 0, 64, 0).has_value(),
+                    "Row range starting at the image end was accepted");
+            require(!adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, joined, 0, 0, -1, 8).has_value(),
+                    "Negative source row was accepted");
+            require(!adapter->submitReadOutputImageIntoCpuHwcTicket(vis::RenderTargetId{1}, short_destination, 0, 0, 0, 9).has_value(),
+                    "Row range past the destination end was accepted");
+            require(adapter->readbackStats().outstanding == 0, "Rejected row ranges left tickets behind");
         }
         model.opacity_raw() = Tensor::full({1, 1}, -4.f, Device::GPU).to(core::DataType::Float16);
         adapter->setDepthCaptureMode(true, true);

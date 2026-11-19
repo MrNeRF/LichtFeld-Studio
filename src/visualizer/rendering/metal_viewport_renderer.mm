@@ -1615,7 +1615,7 @@ namespace lfs::vis {
     }
 #endif
     lfs::Result<uint64_t> MetalViewportRenderer::submitReadback(
-        Slot slot, core::Tensor& destination, int x, int y, bool depth) const {
+        Slot slot, core::Tensor& destination, int x, int y, bool depth, int source_y, int source_height) const {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -1627,30 +1627,34 @@ namespace lfs::vis {
                                                                       (entry.second.command.status == MTLCommandBufferStatusCompleted || entry.second.command.status == MTLCommandBufferStatusError); });
             if (i.readbacks.size() >= BasicReadbackTicketRing<void*>::kRingSize)
                 throw std::runtime_error(std::format("Metal readback ring is full; retire or abandon a ticket (active_tickets={}, capacity={}, target={})", i.readbacks.size(), BasicReadbackTicketRing<void*>::kRingSize, slot.value));
+            if (depth ? (source_y != 0 || source_height != 0)
+                      : (source_y < 0 || source_y >= f->size.y || source_height < 0 || source_height > f->size.y - source_y))
+                throw std::invalid_argument(std::format("Metal readback source rows are out of range (target={}, source_y={}, source_height={}, extent={}x{}, depth={})", slot.value, source_y, source_height, f->size.x, f->size.y, depth));
+            const int rows = source_height > 0 ? source_height : f->size.y - source_y;
             if (!destination.is_valid() || destination.device() != core::Device::CPU || !destination.is_contiguous() ||
-                x < 0 || y < 0 || (depth ? (destination.dtype() != core::DataType::Float32 || destination.ndim() != 2 || destination.size(0) != size_t(f->size.y) || destination.size(1) != size_t(f->size.x)) : (destination.ndim() != 3 || destination.size(2) < 3 || destination.size(2) > 4 || size_t(x) + f->size.x > destination.size(1) || size_t(y) + f->size.y > destination.size(0) || (destination.dtype() != core::DataType::Float32 && destination.dtype() != core::DataType::UInt8))))
-                throw std::invalid_argument(std::format("Invalid Metal readback destination (shape={}, dtype={}, device={}, contiguous={}, origin=[{},{}], extent={}x{}, depth={})", destination.shape().str(), int(destination.dtype()), int(destination.device()), destination.is_contiguous(), x, y, f->size.x, f->size.y, depth));
+                x < 0 || y < 0 || (depth ? (destination.dtype() != core::DataType::Float32 || destination.ndim() != 2 || destination.size(0) != size_t(f->size.y) || destination.size(1) != size_t(f->size.x)) : (destination.ndim() != 3 || destination.size(2) < 3 || destination.size(2) > 4 || size_t(x) + f->size.x > destination.size(1) || size_t(y) + rows > destination.size(0) || (destination.dtype() != core::DataType::Float32 && destination.dtype() != core::DataType::UInt8))))
+                throw std::invalid_argument(std::format("Invalid Metal readback destination (shape={}, dtype={}, device={}, contiguous={}, origin=[{},{}], extent={}x{}, depth={})", destination.shape().str(), int(destination.dtype()), int(destination.device()), destination.is_contiguous(), x, y, f->size.x, rows, depth));
             if (!i.readback_queue || !i.readback_event || i.next_readback == ((uint64_t{1} << 63) - 1))
                 throw std::runtime_error(std::format("Metal readback timeline unavailable or exhausted (queue_present={}, event_present={}, serial={})", i.readback_queue != nil, i.readback_event != nil, i.next_readback));
             const uint64_t serial = i.next_readback + 1;
             const auto command = [i.readback_queue commandBuffer];
             const size_t row = size_t(f->size.x) * 4;
-            const auto buffer = [i.reader.device() newBufferWithLength:row * f->size.y options:MTLResourceStorageModeShared];
+            const auto buffer = [i.reader.device() newBufferWithLength:row * rows options:MTLResourceStorageModeShared];
             if (!command || !buffer)
-                throw lfs::Exception(nativeError(std::format("Metal readback allocation failed (target={}, bytes={}, command_present={})", slot.value, row * f->size.y, command != nil), lfs::ErrorCode::ResourceExhausted));
+                throw lfs::Exception(nativeError(std::format("Metal readback allocation failed (target={}, bytes={}, command_present={})", slot.value, row * rows, command != nil), lfs::ErrorCode::ResourceExhausted));
             [command encodeWaitForEvent:i.event value:f->producer_value];
             auto blit = [command blitCommandEncoder];
             if (!blit)
-                throw std::runtime_error(std::format("Metal readback encoder unavailable (command_status={}, target={}, bytes={})", long(command.status), slot.value, row * f->size.y));
+                throw std::runtime_error(std::format("Metal readback encoder unavailable (command_status={}, target={}, bytes={})", long(command.status), slot.value, row * rows));
             [blit copyFromTexture:depth ? f->depth.texture : f->color.texture
                              sourceSlice:0
                              sourceLevel:0
-                            sourceOrigin:MTLOriginMake(0, 0, 0)
-                              sourceSize:MTLSizeMake(f->size.x, f->size.y, 1)
+                            sourceOrigin:MTLOriginMake(0, source_y, 0)
+                              sourceSize:MTLSizeMake(f->size.x, rows, 1)
                                 toBuffer:buffer
                        destinationOffset:0
                   destinationBytesPerRow:row
-                destinationBytesPerImage:row * f->size.y];
+                destinationBytesPerImage:row * rows];
             [blit endEncoding];
             const auto event = i.readback_event;
             [command encodeSignalEvent:event value:serial];
@@ -1659,7 +1663,7 @@ namespace lfs::vis {
                     event.signaledValue = serial;
             }];
             const uint64_t ticket = reserveNativeTicket();
-            i.readbacks.emplace(ticket, Impl::Readback{buffer, command, f->command, destination.data_ptr(), f->size,
+            i.readbacks.emplace(ticket, Impl::Readback{buffer, command, f->command, destination.data_ptr(), glm::ivec2(f->size.x, rows),
                                                        destination.size(1), depth ? 1 : destination.size(2), x, y, depth, destination.dtype() == core::DataType::Float32, slot});
             i.next_readback = serial;
             [command commit];
