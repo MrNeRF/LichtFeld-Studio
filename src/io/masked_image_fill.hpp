@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include <cstdint>
+#include <filesystem>
 
 namespace lfs::io {
     // Keep policy for a source- or output-grid mask, applied while preparing a derived cache entry.
@@ -34,4 +35,7 @@ namespace lfs::io {
     // Planar (CHW) RGB(A) on a GPU, filled through a host copy and uploaded to its backend again. An
     // image the policy cannot apply to is left as it is, without a copy.
     void fill_masked_planar_image(lfs::core::Tensor& image, const MaskedImageFill& policy);
+    // The source-grid fill mask of a mask file, decoded as load_mask_image_cpu_decoded decodes it:
+    // UInt8 [H, W] on the host, or Float32 [1, H, W] when a TIFF keeps its precision.
+    [[nodiscard]] lfs::core::Tensor load_fill_mask(const std::filesystem::path& path);
 } // namespace lfs::io

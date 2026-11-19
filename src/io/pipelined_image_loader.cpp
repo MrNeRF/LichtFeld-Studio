@@ -1602,8 +1602,9 @@ namespace lfs::io {
             }
 
             auto rgb_key = make_cache_key(request.path, request.params);
-            if (request.fill_masked_rgb &&
-                (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask)) {
+            const bool fills_rgb = request.fill_masked_rgb &&
+                                   (request.mask_path || request.rgb_mask || request.extract_alpha_as_mask);
+            if (fills_rgb) {
                 const auto& policy = request.extract_alpha_as_mask
                                          ? request.alpha_mask_params
                                          : request.mask_params;
@@ -1620,6 +1621,82 @@ namespace lfs::io {
                 }
             }
 
+            if (!cuda_run && fills_rgb) {
+                // The worker fills the decoded source as the CUDA cold path does, then
+                // publishes the prepared RGB (and alpha) under the mask-keyed RGB key.
+                PrefetchedImage result;
+                result.sequence_id = request.sequence_id;
+                result.loader_generation = request.loader_generation;
+                result.path = request.path;
+                result.params = request.params;
+                result.cache_key = rgb_key;
+                result.needs_processing = true;
+                result.undistort = request.undistort;
+                result.fill_masked_rgb = true;
+                result.mask_keep_high_band = request.mask_keep_high_band;
+                result.alpha_as_mask = request.extract_alpha_as_mask;
+                result.alpha_is_transparency = request.alpha_is_transparency;
+                result.alpha_mask_params = request.alpha_mask_params;
+                if (!request.extract_alpha_as_mask) {
+                    result.rgb_mask_path = request.mask_path && is_regular_file_no_throw(*request.mask_path)
+                                               ? request.mask_path
+                                               : std::nullopt;
+                    result.rgb_mask = request.rgb_mask;
+                    result.mask_params = request.mask_params;
+                }
+                result.caches_filled_rgb = caches_portable_filled_rgb(request.params);
+                if (result.caches_filled_rgb) {
+                    result.jpeg_data = load_cached_jpeg_blob(rgb_key);
+                    if (result.jpeg_data && result.alpha_as_mask) {
+                        result.alpha_data = load_cached_jpeg_blob(portable_alpha_cache_key(
+                            request.path, request.params, request.alpha_is_transparency));
+                        if (!result.alpha_data)
+                            result.jpeg_data.reset();
+                    }
+                    result.is_cache_hit = result.jpeg_data != nullptr;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    if (result.is_cache_hit)
+                        ++stats_.hot_path_hits;
+                    else
+                        ++stats_.cold_path_misses;
+                }
+                // A cold RGB refills its output grid with the sidecar's prepared mask,
+                // so the sidecar goes first for a single worker.
+                std::shared_ptr<std::promise<lfs::core::Tensor>> mask_source;
+                if (!result.is_cache_hit && result.rgb_mask_path && !result.rgb_mask) {
+                    mask_source = std::make_shared<std::promise<lfs::core::Tensor>>();
+                    result.rgb_mask_source = mask_source->get_future().share();
+                }
+                if (request.mask_path && !request.extract_alpha_as_mask) {
+                    if (!is_regular_file_no_throw(*request.mask_path)) {
+                        std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                        fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                            SidecarKind::Mask,
+                                            *request.mask_path, "file does not exist or is not a regular file", lock);
+                    } else {
+                        PrefetchedImage mask_result;
+                        mask_result.sequence_id = request.sequence_id;
+                        mask_result.loader_generation = request.loader_generation;
+                        mask_result.path = *request.mask_path;
+                        mask_result.params = request.params;
+                        mask_result.is_mask = true;
+                        mask_result.needs_processing = true;
+                        mask_result.mask_params = request.mask_params;
+                        mask_result.undistort = request.undistort;
+                        mask_result.mask_source_promise = std::move(mask_source);
+                        cold_queue_.push(std::move(mask_result));
+                        std::lock_guard<std::mutex> lock(stats_mutex_);
+                        ++stats_.mask_cache_misses;
+                    }
+                }
+                cold_queue_.push(std::move(result));
+                enqueue_depth_request();
+                enqueue_normal_request();
+                continue;
+            }
+
             if (!cuda_run) {
                 // Derived warps are encoded/decoded by the portable worker using
                 // this same blob cache. Never store original bytes under a derived key.
@@ -1631,6 +1708,7 @@ namespace lfs::io {
                 result.needs_processing = true;
                 result.alpha_as_mask = request.extract_alpha_as_mask;
                 result.alpha_mask_params = request.alpha_mask_params;
+                result.fill_masked_rgb = false;
                 result.undistort = request.undistort;
                 if (!request.extract_alpha_as_mask && !config_.use_16bit_color &&
                     !request.params.undistort && !request.undistort) {

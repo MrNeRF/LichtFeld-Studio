@@ -19,6 +19,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_image.hpp"
+#include "masked_image_fill.hpp"
 #include <stb_image.h>
 #if LFS_HAS_CUDA
 #include "io/cuda/masked_image_fill.hpp"
@@ -334,6 +335,71 @@ namespace lfs::io {
                                                           : "Unable to prepare this image for masked training.";
     }
 
+    namespace {
+        // The CUDA fill runs on the device staging tensor; other backends fill on the host.
+        bool fills_on_host() {
+#if LFS_HAS_CUDA
+            return lfs::core::TensorExecutionTarget::current().backend() != lfs::core::GpuBackend::CUDA;
+#else
+            return true;
+#endif
+        }
+
+        // The decoder's pixels stay unchanged; a filled copy is uploaded instead.
+        template <typename T>
+        lfs::core::Tensor upload_filled_on_host(const T* data, const int width, const int height, const int channels,
+                                                const MaskedImageFill& fill) {
+            std::vector<T> filled(data, data + static_cast<size_t>(width) * height * channels);
+            fill_masked_image_host(filled.data(), width, height, channels, false, fill);
+            return upload_hwc(filled.data(), width, height, channels);
+        }
+
+        bool is_tiff_mask(const std::filesystem::path& path) {
+            auto extension = lfs::core::path_to_utf8(path.extension());
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return extension == ".tif" || extension == ".tiff";
+        }
+
+        // Mask luminance bytes [H, W] on the host: stb's, else the regular loader's RGB with the same weights.
+        lfs::core::Tensor decode_mask_bytes(const std::filesystem::path& path) {
+            using namespace lfs::core;
+            int width = 0, height = 0, channels = 0;
+            const std::unique_ptr<std::FILE, decltype(&std::fclose)> file(lfs::core::open_file(path, "rb"), &std::fclose);
+            const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> gray(
+                file ? stbi_load_from_file(file.get(), &width, &height, &channels, 1) : nullptr, &stbi_image_free);
+            Tensor cpu;
+            if (gray) {
+                cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
+                std::memcpy(cpu.data_ptr(), gray.get(), cpu.bytes());
+            } else {
+                // Preserve codecs accepted by the regular image loader but not stb.
+                auto [data, w, h, c] = load_image(path, 1, 0);
+                const std::unique_ptr<unsigned char, decltype(&free_image)> rgb(data, &free_image);
+                if (!data || c != 3)
+                    throw std::runtime_error(std::string(lfs::event::LocalizationManager::getInstance().hasKey("io.mask_decode_failed")
+                                                             ? LOC("io.mask_decode_failed")
+                                                             : "Failed to decode mask") +
+                                             ": " + path_to_utf8(path));
+                width = w;
+                height = h;
+                cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
+                auto* output = cpu.ptr<uint8_t>();
+                for (size_t i = 0; i < cpu.numel(); ++i)
+                    output[i] = static_cast<uint8_t>((77 * data[i * 3] + 150 * data[i * 3 + 1] + 29 * data[i * 3 + 2]) >> 8);
+            }
+            return cpu;
+        }
+    } // namespace
+
+    lfs::core::Tensor load_fill_mask(const std::filesystem::path& path) {
+        // A TIFF's luminance is computed on the active backend, as load_mask_image_cpu_decoded does on CUDA.
+        if (is_tiff_mask(path))
+            return load_mask_image_cpu_decoded(path, {}).cpu();
+        return decode_mask_bytes(path);
+    }
+
     lfs::core::Tensor upload_rgb_image(const unsigned char* data, const int width, const int height, const int channels,
                                        const LoadParams& params) {
         assert(data && channels == 3);
@@ -342,14 +408,14 @@ namespace lfs::io {
         if (lfs::core::TensorExecutionTarget::current().backend() == lfs::core::GpuBackend::CUDA)
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
-        auto staging = upload_hwc(data, width, height, channels);
-        if (params.masked_fill) {
+        const bool host_fill = params.masked_fill && fills_on_host();
+        auto staging = host_fill ? upload_filled_on_host(data, width, height, channels, *params.masked_fill)
+                                 : upload_hwc(data, width, height, channels);
+        if (params.masked_fill && !host_fill) {
 #if LFS_HAS_CUDA
             if (lfs::core::gpu_backend_of(staging) != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
             fill_masked_image(staging, *params.masked_fill, staging.stream());
-#else
-            throw std::runtime_error(masked_image_fill_error());
 #endif
         }
         return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8);
@@ -363,14 +429,14 @@ namespace lfs::io {
         if (lfs::core::TensorExecutionTarget::current().backend() == lfs::core::GpuBackend::CUDA)
             execution_scope.emplace(image_execution_stream(params.cuda_stream));
 #endif
-        auto staging = upload_hwc(data, width, height, channels);
-        if (params.masked_fill) {
+        const bool host_fill = params.masked_fill && fills_on_host();
+        auto staging = host_fill ? upload_filled_on_host(data, width, height, channels, *params.masked_fill)
+                                 : upload_hwc(data, width, height, channels);
+        if (params.masked_fill && !host_fill) {
 #if LFS_HAS_CUDA
             if (lfs::core::gpu_backend_of(staging) != lfs::core::GpuBackend::CUDA)
                 throw std::runtime_error(masked_image_fill_error());
             fill_masked_image(staging, *params.masked_fill, staging.stream());
-#else
-            throw std::runtime_error(masked_image_fill_error());
 #endif
         }
         return hwc_to_chw(staging, params.resize_factor, params.max_width, params.output_uint8);
@@ -442,11 +508,7 @@ namespace lfs::io {
             return image_ops->resize(input, height, width,
                                      gpu_ops::Resample::LanczosGray, 2);
         };
-        auto extension = lfs::core::path_to_utf8(path.extension());
-        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        if (extension == ".tif" || extension == ".tiff") {
+        if (is_tiff_mask(path)) {
             // The pipeline, Camera and source-RGB fill all need the same UInt16
             // source values before resizing onto the existing byte cache grid.
             std::tuple<float*, int, int, int> decoded{nullptr, 0, 0, 0};
@@ -485,30 +547,8 @@ namespace lfs::io {
             }
             // An unusual TIFF still gets the pre-existing byte-decoder fallback.
         }
-        int width = 0, height = 0, channels = 0;
-        const std::unique_ptr<std::FILE, decltype(&std::fclose)> file(lfs::core::open_file(path, "rb"), &std::fclose);
-        const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> gray(
-            file ? stbi_load_from_file(file.get(), &width, &height, &channels, 1) : nullptr, &stbi_image_free);
-        Tensor cpu;
-        if (gray) {
-            cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
-            std::memcpy(cpu.data_ptr(), gray.get(), cpu.bytes());
-        } else {
-            // Preserve codecs accepted by the regular image loader but not stb.
-            auto [data, w, h, c] = load_image(path, 1, 0);
-            const std::unique_ptr<unsigned char, decltype(&free_image)> rgb(data, &free_image);
-            if (!data || c != 3)
-                throw std::runtime_error(std::string(lfs::event::LocalizationManager::getInstance().hasKey("io.mask_decode_failed")
-                                                         ? LOC("io.mask_decode_failed")
-                                                         : "Failed to decode mask") +
-                                         ": " + path_to_utf8(path));
-            width = w;
-            height = h;
-            cpu = Tensor::empty({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CPU, DataType::UInt8);
-            auto* output = cpu.ptr<uint8_t>();
-            for (size_t i = 0; i < cpu.numel(); ++i)
-                output[i] = static_cast<uint8_t>((77 * data[i * 3] + 150 * data[i * 3 + 1] + 29 * data[i * 3 + 2]) >> 8);
-        }
+        const auto cpu = decode_mask_bytes(path);
+        const int height = static_cast<int>(cpu.shape()[0]), width = static_cast<int>(cpu.shape()[1]);
         const auto bytes = upload(cpu);
         const auto [target_w, target_h] = resized_image_dimensions(width, height, params.resize_factor, params.max_width);
         auto mask = target_w == width && target_h == height
@@ -537,23 +577,29 @@ namespace lfs::io {
             (void)force_masked_fill;
             if (!data || channels != 4)
                 throw std::runtime_error("Failed to decode RGBA image: " + path_to_utf8(path));
-            auto staging = upload_hwc(data, width, height, channels);
-            if (masked_fill) {
+            const bool host_fill = masked_fill && fills_on_host();
+            auto staging = host_fill ? upload_filled_on_host(data, width, height, channels, *masked_fill)
+                                     : upload_hwc(data, width, height, channels);
+            if (masked_fill && !host_fill) {
 #if LFS_HAS_CUDA
                 if (gpu_backend_of(staging) != GpuBackend::CUDA)
                     throw std::runtime_error(masked_image_fill_error());
                 fill_masked_image(staging, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
-#else
-                throw std::runtime_error("Masked image fill requires the CUDA backend");
 #endif
             }
             auto result = hwc_to_chw(staging, resize_factor, max_width, false, exact_mask_alpha);
-            if (masked_fill) {
+            if (masked_fill && !host_fill) {
 #if LFS_HAS_CUDA
                 auto result_hwc = result.permute({1, 2, 0}).contiguous();
                 fill_masked_image(result_hwc, *masked_fill, static_cast<cudaStream_t>(cuda_stream));
                 result = result_hwc.permute({2, 0, 1}).contiguous();
 #endif
+            } else if (host_fill &&
+                       (!exact_mask_alpha || result.shape()[1] != static_cast<size_t>(height) ||
+                        result.shape()[2] != static_cast<size_t>(width))) {
+                // Refill on the output grid, as CUDA does. Exact alpha on the source grid would
+                // classify every pixel as above and find the same nearest kept pixels.
+                fill_masked_planar_image(result, *masked_fill);
             }
             return result;
         };

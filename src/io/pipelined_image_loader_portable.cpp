@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "core/shared_image_ops.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "masked_image_fill.hpp"
 
 #include <stb_image.h>
 
@@ -138,6 +139,49 @@ namespace lfs::io {
                 resize_factor, max_width);
         }
 
+        constexpr std::array<uint8_t, 8> PNG_SIGNATURE{137, 80, 78, 71, 13, 10, 26, 10};
+
+        bool is_png(const std::vector<uint8_t>& bytes) {
+            return bytes.size() >= PNG_SIGNATURE.size() && std::equal(PNG_SIGNATURE.begin(), PNG_SIGNATURE.end(), bytes.begin());
+        }
+
+        // A lossless prepared PNG's 16-bit samples as Int32 [planes, H, W]: the first planes of the
+        // RGB the decoder expands gray to. An image whose RGB samples exceed max_bytes is rejected
+        // before they are allocated.
+        Tensor decode_prepared_png(const std::vector<uint8_t>& bytes, const size_t planes, const size_t max_bytes) {
+            constexpr size_t channels = 3;
+            if (!is_png(bytes))
+                throw std::runtime_error("invalid prepared PNG bytes");
+            struct BoundedPixels {
+                size_t limit;
+                std::vector<uint16_t> values;
+            } pixels{max_bytes, {}};
+            lfs::core::image_codecs::DecodeTarget target;
+            target.channels = channels;
+            target.sample_type = lfs::core::image_codecs::SampleType::UInt16;
+            target.user = &pixels;
+            target.allocate = [](size_t size, void* user) -> void* {
+                auto& buffer = *static_cast<BoundedPixels*>(user);
+                if (size > buffer.limit)
+                    return nullptr;
+                buffer.values.resize(size / sizeof(uint16_t));
+                return buffer.values.data();
+            };
+            lfs::core::image_codecs::Probe decoded;
+            std::string error;
+            if (!lfs::core::image_codecs::decode_memory_to_buffer(bytes.data(), bytes.size(), target, decoded, error))
+                throw std::runtime_error("invalid prepared PNG bytes: " + error);
+            const size_t plane = size_t(decoded.width) * size_t(decoded.height);
+            if (decoded.width <= 0 || decoded.height <= 0 || pixels.values.size() != plane * channels)
+                throw std::runtime_error("invalid prepared PNG layout");
+            auto host = Tensor::empty_pageable_host({planes, size_t(decoded.height), size_t(decoded.width)}, DataType::Int32);
+            auto* dst = host.ptr<int32_t>();
+            for (size_t i = 0; i < plane; ++i)
+                for (size_t ch = 0; ch < planes; ++ch)
+                    dst[ch * plane + i] = pixels.values[i * channels + ch];
+            return host;
+        }
+
         // Inversion precedes binarization; threshold compares with >=.
         Tensor finish_mask(Tensor mask, const MaskParams& params) {
             const auto backend = lfs::core::gpu_backend_of(mask).value_or(lfs::core::default_gpu_backend());
@@ -151,15 +195,23 @@ namespace lfs::io {
             return mask.contiguous();
         }
 
-        std::pair<Tensor, Tensor> decode_rgba(const std::filesystem::path& path,
-                                              const LoadParams& params,
-                                              const bool decode_16bit,
-                                              const bool alpha_is_transparency) {
+        struct DecodedRgba {
+            Tensor rgb;
+            Tensor alpha;      // Float32 [H, W] on the 16-bit grid,
+            Tensor alpha_grid; // whose Int32 samples a lossless cache keeps.
+        };
+
+        // A fill classifies the source alpha, then the resized alpha, and the warped alpha after a warp.
+        DecodedRgba decode_rgba(const std::filesystem::path& path,
+                                const LoadParams& params,
+                                const bool decode_16bit,
+                                const bool alpha_is_transparency,
+                                const MaskedImageFill* const fill = nullptr) {
             if (params.sharpen.enabled())
                 throw std::invalid_argument("Sharpening training images needs the CUDA image loader");
             const auto rgba = load_rgba_image_cpu_decoded(path, params.undistort ? 1 : params.resize_factor,
                                                           params.undistort ? 0 : params.max_width, nullptr,
-                                                          decode_16bit, !alpha_is_transparency);
+                                                          decode_16bit, !alpha_is_transparency, fill);
             Tensor rgb = rgba.slice(0, 0, 3).contiguous();
             if (params.output_uint8)
                 rgb = float_to_uint8(rgb);
@@ -172,9 +224,18 @@ namespace lfs::io {
                 alpha = lfs::core::undistort_mask(alpha.contiguous(), scaled, nullptr);
                 if (params.output_uint8)
                     rgb = float_to_uint8(rgb);
+                if (fill) {
+                    MaskedImageFill warped = *fill;
+                    warped.alpha = false;
+                    warped.mask = alpha;
+                    warped.resize_factor = 1;
+                    warped.max_width = 0;
+                    fill_masked_planar_image(rgb, warped);
+                }
             }
-            alpha = alpha.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32).to(DataType::Float32).div(65535.0f);
-            return {rgb.contiguous(), alpha};
+            auto alpha_grid = alpha.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32);
+            alpha = alpha_grid.to(DataType::Float32).div(65535.0f);
+            return {rgb.contiguous(), alpha, alpha_grid};
         }
 
         // Normal maps store v = n * 0.5 + 0.5, optionally through the sRGB display transform.
@@ -239,18 +300,19 @@ namespace lfs::io {
             if (!running_.load(std::memory_order_acquire))
                 return;
             if (lossless && image.dtype() == DataType::Int32) {
-                if (image.ndim() != 3 || image.shape()[0] != 3)
-                    throw std::runtime_error("prepared PNG cache expects UInt16 RGB");
+                if (image.ndim() != 3 || (image.shape()[0] != 3 && image.shape()[0] != 1))
+                    throw std::runtime_error("prepared PNG cache expects UInt16 RGB or gray");
                 const auto pixels = image.to_pageable_host();
+                const size_t channels = pixels.shape()[0];
                 const size_t width = pixels.shape()[2], height = pixels.shape()[1], plane = width * height;
                 std::vector<uint16_t> interleaved(pixels.numel());
                 const auto* src = pixels.ptr<int32_t>();
                 for (size_t i = 0; i < plane; ++i)
-                    for (size_t ch = 0; ch < 3; ++ch) {
+                    for (size_t ch = 0; ch < channels; ++ch) {
                         const auto value = src[ch * plane + i];
                         if (value < 0 || value > 65535)
                             throw std::runtime_error("prepared PNG cache sample is outside the UInt16 grid");
-                        interleaved[i * 3 + ch] = static_cast<uint16_t>(value);
+                        interleaved[i * channels + ch] = static_cast<uint16_t>(value);
                     }
                 lfs::core::image_codecs::PngEncodeOptions options;
                 options.compression_level = 3;
@@ -258,7 +320,8 @@ namespace lfs::io {
                 std::vector<uint8_t> bytes;
                 const auto status = lfs::core::image_codecs::encode_png_memory(
                     {reinterpret_cast<const uint8_t*>(interleaved.data()), interleaved.size() * sizeof(uint16_t)},
-                    static_cast<int>(width), static_cast<int>(height), 3, 16, width * 3 * sizeof(uint16_t), bytes, options);
+                    static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels), 16,
+                    width * channels * sizeof(uint16_t), bytes, options);
                 if (!status) {
                     LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache PNG encoding failed for {}: {}", key, status.error().detail());
                     warn_portable_cache_failure(status.error().detail());
@@ -335,6 +398,78 @@ namespace lfs::io {
         }
     }
 
+    // The prepared-image policy: lossy JPEG for 8-bit, PNG16 for 16-bit samples, nothing for
+    // float decodes, 16-bit decodes converted to bytes, or requests that skip the blob cache.
+    bool PipelinedImageLoader::caches_portable_filled_rgb(const LoadParams& params) const {
+        return !params.skip_blob_cache && !params.decode_float && !(decodes_16bit(params) && params.output_uint8);
+    }
+
+    // The key CUDA reads an alpha mask's cached alpha from.
+    std::string PipelinedImageLoader::portable_alpha_cache_key(const std::filesystem::path& path, const LoadParams& params,
+                                                               const bool alpha_is_transparency) const {
+        return make_mask_cache_key(path, params) + (alpha_is_transparency ? "_transparency" : "");
+    }
+
+    void PipelinedImageLoader::cache_portable_filled_rgb(const std::string& key, const Tensor& image,
+                                                         const LoadParams& params) {
+        if (!decodes_16bit(params)) {
+            cache_portable_prepared_image(key, image);
+            return;
+        }
+        // The staging bound of prepared warps.
+        if (image.shape()[1] * image.shape()[2] > PORTABLE_CACHE_MAX_BYTES / (3 * sizeof(uint16_t)))
+            return;
+        Tensor grid;
+        try {
+            grid = image.clamp(0.0f, 1.0f).mul(65535.0f).add(0.5f).to(DataType::Int32);
+        } catch (const std::exception& e) {
+            LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache store failed for {}: {}", key, e.what());
+            warn_portable_cache_failure(e.what());
+            return;
+        }
+        cache_portable_prepared_image(key, grid, PORTABLE_PNG_CACHE_MAX_BYTES, true);
+    }
+
+    void PipelinedImageLoader::cache_portable_alpha(const std::string& key, const Tensor& alpha_grid) {
+        Tensor gray;
+        try {
+            gray = alpha_grid.unsqueeze(0);
+        } catch (const std::exception& e) {
+            LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache store failed for {}: {}", key, e.what());
+            warn_portable_cache_failure(e.what());
+            return;
+        }
+        cache_portable_prepared_image(key, gray, PORTABLE_PNG_CACHE_MAX_BYTES, true);
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::decode_portable_filled_rgb(const std::vector<uint8_t>& bytes,
+                                                                       const LoadParams& params,
+                                                                       lfs::core::TensorUpload& upload) {
+        {
+            std::lock_guard stats_lock(stats_mutex_);
+            ++stats_.cpu_decode_calls;
+        }
+        if (is_png(bytes))
+            return to_device(upload, decode_prepared_png(bytes, 3, PORTABLE_CACHE_MAX_BYTES)).to(DataType::Float32).div(65535.0f);
+        auto [data, width, height, channels] = lfs::core::load_image_from_memory(bytes.data(), bytes.size(), 1, 0);
+        if (!data)
+            throw std::runtime_error("invalid prepared JPEG bytes");
+        const auto host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+        if (channels != 3)
+            throw std::runtime_error("prepared JPEG is not RGB");
+        auto image = to_device(upload, host);
+        return params.output_uint8 ? image : image.to(DataType::Float32).mul(UINT8_SCALE);
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::decode_portable_alpha(const std::vector<uint8_t>& bytes, const size_t width,
+                                                                  const size_t height, lfs::core::TensorUpload& upload) {
+        const auto samples = decode_prepared_png(bytes, 1, width * height * 3 * sizeof(uint16_t));
+        if (samples.shape()[1] != height || samples.shape()[2] != width)
+            throw std::runtime_error("prepared alpha does not match its image");
+        // The cold alpha divides the same samples on the GPU.
+        return to_device(upload, samples).to(DataType::Float32).div(65535.0f).squeeze(0).contiguous();
+    }
+
     lfs::core::Tensor PipelinedImageLoader::decode_portable_rgb(
         const std::filesystem::path& path,
         const LoadParams& params,
@@ -359,36 +494,9 @@ namespace lfs::io {
                     const auto grid = lfs::core::compute_undistort_grid(*params.undistort, params.resize_factor, params.max_width);
                     Tensor host;
                     if (lossless_cache && !params.decode_float) {
-                        constexpr std::array<uint8_t, 8> png_signature{137, 80, 78, 71, 13, 10, 26, 10};
-                        if (cached->size() < png_signature.size() || !std::equal(png_signature.begin(), png_signature.end(), cached->begin()))
-                            throw std::runtime_error("invalid prepared PNG bytes");
-                        struct BoundedPixels {
-                            size_t expected;
-                            std::vector<uint16_t> values;
-                        } pixels{size_t(grid.width) * grid.height * 3 * sizeof(uint16_t), {}};
-                        lfs::core::image_codecs::DecodeTarget target;
-                        target.channels = 3;
-                        target.sample_type = lfs::core::image_codecs::SampleType::UInt16;
-                        target.user = &pixels;
-                        target.allocate = [](size_t bytes, void* user) -> void* {
-                            auto& buffer = *static_cast<BoundedPixels*>(user);
-                            if (bytes != buffer.expected)
-                                return nullptr;
-                            buffer.values.resize(bytes / sizeof(uint16_t));
-                            return buffer.values.data();
-                        };
-                        lfs::core::image_codecs::Probe decoded;
-                        std::string error;
-                        if (!lfs::core::image_codecs::decode_memory_to_buffer(cached->data(), cached->size(), target, decoded, error))
-                            throw std::runtime_error("invalid prepared PNG bytes: " + error);
-                        if (decoded.width != grid.width || decoded.height != grid.height)
+                        host = decode_prepared_png(*cached, 3, size_t(grid.width) * grid.height * 3 * sizeof(uint16_t));
+                        if (host.shape()[2] != size_t(grid.width) || host.shape()[1] != size_t(grid.height))
                             throw std::runtime_error("prepared PNG dimensions do not match the requested warp");
-                        host = Tensor::empty_pageable_host({3, size_t(grid.height), size_t(grid.width)}, DataType::Int32);
-                        const size_t plane = size_t(grid.width) * grid.height;
-                        auto* dst = host.ptr<int32_t>();
-                        for (size_t i = 0; i < plane; ++i)
-                            for (size_t ch = 0; ch < 3; ++ch)
-                                dst[ch * plane + i] = pixels.values[i * 3 + ch];
                     } else if (lossless_cache) {
                         lfs::core::image_codecs::Image decoded;
                         std::string error;
@@ -438,7 +546,8 @@ namespace lfs::io {
             }
         }
         const bool float_decode = decodes_float(path, params);
-        if (!params.undistort && !float_decode && !encoded)
+        // A masked fill needs the full-resolution source, which the encoded path resizes while decoding.
+        if (!params.undistort && !float_decode && (!encoded || params.masked_fill))
             return load_rgb_decoded_ahead(path, params, decodes_16bit(params));
         Tensor host;
         if (float_decode || (params.undistort && decodes_16bit(params))) {
@@ -455,6 +564,10 @@ namespace lfs::io {
                 host = Tensor::cat({gray, gray, gray}, 2);
             } else if (channels == 4) {
                 host = host.slice(2, 0, 3);
+            }
+            if (params.masked_fill) {
+                host = host.contiguous();
+                fill_masked_image_host(host, false, *params.masked_fill);
             }
             host = host.permute({2, 0, 1}).contiguous();
         } else if (decodes_16bit(params)) {
@@ -477,8 +590,12 @@ namespace lfs::io {
                     : lfs::core::load_image(path, resize_factor, max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            std::unique_ptr<void, ReleaseFn> owner(data, lfs::core::free_image);
+            // Only a full-resolution warp source gets here with a fill.
+            if (params.masked_fill)
+                fill_masked_image_host(data, width, height, channels, false, *params.masked_fill);
             // Planar bytes avoid a second device image and a per-step GPU transpose.
-            host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
+            host = host_uint8_planar(owner.release(), height, width, channels, lfs::core::free_image);
         }
         std::unique_lock<std::mutex> large_prepare_lock;
         constexpr size_t LARGE_PORTABLE_SOURCE_BYTES = size_t{128} * 1024 * 1024;
@@ -562,6 +679,7 @@ namespace lfs::io {
             }
             LoadParams params = item.params;
             params.undistort = item.undistort;
+            std::optional<MaskedImageFill> fill;
 
             const auto fail = [&](const std::string& failure) {
                 if (item.alpha_as_mask) {
@@ -600,11 +718,45 @@ namespace lfs::io {
             };
 
             try {
+                if (item.is_cache_hit) {
+                    // Masked RGB prepared on an earlier visit, with its alpha for an alpha mask.
+                    Tensor rgb, alpha;
+                    try {
+                        rgb = decode_portable_filled_rgb(*item.jpeg_data, params, upload);
+                        if (item.alpha_as_mask)
+                            alpha = decode_portable_alpha(*item.alpha_data, rgb.shape()[2], rgb.shape()[1], upload);
+                    } catch (const std::exception& e) {
+                        // A damaged entry is dropped, and the source is prepared again below.
+                        LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache read failed for {}: {}",
+                                  lfs::core::path_to_utf8(item.path), e.what());
+                        invalidate_cache_entry(item.cache_key);
+                        if (item.alpha_as_mask)
+                            invalidate_cache_entry(portable_alpha_cache_key(item.path, item.params, item.alpha_is_transparency));
+                        warn_portable_cache_failure(e.what());
+                        rgb = {};
+                    }
+                    if (rgb.is_valid()) {
+                        try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
+                                          item.alpha_as_mask ? std::optional{finish_mask(std::move(alpha), item.alpha_mask_params)}
+                                                             : std::nullopt);
+                        continue;
+                    }
+                }
                 if (item.alpha_as_mask) {
-                    auto [rgb, alpha] = decode_rgba(item.path, params, config_.use_16bit_color,
-                                                    item.alpha_is_transparency);
-                    try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
-                                      finish_mask(std::move(alpha), item.alpha_mask_params));
+                    if (item.fill_masked_rgb)
+                        fill.emplace(MaskedImageFill{.alpha = true,
+                                                     .invert = item.alpha_mask_params.invert,
+                                                     .threshold = item.alpha_mask_params.threshold,
+                                                     .keep_high_band = item.mask_keep_high_band});
+                    auto rgba = decode_rgba(item.path, params, config_.use_16bit_color, item.alpha_is_transparency,
+                                            fill ? &*fill : nullptr);
+                    if (item.caches_filled_rgb) {
+                        cache_portable_filled_rgb(item.cache_key, rgba.rgb, params);
+                        cache_portable_alpha(portable_alpha_cache_key(item.path, item.params, item.alpha_is_transparency),
+                                             rgba.alpha_grid);
+                    }
+                    try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgba.rgb),
+                                      finish_mask(std::move(rgba.alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
                     int width = 0, height = 0, channels = 0;
                     stbi_uc* const gray = stb_load(item.path, &width, &height, &channels, 1);
@@ -630,6 +782,9 @@ namespace lfs::io {
                     }
                     if (const auto* const ops = lfs::core::shared_image_ops(config_.backend); ops && ops->mask)
                         ops->mask(mask, lfs::gpu_ops::MaskTransform::QuantizeByteGrid, 0.0f);
+                    // The waiting RGB refills its output grid with these byte-grid values.
+                    if (item.mask_source_promise)
+                        item.mask_source_promise->set_value(mask.cpu());
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
                                       finish_mask(std::move(mask), item.mask_params));
                 } else if (item.is_depth || item.is_normal) {
@@ -705,7 +860,36 @@ namespace lfs::io {
                                           std::nullopt, std::nullopt, std::move(prior));
                     }
                 } else {
-                    auto image = decode_portable_rgb(item.path, params, upload, item.jpeg_data.get());
+                    // The source mask of the CUDA cold path: a mask file before an in-memory mask.
+                    if (item.fill_masked_rgb && (item.rgb_mask_path || item.rgb_mask)) {
+                        auto source_mask = item.rgb_mask_path ? load_fill_mask(*item.rgb_mask_path) : *item.rgb_mask;
+                        if (source_mask.is_valid()) {
+                            fill.emplace(MaskedImageFill{.mask = std::move(source_mask),
+                                                         .invert = item.mask_params.invert,
+                                                         .threshold = item.mask_params.threshold,
+                                                         .keep_high_band = item.mask_keep_high_band});
+                            params.masked_fill = &*fill;
+                        }
+                    }
+                    // jpeg_data holds the source's own bytes unless it was a prepared image.
+                    auto image = decode_portable_rgb(item.path, params, upload,
+                                                     item.is_cache_hit ? nullptr : item.jpeg_data.get());
+                    if (fill) {
+                        // As CUDA, refill the output grid: with the sidecar's prepared mask when it
+                        // was decoded alongside, else with the source mask where the grids agree.
+                        MaskedImageFill output = *fill;
+                        if (item.rgb_mask_source.valid()) {
+                            try {
+                                output.mask = item.rgb_mask_source.get();
+                            } catch (const std::exception& e) {
+                                LOG_DEBUG("[PipelinedImageLoader] Output-grid fill keeps the source mask of {}: {}",
+                                          lfs::core::path_to_utf8(item.path), e.what());
+                            }
+                        }
+                        fill_masked_planar_image(image, output);
+                    }
+                    if (item.caches_filled_rgb)
+                        cache_portable_filled_rgb(item.cache_key, image, params);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
                                       std::nullopt);
                 }
