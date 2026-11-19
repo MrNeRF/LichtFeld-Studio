@@ -3750,6 +3750,68 @@ namespace lfs::vis {
         }
     };
 
+    TEST_F(ScenePanelRefreshTest, KeyframeTrashDeletesTimelineEntryAndSupportsUndoRedo) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        panel.preload(ctx);
+        panel.renderDirect({.mode = gui::PanelDirectRenderMode::Preload, .width = 400, .height = 600}, ctx);
+        auto* context = manager().getContext("scene_panel_native");
+        ASSERT_NE(context, nullptr);
+        auto* document = context->GetDocument(0);
+        auto* tree = dynamic_cast<gui::SceneGraphElement*>(document->GetElementById("tree-container"));
+        ASSERT_NE(tree, nullptr);
+        document->Show();
+        tree->SetProperty("height", "500px");
+        context->SetDimensions({400, 600});
+        context->Update();
+        const auto* group = scene.getNode("Keyframes");
+        ASSERT_NE(group, nullptr);
+        auto* group_trash = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(group->id) + "']");
+        ASSERT_NE(group_trash, nullptr);
+        EXPECT_EQ(group_trash->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        auto& history = op::undoHistory();
+        for (const size_t index : {1u, 0u, 2u}) {
+            history.clear();
+            ctx.scene_generation = python::get_scene_generation();
+            ++ctx.frame_serial;
+            static_cast<void>(tree->syncFromScene(ctx));
+            context->Update();
+            const auto* node = scene.getNode(std::format("Keyframe {}", index + 1));
+            ASSERT_NE(node, nullptr);
+            if (index == 0) {
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete_kf:0']"), nullptr);
+                menu().request({}, 0, 0);
+            }
+            auto* icon = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(node->id) + "']");
+            ASSERT_NE(icon, nullptr);
+            EXPECT_EQ(icon->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::Inline);
+            icon->DispatchEvent("click", {});
+            EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            EXPECT_EQ(sequencer.timeline().realKeyframeCount(), 2u);
+            EXPECT_EQ(scene.getNodes().size(), 3u); // Group and two remaining keyframes.
+            ASSERT_EQ(history.undoCount(), 1u);
+            ASSERT_TRUE(history.undo().success);
+            EXPECT_NE(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            EXPECT_EQ(scene.getNodes().size(), 4u);
+            ASSERT_TRUE(history.redo().success);
+            EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+            ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+    }
+
     TEST_F(ScenePanelRefreshTest, UnchangedPanelStaysIdle) {
         auto& scene = viewer_->getSceneManager()->getScene();
         scene.addGroup("Existing");
