@@ -171,7 +171,6 @@ configure_library_version(NVIMGCODEC_LIBRARY_NAME
 
 set(NVIMGCODEC_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/../include/nvimgcodec.h")
 set(NVIMGCODEC_PUBLIC_HEADERS "${NVIMGCODEC_PUBLIC_HEADERS}\;${CMAKE_CURRENT_SOURCE_DIR}/../include/nvimgcodec_version.h")
-set(NVIMGCODEC_PUBLIC_HEADERS "${NVIMGCODEC_PUBLIC_HEADERS}\;${CMAKE_CURRENT_SOURCE_DIR}/../include/nvcv_adapter.hpp")
 
 if(UNIX)
     set_target_properties(${NVIMGCODEC_LIBRARY_NAME} PROPERTIES
@@ -229,7 +228,7 @@ write_basic_package_version_file(
 #   * PROJECT_NAME
 # PATH_VARS below generate the PACKAGE_<var> placeholders used by Config.cmake.in.
 configure_package_config_file(
-    "${CMAKE_SOURCE_DIR}/cmake/template/Config.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/template/Config.cmake.in"
     "${project_config}"
     INSTALL_DESTINATION "${config_install_dir}"
     PATH_VARS
@@ -250,25 +249,16 @@ install(
     PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
 )
 
-# License & acknowledgements: Debian policy requires /usr/share/doc/<pkg>/copyright.
-# CUDA-major DEB packages are co-installable, so the doc directory must match
-# the package name to avoid cross-package file ownership conflicts.
-if(UNIX AND CPACK_DEBIAN_LIB_PACKAGE_NAME)
-    set(NVIMGCODEC_INSTALL_DOCDIR "share/doc/${CPACK_DEBIAN_LIB_PACKAGE_NAME}")
-else()
-    set(NVIMGCODEC_INSTALL_DOCDIR "share/doc/lib${PROJECT_NAME}")
+# License file - install to nvImageCodec-specific directory (not root)
+set(NVIMGCODEC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(EXISTS "${NVIMGCODEC_ROOT}/LICENSE.txt")
+    install(
+        FILES "${NVIMGCODEC_ROOT}/LICENSE.txt" "${NVIMGCODEC_ROOT}/Acknowledgements.txt"
+        DESTINATION "share/nvImageCodec"
+        COMPONENT lib
+        OPTIONAL
+    )
 endif()
-install(
-    FILES "${CMAKE_SOURCE_DIR}/LICENSE.txt"
-    DESTINATION "${NVIMGCODEC_INSTALL_DOCDIR}"
-    RENAME copyright
-    COMPONENT lib
-)
-install(
-    FILES "${CMAKE_SOURCE_DIR}/Acknowledgements.txt"
-    DESTINATION "${NVIMGCODEC_INSTALL_DOCDIR}"
-    COMPONENT lib
-)
 
 # Config
 #   * <prefix>/${NVIMGCODEC_INSTALL_CMAKEDIR}/nvimgcodecConfig.cmake
@@ -301,7 +291,7 @@ install(
 set(dispatcher_dir "${generated_dir}/dispatcher")
 set(dispatcher_config "${dispatcher_dir}/${PROJECT_NAME}Config.cmake")
 configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/template/DispatcherConfig.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/template/DispatcherConfig.cmake.in"
     "${dispatcher_config}"
     @ONLY
 )

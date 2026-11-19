@@ -56,13 +56,26 @@ include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/external/dlpack/include)
 if (BUILD_NVJPEG2K_EXT)
     if (WITH_DYNAMIC_NVJPEG2K)
         include(FetchContent)
+        if(WIN32)
+            set(_nvjpeg2k_redist_url
+                https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/windows-x86_64/libnvjpeg_2k-windows-x86_64-0.9.0.43-archive.zip)
+            set(_nvjpeg2k_redist_hash
+                SHA512=f4bcd9e6bb23fffc47bbb02b6ce295332da531fa8f76bb208478b8059a62bea22547bd8208af2ce410c2451a0d6a9ea00b339582e645a08ba1d49569280c4f9d)
+        else()
+            set(_nvjpeg2k_redist_url
+                https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/linux-x86_64/libnvjpeg_2k-linux-x86_64-0.9.0.43-archive.tar.xz)
+            set(_nvjpeg2k_redist_hash
+                SHA512=22d14a20af67ba414956fd7c4223cf3fd519cec9ccbd0ae27603416ab143eae92457ab0434205fe66617bcc5a54805bfc6183f89205ea2d0068d497321a43783)
+        endif()
         FetchContent_Declare(
             nvjpeg2k_headers
-            URL      https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/linux-x86_64/libnvjpeg_2k-linux-x86_64-0.12.0.58_cuda12-archive.tar.xz
-            URL_HASH SHA512=cbc872a74dc6e7dad62ef59933e719c775205a48e30cfbaccbefd3ec9d65feab52cd7078bf5d74b823c03c854fe257cebe38e6b013cf16ca62b1fb8f4f303b60
+            URL      ${_nvjpeg2k_redist_url}
+            URL_HASH ${_nvjpeg2k_redist_hash}
+            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
         )
-        FetchContent_Populate(nvjpeg2k_headers)
+        FetchContent_MakeAvailable(nvjpeg2k_headers)
         set(NVJPEG2K_SEARCH_PATHS "${nvjpeg2k_headers_SOURCE_DIR}/include")
+        set(NVJPEG2K_REDIST_ROOT "${nvjpeg2k_headers_SOURCE_DIR}" CACHE INTERNAL "nvJPEG2000 redist root")
     else()
         set(NVJPEG2K_SEARCH_PATHS ${CTK_SEARCH_PATHS})
         find_library(NVJPEG2K_LIBRARY ${NVJPEG2K_LIB_NAME} PATH_SUFFIXES lib lib64)
@@ -98,8 +111,9 @@ if (BUILD_NVTIFF_EXT)
            nvtiff_headers
            URL      https://developer.download.nvidia.com/compute/nvtiff/redist/libnvtiff/linux-x86_64/libnvtiff-linux-x86_64-0.9.0.86_cuda12-archive.tar.xz
            URL_HASH SHA512=3e57f823129ed60c7b4177b0cdfba32630272ba8610d8d57eabb4f4e8336fbabe3213f1b006f0cde4507fa19a2bb90cc91ae4ee0e253c0ccee6a6fddb7d3afde
+           DOWNLOAD_EXTRACT_TIMESTAMP FALSE
         )
-        FetchContent_Populate(nvtiff_headers)
+        FetchContent_MakeAvailable(nvtiff_headers)
         set(NVTIFF_SEARCH_PATHS "${nvtiff_headers_SOURCE_DIR}/include")
     else()
         set(NVTIFF_SEARCH_PATHS ${CTK_SEARCH_PATHS})
@@ -140,153 +154,6 @@ if (BUILD_NVTIFF_EXT)
 else()
     message(STATUS "nvTIFF extension build disabled")
 endif()
-
-set(TIFF_LIBRARY_DEPS)
-
-find_package(ZLIB)
-if(NOT ZLIB_FOUND)
-    message(STATUS "zlib not found - disabled")
-else()
-    message(STATUS "Using zlib at ${ZLIB_LIBRARIES}")
-    list(APPEND TIFF_LIBRARY_DEPS ${ZLIB_LIBRARIES})
-endif()
-
-find_package(ZSTD)
-if(NOT DEFINED ZSTD_LIBRARY)
-    message(FATAL_ERROR "zstd not found - disabled")
-else()
-    message(STATUS "Using zstd at ${ZSTD_LIBRARY}")
-    list(APPEND TIFF_LIBRARY_DEPS ${ZSTD_LIBRARY})
-endif()
-
-find_package(JPEG 62) # 1.5.3 version
-if(NOT JPEG_FOUND)
-    message(STATUS "libjpeg-turbo not found - disabled")
-    set(BUILD_LIBJPEG_TURBO_EXT OFF CACHE BOOL INTERNAL)
-    set(BUILD_LIBJPEG_TURBO_EXT OFF)
-else()
-    message(STATUS "Using libjpeg-turbo at ${JPEG_LIBRARIES}")
-    include_directories(SYSTEM ${JPEG_INCLUDE_DIRS})
-    list(APPEND TIFF_LIBRARY_DEPS ${JPEG_LIBRARIES})
-endif()
-
-# excludes the long-EOL libtiff 3.x series
-find_package(TIFF 4.0)
-if(NOT TIFF_FOUND)
-    message(STATUS "libtiff not found - disabled")
-    set(BUILD_LIBTIFF_EXT OFF CACHE BOOL INTERNAL)
-    set(BUILD_LIBTIFF_EXT OFF)
-else()
-    # libtiff's exported static TIFF::tiff (picked up by FindTIFF on CMake >= 3.29)
-    # links CMath::CMath, but its package config does not define it.
-    if(NOT TARGET CMath::CMath)
-        add_library(CMath::CMath INTERFACE IMPORTED)
-    endif()
-    message(STATUS "TIFF_INCLUDE_DIRS: ${TIFF_INCLUDE_DIRS}")
-    message(STATUS "TIFF_LIBRARIES: ${TIFF_LIBRARIES}")
-    message(STATUS "libtiff dependencies: ${TIFF_LIBRARY_DEPS}")
-    set_property(TARGET TIFF::TIFF APPEND PROPERTY INTERFACE_LINK_LIBRARIES "${TIFF_LIBRARY_DEPS}")
-endif()
-
-if (NOT DEFINED OpenCV_VERSION AND (BUILD_OPENCV_EXT OR BUILD_TEST))
-    if (WIN32)
-        set(OpenCV_STATIC ON)
-    endif()
-    find_package(OpenCV 4.9 QUIET COMPONENTS core imgproc imgcodecs)
-
-    if(NOT OpenCV_FOUND)
-        message(STATUS "OpenCV not found - disabled")
-        set(BUILD_OPENCV_EXT OFF CACHE BOOL INTERNAL)
-        set(BUILD_OPENCV_EXT OFF)
-
-        if (BUILD_TEST)
-            message(WARNING "Native tests need OpenCV to run - Disabling tests")
-            set(BUILD_TEST OFF CACHE BOOL INTERNAL)
-            set(BUILD_TEST OFF)
-        endif()
-    else()
-        message(STATUS "Found OpenCV: ${OpenCV_INCLUDE_DIRS} (found suitable version \"${OpenCV_VERSION}\", minimum required is \"4.9\")")
-        message(STATUS "OpenCV libraries: ${OpenCV_LIBRARIES}")
-        include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
-
-        if(WIN32)
-            set(NVIMGCODEC_OPENCV_RUNTIME_DLLS "")
-            set(_opencv_runtime_search_dirs "")
-
-            foreach(_opencv_dir_var IN ITEMS OpenCV_BIN_DIR OpenCV_RUNTIME_DIR)
-                if(DEFINED ${_opencv_dir_var})
-                    set(_opencv_dir_value "${${_opencv_dir_var}}")
-                    if(_opencv_dir_value)
-                        list(APPEND _opencv_runtime_search_dirs "${_opencv_dir_value}")
-                    endif()
-                endif()
-            endforeach()
-
-            if(DEFINED OpenCV_INSTALL_PATH)
-                list(APPEND _opencv_runtime_search_dirs
-                    "${OpenCV_INSTALL_PATH}/bin"
-                    "${OpenCV_INSTALL_PATH}/x64/vc17/bin"
-                    "${OpenCV_INSTALL_PATH}/x64/vc16/bin"
-                    "${OpenCV_INSTALL_PATH}/x64/vc15/bin")
-            endif()
-
-            if(DEFINED OpenCV_DIR)
-                list(APPEND _opencv_runtime_search_dirs
-                    "${OpenCV_DIR}/../bin"
-                    "${OpenCV_DIR}/../../bin"
-                    "${OpenCV_DIR}/../../../bin")
-            endif()
-
-            foreach(_opencv_lib IN LISTS OpenCV_LIBRARIES)
-                if(TARGET ${_opencv_lib})
-                    foreach(_opencv_target_prop IN ITEMS
-                        IMPORTED_LOCATION
-                        IMPORTED_LOCATION_RELEASE
-                        IMPORTED_LOCATION_RELWITHDEBINFO
-                        IMPORTED_LOCATION_MINSIZEREL
-                        IMPORTED_IMPLIB
-                        IMPORTED_IMPLIB_RELEASE
-                        IMPORTED_IMPLIB_RELWITHDEBINFO
-                        IMPORTED_IMPLIB_MINSIZEREL)
-                        get_target_property(_opencv_target_path ${_opencv_lib} ${_opencv_target_prop})
-                        if(_opencv_target_path AND NOT _opencv_target_path MATCHES "NOTFOUND")
-                            if(_opencv_target_path MATCHES "\\.dll$")
-                                list(APPEND NVIMGCODEC_OPENCV_RUNTIME_DLLS "${_opencv_target_path}")
-                            else()
-                                get_filename_component(_opencv_target_dir "${_opencv_target_path}" DIRECTORY)
-                                list(APPEND _opencv_runtime_search_dirs
-                                    "${_opencv_target_dir}"
-                                    "${_opencv_target_dir}/../bin"
-                                    "${_opencv_target_dir}/../../bin")
-                            endif()
-                        endif()
-                    endforeach()
-                endif()
-            endforeach()
-
-            if(_opencv_runtime_search_dirs)
-                list(REMOVE_DUPLICATES _opencv_runtime_search_dirs)
-            endif()
-
-            foreach(_opencv_runtime_dir IN LISTS _opencv_runtime_search_dirs)
-                if(EXISTS "${_opencv_runtime_dir}")
-                    file(GLOB _opencv_runtime_dlls CONFIGURE_DEPENDS "${_opencv_runtime_dir}/opencv_*.dll")
-                    list(APPEND NVIMGCODEC_OPENCV_RUNTIME_DLLS ${_opencv_runtime_dlls})
-                endif()
-            endforeach()
-
-            if(NVIMGCODEC_OPENCV_RUNTIME_DLLS)
-                list(REMOVE_DUPLICATES NVIMGCODEC_OPENCV_RUNTIME_DLLS)
-                message(STATUS "OpenCV runtime DLLs: ${NVIMGCODEC_OPENCV_RUNTIME_DLLS}")
-            endif()
-        endif()
-    endif()
-endif()
-
-# #################################################################
-# Boost preprocessor
-# #################################################################
-include_directories(${PROJECT_SOURCE_DIR}/external/boost/preprocessor/include)
 
 set(NVIMGCODEC_COMMON_DEPENDENCIES "")
 list(APPEND NVIMGCODEC_COMMON_DEPENDENCIES rt)

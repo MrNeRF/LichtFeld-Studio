@@ -10,12 +10,4 @@ bin/*
 .*.swp
 nvimgcodec_version.h
 *__pycache__*
-.cache/
 .venv/
-.nvimgcodec_test_venv/
-test/python/integration/dicom/.midi_b_data/
-conda/.*-feedstock_clone/
-docs/superpowers/
-
-# Work dir for the CMake package guard tests (kept on failure for inspection)
-nvimgcodec_pkg_guard/
