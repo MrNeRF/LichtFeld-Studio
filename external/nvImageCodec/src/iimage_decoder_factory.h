@@ -31,6 +31,8 @@ namespace nvimgcodec {
         virtual std::string getDecoderId() const = 0;
         virtual std::string getCodecName() const = 0;
         virtual nvimgcodecBackendKind_t getBackendKind() const = 0;
+        virtual const nvimgcodecDecoderDesc_t* getDecoderDesc() const = 0;
+        // Throws if the decoder cannot be created.
         virtual std::unique_ptr<IImageDecoder> createDecoder(
             const nvimgcodecExecutionParams_t* exec_params, const char* options) const = 0;
     };

@@ -1,0 +1,133 @@
+# ---------------------------------------------------------------------------
+# Unversioned dispatcher config for @PROJECT_NAME@.
+#
+# The real package config lives in a CUDA-major-scoped directory that CMake does
+# not search by default:
+#
+#     <prefix>/lib64/lib@PROJECT_NAME@/<cuda_major>/cmake/@PROJECT_NAME@/
+#
+# so find_package(@PROJECT_NAME@) only worked when the consumer passed
+# -D@PROJECT_NAME@_DIR=... explicitly. This file sits on a path CMake *does*
+# search (share/cmake/@PROJECT_NAME@) and forwards to the right CUDA-major
+# config, so a bare find_package(@PROJECT_NAME@) works.
+#
+# share/cmake is used rather than <libdir>/cmake because it is searched on every
+# layout: on Debian multiarch systems <prefix>/lib64/cmake is not in the default
+# search path, and distro repackaging rewrites the library directory anyway.
+#
+# This file is deliberately free of CUDA-major and version specific content, so
+# every CUDA-major package of a given release ships byte-identical bytes here and
+# the packages do not fight over ownership of it.
+# ---------------------------------------------------------------------------
+
+# Note: this file is include()d by find_package(), not loaded in its own scope, so every temporary
+# set here outlives it in the caller's scope unless explicitly unset - including on the early
+# not-found returns below.
+get_filename_component(_@PROJECT_NAME@_dispatch_dir "${CMAKE_CURRENT_LIST_DIR}" REALPATH)
+get_filename_component(_@PROJECT_NAME@_prefix "${_@PROJECT_NAME@_dispatch_dir}/../../.." ABSOLUTE)
+
+# Collect the per-CUDA-major configs. The library directory name differs between
+# the plain install (lib@PROJECT_NAME@) and distro repackaging (@PROJECT_NAME@),
+# and the library root differs between lib64, lib and lib/<arch>.
+file(GLOB _@PROJECT_NAME@_candidates
+    "${_@PROJECT_NAME@_prefix}/lib*/lib@PROJECT_NAME@/*/cmake/@PROJECT_NAME@/@PROJECT_NAME@Config.cmake"
+    "${_@PROJECT_NAME@_prefix}/lib*/@PROJECT_NAME@/*/cmake/@PROJECT_NAME@/@PROJECT_NAME@Config.cmake"
+    "${_@PROJECT_NAME@_prefix}/lib/*/lib@PROJECT_NAME@/*/cmake/@PROJECT_NAME@/@PROJECT_NAME@Config.cmake"
+    "${_@PROJECT_NAME@_prefix}/lib/*/@PROJECT_NAME@/*/cmake/@PROJECT_NAME@/@PROJECT_NAME@Config.cmake"
+    # Windows installer: nests under a version folder and drops "lib@PROJECT_NAME@",
+    # e.g. <root>/v0.9/lib/<major>/cmake/@PROJECT_NAME@/.
+    "${_@PROJECT_NAME@_prefix}/*/lib/*/cmake/@PROJECT_NAME@/@PROJECT_NAME@Config.cmake")
+
+if(NOT _@PROJECT_NAME@_candidates)
+    set(@PROJECT_NAME@_FOUND FALSE)
+    set(@PROJECT_NAME@_NOT_FOUND_MESSAGE
+        "@PROJECT_NAME@: no CUDA-major package config found under \"${_@PROJECT_NAME@_prefix}\". The runtime package may be installed without its development files.")
+    unset(_@PROJECT_NAME@_dispatch_dir)
+    unset(_@PROJECT_NAME@_prefix)
+    unset(_@PROJECT_NAME@_candidates)
+    return()
+endif()
+
+# Map each candidate to the CUDA major taken from its path: .../<major>/cmake/<name>/
+set(_@PROJECT_NAME@_majors "")
+foreach(_@PROJECT_NAME@_cand IN LISTS _@PROJECT_NAME@_candidates)
+    get_filename_component(_@PROJECT_NAME@_major_dir "${_@PROJECT_NAME@_cand}" DIRECTORY)   # .../cmake/@PROJECT_NAME@
+    get_filename_component(_@PROJECT_NAME@_major_dir "${_@PROJECT_NAME@_major_dir}" DIRECTORY)  # .../cmake
+    get_filename_component(_@PROJECT_NAME@_major_dir "${_@PROJECT_NAME@_major_dir}" DIRECTORY)  # .../<major>
+    get_filename_component(_@PROJECT_NAME@_major "${_@PROJECT_NAME@_major_dir}" NAME)
+    if(_@PROJECT_NAME@_major MATCHES "^[0-9]+$")
+        list(APPEND _@PROJECT_NAME@_majors "${_@PROJECT_NAME@_major}")
+        set(_@PROJECT_NAME@_config_for_${_@PROJECT_NAME@_major} "${_@PROJECT_NAME@_cand}")
+    endif()
+endforeach()
+
+if(NOT _@PROJECT_NAME@_majors)
+    set(@PROJECT_NAME@_FOUND FALSE)
+    set(@PROJECT_NAME@_NOT_FOUND_MESSAGE
+        "@PROJECT_NAME@: found package configs under \"${_@PROJECT_NAME@_prefix}\" but none in a CUDA-major directory.")
+    unset(_@PROJECT_NAME@_dispatch_dir)
+    unset(_@PROJECT_NAME@_prefix)
+    unset(_@PROJECT_NAME@_candidates)
+    unset(_@PROJECT_NAME@_majors)
+    unset(_@PROJECT_NAME@_cand)
+    unset(_@PROJECT_NAME@_major)
+    unset(_@PROJECT_NAME@_major_dir)
+    return()
+endif()
+list(REMOVE_DUPLICATES _@PROJECT_NAME@_majors)
+# Plain ascending sort + reverse, not `list(SORT ... COMPARE NATURAL ORDER DESCENDING)`:
+# the COMPARE/ORDER keywords need CMake >= 3.13 and NATURAL needs >= 3.18, and this
+# file is include()d into the consumer, which may declare an older
+# cmake_minimum_required (the in-repo conda consumer test uses 3.12). A lexicographic
+# sort is equivalent to a natural one while every CUDA major stays two digits.
+list(SORT _@PROJECT_NAME@_majors)
+list(REVERSE _@PROJECT_NAME@_majors)
+
+# Prefer the build matching the consumer's CUDA Toolkit, so a project compiling
+# against CTK 12 does not silently link the CUDA 13 build when both are present.
+# QUIET because a consumer of the shared library need not have CUDA enabled; the
+# highest installed major is then the best guess available.
+set(_@PROJECT_NAME@_selected "")
+find_package(CUDAToolkit QUIET)
+if(CUDAToolkit_FOUND AND DEFINED CUDAToolkit_VERSION_MAJOR)
+    if(DEFINED _@PROJECT_NAME@_config_for_${CUDAToolkit_VERSION_MAJOR})
+        set(_@PROJECT_NAME@_selected "${_@PROJECT_NAME@_config_for_${CUDAToolkit_VERSION_MAJOR}}")
+    endif()
+endif()
+
+if(NOT _@PROJECT_NAME@_selected)
+    list(GET _@PROJECT_NAME@_majors 0 _@PROJECT_NAME@_fallback_major)
+    set(_@PROJECT_NAME@_selected "${_@PROJECT_NAME@_config_for_${_@PROJECT_NAME@_fallback_major}}")
+    # Always report a guess. The no-toolkit case is the one most worth announcing:
+    # the consumer gave no signal to match on, so the choice is arbitrary and silent
+    # selection of a CUDA major is exactly what surprises people later.
+    if(CUDAToolkit_FOUND AND DEFINED CUDAToolkit_VERSION_MAJOR)
+        message(STATUS
+            "@PROJECT_NAME@: no build for CUDA ${CUDAToolkit_VERSION_MAJOR}; "
+            "using CUDA ${_@PROJECT_NAME@_fallback_major} instead "
+            "(available: ${_@PROJECT_NAME@_majors})")
+    else()
+        message(STATUS
+            "@PROJECT_NAME@: no CUDA Toolkit detected; "
+            "using CUDA ${_@PROJECT_NAME@_fallback_major} "
+            "(available: ${_@PROJECT_NAME@_majors})")
+    endif()
+    unset(_@PROJECT_NAME@_fallback_major)
+endif()
+
+foreach(_@PROJECT_NAME@_major IN LISTS _@PROJECT_NAME@_majors)
+    unset(_@PROJECT_NAME@_config_for_${_@PROJECT_NAME@_major})
+endforeach()
+unset(_@PROJECT_NAME@_candidates)
+unset(_@PROJECT_NAME@_majors)
+unset(_@PROJECT_NAME@_dispatch_dir)
+unset(_@PROJECT_NAME@_prefix)
+unset(_@PROJECT_NAME@_cand)
+unset(_@PROJECT_NAME@_major)
+unset(_@PROJECT_NAME@_major_dir)
+
+# include() rather than a nested find_package() so this file cannot recurse into
+# itself. The real config anchors its directory discovery on its own
+# CMAKE_CURRENT_LIST_DIR, which include() sets correctly.
+include("${_@PROJECT_NAME@_selected}")
+unset(_@PROJECT_NAME@_selected)

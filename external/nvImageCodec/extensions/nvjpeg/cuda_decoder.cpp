@@ -37,6 +37,7 @@
 
 #include "imgproc/convert_kernel_gpu.h"
 #include "imgproc/device_buffer.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "imgproc/out_of_bound_roi_fill.h"
 #include "imgproc/region_orientation.h"
@@ -63,7 +64,7 @@ namespace nvjpeg {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<Decoder*>(decoder);
                 return handle->getMetadata(code_stream, metadata, metadata_count);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
             }
         }
@@ -76,7 +77,7 @@ namespace nvjpeg {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<Decoder*>(decoder);
                 return handle->canDecode(image, code_stream, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_PROCESSING_STATUS_FAIL;
             }
         }
@@ -89,9 +90,8 @@ namespace nvjpeg {
                 XM_CHECK_NULL(decoder);
                 auto handle = reinterpret_cast<Decoder*>(decoder);
                 return handle->decode(image, code_stream, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXECUTION_FAILED;
-                ;
             }
         }
 
@@ -240,6 +240,7 @@ namespace nvjpeg {
     Decoder::Decoder(
         const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
         : plugin_id_(plugin_id), device_allocator_{nullptr, nullptr, nullptr}, pinned_allocator_{nullptr, nullptr, nullptr}, framework_(framework), exec_params_(exec_params), nvjpeg_version_(get_nvjpeg_version()) {
+        (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any decoder lives
         if (!nvjpeg_version_) {
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Failed to get nvJPEG version");
             throw std::runtime_error("Failed to get nvJPEG version");
@@ -418,6 +419,14 @@ namespace nvjpeg {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "nvjpeg_destroy");
 
+            // See imgproc/exit_guard.h: at process exit, the CUDA driver or the
+            // nvJPEG library may already be tearing down, so skip the teardown
+            // calls below and intentionally leak instead of risking a segfault.
+            if (nvimgcodec::IsProcessExiting()) {
+                per_thread_.clear();
+                return;
+            }
+
             for (auto& res : per_thread_) {
                 const int npages = res.pages_.size();
                 for (int page_idx = 0; page_idx < npages; page_idx++) {
@@ -538,6 +547,16 @@ namespace nvjpeg {
                     status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED;
                     NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "YUV/YCC decoding is only supported if image is encoded without subsampling (444).");
                 }
+            }
+
+            // nvjpegImage_t has exactly NVJPEG_MAX_COMPONENT channel/pitch slots. Both num_planes and
+            // (for the I_YUV path, which promotes channels to planes) plane_info[0].num_channels end up
+            // driving the fill loop in decode(), so both have to be bounded before we accept the sample.
+            if (image_info.num_planes > NVJPEG_MAX_COMPONENT || image_info.plane_info[0].num_channels > NVJPEG_MAX_COMPONENT) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_,
+                                       "nvjpeg supports at most " << NVJPEG_MAX_COMPONENT << " components, got num_planes=" << image_info.num_planes
+                                                                  << ", num_channels=" << image_info.plane_info[0].num_channels);
+                status |= NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED;
             }
 
             for (uint32_t p = 0; p < image_info.num_planes; ++p) {
@@ -796,6 +815,15 @@ namespace nvjpeg {
             nvjpegImage_t nvjpeg_image;
             unsigned char* ptr = reinterpret_cast<unsigned char*>(decoded_image_info.buffer);
 
+            // canDecode() rejects this, but decode() is reachable directly through the C API, so the
+            // bound on the fixed-size nvjpegImage_t arrays is re-checked here rather than assumed.
+            if (decoded_image_info.num_planes > NVJPEG_MAX_COMPONENT) {
+                NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                     "Too many planes for nvjpeg: " << decoded_image_info.num_planes << " > " << NVJPEG_MAX_COMPONENT);
+                image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED);
+                return NVIMGCODEC_STATUS_EXECUTION_FAILED;
+            }
+
             for (uint32_t c = 0; c < decoded_image_info.num_planes; ++c) {
                 nvjpeg_image.channel[c] = ptr;
                 nvjpeg_image.pitch[c] = decoded_image_info.plane_info[c].row_stride;
@@ -868,6 +896,13 @@ namespace nvjpeg {
             return NVIMGCODEC_STATUS_SUCCESS;
         } catch (const NvJpegException& e) {
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not decode jpeg code stream - " << e.info());
+            image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+            return NVIMGCODEC_STATUS_SUCCESS;
+        } catch (const std::exception& e) {
+            // Anything that is not an NvJpegException (std::bad_alloc from the I_YUV helper buffer,
+            // std::logic_error / std::out_of_range from helpers, ...) would otherwise unwind past
+            // decode() and reach static_decode_sample with the sample still UNKNOWN.
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not decode jpeg code stream - " << e.what());
             image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
             return NVIMGCODEC_STATUS_SUCCESS;
         }

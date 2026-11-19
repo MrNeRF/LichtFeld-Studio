@@ -201,11 +201,23 @@ namespace nvimgcodec {
         codestream_info_.struct_next = &codestream_info_tiff_ext_;
     }
 
+    // The chained extension structs are supplied by the application, so their declared struct_size
+    // is the only thing telling us how much of the caller's buffer we may touch. Refuse to copy a
+    // whole T into a buffer the caller says is smaller than T. A larger struct_size is accepted: that
+    // is a caller built against a newer header, and writing the sizeof(T) prefix we know about stays
+    // in bounds and leaves their trailing fields alone. struct_size and struct_next are preserved so
+    // the copy does not rewrite the caller's own description of its buffer.
     template <typename T>
-    void copy(T& dst, const T& src) {
+    bool copy(T& dst, const T& src) {
+        if (dst.struct_size < sizeof(T)) {
+            return false;
+        }
         void* struct_next = dst.struct_next;
+        size_t struct_size = dst.struct_size;
         dst = src;
         dst.struct_next = struct_next;
+        dst.struct_size = struct_size;
+        return true;
     }
 
     nvimgcodecStatus_t CodeStream::ensureCodeStreamInfoParsed() {
@@ -294,9 +306,17 @@ namespace nvimgcodec {
             auto* next_struct_next = base->struct_next;
             switch (base->struct_type) {
             case NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO:
-                // Copy whole struct and fix the pointer (future-proof for new members)
-                *base = codestream_info_tiff_ext_;
-                base->struct_next = next_struct_next;
+                // Copy whole struct and fix the pointer (future-proof for new members).
+                // Only safe if the caller's buffer is at least this struct's size.
+                if (base->struct_size < sizeof(nvimgcodecCodeStreamInfoTiffExt_t)) {
+                    return NVIMGCODEC_STATUS_INVALID_PARAMETER;
+                }
+                {
+                    size_t struct_size = base->struct_size;
+                    *base = codestream_info_tiff_ext_;
+                    base->struct_next = next_struct_next;
+                    base->struct_size = struct_size;
+                }
                 break;
             default:
                 break;
@@ -324,10 +344,12 @@ namespace nvimgcodec {
             auto* next_struct_next = ptr->struct_next;
             switch (ptr->struct_type) {
             case NVIMGCODEC_STRUCTURE_TYPE_TILE_GEOMETRY_INFO:
-                copy(*reinterpret_cast<nvimgcodecTileGeometryInfo_t*>(ptr), tile_geometry_info_);
+                if (!copy(*reinterpret_cast<nvimgcodecTileGeometryInfo_t*>(ptr), tile_geometry_info_))
+                    return NVIMGCODEC_STATUS_INVALID_PARAMETER;
                 break;
             case NVIMGCODEC_STRUCTURE_TYPE_JPEG_IMAGE_INFO:
-                copy(*reinterpret_cast<nvimgcodecJpegImageInfo_t*>(ptr), jpeg_info_);
+                if (!copy(*reinterpret_cast<nvimgcodecJpegImageInfo_t*>(ptr), jpeg_info_))
+                    return NVIMGCODEC_STATUS_INVALID_PARAMETER;
                 break;
             default:
                 return NVIMGCODEC_STATUS_INVALID_PARAMETER;
@@ -346,14 +368,21 @@ namespace nvimgcodec {
         while (struct_next) {
             auto* ptr = reinterpret_cast<nvimgcodecImageInfo_t*>(struct_next);
             switch (ptr->struct_type) {
-            case NVIMGCODEC_STRUCTURE_TYPE_TILE_GEOMETRY_INFO:
-                copy(tile_geometry_info_, *reinterpret_cast<nvimgcodecTileGeometryInfo_t*>(ptr));
-                break;
-            case NVIMGCODEC_STRUCTURE_TYPE_JPEG_IMAGE_INFO:
-                copy(jpeg_info_, *reinterpret_cast<nvimgcodecJpegImageInfo_t*>(ptr));
-                break;
+            case NVIMGCODEC_STRUCTURE_TYPE_TILE_GEOMETRY_INFO: {
+                auto* src = reinterpret_cast<nvimgcodecTileGeometryInfo_t*>(ptr);
+                if (src->struct_size < sizeof(nvimgcodecTileGeometryInfo_t))
+                    return NVIMGCODEC_STATUS_INVALID_PARAMETER;
+                copy(tile_geometry_info_, *src);
+            } break;
+            case NVIMGCODEC_STRUCTURE_TYPE_JPEG_IMAGE_INFO: {
+                auto* src = reinterpret_cast<nvimgcodecJpegImageInfo_t*>(ptr);
+                if (src->struct_size < sizeof(nvimgcodecJpegImageInfo_t))
+                    return NVIMGCODEC_STATUS_INVALID_PARAMETER;
+                copy(jpeg_info_, *src);
+            } break;
             default:
-                assert(false);
+                // An unknown chained struct is an application error, not something to abort on.
+                return NVIMGCODEC_STATUS_INVALID_PARAMETER;
             }
             struct_next = ptr->struct_next;
         }

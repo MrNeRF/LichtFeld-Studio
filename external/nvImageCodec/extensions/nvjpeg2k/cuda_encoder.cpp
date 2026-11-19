@@ -16,8 +16,10 @@
  */
 #define NOMINMAX
 #include "cuda_encoder.h"
+#include "encoder_output.h"
 #include "error_handling.h"
 #include "imgproc/device_buffer.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "imgproc/pinned_buffer.h"
 #include "log.h"
@@ -56,7 +58,7 @@ namespace nvjpeg2k {
                 XM_CHECK_NULL(encoder);
                 auto handle = reinterpret_cast<EncoderImpl*>(encoder);
                 return handle->canEncode(code_stream, image, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_PROCESSING_STATUS_FAIL;
             }
         }
@@ -69,7 +71,7 @@ namespace nvjpeg2k {
                 XM_CHECK_NULL(encoder);
                 auto handle = reinterpret_cast<EncoderImpl*>(encoder);
                 return handle->encode(code_stream, image, params, thread_idx);
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_EXECUTION_FAILED;
             }
         }
@@ -89,22 +91,24 @@ namespace nvjpeg2k {
             const nvimgcodecExecutionParams_t* exec_params_;
 
             PinnedBuffer pinned_buffer_;
-            cudaEvent_t event_;
             nvjpeg2kEncodeState_t state_;
 
             PerThreadResources(const nvimgcodecFrameworkDesc_t* framework, const char* plugin_id, nvjpeg2kEncoder_t handle,
                                const nvimgcodecExecutionParams_t* exec_params)
-                : framework_(framework), plugin_id_(plugin_id), handle_(handle), exec_params_(exec_params), pinned_buffer_(exec_params ? exec_params->pinned_allocator : nullptr), event_(nullptr), state_(nullptr) {
-                XM_CHECK_CUDA(cudaEventCreateWithFlags(&event_, cudaEventDisableTiming));
+                : framework_(framework), plugin_id_(plugin_id), handle_(handle), exec_params_(exec_params), pinned_buffer_(exec_params ? exec_params->pinned_allocator : nullptr), state_(nullptr) {
                 XM_CHECK_NVJPEG2K(nvjpeg2kEncodeStateCreate(handle_, &state_));
             }
 
             ~PerThreadResources() {
+                // See imgproc/exit_guard.h: at process exit, the CUDA driver or
+                // the nvJPEG2000 library may already be tearing down, so skip
+                // the teardown call below and intentionally leak instead of
+                // risking a segfault.
+                if (nvimgcodec::IsProcessExiting()) {
+                    return;
+                }
                 if (state_) {
                     XM_NVJPEG2K_LOG_DESTROY(nvjpeg2kEncodeStateDestroy(state_));
-                }
-                if (event_) {
-                    XM_CUDA_LOG_DESTROY(cudaEventDestroy(event_));
                 }
             }
         };
@@ -279,6 +283,9 @@ namespace nvjpeg2k {
             if (!nvimgcodec::check_planes_consistency(framework_, plugin_id_, image_info)) {
                 status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_TYPE_UNSUPPORTED;
             }
+            if (!nvimgcodec::check_orientation_supported(framework_, plugin_id_, image_info, out_image_info)) {
+                status |= NVIMGCODEC_PROCESSING_STATUS_ORIENTATION_UNSUPPORTED;
+            }
 
             static const std::set<nvimgcodecQualityType_t> supported_quality_types{
                 NVIMGCODEC_QUALITY_TYPE_DEFAULT,
@@ -330,6 +337,7 @@ namespace nvjpeg2k {
     EncoderImpl::EncoderImpl(
         const char* id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
         : plugin_id_(id), framework_(framework), device_id_(0), exec_params_(exec_params), options_(options), nvjpeg2k_version_(get_nvjpeg2k_version()) {
+        (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any encoder lives
         if (!nvjpeg2k_version_) {
             throw NvJpeg2kException(NVIMGCODEC_STATUS_EXTENSION_EXECUTION_FAILED, "Failed to get nvJPEG2000 version");
         }
@@ -379,7 +387,9 @@ namespace nvjpeg2k {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "nvjpeg2k_destroy_encoder");
             per_thread_.clear();
-            if (handle_)
+            // See imgproc/exit_guard.h: skip nvjpeg2kEncoderDestroy at process
+            // exit, since the nvJPEG2000 library may already be tearing down.
+            if (handle_ && !nvimgcodec::IsProcessExiting())
                 XM_CHECK_NVJPEG2K(nvjpeg2kEncoderDestroy(handle_));
         } catch (const NvJpeg2kException& e) {
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not properly destroy nvjpeg2k encoder - " << e.info());
@@ -474,10 +484,44 @@ namespace nvjpeg2k {
         return attr.type == cudaMemoryTypeHost;
     }
 
+    static void check_io_status(nvimgcodecStatus_t status, const char* operation) {
+        if (status != NVIMGCODEC_STATUS_SUCCESS)
+            throw NvJpeg2kException(status, std::string(operation) + " failed with status " + std::to_string(status));
+    }
+
     nvimgcodecStatus_t EncoderImpl::encode(const nvimgcodecCodeStreamDesc_t* code_stream,
                                            const nvimgcodecImageDesc_t* image, const nvimgcodecEncodeParams_t* params, int thread_idx) {
         auto& t = per_thread_[thread_idx];
         auto state_handle = t.state_;
+
+        nvimgcodecIoStreamDesc_t* mapped_io_stream = nullptr;
+        void* mapped_data = nullptr;
+        size_t mapped_capacity = 0;
+        cudaStream_t encode_stream = nullptr;
+        bool gpu_work_pending = false;
+        auto cleanup_output = [&]() noexcept {
+            // Encode and retrieval can both queue CUDA work. Even failures before
+            // mapping or retrieval must finish that work before input/output buffers
+            // and the per-thread encoder state can be released or reused.
+            if (gpu_work_pending) {
+                cudaError_t sync_status = cudaStreamSynchronize(encode_stream);
+                gpu_work_pending = false;
+                if (sync_status != cudaSuccess) {
+                    NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                         "Could not synchronize nvJPEG2K encode work during cleanup: " << cudaGetErrorString(sync_status));
+                    (void)cudaGetLastError();
+                }
+            }
+
+            if (!mapped_data)
+                return;
+
+            auto unmap_status = detail::unmap_output(mapped_io_stream, mapped_data, mapped_capacity);
+            if (unmap_status != NVIMGCODEC_STATUS_SUCCESS) {
+                NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                     "Could not unmap nvJPEG2K output during cleanup, status=" << unmap_status);
+            }
+        };
 
         try {
             XM_CHECK_NULL(image);
@@ -607,48 +651,58 @@ namespace nvjpeg2k {
             nvjpeg2kImageFormat_t format = image_info.num_planes == 1 ? NVJPEG2K_FORMAT_INTERLEAVED : NVJPEG2K_FORMAT_PLANAR;
             XM_CHECK_NVJPEG2K(nvjpeg2kEncodeParamsSetInputFormat(encode_params.get(), format));
 
-            XM_CHECK_NVJPEG2K(nvjpeg2kEncode(handle_, state_handle, encode_params.get(), &input_image, image_info.cuda_stream));
-            XM_CHECK_CUDA(cudaEventRecord(t.event_, image_info.cuda_stream));
-            XM_CHECK_CUDA(cudaEventSynchronize(t.event_));
+            encode_stream = image_info.cuda_stream;
+            // Mark pending before the call: encode may queue work and then fail.
+            gpu_work_pending = true;
+            XM_CHECK_NVJPEG2K(nvjpeg2kEncode(handle_, state_handle, encode_params.get(), &input_image, encode_stream));
 
-            size_t length;
-            XM_CHECK_NVJPEG2K(nvjpeg2kEncodeRetrieveBitstream(handle_, state_handle, NULL, &length, image_info.cuda_stream));
+            // No extra host wait here; same-stream retrieval is synchronized below.
+            XM_CHECK_NVJPEG2K(
+                nvjpeg2kEncodeRetrieveBitstream(handle_, state_handle, NULL, &mapped_capacity, encode_stream));
 
             nvimgcodecIoStreamDesc_t* io_stream = code_stream->io_stream;
 
-            io_stream->reserve(io_stream->instance, length);
-            void* encoded_data = nullptr;
-            if (io_stream->map(io_stream->instance, &encoded_data, 0, length) !=
-                NVIMGCODEC_STATUS_SUCCESS) {
-                image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_IMAGE_CORRUPTED);
-                return NVIMGCODEC_STATUS_EXECUTION_FAILED;
-            }
-            bool is_pinned = is_buffer_pinned(encoded_data);
-            if (encoded_data == nullptr || !is_pinned) {
+            check_io_status(io_stream->reserve(io_stream->instance, mapped_capacity), "output reserve");
+            mapped_io_stream = io_stream;
+            check_io_status(io_stream->map(io_stream->instance, &mapped_data, 0, mapped_capacity), "output map");
+
+            const bool use_fallback = !is_buffer_pinned(mapped_data);
+            void* output_buffer = mapped_data;
+            if (use_fallback) {
                 NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, "Output buffer is not pinned, copying to pinned buffer");
-                t.pinned_buffer_.resize(length, image_info.cuda_stream);
-                XM_CHECK_NVJPEG2K(nvjpeg2kEncodeRetrieveBitstream(
-                    handle_, state_handle, static_cast<uint8_t*>(t.pinned_buffer_.data), &length, image_info.cuda_stream));
-
-                XM_CHECK_CUDA(cudaStreamSynchronize(image_info.cuda_stream));
-
-                size_t output_size;
-                io_stream->seek(io_stream->instance, 0, SEEK_SET);
-                io_stream->write(io_stream->instance, &output_size, t.pinned_buffer_.data, t.pinned_buffer_.size);
-                io_stream->flush(io_stream->instance);
-            } else {
-                NVIMGCODEC_LOG_DEBUG(framework_, plugin_id_, "Output buffer is pinned, using it");
-                XM_CHECK_NVJPEG2K(nvjpeg2kEncodeRetrieveBitstream(
-                    handle_, state_handle, static_cast<uint8_t*>(encoded_data), &length, image_info.cuda_stream));
-                XM_CHECK_CUDA(cudaStreamSynchronize(image_info.cuda_stream));
+                t.pinned_buffer_.resize(mapped_capacity, encode_stream);
+                output_buffer = t.pinned_buffer_.data;
             }
 
-            io_stream->unmap(io_stream->instance, encoded_data, length);
+            size_t produced_length = mapped_capacity;
+            XM_CHECK_NVJPEG2K(nvjpeg2kEncodeRetrieveBitstream(
+                handle_, state_handle, static_cast<uint8_t*>(output_buffer), &produced_length, encode_stream));
+            XM_CHECK_CUDA(cudaStreamSynchronize(encode_stream));
+            gpu_work_pending = false;
+
+            check_io_status(detail::finalize_output(io_stream, mapped_data, mapped_capacity,
+                                                    produced_length, use_fallback ? output_buffer : nullptr),
+                            "output finalization");
+
             image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
             return NVIMGCODEC_STATUS_SUCCESS;
         } catch (const NvJpeg2kException& e) {
+            cleanup_output();
             NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not encode jpeg2k code stream - " << e.info());
-            image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+            if (image)
+                image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+            return NVIMGCODEC_STATUS_EXECUTION_FAILED;
+        } catch (const std::exception& e) {
+            cleanup_output();
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not encode jpeg2k code stream - " << e.what());
+            if (image)
+                image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
+            return NVIMGCODEC_STATUS_EXECUTION_FAILED;
+        } catch (...) {
+            cleanup_output();
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not encode jpeg2k code stream - unknown exception");
+            if (image)
+                image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_FAIL);
             return NVIMGCODEC_STATUS_EXECUTION_FAILED;
         }
     }
