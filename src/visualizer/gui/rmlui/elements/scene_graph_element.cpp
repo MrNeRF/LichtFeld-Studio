@@ -2282,7 +2282,7 @@ namespace lfs::vis::gui {
         markStateDirty();
     }
 
-    bool SceneGraphElement::hasSelectedCamerasInGroup(const core::NodeId node_id) const {
+    bool SceneGraphElement::selectionContainsOnlyCamerasInGroup(const core::NodeId node_id) const {
         const auto group = node_snapshots_.find(node_id);
         if (group == node_snapshots_.end() || group->second.type != core::NodeType::CAMERA_GROUP || selected_ids_.empty())
             return false;
@@ -2302,7 +2302,7 @@ namespace lfs::vis::gui {
             return;
 
         focusTree();
-        if (!selected_ids_.contains(node_id) && !hasSelectedCamerasInGroup(node_id)) {
+        if (!selected_ids_.contains(node_id) && !selectionContainsOnlyCamerasInGroup(node_id)) {
             scene_manager->selectNode(node_id);
             selected_ids_.clear();
             selected_ids_.insert(node_id);
@@ -3147,7 +3147,7 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
-        const bool selected_cameras_in_group = hasSelectedCamerasInGroup(node_id);
+        const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
         if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
@@ -3439,7 +3439,7 @@ namespace lfs::vis::gui {
 
         const std::string& kind = parts[0];
         if (kind == "select_hierarchy") {
-            if (hasSelectedCamerasInGroup(context_menu_node_id_))
+            if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
                 selectHierarchy(context_menu_node_id_);
             else
                 selectHierarchyFromSelection();
