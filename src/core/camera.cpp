@@ -402,7 +402,8 @@ namespace lfs::core {
           _image_size_loaded(other._image_size_loaded),
           _source_image_width(other._source_image_width),
           _source_image_height(other._source_image_height),
-          _cam_position(other._cam_position),
+          // Its own position, like the transform the caller hands it: moving one camera never moves the other.
+          _cam_position(other._cam_position.is_valid() ? other._cam_position.clone() : Tensor{}),
           _FoVx(other._FoVx),
           _FoVy(other._FoVy) {
         _world_view_transform = transform;

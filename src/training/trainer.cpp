@@ -9154,7 +9154,8 @@ namespace lfs::training {
 
     EvalMetrics Trainer::evaluate_model(const int iteration, lfs::io::PipelinedImageLoader* image_loader,
                                         std::function<bool()> on_view_boundary) {
-        // The training cameras moved with the model; score the held-out views from where they fit it best.
+        // The training cameras moved with the model; score the held-out views from where they fit it best. The fit works
+        // on copies of the cameras, so only apply() and restore() need the viewer out.
         std::optional<RefittedCameraPoses> refit;
         if (pose_refinement_ && val_dataset_ && !params_.optimization.eval_all) {
             refit.emplace(held_out_pose_groups_, strategy_->get_model(), background_,
@@ -9163,6 +9164,10 @@ namespace lfs::training {
                               .max_width = params_.dataset.max_width,
                               .lambda_dssim = params_.optimization.lambda_dssim,
                               .mip_filter = params_.optimization.mip_filter,
+                              .mask_mode = params_.optimization.mask_mode,
+                              .invert_masks = params_.optimization.invert_masks,
+                              .mask_threshold = params_.optimization.mask_threshold,
+                              .use_alpha_as_mask = params_.optimization.use_alpha_as_mask,
                           });
             std::unique_lock render_lock(render_mutex_);
             refit->apply();

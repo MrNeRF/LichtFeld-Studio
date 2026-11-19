@@ -13,7 +13,9 @@
 #include "io/formats/colmap.hpp"
 #include "kernels/camera_pose.hpp"
 #include "kernels/camera_pose_math.hpp"
+#include "kernels/image_kernels.hpp"
 #include "losses/photometric_loss.hpp"
+#include "metrics/eval_mask.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 
 #include <algorithm>
@@ -73,6 +75,47 @@ namespace lfs::training {
                 Tensor::from_vector({w2c[0], w2c[1], w2c[2], w2c[4], w2c[5], w2c[6], w2c[8], w2c[9], w2c[10]}, {3, 3},
                                     Device::CPU),
                 Tensor::from_vector({w2c[3], w2c[7], w2c[11]}, {3}, Device::CPU), stream, centre);
+        }
+
+        // The photograph of `camera` as training fits it: the target on the drawn grid, and a [H, W] weight that is zero
+        // where the dataset's masks (mask files, or alpha as mask) leave pixels out. With alpha and no mask mode the
+        // target is composited over the background, as the training target is.
+        std::pair<Tensor, Tensor> load_target(lfs::core::Camera& camera, const Tensor& background,
+                                              const RefittedCameraPoses::Settings& settings) {
+            using lfs::core::param::MaskMode;
+            const bool undistort = camera.is_undistort_prepared();
+            auto target = lfs::io::CacheLoader::getInstance().load_cached_image(
+                camera.image_path(),
+                lfs::io::LoadParams{
+                    .resize_factor = settings.resize_factor,
+                    .max_width = settings.max_width,
+                    .cuda_stream = lfs::core::getCurrentCUDAStream(),
+                    .undistort = undistort ? &camera.undistort_params() : nullptr,
+                    // Held-out photographs stay out of the image cache the training images use.
+                    .skip_blob_cache = true,
+                });
+            if (target.device() != Device::CUDA)
+                target = target.to(Device::CUDA);
+            const MetricsMaskLoadConfig masks{
+                .resize_factor = settings.resize_factor,
+                .max_width = settings.max_width,
+                .invert_masks = settings.invert_masks,
+                .mask_threshold = settings.mask_threshold,
+                .mask_mode = settings.mask_mode,
+                .apply_undistortion = undistort,
+                .replace_gt_image = false,
+            };
+            const bool alpha = settings.use_alpha_as_mask && camera.has_alpha();
+            Tensor weight;
+            if (settings.mask_mode == MaskMode::Segment || settings.mask_mode == MaskMode::Ignore ||
+                settings.mask_mode == MaskMode::SegmentAndIgnore) {
+                weight = load_eval_mask(&camera, target, alpha, masks);
+                if (weight.is_valid())
+                    weight = weight.to(lfs::core::DataType::Float32);
+            } else if (settings.mask_mode == MaskMode::None && alpha) {
+                target = kernels::composite_over_background(target, load_eval_alpha(camera, masks), background);
+            }
+            return {std::move(target), std::move(weight)};
         }
 
         struct Spread {
@@ -166,7 +209,10 @@ namespace lfs::training {
     }
 
     void CameraPoseOffsets::commit() {
-        const auto state = download();
+        commit(download());
+    }
+
+    void CameraPoseOffsets::commit(const HostState& state) {
         for (size_t row = 0; row < groups_.size(); ++row) {
             const float* off = state.offsets.data() + 6 * row;
             if (state.steps[row] == 0.0f)
@@ -280,55 +326,73 @@ namespace lfs::training {
                                              lfs::core::Tensor& background,
                                              const Settings& settings)
         : offsets_(std::move(groups)) {
-        try {
-            refit(model, background, settings);
-        } catch (...) {
-            offsets_.restore_start_poses();
-            throw;
+        for (const auto& group : offsets_.groups()) {
+            const auto row = refit(group, model, background, settings);
+            fitted_.offsets.insert(fitted_.offsets.end(), row.offsets.begin(), row.offsets.end());
+            fitted_.steps.insert(fitted_.steps.end(), row.steps.begin(), row.steps.end());
         }
     }
 
-    void RefittedCameraPoses::refit(lfs::core::SplatData& model, lfs::core::Tensor& background,
-                                    const Settings& settings) {
+    CameraPoseOffsets::HostState RefittedCameraPoses::refit(const core::CameraViewGroup& group,
+                                                            lfs::core::SplatData& model,
+                                                            lfs::core::Tensor& background,
+                                                            const Settings& settings) {
+        // The steps move the device pose of the cameras they draw, so they draw private copies: the scene's cameras,
+        // which the viewer reads, keep their poses until apply().
+        core::CameraViewGroup copies{.photograph = group.photograph, .drawn = {}};
+        std::vector<Tensor> targets, weights;
+        for (const auto& camera : group.drawn) {
+            auto copy = std::make_shared<lfs::core::Camera>(*camera, camera->world_view_transform().clone());
+            if (!copy->image_size_loaded())
+                copy->load_image_size(settings.resize_factor, settings.max_width);
+            auto [target, weight] = load_target(*camera, background, settings);
+            if (weight.is_valid() && (weight.ndim() != 2 || weight.shape()[0] != target.shape()[1] ||
+                                      weight.shape()[1] != target.shape()[2]))
+                throw std::runtime_error(std::format("the mask of '{}' does not match its image", camera->image_name()));
+            targets.push_back(std::move(target));
+            weights.push_back(std::move(weight));
+            if (camera == group.photograph)
+                copies.photograph = copy;
+            copies.drawn.push_back(std::move(copy));
+        }
+        CameraPoseOffsets offsets({std::move(copies)});
+        const auto& drawn = offsets.groups().front().drawn;
         losses::PhotometricLoss loss;
-        auto& loader = lfs::io::CacheLoader::getInstance();
-        for (const auto& group : offsets_.groups()) {
-            std::vector<Tensor> targets;
-            for (const auto& camera : group.drawn) {
-                if (!camera->image_size_loaded())
-                    camera->load_image_size(settings.resize_factor, settings.max_width);
-                auto target = loader.load_cached_image(
-                    camera->image_path(),
-                    lfs::io::LoadParams{
-                        .resize_factor = settings.resize_factor,
-                        .max_width = settings.max_width,
-                        .cuda_stream = lfs::core::getCurrentCUDAStream(),
-                        .undistort = camera->is_undistort_prepared() ? &camera->undistort_params() : nullptr,
-                    });
-                targets.push_back(target.device() == Device::CUDA ? std::move(target) : target.to(Device::CUDA));
-            }
-            for (int k = 0; k < kRefitSteps; ++k) {
-                const auto draw = k % group.drawn.size();
-                auto& camera = *group.drawn[draw];
-                const auto& target = targets[draw];
-                auto forward = fast_rasterize_forward(camera, model, background, 0, 0, 0, 0, settings.mip_filter, {},
-                                                      /*render_normal=*/false, /*render_depth=*/false,
-                                                      /*dilation_scale=*/1.0f, /*update_screen_share=*/false);
-                if (!forward)
-                    throw std::runtime_error(std::format("refit render of '{}' failed: {}", camera.image_name(),
-                                                         lfs::format_for_developer(forward.error())));
-                auto& [output, ctx] = *forward;
+        for (int k = 0; k < kRefitSteps; ++k) {
+            const auto draw = k % drawn.size();
+            auto& camera = *drawn[draw];
+            const auto& target = targets[draw];
+            const auto& weight = weights[draw];
+            auto forward = fast_rasterize_forward(camera, model, background, 0, 0, 0, 0, settings.mip_filter, {},
+                                                  /*render_normal=*/false, /*render_depth=*/false,
+                                                  /*dilation_scale=*/1.0f, /*update_screen_share=*/false);
+            if (!forward)
+                throw std::runtime_error(std::format("refit render of '{}' failed: {}", camera.image_name(),
+                                                     lfs::format_for_developer(forward.error())));
+            auto& [output, ctx] = *forward;
+            Tensor grad_image;
+            if (weight.is_valid()) {
+                // Pixels the masks leave out carry no weight, as in training.
+                output.image.sync_to_stream(lfs::core::getCurrentCUDAStream());
+                auto& workspace = loss.arena().masked_fused();
+                auto [value, loss_ctx] = kernels::masked_fused_l1_ssim_forward(output.image, target, weight,
+                                                                               settings.lambda_dssim, workspace);
+                grad_image = kernels::masked_fused_l1_ssim_backward(loss_ctx, workspace);
+                if (grad_image.ndim() == 4)
+                    grad_image = grad_image.squeeze(0);
+            } else {
                 auto photometric = loss.forward(output.image, target, {.lambda_dssim = settings.lambda_dssim});
                 if (!photometric)
                     throw std::runtime_error(std::format("refit loss of '{}' failed: {}", camera.image_name(),
                                                          photometric.error()));
-                const cudaStream_t backward_stream = ctx.forward_ctx.stream;
-                fast_rasterize_camera_backward(ctx, photometric->second.grad_image, model, offsets_.grad_w2c(),
-                                               offsets_.grad_cam_position());
-                const float r = pose_rate(k, 0, kRefitSteps / 2, kRefitSteps - 1);
-                offsets_.step(camera, kRotationLr * r, kTranslationLr * r, backward_stream);
+                grad_image = photometric->second.grad_image;
             }
+            const cudaStream_t backward_stream = ctx.forward_ctx.stream;
+            fast_rasterize_camera_backward(ctx, grad_image, model, offsets.grad_w2c(), offsets.grad_cam_position());
+            const float r = pose_rate(k, 0, kRefitSteps / 2, kRefitSteps - 1);
+            offsets.step(camera, kRotationLr * r, kTranslationLr * r, backward_stream);
         }
+        return offsets.download();
     }
 
     lfs::Status write_scene_cameras_colmap(const lfs::core::Scene& scene,
