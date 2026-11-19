@@ -11,10 +11,11 @@ namespace lfs::training {
     using namespace core;
 
     CalibrationCorrection::CalibrationCorrection(int slots)
-        : CalibrationCorrection(slots, grid) {}
+        : CalibrationCorrection(slots, training_step) {}
 
-    CalibrationCorrection::CalibrationCorrection(int slots, int side)
-        : field_(Tensor::zeros({static_cast<size_t>(slots), size_t(side), size_t(side), 2}, Device::CUDA)) {}
+    CalibrationCorrection::CalibrationCorrection(int slots, float step)
+        : step_(step),
+          field_(Tensor::zeros({static_cast<size_t>(slots), size_t(grid), size_t(grid), 2}, Device::CUDA)) {}
 
     CalibrationCorrection::Lens CalibrationCorrection::lens(CameraModelType model, float fx, float fy, int width, int height) {
         // An equirectangular camera carries only a placeholder focal length.
@@ -59,7 +60,7 @@ namespace lfs::training {
             levels.push_back({half(level.render), half(level.photo), std::move(included)});
         }
 
-        CalibrationCorrection fit(1, scoring_grid);
+        CalibrationCorrection fit(1, scoring_step);
         Tensor unused_mask, structure, edge, no_gradient;
         auto sample = [&](const Tensor& source, float scale) {
             return fit.sample_image(0, scale, scale, 0, 0, source, source, unused_mask, structure, edge, true);

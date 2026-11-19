@@ -13,13 +13,13 @@ namespace lfs::training {
         constexpr int threads = 128, chunk = 512;
         constexpr int partial_size = 4 * 5 + 1; // Four corner systems and an exact residual-presence bit.
         constexpr float epsilon = .03f;
+        // One solver for training and the scoring alignment; only the share of each step they take differs.
         struct Solver {
-            float smoothness, prior, damping, max_pixels, fraction;
+            float smoothness, prior, damping, max_pixels;
             float reach = 0; // Largest displacement as a share of the image's short side; zero is unlimited.
         };
-        // A photo the scene cannot explain (occluded, defocused) must not drift without limit: training keeps the
-        // scoring fit's bound.
-        constexpr Solver training{.05f, .01f, .1f, 1.5f, .5f, .05f}, scoring{.02f, 0.f, .1f, 1.5f, 1.f, .05f};
+        // A photo the scene cannot explain (occluded, defocused) must not drift without limit.
+        constexpr Solver constants{.05f, .01f, .1f, 1.5f, .05f};
 
         struct Location {
             int cell;
@@ -297,7 +297,7 @@ namespace lfs::training {
                 dst = first ? sum : dst + sum;
             }
         }
-        __global__ void update_row(float2* row, const float* partials, int chunks, Tile t, Solver solver) {
+        __global__ void update_row(float2* row, const float* partials, int chunks, Tile t, Solver solver, float step) {
             const int side = t.side, cells = side - 1, points = side * side;
             const int i = threadIdx.x, x = i % side, y = i / side;
             extern __shared__ float2 shared[];
@@ -354,7 +354,7 @@ namespace lfs::training {
             const float dx = (c * gx - b * gy) / det, dy = (a * gy - b * gx) / det;
             const float length = hypotf(dx * t.sx, dy * t.sy);
             if (isfinite(length)) {
-                const float scale = solver.fraction * (length > solver.max_pixels ? solver.max_pixels / length : 1.f);
+                const float scale = step * (length > solver.max_pixels ? solver.max_pixels / length : 1.f);
                 float2 moved = make_float2(old[i].x - scale * dx, old[i].y - scale * dy);
                 const float reach = hypotf(moved.x * t.sx, moved.y * t.sy), limit = solver.reach * min(t.width, t.height);
                 if (limit > 0 && reach > limit)
@@ -503,8 +503,8 @@ namespace lfs::training {
         const auto stream = getCurrentCUDAStream();
         const int points = tile_.side * tile_.side;
         auto row = reinterpret_cast<float2*>(field_.ptr<float>()) + slot_ * points;
-        update_row<<<1, points, 3 * points * sizeof(float), stream>>>(row, partials_.ptr<float>(), chunks_for(tile_), tile_,
-                                                                      tile_.side == grid ? training : scoring);
+        update_row<<<1, points, 3 * points * sizeof(float), stream>>>(row, partials_.ptr<float>(), chunks_for(tile_), tile_, constants,
+                                                                      step_);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.calibration.update");
     }
 } // namespace lfs::training

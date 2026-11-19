@@ -56,7 +56,8 @@ namespace lfs::training {
         static bool report_due(int iteration, int total_iterations, int start_iteration);
         void report(int iteration) const;
 
-        // The returned image and displacement grid are in the photograph's scoring coordinates.
+        // The returned image and displacement grid are in the photograph's scoring coordinates. The fit uses the
+        // training grid and solver with full steps, so it corrects what training can correct, not more.
         static core::Tensor align_for_scoring(const core::Tensor& render, const core::Tensor& photo,
                                               const core::Tensor& mask, core::Tensor& displacement, core::Tensor* raw = nullptr);
 
@@ -67,8 +68,10 @@ namespace lfs::training {
         };
 
     private:
-        static constexpr int scoring_grid = 16;
-        CalibrationCorrection(int slots, int side);
+        // The share of each solved step an update takes: half in training, the full step in the scoring alignment, which
+        // runs a fixed number of iterations.
+        static constexpr float training_step = .5f, scoring_step = 1.f;
+        CalibrationCorrection(int slots, float step);
         core::Tensor sample_image(int slot, float sx, float sy, int x, int y, const core::Tensor& source,
                                   const core::Tensor& fallback, core::Tensor& mask, core::Tensor& structure,
                                   core::Tensor& edge, bool first_tile, const Composite* composite = nullptr,
@@ -76,6 +79,7 @@ namespace lfs::training {
         Tile tile_{};
         int slot_ = 0;
         bool first_tile_ = true;
+        float step_;
         core::Tensor field_, image_, mask_, structure_, edge_, partials_, gradient_;
     };
 } // namespace lfs::training

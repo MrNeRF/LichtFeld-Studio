@@ -260,18 +260,19 @@ TEST(CalibrationScoring, RecoversTranslationAndSmoothWarp) {
     auto image = scoring_image(false), target = scoring_image(true);
     Tensor field;
     auto aligned = CalibrationCorrection::align_for_scoring(image, target, {}, field);
-    ASSERT_EQ(field.shape()[1], 16);
+    constexpr int side = CalibrationCorrection::grid;
+    ASSERT_EQ(field.numel(), size_t(2 * side * side));
     const auto grid = field.to_vector();
     double squared = 0;
     for (int y = 0; y < scoring_height; ++y)
         for (int x = 0; x < scoring_width; ++x) {
-            const float u = (x + .5f) * 15 / scoring_width, v = (y + .5f) * 15 / scoring_height;
+            const float u = (x + .5f) * (side - 1) / scoring_width, v = (y + .5f) * (side - 1) / scoring_height;
             const auto shift = planted_shift(x, y);
             for (int c = 0; c < 2; ++c) {
                 double d = 0;
                 for (int j = int(v); j <= int(v) + 1; ++j)
                     for (int i = int(u); i <= int(u) + 1; ++i)
-                        d += (1 - std::abs(u - i)) * (1 - std::abs(v - j)) * grid[2 * (16 * j + i) + c];
+                        d += (1 - std::abs(u - i)) * (1 - std::abs(v - j)) * grid[2 * (side * j + i) + c];
                 squared += (d - shift[c]) * (d - shift[c]);
             }
         }
@@ -281,7 +282,9 @@ TEST(CalibrationScoring, RecoversTranslationAndSmoothWarp) {
         return (residual * residual).mean().item<float>();
     };
     const double gain = 10 * std::log10(mse(image) / mse(aligned));
-    EXPECT_LT(rms, .15);
+    // The training grid holds the planted field to .05 px rms at best; the pull to zero, strongest at the border where
+    // fewer pixels constrain the control points, costs the rest.
+    EXPECT_LT(rms, .2);
     EXPECT_GE(gain, 10.);
     RecordProperty("rms_px", std::to_string(rms));
     RecordProperty("gain_db", std::to_string(gain));
@@ -331,6 +334,13 @@ TEST(CalibrationScoring, BrightnessOffsetIsNotAShiftAndDisplacementIsBounded) {
     for (size_t i = 0; i < moved.size(); i += 2)
         reach = std::max(reach, std::hypot(moved[i], moved[i + 1]));
     EXPECT_LE(reach, .05f * scoring_height * 1.0001f);
+}
+
+// The alignment may correct what training can correct, not more: it fits the training grid.
+TEST(CalibrationScoring, DisplacementHasTheTrainingGrid) {
+    Tensor field;
+    CalibrationCorrection::align_for_scoring(scoring_image(false), scoring_image(true), {}, field);
+    EXPECT_EQ(field.shape().str(), TensorShape({1, CalibrationCorrection::grid, CalibrationCorrection::grid, 2}).str());
 }
 
 namespace {
