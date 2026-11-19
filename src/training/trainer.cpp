@@ -1344,11 +1344,18 @@ namespace lfs::training {
             const auto known = [&](const auto& id) {
                 return std::ranges::all_of(cameras, [&](const auto& camera) { return ppisp_->is_known_frame(id(camera->uid())); });
             };
-            if (!known(std::identity{}) && known(legacy)) {
+            // Earlier ids show as a frame beyond every id of this run, or as training views that are only known by
+            // their earlier ids.
+            const auto slots = camera_slot_count();
+            const bool beyond = slots && std::ranges::any_of(legacy_view_uids_, [&](const auto& ids) {
+                                    return ids.second >= *slots && ppisp_->is_known_frame(ids.second);
+                                });
+            if (beyond || (!known(std::identity{}) && known(legacy))) {
+                // Every view of the run is renamed, the held-out ones too: left alone, their earlier ids are the
+                // ids other views have now.
                 std::unordered_map<int, int> renamed;
-                for (const auto& camera : cameras)
-                    if (legacy(camera->uid()) != camera->uid())
-                        renamed.emplace(legacy(camera->uid()), camera->uid());
+                for (const auto& [uid, earlier] : legacy_view_uids_)
+                    renamed.emplace(earlier, uid);
                 if (ppisp_->rename_frames(renamed)) {
                     LOG_INFO("PPISP: mapped {} pinhole views from the ids of an earlier version", renamed.size());
                 } else {

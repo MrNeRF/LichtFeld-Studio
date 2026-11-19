@@ -46,6 +46,12 @@ namespace lfs::training {
         static std::unique_ptr<PPISP>& ppisp(Trainer& trainer) { return trainer.ppisp_; }
         static const std::unordered_map<int, int>& legacy(const Trainer& trainer) { return trainer.legacy_view_uids_; }
         static void adopt(Trainer& trainer) { trainer.adopt_legacy_view_uids(); }
+        // Leaves the views of `photograph` out of the training set, as a held-out split does.
+        static void hold_out(Trainer& trainer, const int photograph) {
+            auto cameras = trainer.train_dataset_->get_cameras();
+            std::erase_if(cameras, [&](const auto& camera) { return camera->photograph_uid() == photograph; });
+            trainer.train_dataset_ = std::make_shared<CameraDataset>(cameras, DatasetConfig{});
+        }
     };
 
     struct TrainerDepthAnchorTestAccess {
@@ -797,6 +803,52 @@ namespace {
             EXPECT_EQ(lfs::training::sort_and_fingerprint_popspa_cameras(current, &TrainerViewIdTestAccess::legacy(trainer)) ==
                           saved_fingerprint,
                       written_before);
+        }
+    }
+
+    // A resumed run may hold out photographs its checkpoint trained on. Their frames are renamed with the others:
+    // left alone, the earlier ids of one photograph's views are the ids the next photograph's views have now.
+    TEST(PanoramaViews, CheckpointFramesOfHeldOutViewsAreRenamedToo) {
+        using lfs::training::TrainerViewIdTestAccess;
+        Scene scene;
+        std::vector<std::shared_ptr<Camera>> cameras;
+        for (const int uid : {0, 1, 2, 3}) {
+            cameras.push_back(photograph(uid == 0 ? CameraModelType::PINHOLE : CameraModelType::EQUIRECTANGULAR, uid));
+            scene.addCamera(cameras.back()->image_name(), NULL_NODE, cameras.back());
+        }
+        lfs::training::Trainer trainer(scene);
+        ASSERT_NO_FATAL_FAILURE(TrainerViewIdTestAccess::train_through_views(trainer, cameras));
+        const auto& earlier = TrainerViewIdTestAccess::legacy(trainer);
+        // Photograph 1 had the ids 10..15, which photograph 2 has now.
+        ASSERT_EQ(earlier.size(), 18u);
+        ASSERT_EQ(earlier.at(4), 10);
+        ASSERT_EQ(earlier.at(10), 16);
+        const auto saved_id = [&](const Camera& camera) {
+            const auto it = earlier.find(camera.uid());
+            return it == earlier.end() ? camera.uid() : it->second;
+        };
+        const auto rgb = Tensor::full({3, 8, 8}, 0.5f, Device::CUDA);
+        auto& ppisp = TrainerViewIdTestAccess::ppisp(trainer);
+        ppisp = std::make_unique<lfs::training::PPISP>(100);
+        std::vector<std::pair<int, float>> exposures;
+        for (const auto& camera : cameras) {
+            ppisp->register_frame(saved_id(*camera), camera->camera_id());
+            exposures.emplace_back(saved_id(*camera), 0.1f * static_cast<float>(exposures.size()));
+        }
+        ppisp->finalize();
+        ppisp->seed_exposure(exposures);
+        std::vector<std::vector<float>> colours;
+        for (const auto& camera : cameras)
+            colours.push_back(ppisp->apply(rgb, camera->camera_id(), saved_id(*camera)).cpu().to_vector());
+        const auto* loaded = ppisp.get();
+
+        TrainerViewIdTestAccess::hold_out(trainer, 1);
+        TrainerViewIdTestAccess::adopt(trainer);
+        ASSERT_EQ(ppisp.get(), loaded);
+        for (size_t i = 0; i < cameras.size(); ++i) {
+            ASSERT_TRUE(ppisp->is_known_frame(cameras[i]->uid())) << cameras[i]->uid();
+            EXPECT_EQ(ppisp->apply(rgb, cameras[i]->camera_id(), cameras[i]->uid()).cpu().to_vector(), colours[i])
+                << cameras[i]->uid();
         }
     }
 
