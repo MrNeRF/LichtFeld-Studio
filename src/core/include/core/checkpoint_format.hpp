@@ -33,6 +33,8 @@ namespace lfs::core {
         HAS_PPISP_CONTROLLER = 1 << 2,
         HAS_SPARSITY = 1 << 3,
         HAS_POPSPA = 1 << 4,
+        // Per-photo alignment warp; written only while the option is on.
+        HAS_CALIBRATION_CORRECTION = 1 << 5,
     };
 
     constexpr CheckpointFlags operator|(const CheckpointFlags a, const CheckpointFlags b) {

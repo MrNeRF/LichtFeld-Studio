@@ -37,6 +37,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/roi_weight_map.cu
     kernels/image_kernels.cu
     kernels/mask_preprocess.cu
+    kernels/calibration_correction.cu
     kernels/camera_pose.cu
 )
 
@@ -108,6 +109,7 @@ set(TRAINING_NEW_SOURCES
     components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
+    components/calibration_correction.cpp
     components/camera_pose_refinement.cpp
     components/ppisp_controller.cu
     components/ppisp_controller_pool.cu

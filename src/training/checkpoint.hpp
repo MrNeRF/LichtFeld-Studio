@@ -32,6 +32,7 @@ namespace lfs::training {
     class PPISPControllerPool;
     class POPSpaController;
     class AdamOptimizer;
+    class CalibrationCorrection;
 
     struct CheckpointAppearance {
         std::unique_ptr<PPISP> ppisp;
@@ -62,7 +63,8 @@ namespace lfs::training {
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
         const POPSpaController* popspa_controller = nullptr,
-        const AdamOptimizer* popspa_optimizer = nullptr);
+        const AdamOptimizer* popspa_optimizer = nullptr,
+        const CalibrationCorrection* calibration_correction = nullptr);
 
     /// Import a standalone legacy checkpoint.
     std::expected<int, std::string> load_checkpoint(
@@ -74,7 +76,8 @@ namespace lfs::training {
         PPISPControllerPool* ppisp_controller_pool,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
         POPSpaController* popspa_controller = nullptr,
-        AdamOptimizer* popspa_optimizer = nullptr);
+        AdamOptimizer* popspa_optimizer = nullptr,
+        CalibrationCorrection* calibration_correction = nullptr);
     using CheckpointLoadResult = decltype(load_checkpoint(
         std::filesystem::path{},
         std::declval<IStrategy&>(),
@@ -90,6 +93,7 @@ namespace lfs::training {
     /// POPSpa destinations must both be supplied or both null. The supplied Adam
     /// must reference strategy.get_model(); only its owned state is adopted.
     /// Null destinations still consume and validate the complete POPSpa payload.
+    /// A checkpoint without a calibration correction leaves `calibration_correction` at its zero field.
     CheckpointLoadResult load_checkpoint(
         std::istream& source,
         std::uint64_t source_bytes,
@@ -102,6 +106,7 @@ namespace lfs::training {
         std::string_view source_name = "embedded CKPT",
         lfs::core::SplatData* preloaded_model = nullptr,
         POPSpaController* popspa_controller = nullptr,
-        AdamOptimizer* popspa_optimizer = nullptr);
+        AdamOptimizer* popspa_optimizer = nullptr,
+        CalibrationCorrection* calibration_correction = nullptr);
 
 } // namespace lfs::training

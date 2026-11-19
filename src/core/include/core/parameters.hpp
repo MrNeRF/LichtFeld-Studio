@@ -368,6 +368,12 @@ namespace lfs::core {
             // Refines every training camera's pose with the model (training/components/camera_pose_refinement.hpp).
             bool pose_opt = false;
 
+            // Aligns each training photo to the render with a smooth per-photo displacement field before the loss
+            // (training/components/calibration_correction.hpp), from calibration_correction_start_iteration() on.
+            bool calibration_correction = false;
+            static constexpr int CALIBRATION_CORRECTION_START_ITER = 1000;
+            [[nodiscard]] int calibration_correction_start_iteration() const;
+
             // PPISP (Physically-Plausible ISP) parameters
             bool use_ppisp = false;
             bool ppisp_exposure_from_exif = true;

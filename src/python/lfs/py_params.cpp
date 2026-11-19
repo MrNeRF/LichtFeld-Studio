@@ -1319,6 +1319,14 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.pose_opt = v; }); },
                 "Refine the training camera poses during training; the refined poses replace the cameras' own")
             .def_prop_rw(
+                "calibration_correction",
+                [](PyOptimizationParams& self) { return self.params().calibration_correction; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.calibration_correction = v; }); },
+                "Fits a small, smooth warp to every training photo that absorbs what the calibration missed "
+                "(rolling shutter, stabilization, focus breathing, a slightly wrong pose), so photos that "
+                "disagree by a pixel no longer blur the scene. Starts at step 1000, scaled with the step "
+                "count; evaluation then scores each held-out view after aligning the render to the photo.")
+            .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_ppisp = v; }); },

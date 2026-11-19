@@ -3,6 +3,7 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "components/calibration_correction.hpp"
 #include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -356,7 +357,8 @@ namespace lfs::training {
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
         const POPSpaController* popspa_controller,
-        const AdamOptimizer* popspa_optimizer) {
+        const AdamOptimizer* popspa_optimizer,
+        const CalibrationCorrection* calibration_correction) {
         try {
             if (iteration < 0) {
                 return checkpoint_stream_error(
@@ -411,6 +413,9 @@ namespace lfs::training {
                 header.flags =
                     header.flags |
                     CheckpointFlags::HAS_PPISP_CONTROLLER;
+
+            if (params.optimization.calibration_correction && calibration_correction)
+                header.flags = header.flags | CheckpointFlags::HAS_CALIBRATION_CORRECTION;
 
             const auto header_pos = destination.tellp();
             if (save_popspa)
@@ -475,6 +480,8 @@ namespace lfs::training {
                     return std::move(serialized).error();
                 popspa_optimizer->serialize(destination);
             }
+            if (has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION))
+                destination << calibration_correction->field();
 
             const auto params_pos = destination.tellp();
             if (params_pos == std::streampos(-1)) {
@@ -589,7 +596,8 @@ namespace lfs::training {
         PPISPControllerPool* ppisp_controller_pool,
         lfs::core::SplatTensorAllocator tensor_allocator,
         POPSpaController* popspa_controller,
-        AdamOptimizer* popspa_optimizer) {
+        AdamOptimizer* popspa_optimizer,
+        CalibrationCorrection* calibration_correction) {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(
                 path, std::ios::binary, file)) {
@@ -611,7 +619,7 @@ namespace lfs::training {
             ppisp, ppisp_controller_pool,
             std::move(tensor_allocator),
             lfs::core::path_to_utf8(path), nullptr,
-            popspa_controller, popspa_optimizer);
+            popspa_controller, popspa_optimizer, calibration_correction);
     }
 
     CheckpointLoadResult load_checkpoint(
@@ -626,7 +634,8 @@ namespace lfs::training {
         const std::string_view source_name,
         lfs::core::SplatData* preloaded_model,
         POPSpaController* popspa_controller,
-        AdamOptimizer* popspa_optimizer) {
+        AdamOptimizer* popspa_optimizer,
+        CalibrationCorrection* calibration_correction) {
         try {
             const auto load_started = std::chrono::steady_clock::now();
             if (bool(popspa_controller) != bool(popspa_optimizer))
@@ -926,6 +935,20 @@ namespace lfs::training {
                 loaded_params.optimization.enable_sparsity = false;
             }
 
+            core::Tensor loaded_correction;
+            if (has_flag(header.flags, CheckpointFlags::HAS_CALIBRATION_CORRECTION)) {
+                if (calibration_correction) {
+                    file >> loaded_correction;
+                    if (loaded_correction.shape() != calibration_correction->field().shape() ||
+                        loaded_correction.dtype() != core::DataType::Float32) {
+                        LOG_WARN("Calibration correction checkpoint grid or camera count differs; starting from zero");
+                        loaded_correction = {};
+                    }
+                } else {
+                    core::serialization_detail::skip_serialized_tensor(file);
+                }
+            }
+
             // Reserve capacity for densification after the checkpoint params are resolved.
             if (header.params_json_size > 0) {
                 const auto serialized_state_end = file.tellg();
@@ -976,6 +999,12 @@ namespace lfs::training {
                 LOG_INFO("PPISP controller pool restored: {} cameras (lr={:.2e})",
                          ppisp_controller_pool->num_cameras(),
                          ppisp_controller_pool->get_learning_rate());
+            }
+            if (calibration_correction) {
+                if (loaded_correction.is_valid())
+                    calibration_correction->field() = loaded_correction.cuda();
+                else
+                    calibration_correction->field().zero_();
             }
             if (popspa_controller && loaded_popspa) {
                 popspa_controller->adopt_checkpoint_state(*loaded_popspa);

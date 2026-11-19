@@ -3403,3 +3403,20 @@ TEST(ArgumentParserTest, JoinedShortIterationValueIsUsed) {
     EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
     EXPECT_TRUE((*parsed)->cli_iterations_set);
 }
+
+TEST(ArgumentParserTest, CalibrationCorrectionIsOptInAndRoundTrips) {
+    using lfs::core::param::OptimizationParameters;
+    OptimizationParameters defaults;
+    EXPECT_FALSE(defaults.calibration_correction);
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000);
+    defaults.steps_scaler = .7506f;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 751);
+    const auto data = make_test_path("calibration_args");
+    const char* argv[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--calibration-correction"};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto& opt = (*parsed)->optimization;
+    EXPECT_TRUE(opt.calibration_correction);
+    EXPECT_TRUE(OptimizationParameters::from_json(opt.to_json()).calibration_correction);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("calibration_correction"));
+}

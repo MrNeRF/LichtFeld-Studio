@@ -634,6 +634,10 @@ namespace lfs::core {
                        : 0.0f;
         }
 
+        int OptimizationParameters::calibration_correction_start_iteration() const {
+            return static_cast<int>(std::lround(CALIBRATION_CORRECTION_START_ITER * steps_scaler));
+        }
+
         void OptimizationParameters::apply_step_scaling() {
             if (steps_scaler <= 0.f || steps_scaler == 1.f)
                 return;
