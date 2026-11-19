@@ -20,18 +20,17 @@
 #include <nvimgcodec.h>
 
 namespace nvimgcodec {
-class ProcessingResultsPromise;
+    class ProcessingResultsPromise;
 
-class IImage
-{
-  public:
-    virtual ~IImage() = default;
-    virtual int getIndex()  = 0;
-    virtual void setIndex(int index)  = 0;
-    virtual void getImageInfo(nvimgcodecImageInfo_t* image_info)  = 0;
-    virtual void setImageInfo(const nvimgcodecImageInfo_t* image_info)  = 0;
-    virtual nvimgcodecImageDesc_t* getImageDesc()  = 0;
-    virtual std::shared_ptr<ProcessingResultsPromise> getPromise() = 0;
-    virtual void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) = 0;
-};
+    class IImage {
+    public:
+        virtual ~IImage() = default;
+        virtual int getIndex() = 0;
+        virtual void setIndex(int index) = 0;
+        virtual void getImageInfo(nvimgcodecImageInfo_t* image_info) = 0;
+        virtual void setImageInfo(const nvimgcodecImageInfo_t* image_info) = 0;
+        virtual nvimgcodecImageDesc_t* getImageDesc() = 0;
+        virtual std::shared_ptr<ProcessingResultsPromise> getPromise() = 0;
+        virtual void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) = 0;
+    };
 } // namespace nvimgcodec

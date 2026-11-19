@@ -21,54 +21,54 @@
 
 namespace nvimgcodec {
 
-struct LibraryVersion {
-    int major_ver = -1;
-    int minor_ver = -1;
-    int patch_ver = -1;
-    bool valid = false;
+    struct LibraryVersion {
+        int major_ver = -1;
+        int minor_ver = -1;
+        int patch_ver = -1;
+        bool valid = false;
 
-    constexpr LibraryVersion(int _major, int _minor, int _patch)
-        : major_ver(_major), minor_ver(_minor), patch_ver(_patch), valid(true) {}
-    constexpr LibraryVersion() : valid(false) {}
+        constexpr LibraryVersion(int _major, int _minor, int _patch)
+            : major_ver(_major), minor_ver(_minor), patch_ver(_patch), valid(true) {}
+        constexpr LibraryVersion() : valid(false) {}
 
-    int flat_version() const {
-        if (!valid) {
-            return -1;
+        int flat_version() const {
+            if (!valid) {
+                return -1;
+            }
+            return (major_ver * 1000000 + minor_ver * 1000 + patch_ver);
         }
-        return (major_ver * 1000000 + minor_ver * 1000 + patch_ver);
-    }
 
-    friend std::ostream& operator<<(std::ostream& os, const LibraryVersion& v) {
-        if (!v.valid) {
-            os << "invalid";
-        } else {
-            os << v.major_ver << "." << v.minor_ver << "." << v.patch_ver;
+        friend std::ostream& operator<<(std::ostream& os, const LibraryVersion& v) {
+            if (!v.valid) {
+                os << "invalid";
+            } else {
+                os << v.major_ver << "." << v.minor_ver << "." << v.patch_ver;
+            }
+            return os;
         }
-        return os;
-    }
 
-    explicit operator bool() const {
-        return valid;
-    }
+        explicit operator bool() const {
+            return valid;
+        }
 
-    bool operator==(const LibraryVersion& other) const {
-        return flat_version() == other.flat_version();
-    }
-    bool operator!=(const LibraryVersion& other) const {
-        return !(*this == other);
-    }
-    bool operator<(const LibraryVersion& other) const {
-        return flat_version() < other.flat_version();
-    }
-    bool operator>(const LibraryVersion& other) const {
-        return other < *this;
-    }
-    bool operator<=(const LibraryVersion& other) const {
-        return !(other < *this);
-    }
-    bool operator>=(const LibraryVersion& other) const {
-        return !(*this < other);
-    }
-};
+        bool operator==(const LibraryVersion& other) const {
+            return flat_version() == other.flat_version();
+        }
+        bool operator!=(const LibraryVersion& other) const {
+            return !(*this == other);
+        }
+        bool operator<(const LibraryVersion& other) const {
+            return flat_version() < other.flat_version();
+        }
+        bool operator>(const LibraryVersion& other) const {
+            return other < *this;
+        }
+        bool operator<=(const LibraryVersion& other) const {
+            return !(other < *this);
+        }
+        bool operator>=(const LibraryVersion& other) const {
+            return !(*this < other);
+        }
+    };
 
 } // namespace nvimgcodec

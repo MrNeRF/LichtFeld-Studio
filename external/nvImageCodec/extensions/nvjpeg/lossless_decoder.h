@@ -17,30 +17,29 @@
 
 #pragma once
 
+#include <future>
 #include <nvimgcodec.h>
 #include <nvjpeg.h>
-#include <future>
 #include <vector>
 
 namespace nvjpeg {
 
-class NvJpegLosslessDecoderPlugin
-{
-  public:
-    explicit NvJpegLosslessDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
-    nvimgcodecDecoderDesc_t* getDecoderDesc();
-    static bool isPlatformSupported();
+    class NvJpegLosslessDecoderPlugin {
+    public:
+        explicit NvJpegLosslessDecoderPlugin(const nvimgcodecFrameworkDesc_t* framework);
+        nvimgcodecDecoderDesc_t* getDecoderDesc();
+        static bool isPlatformSupported();
 
-  private:
-    nvimgcodecStatus_t create(
-        nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+    private:
+        nvimgcodecStatus_t create(
+            nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
 
-    static nvimgcodecStatus_t static_create(
-        void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+        static nvimgcodecStatus_t static_create(
+            void* instance, nvimgcodecDecoder_t* decoder, const nvimgcodecExecutionParams_t* exec_params, const char* options);
 
-    static constexpr const char* plugin_id_ = "nvjpeg_lossless_decoder";
-    nvimgcodecDecoderDesc_t decoder_desc_;
-    const nvimgcodecFrameworkDesc_t* framework_;
-};
+        static constexpr const char* plugin_id_ = "nvjpeg_lossless_decoder";
+        nvimgcodecDecoderDesc_t decoder_desc_;
+        const nvimgcodecFrameworkDesc_t* framework_;
+    };
 
 } // namespace nvjpeg

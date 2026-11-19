@@ -22,37 +22,35 @@
 
 namespace nvimgcodec {
 
-namespace {
+    namespace {
 
-ProcessExitFlag& GetProcessExitFlag()
-{
-    static auto* flag = new ProcessExitFlag();
-    return *flag;
-}
+        ProcessExitFlag& GetProcessExitFlag() {
+            static auto* flag = new ProcessExitFlag();
+            return *flag;
+        }
 
-}  // namespace
+    } // namespace
 
-bool IsProcessExiting() noexcept
-{
-    // Must never throw: called from destructors (some implicitly noexcept),
-    // so a thrown exception here could call std::terminate() instead of
-    // just failing to detect process exit. If registration fails (in
-    // practice, essentially never), fall back to always reporting "not
-    // exiting" -- the same risk profile callers had before this guard
-    // existed.
-    static std::once_flag register_once;
-    try {
-        std::call_once(register_once, []() {
-            if (std::atexit([]() { GetProcessExitFlag().Trip(); }) != 0) {
-                std::fprintf(stderr, "nvimgcodec: failed to register process-exit guard atexit handler\n");
-            }
-        });
-        return GetProcessExitFlag().IsSet();
-    } catch (...) {
-        // std::call_once may throw std::system_error, and the first call may
-        // fail to allocate the flag. Either way, report "not exiting".
-        return false;
+    bool IsProcessExiting() noexcept {
+        // Must never throw: called from destructors (some implicitly noexcept),
+        // so a thrown exception here could call std::terminate() instead of
+        // just failing to detect process exit. If registration fails (in
+        // practice, essentially never), fall back to always reporting "not
+        // exiting" -- the same risk profile callers had before this guard
+        // existed.
+        static std::once_flag register_once;
+        try {
+            std::call_once(register_once, []() {
+                if (std::atexit([]() { GetProcessExitFlag().Trip(); }) != 0) {
+                    std::fprintf(stderr, "nvimgcodec: failed to register process-exit guard atexit handler\n");
+                }
+            });
+            return GetProcessExitFlag().IsSet();
+        } catch (...) {
+            // std::call_once may throw std::system_error, and the first call may
+            // fail to allocate the flag. Either way, report "not exiting".
+            return false;
+        }
     }
-}
 
-}  // namespace nvimgcodec
+} // namespace nvimgcodec

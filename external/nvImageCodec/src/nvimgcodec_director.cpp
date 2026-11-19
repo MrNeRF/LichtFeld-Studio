@@ -27,70 +27,55 @@
 
 namespace nvimgcodec {
 
-NvImgCodecDirector::NvImgCodecDirector(const nvimgcodecInstanceCreateInfo_t* create_info)
-    : logger_("nvimgcodec")
-    , default_debug_messenger_manager_(&logger_, create_info)
-    , codec_registry_(&logger_)
-    , plugin_framework_(&logger_, &codec_registry_, std::move(std::make_unique<Environment>()),
-          std::move(std::make_unique<DirectoryScaner>()), std::move(std::make_unique<LibraryLoader>()),
-          create_info->extension_modules_path ? create_info->extension_modules_path : "", &registry_client_count_, &registry_mutex_)
-{
-    if (create_info->load_builtin_modules) {
-        for (auto builtin_ext : get_builtin_modules())
-            plugin_framework_.registerExtension(nullptr, &builtin_ext);
+    NvImgCodecDirector::NvImgCodecDirector(const nvimgcodecInstanceCreateInfo_t* create_info)
+        : logger_("nvimgcodec"), default_debug_messenger_manager_(&logger_, create_info), codec_registry_(&logger_), plugin_framework_(&logger_, &codec_registry_, std::move(std::make_unique<Environment>()), std::move(std::make_unique<DirectoryScaner>()), std::move(std::make_unique<LibraryLoader>()), create_info->extension_modules_path ? create_info->extension_modules_path : "", &registry_client_count_, &registry_mutex_) {
+        if (create_info->load_builtin_modules) {
+            for (auto builtin_ext : get_builtin_modules())
+                plugin_framework_.registerExtension(nullptr, &builtin_ext);
+        }
+
+        if (create_info->load_extension_modules) {
+            plugin_framework_.discoverAndLoadExtModules();
+        }
     }
 
-    if (create_info->load_extension_modules) {
-        plugin_framework_.discoverAndLoadExtModules();
+    NvImgCodecDirector::~NvImgCodecDirector() {
     }
-}
 
-NvImgCodecDirector::~NvImgCodecDirector()
-{
-}
+    std::unique_ptr<CodeStream> NvImgCodecDirector::createCodeStream() {
+        return std::make_unique<CodeStream>(&codec_registry_, std::make_unique<IoStreamFactory>());
+    }
 
-std::unique_ptr<CodeStream> NvImgCodecDirector::createCodeStream()
-{
-    return std::make_unique<CodeStream>(&codec_registry_, std::make_unique<IoStreamFactory>());
-}
+    std::unique_ptr<ImageGenericDecoder> NvImgCodecDirector::createGenericDecoder(
+        const nvimgcodecExecutionParams_t* exec_params, const char* options) {
+        return std::make_unique<ImageGenericDecoder>(&logger_, &codec_registry_, exec_params, options);
+    }
 
-std::unique_ptr<ImageGenericDecoder> NvImgCodecDirector::createGenericDecoder(
-    const nvimgcodecExecutionParams_t* exec_params, const char* options)
-{
-    return std::make_unique<ImageGenericDecoder>(&logger_, &codec_registry_, exec_params, options);
-}
+    std::unique_ptr<ImageGenericEncoder> NvImgCodecDirector::createGenericEncoder(
+        const nvimgcodecExecutionParams_t* exec_params, const char* options) {
+        return std::make_unique<ImageGenericEncoder>(&logger_, &codec_registry_, exec_params, options);
+    }
 
-std::unique_ptr<ImageGenericEncoder> NvImgCodecDirector::createGenericEncoder(
-    const nvimgcodecExecutionParams_t* exec_params, const char* options)
-{
-    return std::make_unique<ImageGenericEncoder>(&logger_, &codec_registry_, exec_params, options);
-}
+    void NvImgCodecDirector::registerDebugMessenger(IDebugMessenger* messenger) {
+        logger_.registerDebugMessenger(messenger);
+    }
 
-void NvImgCodecDirector::registerDebugMessenger(IDebugMessenger* messenger)
-{
-    logger_.registerDebugMessenger(messenger);
-}
+    void NvImgCodecDirector::unregisterDebugMessenger(IDebugMessenger* messenger) {
+        logger_.unregisterDebugMessenger(messenger);
+    }
 
-void NvImgCodecDirector::unregisterDebugMessenger(IDebugMessenger* messenger)
-{
-    logger_.unregisterDebugMessenger(messenger);
-}
+    void NvImgCodecDirector::retainRegistryClient() {
+        std::lock_guard<std::recursive_mutex> registry_lock(registry_mutex_);
+        registry_client_count_.fetch_add(1, std::memory_order_relaxed);
+    }
 
-void NvImgCodecDirector::retainRegistryClient()
-{
-    std::lock_guard<std::recursive_mutex> registry_lock(registry_mutex_);
-    registry_client_count_.fetch_add(1, std::memory_order_relaxed);
-}
+    void NvImgCodecDirector::releaseRegistryClient() {
+        std::lock_guard<std::recursive_mutex> registry_lock(registry_mutex_);
+        registry_client_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
 
-void NvImgCodecDirector::releaseRegistryClient()
-{
-    std::lock_guard<std::recursive_mutex> registry_lock(registry_mutex_);
-    registry_client_count_.fetch_sub(1, std::memory_order_relaxed);
-}
-
-bool NvImgCodecDirector::hasRegistryClients() const
-{
-    return registry_client_count_.load(std::memory_order_acquire) != 0;
-}
+    bool NvImgCodecDirector::hasRegistryClients() const {
+        return registry_client_count_.load(std::memory_order_acquire) != 0;
+    }
 
 } // namespace nvimgcodec

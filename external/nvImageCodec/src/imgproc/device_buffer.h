@@ -17,76 +17,73 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include <functional>
 #include <memory>
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
-enum class DeleterBackend
-{
-    Unknown,
-    DeviceCustom,
-    DeviceAsync,
-    DeviceSync,
-    PinnedCustom,
-    PinnedHost
-};
+    enum class DeleterBackend {
+        Unknown,
+        DeviceCustom,
+        DeviceAsync,
+        DeviceSync,
+        PinnedCustom,
+        PinnedHost
+    };
 
-// Holds the currently-active cleanup callback for a buffer's underlying
-// storage. The callback is installed at allocation time and may be swapped
-// later (e.g., by `detach_from_stream()`) without invalidating the
-// `shared_ptr` deleter that references this strategy.
-//
-// By convention, `fn` must not throw: it is invoked from a `shared_ptr`
-// deleter and therefore from destructors. All implementations in this file
-// swallow CUDA/allocator errors internally.
-struct DeleterStrategy
-{
-    std::function<void(void*)> fn;
-    // Device id captured at allocation time. Used by `detach_from_stream()`
-    // so the detached deleter can run a `DeviceGuard` without needing to
-    // re-query the (potentially already-destroyed) user stream.
-    int device_id = -1;
-    DeleterBackend backend = DeleterBackend::Unknown;
-};
+    // Holds the currently-active cleanup callback for a buffer's underlying
+    // storage. The callback is installed at allocation time and may be swapped
+    // later (e.g., by `detach_from_stream()`) without invalidating the
+    // `shared_ptr` deleter that references this strategy.
+    //
+    // By convention, `fn` must not throw: it is invoked from a `shared_ptr`
+    // deleter and therefore from destructors. All implementations in this file
+    // swallow CUDA/allocator errors internally.
+    struct DeleterStrategy {
+        std::function<void(void*)> fn;
+        // Device id captured at allocation time. Used by `detach_from_stream()`
+        // so the detached deleter can run a `DeviceGuard` without needing to
+        // re-query the (potentially already-destroyed) user stream.
+        int device_id = -1;
+        DeleterBackend backend = DeleterBackend::Unknown;
+    };
 
-// Wraps `data` in a `shared_ptr` whose deleter invokes `strategy->fn` when
-// the last reference is dropped -- except once `IsProcessExiting()` is true
-// (see imgproc/exit_guard.h), in which case the deleter intentionally skips
-// `fn` and leaks `data` instead. This is the single place `DeviceBuffer` and
-// `PinnedBuffer` release their underlying allocation, so it is also the
-// single place that needs to know CUDA/the allocator may already be
-// unavailable near process exit. Callers need not arm the exit guard
-// themselves: `MakeBufferOwner` calls `IsProcessExiting()` on this normal
-// allocation path, which registers the guard's atexit handler early enough for
-// the deleter to observe process exit later.
-std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy);
+    // Wraps `data` in a `shared_ptr` whose deleter invokes `strategy->fn` when
+    // the last reference is dropped -- except once `IsProcessExiting()` is true
+    // (see imgproc/exit_guard.h), in which case the deleter intentionally skips
+    // `fn` and leaks `data` instead. This is the single place `DeviceBuffer` and
+    // `PinnedBuffer` release their underlying allocation, so it is also the
+    // single place that needs to know CUDA/the allocator may already be
+    // unavailable near process exit. Callers need not arm the exit guard
+    // themselves: `MakeBufferOwner` calls `IsProcessExiting()` on this normal
+    // allocation path, which registers the guard's atexit handler early enough for
+    // the deleter to observe process exit later.
+    std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy);
 
-struct DeviceBuffer
-{
-    explicit DeviceBuffer(nvimgcodecDeviceAllocator_t* device_allocator = nullptr);
-    void resize(size_t new_size, cudaStream_t new_stream);
-    void alloc_impl(size_t new_size, cudaStream_t new_stream);
+    struct DeviceBuffer {
+        explicit DeviceBuffer(nvimgcodecDeviceAllocator_t* device_allocator = nullptr);
+        void resize(size_t new_size, cudaStream_t new_stream);
+        void alloc_impl(size_t new_size, cudaStream_t new_stream);
 
-    // Rebind the buffer's deleter so that it no longer references the stream
-    // this buffer was allocated on. After this call returns, the caller may
-    // destroy the original `cuda_stream` at any time without affecting correct
-    // cleanup of this buffer; the detached deleter uses plain `cudaFree` under
-    // a `DeviceGuard` (or the user-supplied allocator with the legacy default
-    // stream). Safe and idempotent to call regardless of which allocation path
-    // produced the current deleter.
-    void detach_from_stream() noexcept;
+        // Rebind the buffer's deleter so that it no longer references the stream
+        // this buffer was allocated on. After this call returns, the caller may
+        // destroy the original `cuda_stream` at any time without affecting correct
+        // cleanup of this buffer; the detached deleter uses plain `cudaFree` under
+        // a `DeviceGuard` (or the user-supplied allocator with the legacy default
+        // stream). Safe and idempotent to call regardless of which allocation path
+        // produced the current deleter.
+        void detach_from_stream() noexcept;
 
-    nvimgcodecDeviceAllocator_t* allocator;
-    std::shared_ptr<void> d_ptr;
-    void* data = nullptr;
-    size_t size = 0;
-    size_t capacity = 0;
-    cudaStream_t stream = 0;
-    // Referenced by `d_ptr`'s deleter; mutating `deleter_strategy->fn`
-    // changes the behavior of the already-installed `shared_ptr` deleter.
-    std::shared_ptr<DeleterStrategy> deleter_strategy;
-};
+        nvimgcodecDeviceAllocator_t* allocator;
+        std::shared_ptr<void> d_ptr;
+        void* data = nullptr;
+        size_t size = 0;
+        size_t capacity = 0;
+        cudaStream_t stream = 0;
+        // Referenced by `d_ptr`'s deleter; mutating `deleter_strategy->fn`
+        // changes the behavior of the already-installed `shared_ptr` deleter.
+        std::shared_ptr<DeleterStrategy> deleter_strategy;
+    };
 
 } // namespace nvimgcodec

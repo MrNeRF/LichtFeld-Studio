@@ -22,6 +22,6 @@
 
 namespace nvimgcodec {
 
-const std::vector<nvimgcodecExtensionDesc_t>& get_builtin_modules();
+    const std::vector<nvimgcodecExtensionDesc_t>& get_builtin_modules();
 
 } // namespace nvimgcodec

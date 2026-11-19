@@ -17,26 +17,24 @@
 
 #pragma once
 
-#include <vector>
-#include <future>
 #include "nvimgcodec.h"
-
+#include <future>
+#include <vector>
 
 struct BlockParallelCtx {
     void (*task)(int thread_id, int sample_idx, void* task_context);
-    void *task_ctx;
+    void* task_ctx;
     int num_tasks;
     int num_blocks;
     std::vector<std::promise<void>> promise;
 };
 
 static void BlockParallelExec(void* task_ctx, void (*task)(int thread_id, int sample_idx, void* task_context), int num_tasks,
-    const nvimgcodecExecutionParams_t* exec_params)
-{
+                              const nvimgcodecExecutionParams_t* exec_params) {
     auto executor = exec_params->executor;
     int num_threads = executor->getNumThreads(executor->instance);
 
-    if (num_tasks < (num_threads + 1) || num_threads < 2) {  // not worth parallelizing
+    if (num_tasks < (num_threads + 1) || num_threads < 2) { // not worth parallelizing
         for (int i = 0; i < num_tasks; i++)
             task(-1, i, task_ctx);
     } else {

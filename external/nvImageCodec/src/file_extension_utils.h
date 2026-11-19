@@ -17,37 +17,34 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include <cctype>
+#include <nvimgcodec.h>
 #include <string>
 
 namespace nvimgcodec {
 
-inline std::string normalizeFileExtension(const char* file_extension)
-{
-    if (file_extension == nullptr || file_extension[0] == '\0') {
-        return {};
+    inline std::string normalizeFileExtension(const char* file_extension) {
+        if (file_extension == nullptr || file_extension[0] == '\0') {
+            return {};
+        }
+        std::string ext(file_extension);
+        for (char& c : ext) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (ext[0] != '.') {
+            ext.insert(ext.begin(), '.');
+        }
+        return ext;
     }
-    std::string ext(file_extension);
-    for (char& c : ext) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    if (ext[0] != '.') {
-        ext.insert(ext.begin(), '.');
-    }
-    return ext;
-}
 
-// Fits a C API slot of NVIMGCODEC_MAX_FILE_EXTENSION_SIZE (including terminator).
-inline bool fileExtensionFitsCApiSlot(const std::string& normalized)
-{
-    return !normalized.empty() && normalized.size() < NVIMGCODEC_MAX_FILE_EXTENSION_SIZE;
-}
+    // Fits a C API slot of NVIMGCODEC_MAX_FILE_EXTENSION_SIZE (including terminator).
+    inline bool fileExtensionFitsCApiSlot(const std::string& normalized) {
+        return !normalized.empty() && normalized.size() < NVIMGCODEC_MAX_FILE_EXTENSION_SIZE;
+    }
 
-// Fits a C API slot of NVIMGCODEC_MAX_CODEC_NAME_SIZE (including terminator).
-inline bool codecNameFitsCApiSlot(const char* codec)
-{
-    return codec != nullptr && codec[0] != '\0' && std::char_traits<char>::length(codec) < NVIMGCODEC_MAX_CODEC_NAME_SIZE;
-}
+    // Fits a C API slot of NVIMGCODEC_MAX_CODEC_NAME_SIZE (including terminator).
+    inline bool codecNameFitsCApiSlot(const char* codec) {
+        return codec != nullptr && codec[0] != '\0' && std::char_traits<char>::length(codec) < NVIMGCODEC_MAX_CODEC_NAME_SIZE;
+    }
 
 } // namespace nvimgcodec

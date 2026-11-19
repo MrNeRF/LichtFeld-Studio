@@ -21,26 +21,25 @@
 
 namespace nvimgcodec {
 
-class MmapedFileIoStream : public FileIoStream
-{
-  public:
-    explicit MmapedFileIoStream(const std::string& path, bool read_ahead);
-    void close() override;
-    std::shared_ptr<void> get(size_t n_bytes) override;
-    size_t read(void* buffer, size_t n_bytes) override;
-    void seek(size_t pos, int whence = SEEK_SET) override;
-    size_t tell() const override;
-    size_t size() const override;
-    void* map(size_t offset, size_t size) const override;
+    class MmapedFileIoStream : public FileIoStream {
+    public:
+        explicit MmapedFileIoStream(const std::string& path, bool read_ahead);
+        void close() override;
+        std::shared_ptr<void> get(size_t n_bytes) override;
+        size_t read(void* buffer, size_t n_bytes) override;
+        void seek(size_t pos, int whence = SEEK_SET) override;
+        size_t tell() const override;
+        size_t size() const override;
+        void* map(size_t offset, size_t size) const override;
 
-    size_t write(void* buf, size_t bytes) override { throw std::runtime_error("writing not yet supported"); }
-    size_t putc(unsigned char buf) override { throw std::runtime_error("writing not yet supported"); }
-    ~MmapedFileIoStream() override;
+        size_t write(void* buf, size_t bytes) override { throw std::runtime_error("writing not yet supported"); }
+        size_t putc(unsigned char buf) override { throw std::runtime_error("writing not yet supported"); }
+        ~MmapedFileIoStream() override;
 
-  private:
-    std::shared_ptr<void> p_;
-    size_t length_;
-    size_t pos_;
-    bool read_ahead_whole_file_;
-};
+    private:
+        std::shared_ptr<void> p_;
+        size_t length_;
+        size_t pos_;
+        bool read_ahead_whole_file_;
+    };
 } // namespace nvimgcodec

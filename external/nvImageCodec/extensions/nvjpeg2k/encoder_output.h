@@ -20,19 +20,19 @@
 #include <nvimgcodec.h>
 
 namespace nvjpeg2k {
-namespace detail {
+    namespace detail {
 
-// Clears mapped_data before invoking the callback so a failed unmap is never
-// retried during exception cleanup. mapped_capacity is the extent originally
-// passed to map(), not the number of bytes ultimately produced by the encoder.
-nvimgcodecStatus_t unmap_output(
-    nvimgcodecIoStreamDesc_t* io_stream, void*& mapped_data, size_t mapped_capacity) noexcept;
+        // Clears mapped_data before invoking the callback so a failed unmap is never
+        // retried during exception cleanup. mapped_capacity is the extent originally
+        // passed to map(), not the number of bytes ultimately produced by the encoder.
+        nvimgcodecStatus_t unmap_output(
+            nvimgcodecIoStreamDesc_t* io_stream, void*& mapped_data, size_t mapped_capacity) noexcept;
 
-// Commits an already retrieved and synchronized bitstream. If fallback_data is
-// null, nvJPEG2K wrote directly to mapped_data; otherwise fallback_data contains
-// produced_length bytes that must be copied through the stream interface.
-nvimgcodecStatus_t finalize_output(nvimgcodecIoStreamDesc_t* io_stream, void*& mapped_data,
-    size_t mapped_capacity, size_t produced_length, const void* fallback_data) noexcept;
+        // Commits an already retrieved and synchronized bitstream. If fallback_data is
+        // null, nvJPEG2K wrote directly to mapped_data; otherwise fallback_data contains
+        // produced_length bytes that must be copied through the stream interface.
+        nvimgcodecStatus_t finalize_output(nvimgcodecIoStreamDesc_t* io_stream, void*& mapped_data,
+                                           size_t mapped_capacity, size_t produced_length, const void* fallback_data) noexcept;
 
-} // namespace detail
+    } // namespace detail
 } // namespace nvjpeg2k

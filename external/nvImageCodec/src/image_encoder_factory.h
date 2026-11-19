@@ -17,28 +17,26 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
-#include <nvimgcodec.h>
-#include <memory>
-#include <string>
 #include "iimage_encoder_factory.h"
+#include <memory>
+#include <nvimgcodec.h>
+#include <string>
 
 namespace nvimgcodec {
 
-class IImageEncoder;
+    class IImageEncoder;
 
-class ImageEncoderFactory : public IImageEncoderFactory
-{
-  public:
-    explicit ImageEncoderFactory(const nvimgcodecEncoderDesc_t* desc);
-    std::string getEncoderId() const override;
-    std::string getCodecName() const override;
-    nvimgcodecBackendKind_t getBackendKind() const override;
-    const nvimgcodecEncoderDesc_t* getEncoderDesc() const override;
-    std::unique_ptr<IImageEncoder> createEncoder(
-        const nvimgcodecExecutionParams_t* exec_params, const char* options) const override;
+    class ImageEncoderFactory : public IImageEncoderFactory {
+    public:
+        explicit ImageEncoderFactory(const nvimgcodecEncoderDesc_t* desc);
+        std::string getEncoderId() const override;
+        std::string getCodecName() const override;
+        nvimgcodecBackendKind_t getBackendKind() const override;
+        const nvimgcodecEncoderDesc_t* getEncoderDesc() const override;
+        std::unique_ptr<IImageEncoder> createEncoder(
+            const nvimgcodecExecutionParams_t* exec_params, const char* options) const override;
 
-  private:
-    const nvimgcodecEncoderDesc_t* encoder_desc_;
-};
+    private:
+        const nvimgcodecEncoderDesc_t* encoder_desc_;
+    };
 } // namespace nvimgcodec

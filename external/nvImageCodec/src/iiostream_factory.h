@@ -23,15 +23,14 @@
 
 namespace nvimgcodec {
 
-class IoStream;
-class IIoStreamFactory
-{
-  public:
-    virtual ~IIoStreamFactory() = default;
-    virtual std::unique_ptr<IoStream> createFileIoStream(
-        const std::string& file_name, bool read_ahead, bool use_mmap, bool to_write) const = 0;
-    virtual std::unique_ptr<IoStream> createMemIoStream(const unsigned char* data, size_t size) const = 0;
-    virtual std::unique_ptr<IoStream> createMemIoStream(void* ctx, std::function<unsigned char*(void* ctx, size_t)> get_buffer_func) const = 0;
-};
+    class IoStream;
+    class IIoStreamFactory {
+    public:
+        virtual ~IIoStreamFactory() = default;
+        virtual std::unique_ptr<IoStream> createFileIoStream(
+            const std::string& file_name, bool read_ahead, bool use_mmap, bool to_write) const = 0;
+        virtual std::unique_ptr<IoStream> createMemIoStream(const unsigned char* data, size_t size) const = 0;
+        virtual std::unique_ptr<IoStream> createMemIoStream(void* ctx, std::function<unsigned char*(void* ctx, size_t)> get_buffer_func) const = 0;
+    };
 
 } // namespace nvimgcodec

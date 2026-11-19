@@ -17,34 +17,33 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
-#include <memory>
-#include <string>
 #include "iimage_encoder.h"
+#include <memory>
+#include <nvimgcodec.h>
+#include <string>
 
 namespace nvimgcodec {
 
-class IEncodeState;
-class IImage;
-class ICodeStream;
+    class IEncodeState;
+    class IImage;
+    class ICodeStream;
 
-class ImageEncoder : public IImageEncoder
-{
-  public:
-    // Throws if the plugin fails to create the encoder.
-    ImageEncoder(const nvimgcodecEncoderDesc_t* desc, const nvimgcodecExecutionParams_t* exec_params, const char* options);
-    ~ImageEncoder() override;
-    nvimgcodecBackendKind_t getBackendKind() const override;
-    std::unique_ptr<IEncodeState> createEncodeStateBatch() const override;
-    bool canEncode(const nvimgcodecCodeStreamDesc_t* code_stream, const nvimgcodecImageDesc_t* image, const nvimgcodecEncodeParams_t* params,
-        nvimgcodecProcessingStatus_t* status, int thread_idx) const override;
-    bool encode(const nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageDesc_t* image,
-        const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) override;
-    const char* encoderId() const override;
+    class ImageEncoder : public IImageEncoder {
+    public:
+        // Throws if the plugin fails to create the encoder.
+        ImageEncoder(const nvimgcodecEncoderDesc_t* desc, const nvimgcodecExecutionParams_t* exec_params, const char* options);
+        ~ImageEncoder() override;
+        nvimgcodecBackendKind_t getBackendKind() const override;
+        std::unique_ptr<IEncodeState> createEncodeStateBatch() const override;
+        bool canEncode(const nvimgcodecCodeStreamDesc_t* code_stream, const nvimgcodecImageDesc_t* image, const nvimgcodecEncodeParams_t* params,
+                       nvimgcodecProcessingStatus_t* status, int thread_idx) const override;
+        bool encode(const nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageDesc_t* image,
+                    const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) override;
+        const char* encoderId() const override;
 
-  private:
-    const nvimgcodecEncoderDesc_t* encoder_desc_;
-    nvimgcodecEncoder_t encoder_ = nullptr;
-};
+    private:
+        const nvimgcodecEncoderDesc_t* encoder_desc_;
+        nvimgcodecEncoder_t encoder_ = nullptr;
+    };
 
 } // namespace nvimgcodec

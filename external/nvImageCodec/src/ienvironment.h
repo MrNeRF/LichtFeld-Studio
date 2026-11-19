@@ -21,12 +21,11 @@
 
 namespace nvimgcodec {
 
-class IEnvironment
-{
-  public:
-    virtual ~IEnvironment() = default;
+    class IEnvironment {
+    public:
+        virtual ~IEnvironment() = default;
 
-    virtual std::string getVariable(const std::string& env_var) = 0;
-};
+        virtual std::string getVariable(const std::string& env_var) = 0;
+    };
 
 } // namespace nvimgcodec

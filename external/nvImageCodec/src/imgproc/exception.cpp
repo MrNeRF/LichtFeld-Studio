@@ -19,65 +19,57 @@
 
 namespace nvimgcodec {
 
-namespace StatusStrings {
-const std::string sNotValidFormat    = "Not valid format";
-const std::string sUnsupportedFormat = "Unsupported format";
-const std::string sBadStream         = "Corrupted stream";
-const std::string sStreamParse       = "Stream parse error";
-const std::string sAllocationError   = "Memory allocator error";
-const std::string sInternalError     = "Internal error";
-const std::string sParameterError    = "Error in the API call";
-const std::string sCUDAError         = "Error in the CUDA API call";
-const std::string sArchMismatch      = "Architecture mismatch";
-} // namespace StatusStrings
+    namespace StatusStrings {
+        const std::string sNotValidFormat = "Not valid format";
+        const std::string sUnsupportedFormat = "Unsupported format";
+        const std::string sBadStream = "Corrupted stream";
+        const std::string sStreamParse = "Stream parse error";
+        const std::string sAllocationError = "Memory allocator error";
+        const std::string sInternalError = "Internal error";
+        const std::string sParameterError = "Error in the API call";
+        const std::string sCUDAError = "Error in the CUDA API call";
+        const std::string sArchMismatch = "Architecture mismatch";
+    } // namespace StatusStrings
 
-const char* getErrorString(Status eStatus_)
-{
-    switch (eStatus_) {
-    case NOT_VALID_FORMAT_STATUS:
-        return StatusStrings::sNotValidFormat.c_str();
-    case UNSUPPORTED_FORMAT_STATUS:
-        return StatusStrings::sUnsupportedFormat.c_str();
-    case BAD_FORMAT_STATUS:
-        return StatusStrings::sBadStream.c_str();
-    case PARSE_STATUS:
-        return StatusStrings::sStreamParse.c_str();
-    case ALLOCATION_ERROR:
-        return StatusStrings::sAllocationError.c_str();
-    case INVALID_PARAMETER:
-        return StatusStrings::sParameterError.c_str();
-    case CUDA_CALL_ERROR:
-        return StatusStrings::sCUDAError.c_str();
-    case ARCH_MISMATCH:
-        return StatusStrings::sArchMismatch.c_str();
-    case INTERNAL_ERROR:
-    default:
-        return StatusStrings::sInternalError.c_str();
+    const char* getErrorString(Status eStatus_) {
+        switch (eStatus_) {
+        case NOT_VALID_FORMAT_STATUS:
+            return StatusStrings::sNotValidFormat.c_str();
+        case UNSUPPORTED_FORMAT_STATUS:
+            return StatusStrings::sUnsupportedFormat.c_str();
+        case BAD_FORMAT_STATUS:
+            return StatusStrings::sBadStream.c_str();
+        case PARSE_STATUS:
+            return StatusStrings::sStreamParse.c_str();
+        case ALLOCATION_ERROR:
+            return StatusStrings::sAllocationError.c_str();
+        case INVALID_PARAMETER:
+            return StatusStrings::sParameterError.c_str();
+        case CUDA_CALL_ERROR:
+            return StatusStrings::sCUDAError.c_str();
+        case ARCH_MISMATCH:
+            return StatusStrings::sArchMismatch.c_str();
+        case INTERNAL_ERROR:
+        default:
+            return StatusStrings::sInternalError.c_str();
+        }
     }
-}
 
-Exception::Exception(Status eStatus, const std::string& rMessage, const std::string& rLoc)
-    : std::runtime_error(getErrorString(eStatus) + (rMessage.empty() ? "" : " - " + rMessage))
-    , eStatus_(eStatus)
-    , sMessage_(getErrorString(eStatus_) + (rMessage.empty() ? "" : " - " + rMessage))
-    , sLocation_(rLoc)
-{
-    ;
-}
+    Exception::Exception(Status eStatus, const std::string& rMessage, const std::string& rLoc)
+        : std::runtime_error(getErrorString(eStatus) + (rMessage.empty() ? "" : " - " + rMessage)), eStatus_(eStatus), sMessage_(getErrorString(eStatus_) + (rMessage.empty() ? "" : " - " + rMessage)), sLocation_(rLoc) {
+        ;
+    }
 
-const char* Exception::what() const throw()
-{
-    return sMessage_.c_str();
-};
+    const char* Exception::what() const throw() {
+        return sMessage_.c_str();
+    };
 
-Status Exception::status() const
-{
-    return eStatus_;
-}
+    Status Exception::status() const {
+        return eStatus_;
+    }
 
-const char* Exception::where() const
-{
-    return sLocation_.c_str();
-}
+    const char* Exception::where() const {
+        return sLocation_.c_str();
+    }
 
 } // namespace nvimgcodec

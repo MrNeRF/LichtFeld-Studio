@@ -21,9 +21,9 @@
 
 namespace nvjpeg2k {
 
-using Nvjpeg2kVersion = nvimgcodec::LibraryVersion;
+    using Nvjpeg2kVersion = nvimgcodec::LibraryVersion;
 
-// Get the current nvJPEG2000 library version
-Nvjpeg2kVersion get_nvjpeg2k_version();
+    // Get the current nvJPEG2000 library version
+    Nvjpeg2kVersion get_nvjpeg2k_version();
 
-}
+} // namespace nvjpeg2k

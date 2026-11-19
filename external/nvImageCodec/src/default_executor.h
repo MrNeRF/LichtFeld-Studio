@@ -17,40 +17,39 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
-#include <map>
 #include "iexecutor.h"
 #include "thread_pool.h"
+#include <map>
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
- class ILogger; 
+    class ILogger;
 
-class DefaultExecutor : public IExecutor
-{
-  public:
-    explicit DefaultExecutor(ILogger* logger, int num_threads);
-    ~DefaultExecutor() override;
-    nvimgcodecExecutorDesc_t* getExecutorDesc() override;
+    class DefaultExecutor : public IExecutor {
+    public:
+        explicit DefaultExecutor(ILogger* logger, int num_threads);
+        ~DefaultExecutor() override;
+        nvimgcodecExecutorDesc_t* getExecutorDesc() override;
 
-  private:
-    nvimgcodecStatus_t schedule_impl(int device_id, int sample_idx, void* task_context, bool start_immediately,
-        void (*task)(int thread_id, int sample_idx, void* task_context));
-    nvimgcodecStatus_t run(int device_id);
-    nvimgcodecStatus_t wait(int device_id);
-    int get_num_threads() const;
+    private:
+        nvimgcodecStatus_t schedule_impl(int device_id, int sample_idx, void* task_context, bool start_immediately,
+                                         void (*task)(int thread_id, int sample_idx, void* task_context));
+        nvimgcodecStatus_t run(int device_id);
+        nvimgcodecStatus_t wait(int device_id);
+        int get_num_threads() const;
 
-    static nvimgcodecStatus_t static_schedule(
-        void* instance, int device_id, int sample_idx, void* task_context,
-        void (*task)(int thread_id, int sample_idx, void* task_context));
-    static nvimgcodecStatus_t static_run(void* instance, int device_id);
-    static nvimgcodecStatus_t static_wait(void* instance, int device_id);
-    static int static_get_num_threads(void* instance);
+        static nvimgcodecStatus_t static_schedule(
+            void* instance, int device_id, int sample_idx, void* task_context,
+            void (*task)(int thread_id, int sample_idx, void* task_context));
+        static nvimgcodecStatus_t static_run(void* instance, int device_id);
+        static nvimgcodecStatus_t static_wait(void* instance, int device_id);
+        static int static_get_num_threads(void* instance);
 
-    ILogger* logger_;
-    nvimgcodecExecutorDesc_t desc_;
-    int num_threads_;
-    std::map<int, ThreadPool> device_id2thread_pool_;
-};
+        ILogger* logger_;
+        nvimgcodecExecutorDesc_t desc_;
+        int num_threads_;
+        std::map<int, ThreadPool> device_id2thread_pool_;
+    };
 
 } // namespace nvimgcodec

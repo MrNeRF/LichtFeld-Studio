@@ -17,72 +17,70 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include "iimage_decoder.h"
 #include "iimage_decoder_factory.h"
 #include "image_generic_codec.h"
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
-class ImageGenericDecoder : public ImageGenericCodec<ImageGenericDecoder, IImageDecoderFactory, IImageDecoder> {
-  public:
-    ImageGenericDecoder(ILogger* logger, 
-                        ICodecRegistry* codec_registry, 
-                        const nvimgcodecExecutionParams_t* exec_params, 
-                        const char* options = nullptr)
-    : Base(logger, codec_registry, exec_params, options) {}
-    
-    ~ImageGenericDecoder() override = default;
+    class ImageGenericDecoder : public ImageGenericCodec<ImageGenericDecoder, IImageDecoderFactory, IImageDecoder> {
+    public:
+        ImageGenericDecoder(ILogger* logger,
+                            ICodecRegistry* codec_registry,
+                            const nvimgcodecExecutionParams_t* exec_params,
+                            const char* options = nullptr)
+            : Base(logger, codec_registry, exec_params, options) {}
 
-    nvimgcodecStatus_t getMetadata(ICodeStream* code_stream, nvimgcodecMetadata_t** metadata, int* metadata_count) noexcept;
+        ~ImageGenericDecoder() override = default;
 
-    void canDecode(const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images,
-            const nvimgcodecDecodeParams_t* params, nvimgcodecProcessingStatus_t* processing_status, int force_format) noexcept;
+        nvimgcodecStatus_t getMetadata(ICodeStream* code_stream, nvimgcodecMetadata_t** metadata, int* metadata_count) noexcept;
 
-    ProcessingResultsPromise::FutureImpl decode(
-        const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images, const nvimgcodecDecodeParams_t* params) noexcept;
+        void canDecode(const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images,
+                       const nvimgcodecDecodeParams_t* params, nvimgcodecProcessingStatus_t* processing_status, int force_format) noexcept;
 
-    using Base = ImageGenericCodec<ImageGenericDecoder, IImageDecoderFactory, IImageDecoder>;
-    using Factory = IImageDecoderFactory;
-    using Processor = IImageDecoder;
-    using Entry = SampleEntry<typename Base::ProcessorEntry>;
+        ProcessingResultsPromise::FutureImpl decode(
+            const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images, const nvimgcodecDecodeParams_t* params) noexcept;
 
-    static const std::string& process_name()
-    {
-        static std::string name{"decode"};
-        return name;
+        using Base = ImageGenericCodec<ImageGenericDecoder, IImageDecoderFactory, IImageDecoder>;
+        using Factory = IImageDecoderFactory;
+        using Processor = IImageDecoder;
+        using Entry = SampleEntry<typename Base::ProcessorEntry>;
+
+        static const std::string& process_name() {
+            static std::string name{"decode"};
+            return name;
+        };
+
+        static std::vector<IImageDecoderFactory*> getFactories(ICodec* codec) { return codec->getDecoderFactories(); }
+
+        static std::string getId(Factory* factory) {
+            return factory->getDecoderId();
+        }
+
+        static std::unique_ptr<IImageDecoder> createInstance(
+            const Factory* factory, const nvimgcodecExecutionParams_t* exec_params, const char* options) {
+            return factory->createDecoder(exec_params, options);
+        }
+
+        static bool hasBatchedAPI(Processor* processor) {
+            return processor->hasDecodeBatch();
+        }
+
+        static int getMiniBatchSize(Processor* processor) {
+            return processor->getMiniBatchSize();
+        }
+
+        void sortSamples();
+        nvimgcodecProcessingStatus_t canProcessImpl(Entry& sample, ProcessorEntry* processor, int tid) noexcept;
+        bool processImpl(Entry& sample, int tid) noexcept;
+        bool processBatchImpl(ProcessorEntry& processor) noexcept;
+        bool allocateTempBuffers(Entry& sample, int tid);
+        void copyToOutputBuffer(const nvimgcodecImageInfo_t& output_info, const nvimgcodecImageInfo_t& info, int tid);
+
+        // to sort
+        std::vector<uint8_t> subsampling_score_;
+        std::vector<uint64_t> area_;
     };
-
-    static std::vector<IImageDecoderFactory*> getFactories(ICodec* codec) { return codec->getDecoderFactories(); }
-
-    static std::string getId(Factory* factory) {
-        return factory->getDecoderId();
-    }
-
-    static std::unique_ptr<IImageDecoder> createInstance(
-        const Factory* factory, const nvimgcodecExecutionParams_t* exec_params, const char* options)
-    {
-        return factory->createDecoder(exec_params, options);
-    }
-
-    static bool hasBatchedAPI(Processor* processor) {
-        return processor->hasDecodeBatch();
-    }
-
-    static int getMiniBatchSize(Processor* processor) {
-        return processor->getMiniBatchSize();
-    }
-
-    void sortSamples();
-    nvimgcodecProcessingStatus_t canProcessImpl(Entry& sample, ProcessorEntry* processor, int tid) noexcept;
-    bool processImpl(Entry& sample, int tid) noexcept;
-    bool processBatchImpl(ProcessorEntry& processor) noexcept;
-    bool allocateTempBuffers(Entry& sample, int tid);
-    void copyToOutputBuffer(const nvimgcodecImageInfo_t& output_info, const nvimgcodecImageInfo_t& info, int tid);
-
-    // to sort
-    std::vector<uint8_t> subsampling_score_;
-    std::vector<uint64_t> area_;
-};
 
 } // namespace nvimgcodec

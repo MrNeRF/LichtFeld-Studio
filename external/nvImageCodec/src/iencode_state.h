@@ -17,17 +17,16 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
-#include <memory>
 #include "processing_results.h"
+#include <memory>
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
-class IEncodeState
-{
-  public:
-    virtual ~IEncodeState() = default;
-    virtual void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) = 0;
-};
+    class IEncodeState {
+    public:
+        virtual ~IEncodeState() = default;
+        virtual void setPromise(std::shared_ptr<ProcessingResultsPromise> promise) = 0;
+    };
 
 } // namespace nvimgcodec

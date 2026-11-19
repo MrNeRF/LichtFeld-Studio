@@ -17,29 +17,28 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
+#include "processing_results.h"
 #include <memory>
+#include <nvimgcodec.h>
 #include <string>
 #include <vector>
-#include "processing_results.h"
 
 namespace nvimgcodec {
 
-class IEncodeState;
-class IImage;
-class ICodeStream;
+    class IEncodeState;
+    class IImage;
+    class ICodeStream;
 
-class IImageEncoder
-{
-  public:
-    virtual ~IImageEncoder() = default;
-    virtual nvimgcodecBackendKind_t getBackendKind() const = 0;
-    virtual std::unique_ptr<IEncodeState> createEncodeStateBatch() const = 0;
-    virtual bool canEncode(const nvimgcodecCodeStreamDesc_t* code_stream, const nvimgcodecImageDesc_t* image,
-        const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) const = 0;
-    virtual bool encode(const nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageDesc_t* image,
-        const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) = 0;
-    virtual const char* encoderId() const = 0;
-};
+    class IImageEncoder {
+    public:
+        virtual ~IImageEncoder() = default;
+        virtual nvimgcodecBackendKind_t getBackendKind() const = 0;
+        virtual std::unique_ptr<IEncodeState> createEncodeStateBatch() const = 0;
+        virtual bool canEncode(const nvimgcodecCodeStreamDesc_t* code_stream, const nvimgcodecImageDesc_t* image,
+                               const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) const = 0;
+        virtual bool encode(const nvimgcodecCodeStreamDesc_t* code_stream, nvimgcodecImageDesc_t* image,
+                            const nvimgcodecEncodeParams_t* params, nvimgcodecProcessingStatus_t* status, int thread_idx) = 0;
+        virtual const char* encoderId() const = 0;
+    };
 
 } // namespace nvimgcodec

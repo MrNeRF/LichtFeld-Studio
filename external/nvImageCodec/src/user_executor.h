@@ -17,22 +17,21 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
-#include <map>
 #include "iexecutor.h"
 #include "thread_pool.h"
+#include <map>
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
-class UserExecutor : public IExecutor
-{
-  public:
-    explicit UserExecutor(nvimgcodecExecutorDesc_t* executor_desc) : desc_(executor_desc) {}
-    ~UserExecutor() override = default;
-    nvimgcodecExecutorDesc_t* getExecutorDesc() override { return desc_; }
+    class UserExecutor : public IExecutor {
+    public:
+        explicit UserExecutor(nvimgcodecExecutorDesc_t* executor_desc) : desc_(executor_desc) {}
+        ~UserExecutor() override = default;
+        nvimgcodecExecutorDesc_t* getExecutorDesc() override { return desc_; }
 
-  private:
-    nvimgcodecExecutorDesc_t* desc_;
-};
+    private:
+        nvimgcodecExecutorDesc_t* desc_;
+    };
 
 } // namespace nvimgcodec

@@ -20,62 +20,58 @@
 
 namespace nvimgcodec {
 
-constexpr bool IsPlanar(nvimgcodecSampleFormat_t fmt)
-{
-    switch (fmt)
-    {
-    case NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED:
-    case NVIMGCODEC_SAMPLEFORMAT_P_RGBA:
-    case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
-    case NVIMGCODEC_SAMPLEFORMAT_P_BGR:
-    case NVIMGCODEC_SAMPLEFORMAT_P_YUV:
-    case NVIMGCODEC_SAMPLEFORMAT_P_YA:
-    case NVIMGCODEC_SAMPLEFORMAT_P_Y:
-        return true;
-    default:
-        return false;
+    constexpr bool IsPlanar(nvimgcodecSampleFormat_t fmt) {
+        switch (fmt) {
+        case NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED:
+        case NVIMGCODEC_SAMPLEFORMAT_P_RGBA:
+        case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
+        case NVIMGCODEC_SAMPLEFORMAT_P_BGR:
+        case NVIMGCODEC_SAMPLEFORMAT_P_YUV:
+        case NVIMGCODEC_SAMPLEFORMAT_P_YA:
+        case NVIMGCODEC_SAMPLEFORMAT_P_Y:
+            return true;
+        default:
+            return false;
+        }
     }
-}
 
-constexpr bool IsRgb(nvimgcodecSampleFormat_t fmt) {
-    switch (fmt) {
+    constexpr bool IsRgb(nvimgcodecSampleFormat_t fmt) {
+        switch (fmt) {
         case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
         case NVIMGCODEC_SAMPLEFORMAT_I_RGB:
             return true;
         default:
             return false;
+        }
     }
-}
 
-constexpr bool IsBgr(nvimgcodecSampleFormat_t fmt) {
-    switch (fmt) {
+    constexpr bool IsBgr(nvimgcodecSampleFormat_t fmt) {
+        switch (fmt) {
         case NVIMGCODEC_SAMPLEFORMAT_P_BGR:
         case NVIMGCODEC_SAMPLEFORMAT_I_BGR:
             return true;
         default:
             return false;
+        }
     }
-}
 
-constexpr bool IsGray(nvimgcodecSampleFormat_t fmt) {
-    switch (fmt) {
+    constexpr bool IsGray(nvimgcodecSampleFormat_t fmt) {
+        switch (fmt) {
         case NVIMGCODEC_SAMPLEFORMAT_P_Y:
         case NVIMGCODEC_SAMPLEFORMAT_I_Y:
             return true;
         default:
             return false;
+        }
     }
-}
 
-constexpr int NumberOfChannels(const nvimgcodecImageInfo_t& info)
-{
-    return IsPlanar(info.sample_format) ? info.num_planes : info.plane_info[0].num_channels;
-}
+    constexpr int NumberOfChannels(const nvimgcodecImageInfo_t& info) {
+        return IsPlanar(info.sample_format) ? info.num_planes : info.plane_info[0].num_channels;
+    }
 
-constexpr bool IsSampleFormatInterleaved(nvimgcodecSampleFormat_t sample_format)
-{
-    //First bit of sample format says if this is interleaved or not
-    return static_cast<int>(sample_format) % 2 == 0 ;
-}
+    constexpr bool IsSampleFormatInterleaved(nvimgcodecSampleFormat_t sample_format) {
+        // First bit of sample format says if this is interleaved or not
+        return static_cast<int>(sample_format) % 2 == 0;
+    }
 
-}  // namespace nvimgcodec
+} // namespace nvimgcodec

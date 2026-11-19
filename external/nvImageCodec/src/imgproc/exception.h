@@ -17,55 +17,53 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
 #include <iostream>
 #include <sstream>
-#include <string>
 #include <stdexcept>
-#include <cuda_runtime.h>
+#include <string>
 
 namespace nvimgcodec {
 
-enum Status
-{
-    STATUS_OK = 0,
-    NOT_VALID_FORMAT_STATUS = 1,
-    UNSUPPORTED_FORMAT_STATUS = 2,
-    BAD_FORMAT_STATUS = 3,
-    PARSE_STATUS = 4,
-    ALLOCATION_ERROR = 5,
-    INTERNAL_ERROR = 6,
-    INVALID_PARAMETER = 7,
-    CUDA_CALL_ERROR = 8,
-    BAD_STATE = 9,
-    ARCH_MISMATCH = 10
-};
+    enum Status {
+        STATUS_OK = 0,
+        NOT_VALID_FORMAT_STATUS = 1,
+        UNSUPPORTED_FORMAT_STATUS = 2,
+        BAD_FORMAT_STATUS = 3,
+        PARSE_STATUS = 4,
+        ALLOCATION_ERROR = 5,
+        INTERNAL_ERROR = 6,
+        INVALID_PARAMETER = 7,
+        CUDA_CALL_ERROR = 8,
+        BAD_STATE = 9,
+        ARCH_MISMATCH = 10
+    };
 
-const char* getErrorString(Status);
+    const char* getErrorString(Status);
 
-// Derives from std::runtime_error, not std::exception directly: the thunks at the C boundary now
-// catch std::exception, but plenty of handlers inside the extensions and parsers still narrow to
-// std::runtime_error, and an exception that escaped one of those would skip the per-sample
-// imageReady() call and stall the batch.
-class Exception : public std::runtime_error
-{
-  public:
-    explicit Exception(
-        Status eStatus, const std::string& rMessage = "", const std::string& rLoc = "");
+    // Derives from std::runtime_error, not std::exception directly: the thunks at the C boundary now
+    // catch std::exception, but plenty of handlers inside the extensions and parsers still narrow to
+    // std::runtime_error, and an exception that escaped one of those would skip the per-sample
+    // imageReady() call and stall the batch.
+    class Exception : public std::runtime_error {
+    public:
+        explicit Exception(
+            Status eStatus, const std::string& rMessage = "", const std::string& rLoc = "");
 
-    inline virtual ~Exception() throw() { ; }
+        inline virtual ~Exception() throw() { ; }
 
-    virtual const char* what() const throw();
+        virtual const char* what() const throw();
 
-    Status status() const;
+        Status status() const;
 
-    const char* where() const;
+        const char* where() const;
 
-  private:
-    Exception();
-    Status eStatus_;
-    std::string sMessage_;
-    std::string sLocation_;
-};
+    private:
+        Exception();
+        Status eStatus_;
+        std::string sMessage_;
+        std::string sLocation_;
+    };
 
 #define FatalError(status, message)                     \
     {                                                   \
@@ -80,22 +78,21 @@ class Exception : public std::runtime_error
             FatalError(INVALID_PARAMETER, "null pointer"); \
     }
 
-
 #ifndef CHECK_CUDA
-#define CHECK_CUDA(call)                                                       \
-    {                                                                          \
-        cudaError_t _e = (call);                                               \
-        if (_e != cudaSuccess) {                                               \
-            std::stringstream _error;                                          \
-            _error << "CUDA Runtime failure '#" << std::to_string(_e) << "'"   \
-                << " : " << cudaGetErrorString(_e);                            \
-            cudaGetLastError(); /* clean that error for any further calls */   \
-            if (_e == cudaErrorMemoryAllocation) {                             \
-                FatalError(ALLOCATION_ERROR, _error.str());                    \
-            } else {                                                           \
-                FatalError(CUDA_CALL_ERROR, _error.str());                     \
-            }                                                                  \
-        }                                                                      \
+#define CHECK_CUDA(call)                                                     \
+    {                                                                        \
+        cudaError_t _e = (call);                                             \
+        if (_e != cudaSuccess) {                                             \
+            std::stringstream _error;                                        \
+            _error << "CUDA Runtime failure '#" << std::to_string(_e) << "'" \
+                   << " : " << cudaGetErrorString(_e);                       \
+            cudaGetLastError(); /* clean that error for any further calls */ \
+            if (_e == cudaErrorMemoryAllocation) {                           \
+                FatalError(ALLOCATION_ERROR, _error.str());                  \
+            } else {                                                         \
+                FatalError(CUDA_CALL_ERROR, _error.str());                   \
+            }                                                                \
+        }                                                                    \
     }
 #endif
 
@@ -122,15 +119,15 @@ class Exception : public std::runtime_error
     }
 
 #ifndef CHECK_CU
- #define CHECK_CU(call)                                                                             \
-     {                                                                                              \
-         CUresult _e = (call);                                                                      \
-         if (_e != CUDA_SUCCESS) {                                                                  \
-             std::stringstream _error;                                                              \
-             _error << "CUDA Driver API failure: '#" << std::to_string(_e) << "'";                  \
-             FatalError(CUDA_CALL_ERROR, _error.str());                                             \
-         }                                                                                          \
-     }
+#define CHECK_CU(call)                                                            \
+    {                                                                             \
+        CUresult _e = (call);                                                     \
+        if (_e != CUDA_SUCCESS) {                                                 \
+            std::stringstream _error;                                             \
+            _error << "CUDA Driver API failure: '#" << std::to_string(_e) << "'"; \
+            FatalError(CUDA_CALL_ERROR, _error.str());                            \
+        }                                                                         \
+    }
 #endif
 
 } // namespace nvimgcodec

@@ -19,13 +19,11 @@
 
 #include <nvimgcodec.h>
 
-
 namespace nvimgcodec {
 
-class IDebugMessenger
-{
-  public:
-    virtual ~IDebugMessenger() = default;
-    virtual const nvimgcodecDebugMessengerDesc_t* getDesc() = 0;
-};
+    class IDebugMessenger {
+    public:
+        virtual ~IDebugMessenger() = default;
+        virtual const nvimgcodecDebugMessengerDesc_t* getDesc() = 0;
+    };
 } // namespace nvimgcodec

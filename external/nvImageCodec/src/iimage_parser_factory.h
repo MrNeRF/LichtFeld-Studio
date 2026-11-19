@@ -17,22 +17,21 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include <memory>
+#include <nvimgcodec.h>
 #include <string>
 
 namespace nvimgcodec {
 
-class IImageParser;
-class IImageParserFactory
-{
-  public:
-    virtual ~IImageParserFactory() = default;
-    virtual std::string getParserId() const = 0;
-    virtual std::string getCodecName() const = 0;
-    virtual const nvimgcodecParserDesc_t* getParserDesc() const = 0;
-    virtual bool canParse(nvimgcodecCodeStreamDesc_t* code_stream) = 0;
-    virtual std::unique_ptr<IImageParser> createParser() const = 0;
-};
+    class IImageParser;
+    class IImageParserFactory {
+    public:
+        virtual ~IImageParserFactory() = default;
+        virtual std::string getParserId() const = 0;
+        virtual std::string getCodecName() const = 0;
+        virtual const nvimgcodecParserDesc_t* getParserDesc() const = 0;
+        virtual bool canParse(nvimgcodecCodeStreamDesc_t* code_stream) = 0;
+        virtual std::unique_ptr<IImageParser> createParser() const = 0;
+    };
 
 } // namespace nvimgcodec

@@ -51,23 +51,23 @@
  * ```
  *
  * TypeTag is a proposed name for mapping types to TypeId
-*/
+ */
 
+#include <boost/preprocessor/punctuation/remove_parens.hpp>
 #include <boost/preprocessor/seq/for_each.hpp>
 #include <boost/preprocessor/variadic/to_seq.hpp>
-#include <boost/preprocessor/punctuation/remove_parens.hpp>
 
 // HC SVNT DRACONES
 
 #define NVIMGCODEC_REMOVE_PAREN_IMPL(...) __VA_ARGS__
-#define NVIMGCODEC_REMOVE_PAREN(args) NVIMGCODEC_REMOVE_PAREN_IMPL args
+#define NVIMGCODEC_REMOVE_PAREN(args)     NVIMGCODEC_REMOVE_PAREN_IMPL args
 
 #define NVIMGCODEC_TYPE_SWITCH_IMPL3(type_, type_tag_, type_name_, code_, ...) \
     case type_tag_<BOOST_PP_REMOVE_PARENS(type_)>::value: {                    \
         using type_name_ = BOOST_PP_REMOVE_PARENS(type_);                      \
         BOOST_PP_REMOVE_PARENS(code_);                                         \
-        __VA_ARGS__ \
-  } break;
+        __VA_ARGS__                                                            \
+    } break;
 
 #define NVIMGCODEC_TYPE_SWITCH_IMPL2(...) NVIMGCODEC_TYPE_SWITCH_IMPL3(__VA_ARGS__)
 
@@ -99,22 +99,25 @@
 ///  ), assert(!"Unsupported input type");
 /// )
 /// ```
-#define TYPE_SWITCH(id_, type_tag_, type_name_, types, case_, default_) switch (id_) { \
-    BOOST_PP_SEQ_FOR_EACH(NVIMGCODEC_TYPE_SWITCH_IMPL, (type_tag_, type_name_, case_), \
-                          BOOST_PP_VARIADIC_TO_SEQ(NVIMGCODEC_REMOVE_PAREN(types))) \
-  default: \
-  { BOOST_PP_REMOVE_PARENS(default_); } \
-  }
+#define TYPE_SWITCH(id_, type_tag_, type_name_, types, case_, default_)                    \
+    switch (id_) {                                                                         \
+        BOOST_PP_SEQ_FOR_EACH(NVIMGCODEC_TYPE_SWITCH_IMPL, (type_tag_, type_name_, case_), \
+                              BOOST_PP_VARIADIC_TO_SEQ(NVIMGCODEC_REMOVE_PAREN(types)))    \
+    default: {                                                                             \
+        BOOST_PP_REMOVE_PARENS(default_);                                                  \
+    }                                                                                      \
+    }
 
-#define NVIMGCODEC_VALUE_SWITCH_IMPL3(value_, value_name_, code_) case value_: { \
-  const auto value_name_ = value_; \
-    BOOST_PP_REMOVE_PARENS(code_); \
-  } break; \
+#define NVIMGCODEC_VALUE_SWITCH_IMPL3(value_, value_name_, code_) \
+    case value_: {                                                \
+        const auto value_name_ = value_;                          \
+        BOOST_PP_REMOVE_PARENS(code_);                            \
+    } break;
 
 #define NVIMGCODEC_VALUE_SWITCH_IMPL2(...) NVIMGCODEC_VALUE_SWITCH_IMPL3(__VA_ARGS__)
 
 #define NVIMGCODEC_VALUE_SWITCH_IMPL(r, args, value) \
-  NVIMGCODEC_VALUE_SWITCH_IMPL2(value, NVIMGCODEC_REMOVE_PAREN(args))
+    NVIMGCODEC_VALUE_SWITCH_IMPL2(value, NVIMGCODEC_REMOVE_PAREN(args))
 
 /// Pastes the case_ code specialized for each value in values.
 /// The specialization is performed by aliasing a value with a constant named constant_name_
@@ -133,12 +136,14 @@
 ///   ), assert(!"Unsupported number of channels");
 /// )
 /// ```
-#define VALUE_SWITCH(value_, value_name_, values, case_, default_) switch (value_) { \
-    BOOST_PP_SEQ_FOR_EACH(NVIMGCODEC_VALUE_SWITCH_IMPL, (value_name_, case_), \
-                          BOOST_PP_VARIADIC_TO_SEQ(NVIMGCODEC_REMOVE_PAREN(values))) \
-  default: \
-  { BOOST_PP_REMOVE_PARENS(default_); } \
-  }
+#define VALUE_SWITCH(value_, value_name_, values, case_, default_)                       \
+    switch (value_) {                                                                    \
+        BOOST_PP_SEQ_FOR_EACH(NVIMGCODEC_VALUE_SWITCH_IMPL, (value_name_, case_),        \
+                              BOOST_PP_VARIADIC_TO_SEQ(NVIMGCODEC_REMOVE_PAREN(values))) \
+    default: {                                                                           \
+        BOOST_PP_REMOVE_PARENS(default_);                                                \
+    }                                                                                    \
+    }
 
 /// Pastes the case_ code specialized for true and false values.
 /// The specialization is performed by aliasing a value with a constant named constant_name_
@@ -154,11 +159,11 @@
 ///   )
 /// )
 /// ```
-#define BOOL_SWITCH(expr_, const_name_, code_)   \
-  if (expr_) {                                   \
-    constexpr bool const_name_ = true;           \
-    BOOST_PP_REMOVE_PARENS(code_);               \
-  } else {                                       \
-    constexpr bool const_name_ = false;          \
-    BOOST_PP_REMOVE_PARENS(code_);               \
-  }
+#define BOOL_SWITCH(expr_, const_name_, code_) \
+    if (expr_) {                               \
+        constexpr bool const_name_ = true;     \
+        BOOST_PP_REMOVE_PARENS(code_);         \
+    } else {                                   \
+        constexpr bool const_name_ = false;    \
+        BOOST_PP_REMOVE_PARENS(code_);         \
+    }

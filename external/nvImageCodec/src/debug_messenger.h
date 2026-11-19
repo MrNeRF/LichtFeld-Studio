@@ -23,13 +23,13 @@
 
 namespace nvimgcodec {
 
-class DebugMessenger : public IDebugMessenger
-{
-  public:
-    DebugMessenger(const nvimgcodecDebugMessengerDesc_t* desc): desc_(*desc){}
-    const nvimgcodecDebugMessengerDesc_t* getDesc() override { return &desc_; }
-  private:
-    const nvimgcodecDebugMessengerDesc_t desc_;
-};
+    class DebugMessenger : public IDebugMessenger {
+    public:
+        DebugMessenger(const nvimgcodecDebugMessengerDesc_t* desc) : desc_(*desc) {}
+        const nvimgcodecDebugMessengerDesc_t* getDesc() override { return &desc_; }
 
-} //namespace nvimgcodec
+    private:
+        const nvimgcodecDebugMessengerDesc_t desc_;
+    };
+
+} // namespace nvimgcodec

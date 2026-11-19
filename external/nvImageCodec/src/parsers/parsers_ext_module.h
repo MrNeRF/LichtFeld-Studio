@@ -21,6 +21,6 @@
 
 namespace nvimgcodec {
 
-nvimgcodecStatus_t get_parsers_extension_desc(nvimgcodecExtensionDesc_t* ext_desc);
+    nvimgcodecStatus_t get_parsers_extension_desc(nvimgcodecExtensionDesc_t* ext_desc);
 
 } // namespace nvimgcodec

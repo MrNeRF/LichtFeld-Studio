@@ -43,4 +43,4 @@ namespace nvimgcodec {
 #define NVIMGCODEC_DEVICE
 #endif
 
-}  // namespace nvimgcodec
+} // namespace nvimgcodec

@@ -27,71 +27,65 @@
 
 namespace nvimgcodec {
 
-void ProcessingResultsPromise::set(int index, ProcessingResult res) {
-  if (is_set_[index].exchange(true))
-    throw std::runtime_error("Processing results for sample " + std::to_string(index) + " was already set.");
-  results_[index] = res.status_;
-  if (pending_.fetch_sub(1) == 1) { // last one
-    is_all_set_.store(true);
-    promise_impl_.set_value(results_);
-  }
-}
+    void ProcessingResultsPromise::set(int index, ProcessingResult res) {
+        if (is_set_[index].exchange(true))
+            throw std::runtime_error("Processing results for sample " + std::to_string(index) + " was already set.");
+        results_[index] = res.status_;
+        if (pending_.fetch_sub(1) == 1) { // last one
+            is_all_set_.store(true);
+            promise_impl_.set_value(results_);
+        }
+    }
 
-void ProcessingResultsPromise::set(const std::vector<std::pair<int, nvimgcodecProcessingStatus_t>>& results) {
-  if (results.empty()) {
-    return;  // nothing to do
-  }
-  for (auto& result : results) {
-    int sample_idx = result.first;
-    auto status = result.second;
-    if (is_set_[sample_idx].exchange(true))
-      throw std::runtime_error("Processing results for sample " + std::to_string(sample_idx) + " was already set.");
-    results_[sample_idx] = status;
-  }
-  if (pending_.fetch_sub(results.size()) == results.size()) { // last elements
-      is_all_set_.store(true);
-      promise_impl_.set_value(results_);
-  }
-}
+    void ProcessingResultsPromise::set(const std::vector<std::pair<int, nvimgcodecProcessingStatus_t>>& results) {
+        if (results.empty()) {
+            return; // nothing to do
+        }
+        for (auto& result : results) {
+            int sample_idx = result.first;
+            auto status = result.second;
+            if (is_set_[sample_idx].exchange(true))
+                throw std::runtime_error("Processing results for sample " + std::to_string(sample_idx) + " was already set.");
+            results_[sample_idx] = status;
+        }
+        if (pending_.fetch_sub(results.size()) == results.size()) { // last elements
+            is_all_set_.store(true);
+            promise_impl_.set_value(results_);
+        }
+    }
 
-void ProcessingResultsPromise::setAll(ProcessingResult res)
-{
-  size_t size = getNumSamples();
-  for (size_t index = 0; index < size; index++)
-    set(index, res);
-}
+    void ProcessingResultsPromise::setAll(ProcessingResult res) {
+        size_t size = getNumSamples();
+        for (size_t index = 0; index < size; index++)
+            set(index, res);
+    }
 
-bool ProcessingResultsPromise::isSet(int index) const
-{
-  return is_set_[index].load();
-}
+    bool ProcessingResultsPromise::isSet(int index) const {
+        return is_set_[index].load();
+    }
 
-bool ProcessingResultsPromise::isAllSet() const
-{
-  return is_all_set_.load();
-}
+    bool ProcessingResultsPromise::isAllSet() const {
+        return is_all_set_.load();
+    }
 
-int ProcessingResultsPromise::getNumSamples() const {
-  return results_.size();
-}
+    int ProcessingResultsPromise::getNumSamples() const {
+        return results_.size();
+    }
 
-ProcessingResultsPromise::FutureImpl ProcessingResultsPromise::getFuture() {
-  return promise_impl_.get_future();
-}
+    ProcessingResultsPromise::FutureImpl ProcessingResultsPromise::getFuture() {
+        return promise_impl_.get_future();
+    }
 
-ProcessingResultsPromise::ProcessingResultsPromise(int num_samples)
-    : results_(num_samples)
-    , is_set_(num_samples)
-    , pending_(num_samples)
-{
-  for (auto& elem: is_set_)
-    elem.store(false);
-  is_all_set_.store(false);
+    ProcessingResultsPromise::ProcessingResultsPromise(int num_samples)
+        : results_(num_samples), is_set_(num_samples), pending_(num_samples) {
+        for (auto& elem : is_set_)
+            elem.store(false);
+        is_all_set_.store(false);
 
-  if (num_samples == 0) {
-    is_all_set_.store(true);
-    promise_impl_.set_value(results_);
-  }
-}
+        if (num_samples == 0) {
+            is_all_set_.store(true);
+            promise_impl_.set_value(results_);
+        }
+    }
 
 } // namespace nvimgcodec

@@ -17,62 +17,57 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include <cstddef>
 #include <initializer_list>
+#include <nvimgcodec.h>
 
 namespace nvimgcodec {
 
-// registerFileExtension / unregisterFileExtension were appended to
-// nvimgcodecFrameworkDesc_t. Read struct_size before those pointers so an
-// extension built against this header does not load them from an older, shorter
-// descriptor.
-// The threshold is deliberately the end of unregisterFileExtension, not
-// sizeof(nvimgcodecFrameworkDesc_t), so appending future members does not
-// disable this API. Register also requires unregisterFileExtension to be in
-// the struct: both members shipped together, and a register-only descriptor
-// is treated as not having the API.
-inline bool hasFileExtensionApi(const nvimgcodecFrameworkDesc_t* framework)
-{
-    return framework != nullptr &&
-           framework->struct_size >= offsetof(nvimgcodecFrameworkDesc_t, unregisterFileExtension) +
-                                         sizeof(framework->unregisterFileExtension);
-}
-
-template <typename Extensions>
-inline void registerCodecFileExtensions(
-    const nvimgcodecFrameworkDesc_t* framework, const char* codec, const Extensions& file_extensions, int is_default = 0)
-{
-    if (!hasFileExtensionApi(framework) || framework->registerFileExtension == nullptr || codec == nullptr) {
-        return;
+    // registerFileExtension / unregisterFileExtension were appended to
+    // nvimgcodecFrameworkDesc_t. Read struct_size before those pointers so an
+    // extension built against this header does not load them from an older, shorter
+    // descriptor.
+    // The threshold is deliberately the end of unregisterFileExtension, not
+    // sizeof(nvimgcodecFrameworkDesc_t), so appending future members does not
+    // disable this API. Register also requires unregisterFileExtension to be in
+    // the struct: both members shipped together, and a register-only descriptor
+    // is treated as not having the API.
+    inline bool hasFileExtensionApi(const nvimgcodecFrameworkDesc_t* framework) {
+        return framework != nullptr &&
+               framework->struct_size >= offsetof(nvimgcodecFrameworkDesc_t, unregisterFileExtension) +
+                                             sizeof(framework->unregisterFileExtension);
     }
-    for (const char* ext : file_extensions) {
-        framework->registerFileExtension(framework->instance, codec, ext, is_default);
-    }
-}
 
-template <typename Extensions>
-inline void unregisterCodecFileExtensions(
-    const nvimgcodecFrameworkDesc_t* framework, const char* codec, const Extensions& file_extensions)
-{
-    if (!hasFileExtensionApi(framework) || framework->unregisterFileExtension == nullptr || codec == nullptr) {
-        return;
+    template <typename Extensions>
+    inline void registerCodecFileExtensions(
+        const nvimgcodecFrameworkDesc_t* framework, const char* codec, const Extensions& file_extensions, int is_default = 0) {
+        if (!hasFileExtensionApi(framework) || framework->registerFileExtension == nullptr || codec == nullptr) {
+            return;
+        }
+        for (const char* ext : file_extensions) {
+            framework->registerFileExtension(framework->instance, codec, ext, is_default);
+        }
     }
-    for (const char* ext : file_extensions) {
-        framework->unregisterFileExtension(framework->instance, codec, ext);
+
+    template <typename Extensions>
+    inline void unregisterCodecFileExtensions(
+        const nvimgcodecFrameworkDesc_t* framework, const char* codec, const Extensions& file_extensions) {
+        if (!hasFileExtensionApi(framework) || framework->unregisterFileExtension == nullptr || codec == nullptr) {
+            return;
+        }
+        for (const char* ext : file_extensions) {
+            framework->unregisterFileExtension(framework->instance, codec, ext);
+        }
     }
-}
 
-inline void registerCodecFileExtensions(const nvimgcodecFrameworkDesc_t* framework, const char* codec,
-    std::initializer_list<const char*> file_extensions, int is_default = 0)
-{
-    registerCodecFileExtensions<std::initializer_list<const char*>>(framework, codec, file_extensions, is_default);
-}
+    inline void registerCodecFileExtensions(const nvimgcodecFrameworkDesc_t* framework, const char* codec,
+                                            std::initializer_list<const char*> file_extensions, int is_default = 0) {
+        registerCodecFileExtensions<std::initializer_list<const char*>>(framework, codec, file_extensions, is_default);
+    }
 
-inline void unregisterCodecFileExtensions(
-    const nvimgcodecFrameworkDesc_t* framework, const char* codec, std::initializer_list<const char*> file_extensions)
-{
-    unregisterCodecFileExtensions<std::initializer_list<const char*>>(framework, codec, file_extensions);
-}
+    inline void unregisterCodecFileExtensions(
+        const nvimgcodecFrameworkDesc_t* framework, const char* codec, std::initializer_list<const char*> file_extensions) {
+        unregisterCodecFileExtensions<std::initializer_list<const char*>>(framework, codec, file_extensions);
+    }
 
 } // namespace nvimgcodec

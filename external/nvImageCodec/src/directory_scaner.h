@@ -17,30 +17,28 @@
 
 #pragma once
 
+#include "idirectory_scaner.h"
 #include <filesystem>
 #include <string>
-#include "idirectory_scaner.h"
 
 namespace fs = std::filesystem;
 
 namespace nvimgcodec {
 
-class DirectoryScaner : public IDirectoryScaner
-{
-  public:
-    void start(const fs::path& directory) override { dir_it_ = fs::directory_iterator(directory); }
-    bool hasMore() override { return dir_it_ != fs::directory_iterator(); }
-    fs::path next() override
-    {
-        fs::path tmp = dir_it_->path();
-        dir_it_++;
-        return tmp;
-    }
-    fs::file_status symlinkStatus(const fs::path& p) override { return fs::symlink_status(p); }
-    bool exists(const fs::path& p) override { return std::filesystem::exists(p); }
+    class DirectoryScaner : public IDirectoryScaner {
+    public:
+        void start(const fs::path& directory) override { dir_it_ = fs::directory_iterator(directory); }
+        bool hasMore() override { return dir_it_ != fs::directory_iterator(); }
+        fs::path next() override {
+            fs::path tmp = dir_it_->path();
+            dir_it_++;
+            return tmp;
+        }
+        fs::file_status symlinkStatus(const fs::path& p) override { return fs::symlink_status(p); }
+        bool exists(const fs::path& p) override { return std::filesystem::exists(p); }
 
-  private:
-    fs::directory_iterator dir_it_;
-};
+    private:
+        fs::directory_iterator dir_it_;
+    };
 
 } // namespace nvimgcodec

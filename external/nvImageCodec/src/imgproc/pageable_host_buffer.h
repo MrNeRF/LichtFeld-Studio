@@ -17,27 +17,26 @@
 
 #pragma once
 
-#include <nvimgcodec.h>
 #include <memory>
+#include <nvimgcodec.h>
 
-#include "imgproc/device_buffer.h"  // for DeleterStrategy
+#include "imgproc/device_buffer.h" // for DeleterStrategy
 
 namespace nvimgcodec {
 
-// Plain pageable host buffer. Used for CPU-only decode on driverless hosts
-// where cudaMallocHost (which calls cudaGetDeviceCount under the hood) is
-// unavailable.
-struct PageableHostBuffer
-{
-    PageableHostBuffer() = default;
-    void resize(size_t new_size);
-    void alloc_impl(size_t new_size);
+    // Plain pageable host buffer. Used for CPU-only decode on driverless hosts
+    // where cudaMallocHost (which calls cudaGetDeviceCount under the hood) is
+    // unavailable.
+    struct PageableHostBuffer {
+        PageableHostBuffer() = default;
+        void resize(size_t new_size);
+        void alloc_impl(size_t new_size);
 
-    std::shared_ptr<void> d_ptr;
-    void* data = nullptr;
-    size_t capacity = 0;
-    size_t size = 0;
-    std::shared_ptr<DeleterStrategy> deleter_strategy;
-};
+        std::shared_ptr<void> d_ptr;
+        void* data = nullptr;
+        size_t capacity = 0;
+        size_t size = 0;
+        std::shared_ptr<DeleterStrategy> deleter_strategy;
+    };
 
-} // end nvimgcodec
+} // namespace nvimgcodec

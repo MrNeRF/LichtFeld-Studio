@@ -23,99 +23,98 @@
 #ifdef __CUDA_ARCH__
 #include <cuda_runtime.h>
 #else
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #endif
-#include <cstdint>
-#include "host_dev.h"
 #include "force_inline.h"
+#include "host_dev.h"
+#include <cstdint>
 
 #ifndef M_PI
-    #define M_PI 3.14159265358979323846
+#define M_PI 3.14159265358979323846
 #endif
 
 namespace nvimgcodec {
 
-/// @brief Round down and convert to integer
-inline NVIMGCODEC_HOST_DEV int floor_int(float x) {
+    /// @brief Round down and convert to integer
+    inline NVIMGCODEC_HOST_DEV int floor_int(float x) {
 #ifdef __CUDA_ARCH__
-  return __float2int_rd(x);
+        return __float2int_rd(x);
 #else
-  return static_cast<int>(std::floor(x));
+        return static_cast<int>(std::floor(x));
 #endif
-}
+    }
 
-/// @brief Round up and convert to integer
-inline NVIMGCODEC_HOST_DEV int ceil_int(float x) {
+    /// @brief Round up and convert to integer
+    inline NVIMGCODEC_HOST_DEV int ceil_int(float x) {
 #ifdef __CUDA_ARCH__
-  return __float2int_ru(x);
+        return __float2int_ru(x);
 #else
-  return static_cast<int>(std::ceil(x));
+        return static_cast<int>(std::ceil(x));
 #endif
-}
+    }
 
-/// @brief Round to nearest integer and convert
-inline NVIMGCODEC_HOST_DEV int round_int(float x) {
+    /// @brief Round to nearest integer and convert
+    inline NVIMGCODEC_HOST_DEV int round_int(float x) {
 #ifdef __CUDA_ARCH__
-  return __float2int_rn(x);
+        return __float2int_rn(x);
 #else
-  return static_cast<int>(std::roundf(x));
+        return static_cast<int>(std::roundf(x));
 #endif
-}
+    }
 
-template <typename T>
-NVIMGCODEC_HOST_DEV constexpr T clamp(const T &value, const T &lo, const T &hi) {
-  // Going through intermediate value saves us a jump
-  #ifdef __CUDA_ARCH__
-    return ::min(hi, ::max(value, lo));
-  #else
-    T x = value < lo ? lo : value;
-    return x > hi ? hi : x;
-  #endif
-}
-
-/// @brief Ceil division: smallest integer >= x / d. The divisor d must be non-zero.
-///
-/// Overflow-safe: the naive (x + d - 1) / d wraps the numerator for large x (e.g. x near the
-/// type maximum), silently producing 0 and causing a downstream division-by-zero when the
-/// result is later used as a divisor. x / d + (x % d != 0) never overflows.
-template <typename T, typename V>
-NVIMGCODEC_HOST_DEV constexpr T div_up(T x, V d) {
-  return x / d + (x % d != 0 ? 1 : 0);
-}
-
-/// @brief Calculate square root reciprocal.
-NVIMGCODEC_HOST_DEV inline float rsqrt(float x) {
+    template <typename T>
+    NVIMGCODEC_HOST_DEV constexpr T clamp(const T& value, const T& lo, const T& hi) {
+// Going through intermediate value saves us a jump
 #ifdef __CUDA_ARCH__
-  return __frsqrt_rn(x);
+        return ::min(hi, ::max(value, lo));
+#else
+        T x = value < lo ? lo : value;
+        return x > hi ? hi : x;
+#endif
+    }
+
+    /// @brief Ceil division: smallest integer >= x / d. The divisor d must be non-zero.
+    ///
+    /// Overflow-safe: the naive (x + d - 1) / d wraps the numerator for large x (e.g. x near the
+    /// type maximum), silently producing 0 and causing a downstream division-by-zero when the
+    /// result is later used as a divisor. x / d + (x % d != 0) never overflows.
+    template <typename T, typename V>
+    NVIMGCODEC_HOST_DEV constexpr T div_up(T x, V d) {
+        return x / d + (x % d != 0 ? 1 : 0);
+    }
+
+    /// @brief Calculate square root reciprocal.
+    NVIMGCODEC_HOST_DEV inline float rsqrt(float x) {
+#ifdef __CUDA_ARCH__
+        return __frsqrt_rn(x);
 #elif defined __SSE__
-  // Use SSE intrinsic and one Newton-Raphson refinement step
-  // - faster and less hacky than the hack below.
-  __m128 X = _mm_set_ss(x);
-  __m128 tmp = _mm_rsqrt_ss(X);
-  float y = _mm_cvtss_f32(tmp);
-  return y * (1.5f - x*0.5f * y*y);
+        // Use SSE intrinsic and one Newton-Raphson refinement step
+        // - faster and less hacky than the hack below.
+        __m128 X = _mm_set_ss(x);
+        __m128 tmp = _mm_rsqrt_ss(X);
+        float y = _mm_cvtss_f32(tmp);
+        return y * (1.5f - x * 0.5f * y * y);
 #else
-  // Fallback to bit-level hacking.
-  // https://en.wikipedia.org/wiki/Fast_inverse_square_root
-  int32_t i;
-  float x2, y;
-  x2 = x * 0.5f;
-  y  = x;
-  i  = *(const int32_t*)&y;
-  i  = 0x5F375A86 - (i >> 1);
-  y  = *(const float *)&i;
-  // Two Newton-Raphson steps gives 5-6 significant digits
-  y  = y * (1.5f - (x2 * y * y));
-  y  = y * (1.5f - (x2 * y * y));
-  return y;
+        // Fallback to bit-level hacking.
+        // https://en.wikipedia.org/wiki/Fast_inverse_square_root
+        int32_t i;
+        float x2, y;
+        x2 = x * 0.5f;
+        y = x;
+        i = *(const int32_t*)&y;
+        i = 0x5F375A86 - (i >> 1);
+        y = *(const float*)&i;
+        // Two Newton-Raphson steps gives 5-6 significant digits
+        y = y * (1.5f - (x2 * y * y));
+        y = y * (1.5f - (x2 * y * y));
+        return y;
 #endif
-}
+    }
 
-/// @brief Calculate square root reciprocal.
-NVIMGCODEC_HOST_DEV inline double rsqrt(double x) {
-  return 1.0/sqrt(x);
-}
+    /// @brief Calculate square root reciprocal.
+    NVIMGCODEC_HOST_DEV inline double rsqrt(double x) {
+        return 1.0 / sqrt(x);
+    }
 
-
-}  // namespace nvimgcodec
+} // namespace nvimgcodec

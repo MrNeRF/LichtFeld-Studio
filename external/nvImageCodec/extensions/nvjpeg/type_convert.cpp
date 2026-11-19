@@ -16,12 +16,11 @@
  */
 #include "type_convert.h"
 
-nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format, nvimgcodecSampleDataType_t nvimgcodec_data_type)
-{
+nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format, nvimgcodecSampleDataType_t nvimgcodec_data_type) {
     switch (nvimgcodec_format) {
     case NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED:
         return NVJPEG_OUTPUT_UNCHANGED;
-    case NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED:{
+    case NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED: {
         if (nvimgcodec_data_type == NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
             return NVJPEG_OUTPUT_UNCHANGEDI_U16;
         } else {
@@ -53,8 +52,7 @@ nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgc
     }
 }
 
-nvjpegExifOrientation_t nvimgcodec_to_nvjpeg_orientation(nvimgcodecOrientation_t orientation)
-{
+nvjpegExifOrientation_t nvimgcodec_to_nvjpeg_orientation(nvimgcodecOrientation_t orientation) {
     if (orientation.rotated == 0 && !orientation.flip_x && !orientation.flip_y) {
         return NVJPEG_ORIENTATION_NORMAL;
     } else if (orientation.rotated == 0 && orientation.flip_x && !orientation.flip_y) {
@@ -76,8 +74,7 @@ nvjpegExifOrientation_t nvimgcodec_to_nvjpeg_orientation(nvimgcodecOrientation_t
     }
 }
 
-nvjpegChromaSubsampling_t nvimgcodec_to_nvjpeg_css(nvimgcodecChromaSubsampling_t nvimgcodec_css)
-{
+nvjpegChromaSubsampling_t nvimgcodec_to_nvjpeg_css(nvimgcodecChromaSubsampling_t nvimgcodec_css) {
     switch (nvimgcodec_css) {
     case NVIMGCODEC_SAMPLING_UNSUPPORTED:
         return NVJPEG_CSS_UNKNOWN;
@@ -102,8 +99,7 @@ nvjpegChromaSubsampling_t nvimgcodec_to_nvjpeg_css(nvimgcodecChromaSubsampling_t
     }
 }
 
-nvjpegJpegEncoding_t nvimgcodec_to_nvjpeg_encoding(nvimgcodecJpegEncoding_t nvimgcodec_encoding)
-{
+nvjpegJpegEncoding_t nvimgcodec_to_nvjpeg_encoding(nvimgcodecJpegEncoding_t nvimgcodec_encoding) {
     switch (nvimgcodec_encoding) {
     case NVIMGCODEC_JPEG_ENCODING_BASELINE_DCT:
         return NVJPEG_ENCODING_BASELINE_DCT;
@@ -116,8 +112,7 @@ nvjpegJpegEncoding_t nvimgcodec_to_nvjpeg_encoding(nvimgcodecJpegEncoding_t nvim
     }
 }
 
-nvimgcodecJpegEncoding_t nvjpeg_to_nvimgcodec_encoding(nvjpegJpegEncoding_t nvjpeg_encoding)
-{
+nvimgcodecJpegEncoding_t nvjpeg_to_nvimgcodec_encoding(nvjpegJpegEncoding_t nvjpeg_encoding) {
     switch (nvjpeg_encoding) {
     case NVJPEG_ENCODING_BASELINE_DCT:
         return NVIMGCODEC_JPEG_ENCODING_BASELINE_DCT;
@@ -130,13 +125,11 @@ nvimgcodecJpegEncoding_t nvjpeg_to_nvimgcodec_encoding(nvjpegJpegEncoding_t nvjp
     }
 }
 
-nvimgcodecSampleDataType_t precision_to_sample_type(int precision)
-{
+nvimgcodecSampleDataType_t precision_to_sample_type(int precision) {
     return precision == 8 ? NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8 : NVIMGCODEC_SAMPLE_DATA_TYPE_UNSUPPORTED;
 }
 
-nvimgcodecChromaSubsampling_t nvjpeg_to_nvimgcodec_css(nvjpegChromaSubsampling_t nvjpeg_css)
-{
+nvimgcodecChromaSubsampling_t nvjpeg_to_nvimgcodec_css(nvjpegChromaSubsampling_t nvjpeg_css) {
     switch (nvjpeg_css) {
     case NVJPEG_CSS_UNKNOWN:
         return NVIMGCODEC_SAMPLING_NONE;
@@ -161,8 +154,7 @@ nvimgcodecChromaSubsampling_t nvjpeg_to_nvimgcodec_css(nvjpegChromaSubsampling_t
     }
 }
 
-nvimgcodecOrientation_t exif_to_nvimgcodec_orientation(nvjpegExifOrientation_t exif_orientation)
-{
+nvimgcodecOrientation_t exif_to_nvimgcodec_orientation(nvjpegExifOrientation_t exif_orientation) {
     switch (exif_orientation) {
     case NVJPEG_ORIENTATION_NORMAL:
         return {NVIMGCODEC_STRUCTURE_TYPE_ORIENTATION, sizeof(nvimgcodecOrientation_t), nullptr, 0, false, false};
