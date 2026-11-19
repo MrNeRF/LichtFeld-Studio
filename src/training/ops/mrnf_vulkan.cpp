@@ -161,7 +161,7 @@ namespace lfs::training {
             LFS_ASSERT_MSG(finite(percentile) && percentile >= 0.0f && percentile <= 1.0f, "MRNF percentile must be finite and within [0,1]");
             auto values = read_floats(means);
             Bounds out{};
-            size_t low = static_cast<size_t>(std::floor((1.0f - percentile) * 0.5f * float(n - 1))), high = static_cast<size_t>(std::floor((1.0f - (1.0f - percentile) * 0.5f) * float(n - 1)));
+            const auto [low, high] = lfs::gpu_ops::percentile_bound_ranks(n, percentile);
             std::array<float, 3> ext{};
             for (size_t axis = 0; axis < 3; ++axis) {
                 std::vector<float> v(n);
