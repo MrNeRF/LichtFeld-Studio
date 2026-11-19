@@ -1238,6 +1238,79 @@ TEST_F(ColmapImageLayoutTest, WriteBackAcceptsTrackObservingOneImageTwice) {
     EXPECT_EQ(points->value.size(), 1);
 }
 
+TEST_F(ColmapImageLayoutTest, WriteBackRoundTripsZeroCameraImageAndPointIds) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path text_dir = temp_dir_ / "out_text";
+    const fs::path binary_dir = temp_dir_ / "out_binary";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "0 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "0 1 0 0 0 0 0 0 0 frame_0000.png\n"
+                    "12 34 0 56 78 -1\n"
+                    "1 1 0 0 0 1 2 3 0 frame_0001.png\n"
+                    "90 12 0\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "0 10 20 30 1 2 3 0.25 0 0 1 0\n");
+
+    // Text output from the source, then binary output from the re-read text output.
+    for (const auto& [source, output, format] :
+         {std::tuple{dataset_dir, text_dir, lfs::io::ColmapWriteFormat::Text},
+          std::tuple{text_dir, binary_dir, lfs::io::ColmapWriteFormat::Binary}}) {
+        auto cameras_result = lfs::io::read_colmap_cameras_only(source);
+        ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+        const auto& cameras = std::get<0>(*cameras_result);
+        ASSERT_EQ(cameras.size(), 2u);
+        std::vector<lfs::io::ColmapCameraWriteData> camera_data;
+        for (const auto& camera : cameras) {
+            EXPECT_EQ(camera->camera_id(), 0);
+            camera_data.push_back({.camera = camera, .data_world_transform = glm::mat4(1.0f)});
+        }
+        const auto write_result = lfs::io::write_colmap_reconstruction(
+            source, output, camera_data, nullptr, glm::mat4(1.0f),
+            lfs::io::ColmapWriteOptions{.format = format});
+        ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+    }
+
+    const auto images = lfs::io::read_colmap_images_binary(binary_dir / "images.bin");
+    ASSERT_TRUE(images.has_value()) << images.error().format();
+    ASSERT_EQ(images->value.size(), 2u);
+    const auto& first = images->value[0];
+    const auto& second = images->value[1];
+    EXPECT_EQ(first.image_id, 0u);
+    EXPECT_EQ(first.camera_id, 0u);
+    EXPECT_EQ(first.name, "frame_0000.png");
+    ASSERT_EQ(first.points2D.size(), 2u);
+    EXPECT_EQ(first.points2D[0].x, 12.0);
+    EXPECT_EQ(first.points2D[0].y, 34.0);
+    EXPECT_EQ(first.points2D[0].point3D_id, 0u);
+    EXPECT_EQ(first.points2D[1].point3D_id, lfs::io::INVALID_POINT3D_ID);
+    EXPECT_EQ(second.image_id, 1u);
+    EXPECT_EQ(second.camera_id, 0u);
+    EXPECT_EQ(second.name, "frame_0001.png");
+    ASSERT_EQ(second.points2D.size(), 1u);
+    EXPECT_EQ(second.points2D[0].point3D_id, 0u);
+    ASSERT_EQ(second.tvec.size(), 3u);
+    EXPECT_NEAR(second.tvec[0], 1.0f, 1e-6f);
+    EXPECT_NEAR(second.tvec[1], 2.0f, 1e-6f);
+    EXPECT_NEAR(second.tvec[2], 3.0f, 1e-6f);
+
+    const auto points = lfs::io::read_colmap_point3D_binary_records(binary_dir / "points3D.bin");
+    ASSERT_TRUE(points.has_value()) << points.error().format();
+    ASSERT_EQ(points->value.size(), 1u);
+    const auto& point = points->value[0];
+    EXPECT_EQ(point.point3D_id, 0u);
+    EXPECT_EQ(point.xyz[0], 10.0);
+    EXPECT_EQ(point.xyz[1], 20.0);
+    EXPECT_EQ(point.xyz[2], 30.0);
+    EXPECT_EQ(point.error, 0.25);
+    ASSERT_EQ(point.track.size(), 2u);
+    EXPECT_EQ(point.track[0].image_id, 0u);
+    EXPECT_EQ(point.track[0].point2D_idx, 0u);
+    EXPECT_EQ(point.track[1].image_id, 1u);
+    EXPECT_EQ(point.track[1].point2D_idx, 0u);
+}
+
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";

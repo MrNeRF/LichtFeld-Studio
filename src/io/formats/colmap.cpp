@@ -3874,8 +3874,8 @@ namespace lfs::io {
                                    model.points3D.size(), binary));
 
         for (const auto& [camera_id, camera] : model.cameras) {
-            LFS_ASSERT_MSG(camera_id != 0 && camera.camera_id == camera_id,
-                           std::format("COLMAP camera map key must match its non-zero record id "
+            LFS_ASSERT_MSG(camera.camera_id == camera_id,
+                           std::format("COLMAP camera map key must match its record id "
                                        "(map_key={}, record_camera_id={}, camera_count={})",
                                        camera_id, camera.camera_id, model.cameras.size()));
             LFS_ASSERT_MSG(camera.width > 0 && camera.height > 0,
@@ -3901,9 +3901,8 @@ namespace lfs::io {
         image_by_id.reserve(model.images.size());
         image_names.reserve(model.images.size());
         for (const auto& image : model.images) {
-            LFS_ASSERT_MSG(image.image_id != 0 &&
-                               image_by_id.emplace(image.image_id, &image).second,
-                           std::format("COLMAP image ids must be non-zero and unique at write time "
+            LFS_ASSERT_MSG(image_by_id.emplace(image.image_id, &image).second,
+                           std::format("COLMAP image ids must be unique at write time "
                                        "(image_id={}, name='{}')",
                                        image.image_id, image.name));
             LFS_ASSERT_MSG(!image.name.empty() && image_names.insert(image.name).second,
@@ -3951,9 +3950,8 @@ namespace lfs::io {
         std::unordered_map<uint64_t, const Point3DData*> point_by_id;
         point_by_id.reserve(model.points3D.size());
         for (const auto& point : model.points3D) {
-            LFS_ASSERT_MSG(point.point3D_id != 0 &&
-                               point_by_id.emplace(point.point3D_id, &point).second,
-                           std::format("COLMAP point3D ids must be non-zero and unique at write time "
+            LFS_ASSERT_MSG(point_by_id.emplace(point.point3D_id, &point).second,
+                           std::format("COLMAP point3D ids must be unique at write time "
                                        "(point_id={}, point_count={}, unique_count={})",
                                        point.point3D_id, model.points3D.size(), point_by_id.size()));
             LFS_ASSERT_MSG(std::ranges::all_of(point.xyz, [](const double value) {
