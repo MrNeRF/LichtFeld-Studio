@@ -52,6 +52,17 @@ namespace lfs::vis {
         glm::ivec4 content_rect{0, 0, 0, 0}; // x, y, w, h (letterboxed)
         glm::ivec2 coordinate_extent{0, 0};
         glm::vec3 background{0.0f};
+
+        [[nodiscard]] glm::ivec4 contentRectAt(glm::ivec2 viewport_size) const {
+            if (coordinate_extent.x <= 0 || coordinate_extent.y <= 0)
+                return content_rect;
+            const glm::vec2 scale = glm::vec2(viewport_size) / glm::vec2(coordinate_extent);
+            const glm::ivec2 origin(content_rect.x, content_rect.y);
+            const glm::ivec2 size(content_rect.z, content_rect.w);
+            const glm::ivec2 first(glm::round(glm::vec2(origin) * scale));
+            const glm::ivec2 last(glm::round(glm::vec2(origin + size) * scale));
+            return {first, glm::max(last - first, glm::ivec2(1))};
+        }
     };
 
     // GPU split-view composite. Replaces the CPU compositeSplitImages scanline loop

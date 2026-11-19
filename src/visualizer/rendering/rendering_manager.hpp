@@ -495,6 +495,15 @@ namespace lfs::vis {
         };
         ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
 
+        struct GTComparisonGuideCamera {
+            GTRenderCamera camera;
+            glm::ivec2 render_size;
+        };
+        [[nodiscard]] std::optional<GTComparisonGuideCamera> getGTComparisonGuideCamera() const {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            return vulkan_mesh_frame_.gt_camera;
+        }
+
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
             const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
@@ -698,6 +707,7 @@ namespace lfs::vis {
             lfs::vis::VulkanEnvironmentParams environment;
             lfs::vis::VulkanDepthBlitParams depth_blit;
             lfs::vis::VulkanSplitViewParams split_view;
+            std::optional<GTComparisonGuideCamera> gt_camera;
         };
         void setVulkanMeshFrame(VulkanMeshFrame frame);
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
@@ -1096,7 +1106,6 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
         glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
-        glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCacheEntry {
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;

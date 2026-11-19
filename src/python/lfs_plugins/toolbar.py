@@ -1768,17 +1768,18 @@ class _ViewportToolbarController:
         self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
+        gt_compare_active = self._gt_compare_controls._gt_compare_active()
         gizmo_state = self._gizmo.snapshot(
             self._crop_roi_settings_open,
             numeric_overlay_available=not (
                 self._viewport_export_controls.visible
-                or self._gt_compare_controls._gt_compare_active()
+                or gt_compare_active
                 or self._depth_view_controls._render_mode_selector_open()
             ),
         )
 
         dirty = False
-        if not gizmo_state["crop_settings_buttons"]:
+        if not gizmo_state["crop_settings_buttons"] or gt_compare_active:
             dirty |= self._sync_flag("crop_roi_settings_open", False)
         dirty |= self._sync_crop_roi_params(cropbox_toolbar_signature)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
@@ -1786,7 +1787,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
         dirty |= self._sync_flag("show_scale_distance_toolbar", gizmo_state["show_scale_distance_toolbar"])
         dirty |= self._sync_scale_distance()
-        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"])
+        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"] and not gt_compare_active)
         dirty |= self._sync_flag("show_crop_edit_controls", gizmo_state["show_crop_edit_controls"])
         dirty |= self._sync_flag("show_crop_numeric_controls", gizmo_state["show_crop_numeric_controls"])
         dirty |= self._sync_flag("show_crop_enable_separator", gizmo_state["show_crop_enable_separator"])

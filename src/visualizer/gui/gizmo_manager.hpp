@@ -131,6 +131,7 @@ namespace lfs::vis {
             struct ToolStateStamp {
                 bool valid = false;
                 bool ui_hidden = false;
+                bool gt_compare = false;
                 bool has_scene_manager = false;
                 bool has_selected_node = false;
                 const void* align_tool = nullptr;
