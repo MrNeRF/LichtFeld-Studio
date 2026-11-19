@@ -3842,6 +3842,16 @@ namespace lfs::vis {
         gui::PanelDrawContext ctx;
         ctx.scene = &scene;
 
+        scene_manager.clearSelection();
+        auto* group_menu = openCameraMenu(panel, ctx, group);
+        ASSERT_NE(group_menu, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{group});
+        EXPECT_EQ(group_menu->GetInnerRML().find("scene_panel:disable_all_selected_train"), std::string::npos);
+        EXPECT_NE(group_menu->GetInnerRML().find("scene_panel:disable_group_train:" + std::to_string(group)), std::string::npos);
+        EXPECT_TRUE(scene.getNodeById(first)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(second)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(untouched)->training_enabled);
+
         for (const auto& selection : {std::vector<core::NodeId>{first},
                                       std::vector<core::NodeId>{first, second}}) {
             scene_manager.selectNodesById(selection);
@@ -3864,6 +3874,14 @@ namespace lfs::vis {
                 document = openCameraMenu(panel, ctx, group);
                 ASSERT_NE(document, nullptr);
             }
+
+            auto* hierarchy = document->QuerySelector("[data-ctx-action='scene_panel:select_hierarchy']");
+            ASSERT_NE(hierarchy, nullptr);
+            hierarchy->DispatchEvent("click", {});
+            panel.preload(ctx);
+            const auto selected = scene_manager.getSelectedNodeIds();
+            EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()),
+                      (std::set<core::NodeId>{group, first, second, untouched}));
         }
 
         // A different group's menu must retain normal right-click selection semantics.
@@ -3937,8 +3955,10 @@ namespace lfs::vis {
         EXPECT_NE(scene.getNodeById(disabled_camera), nullptr);
 
         scene.setCameraTrainingEnabled(disabled_camera, false);
+        scene_manager.selectNodesById({disabled_camera});
         menu_document = openCameraMenu(panel, ctx, group);
         ASSERT_NE(menu_document, nullptr);
+        EXPECT_EQ(scene_manager.getSelectedNodeIds(), std::vector<core::NodeId>{disabled_camera});
         remove_disabled = menu_document->QuerySelector("[data-ctx-action='" + action + "']");
         ASSERT_NE(remove_disabled, nullptr);
         EXPECT_FALSE(remove_disabled->HasAttribute("disabled"));
@@ -3946,6 +3966,7 @@ namespace lfs::vis {
         panel.preload(ctx);
         EXPECT_NE(scene.getNodeById(enabled_camera), nullptr);
         EXPECT_EQ(scene.getNodeById(disabled_camera), nullptr);
+        EXPECT_TRUE(scene_manager.getSelectedNodeIds().empty());
 
         const auto undo = op::undoHistory().undo();
         ASSERT_TRUE(undo.success) << undo.error;

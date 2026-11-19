@@ -3439,7 +3439,10 @@ namespace lfs::vis::gui {
 
         const std::string& kind = parts[0];
         if (kind == "select_hierarchy") {
-            selectHierarchyFromSelection();
+            if (hasSelectedCamerasInGroup(context_menu_node_id_))
+                selectHierarchy(context_menu_node_id_);
+            else
+                selectHierarchyFromSelection();
             return;
         }
         if (kind == "group_selected") {
