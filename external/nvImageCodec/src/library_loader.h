@@ -20,6 +20,7 @@
 #include <nvimgcodec.h>
 
 #include "ilibrary_loader.h"
+#include <stdexcept>
 #include <string>
 
 namespace nvimgcodec {

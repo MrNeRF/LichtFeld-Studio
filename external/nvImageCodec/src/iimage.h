@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <memory>
 #include <nvimgcodec.h>
 
 namespace nvimgcodec {

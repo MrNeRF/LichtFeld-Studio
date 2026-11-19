@@ -320,7 +320,8 @@ namespace nvimgcodec {
     }                                                                                   \
     template <typename U>                                                               \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE                                          \
-        std::enable_if_t<is_scalar<U>::value, vec&> operator op(const U & rhs) {        \
+        std::enable_if_t<is_scalar<U>::value, vec&>                                     \
+        operator op(const U & rhs) {                                                    \
         for (int i = 0; i < N; i++)                                                     \
             v[i] op rhs;                                                                \
         return *this;                                                                   \
