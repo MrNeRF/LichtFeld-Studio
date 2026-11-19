@@ -5,6 +5,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace lfs::training {
     using namespace core;
@@ -14,6 +15,18 @@ namespace lfs::training {
 
     CalibrationCorrection::CalibrationCorrection(int slots, int side)
         : field_(Tensor::zeros({static_cast<size_t>(slots), size_t(side), size_t(side), 2}, Device::CUDA)) {}
+
+    CalibrationCorrection::Lens CalibrationCorrection::lens(CameraModelType model, float fx, float fy, int width, int height) {
+        // An equirectangular camera carries only a placeholder focal length.
+        if (model == CameraModelType::EQUIRECTANGULAR)
+            return {static_cast<float>(width / (2 * std::numbers::pi)), static_cast<float>(height / std::numbers::pi), true};
+        return {fx, fy, false};
+    }
+
+    bool CalibrationCorrection::report_due(int iteration, int total_iterations, int start_iteration) {
+        return iteration >= start_iteration &&
+               (iteration == total_iterations || iteration % std::max(1, total_iterations / 15) == 0);
+    }
 
     Tensor CalibrationCorrection::align_for_scoring(const Tensor& render, const Tensor& photo, const Tensor& mask,
                                                     Tensor& displacement, Tensor* raw) {
