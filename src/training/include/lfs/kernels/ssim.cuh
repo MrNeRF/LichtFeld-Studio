@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -372,6 +373,8 @@ namespace lfs::training::kernels {
                 capacity_bytes_ = other.capacity_bytes_;
                 active_kind_ = other.active_kind_;
                 active_shape_ = std::move(other.active_shape_);
+                active_step_partials_ = other.active_step_partials_;
+                step_scratch_ = std::move(other.step_scratch_);
                 fused_ = std::move(other.fused_);
                 pure_ssim_ = std::move(other.pure_ssim_);
                 decoupled_ = std::move(other.decoupled_);
@@ -385,6 +388,8 @@ namespace lfs::training::kernels {
                 other.capacity_bytes_ = 0;
                 other.active_kind_ = Kind::None;
                 other.active_shape_.clear();
+                other.active_step_partials_ = false;
+                other.step_scratch_ = {};
                 other.fused_.arena = nullptr;
                 other.pure_ssim_.arena = nullptr;
                 other.decoupled_.arena = nullptr;
@@ -399,13 +404,23 @@ namespace lfs::training::kernels {
         [[nodiscard]] Kind active_kind() const { return active_kind_; }
         [[nodiscard]] const std::vector<size_t>& active_shape() const { return active_shape_; }
 
-        // Layout oracles (match independent ensure_size field lists).
-        [[nodiscard]] static size_t fused_layout_bytes(const std::vector<size_t>& shape);
-        [[nodiscard]] static size_t pure_ssim_layout_bytes(const std::vector<size_t>& shape);
-        [[nodiscard]] static size_t decoupled_layout_bytes(const std::vector<size_t>& shape);
-        [[nodiscard]] static size_t masked_fused_layout_bytes(const std::vector<size_t>& shape);
-        [[nodiscard]] static size_t masked_decoupled_layout_bytes(const std::vector<size_t>& shape);
+        // Layout oracles (match independent ensure_size field lists). With
+        // step_partials the fp16 dm_* partials are left to the step allocator.
+        [[nodiscard]] static size_t fused_layout_bytes(const std::vector<size_t>& shape, bool step_partials = false);
+        [[nodiscard]] static size_t pure_ssim_layout_bytes(const std::vector<size_t>& shape, bool step_partials = false);
+        [[nodiscard]] static size_t decoupled_layout_bytes(const std::vector<size_t>& shape, bool step_partials = false);
+        [[nodiscard]] static size_t masked_fused_layout_bytes(const std::vector<size_t>& shape,
+                                                              bool step_partials = false);
+        [[nodiscard]] static size_t masked_decoupled_layout_bytes(const std::vector<size_t>& shape,
+                                                                  bool step_partials = false);
         [[nodiscard]] static size_t max_variant_bytes(const std::vector<size_t>& shape);
+
+        // The fp16 dm_* partials are read only until the loss gradients are formed, including the
+        // raw-render part. While a step allocator is bound, each step carves them from it and the
+        // arena keeps only the outputs (SSIM map, image gradient, scalars); an allocator returning
+        // null throws MemoryAllocationError. Releasing drops every view; the next ensure_* rebinds.
+        void bind_step_scratch(const std::function<char*(size_t)>& allocator);
+        void release_step_scratch();
 
         FusedL1SSIMWorkspace& ensure_fused(const std::vector<size_t>& shape);
         SSIMWorkspace& ensure_pure_ssim(const std::vector<size_t>& shape);
@@ -444,6 +459,7 @@ namespace lfs::training::kernels {
         [[nodiscard]] lfs::core::Tensor make_view(size_t& offset,
                                                   const std::vector<size_t>& shape,
                                                   lfs::core::DataType dtype);
+        [[nodiscard]] lfs::core::Tensor partial_view(size_t& offset, const std::vector<size_t>& shape);
         void bind_fused(const std::vector<size_t>& shape);
         void bind_pure_ssim(const std::vector<size_t>& shape);
         void bind_decoupled(const std::vector<size_t>& shape);
@@ -455,6 +471,8 @@ namespace lfs::training::kernels {
         size_t capacity_bytes_ = 0;
         Kind active_kind_ = Kind::None;
         std::vector<size_t> active_shape_;
+        bool active_step_partials_ = false;
+        std::function<char*(size_t)> step_scratch_;
 
         FusedL1SSIMWorkspace fused_;
         SSIMWorkspace pure_ssim_;

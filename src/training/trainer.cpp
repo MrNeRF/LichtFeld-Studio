@@ -853,13 +853,13 @@ namespace lfs::training {
             record_vram_current(scope, "backward.grad_conic_helper", num_primitives * 3 * sizeof(float));
             record_vram_current(scope,
                                 "backward.fused_grad_opacity_helper",
-                                run_gaussian_backward && ctx.forward_ctx.grad_opacity_helper
+                                run_gaussian_backward && ctx.forward_ctx.n_visible > 0
                                     ? num_primitives * sizeof(float)
                                     : 0,
                                 true);
             record_vram_current(scope,
                                 "backward.fused_grad_color_helper",
-                                run_gaussian_backward && ctx.forward_ctx.grad_color_helper
+                                run_gaussian_backward && ctx.forward_ctx.n_visible > 0
                                     ? num_primitives * 3 * sizeof(float)
                                     : 0,
                                 true);
@@ -1909,7 +1909,7 @@ namespace lfs::training {
             const auto raw_gradient = lfs::training::kernels::decoupled_raw_gradient(ctx);
             if (fit)
                 fit->accumulate(corrected, grads.grad_corrected, {}, photometric_value_count(),
-                                photometric_valid_padding, &raw_gradient);
+                                photometric_valid_padding, &raw_gradient, loss_step_scratch_);
             add_gradient_residual(corrected, gt_image, raw_rendered, {}, opt_params, iteration,
                                   loss_tensor, grads.grad_corrected, raw_residual);
             return PhotometricLossResult{
@@ -2102,7 +2102,7 @@ namespace lfs::training {
 
             if (fit)
                 fit->accumulate(corrected, grad_corrected, photometric_weight, mask_normalization, 0,
-                                raw_gradient ? &*raw_gradient : nullptr);
+                                raw_gradient ? &*raw_gradient : nullptr, loss_step_scratch_);
 
             // The loss already reads this normalization; epsilon alone means no contributing pixels.
             if (has_user_mask && mode == param::MaskMode::Ignore && !empty_ignore_mask_warned_ &&
@@ -7297,12 +7297,25 @@ namespace lfs::training {
                     r_output.stable_target_image = stable_gt;
                     nvtxRangePop();
 
+                    // The loss scratch that is dead before the backward reuses the forward's sort space
+                    // above the retained outputs; the backward rewinds over it.
+                    const auto release_loss_scratch = [this] {
+                        loss_step_scratch_ = {};
+                        photometric_loss_.arena().release_step_scratch();
+                    };
+                    auto loss_scratch_guard = makeScopeGuard(release_loss_scratch);
+                    if (fast_ctx) {
+                        loss_step_scratch_ = fast_lfs::rasterization::begin_loss_phase(fast_ctx->forward_ctx);
+                        photometric_loss_.arena().bind_step_scratch(loss_step_scratch_);
+                    }
+
                     bool tile_context_cleaned = false;
                     auto cleanup_tile_context = [&]() {
                         if (tile_context_cleaned) {
                             return;
                         }
                         tile_context_cleaned = true;
+                        release_loss_scratch();
 
                         if (fast_ctx) {
                             fast_ctx->release_forward_context();
@@ -8519,6 +8532,7 @@ namespace lfs::training {
                         }
                         if (fit && (tile_raw_gradient || tile_raw_residual))
                             fit->clear_outside(raster_grad);
+                        release_loss_scratch();
 
                         current_phase = StepPhase::Backward;
                         nvtxRangePush("rasterize_backward");
