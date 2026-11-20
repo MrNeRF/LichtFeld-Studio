@@ -142,7 +142,7 @@ add_library(lfs_video STATIC
         sharpness_score.cpp
         sharpness_edge.hpp
         cuda/sharpness_score.cpp
-    cuda/sharpness_score.cu
+        cuda/sharpness_score.cu
         hdr_tonemap.hpp
         hdr_tonemap.cpp
         hdr_libplacebo.hpp
