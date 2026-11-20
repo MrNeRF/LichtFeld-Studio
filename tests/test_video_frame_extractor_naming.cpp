@@ -3291,3 +3291,60 @@ TEST(VideoDecoderFallback, FailedReplacementClearsDialogPathsAndCanRecover) {
     EXPECT_EQ(Access::videoPath(dialog), source);
     EXPECT_EQ(Access::outputPath(dialog), source.parent_path() / "h264_420_frames");
 }
+
+// Independent scalar oracle: preserve the extractor's original border, thresholds and denominator.
+namespace {
+    double referenceSharpness(const std::vector<uint8_t>& rgb, int w, int h, lfs::io::SharpnessAlgorithm algorithm) {
+        long long edges = 0;
+        for (int y = 1; y + 1 < h; ++y) {
+            for (int x = 1; x + 1 < w; ++x) {
+                const auto green = [&](int dx, int dy) { return static_cast<int>(rgb[((y + dy) * w + x + dx) * 3 + 1]); };
+                const int lap = std::abs(4 * green(0, 0) - green(-1, 0) - green(1, 0) - green(0, -1) - green(0, 1));
+                const int gx = -green(-1, -1) + green(1, -1) - 2 * green(-1, 0) + 2 * green(1, 0) - green(-1, 1) + green(1, 1);
+                const int gy = -green(-1, -1) - 2 * green(0, -1) - green(1, -1) + green(-1, 1) + 2 * green(0, 1) + green(1, 1);
+                const bool lap_edge = lap > 10;
+                const bool sobel_edge = std::abs(gx) + std::abs(gy) > 40;
+                edges += algorithm == lfs::io::SharpnessAlgorithm::LAPLACIAN ? lap_edge : algorithm == lfs::io::SharpnessAlgorithm::COMBINED ? lap_edge || sobel_edge
+                                                                                                                                             : sobel_edge;
+            }
+        }
+        return w < 3 || h < 3 ? 0.0 : static_cast<double>(edges) * 100.0 / (static_cast<double>(static_cast<long long>(w) * h));
+    }
+} // namespace
+
+TEST(VideoSharpnessScore, CpuPreservesOriginalIntegerContract) {
+    using namespace lfs::io;
+    uint32_t random = 4112;
+    for (const auto [w, h] : {std::pair{0, 0}, {1, 2}, {3, 3}, {5, 9}, {257, 13}, {1919, 1079}}) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (auto& pixel : rgb) {
+            random = random * 1664525U + 1013904223U;
+            pixel = static_cast<uint8_t>(random >> 24);
+        }
+        for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+            const auto expected = referenceSharpness(rgb, w, h, algorithm);
+            EXPECT_EQ(expected, computeSharpnessScore(rgb.data(), w, h, algorithm));
+        }
+    }
+}
+
+TEST(VideoSharpnessScore, StrictLaplacianAndSobelBoundaries) {
+    using namespace lfs::io;
+    for (int sample = 0; sample < 4; ++sample) {
+        std::vector<uint8_t> rgb(3 * 3 * 3, 0);
+        if (sample < 2) {
+            rgb[(1 * 3 + 1) * 3 + 1] = 3;
+            rgb[(1 * 3 + 0) * 3 + 1] = sample == 0 ? 2 : 1; // Laplacian 10 / 11
+        } else {
+            for (int y = 0; y < 3; ++y)
+                for (int x = 0; x < 3; ++x)
+                    rgb[(y * 3 + x) * 3 + 1] = static_cast<uint8_t>(x * 5);
+            rgb[(0 * 3 + 2) * 3 + 1] += sample == 3 ? 1 : 0; // Sobel 40 / 42 (L1 is always even)
+        }
+        for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+            const bool edge = algorithm == SharpnessAlgorithm::LAPLACIAN ? sample == 1 : algorithm == SharpnessAlgorithm::TENENGRAD ? sample == 3
+                                                                                                                                    : sample == 1 || sample == 3;
+            EXPECT_EQ(edge ? 100.0 / 9.0 : 0.0, computeSharpnessScore(rgb.data(), 3, 3, algorithm));
+        }
+    }
+}
