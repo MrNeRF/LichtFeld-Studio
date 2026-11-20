@@ -5,11 +5,6 @@
     overflow-x: hidden;
 }
 
-.export-panel #minimize-btn,
-.export-panel #maximize-btn {
-    display: none;
-}
-
 /* The format rail sets a stable height even when the scene has no splats. */
 .ep-layout {
     display: flex;

@@ -42,7 +42,7 @@
               <div class="ep-empty-state" data-if="show_no_models">
                 <span class="ep-empty-title">@tr:export_dialog.no_splat_models</span>
                 <span class="ep-empty-hint">@tr:export_dialog.empty_hint</span>
-                <button type="button" class="btn btn--secondary" data-event-click="do_new_project">@tr:new_project.title</button>
+                <button id="btn-export-new-project" type="button" class="btn btn--secondary" data-if="show_new_project" data-event-click="do_new_project">@tr:new_project.title</button>
               </div>
               <div class="ep-model-row"
                    data-for="model : models"
@@ -163,7 +163,7 @@
       <span id="export-error" class="ep-error hidden" data-class-hidden="hide_export_error">{{ export_error_text }}</span>
       <div class="ep-buttons">
         <button type="button" class="btn btn--secondary ep-action-btn" data-event-click="do_cancel">@tr:export.cancel</button>
-        <input id="btn-export" class="btn btn--secondary ep-action-btn"
+        <input id="btn-export" class="btn btn--primary ep-action-btn"
                type="submit"
                data-attr-value="export_label"
                data-attrif-disabled="!can_export" />

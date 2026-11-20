@@ -39,7 +39,7 @@ def _install_lf_stub(monkeypatch):
         language=["en"],
         nodes=[],
         splat_export_requests=[],
-        content_type="splat_files",
+        content_type="empty",
         active_camera_count=0,
         export_state={"active": False},
         set_panel_enabled_calls=[],
@@ -793,6 +793,41 @@ def test_empty_scene_hides_settings_until_splats_arrive(export_panel_module):
     assert getters["show_no_models"]()
     assert not getters["show_splat_settings"]()
     assert not getters["can_export"]()
+
+
+@pytest.mark.parametrize("content", ["dataset", "mesh", "read_only_splat"])
+def test_new_project_is_only_available_in_an_empty_scene(export_panel_module, monkeypatch, content):
+    module, state = export_panel_module
+    import_panel = ModuleType("lfs_plugins.import_panels")
+    calls = []
+    import_panel.open_new_project_panel = lambda: calls.append("open") or True
+    monkeypatch.setitem(sys.modules, "lfs_plugins.import_panels", import_panel)
+    panel = module.ExportPanel()
+    getters = _bound_export_model(panel)
+    panel.on_update(None)
+    assert getters["show_new_project"]()
+
+    if content == "dataset":
+        state.content_type = "dataset"
+    elif content == "mesh":
+        state.nodes = [_make_node(module.lf.scene.NodeType.MESH, "Mesh", 0)]
+    else:
+        state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Preview", 128)]
+        state.nodes[0].read_only = True
+
+    panel._handle.dirty_fields.clear()
+    panel.on_update(None)
+    assert "show_new_project" in panel._handle.dirty_fields
+    assert getters["show_no_models"]()
+    assert not getters["show_new_project"]()
+    panel._on_new_project(None, None, None)
+    assert calls == []
+    assert state.set_panel_enabled_calls == []
+
+    state.content_type = "empty"
+    state.nodes = []
+    panel.on_update(None)
+    assert getters["show_new_project"]()
 
 
 def test_empty_scene_colmap_keeps_dataset_error_and_format_description(export_panel_module):

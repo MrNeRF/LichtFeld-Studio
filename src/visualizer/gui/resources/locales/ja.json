@@ -1775,7 +1775,7 @@
     "ssog_overwrite": "このフォルダーには既に SSOG データがあります。上書きしますか？",
     "format": "フォーマット",
     "models": "モデル",
-    "no_splat_models": "このシーンにはスプラットモデルがありません",
+    "no_splat_models": "エクスポート可能なスプラットモデルがありません",
     "empty_hint": "エクスポートするには、スプラットモデルを読み込むか学習してください。",
     "format_description": {
       "ply": "編集とデータ交換",
@@ -1790,7 +1790,7 @@
       "colmap": "カメラと点群（スプラットは含みません）"
     },
     "no_models": "シーンにモデルがありません",
-    "sh_degree": "SH Degree",
+    "sh_degree": "SH次数",
     "include_provenance": "来歴メタデータ",
     "include_provenance_hint": "オフにすると識別フィールドは省かれますが、最小限のビルド識別（アプリバージョン + ビルドコミット）は常に埋め込まれます",
     "spz_version": "SPZバージョン",
@@ -1798,7 +1798,7 @@
     "spz_version_v3": "v3 (レガシー)",
     "export_file": "エクスポート...",
     "export_merged": "結合してエクスポート...",
-    "rad_export_mode": "RAD MODE",
+    "rad_export_mode": "RADモード",
     "rad_streamable": "RAD (ストリーミング対応)",
     "rad_native": "RAD (ストリーミング不可)",
     "rad_flip_y": "Y軸を反転",

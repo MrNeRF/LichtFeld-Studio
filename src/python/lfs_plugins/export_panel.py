@@ -116,6 +116,7 @@ class ExportPanel(Panel):
         self._last_progress = -1.0
         self._progress_value = "0"
         self._has_models = False
+        self._show_new_project = False
         self._cached_export_state = {}
         self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
@@ -168,6 +169,7 @@ class ExportPanel(Panel):
         model.bind_func("hide_export_error", lambda: self._can_export() or (
             not self._has_models and self._format != ExportFormat.COLMAP))
         model.bind_func("show_no_models", lambda: not self._has_models)
+        model.bind_func("show_new_project", lambda: self._show_new_project)
         model.bind_func("show_model_selection", lambda: self._format != ExportFormat.COLMAP)
         model.bind_func("show_sh_degree", lambda: self._format != ExportFormat.COLMAP)
         model.bind_func("show_ssog_settings", lambda: self._format == ExportFormat.SSOG)
@@ -386,7 +388,9 @@ class ExportPanel(Panel):
             model_list.add_event_listener("click", self._on_model_toggle)
 
         self._rebuild_format_records()
-        self._rebuild_model_records(self._scene_nodes())
+        scene_nodes = self._scene_nodes()
+        self._update_new_project_visibility(scene_nodes)
+        self._rebuild_model_records(scene_nodes)
         self._scrub_fields.mount(doc)
         self._default_reset.mount(doc)
         self._subscribe_reactive_state()
@@ -456,6 +460,7 @@ class ExportPanel(Panel):
             dirty = True
 
         scene_nodes = self._scene_nodes()
+        dirty |= self._update_new_project_visibility(scene_nodes)
         splat_nodes = [node for node in scene_nodes if self._is_exportable_splat(node)]
         # Parentage is in the key so a regroup rebuilds once, and a quiet frame does not.
         node_key = self._model_structure_key(scene_nodes)
@@ -656,6 +661,17 @@ class ExportPanel(Panel):
             return list(scene.get_nodes())
         except Exception:
             return []
+
+    def _is_empty_scene(self, nodes):
+        return not nodes and lf.ui.get_content_type() == "empty"
+
+    def _update_new_project_visibility(self, nodes):
+        show_new_project = self._is_empty_scene(nodes)
+        if show_new_project == self._show_new_project:
+            return False
+        self._show_new_project = show_new_project
+        self._dirty_model("show_new_project")
+        return True
 
     def _is_group_node(self, node):
         return node.type == lf.scene.NodeType.GROUP
@@ -892,6 +908,9 @@ class ExportPanel(Panel):
         ev.stop_propagation()
 
     def _on_new_project(self, _handle, _ev, _args):
+        if not self._is_empty_scene(self._scene_nodes()):
+            return
+
         from .import_panels import open_new_project_panel
 
         if open_new_project_panel():

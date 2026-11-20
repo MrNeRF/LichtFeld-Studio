@@ -1786,7 +1786,7 @@
     "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
     "format": "Format",
     "models": "Models",
-    "no_splat_models": "No splat models in this scene",
+    "no_splat_models": "No exportable splat models",
     "empty_hint": "Load or train a splat to export it.",
     "format_description": {
       "ply": "Editing and interchange",
@@ -1808,7 +1808,7 @@
     "spz_version_v4": "v4",
     "spz_version_v3": "v3 (legacy)",
     "export_file": "Export...",
-    "export_merged": "Export Merged...",
+    "export_merged": "Export merged...",
     "rad_export_mode": "RAD mode",
     "rad_streamable": "RAD (streamable)",
     "rad_native": "RAD (non-streamable)",
