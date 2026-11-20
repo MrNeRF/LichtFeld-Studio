@@ -41,7 +41,7 @@ body {
     margin-left: -12dp;
     width: 24dp;
     height: 2dp;
-    border-radius: 1dp;
+
     pointer-events: none;
 }
 
@@ -83,7 +83,7 @@ body {
     padding: 0;
     margin: 0;
     border-width: 0;
-    border-radius: 4dp;
+
     line-height: 20dp;
     font-size: 10dp;
     text-align: center;
@@ -107,7 +107,7 @@ body {
     margin: 0 0 0 3dp;
     padding: 0;
     border-width: 1dp;
-    border-radius: 6dp 0 0 6dp;
+
     white-space: nowrap;
     cursor: pointer;
     tab-index: auto;
@@ -142,12 +142,12 @@ body {
     height: 16dp;
     padding: 0;
     border-width: 0;
-    border-radius: 4dp;
+
     background-color: transparent;
     line-height: 16dp;
     text-align: center;
     font-size: 13dp;
-    font-weight: bold;
+    font-weight: 600;
     cursor: pointer;
     tab-index: auto;
     nav: auto;

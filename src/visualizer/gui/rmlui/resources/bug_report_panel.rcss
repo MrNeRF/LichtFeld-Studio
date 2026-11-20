@@ -1,7 +1,7 @@
 .panel-title {
     display: block;
     font-size: 12dp;
-    font-weight: bold;
+    font-weight: 600;
     margin-bottom: 6dp;
 }
 
@@ -31,14 +31,14 @@
     display: block;
     margin-bottom: 6dp;
     font-size: 14dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .bugreport-subheading,
 .bugreport-field-label {
     display: block;
     margin: 7dp 0 3dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .bugreport-auth .btn,
@@ -84,7 +84,7 @@
     align-items: center;
     min-height: 20dp;
     padding: 2dp 5dp;
-    border-radius: 3dp;
+
     cursor: pointer;
 }
 

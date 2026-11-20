@@ -1,9 +1,148 @@
+/* Shared border roles and shape scale. */
+
+.transport-btn {
+    border-radius: 4dp;
+}
+
+.transport-btn.toggle {
+    border-radius: 4dp;
+}
+
+.play-btn {
+    border-radius: 15dp;
+}
+
+.sequence-fps-field {
+    border-color: transparent;
+    border-radius: 4dp;
+}
+
+.sequence-fps-field:hover,
+.sequence-fps-field.active,
+.sequence-fps-field.is-editing {
+    border-color: @{border};
+}
+
+.snap-check {
+    border-radius: 2dp;
+}
+
+#track-bar {
+    border-radius: 4dp;
+}
+
+#ply-sequence-clip.selected {
+    border-color: rgba(240, 245, 255, 255);
+}
+
+.reveal-clip {
+    border-color: @{primary};
+}
+
+.sequence-clip {
+    border-color: @{primary};
+    border-radius: 4dp;
+}
+
+.keyframe {
+    border-radius: 1dp;
+    background-color: @{primary};
+}
+
+.keyframe.alternate {
+    background-color: @{secondary};
+}
+
+.keyframe.selected {
+    border-color: @{text};
+    border-width: @{stroke.normal}dp;
+    background-color: @{lighten(primary,0.2)};
+}
+
+.keyframe.alternate.selected {
+    background-color: @{lighten(secondary,0.2)};
+}
+
+.keyframe.loop-point {
+    border-radius: 6dp;
+    background-color: @{info};
+}
+
+.keyframe.loop-point.selected {
+    background-color: @{lighten(info,0.2)};
+}
+
+#playhead-handle {
+    border-radius: 7dp;
+}
+
+#timeline-scrollbar {
+    border-radius: 3dp;
+}
+
+#timeline-scrollbar-thumb {
+    border-radius: 3dp;
+}
+
+#duration-field {
+    border-color: transparent;
+    border-radius: 4dp;
+}
+
+#duration-field:hover,
+#duration-field.is-editing {
+    border-color: @{border};
+}
+
+.easing-curve-segment {
+    border-radius: 1dp;
+}
+
+.easing-dot {
+    border-radius: 3dp;
+}
+
+.easing-indicator.ease-in,
+.easing-indicator.ease-out {
+    border-left-color: transparent;
+    border-right-color: transparent;
+}
+
+.easing-indicator.ease-in-out {
+    border-radius: 2dp;
+}
+
+#film-strip-groove {
+    border-radius: 4px;
+}
+
+.film-thumb {
+    border-radius: 3px;
+}
+
+.film-thumb-outline {
+    border-radius: 3px;
+    border-color: transparent;
+}
+
+.film-strip-marker-cap {
+    border-radius: 1.5px;
+}
+
+.film-strip-sprocket {
+    border-radius: 1px;
+}
+
+#timeline-tooltip {
+    border-radius: 8dp;
+}
+
 /* Theme-dependent sequencer panel styles. */
 
 #panel {
     @{panel.body_decor};
     border-width: 1dp;
-    border-color: @{alpha(border,0.4)};
+    border-color: @{border};
     border-radius: @{num(size.window_rounding)}dp;
 }
 
@@ -18,7 +157,7 @@
 #track-bar {
     background-color: @{background};
     border-width: 1dp;
-    border-color: @{alpha(border,0.3)};
+    border-color: @{border};
 }
 
 #hint {
@@ -71,12 +210,12 @@
 
 #easing-stripe {
     background-color: @{surface};
-    border-top: 1dp @{alpha(border,0.3)};
+    border-top: 1dp @{border};
 }
 
 #transport-row {
     @{components.header_decor};
-    border-bottom: 1dp @{alpha(border,0.3)};
+    border-bottom: 1dp @{border};
 }
 
 .transport-sep {
@@ -102,7 +241,7 @@
 #btn-camera-path.active {
     background-color: @{alpha(primary,0.30)};
     border-width: 1dp;
-    border-color: @{alpha(primary,0.50)};
+    border-color: @{primary};
 }
 
 #btn-add .transport-icon,
@@ -117,20 +256,20 @@
 
 #btn-export {
     border-width: 1dp;
-    border-color: @{alpha(primary,0.40)};
+    border-color: @{primary};
 }
 
 #btn-clear {
     background-color: @{alpha(error,0.15)};
     border-width: 1dp;
-    border-color: @{alpha(error,0.15)};
+    border-color: @{error};
 }
 
 #film-strip-panel {
     @{panel.body_decor};
-    border-left: 1dp @{alpha(border,0.4)};
-    border-right: 1dp @{alpha(border,0.4)};
-    border-bottom: 1dp @{alpha(border,0.4)};
+    border-left: 1dp @{border};
+    border-right: 1dp @{border};
+    border-bottom: 1dp @{border};
     border-radius: 0dp 0dp @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp;
 }
 
@@ -268,7 +407,7 @@
 
 #timeline-tooltip {
     background-color: @{alpha(surface,0.96)};
-    border-color: @{alpha(border,0.75)};
+    border-color: @{border};
 }
 
 .timeline-tooltip-line.title {

@@ -133,8 +133,6 @@ namespace lfs::vis {
 
     } // namespace
 
-    using gui::rml_theme::colorToRml;
-    using gui::rml_theme::colorToRmlAlpha;
     using namespace panel_config;
 
     RmlSequencerPanel::RmlSequencerPanel(SequencerController& controller, gui::panels::SequencerUIState& ui_state,
@@ -771,8 +769,6 @@ namespace lfs::vis {
         if (timeline_width <= 0.0f)
             return;
 
-        const auto& p = lfs::vis::theme().palette;
-
         if (count == 0) {
             while (!keyframe_elements_.empty()) {
                 el_keyframes_->RemoveChild(keyframe_elements_.back());
@@ -810,17 +806,11 @@ namespace lfs::vis {
                                   hasSelectedKeyframe(selected_keyframes_, keyframes[i].id);
             const bool is_loop = keyframes[i].is_loop_point;
 
-            const auto base = is_loop ? p.info : (i % 2 == 0 ? p.primary : p.secondary);
-            auto fill = base;
-            if (selected)
-                fill = lighten(base, 0.2f);
-
             el->SetClassNames("keyframe");
+            el->SetClass("alternate", i % 2 != 0);
             el->SetClass("loop-point", is_loop);
             el->SetClass("selected", selected);
             el->SetProperty("left", fmt::format("{:.1f}px", x));
-            el->SetProperty("background-color", colorToRml(fill));
-            el->SetProperty("border-color", selected ? colorToRml(p.text) : colorToRml(fill));
         }
     }
 

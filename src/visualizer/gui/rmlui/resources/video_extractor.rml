@@ -33,11 +33,11 @@
           <button id="btn-step-forward" class="transport-btn" type="button" title="@tr:video_extractor.step_forward">
             <img src="../icon/sequencer/step-forward.png" />
           </button>
-          <span id="time-label">--:--.-- / --:--.--</span>
+          <span id="time-label" class="text-body">--:--.-- / --:--.--</span>
           <button id="btn-rotation-ccw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_ccw">
             <img src="../icon/sequencer/rotate-ccw.png" />
           </button>
-          <span id="rotation-value" style="color:#cdd6f4;min-width:28px;text-align:center;font-size:13dp">0°</span>
+          <span id="rotation-value" class="text-body">0°</span>
           <button id="btn-rotation-cw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_cw">
             <img src="../icon/sequencer/rotate-cw.png" />
           </button>
@@ -47,7 +47,7 @@
           </span>
         </div>
 
-        <div id="timeline">
+        <div id="timeline" class="control">
           <div id="timeline-segments"></div>
           <div id="timeline-markers"></div>
           <div id="timeline-progress"></div>

@@ -22,5 +22,4 @@ body {
 .dock-grip-bar {
     width: 36dp;
     height: 3dp;
-    border-radius: 2dp;
 }
