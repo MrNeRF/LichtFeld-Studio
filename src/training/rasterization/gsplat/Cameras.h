@@ -4,7 +4,11 @@
 
 #pragma once
 
+// CUDA builds take Common.h as before. Host builds of Cameras.cuh need only the camera types.
+#ifdef __CUDACC__
 #include "Common.h"
+#endif
+#include "CameraTypes.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +17,3 @@
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
 #include <variant>
-
-// Types are now defined in Common.h with include guards
-// ShutterType, UnscentedTransformParameters, CameraModelType
