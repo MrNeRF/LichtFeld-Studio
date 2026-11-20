@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "La visibilidad de la caja de recorte requiere cámaras estenopeicas.",
     "camera_selection_stale": "La escena cambió durante la selección de cámaras.",
     "camera_selection_progress": "Progreso de selección",
+    "camera_selection_images_skipped": "Imágenes faltantes omitidas: {}.",
     "go_to_keyframe": "Ir a la Vista del Fotograma Clave",
     "update_keyframe": "Actualizar a la Vista Actual",
     "select_in_timeline": "Seleccionar en la Línea de Tiempo",

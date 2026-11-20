@@ -1317,6 +1317,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     Zep::Zep
     vterm
     GTest::gtest
+    TBB::tbb
     nanobind-static
     ZLIB::ZLIB
     ${TORCH_LIBRARIES}

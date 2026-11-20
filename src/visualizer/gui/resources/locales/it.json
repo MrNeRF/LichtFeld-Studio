@@ -996,6 +996,7 @@
     "camera_selection_pinhole_required": "La visibilità della casella di ritaglio richiede fotocamere stenopeiche.",
     "camera_selection_stale": "La scena è cambiata durante la selezione delle fotocamere.",
     "camera_selection_progress": "Avanzamento selezione",
+    "camera_selection_images_skipped": "Immagini mancanti saltate: {}.",
     "go_to_keyframe": "Vai alla vista del keyframe",
     "update_keyframe": "Aggiorna alla vista corrente",
     "select_in_timeline": "Seleziona nella timeline",

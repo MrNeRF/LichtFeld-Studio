@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "크롭 상자 가시성에는 핀홀 카메라가 필요합니다.",
     "camera_selection_stale": "카메라 선택 중 장면이 변경되었습니다.",
     "camera_selection_progress": "선택 진행률",
+    "camera_selection_images_skipped": "누락되어 건너뛴 이미지: {}장.",
     "go_to_keyframe": "키프레임 뷰로 이동",
     "update_keyframe": "현재 뷰로 업데이트",
     "select_in_timeline": "타임라인에서 선택",

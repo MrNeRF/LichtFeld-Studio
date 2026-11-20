@@ -3186,7 +3186,7 @@ namespace lfs::vis::gui {
         const auto job = jobs_.peek(camera_selection_state_.job);
         state.active = job && job->running();
         state.progress = job ? job->progress : 0.0F;
-        state.stage = job ? job->stage : std::string{};
+        state.stage = job && (state.active || job->status == JobStatus::Completed) ? job->stage : std::string{};
         state.error = job ? job->error : std::string{};
         lfs::vis::app_store().camera_selection_state.set(std::move(state));
     }
@@ -4745,7 +4745,8 @@ namespace lfs::vis::gui {
             if (const auto* node = scene.getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera) {
                 uuids.push_back(node->uuid);
                 enabled.push_back(node->training_enabled);
-                CameraSelectionState::CameraSnapshot snapshot{.uuid = node->uuid};
+                CameraSelectionState::CameraSnapshot snapshot{};
+                snapshot.uuid = node->uuid;
                 if (options.operation == CameraSelectionOperation::Blurry) {
                     snapshot.image_path = node->camera->image_path();
                     snapshot.has_image = node->camera->has_image();
@@ -4850,6 +4851,20 @@ namespace lfs::vis::gui {
             std::vector<size_t> selected;
             std::string error;
             const auto count = snapshot_enabled.size();
+            size_t scored = 0;
+            size_t skipped = 0;
+            const auto score_image = [](const std::filesystem::path& path) -> std::optional<double> {
+                try {
+                    const auto [data, width, height, channels] = core::load_image(path);
+                    const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
+                    return io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED);
+                } catch (const std::runtime_error&) {
+                    std::error_code ec;
+                    if (!core::native_fs::exists(path, ec) && (!ec || ec == std::errc::no_such_file_or_directory))
+                        return std::nullopt;
+                    throw;
+                }
+            };
             const auto cancelled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
             try {
                 if (options.operation == CameraSelectionOperation::EnableAll) {
@@ -4865,8 +4880,12 @@ namespace lfs::vis::gui {
                 } else if (options.operation == CameraSelectionOperation::Blurry) {
                     std::vector<size_t> eligible;
                     for (size_t index = 0; index < count; ++index)
-                        if (snapshot_enabled[index] && cameras[index].has_image)
-                            eligible.push_back(index);
+                        if (snapshot_enabled[index]) {
+                            if (cameras[index].has_image)
+                                eligible.push_back(index);
+                            else
+                                ++skipped;
+                        }
                     std::vector<unsigned char> matches(eligible.size(), 0);
                     std::vector<std::optional<CameraSelectionState::SharpnessEntry>> fresh(eligible.size());
                     auto& scores = camera_selection_state_.sharpness_scores;
@@ -4888,24 +4907,24 @@ namespace lfs::vis::gui {
                         const auto& camera = cameras[eligible[item]];
                         const auto stamp = read_stamp(camera.image_path);
                         const auto cached = std::as_const(scores).find(camera.uuid);
-                        double score;
+                        std::optional<double> score;
                         if (stamp && cached != scores.cend() &&
                             cached->second.image_path == camera.image_path && cached->second.stamp == *stamp) {
                             score = cached->second.score;
                         } else {
-                            {
-                                const auto [data, width, height, channels] = core::load_image(camera.image_path);
-                                const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
-                                score = io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED);
-                            }
-                            if (stamp) {
+                            score = score_image(camera.image_path);
+                            if (score && stamp) {
                                 if (read_stamp(camera.image_path) != stamp)
                                     throw std::runtime_error(LOC("scene.camera_selection_stale"));
-                                fresh[item].emplace(camera.image_path, *stamp, score);
+                                fresh[item].emplace(camera.image_path, *stamp, *score);
                             }
                         }
-                        matches[item] = score < options.sharpness_threshold;
+                        matches[item] = score && *score < options.sharpness_threshold;
                         const std::lock_guard lock(progress_mutex);
+                        if (score)
+                            ++scored;
+                        else
+                            ++skipped;
                         jobs_.report(job, static_cast<float>(++completed) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
                         publishCameraSelectionState();
                     };
@@ -4962,11 +4981,14 @@ namespace lfs::vis::gui {
                 LOG_ERROR("{}", error);
             }
             const bool was_cancelled = cancelled();
-            const bool ready = camera_selection::apply_if_ready(was_cancelled, !error.empty(), [&] {
-                const std::lock_guard lock(camera_selection_state_.mutex);
-                camera_selection_state_.selected_indices = std::move(selected);
-                jobs_.report(job, 1.0F, LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
-            });
+            const bool has_results = options.operation != CameraSelectionOperation::Blurry || scored != 0;
+            const bool ready = has_results && camera_selection::apply_if_ready(was_cancelled, !error.empty(), [&] {
+                                   const std::lock_guard lock(camera_selection_state_.mutex);
+                                   camera_selection_state_.selected_indices = std::move(selected);
+                               });
+            if (!was_cancelled && error.empty()) {
+                jobs_.report(job, 1.0F, skipped ? LOCF("scene.camera_selection_images_skipped", skipped) : std::string{});
+            }
             jobs_.finishWork(job, was_cancelled, error);
             camera_selection_state_.completion.store(
                 ready ? CameraSelectionState::Completion::Apply : CameraSelectionState::Completion::Settle,
@@ -5061,7 +5083,7 @@ namespace lfs::vis::gui {
                 jobs_.canceled(camera_selection_state_.job);
             } else if (!valid || (selected.empty() && !selected_indices.empty())) {
                 jobs_.failed(camera_selection_state_.job, LOC("scene.camera_selection_stale"),
-                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+                             std::string{});
             } else {
                 const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);
                 if (select_nodes)

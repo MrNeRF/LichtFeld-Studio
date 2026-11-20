@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "Widoczność pola kadrowania wymaga kamer otworkowych.",
     "camera_selection_stale": "Scena zmieniła się podczas wyboru kamer.",
     "camera_selection_progress": "Postęp wyboru",
+    "camera_selection_images_skipped": "Pominięte brakujące obrazy: {}.",
     "go_to_keyframe": "Przejdź do widoku klatki kluczowej",
     "update_keyframe": "Aktualizuj do bieżącego widoku",
     "select_in_timeline": "Wybierz na osi czasu",

@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "Zichtbaarheid van het snijvak vereist pinholecamera's.",
     "camera_selection_stale": "De scène is gewijzigd tijdens de cameraselectie.",
     "camera_selection_progress": "Selectievoortgang",
+    "camera_selection_images_skipped": "Ontbrekende afbeeldingen overgeslagen: {}.",
     "go_to_keyframe": "Ga naar keyframe-weergave",
     "update_keyframe": "Bijwerken naar huidige weergave",
     "select_in_timeline": "Selecteer in tijdlijn",
