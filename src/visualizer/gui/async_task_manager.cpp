@@ -4812,6 +4812,10 @@ namespace lfs::vis::gui {
         {
             const std::lock_guard lock(camera_selection_state_.mutex);
             camera_selection_state_.document_epoch = viewer_->project_lifecycle_->documentEpoch();
+            if (camera_selection_state_.sharpness_epoch != camera_selection_state_.document_epoch) {
+                camera_selection_state_.sharpness_scores.clear();
+                camera_selection_state_.sharpness_epoch = camera_selection_state_.document_epoch;
+            }
             camera_selection_state_.scene_generation = scene.renderGeneration();
             camera_selection_state_.camera_uuids = std::move(uuids);
             camera_selection_state_.cameras = std::move(cameras);
@@ -4864,17 +4868,43 @@ namespace lfs::vis::gui {
                         if (snapshot_enabled[index] && cameras[index].has_image)
                             eligible.push_back(index);
                     std::vector<unsigned char> matches(eligible.size(), 0);
+                    std::vector<std::optional<CameraSelectionState::SharpnessEntry>> fresh(eligible.size());
+                    auto& scores = camera_selection_state_.sharpness_scores;
+                    const auto read_stamp = [](const std::filesystem::path& path) -> std::optional<CameraSelectionState::SharpnessStamp> {
+                        std::error_code ec;
+                        const auto size = core::native_fs::file_size(path, ec);
+                        if (ec)
+                            return std::nullopt;
+                        const auto modified = core::native_fs::last_write_time(path, ec);
+                        if (ec)
+                            return std::nullopt;
+                        return CameraSelectionState::SharpnessStamp{size, modified};
+                    };
                     std::mutex progress_mutex;
                     size_t completed = count - eligible.size();
                     const auto analyze = [&](const size_t item) {
                         if (cancelled())
                             return;
-                        const auto index = eligible[item];
-                        {
-                            const auto [data, width, height, channels] = core::load_image(cameras[index].image_path);
-                            const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
-                            matches[item] = io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED) < options.sharpness_threshold;
+                        const auto& camera = cameras[eligible[item]];
+                        const auto stamp = read_stamp(camera.image_path);
+                        const auto cached = std::as_const(scores).find(camera.uuid);
+                        double score;
+                        if (stamp && cached != scores.cend() &&
+                            cached->second.image_path == camera.image_path && cached->second.stamp == *stamp) {
+                            score = cached->second.score;
+                        } else {
+                            {
+                                const auto [data, width, height, channels] = core::load_image(camera.image_path);
+                                const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
+                                score = io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED);
+                            }
+                            if (stamp) {
+                                if (read_stamp(camera.image_path) != stamp)
+                                    throw std::runtime_error(LOC("scene.camera_selection_stale"));
+                                fresh[item].emplace(camera.image_path, *stamp, score);
+                            }
                         }
+                        matches[item] = score < options.sharpness_threshold;
                         const std::lock_guard lock(progress_mutex);
                         jobs_.report(job, static_cast<float>(++completed) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
                         publishCameraSelectionState();
@@ -4893,9 +4923,12 @@ namespace lfs::vis::gui {
                     } else if (!eligible.empty()) {
                         analyze(0);
                     }
-                    for (size_t item = 0; item < eligible.size(); ++item)
+                    for (size_t item = 0; item < eligible.size(); ++item) {
+                        if (fresh[item])
+                            scores.insert_or_assign(cameras[eligible[item]].uuid, std::move(*fresh[item]));
                         if (matches[item])
                             selected.push_back(eligible[item]);
+                    }
                 } else if (options.operation == CameraSelectionOperation::Random) {
                     std::mt19937 generator{std::random_device{}()};
                     selected = camera_selection::random(count, options.percentage, generator);
