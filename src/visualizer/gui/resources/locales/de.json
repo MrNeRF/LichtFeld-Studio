@@ -966,7 +966,7 @@
     "select_distinct_cameras": "Unterschiedliche auswählen",
     "select_blurry_cameras": "Unscharfe auswählen",
     "camera_blur_threshold": "Schärfeschwelle",
-    "camera_blur_hint": "Wählt nur aktivierte Kameras aus, ohne sie vom Training auszuschließen. Prüfe zuerst die Auswahl: Auch detailarme Bilder können niedrige Werte erreichen; die Werte hängen von der Bildauflösung ab.",
+    "camera_blur_hint": "Erhöhe den Schwellenwert, um mehr Kameras auszuwählen.",
     "camera_sharpness_threshold_invalid": "Der Schärfeschwellenwert muss zwischen 0 und 100 liegen.",
     "select_cropbox_cameras": "Nach Crop-Box-Sichtbarkeit auswählen",
     "hide_disabled_cameras": "Deaktivierte Kameras ausblenden",

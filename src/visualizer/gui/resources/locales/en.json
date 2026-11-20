@@ -975,7 +975,7 @@
     "select_distinct_cameras": "Select Distinct",
     "select_blurry_cameras": "Select Blurry",
     "camera_blur_threshold": "Sharpness threshold",
-    "camera_blur_hint": "Selects only enabled cameras, without excluding them from training. Review the selection first: low-detail images may also score low, and scores depend on image resolution.",
+    "camera_blur_hint": "Raise the threshold to select more cameras.",
     "camera_sharpness_threshold_invalid": "Sharpness threshold must be between 0 and 100.",
     "select_cropbox_cameras": "Select by Crop Box Visibility",
     "hide_disabled_cameras": "Hide Disabled Cameras",

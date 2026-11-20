@@ -966,7 +966,7 @@
     "select_distinct_cameras": "서로 다른 카메라 선택",
     "select_blurry_cameras": "흐릿한 이미지 선택",
     "camera_blur_threshold": "선명도 임계값",
-    "camera_blur_hint": "활성화된 카메라만 선택하며 학습에서 제외하지는 않습니다. 먼저 선택 결과를 확인하세요. 세부 정보가 적은 이미지도 점수가 낮을 수 있으며, 점수는 이미지 해상도에 따라 달라집니다.",
+    "camera_blur_hint": "임계값을 높이면 더 많은 카메라가 선택됩니다.",
     "camera_sharpness_threshold_invalid": "선명도 임계값은 0에서 100 사이여야 합니다.",
     "select_cropbox_cameras": "크롭 상자 가시성으로 선택",
     "hide_disabled_cameras": "비활성화된 카메라 숨기기",
