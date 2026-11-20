@@ -8,7 +8,6 @@
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
-#include <bit>
 #include <climits>
 #include <cstdint>
 #include <cstring>
@@ -35,16 +34,6 @@ namespace lfs::io {
         constexpr std::int8_t no_row = INT8_MAX;
         constexpr float high_band_cutoff = 250.5f / 255.0f;
 
-        // IEEE comparisons on the bit patterns: subnormal values and cutoffs keep their order even
-        // where a thread flushes them to zero, as the CUDA classifier's non-FTZ comparisons do.
-        bool positive(const float value) {
-            return std::bit_cast<std::uint32_t>(value) - 1u < 0x7f800000u;
-        }
-        bool at_least(const float value, const float positive_cutoff) {
-            const auto bits = std::bit_cast<std::uint32_t>(value);
-            return bits <= 0x7f800000u && bits >= std::bit_cast<std::uint32_t>(positive_cutoff);
-        }
-
         struct KeepRule {
             bool invert = false;
             bool high_band = false;
@@ -54,7 +43,7 @@ namespace lfs::io {
             explicit KeepRule(const MaskedImageFill& policy)
                 : invert(policy.invert),
                   high_band(policy.keep_high_band),
-                  thresholded(positive(policy.threshold)),
+                  thresholded(policy.threshold > 0.f),
                   threshold(policy.threshold) {}
 
             bool operator()(float value) const {
@@ -62,7 +51,7 @@ namespace lfs::io {
                     value = 1.f - value;
                 if (high_band)
                     return value > high_band_cutoff;
-                return thresholded ? at_least(value, threshold) : positive(value);
+                return thresholded ? value >= threshold : value > 0.f;
             }
         };
 
