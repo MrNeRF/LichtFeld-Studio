@@ -8,3 +8,6 @@ tools/ci_format_push.sh text eol=lf
 
 # Unified-diff prefixes are not source indentation.
 .github/overlays/rmlui/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+
+# vcpkg checks these files against the hashes in its ports, so they stay byte-exact.
+.github/vcpkg-downloads/*.patch -text

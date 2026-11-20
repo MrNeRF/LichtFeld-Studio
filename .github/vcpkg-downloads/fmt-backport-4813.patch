@@ -1,0 +1,40 @@
+From 588b3a0f8f6a8bcf2a959cae882d5b2703e86737 Mon Sep 17 00:00:00 2001
+From: Vinay Kumar <vkslog69@gmail.com>
+Date: Thu, 18 Jun 2026 12:22:12 +0530
+Subject: [PATCH] Fix fallback uint128 bitwise not (#4813)
+
+---
+ include/fmt/format.h | 3 +++
+ test/format-test.cc  | 5 +++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/include/fmt/format.h b/include/fmt/format.h
+index 5044befdd863c3c2b95d26050aca7315f280739d..570627922c6287bcc3e98303328cbadb6a9c6ea7 100644
+--- a/include/fmt/format.h
++++ b/include/fmt/format.h
+@@ -326,6 +326,9 @@ class uint128 {
+       -> uint128 {
+     return {lhs.hi_ & rhs.hi_, lhs.lo_ & rhs.lo_};
+   }
++  friend constexpr auto operator~(const uint128& n) -> uint128 {
++    return {~n.hi_, ~n.lo_};
++  }
+   friend FMT_CONSTEXPR auto operator+(const uint128& lhs, const uint128& rhs)
+       -> uint128 {
+     auto result = uint128(lhs);
+diff --git a/test/format-test.cc b/test/format-test.cc
+index 9a2258d5921f3cf4f5bea02d4b09ae84615da917..8c2670a19fc3a6b037ea3ee51fc3225dc529ce95 100644
+--- a/test/format-test.cc
++++ b/test/format-test.cc
+@@ -82,6 +82,11 @@ TEST(uint128_test, minus) {
+   EXPECT_EQ(n - 2, 40);
+ }
+ 
++TEST(uint128_test, bitwise_not) {
++  auto n = ~uint128(0x123456789abcdef0, 0x0fedcba987654321);
++  EXPECT_EQ(n, uint128(0xedcba9876543210f, 0xf0123456789abcde));
++}
++
+ TEST(uint128_test, plus_assign) {
+   auto n = uint128(32);
+   n += uint128(10);
