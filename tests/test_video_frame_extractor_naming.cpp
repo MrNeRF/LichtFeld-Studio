@@ -2522,6 +2522,27 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
     }
 }
 
+TEST(VideoSharpnessScore, SharesEdgeRatioAndGreenChannelContract) {
+    std::vector<uint8_t> rgb(8 * 8 * 3, 128);
+    for (const auto algorithm : {lfs::io::SharpnessAlgorithm::LAPLACIAN,
+                                 lfs::io::SharpnessAlgorithm::TENENGRAD,
+                                 lfs::io::SharpnessAlgorithm::COMBINED}) {
+        EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, algorithm), 0.0);
+        for (const int size : {0, 1, 2})
+            EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), size, size, algorithm), 0.0);
+    }
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            rgb[(y * 8 + x) * 3] = (x + y) % 2 ? 255 : 0;
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::COMBINED), 0.0);
+    for (size_t index = 0; index < rgb.size(); index += 3)
+        rgb[index + 1] = rgb[index];
+    // All 6x6 interior pixels pass the Laplacian threshold; the denominator includes the border.
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::LAPLACIAN), 56.25);
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::COMBINED), 56.25);
+    EXPECT_DOUBLE_EQ(lfs::io::computeSharpnessScore(rgb.data(), 8, 8, lfs::io::SharpnessAlgorithm::TENENGRAD), 0.0);
+}
+
 TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepFirstMaximumAndMatchingPixels) {
     TempDir temp("window_best");
     for (const auto [pattern_step, codec] : {std::tuple{0, AV_CODEC_ID_MPEG4}, std::tuple{47, AV_CODEC_ID_MPEG4},
