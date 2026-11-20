@@ -1065,35 +1065,33 @@ namespace lfs::vis::gui::rml_theme {
         if (theme_template.empty())
             return {};
 
-        std::string result;
-        visitThemePresets([&](const std::string_view theme_id, const Theme& theme) {
-            auto rules = expandThemeTemplate(theme_template, theme);
-            if (!rules.empty())
-                result += std::format("@media (theme: {}) {{\n{}}}\n", theme_id, rules);
-        });
-        return result;
+        // Theme changes invalidate each document through currentThemeSignature().
+        // Expand the active variant only, so startup does not parse unused rules.
+        return std::format("@media (theme: {}) {{\n{}}}\n",
+                           currentThemeId(), expandThemeTemplate(theme_template, theme()));
     }
 
     namespace {
         std::string components_theme_media_cache;
-        bool components_theme_media_valid = false;
+        std::optional<std::size_t> components_theme_signature;
         std::mutex cache_mutex;
     } // namespace
 
     const std::string& getComponentsThemeMedia() {
         std::lock_guard lock(cache_mutex);
-        if (!components_theme_media_valid) {
+        const auto signature = currentThemeSignature();
+        if (components_theme_signature != signature) {
             components_theme_media_cache =
                 generateThemeMediaFromTemplate(loadBaseRCSS("rmlui/components.theme.rcss") + "\n" +
                                                loadBaseRCSS("rmlui/im_mode_panel.theme.rcss"));
-            components_theme_media_valid = true;
+            components_theme_signature = signature;
         }
         return components_theme_media_cache;
     }
 
     void invalidateThemeMediaCache() {
         std::lock_guard lock(cache_mutex);
-        components_theme_media_valid = false;
+        components_theme_signature.reset();
     }
 
     std::string generateSpriteSheetRCSS() {
@@ -1160,6 +1158,7 @@ namespace lfs::vis::gui::rml_theme {
 
         std::size_t seed = 0;
         hashCombine(seed, lfs::vis::getThemeDpiScale());
+        hashCombine(seed, currentThemeId());
         hashCombine(seed, t.name);
 
         hashColor(seed, p.background);

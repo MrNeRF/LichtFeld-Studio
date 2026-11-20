@@ -5,6 +5,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/user_paths.hpp"
+#include "visualizer/gui/rmlui/rml_theme.hpp"
 #include "visualizer/internal/resource_paths.hpp"
 #include "visualizer/preferences.hpp"
 #include "visualizer/theme/style_tokens.hpp"
@@ -304,6 +305,30 @@ TEST(ThemeRegistry, CurrentThemeUsesStablePresetId) {
     if (!original_theme.empty()) {
         EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
     }
+}
+
+TEST(ThemeRegistry, StylesheetsExpandOnlyTheActiveTheme) {
+    using namespace lfs::vis::gui::rml_theme;
+    const std::string original_theme = lfs::vis::currentThemeId();
+    const std::string rule = ".theme-test { color: @{text}; }";
+
+    ASSERT_TRUE(lfs::vis::setThemeByName("dark"));
+    const auto dark_sheet = generateThemeMediaFromTemplate(rule);
+    EXPECT_TRUE(dark_sheet.starts_with("@media (theme: dark)"));
+    EXPECT_EQ(dark_sheet.find("@media", 1), std::string::npos);
+    EXPECT_EQ(dark_sheet.find("@{text}"), std::string::npos);
+    EXPECT_TRUE(getComponentsThemeMedia().starts_with("@media (theme: dark)"));
+
+    const bool activated_light = lfs::vis::setThemeByName("light");
+    EXPECT_TRUE(activated_light);
+    if (activated_light) {
+        const auto light_sheet = generateThemeMediaFromTemplate(rule);
+        EXPECT_TRUE(light_sheet.starts_with("@media (theme: light)"));
+        EXPECT_EQ(light_sheet.find("@media", 1), std::string::npos);
+        EXPECT_NE(light_sheet.substr(light_sheet.find('{')), dark_sheet.substr(dark_sheet.find('{')));
+        EXPECT_TRUE(getComponentsThemeMedia().starts_with("@media (theme: light)"));
+    }
+    EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
 }
 
 TEST(ThemeRegistry, OptionalGradientsLoadAndLegacyThemesKeepDerivedFallbacks) {
