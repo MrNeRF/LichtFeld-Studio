@@ -44,6 +44,7 @@ namespace lfs::training {
             float inv_radius;
             uint32_t count;
         };
+        static_assert(sizeof(CodeParams) == 40); // MortonCodeParams in morton.metal
 
         Tensor permutation(const Tensor& means) {
             if (!means.is_valid() || means.ndim() != 2 || means.size(1) != 3 || means.dtype() != DataType::Float32 ||
