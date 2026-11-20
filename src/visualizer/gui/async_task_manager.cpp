@@ -8,6 +8,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/native_fs.hpp"
@@ -35,6 +36,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/video/video_export_schedule.hpp"
+#include "io/video_frame_extractor.hpp"
 #include "nanoflann.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -4723,6 +4725,9 @@ namespace lfs::vis::gui {
             camera_selection_state_.thread->join();
             camera_selection_state_.thread.reset();
         }
+        if (options.operation == CameraSelectionOperation::Blurry &&
+            (!std::isfinite(options.sharpness_threshold) || options.sharpness_threshold < 0.0 || options.sharpness_threshold > 100.0))
+            return selection_error(LOC("scene.camera_sharpness_threshold_invalid"));
         auto* const manager = viewer_->getSceneManager();
         if (!manager || !viewer_->project_lifecycle_)
             return selection_error(LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED));
@@ -4738,6 +4743,13 @@ namespace lfs::vis::gui {
                 uuids.push_back(node->uuid);
                 enabled.push_back(node->training_enabled);
                 CameraSelectionState::CameraSnapshot snapshot{.uuid = node->uuid};
+                if (options.operation == CameraSelectionOperation::Blurry) {
+                    snapshot.image_path = node->camera->image_path();
+                    snapshot.has_image = node->camera->has_image();
+                    snapshot.training_enabled = node->training_enabled;
+                    cameras.push_back(std::move(snapshot));
+                    continue;
+                }
                 const auto rotation = node->camera->R().cpu().contiguous().to_vector();
                 const auto translation = node->camera->T().cpu().contiguous().to_vector();
                 snapshot.focal_x = node->camera->focal_x();
@@ -4809,6 +4821,7 @@ namespace lfs::vis::gui {
                 camera_selection_state_.cropbox_max = cropbox->cropbox->max;
             }
             camera_selection_state_.has_cropbox = has_cropbox;
+            camera_selection_state_.select_nodes = options.operation == CameraSelectionOperation::Blurry;
             camera_selection_state_.selected_indices.clear();
         }
         const auto job = camera_selection_state_.job;
@@ -4841,6 +4854,19 @@ namespace lfs::vis::gui {
                             break;
                         if (!snapshot_enabled[index])
                             selected.push_back(index);
+                    }
+                } else if (options.operation == CameraSelectionOperation::Blurry) {
+                    for (size_t index = 0; index < count; ++index) {
+                        if (cancelled())
+                            break;
+                        if (snapshot_enabled[index] && cameras[index].has_image) {
+                            const auto [data, width, height, channels] = core::load_image(cameras[index].image_path);
+                            const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
+                            if (io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED) < options.sharpness_threshold)
+                                selected.push_back(index);
+                        }
+                        jobs_.report(job, static_cast<float>(index + 1) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
+                        publishCameraSelectionState();
                     }
                 } else if (options.operation == CameraSelectionOperation::Random) {
                     std::mt19937 generator{std::random_device{}()};
@@ -4901,6 +4927,7 @@ namespace lfs::vis::gui {
         }
         if (completion == CameraSelectionState::Completion::Apply) {
             std::vector<core::Uuid> uuids;
+            std::vector<CameraSelectionState::CameraSnapshot> blurry_inputs;
             std::vector<size_t> selected_indices;
             uint64_t epoch = 0;
             uint64_t scene_generation = 0;
@@ -4908,6 +4935,7 @@ namespace lfs::vis::gui {
             core::Uuid cropbox_uuid;
             std::vector<glm::vec3> cropbox_points;
             bool has_cropbox = false;
+            bool select_nodes = false;
             {
                 const std::lock_guard lock(camera_selection_state_.mutex);
                 uuids = camera_selection_state_.camera_uuids;
@@ -4918,12 +4946,15 @@ namespace lfs::vis::gui {
                 cropbox_uuid = camera_selection_state_.cropbox_uuid;
                 cropbox_points = camera_selection_state_.cropbox_points;
                 has_cropbox = camera_selection_state_.has_cropbox;
+                select_nodes = camera_selection_state_.select_nodes;
+                if (select_nodes)
+                    blurry_inputs = std::move(camera_selection_state_.cameras);
             }
             auto* const manager = viewer_->getSceneManager();
             const bool cancel_requested = jobs_.cancelRequested(camera_selection_state_.job);
             bool valid = manager && viewer_->project_lifecycle_ &&
                          viewer_->project_lifecycle_->documentEpoch() == epoch &&
-                         manager->getScene().renderGeneration() == scene_generation &&
+                         (select_nodes || manager->getScene().renderGeneration() == scene_generation) &&
                          !cancel_requested;
             std::unordered_set<core::NodeId> selected;
             if (valid) {
@@ -4937,6 +4968,16 @@ namespace lfs::vis::gui {
                             current.insert(node->uuid);
                 valid = valid && current.size() == uuids.size() &&
                         std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
+                if (valid && select_nodes) {
+                    // Training can change Gaussian topology without changing any image inputs.
+                    valid = std::ranges::all_of(blurry_inputs, [&](const auto& input) {
+                        const auto* node = manager->getScene().getNodeByUuid(input.uuid);
+                        return node && node->camera &&
+                               node->training_enabled == input.training_enabled &&
+                               node->camera->has_image() == input.has_image &&
+                               node->camera->image_path() == input.image_path;
+                    });
+                }
             }
             if (valid && has_cropbox) {
                 const auto* cropbox = manager->getScene().getNodeByUuid(cropbox_uuid);
@@ -4962,7 +5003,10 @@ namespace lfs::vis::gui {
                              LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
             } else {
                 const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);
-                static_cast<void>(manager->getScene().setCameraGroupTrainingSelection(group->id, selected));
+                if (select_nodes)
+                    manager->selectNodesById(std::vector<core::NodeId>(selected.begin(), selected.end()));
+                else
+                    static_cast<void>(manager->getScene().setCameraGroupTrainingSelection(group->id, selected));
                 jobs_.completed(camera_selection_state_.job);
             }
             publishCameraSelectionState();

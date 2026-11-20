@@ -293,6 +293,7 @@ namespace lfs::vis {
                 EveryN,
                 Distinct,
                 CropBoxVisibility,
+                Blurry,
             };
             struct CameraSelectionOptions {
                 CameraSelectionOperation operation = CameraSelectionOperation::Random;
@@ -300,6 +301,7 @@ namespace lfs::vis {
                 int every_n = 2;
                 float overlap = 65.0F;
                 float coverage = 40.0F;
+                double sharpness_threshold = 10.0;
                 core::NodeId camera_group_id = core::NULL_NODE;
                 core::NodeId cropbox_id = core::NULL_NODE;
             };
@@ -532,6 +534,9 @@ namespace lfs::vis {
                 };
                 struct CameraSnapshot {
                     core::Uuid uuid;
+                    std::filesystem::path image_path;
+                    bool has_image = true;
+                    bool training_enabled = false;
                     glm::vec3 center{0.0f};
                     glm::vec3 forward{0.0f, 0.0f, 1.0f};
                     float fov = 0.0f;
@@ -559,6 +564,7 @@ namespace lfs::vis {
                 glm::vec3 cropbox_min{0.0F};
                 glm::vec3 cropbox_max{0.0F};
                 bool has_cropbox = false;
+                bool select_nodes = false;
                 std::vector<size_t> selected_indices;
                 std::optional<std::jthread> thread;
             };

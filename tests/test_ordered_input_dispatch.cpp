@@ -4,6 +4,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/bounds_gizmo.hpp"
@@ -34,6 +35,7 @@
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
+#include "io/video_frame_extractor.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
@@ -57,6 +59,7 @@
 #include <future>
 #include <glm/gtc/type_ptr.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 #include <thread>
 #include <vector>
@@ -4011,11 +4014,13 @@ namespace lfs::vis {
             html = open_menu(id);
             EXPECT_EQ(html.find("scene_panel:enable_group_train:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:disable_group_train:"), std::string::npos);
+            EXPECT_EQ(html.find("scene_panel:camera_selection:blurry:"), std::string::npos);
             EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
         }
         html = open_menu(full);
         EXPECT_NE(html.find("scene_panel:enable_group_train:"), std::string::npos);
         EXPECT_NE(html.find("scene_panel:disable_group_train:"), std::string::npos);
+        EXPECT_NE(html.find("scene_panel:camera_selection:blurry:" + std::to_string(full)), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:enable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:disable_all_selected_train"), std::string::npos);
         EXPECT_EQ(html.find("scene_panel:duplicate:"), std::string::npos);
@@ -4128,6 +4133,122 @@ namespace lfs::vis {
             const auto selected = scene_manager.getSelectedNodeIds();
             EXPECT_EQ(std::set<core::NodeId>(selected.begin(), selected.end()), (std::set<core::NodeId>{first, second}));
         }
+    }
+
+    TEST_F(ScenePanelRefreshTest, BlurryCameraSelectionOnlySelectsEnabledImagesAndCommitsOnSuccess) {
+        lfs::test::licht::TemporaryDirectory temp("blurry-cameras");
+        std::filesystem::create_directories(temp.path / "sharp");
+        std::filesystem::create_directories(temp.path / "blurred");
+        const auto sharp_path = temp.path / "sharp" / "image.png";
+        const auto blurred_path = temp.path / "blurred" / "image.png";
+        std::vector<uint8_t> pixels(64 * 48 * 3, 128);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        for (int y = 0; y < 48; ++y)
+            for (int x = 0; x < 64; ++x)
+                for (int channel = 0; channel < 3; ++channel)
+                    pixels[(y * 64 + x) * 3 + channel] = (x / 4 + y / 4) % 2 ? 255 : 0;
+        ASSERT_TRUE(core::save_png(sharp_path, pixels.data(), 64, 48, 3, 8, 1));
+        const auto sharp_score = io::computeSharpnessScore(pixels.data(), 64, 48, io::SharpnessAlgorithm::COMBINED);
+        ASSERT_GT(sharp_score, 10.0);
+        auto& manager = *viewer_->getSceneManager();
+        auto& scene = manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", core::NULL_NODE, 0);
+        const auto sharp = addCamera(scene, "Sharp", group, sharp_path, 71);
+        const auto blurred = addCamera(scene, "Blurred", group, blurred_path, 72);
+        const auto disabled = addCamera(scene, "Disabled", group, temp.path / "missing.png", 73);
+        const auto other = addCamera(scene, "Other", core::NULL_NODE, {}, 74);
+        const auto unavailable = addCamera(scene, "Unavailable image", group, {}, 76);
+        scene.getNodeById(unavailable)->camera->set_has_image(false);
+        scene.setCameraTrainingEnabled(disabled, false);
+        auto& tasks = viewer_->getGuiManager()->asyncTasks();
+        const auto start = [&](double threshold) {
+            return tasks.startCameraSelection({.operation = gui::AsyncTaskManager::CameraSelectionOperation::Blurry,
+                                               .sharpness_threshold = threshold,
+                                               .camera_group_id = group});
+        };
+        const auto finish = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            auto state = tasks.cameraSelectionStatus();
+            while (state && state->running() && std::chrono::steady_clock::now() < deadline) {
+                tasks.pollCameraSelectionCompletion();
+                std::this_thread::yield();
+                state = tasks.cameraSelectionStatus();
+            }
+            return state;
+        };
+        manager.selectNodesById({other});
+        const auto generation = scene.renderGeneration();
+        ASSERT_TRUE(start(sharp_score));
+        scene.syncTrainingModelTopology(42);
+        const auto refined_generation = scene.renderGeneration();
+        ASSERT_NE(refined_generation, generation);
+        auto state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        EXPECT_EQ(scene.renderGeneration(), refined_generation);
+        EXPECT_TRUE(scene.getNodeById(sharp)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(blurred)->training_enabled);
+        EXPECT_FALSE(scene.getNodeById(disabled)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(other)->training_enabled);
+        EXPECT_TRUE(scene.getNodeById(unavailable)->training_enabled);
+
+        ASSERT_TRUE(start(0.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(disabled, true);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Failed);
+        EXPECT_NE(state->error.find("missing.png"), std::string::npos);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(disabled, false);
+
+        ASSERT_TRUE(start(10.0));
+        tasks.cancelCameraSelection();
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Canceled);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        ASSERT_TRUE(start(10.0));
+        scene.setCameraTrainingEnabled(blurred, false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(blurred, true);
+
+        auto& blurred_camera = *scene.getNodeById(blurred)->camera;
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.set_has_image(false);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.set_has_image(true);
+
+        ASSERT_TRUE(start(10.0));
+        blurred_camera.rebase_asset_paths(temp.path, temp.path / "relocated");
+        ASSERT_NE(blurred_camera.image_path(), blurred_path);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        blurred_camera.rebase_asset_paths(temp.path / "relocated", temp.path);
+
+        ASSERT_TRUE(start(10.0));
+        addCamera(scene, "New camera", group, sharp_path, 75);
+        state = finish();
+        ASSERT_TRUE(state);
+        EXPECT_EQ(state->status, JobStatus::Failed);
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        EXPECT_FALSE(start(-1.0));
+        EXPECT_FALSE(start(101.0));
+        EXPECT_FALSE(start(std::numeric_limits<double>::quiet_NaN()));
     }
 
     TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {

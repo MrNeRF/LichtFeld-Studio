@@ -3309,6 +3309,8 @@ namespace lfs::vis::gui {
                                                prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.select_blurry_cameras") + "...",
+                                               prefixedAction(std::format("camera_selection:blurry:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
                                                prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
                 }

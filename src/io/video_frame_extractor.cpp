@@ -483,58 +483,61 @@ namespace lfs::io {
             return name ? name : "unknown";
         }
 
-        [[nodiscard]] double computeSharpnessScore(const uint8_t* rgb,
-                                                   const int w,
-                                                   const int h,
-                                                   const SharpnessAlgorithm algo) {
-            const long long total_pixels = static_cast<long long>(w) * h;
-            // Laplacian threshold: pixel needs Laplacian > 10 to count as edge
-            // Tenengrad threshold: pixel needs Sobel energy > 40 to count as edge (4x)
-            const int lap_threshold = 10;
-            const int ten_threshold = 40;
-            long long edge_count = 0;
+    } // namespace
 
-            if (algo == SharpnessAlgorithm::COMBINED) {
-                // Single pass: count if EITHER condition is met (no double counting)
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int lap = std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]);
-                        if (lap > lap_threshold) {
-                            ++edge_count;
-                            continue;
-                        }
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
-                            ++edge_count;
+    [[nodiscard]] double computeSharpnessScore(const uint8_t* rgb,
+                                               const int w,
+                                               const int h,
+                                               const SharpnessAlgorithm algo) {
+        if (w < 3 || h < 3)
+            return 0.0;
+        const std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(w) * 3;
+        const long long total_pixels = static_cast<long long>(w) * h;
+        // Laplacian threshold: pixel needs Laplacian > 10 to count as edge
+        // Tenengrad threshold: pixel needs Sobel energy > 40 to count as edge (4x)
+        const int lap_threshold = 10;
+        const int ten_threshold = 40;
+        long long edge_count = 0;
+
+        if (algo == SharpnessAlgorithm::COMBINED) {
+            // Single pass: count if EITHER condition is met (no double counting)
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    const uint8_t* const p = rgb + static_cast<std::ptrdiff_t>(y) * stride + static_cast<std::ptrdiff_t>(x) * 3 + 1;
+                    const int lap = std::abs(static_cast<int>(p[0] * 4) - p[-stride] - p[3] - p[-3] - p[stride]);
+                    if (lap > lap_threshold) {
+                        ++edge_count;
+                        continue;
                     }
-                }
-            } else if (algo == SharpnessAlgorithm::LAPLACIAN) {
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        if (std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]) > lap_threshold)
-                            ++edge_count;
-                    }
-                }
-            } else { // TENENGRAD
-                for (int y = 1; y < h - 1; ++y) {
-                    for (int x = 1; x < w - 1; ++x) {
-                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
-                            ++edge_count;
-                    }
+                    const int gx = -p[-stride - 3] + p[-stride + 3] - p[-3] * 2 + p[3] * 2 - p[+stride - 3] + p[+stride + 3];
+                    const int gy = -p[-stride - 3] - p[-stride] * 2 - p[-stride + 3] + p[+stride - 3] + p[+stride] * 2 + p[+stride + 3];
+                    if (std::abs(gx) + std::abs(gy) > ten_threshold)
+                        ++edge_count;
                 }
             }
-
-            // Edge ratio: percentage of pixels that are part of a sharp edge (0-100)
-            return static_cast<double>(edge_count) * 100.0 / static_cast<double>(total_pixels);
+        } else if (algo == SharpnessAlgorithm::LAPLACIAN) {
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    const uint8_t* const p = rgb + static_cast<std::ptrdiff_t>(y) * stride + static_cast<std::ptrdiff_t>(x) * 3 + 1;
+                    if (std::abs(static_cast<int>(p[0] * 4) - p[-stride] - p[3] - p[-3] - p[stride]) > lap_threshold)
+                        ++edge_count;
+                }
+            }
+        } else { // TENENGRAD
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    const uint8_t* const p = rgb + static_cast<std::ptrdiff_t>(y) * stride + static_cast<std::ptrdiff_t>(x) * 3 + 1;
+                    const int gx = -p[-stride - 3] + p[-stride + 3] - p[-3] * 2 + p[3] * 2 - p[+stride - 3] + p[+stride + 3];
+                    const int gy = -p[-stride - 3] - p[-stride] * 2 - p[-stride + 3] + p[+stride - 3] + p[+stride] * 2 + p[+stride + 3];
+                    if (std::abs(gx) + std::abs(gy) > ten_threshold)
+                        ++edge_count;
+                }
+            }
         }
 
-    } // namespace
+        // Edge ratio: percentage of pixels that are part of a sharp edge (0-100)
+        return static_cast<double>(edge_count) * 100.0 / static_cast<double>(total_pixels);
+    }
 
     std::size_t calculateFpsSampleCount(const double start_time, const double end_time,
                                         const double target_fps) {
