@@ -5995,6 +5995,41 @@ namespace {
         }
     }
 
+    TEST(ProjectDocumentTest, FirstSaveAsKeepsAdjacentDatasetPortable) {
+        TemporaryDirectory temporary;
+        const auto original = temporary.path / "original";
+        const auto moved = temporary.path / "moved";
+        const auto destination = original / "scene.licht";
+
+        for (const bool adjacent : {true, false}) {
+            SCOPED_TRACE(adjacent);
+            const auto dataset = adjacent ? original / "images" : temporary.path / "external";
+            fs::create_directories(original);
+            fs::create_directories(dataset);
+            std::ofstream(dataset / "frame.txt") << "dataset";
+
+            auto document = make_empty_document(fixed_uuid(19'156), 100);
+            const auto uuid = require_result(upsert_path_reference(
+                document->edit_references(), {}, dataset, "dataset", "dataset"));
+            require_status(document->edit_project().set_dataset_reference(uuid));
+            ASSERT_TRUE(document->save_as(destination, save_options(19'157, 200)));
+            const auto saved = require_result(document->references().find(uuid));
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->locator.base, adjacent ? LocatorBase::Project : LocatorBase::Absolute);
+            EXPECT_EQ(saved->locator.absolute_fallback, lfs::core::path_to_utf8(dataset));
+            document.reset();
+
+            const auto relocated = moved / (adjacent ? "adjacent" : "outside");
+            fs::create_directories(moved);
+            fs::rename(original, relocated);
+            auto reopened = require_result_ptr(ProjectDocument::open(relocated / destination.filename()));
+            const auto resolved = resolve_path_reference(reopened->references(), relocated, uuid);
+            ASSERT_TRUE(resolved);
+            EXPECT_EQ(*resolved, adjacent ? relocated / "images" : dataset);
+            EXPECT_TRUE(fs::is_regular_file(*resolved / "frame.txt"));
+        }
+    }
+
     TEST(ProjectDocumentTest, SaveAsPreservesUnicodeSourceAndDestinationPaths) {
         TemporaryDirectory temporary;
         const fs::path source =

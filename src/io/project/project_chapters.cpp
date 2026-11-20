@@ -2119,6 +2119,29 @@ namespace lfs::io::project {
 
     } // namespace
 
+    ReferenceLocator make_path_reference_locator(
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path) {
+        const auto absolute = absolute_lexically(live_path);
+        const auto absolute_text = lfs::core::path_to_utf8(absolute);
+        ReferenceLocator locator{
+            .preferred = absolute_text,
+            .base = LocatorBase::Absolute,
+            .absolute_fallback = absolute_text,
+        };
+        if (!project_root.empty()) {
+            const auto root = absolute_lexically(project_root);
+            const auto relative = absolute.lexically_relative(root);
+            if (!relative.empty() && relative != "." &&
+                relative.is_relative()) {
+                locator.preferred =
+                    lfs::core::path_to_generic_utf8(relative);
+                locator.base = LocatorBase::Project;
+            }
+        }
+        return locator;
+    }
+
     lfs::Result<lfs::core::Uuid> upsert_path_reference(
         ReferencesChapter& references,
         const std::filesystem::path& project_root,
@@ -2144,23 +2167,7 @@ namespace lfs::io::project {
         if (!fingerprint) {
             return std::move(fingerprint).error();
         }
-        const auto absolute = absolute_lexically(live_path);
-        const auto absolute_text = lfs::core::path_to_utf8(absolute);
-        ReferenceLocator locator{
-            .preferred = absolute_text,
-            .base = LocatorBase::Absolute,
-            .absolute_fallback = absolute_text,
-        };
-        if (!project_root.empty()) {
-            const auto root = absolute_lexically(project_root);
-            const auto relative = absolute.lexically_relative(root);
-            if (!relative.empty() && relative != "." &&
-                relative.is_relative()) {
-                locator.preferred =
-                    lfs::core::path_to_generic_utf8(relative);
-                locator.base = LocatorBase::Project;
-            }
-        }
+        auto locator = make_path_reference_locator(project_root, live_path);
 
         auto records = references.records();
         if (!records) {

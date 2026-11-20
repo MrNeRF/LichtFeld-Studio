@@ -324,6 +324,10 @@ namespace lfs::io::project {
         JsonChapterDom dom_;
     };
 
+    [[nodiscard]] LFS_IO_API ReferenceLocator make_path_reference_locator(
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path);
+
     // Path ↔ REFS helpers for production adapters. Mint fingerprints a live
     // path and upserts a row (reusing the UUID for an existing key). Resolve
     // tries preferred then absolute_fallback with fingerprint precedence
