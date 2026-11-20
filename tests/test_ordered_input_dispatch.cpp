@@ -5,6 +5,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
+#include "core/native_fs.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "gui/bounds_gizmo.hpp"
@@ -63,7 +64,9 @@
 #include <set>
 #include <thread>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <cstdlib>
 #endif
 
@@ -4203,10 +4206,24 @@ namespace lfs::vis {
         ASSERT_TRUE(start(10.0));
         state = finish();
         ASSERT_TRUE(state);
-        ASSERT_EQ(state->status, JobStatus::Failed);
-        EXPECT_NE(state->error.find("missing.png"), std::string::npos);
-        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_FALSE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
         scene.setCameraTrainingEnabled(disabled, false);
+
+        manager.selectNodesById({sharp});
+        scene.setCameraTrainingEnabled(sharp, false);
+        scene.setCameraTrainingEnabled(blurred, false);
+        scene.setCameraTrainingEnabled(unavailable, false);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(state->stage.empty());
+        EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{sharp}));
+        scene.setCameraTrainingEnabled(sharp, true);
+        scene.setCameraTrainingEnabled(blurred, true);
+        scene.setCameraTrainingEnabled(unavailable, true);
 
         ASSERT_TRUE(start(10.0));
         tasks.cancelCameraSelection();
@@ -4249,6 +4266,23 @@ namespace lfs::vis {
         EXPECT_FALSE(start(-1.0));
         EXPECT_FALSE(start(101.0));
         EXPECT_FALSE(start(std::numeric_limits<double>::quiet_NaN()));
+
+#ifdef _WIN32
+        // Deny payload reads while leaving the path and its metadata untouched.
+        {
+            const auto native_path = core::native_fs::native_path(blurred_path);
+            const HANDLE handle = CreateFileW(native_path.c_str(), GENERIC_READ, FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+            const std::unique_ptr<void, decltype(&CloseHandle)> held(handle, &CloseHandle);
+            EXPECT_THROW(static_cast<void>(core::load_image(blurred_path)), std::runtime_error);
+            ASSERT_TRUE(start(10.0));
+            state = finish();
+            ASSERT_TRUE(state);
+            ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+            EXPECT_EQ(manager.getSelectedNodeIds(), (std::vector<core::NodeId>{blurred}));
+        }
+#endif
 
         // A replacement with a preserved timestamp must still invalidate a different file size.
         const auto old_write_time = std::filesystem::last_write_time(blurred_path);

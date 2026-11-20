@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "Die Sichtbarkeit der Crop-Box erfordert Lochkameras.",
     "camera_selection_stale": "Die Szene hat sich während der Kameraselektion geändert.",
     "camera_selection_progress": "Auswahlfortschritt",
+    "camera_selection_images_skipped": "Fehlende Bilder übersprungen: {}.",
     "go_to_keyframe": "Zur Keyframe-Ansicht",
     "update_keyframe": "Auf aktuelle Ansicht aktualisieren",
     "select_in_timeline": "In Timeline auswählen",

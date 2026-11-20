@@ -992,6 +992,7 @@
     "camera_selection_pinhole_required": "Crop box visibility requires pinhole cameras.",
     "camera_selection_stale": "The scene changed during camera selection.",
     "camera_selection_progress": "Selection progress",
+    "camera_selection_images_skipped": "Missing images skipped: {}.",
     "go_to_keyframe": "Go to Keyframe View",
     "update_keyframe": "Update to Current View",
     "select_in_timeline": "Select in Timeline",

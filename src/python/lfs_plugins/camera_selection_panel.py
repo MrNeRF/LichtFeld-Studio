@@ -150,7 +150,8 @@ class CameraSelectionPanel(Panel):
     def _sync_task_state(self, force=False):
         state = self._task_state()
         running = bool(state.get("active", False))
-        error = str(state.get("error", "") or "")
+        notice = state.get("stage") if not running and state.get("status", "completed") == "completed" else ""
+        error = str(state.get("error") or notice or "")
         progress = round(100 * max(0.0, min(1.0, float(state.get("progress", 0.0)))))
         if not force and running == self._running and error == self._task_error and progress == self._progress:
             return False

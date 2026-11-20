@@ -983,6 +983,7 @@
     "camera_selection_pinhole_required": "クロップボックスの可視性にはピンホールカメラが必要です。",
     "camera_selection_stale": "カメラ選択中にシーンが変更されました。",
     "camera_selection_progress": "選択の進行状況",
+    "camera_selection_images_skipped": "見つからないためスキップした画像: {} 枚。",
     "go_to_keyframe": "キーフレームビューに移動",
     "update_keyframe": "現在のビューに更新",
     "select_in_timeline": "タイムラインで選択",
