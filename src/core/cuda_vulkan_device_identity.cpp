@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "rendering/cuda_vulkan_interop.hpp"
+#include "core/cuda_vulkan_device_identity.hpp"
 
 #include <cstdio>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <format>
 #include <mutex>
 
