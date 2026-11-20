@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
-#include "cuda/sharpness_score.cuh"
 #include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "cuda/sharpness_score.cuh"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
 #include "nvcodec_image_loader.hpp"

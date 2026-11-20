@@ -6,10 +6,10 @@
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "io/cuda/sharpness_score.cuh"
 #include "io/video/frame_color_range.hpp"
 #include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
-#include "io/cuda/sharpness_score.cuh"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 

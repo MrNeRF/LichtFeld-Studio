@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "sharpness_score.hpp"
+#include "../sharpness_score.hpp"
 #include <cuda_runtime_api.h>
 #include <memory>
 #include <optional>
