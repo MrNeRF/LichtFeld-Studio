@@ -4249,6 +4249,18 @@ namespace lfs::vis {
         EXPECT_FALSE(start(-1.0));
         EXPECT_FALSE(start(101.0));
         EXPECT_FALSE(start(std::numeric_limits<double>::quiet_NaN()));
+
+        // A replacement with a preserved timestamp must still invalidate a different file size.
+        const auto old_write_time = std::filesystem::last_write_time(blurred_path);
+        const auto old_size = std::filesystem::file_size(blurred_path);
+        ASSERT_TRUE(core::save_png(blurred_path, pixels.data(), 64, 48, 3, 8, 1));
+        ASSERT_NE(std::filesystem::file_size(blurred_path), old_size);
+        std::filesystem::last_write_time(blurred_path, old_write_time);
+        ASSERT_TRUE(start(10.0));
+        state = finish();
+        ASSERT_TRUE(state);
+        ASSERT_EQ(state->status, JobStatus::Completed) << state->error;
+        EXPECT_TRUE(manager.getSelectedNodeIds().empty());
     }
 
     TEST_F(ScenePanelRefreshTest, CameraMenuRemovesDisabledCameras) {

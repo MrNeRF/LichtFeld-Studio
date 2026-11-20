@@ -40,6 +40,7 @@
 #include <shared_mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -550,6 +551,19 @@ namespace lfs::vis {
                     glm::mat4 world_to_camera{1.0f};
                     bool pose_valid = false;
                 };
+                struct SharpnessStamp {
+                    std::uintmax_t size;
+                    std::filesystem::file_time_type modified;
+                    bool operator==(const SharpnessStamp&) const = default;
+                };
+                struct SharpnessEntry {
+                    std::filesystem::path image_path;
+                    SharpnessStamp stamp;
+                    double score;
+                };
+                // Accessed by one selection worker at a time, and reset at job start after join.
+                std::unordered_map<core::Uuid, SharpnessEntry> sharpness_scores;
+                uint64_t sharpness_epoch = 0;
                 JobHandle job;
                 std::atomic<Completion> completion{Completion::Idle};
                 mutable std::mutex mutex;

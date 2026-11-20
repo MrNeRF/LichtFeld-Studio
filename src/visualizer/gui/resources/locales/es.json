@@ -966,7 +966,7 @@
     "select_distinct_cameras": "Seleccionar distintas",
     "select_blurry_cameras": "Seleccionar desenfocadas",
     "camera_blur_threshold": "Umbral de nitidez",
-    "camera_blur_hint": "Selecciona solo las cámaras habilitadas, sin excluirlas del entrenamiento. Revisa primero la selección: las imágenes con pocos detalles también pueden obtener puntuaciones bajas, y estas dependen de la resolución.",
+    "camera_blur_hint": "Sube el umbral para seleccionar más cámaras.",
     "camera_sharpness_threshold_invalid": "El umbral de nitidez debe estar entre 0 y 100.",
     "select_cropbox_cameras": "Seleccionar por visibilidad de caja de recorte",
     "hide_disabled_cameras": "Ocultar cámaras desactivadas",

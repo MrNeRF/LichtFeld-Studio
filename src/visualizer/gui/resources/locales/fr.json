@@ -966,7 +966,7 @@
     "select_distinct_cameras": "Sélectionner les distinctes",
     "select_blurry_cameras": "Sélectionner les vues floues",
     "camera_blur_threshold": "Seuil de netteté",
-    "camera_blur_hint": "Sélectionne uniquement les caméras activées, sans les exclure de l’entraînement. Vérifiez d’abord la sélection : les images peu détaillées peuvent aussi avoir un score faible, et les scores dépendent de la résolution.",
+    "camera_blur_hint": "Augmentez le seuil pour sélectionner plus de caméras.",
     "camera_sharpness_threshold_invalid": "Le seuil de netteté doit être compris entre 0 et 100.",
     "select_cropbox_cameras": "Sélectionner selon la visibilité de la boîte de recadrage",
     "hide_disabled_cameras": "Masquer les caméras désactivées",

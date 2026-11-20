@@ -966,7 +966,7 @@
     "select_distinct_cameras": "Wybierz różne",
     "select_blurry_cameras": "Wybierz nieostre",
     "camera_blur_threshold": "Próg ostrości",
-    "camera_blur_hint": "Wybiera tylko włączone kamery, bez wykluczania ich z treningu. Najpierw sprawdź zaznaczenie: obrazy z niewielką ilością szczegółów też mogą uzyskać niski wynik, a wyniki zależą od rozdzielczości obrazu.",
+    "camera_blur_hint": "Podnieś próg, aby wybrać więcej kamer.",
     "camera_sharpness_threshold_invalid": "Próg ostrości musi mieścić się w zakresie od 0 do 100.",
     "select_cropbox_cameras": "Wybierz według widoczności pola kadrowania",
     "hide_disabled_cameras": "Ukryj wyłączone kamery",
