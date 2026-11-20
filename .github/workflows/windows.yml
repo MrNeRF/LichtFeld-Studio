@@ -98,6 +98,7 @@ jobs:
         build_type: [Release, Debug]
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
+      VCPKG_DOWNLOADS: ${{ github.workspace }}\..\vcpkg-downloads
       VCPKG_BUILD_TYPE: release
       CUDA_PATH: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
       BUILD_DIR: b
@@ -123,7 +124,9 @@ jobs:
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Normalize vcpkg path
-        run: '"VCPKG_ROOT=$([System.IO.Path]::GetFullPath($env:VCPKG_ROOT))" >> $env:GITHUB_ENV'
+        run: |
+          "VCPKG_ROOT=$([System.IO.Path]::GetFullPath($env:VCPKG_ROOT))" >> $env:GITHUB_ENV
+          "VCPKG_DOWNLOADS=$([System.IO.Path]::GetFullPath($env:VCPKG_DOWNLOADS))" >> $env:GITHUB_ENV
 
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
@@ -153,9 +156,18 @@ jobs:
         id: cache-vcpkg-downloads
         uses: actions/cache/restore@v6
         with:
-          path: ${{ env.VCPKG_ROOT }}/downloads
+          path: ${{ env.VCPKG_DOWNLOADS }}
           key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-downloads-${{ runner.os }}-
+
+      # The Visual Studio prompt points the build at its bundled vcpkg, which keeps its downloads
+      # outside VCPKG_ROOT; VCPKG_DOWNLOADS pins them to one folder. The patches that ports fetch
+      # from GitHub's commit endpoint are kept in the repository, because that endpoint can answer
+      # 503 for hours.
+      - name: Seed vcpkg downloads
+        run: |
+          New-Item -ItemType Directory -Force $env:VCPKG_DOWNLOADS | Out-Null
+          Copy-Item .github/vcpkg-downloads/*.patch $env:VCPKG_DOWNLOADS -Force
 
       - name: Configure
         shell: cmd
@@ -169,7 +181,7 @@ jobs:
         if: always() && !cancelled() && steps.cache-vcpkg-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: ${{ env.VCPKG_ROOT }}/downloads
+          path: ${{ env.VCPKG_DOWNLOADS }}
           key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
 
       - name: Generate shader headers for preflight
