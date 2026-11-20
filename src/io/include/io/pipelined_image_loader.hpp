@@ -486,7 +486,6 @@ namespace lfs::io {
         std::string portable_alpha_cache_key(const std::filesystem::path& path, const LoadParams& params,
                                              bool alpha_is_transparency) const;
         void cache_portable_filled_rgb(const std::string& key, const lfs::core::Tensor& image, const LoadParams& params);
-        void cache_portable_alpha(const std::string& key, const lfs::core::Tensor& alpha_grid);
         lfs::core::Tensor decode_portable_filled_rgb(const std::vector<uint8_t>& bytes, const LoadParams& params,
                                                      lfs::core::TensorUpload& upload);
         lfs::core::Tensor decode_portable_alpha(const std::vector<uint8_t>& bytes, size_t width, size_t height,

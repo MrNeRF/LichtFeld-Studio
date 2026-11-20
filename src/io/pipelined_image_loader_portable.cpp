@@ -430,18 +430,6 @@ namespace lfs::io {
         cache_portable_prepared_image(key, grid, PORTABLE_PNG_CACHE_MAX_BYTES, true);
     }
 
-    void PipelinedImageLoader::cache_portable_alpha(const std::string& key, const Tensor& alpha_grid) {
-        Tensor gray;
-        try {
-            gray = alpha_grid.unsqueeze(0);
-        } catch (const std::exception& e) {
-            LOG_DEBUG("[PipelinedImageLoader] Optional prepared image cache store failed for {}: {}", key, e.what());
-            warn_portable_cache_failure(e.what());
-            return;
-        }
-        cache_portable_prepared_image(key, gray, PORTABLE_PNG_CACHE_MAX_BYTES, true);
-    }
-
     lfs::core::Tensor PipelinedImageLoader::decode_portable_filled_rgb(const std::vector<uint8_t>& bytes,
                                                                        const LoadParams& params,
                                                                        lfs::core::TensorUpload& upload) {
@@ -752,8 +740,8 @@ namespace lfs::io {
                                             fill ? &*fill : nullptr);
                     if (item.caches_filled_rgb) {
                         cache_portable_filled_rgb(item.cache_key, rgba.rgb, params);
-                        cache_portable_alpha(portable_alpha_cache_key(item.path, item.params, item.alpha_is_transparency),
-                                             rgba.alpha_grid);
+                        cache_portable_prepared_image(portable_alpha_cache_key(item.path, item.params, item.alpha_is_transparency),
+                                                      rgba.alpha_grid.unsqueeze(0), PORTABLE_PNG_CACHE_MAX_BYTES, true);
                     }
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgba.rgb),
                                       finish_mask(std::move(rgba.alpha), item.alpha_mask_params));
