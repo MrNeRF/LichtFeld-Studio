@@ -1085,7 +1085,8 @@ namespace lfs::vis::gui::rml_theme {
         std::lock_guard lock(cache_mutex);
         if (!components_theme_media_valid) {
             components_theme_media_cache =
-                generateThemeMediaFromTemplate(loadBaseRCSS("rmlui/components.theme.rcss"));
+                generateThemeMediaFromTemplate(loadBaseRCSS("rmlui/components.theme.rcss") + "\n" +
+                                               loadBaseRCSS("rmlui/im_mode_panel.theme.rcss"));
             components_theme_media_valid = true;
         }
         return components_theme_media_cache;

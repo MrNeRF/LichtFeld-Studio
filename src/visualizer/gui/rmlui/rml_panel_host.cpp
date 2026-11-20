@@ -243,6 +243,10 @@ namespace lfs::vis::gui {
                 if (isThemeProvidedStaticStylesheet(path))
                     return;
                 path.replace_extension(".theme.rcss");
+                // The widget theme is shared by immediate and hybrid panels.
+                if (path.filename() == "im_mode_panel.theme.rcss" &&
+                    path.lexically_normal() == lfs::vis::getAssetPath("rmlui/im_mode_panel.theme.rcss").lexically_normal())
+                    return;
                 appendBaseRCSS(panel_theme, loaded_themes, path);
             };
             // Shared linked sheets (for example import dialogs and tabs) own
