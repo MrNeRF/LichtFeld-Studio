@@ -19163,13 +19163,14 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             std::string::npos);
     }
 
-    TEST_F(VisualizerImplResetTest, EmbeddedDatasetFallbackRestoresCameraImagePaths) {
+    TEST_F(VisualizerImplResetTest, MovedProjectRestoresExternalAndEmbeddedDatasetCameraPaths) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto project_path = temporary_.path / "embedded.licht";
         const auto standalone_path = temporary_.path / "standalone" / "embedded.licht";
         const auto dataset_path = temporary_.path / "external";
+        const auto sibling_path = standalone_path.parent_path() / dataset_path.filename();
         const auto moved_path = temporary_.path / "external-moved";
         const std::string image_name = "frame_0001.png";
         write_minimal_transforms_dataset(dataset_path);
@@ -19178,18 +19179,20 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         ASSERT_TRUE(embedded) << lfs::format_for_developer(embedded.error());
         ASSERT_EQ(embedded->images_embedded, 1u);
 
-        for (const bool external_available : {true, false}) {
-            SCOPED_TRACE(external_available);
-            if (!external_available) {
-                std::filesystem::rename(dataset_path, moved_path);
-                std::filesystem::create_directories(standalone_path.parent_path());
-                std::filesystem::copy_file(project_path, standalone_path);
+        std::filesystem::create_directories(standalone_path.parent_path());
+        std::filesystem::copy_file(project_path, standalone_path);
+        for (const auto& expected_external : {dataset_path, sibling_path, std::filesystem::path{}}) {
+            SCOPED_TRACE(expected_external);
+            if (expected_external == sibling_path) {
+                std::filesystem::rename(dataset_path, sibling_path);
+            } else if (expected_external.empty()) {
+                std::filesystem::rename(sibling_path, moved_path);
             }
             auto options = projectOptions();
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             ASSERT_TRUE(viewer.getWindowManager()->init());
-            const auto opened = viewer.projectOpen(external_available ? project_path : standalone_path,
+            const auto opened = viewer.projectOpen(expected_external == dataset_path ? project_path : standalone_path,
                                                    ProjectSwitchDisposition::DiscardChanges);
             ASSERT_TRUE(opened) << lfs::format_for_developer(opened.error());
             viewer.noteGuiSessionRestoreOwnerReady(1);
@@ -19206,8 +19209,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
                        viewer.getTrainerManager()->hasTrainer();
             }));
             const auto& root = viewer.getSceneManager()->getDatasetPath();
-            if (external_available) {
-                EXPECT_EQ(root, dataset_path);
+            if (!expected_external.empty()) {
+                EXPECT_EQ(root, expected_external);
             } else {
                 EXPECT_EQ(root.parent_path(), temporary_.path / "home" / "cache" / "embedded_datasets");
             }
@@ -19288,9 +19291,12 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto moved_path =
             temporary_.path /
             "dataset-relocate-restore-moved";
+        const auto portable_path = temporary_.path / "portable" / project_path.filename();
+        const std::string image_name = "frame_0001.png";
         write_minimal_transforms_dataset(dataset_path);
-        write_dataset_project_without_checkpoint(
-            project_path, dataset_path);
+        write_dataset_project_with_named_cameras(project_path, dataset_path, {{image_name, true}});
+        std::filesystem::create_directories(portable_path.parent_path());
+        std::filesystem::copy_file(project_path, portable_path);
         std::filesystem::rename(dataset_path, moved_path);
 
         auto options = projectOptions();
@@ -19299,7 +19305,7 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
                         ->ensureLoaded());
         ASSERT_TRUE(viewer.getWindowManager()->init());
         auto opened = viewer.projectOpen(
-            project_path,
+            portable_path,
             ProjectSwitchDisposition::DiscardChanges);
         ASSERT_TRUE(opened)
             << lfs::format_for_developer(
@@ -19350,6 +19356,10 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             viewer.getSceneManager()->getDatasetPath(),
             moved_path);
         ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto* camera = camera_by_image_name(viewer.getSceneManager()->getScene(), image_name);
+        ASSERT_NE(camera, nullptr);
+        EXPECT_EQ(camera->image_path(), moved_path / image_name);
+        EXPECT_TRUE(camera->has_image());
         EXPECT_EQ(
             viewer.getTrainer()->getParams().optimization.iterations,
             1234);

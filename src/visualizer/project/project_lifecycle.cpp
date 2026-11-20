@@ -422,6 +422,15 @@ namespace lfs::vis::project {
                                 project_root,
                                 **dataset_ref,
                                 dataset_hint)) {
+                    if (rebase_from) {
+                        *rebase_from = *resolved;
+                        // Camera paths are saved against the original dataset root.
+                        const auto record = document.references().find(**dataset_ref);
+                        if (record && *record && (*record)->locator.absolute_fallback &&
+                            !(*record)->locator.absolute_fallback->empty()) {
+                            *rebase_from = lfs::core::utf8_to_path(*(*record)->locator.absolute_fallback);
+                        }
+                    }
                     if (lfs::core::native_fs::exists(*resolved)) {
                         return *resolved;
                     }
@@ -438,16 +447,6 @@ namespace lfs::vis::project {
                     std::error_code marker_error;
                     if (lfs::core::native_fs::is_regular_file(marker, marker_error) &&
                         !marker_error) {
-                        if (rebase_from && missing_external) {
-                            *rebase_from = *missing_external;
-                            // Saved camera paths use the original absolute dataset root,
-                            // even when the relative locator is resolved beside a moved project.
-                            const auto record = document.references().find(**dataset_ref);
-                            if (record && *record && (*record)->locator.absolute_fallback &&
-                                !(*record)->locator.absolute_fallback->empty()) {
-                                *rebase_from = lfs::core::utf8_to_path(*(*record)->locator.absolute_fallback);
-                            }
-                        }
                         return cache;
                     }
                 }
@@ -1029,7 +1028,8 @@ namespace lfs::vis::project {
                     armMissingDatasetReload(
                         *dataset_root,
                         report.pending_parameters.dataset
-                            .output_path);
+                            .output_path,
+                        rebase_from);
                 } else {
                     reportTrainerRestoreFailure(
                         viewer_,
@@ -1293,15 +1293,17 @@ namespace lfs::vis::project {
         if (!dataset || !*dataset) {
             return false;
         }
+        std::filesystem::path rebase_from;
         auto dataset_root = resolveDatasetRootForTrainer(
-            *document_, std::filesystem::path{});
+            *document_, {}, &rebase_from);
         if (!dataset_root || dataset_root->empty() ||
             !lfs::core::native_fs::exists(*dataset_root)) {
             if (dataset_root && !dataset_root->empty()) {
                 armMissingDatasetReload(
                     *dataset_root,
                     report.pending_parameters.dataset
-                        .output_path);
+                        .output_path,
+                    rebase_from);
             }
             return false;
         }
@@ -2977,15 +2979,18 @@ namespace lfs::vis::project {
 
     void ProjectLifecycle::armMissingDatasetReload(
         std::filesystem::path missing_path,
-        std::filesystem::path output_path) {
+        std::filesystem::path output_path,
+        std::filesystem::path rebase_from) {
         const auto epoch =
             epoch_.load(std::memory_order_acquire);
-        const auto old_root = missing_path;
+        if (rebase_from.empty()) {
+            rebase_from = missing_path;
+        }
         beginPendingDatasetRelocation(
             std::move(missing_path),
             [this, epoch,
              output_path = std::move(output_path),
-             old_root](
+             old_root = std::move(rebase_from)](
                 const std::filesystem::path& new_root) {
                 if (!viewer_.postWork({
                         .run =

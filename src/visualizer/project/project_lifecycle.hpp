@@ -808,7 +808,8 @@ namespace lfs::vis::project {
                 retry);
         void armMissingDatasetReload(
             std::filesystem::path missing_path,
-            std::filesystem::path output_path);
+            std::filesystem::path output_path,
+            std::filesystem::path rebase_from);
         void armMissingCheckpointDataset(
             std::filesystem::path missing_path,
             lfs::core::Uuid checkpoint_uuid,
