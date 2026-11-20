@@ -7,8 +7,10 @@
 #include <limits>
 
 // cuda.h defines CUDA_VERSION which GLM needs to detect CUDA version properly
-// Must be included before any GLM headers
+// Must be included before any GLM headers. Host builds of this header compile without it.
+#ifdef __CUDACC__
 #include <cuda.h>
+#endif
 
 // Silence warnings / errors of the form
 //

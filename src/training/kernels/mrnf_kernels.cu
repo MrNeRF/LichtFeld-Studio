@@ -5,6 +5,7 @@
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
 #include "densification_kernels.hpp"
+#include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/ray_depth_step.cuh"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
@@ -385,12 +386,7 @@ namespace lfs::training::mrnf_strategy {
                        "MRNF bounds percentile must be finite and within [0, 1]");
         LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
                        "MRNF percentile input exceeds CUB's int item-count limit");
-        const size_t last = n - 1;
-        const auto rank = [last](const double fraction) {
-            return std::min(last, static_cast<size_t>(fraction * static_cast<double>(last)));
-        };
-        const double low = (1.0 - static_cast<double>(percentile)) * 0.5;
-        return {rank(low), rank(1.0 - low)};
+        return lfs::gpu_ops::percentile_bound_ranks(n, percentile);
     }
 
     void launch_percentile_bounds(
