@@ -13,6 +13,7 @@ namespace lfs::vis::ui_style {
 
     struct MenuStyle {
         ThemeColor surface;
+        ThemeColor disabled_surface;
         ThemeColor hovered;
         ThemeColor active;
         ThemeColor border;
@@ -31,6 +32,8 @@ namespace lfs::vis::ui_style {
     [[nodiscard]] inline MenuStyle menuStyle(const Theme& theme) {
         return {
             .surface = theme.palette.surface,
+            .disabled_surface = {theme.palette.surface.x, theme.palette.surface.y,
+                                 theme.palette.surface.z, theme.palette.surface.w * 0.55f},
             .hovered = theme.palette.primary,
             .active = theme.palette.primary_dim,
             .border = theme.palette.border,

@@ -364,7 +364,7 @@ namespace lfs::vis::gui {
 
             lfs::rendering::OverlayColor fill;
             if (!item.enabled) {
-                fill = toOverlay(style.surface);
+                fill = toOverlay(style.disabled_surface);
             } else if (i == hovered_sector_) {
                 fill = toOverlay(style.hovered);
             } else if (item.is_active) {
