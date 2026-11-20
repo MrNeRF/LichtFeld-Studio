@@ -3791,7 +3791,7 @@ namespace lfs::vis {
             if (index == 0) {
                 auto* menu_document = openCameraMenu(panel, ctx, node->id);
                 ASSERT_NE(menu_document, nullptr);
-                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete_kf:0']"), nullptr);
+                EXPECT_NE(menu_document->QuerySelector("[data-ctx-action='scene_panel:delete:" + std::to_string(node->id) + "']"), nullptr);
                 menu().request({}, 0, 0);
             }
             auto* icon = document->QuerySelector(".trash-icon[data-node-id='" + std::to_string(node->id) + "']");
@@ -3808,6 +3808,61 @@ namespace lfs::vis {
             ASSERT_TRUE(history.redo().success);
             EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
             ASSERT_TRUE(history.undo().success);
+        }
+        history.clear();
+    }
+
+    TEST_F(ScenePanelRefreshTest, KeyframeContextDeleteRespectsLocksAndPreservesOtherSelection) {
+        auto& scene = viewer_->getSceneManager()->getScene();
+        auto& sequencer = gui_->sequencer();
+        std::array<sequencer::KeyframeId, 3> ids;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            sequencer::Keyframe keyframe;
+            keyframe.time = static_cast<float>(i);
+            ids[i] = sequencer.addKeyframe(keyframe);
+        }
+        core::events::state::KeyframeListChanged{.count = ids.size()}.emit();
+        gui::NativeScenePanel panel(&manager());
+        gui::PanelDrawContext ctx;
+        ctx.scene = &scene;
+        auto& history = op::undoHistory();
+        for (const size_t index : {0u, 1u, 2u}) {
+            for (const bool locked : {true, false}) {
+                SCOPED_TRACE(std::format("index={} locked={}", index, locked));
+                history.clear();
+                const auto name = std::format("Keyframe {}", index + 1);
+                const auto* node = scene.getNode(name);
+                ASSERT_NE(node, nullptr);
+                auto* menu_document = openCameraMenu(panel, ctx, node->id);
+                ASSERT_NE(menu_document, nullptr);
+                auto* remove = menu_document->QuerySelector("[data-ctx-action^='scene_panel:delete']");
+                ASSERT_NE(remove, nullptr);
+                ASSERT_FALSE(remove->HasAttribute("disabled"));
+                const auto other = ids[(index + 1) % ids.size()];
+                ASSERT_TRUE(sequencer.selectKeyframeById(other));
+                // Validate the live lock even when it changes after opening the menu.
+                scene.setNodeLocked(name, locked);
+                remove->DispatchEvent("click", {});
+                panel.preload(ctx);
+                EXPECT_EQ(sequencer.selectedKeyframeId(), other);
+                if (locked) {
+                    ASSERT_EQ(sequencer.timeline().realKeyframeCount(), ids.size());
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(ids[index]), nullptr);
+                    EXPECT_EQ(history.undoCount(), 0u);
+                    continue;
+                }
+                EXPECT_EQ(sequencer.timeline().realKeyframeCount(), 2u);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_EQ(history.undoCount(), 1u);
+                ASSERT_TRUE(history.undo().success);
+                for (const auto id : ids)
+                    EXPECT_NE(sequencer.timeline().getKeyframeById(id), nullptr);
+                ASSERT_TRUE(history.redo().success);
+                for (size_t i = 0; i < ids.size(); ++i)
+                    EXPECT_EQ(sequencer.timeline().getKeyframeById(ids[i]) == nullptr, i == index);
+                ASSERT_TRUE(history.undo().success);
+            }
         }
         history.clear();
     }
