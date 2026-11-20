@@ -407,14 +407,13 @@ namespace lfs::vis::project {
             std::filesystem::path>
         resolveDatasetRootForTrainer(
             const ProjectDocument& document,
-            const std::filesystem::path& dataset_hint) {
+            const std::filesystem::path& dataset_hint,
+            std::filesystem::path* rebase_from = nullptr) {
             const auto project_root =
                 projectRootFor(document);
             std::optional<std::filesystem::path> missing_external;
-            if (const auto dataset_ref =
-                    document.project()
-                        .dataset_reference();
-                dataset_ref && *dataset_ref) {
+            const auto dataset_ref = document.project().dataset_reference();
+            if (dataset_ref && *dataset_ref) {
                 if (auto resolved =
                         lfs::io::project::
                             resolve_path_reference(
@@ -439,6 +438,16 @@ namespace lfs::vis::project {
                     std::error_code marker_error;
                     if (lfs::core::native_fs::is_regular_file(marker, marker_error) &&
                         !marker_error) {
+                        if (rebase_from && missing_external) {
+                            *rebase_from = *missing_external;
+                            // Saved camera paths use the original absolute dataset root,
+                            // even when the relative locator is resolved beside a moved project.
+                            const auto record = document.references().find(**dataset_ref);
+                            if (record && *record && (*record)->locator.absolute_fallback &&
+                                !(*record)->locator.absolute_fallback->empty()) {
+                                *rebase_from = lfs::core::utf8_to_path(*(*record)->locator.absolute_fallback);
+                            }
+                        }
                         return cache;
                     }
                 }
@@ -1010,9 +1019,10 @@ namespace lfs::vis::project {
                 return;
             }
 
+            std::filesystem::path rebase_from;
             auto dataset_root =
                 resolveDatasetRootForTrainer(
-                    document, std::filesystem::path{});
+                    document, {}, &rebase_from);
             if (!dataset_root || dataset_root->empty() ||
                 !lfs::core::native_fs::exists(*dataset_root)) {
                 if (dataset_root && !dataset_root->empty()) {
@@ -1033,7 +1043,7 @@ namespace lfs::vis::project {
                 viewer_, scene_manager, document, *dataset_root,
                 report.pending_parameters.dataset
                     .output_path,
-                {}, on_failure);
+                rebase_from, on_failure);
             return;
         }
         if (report.checkpoint_header->iteration < 0) {
