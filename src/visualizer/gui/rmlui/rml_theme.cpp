@@ -853,7 +853,7 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.header_shape", header_shape},
                 {"components.header_focus_padding_top",
                  std::format("{}", std::max(0.0f, t.sizes.frame_padding.y +
-                                                      (t.gradients.section_header ? -1.0f : 2.0f)))},
+                                                      (t.gradients.section_header ? -3.0f : 0.0f)))},
                 {"components.header_state_border",
                  t.gradients.section_header ? colorToRmlAlpha(p.border, 0.72f)
                                             : colorToRml(t.menu_background())},

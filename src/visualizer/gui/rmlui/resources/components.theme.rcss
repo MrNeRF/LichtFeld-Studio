@@ -327,7 +327,7 @@ progress fill {
 }
 
 .section-header:focus-visible {
-    border-top-width: 2dp;
+    border-top-width: 4dp;
     padding-top: @{components.header_focus_padding_top}dp;
     border-color: @{primary};
 }

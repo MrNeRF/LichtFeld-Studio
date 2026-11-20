@@ -768,11 +768,6 @@ progress fill {
 .section-header:hover {
 }
 
-.section-header:focus-visible {
-    border-top-width: 2dp;
-    padding-top: 7dp;
-}
-
 .section-header.is-expanded {
 }
 

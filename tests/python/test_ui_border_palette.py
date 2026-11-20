@@ -69,6 +69,7 @@ class BorderPaletteTest(unittest.TestCase):
         preserved = {
             ("components.rcss", ".section-content", "border-bottom-width"): "4dp",
             ("components.rcss", ".section-gap", "border-top-width"): "4dp",
+            ("components.theme.rcss", ".section-header:focus-visible", "border-top-width"): "4dp",
             ("external_training.rcss", ".et-current", "border-left-width"): "3dp",
             ("image_preview.rcss", ".thumb-item", "border-width"): "1.5dp",
             ("image_preview.rcss", ".sam-point-selected", "border-width"): "3dp",
@@ -220,11 +221,13 @@ class BorderPaletteTest(unittest.TestCase):
         css = (RESOURCES / "components.theme.rcss").read_text()
         for selector in (".section-header:hover", ".section-header.is-expanded"):
             self.assertIn("border-color: @{components.header_state_border};", rule_body(css, selector))
+        self.assertIn("border-top-width: 4dp;", rule_body(css, ".section-header:focus-visible"))
         for selector in (".section-gap", ".section-content"):
             self.assertIn("border-color: @{menu.background};", rule_body(css, selector))
 
     def test_video_extractor_keeps_timeline_and_trim_colors(self):
         css = (RESOURCES / "video_extractor.theme.rcss").read_text()
+        self.assertIn("background-color: #11131a;", rule_body(css, "#preview-shell"))
         self.assertIn("background-color: #435966;", rule_body(css, "#timeline"))
         self.assertIn("background-color: rgba(166, 227, 161, 36);",
                       rule_body(css, "input.time-input--start"))
