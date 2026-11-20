@@ -9,10 +9,8 @@
 #include "image_layout.hpp"
 
 #include <algorithm>
-#include <cstring>
 #include <format>
 #include <limits>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 

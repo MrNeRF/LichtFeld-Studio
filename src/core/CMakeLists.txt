@@ -69,6 +69,7 @@ set(CORE_SOURCES
         crash_handler.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
+        cuda_vulkan_device_identity.cpp
         device_fault.cpp
         error.cpp
         error_bus.cpp
