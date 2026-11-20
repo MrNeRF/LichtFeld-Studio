@@ -19,6 +19,11 @@ set(RENDERING_TENSOR_SOURCES
         screen_overlay_renderer.cpp
 )
 
+# Device identity is process-wide, including callers in executables and the
+# visualizer DLL. Keep its single implementation in the existing shared core;
+# the remaining interop resources retain their static rendering ownership.
+target_sources(lfs_core PRIVATE cuda_vulkan_device_identity.cpp)
+
 add_library(lfs_rendering_tensor STATIC ${RENDERING_TENSOR_SOURCES})
 
 target_link_libraries(lfs_rendering_tensor
