@@ -1,11 +1,11 @@
 /* Shared border roles and shape scale. */
 
 .edit-popup {
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .overlay-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 /* Theme-dependent sequencer overlay popups. */
@@ -14,7 +14,7 @@
 .edit-popup {
     background-color: @{sequencer_overlay.surface};
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .overlay-text,
@@ -28,7 +28,7 @@
 
 #pip-preview-window {
     border-color: @{primary};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 #pip-preview-window.playing {

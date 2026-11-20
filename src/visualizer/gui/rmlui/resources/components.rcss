@@ -754,7 +754,7 @@ progress fill {
     display: flex;
     align-items: center;
     gap: 4dp;
-    padding: 9dp 6dp 5dp;
+    padding: 5dp 6dp;
     margin: 0 -6dp;
     font-weight: 600;
     color: #cdd6f4;
@@ -811,8 +811,9 @@ progress fill {
     overflow: hidden;
     opacity: 1;
     margin: 0 -6dp;
-    padding: 0 6dp 4dp;
+    padding: 0 6dp;
     border-width: 0;
+    border-bottom-width: 4dp;
 }
 
 .section-content.collapsed {
@@ -829,7 +830,8 @@ progress fill {
     border-width: 0;
 
     margin: 0 -6dp;
-    padding: 4dp 6dp 0;
+    padding: 0 6dp;
+    border-top-width: 4dp;
 }
 
 /* ── Color Controls ─────────────────────────────────────── */

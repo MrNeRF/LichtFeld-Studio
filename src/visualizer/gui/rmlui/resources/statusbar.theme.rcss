@@ -1,35 +1,35 @@
 /* Shared border roles and shape scale. */
 
 #safe-mode-badge {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #mcp-chip {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #mcp-popup {
-    border-radius: @{radius.surface}dp;
+    border-radius: 3dp;
 }
 
 .mcp-switch-track {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .mcp-switch-knob {
-    border-radius: @{radius.round}dp;
+    border-radius: 4dp;
 }
 
 .mcp-edit-button {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #progress-container {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 .progress-marker {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #progress-container.miner .progress-marker {
@@ -37,7 +37,7 @@
 }
 
 #progress-container.tessle {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
     border-bottom: 1dp @{border};
 }
 

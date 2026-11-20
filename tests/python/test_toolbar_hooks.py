@@ -2247,7 +2247,7 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-width: 1dp;" in scene_body_rule
     assert "border-radius:" not in scene_body_rule
     assert "overflow: hidden;" in scene_body_rule
-    assert "border-radius: @{radius.control}dp;" in rule_body(scene_tree_theme, "body")
+    assert "border-radius: 5dp;" in rule_body(scene_tree_theme, "body")
     assert "border-color: @{border};" in rule_body(scene_tree_theme, "body")
 
 

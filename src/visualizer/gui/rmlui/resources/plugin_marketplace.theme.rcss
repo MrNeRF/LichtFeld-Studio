@@ -1,43 +1,43 @@
 /* Shared border roles and shape scale. */
 
 .mp-intro > .mp-warning-note {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .mp-controls {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .mp-manual-section {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .mp-empty-state {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .mp-empty-mark {
-    border-radius: @{radius.round}dp;
+    border-radius: 12dp;
 }
 
 .plugin-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 6dp;
 }
 
 .card-feedback {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .plugin-list-row {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .mp-status-dot {
-    border-radius: @{radius.round}dp;
+    border-radius: 3dp;
 }
 
 .confirm-dialog {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 /* Plugin Marketplace theme overrides. */

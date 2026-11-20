@@ -1,23 +1,23 @@
 /* Shared border roles and shape scale. */
 
 #close-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 input[type="radio"] {
-    border-radius: @{radius.round}dp;
+    border-radius: 7dp;
 }
 
 input[type="range"] slidertrack {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 input[type="range"] sliderprogress {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 input[type="range"] sliderbar {
-    border-radius: @{radius.round}dp;
+    border-radius: 6dp;
 }
 
 select:focus-visible,
@@ -31,23 +31,15 @@ button:focus-visible,
 }
 
 .scrub-field {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .scrub-field-fill {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .section-header {
     border-radius: 0;
-}
-
-.section-content {
-    border-color: @{border};
-}
-
-.section-gap {
-    border-color: @{border};
 }
 
 .color-comp {
@@ -63,7 +55,7 @@ button:focus-visible,
 }
 
 .frame-tooltip {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 /* Theme-dependent shared component styles.
@@ -74,7 +66,7 @@ button:focus-visible,
     @{window.body_decor};
     border-width: @{stroke.normal}dp;
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
     position: relative;
     z-index: 1;
 }
@@ -120,13 +112,13 @@ body.floating-panel {
     width: auto;
     height: auto;
     box-shadow: none;
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 #title-bar {
     @{window.title_decor};
-    border-top-left-radius: @{radius.surface}dp;
-    border-top-right-radius: @{radius.surface}dp;
+    border-top-left-radius: @{window.rounding}dp;
+    border-top-right-radius: @{window.rounding}dp;
     border-bottom-color: @{border};
 }
 
@@ -318,23 +310,20 @@ progress fill {
 .section-header {
     @{components.header_decor};
     color: @{text};
-    border-color: transparent;
+    border-color: @{menu.background};
     padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
     @{components.header_shape};
 }
 
-.section-header:hover,
-.section-header.is-expanded,
 .section-gap,
 .section-content {
-    border-color: transparent;
+    border-color: @{menu.background};
 }
 
 .section-header:hover,
 .section-header.is-expanded {
     @{components.header_hover_decor};
-    /* Flat headers use their border box for spacing, not an outline. */
-    border-color: transparent;
+    border-color: @{components.header_state_border};
 }
 
 .section-header:focus-visible {
@@ -401,7 +390,7 @@ progress fill {
     color: @{text};
     background-color: @{surface_bright};
     border-color: @{border};
-    border-radius: @{radius.control}dp;
+    border-radius: @{num(size.frame_rounding)}dp;
 }
 
 .btn:hover {
@@ -660,5 +649,5 @@ button.window-control .window-restore-box {
 }
 
 button.window-control {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }

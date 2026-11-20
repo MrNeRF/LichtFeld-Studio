@@ -471,7 +471,7 @@ def test_histogram_controls_and_chart_follow_semantic_theme_colors():
     assert "background-color: @{warning};" in theme
 
 
-def test_signal_family_keeps_its_palette_with_shared_corner_sizes():
+def test_signal_family_keeps_its_palette_and_corner_sizes():
     themes = (
         PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     )
@@ -484,8 +484,8 @@ def test_signal_family_keeps_its_palette_with_shared_corner_sizes():
         progress = variant["gradients"]["progress"]
         assert progress["start"] == palette["primary"]
         assert progress["end"] == palette["secondary"]
-        assert variant["sizes"]["window_rounding"] == 8.0
-        assert variant["sizes"]["frame_rounding"] == 4.0
+        assert variant["sizes"]["window_rounding"] == 12.0
+        assert variant["sizes"]["frame_rounding"] == 7.0
 
     signal_day = signal["variants"]["light"]
     lichtfeld_light = lichtfeld["variants"]["light"]
@@ -497,7 +497,7 @@ def test_signal_family_keeps_its_palette_with_shared_corner_sizes():
         )
     )
     assert canvas_distance >= 0.10
-    assert signal_day["sizes"]["window_rounding"] == lichtfeld_light["sizes"]["window_rounding"]
+    assert signal_day["sizes"]["window_rounding"] > lichtfeld_light["sizes"]["window_rounding"]
 
 
 def test_sequencer_export_quality_uses_shared_native_range_and_theme():
@@ -1003,7 +1003,7 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     assert 'selection_markers_visible_ ? "inline-block" : "none"' in scene_graph
     scene_theme = (PROJECT_ROOT / "src/visualizer/gui/rmlui/resources/scene_tree.theme.rcss").read_text(encoding="utf-8")
     assert "border-radius:" not in checkbox_rule
-    assert "border-radius: @{radius.control}dp;" in _rule_body(scene_theme, ".tree-checkbox")
+    assert "border-radius: 5dp;" in _rule_body(scene_theme, ".tree-checkbox")
     assert 'prefixedAction("select_hierarchy")' in scene_graph
     assert "selectHierarchyFromSelection()" in scene_graph
     assert "if (ctrl && shift)" in scene_graph

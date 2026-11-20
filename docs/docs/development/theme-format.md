@@ -84,20 +84,18 @@ Two-component dimensions such as padding and shadow offset use `[x, y]`. Theme f
 
 ## Shared borders and corners
 
-Application chrome uses two corner sizes: `sizes.frame_rounding` for controls
-and `sizes.window_rounding` for containers and popups. Bundled themes use 4dp
-and 8dp respectively. Square joins remain 0; radio buttons, circular indicators,
-and pills use a full radius. Custom themes can change the two sizes; containers
-use at least the control radius. Scrollbar tracks and thumbs use
-`sizes.scrollbar_rounding`, with a minimum of half the scrollbar size.
+Each theme keeps its own corner sizes. New controls can use
+`@{radius.control}dp` and containers can use `@{radius.surface}dp`.
+Use `@{radius.round}dp` for a full radius. Keep existing control dimensions,
+drawing geometry, and square joins when moving rules into a theme sheet.
+Scrollbars use `sizes.scrollbar_rounding`, with a minimum of half the
+scrollbar size before rounding to a whole dp.
 
-In `.theme.rcss`, use `@{radius.control}dp`, `@{radius.surface}dp`, or
-`@{radius.round}dp`. Keep border colors on `@{border}` for neutral edges,
-`@{primary}` for hover/focus/selection, and `@{success}`, `@{warning}` or
-`@{error}` for semantic status. Use `transparent` for intentionally invisible
-edges. Avoid per-panel alpha variations and literal border colors. CSS borders
-that draw window glyphs use text ink, and image annotation handles retain white
-contrast outlines; those are drawing primitives rather than panel edges.
+Use `@{border}` for neutral edges, `@{primary}` for interaction, and
+`@{success}`, `@{warning}` or `@{error}` for status. Use `transparent`
+for intentionally invisible edges. Window glyphs, annotations, and timeline
+markers keep their drawing colors. Section separators use the menu background.
+Existing border tokens remain available to plugin stylesheets.
 
 These roles resolve from each loaded theme variant and participate in the
 existing theme switching and file hot reload. Shared linked stylesheets can
@@ -107,12 +105,9 @@ its theme sibling.
 
 ### Border widths and font weights
 
-Use `0` for no edge, `1dp` for normal outlines and dividers, and `2dp` for
-selection indicators and emphasis. Keep all UI stroke dimensions in `dp`,
-including thumbnail outlines, so they scale consistently with the rest of the UI.
-Transparent borders must not be used as padding. Section spacing belongs in
-padding; the sequencer's four 4dp triangle edges are drawing geometry and retain
-their dimensions.
+Use `0` for no edge, `1dp` for normal outlines, and `2dp` for emphasis
+in new controls. Keep existing dimensions where a different stroke defines a
+shape, a separator, or a selection mark.
 
 Typography has two weights: `400` for regular text and `600` for headings and
 emphasis. These match the loaded Inter Regular and Inter SemiBold faces. Use the
@@ -126,7 +121,7 @@ their rendered appearance.
 `src/visualizer/theme/style_tokens.hpp` is the shared native style contract.
 Its `normal_stroke` and `emphasis_stroke` constants are also exposed to RmlUi
 as `@{stroke.normal}dp` and `@{stroke.emphasis}dp`. The pie menu resolves its
-palette, disabled text, font sizes, stroke and shadow preference through
+palette, opacity, text sizes, and stroke through
 `ui_style::menuStyle(theme())` on each draw. Keep its radial geometry in the
 menu implementation; presentation belongs to the shared resolver.
 
@@ -139,7 +134,7 @@ the shared control rule; custom controls such as its timeline opt in with the
 
 Sequencer keyframes expose `alternate`, `loop-point`, and `selected` classes.
 Their theme stylesheet assigns primary, secondary, and info fills, with the
-existing lightened selected variants and the shared emphasis stroke. Runtime
+existing lightened selected variants and a 1dp outline in the text color. Runtime
 code controls state and position, so switching or reloading a theme also
 updates existing keyframes without rebuilding their elements.
 

@@ -104,7 +104,7 @@
     padding: 0;
     margin: 2dp 0;
     cursor: pointer;
-    border-width: 1dp;
+    border-width: 1.5dp;
     opacity: 0.85;
     position: relative;
     overflow: hidden;
@@ -268,7 +268,7 @@
     text-align: center;
     line-height: 16dp;
 }
-.sam-point-selected { border-width: 2dp; line-height: 14dp; }
+.sam-point-selected { border-width: 3dp; line-height: 12dp; }
 .sam-box { position: absolute; border-width: 2dp; }
 .sam-box-handle {
     position: absolute;

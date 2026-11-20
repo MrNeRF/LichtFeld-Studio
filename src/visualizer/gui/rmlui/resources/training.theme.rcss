@@ -1,11 +1,11 @@
 /* Shared border roles and shape scale. */
 
 .training-preparation-status {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .training-preparation-indicator {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 /* Training panel theme overrides. */

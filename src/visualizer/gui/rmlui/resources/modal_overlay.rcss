@@ -22,7 +22,7 @@ body {
     display: none;
     position: absolute;
     padding: 16dp 20dp;
-    border-width: 1dp;
+    border-width: 2dp;
 }
 
 #modal-form {

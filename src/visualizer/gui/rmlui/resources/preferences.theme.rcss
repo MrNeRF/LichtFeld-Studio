@@ -1,21 +1,21 @@
 /* Shared border roles and shape scale. */
 
 .preferences-mcp-switch-track {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .preferences-mcp-switch-knob {
-    border-radius: @{radius.round}dp;
+    border-radius: 4dp;
 }
 
 .preferences-conflict-dialog {
-    border-radius: @{radius.surface}dp;
+    border-radius: 6dp;
 }
 
 /* Theme-dependent styles for the Preferences panel. */
 
 .preferences-model-card { border-color: @{border}; }
-.preferences-model-dot { background-color: @{error}; border-radius: @{radius.round}dp; }
+.preferences-model-dot { background-color: @{error}; border-radius: 4dp; }
 .preferences-model-dot.is-available { background-color: @{success}; }
 .preferences-model-dot.is-working { background-color: @{warning}; }
 
@@ -52,7 +52,7 @@
     background-color: @{panel.tab_active_bg};
     border-color: @{primary};
     border-left-color: @{primary};
-    border-left-width: 2dp;
+    border-left-width: 3dp;
     font-weight: 600;
 }
 

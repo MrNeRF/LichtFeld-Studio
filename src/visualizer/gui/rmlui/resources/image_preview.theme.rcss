@@ -2,24 +2,24 @@
 
 .thumb-item {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .nav-arrow {
-    border-radius: @{radius.round}dp;
+    border-radius: 16dp;
 }
 
 .btn-copy {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .view-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .hk-key {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 /* Image preview panel theme overrides. */
@@ -145,5 +145,5 @@
 }
 
 .sam-point {
-    border-radius: @{radius.round}dp;
+    border-radius: 9dp;
 }

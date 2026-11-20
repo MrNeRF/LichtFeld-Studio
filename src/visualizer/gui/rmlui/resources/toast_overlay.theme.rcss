@@ -4,7 +4,7 @@
 
 .toast {
     background-color: @{modal.surface};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .toast-title,

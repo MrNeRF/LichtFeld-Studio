@@ -583,7 +583,8 @@ namespace lfs::vis::gui::rml_theme {
             const auto panel_host_body_decor = enhanced_panel_chrome
                                                    ? "decorator: none; background-color: transparent"
                                                    : panel_body_decor;
-            const float enhanced_header_rounding = std::max(0.0f, t.sizes.frame_rounding);
+            const int enhanced_header_rounding =
+                std::max(4, static_cast<int>(std::round(t.sizes.frame_rounding)));
             const auto right_panel_tab_hover_decor = enhanced_panel_chrome
                                                          ? std::format(
                                                                "decorator: vertical-gradient({} {}); background-color: transparent",
@@ -613,11 +614,9 @@ namespace lfs::vis::gui::rml_theme {
                                                 "margin: 4dp 0 2dp 0; border-width: 1dp; "
                                                 "border-radius: {}dp; border-color: {}",
                                                 enhanced_header_rounding,
-                                                colorToRml(p.border))
-                                          : std::format(
-                                                "margin: 0 -6dp; border-width: 0; border-radius: 0; "
-                                                "padding-top: {}dp",
-                                                t.sizes.frame_padding.y + 4.0f);
+                                                colorToRmlAlpha(p.border, 0.58f))
+                                          : "margin: 0 -6dp; border-width: 0; "
+                                            "border-top-width: 4dp; border-radius: 0";
             const ThemeGradient progress_gradient = t.gradients.progress.value_or(
                 ThemeGradient{p.primary, blend(p.primary, ThemeColor{1, 1, 1, 1}, 0.08f)});
             const auto progress_fill_decor = std::format("decorator: horizontal-gradient({} {}); background-color: transparent",

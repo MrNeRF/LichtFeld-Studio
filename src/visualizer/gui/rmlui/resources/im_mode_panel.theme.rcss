@@ -1,39 +1,39 @@
 /* Shared border roles and shape scale. */
 
 .im-plot-graph {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-color-swatch {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-color-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-image-frame {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-menu-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-tooltip {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-box {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-child-bordered {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .im-popup-dialog {
-    border-radius: @{radius.surface}dp;
+    border-radius: 6dp;
 }
 
 /* Immediate-mode bridge theme overrides. */

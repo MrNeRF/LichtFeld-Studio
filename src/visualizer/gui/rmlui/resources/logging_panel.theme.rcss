@@ -1,6 +1,6 @@
 .log-search-box input[type="text"], .log-settings-bar input[type="text"], .log-field select {
     background-color: @{surface_bright}; color: @{text}; border-color: @{border};
-    border-radius: @{radius.control}dp;
+    border-radius: @{num(size.frame_rounding)}dp;
 }
 .log-search-box input[type="text"]:hover, .log-settings-bar input[type="text"]:hover,
 .log-field select:hover { border-color: @{primary}; }
@@ -10,7 +10,7 @@
 .log-settings-bar input[type="text"]:focus, .log-settings-bar input[type="text"]:focus-visible { border-color: @{primary}; }
 #log-scroll scrollbarvertical sliderbar, #log-scroll scrollbarhorizontal sliderbar { background-color: @{alpha(text_dim, 0.55)}; }
 #log-scroll scrollbarvertical sliderbar:hover, #log-scroll scrollbarhorizontal sliderbar:hover { background-color: @{primary}; }
-.log-filter-bar .btn, .log-actions .btn, .log-footer .btn { border-radius: @{radius.control}dp; }
+.log-filter-bar .btn, .log-actions .btn, .log-footer .btn { border-radius: @{num(size.frame_rounding)}dp; }
 .log-column-header { background-color: @{surface_bright}; border-bottom-color: @{border}; }
 .log-row { border-bottom-color: @{border}; }
 .log-row:hover { background-color: @{alpha(surface_bright, 0.6)}; }

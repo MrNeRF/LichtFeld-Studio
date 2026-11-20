@@ -23,7 +23,7 @@
 #overlay-box {
     background-color: @{startup.overlay_bg};
     border: 1dp @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: 12dp;
 }
 
 .dim-text,

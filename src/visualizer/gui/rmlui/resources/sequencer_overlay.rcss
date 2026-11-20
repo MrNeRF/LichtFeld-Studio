@@ -65,7 +65,7 @@ body {
 }
 
 #pip-preview-window.playing {
-    border-width: 1dp;
+    border-width: 2dp;
 }
 
 #pip-preview-title {

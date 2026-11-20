@@ -1,7 +1,7 @@
 /* Shared border roles and shape scale. */
 
 .dock-grip-bar {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #tab-bar {

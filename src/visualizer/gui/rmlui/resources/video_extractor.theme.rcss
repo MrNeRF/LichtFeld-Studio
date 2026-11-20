@@ -9,11 +9,11 @@
 }
 
 .transport-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .hdr-badge {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 #timeline {
@@ -31,16 +31,16 @@
 }
 
 .value-slider slidertrack {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .value-slider sliderprogress {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .value-slider sliderbar {
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .status-section {
@@ -161,7 +161,7 @@ body {
 }
 
 #timeline {
-    background-color: @{surface_bright};
+    background-color: #435966;
 }
 
 #timeline-trim {
@@ -194,11 +194,11 @@ body {
 }
 
 input.time-input--start {
-    background-color: @{blend(surface,success,button.tint_normal)};
+    background-color: rgba(166, 227, 161, 36);
 }
 
 input.time-input--end {
-    background-color: @{blend(surface,error,button.tint_normal)};
+    background-color: rgba(243, 139, 168, 34);
 }
 
 .section-rule__lead,

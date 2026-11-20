@@ -1,173 +1,173 @@
 /* Shared border roles and shape scale. */
 
 .project-drop-overlay {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .project-drop-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .toolbar-vertical .icon-btn {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .viewport-gizmo-controls .icon-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .toolbar-hcenter .icon-btn {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .crop-roi-popover {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 #depth-view-block .viewport-depth-axis > .viewport-depth-step-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .viewport-transform-panel {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 #selection-block .viewport-selection-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 #depth-view-block .viewport-depth-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 #gt-compare-mode-block .viewport-gt-compare-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .viewport-transform-panel.viewport-export-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 #transform-block .viewport-transform-panel {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .viewport-transform-tool-group,
 .viewport-selection-tool-group {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .viewport-transform-option-group {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .viewport-transform-option {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .viewport-export-status {
-    border-radius: @{radius.control}dp;
+    border-radius: 6dp;
 }
 
 .viewport-transform-action {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .viewport-transfer-queue {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .viewport-transfer-progress {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 .viewport-lod-stats-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .viewport-metrics-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .vram-hud-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .vram-hud-tab {
-    border-radius: 0;
+    border-radius: 0dp;
 }
 
 .perf-hud-tracking-off {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .perf-hud-enable-tracking {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .perf-hud-ledger-header {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .perf-hud-ledger-closure {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .perf-hud-ledger-over-banner {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .perf-hud-ledger-row {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .perf-hud-ledger-share {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .perf-hud-ledger-share-fill {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .perf-hud-ledger-badge {
-    border-radius: @{radius.control}dp;
+    border-radius: 7dp;
 }
 
 #vram-hud-filter {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .vram-hud-filter-clear {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .perf-hud-strip {
-    border-radius: @{radius.control}dp;
+    border-radius: 7dp;
 }
 
 .perf-hud-meter-track {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .vram-hud-legend-swatch {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 .comparison-name {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .gamepad-indicator-dot {
-    border-radius: @{radius.round}dp;
+    border-radius: 3dp;
 }
 
 /* Theme-dependent viewport overlay controls. */
 
 .toolbar-container {
     @{chrome.toolbar_decor};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .crop-roi-popover {
@@ -231,7 +231,7 @@
     @{viewport.toolbar_glass_decor};
     border-width: 1dp;
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: 9dp;
     box-shadow: @{viewport.toolbar_shadow};
 }
 
@@ -248,7 +248,7 @@
     @{viewport.toolbar_glass_decor};
     border-width: 1dp;
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
     box-shadow: @{viewport.toolbar_shadow};
 }
 
@@ -622,7 +622,7 @@
 
 .vram-hud-allocs-row {
     background-color: @{viewport.metrics_bg};
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .vram-hud-anno-summary-label,
@@ -646,7 +646,7 @@
 
 .vram-hud-anno-row {
     background-color: @{viewport.metrics_bg};
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .vram-hud-summary {
@@ -700,7 +700,7 @@
 .viewport-status-panel {
     background-color: @{viewport.panel_bg};
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .viewport-status-title {
@@ -778,16 +778,16 @@
 
 .viewport-gt-color-scale {
     border-color: @{border};
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 .side-dock-toggle {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
     color: @{overlay.icon};
     background-color: transparent;
     border-color: transparent;
 }
-.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; border-radius: @{radius.round}dp; }
+.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; border-radius: 1dp; }
 .side-dock-toggle:hover,
 .side-dock-toggle:focus-visible { background-color: @{alpha(overlay.icon,0.12)}; }
 .side-dock-toggle:active { background-color: @{alpha(overlay.icon,0.20)}; }

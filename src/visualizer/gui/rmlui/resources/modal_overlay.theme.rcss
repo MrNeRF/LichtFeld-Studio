@@ -9,7 +9,7 @@
 .modal-dialog {
     background-color: @{modal.surface};
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 .modal-title,

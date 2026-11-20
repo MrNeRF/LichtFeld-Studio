@@ -1,7 +1,6 @@
 """Keep app chrome on shared, reloadable theme roles."""
 from pathlib import Path
 from html.parser import HTMLParser
-import json
 import re
 import unittest
 
@@ -60,12 +59,22 @@ class BorderPaletteTest(unittest.TestCase):
         self.assertNotIn(".palette", source)
         self.assertNotRegex(source, r"toOverlay\([^\n]+,\s*0\.\d+f\)")
 
-    def test_border_widths_use_one_normal_and_one_emphasis_stroke(self):
+    def test_border_widths_use_shared_strokes_or_preserved_geometry(self):
         geometry = {
             ".easing-indicator.ease-in, .easing-indicator.ease-out": {
                 "border-left-width", "border-right-width"},
             ".easing-indicator.ease-in": {"border-bottom-width"},
             ".easing-indicator.ease-out": {"border-top-width"},
+        }
+        preserved = {
+            ("components.rcss", ".section-content", "border-bottom-width"): "4dp",
+            ("components.rcss", ".section-gap", "border-top-width"): "4dp",
+            ("external_training.rcss", ".et-current", "border-left-width"): "3dp",
+            ("image_preview.rcss", ".thumb-item", "border-width"): "1.5dp",
+            ("image_preview.rcss", ".sam-point-selected", "border-width"): "3dp",
+            ("plugin_marketplace.rcss", ".plugin-list-row", "border-left-width"): "3dp",
+            ("preferences.theme.rcss", ".preferences-nav-item.active", "border-left-width"): "3dp",
+            ("sequencer.rcss", ".film-thumb.contains-selected .film-thumb-outline", "border-width"): "2px",
         }
         triangle_edges = 0
         for path in RESOURCES.glob("*.rcss"):
@@ -81,7 +90,7 @@ class BorderPaletteTest(unittest.TestCase):
                         if (path.name == "sequencer.rcss" and value.strip() == "4dp"
                                 and prop in geometry.get(selector, set())):
                             triangle_edges += 1
-                        else:
+                        elif value.strip() != preserved.get((path.name, selector, prop)):
                             self.assertTrue(set(value.split()) <= {"0", "1dp", "2dp"})
         # These four edges draw triangles; they are not UI outlines.
         self.assertEqual(triangle_edges, 4)
@@ -108,27 +117,41 @@ class BorderPaletteTest(unittest.TestCase):
     def test_theme_edges_use_only_shared_roles(self):
         colors = {"transparent", *("@{" + r + "}" for r in
                    ("border", "primary", "success", "warning", "error"))}
-        radii = {"0", *("@{radius." + r + "}dp" for r in
-                        ("control", "surface", "round"))}
+        radii = {
+            "@{radius.control}dp", "@{radius.surface}dp", "@{radius.round}dp",
+            "@{num(size.frame_rounding)}dp", "@{num(size.window_rounding)}dp",
+            "@{window.rounding}dp", "@{components.scrollbar_rounding}dp",
+        }
+        drawing_ink = {
+            "components.theme.rcss": {
+                ".window-maximize-box, .window-restore-box": "@{text}",
+                "button.window-control .window-maximize-box, button.window-control .window-restore-box": "@{text_dim}",
+                ".section-header": "@{menu.background}",
+                ".section-gap, .section-content": "@{menu.background}",
+                ".section-header:hover, .section-header.is-expanded": "@{components.header_state_border}",
+            },
+            "image_preview.theme.rcss": {
+                ".sam-point": "@{white}",
+                ".sam-box-handle": "@{white}",
+            },
+            "sequencer.theme.rcss": {
+                "#ply-sequence-clip.selected": "rgba(240, 245, 255, 255)",
+                ".keyframe.selected": "@{text}",
+                ".easing-indicator.secondary.ease-in": "@{secondary}",
+                ".easing-indicator.secondary.ease-out": "@{secondary}",
+                ".film-thumb.hovered .film-thumb-outline": "@{text}",
+                ".film-thumb.contains-hovered-keyframe .film-thumb-outline": "@{alpha(secondary,0.50)}",
+                ".film-thumb.contains-selected .film-thumb-outline": "@{alpha(primary,0.65)}",
+            },
+        }
         for path in RESOURCES.glob("*.theme.rcss"):
             source = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.S)
-            # These outlines draw glyph ink and image annotations, not chrome.
-            drawing_ink = {
-                "components.theme.rcss": {
-                    ".window-maximize-box, .window-restore-box": "@{text}",
-                    "button.window-control .window-maximize-box, button.window-control .window-restore-box": "@{text_dim}",
-                },
-                "image_preview.theme.rcss": {
-                    ".sam-point": "@{white}",
-                    ".sam-box-handle": "@{white}",
-                },
-            }
             blocks = re.finditer(r"([^{}]+)\{((?:@\{[^}]+\}|[^{}])*)\}", source)
             declarations = ((" ".join(m[1].split()), prop, value)
                             for m in blocks for prop, value in BORDER.findall(m[2]))
             for selector, prop, value in declarations:
                 ink = drawing_ink.get(path.name, {}).get(selector)
-                if prop == "border-color" and ink == value.strip():
+                if prop.endswith("-color") and ink == value.strip():
                     continue
                 with self.subTest(sheet=path.name, property=prop, value=value):
                     if prop.endswith("radius"):
@@ -138,7 +161,8 @@ class BorderPaletteTest(unittest.TestCase):
                                                      "scrollbarhorizontal slidertrack", "scrollbarhorizontal sliderbar"}):
                                 self.assertEqual(corner, "@{components.scrollbar_rounding}dp")
                             else:
-                                self.assertIn(corner, radii)
+                                if corner not in radii:
+                                    self.assertRegex(corner, r"^(?:0|[0-9]+(?:\.[0-9]+)?(?:dp|px))$")
                     else:
                         if not prop.endswith("color"):
                             value = value.split(maxsplit=1)[1]
@@ -150,25 +174,62 @@ class BorderPaletteTest(unittest.TestCase):
         shared = shared.split("void invalidateThemeMediaCache()", 1)[0]
         self.assertIn('loadBaseRCSS("rmlui/im_mode_panel.theme.rcss")', shared)
         widgets = (RESOURCES / "im_mode_panel.theme.rcss").read_text()
-        self.assertIn("border-radius: @{radius.control}dp;", rule_body(widgets, ".im-box"))
+        self.assertIn("border-radius: 3dp;", rule_body(widgets, ".im-box"))
 
     def test_copy_button_has_a_transparent_idle_border(self):
         css = (RESOURCES / "image_preview.theme.rcss").read_text()
         self.assertIn("border-color: transparent;", rule_body(css, ".btn-copy"))
         self.assertIn("border-color: @{primary};", rule_body(css, ".btn-copy:focus-visible"))
 
-    def test_round_controls_use_the_round_radius(self):
+    def test_controls_keep_their_original_geometry(self):
         controls = {
-            "sequencer": (".play-btn", ".keyframe.loop-point", "#playhead-handle"),
-            "image_preview": (".nav-arrow",),
-            "components": ('input[type="range"] sliderbar',),
-            "plugin_marketplace": (".mp-empty-mark",),
+            "sequencer": {
+                ".play-btn": "15dp",
+                ".keyframe": "1dp",
+                ".keyframe.loop-point": "6dp",
+                "#playhead-handle": "7dp",
+                ".snap-check": "2dp",
+                ".easing-indicator.ease-in-out": "2dp",
+                ".film-strip-sprocket": "1px",
+                ".film-strip-marker-cap": "1.5px",
+                "#panel.film-strip-attached": "@{num(size.window_rounding)}dp @{num(size.window_rounding)}dp 0dp 0dp",
+                "#film-strip-panel": "0dp 0dp @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp",
+            },
+            "image_preview": {".nav-arrow": "16dp"},
+            "components": {'input[type="range"] sliderbar': "6dp"},
+            "plugin_marketplace": {".mp-empty-mark": "12dp"},
+            "preferences": {".preferences-mcp-switch-track": "6dp"},
+            "viewport_overlay": {".vram-hud-legend-swatch": "2dp"},
         }
         for name, selectors in controls.items():
             css = (RESOURCES / f"{name}.theme.rcss").read_text()
-            for selector in selectors:
+            for selector, radius in selectors.items():
                 with self.subTest(sheet=name, selector=selector):
-                    self.assertIn("border-radius: @{radius.round}dp;", rule_body(css, selector))
+                    self.assertIn(f"border-radius: {radius};", rule_body(css, selector))
+
+    def test_asset_buttons_only_emit_disabled_when_true(self):
+        document = (RESOURCES / "asset_manager.rml").read_text()
+        contents_buttons = re.findall(
+            r'<button\b[^>]*data-event-click="contents_action\([^"]*\)"[^>]*>', document)
+        self.assertEqual(len(contents_buttons), 4)
+        for button in contents_buttons:
+            self.assertIn("data-attrif-disabled=", button)
+            self.assertNotIn("data-attr-disabled=", button)
+
+    def test_gradient_header_states_keep_their_border(self):
+        css = (RESOURCES / "components.theme.rcss").read_text()
+        for selector in (".section-header:hover", ".section-header.is-expanded"):
+            self.assertIn("border-color: @{components.header_state_border};", rule_body(css, selector))
+        for selector in (".section-gap", ".section-content"):
+            self.assertIn("border-color: @{menu.background};", rule_body(css, selector))
+
+    def test_video_extractor_keeps_timeline_and_trim_colors(self):
+        css = (RESOURCES / "video_extractor.theme.rcss").read_text()
+        self.assertIn("background-color: #435966;", rule_body(css, "#timeline"))
+        self.assertIn("background-color: rgba(166, 227, 161, 36);",
+                      rule_body(css, "input.time-input--start"))
+        self.assertIn("background-color: rgba(243, 139, 168, 34);",
+                      rule_body(css, "input.time-input--end"))
 
     def test_plugin_examples_use_theme_presentation(self):
         examples = ROOT / "docs/plugins/examples"
@@ -182,18 +243,6 @@ class BorderPaletteTest(unittest.TestCase):
         status_bar = (examples / "02_status_bar_mixed.py").read_text()
         self.assertNotRegex(status_bar, r"color\s*:|font-weight\s*:\s*bold")
 
-    def test_bundled_themes_share_two_corner_sizes(self):
-        variants = 0
-        for path in (ROOT / "src/visualizer/gui/assets/themes").glob("*.json"):
-            data = json.loads(path.read_text())
-            for variant in data.get("variants", {}).values():
-                variants += 1
-                sizes = variant["sizes"]
-                with self.subTest(theme=path.name, variant=variant.get("id")):
-                    self.assertEqual(sizes["frame_rounding"], 4)
-                    self.assertEqual(sizes["window_rounding"], 8)
-                    self.assertIn("border", variant["palette"])
-        self.assertGreater(variants, 0)
 
 
 if __name__ == "__main__":

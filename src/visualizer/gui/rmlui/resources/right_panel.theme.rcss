@@ -1,19 +1,19 @@
 /* Shared border roles and shape scale. */
 
 #splitter-grip {
-    border-radius: @{radius.control}dp;
+    border-radius: 1dp;
 }
 
 .tab-nav {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .tab {
-    border-radius: @{radius.control}dp 0 0 @{radius.control}dp;
+    border-radius: 6dp 0 0 6dp;
 }
 
 .tab-close {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 /* Theme-dependent right panel chrome. */

@@ -17,7 +17,7 @@ body {
     display: block;
     margin-top: 8dp;
     padding: 10dp 12dp;
-    border-width: 1dp;
+    border-width: 2dp;
 }
 
 .toast-title {

@@ -493,7 +493,7 @@ input.mp-url-input[type="text"] {
     display: block;
     min-width: 0;
     border-width: 1dp;
-    border-left-width: 2dp;
+    border-left-width: 3dp;
 
     transition: background-color 0.14s quadratic-out, border-color 0.14s quadratic-out;
 }

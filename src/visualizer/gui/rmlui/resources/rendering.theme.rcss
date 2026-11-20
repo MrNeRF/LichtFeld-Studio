@@ -1,7 +1,7 @@
 /* Shared border roles and shape scale. */
 
 .rendering-simplify-stat {
-    border-radius: @{radius.surface}dp;
+    border-radius: 10dp;
 }
 
 /* Rendering panel theme overrides. */

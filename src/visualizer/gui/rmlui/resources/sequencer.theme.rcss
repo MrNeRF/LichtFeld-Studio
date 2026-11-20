@@ -1,20 +1,20 @@
 /* Shared border roles and shape scale. */
 
 .transport-btn {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .transport-btn.toggle {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .play-btn {
-    border-radius: @{radius.round}dp;
+    border-radius: 15dp;
 }
 
 .sequence-fps-field {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .sequence-fps-field:hover,
@@ -24,15 +24,15 @@
 }
 
 .snap-check {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #track-bar {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 #ply-sequence-clip.selected {
-    border-color: @{border};
+    border-color: rgba(240, 245, 255, 255);
 }
 
 .reveal-clip {
@@ -41,11 +41,11 @@
 
 .sequence-clip {
     border-color: @{primary};
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .keyframe {
-    border-radius: @{radius.control}dp;
+    border-radius: 1dp;
     background-color: @{primary};
 }
 
@@ -54,8 +54,8 @@
 }
 
 .keyframe.selected {
-    border-color: @{primary};
-    border-width: @{stroke.emphasis}dp;
+    border-color: @{text};
+    border-width: @{stroke.normal}dp;
     background-color: @{lighten(primary,0.2)};
 }
 
@@ -64,7 +64,7 @@
 }
 
 .keyframe.loop-point {
-    border-radius: @{radius.round}dp;
+    border-radius: 6dp;
     background-color: @{info};
 }
 
@@ -73,20 +73,20 @@
 }
 
 #playhead-handle {
-    border-radius: @{radius.round}dp;
+    border-radius: 7dp;
 }
 
 #timeline-scrollbar {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 #timeline-scrollbar-thumb {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 #duration-field {
     border-color: transparent;
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 #duration-field:hover,
@@ -95,11 +95,11 @@
 }
 
 .easing-curve-segment {
-    border-radius: @{radius.control}dp;
+    border-radius: 1dp;
 }
 
 .easing-dot {
-    border-radius: @{radius.round}dp;
+    border-radius: 3dp;
 }
 
 .easing-indicator.ease-in,
@@ -109,32 +109,32 @@
 }
 
 .easing-indicator.ease-in-out {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 #film-strip-groove {
-    border-radius: @{radius.control}dp;
+    border-radius: 4px;
 }
 
 .film-thumb {
-    border-radius: @{radius.control}dp;
+    border-radius: 3px;
 }
 
 .film-thumb-outline {
-    border-radius: @{radius.control}dp;
+    border-radius: 3px;
     border-color: transparent;
 }
 
 .film-strip-marker-cap {
-    border-radius: @{radius.control}dp;
+    border-radius: 1.5px;
 }
 
 .film-strip-sprocket {
-    border-radius: @{radius.control}dp;
+    border-radius: 1px;
 }
 
 #timeline-tooltip {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 /* Theme-dependent sequencer panel styles. */
@@ -143,11 +143,11 @@
     @{panel.body_decor};
     border-width: 1dp;
     border-color: @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp;
 }
 
 #panel.film-strip-attached {
-    border-radius: @{radius.surface}dp;
+    border-radius: @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp 0dp 0dp;
 }
 
 .transport-icon {
@@ -270,7 +270,7 @@
     border-left: 1dp @{border};
     border-right: 1dp @{border};
     border-bottom: 1dp @{border};
-    border-radius: @{radius.surface}dp;
+    border-radius: 0dp 0dp @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp;
 }
 
 #film-strip-groove {
@@ -310,15 +310,15 @@
 }
 
 .film-thumb.hovered .film-thumb-outline {
-    border-color: @{border};
+    border-color: @{text};
 }
 
 .film-thumb.contains-hovered-keyframe .film-thumb-outline {
-    border-color: @{primary};
+    border-color: @{alpha(secondary,0.50)};
 }
 
 .film-thumb.contains-selected .film-thumb-outline {
-    border-color: @{primary};
+    border-color: @{alpha(primary,0.65)};
 }
 
 .film-thumb-midline.shadow {
@@ -378,7 +378,7 @@
 }
 
 .easing-indicator.secondary.ease-in {
-    border-bottom-color: @{primary};
+    border-bottom-color: @{secondary};
 }
 
 .easing-indicator.primary.ease-out {
@@ -386,7 +386,7 @@
 }
 
 .easing-indicator.secondary.ease-out {
-    border-top-color: @{primary};
+    border-top-color: @{secondary};
 }
 
 .timeline-guide.hovered {

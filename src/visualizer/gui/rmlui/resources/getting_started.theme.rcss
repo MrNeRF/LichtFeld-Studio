@@ -1,7 +1,7 @@
 /* Shared border roles and shape scale. */
 
 .card-body {
-    border-radius: @{radius.surface}dp;
+    border-radius: 6dp;
 }
 
 /* Getting started panel theme overrides. */

@@ -566,7 +566,7 @@ body {
 }
 
 .confirm-dialog {
-    border-width: 1dp;
+    border-width: 2dp;
     padding: 16dp;
     min-width: 280dp;
     max-width: 440dp;

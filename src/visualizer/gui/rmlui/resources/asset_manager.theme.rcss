@@ -1,47 +1,47 @@
 /* Shared border roles and shape scale. */
 
 .asset-button {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-size-menu {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-quick-look-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 6dp;
 }
 
 .asset-search-box {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-card {
-    border-radius: @{radius.surface}dp;
+    border-radius: 4dp;
 }
 
 .asset-thumbnail-placeholder {
-    border-radius: @{radius.surface}dp;
+    border-radius: 10dp;
 }
 
 .asset-list-header {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-list-row {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-loading-track {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 .gallery-progress {
-    border-radius: @{radius.control}dp;
+    border-radius: 2dp;
 }
 
 .asset-list-thumb .asset-thumbnail-placeholder {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-list-column-handle {
@@ -49,23 +49,23 @@
 }
 
 #asset-info-thumbnail {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .asset-quick-look-thumb .asset-thumbnail-placeholder {
-    border-radius: @{radius.surface}dp;
+    border-radius: 12dp;
 }
 
 #asset-info-thumbnail .asset-thumbnail-placeholder {
-    border-radius: @{radius.surface}dp;
+    border-radius: 12dp;
 }
 
 .asset-health-badge {
-    border-radius: @{radius.surface}dp;
+    border-radius: 8dp;
 }
 
 .contents-tag {
-    border-radius: @{radius.control}dp;
+    border-radius: 3dp;
 }
 
 /* Asset Manager theme-dependent styles */

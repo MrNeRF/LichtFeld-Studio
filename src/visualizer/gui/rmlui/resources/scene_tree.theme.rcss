@@ -1,12 +1,12 @@
 /* Shared border roles and shape scale. */
 
 body {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .scene-tab {
-    border-top-left-radius: @{radius.control}dp;
-    border-top-right-radius: @{radius.control}dp;
+    border-top-left-radius: 4dp;
+    border-top-right-radius: 4dp;
 }
 
 .tree-row {
@@ -14,7 +14,7 @@ body {
 }
 
 .tree-drag-ghost {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .tree-drag-ghost.invalid {
@@ -22,11 +22,11 @@ body {
 }
 
 .tree-insert-line {
-    border-radius: @{radius.control}dp;
+    border-radius: 1dp;
 }
 
 .tree-insert-line-dot {
-    border-radius: @{radius.round}dp;
+    border-radius: 3dp;
 }
 
 .tree-row.keyboard-cursor {
@@ -34,7 +34,7 @@ body {
 }
 
 .tree-checkbox {
-    border-radius: @{radius.control}dp;
+    border-radius: 5dp;
 }
 
 .tree-checkbox:hover {
@@ -42,7 +42,7 @@ body {
 }
 
 .training-mixed-mark {
-    border-radius: @{radius.control}dp;
+    border-radius: 1dp;
 }
 
 /* Scene tree theme overrides. */

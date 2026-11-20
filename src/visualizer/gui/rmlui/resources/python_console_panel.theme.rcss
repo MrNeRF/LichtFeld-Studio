@@ -9,11 +9,11 @@
 }
 
 button {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 #python-console-toolbar button {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 #python-console-toolbar button:active,
@@ -51,7 +51,7 @@ button.active {
 }
 
 .popup-menu {
-    border-radius: @{radius.surface}dp;
+    border-radius: 4dp;
 }
 
 #python-splitter {
@@ -64,7 +64,7 @@ button.active {
 }
 
 #tabbar button {
-    border-radius: @{radius.control}dp;
+    border-radius: 4dp;
 }
 
 .pkg-header,
