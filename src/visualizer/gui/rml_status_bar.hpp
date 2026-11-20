@@ -11,6 +11,7 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "preferences.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
@@ -81,6 +82,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API void processInput(const PanelInputState& input, float bar_x, float bar_y,
                                       float bar_w, float bar_h);
         void clearTooltip() { tooltip_.setHover({}, nullptr); }
+        LFS_VIS_API void suspend();
         [[nodiscard]] LFS_VIS_API float overlayHeight() const;
         [[nodiscard]] LFS_VIS_API bool isOverlayPoint(float local_x, float local_y,
                                                       float bar_w) const;
@@ -135,6 +137,7 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
+        LFS_VIS_API void updatePortalStatus();
         LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
@@ -143,6 +146,7 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         bool document_registered_ = false;
         Rml::DataModelHandle model_handle_;
+        Rml::EventListener* portal_listener_ = nullptr;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
@@ -200,6 +204,16 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point progress_style_checked_at_{};
 
         struct ModelState {
+            StatusBarPreferences preferences;
+            std::string renderer_text;
+            std::string camera_text;
+            std::string selected_text;
+            std::string training_speed_text;
+            std::string portal_text;
+            std::string portal_tooltip;
+            std::string portal_icon;
+            std::string portal_tone;
+
             bool safe_mode = false;
             std::string safe_mode_text;
             std::string mode_text;
@@ -282,6 +296,9 @@ namespace lfs::vis::gui {
         };
 
         ModelState model_;
+        int rate_sample_iteration_ = -1;
+        std::chrono::steady_clock::time_point rate_sample_at_{};
+        float training_rate_ = 0.0f;
         SplitViewInfo split_info_cache_;
         std::uint64_t split_info_generation_ = 0;
         std::function<RuntimeServiceStatus()> mcp_status_provider_;

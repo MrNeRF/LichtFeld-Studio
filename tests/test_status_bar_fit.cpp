@@ -5,6 +5,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "visualizer/app_store.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_progress.hpp"
 #include "gui/status_bar_training.hpp"
@@ -42,6 +43,13 @@ namespace lfs::vis::gui {
             status_bar.updateFpsReservedWidths();
         }
 
+        static std::pair<std::string, std::string> portalStatus(RmlStatusBar& bar, Rml::DataModelHandle handle) {
+            bar.model_handle_ = handle;
+            bar.updatePortalStatus();
+            bar.model_handle_ = {};
+            return {bar.model_.portal_text, bar.model_.portal_tooltip};
+        }
+
         static int fit(RmlStatusBar& status_bar, const bool allow_expand = false) {
             status_bar.fitToAvailableWidth(allow_expand);
             return status_bar.fit_level_;
@@ -59,6 +67,11 @@ namespace lfs::vis::gui {
             // Match the available overlay space supplied by render in a 900px window.
             status_bar.tooltip_max_overlay_height_ = 878.0f;
             status_bar.tooltip_.setHover(text, status_bar.document_);
+        }
+
+        static void startAnimations(RmlStatusBar& status_bar) {
+            status_bar.model_animation_active_ = status_bar.rml_animation_active_ = status_bar.animation_active_ = true;
+            status_bar.next_refresh_at_ = {};
         }
 
         static void revealTooltip(RmlStatusBar& status_bar, const bool layout = true) {
@@ -118,6 +131,21 @@ namespace {
 
     // Keep this test model in sync with RmlStatusBar::ModelState in rml_status_bar.hpp.
     struct StatusBarModel {
+        lfs::vis::StatusBarPreferences preferences = [] {
+            lfs::vis::StatusBarPreferences state;
+            for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS)
+                state.*field.member = true;
+            return state;
+        }();
+        std::string renderer_text;
+        std::string camera_text;
+        std::string selected_text;
+        std::string training_speed_text;
+        std::string portal_text;
+        std::string portal_tooltip;
+        std::string portal_icon;
+        std::string portal_tone;
+
         bool safe_mode = false;
         std::string safe_mode_text = "Safe Mode";
         std::string mode_text = "Training (Default/3DGS)";
@@ -191,6 +219,8 @@ namespace {
         std::string mcp_total_text = "2 requests";
         std::string mcp_success_text = "2 successful";
         std::string mcp_error_text = "0 errors";
+        bool preview_reduced = false;
+        std::string preview_reduced_text = "Preview reduced";
         bool show_status_message = false;
         std::string status_message_text = "A long transient status message that must remain on one line";
         std::string status_message_color = "#ffffff";
@@ -258,6 +288,16 @@ namespace {
             auto constructor = context_->CreateDataModel("status_bar");
             ASSERT_TRUE(static_cast<bool>(constructor));
             bool bound = true;
+            for (const auto& field : lfs::vis::STATUS_BAR_PREFERENCE_FIELDS)
+                bound &= constructor.Bind("pref_" + std::string(field.key), &(model_.preferences.*field.member));
+            bound &= constructor.Bind("renderer_text", &model_.renderer_text);
+            bound &= constructor.Bind("camera_text", &model_.camera_text);
+            bound &= constructor.Bind("selected_text", &model_.selected_text);
+            bound &= constructor.Bind("training_speed_text", &model_.training_speed_text);
+            bound &= constructor.Bind("portal_text", &model_.portal_text);
+            bound &= constructor.Bind("portal_tooltip", &model_.portal_tooltip);
+            bound &= constructor.Bind("portal_icon", &model_.portal_icon);
+            bound &= constructor.Bind("portal_tone", &model_.portal_tone);
             bound &= constructor.Bind("safe_mode", &model_.safe_mode);
             bound &= constructor.Bind("safe_mode_text", &model_.safe_mode_text);
             bound &= constructor.Bind("mode_text", &model_.mode_text);
@@ -331,6 +371,8 @@ namespace {
             bound &= constructor.Bind("mcp_total_text", &model_.mcp_total_text);
             bound &= constructor.Bind("mcp_success_text", &model_.mcp_success_text);
             bound &= constructor.Bind("mcp_error_text", &model_.mcp_error_text);
+            bound &= constructor.Bind("preview_reduced", &model_.preview_reduced);
+            bound &= constructor.Bind("preview_reduced_text", &model_.preview_reduced_text);
             bound &= constructor.Bind("show_status_message", &model_.show_status_message);
             bound &= constructor.Bind("status_message_text", &model_.status_message_text);
             bound &= constructor.Bind("status_message_color", &model_.status_message_color);
@@ -391,9 +433,9 @@ namespace {
         EXPECT_FLOAT_EQ(markers->GetChild(0)->GetComputedValues().opacity(), 1.0f);
     }
 
-    TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForBothFpsMetrics) {
+    TEST_F(StatusBarFitTest, TooltipHoverStartsAndClearsForViewportFps) {
         using lfs::vis::gui::RmlStatusBarTestAccess;
-        for (const char* id : {"fps-value", "fps-view-value"}) {
+        for (const char* id : {"fps-view-value"}) {
             auto* value = document_->GetElementById(id);
             ASSERT_TRUE(value);
             auto* metric = value->GetParentNode();
@@ -490,13 +532,13 @@ namespace {
             context_->SetDimensions({static_cast<int>(2400 * scale), height});
             context_->Update();
             lfs::vis::gui::RmlStatusBarTestAccess::attach(status_bar_, context_, document_);
-            auto* ui = document_->GetElementById("fps-value");
-            model_.fps_value = "144";
-            model_handle_.DirtyVariable("fps_value");
+            auto* ui = document_->GetElementById("fps-view-value");
+            model_.fps_view_value = "144";
+            model_handle_.DirtyVariable("fps_view_value");
             context_->Update();
             const float width = ui->GetOffsetWidth();
-            model_.fps_value = "0";
-            model_handle_.DirtyVariable("fps_value");
+            model_.fps_view_value = "0";
+            model_handle_.DirtyVariable("fps_view_value");
             context_->Update();
             EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), width);
             for (const int dp_width : {2400, 1600, 1200, 900, 700, 500, 320}) {
@@ -529,7 +571,7 @@ namespace {
             for (const auto& language : loc.getAvailableLanguages()) {
                 SCOPED_TRACE(language);
                 ASSERT_TRUE(loc.setLanguage(language));
-                for (const char* id : {"fps-value", "fps-view-value"}) {
+                for (const char* id : {"fps-view-value"}) {
                     auto* value = document_->GetElementById(id);
                     const std::string text = lfs::vis::gui::resolveRmlTooltip(value);
                     ASSERT_FALSE(text.empty());
@@ -572,7 +614,7 @@ namespace {
             EXPECT_GE(fit_level, previous_fit_level);
             assertNoVerticalOverflow(document_);
             assertFlexSiblingsDoNotOverlap(document_);
-            auto* fps = document_->GetElementById("fps-value");
+            auto* fps = document_->GetElementById("fps-view-value");
             EXPECT_LE(fps->GetAbsoluteOffset().x + fps->GetOffsetWidth(), width);
             previous_fit_level = fit_level;
         }
@@ -586,29 +628,25 @@ namespace {
         assertFlexSiblingsDoNotOverlap(document_);
     }
 
-    TEST_F(StatusBarFitTest, FpsValuesReserveIndependentWidthsAndKeepUnitVisible) {
+    TEST_F(StatusBarFitTest, ViewportFpsReservesDigitsAndKeepsUnitVisible) {
         context_->SetDimensions({2400, 22});
         context_->Update();
-        auto* ui = document_->GetElementById("fps-value");
         auto* view = document_->GetElementById("fps-view-value");
         auto* unit = document_->GetElementById("fps-label");
-        ASSERT_NE(ui, nullptr);
         ASSERT_NE(view, nullptr);
         ASSERT_NE(unit, nullptr);
-        const auto ui_width = ui->GetOffsetWidth();
-        const auto view_position = view->GetAbsoluteOffset().x;
-        model_.fps_value = "0";
+        const auto width = view->GetOffsetWidth();
+        const auto position = view->GetAbsoluteOffset().x;
         model_.fps_view_value = "9";
-        model_handle_.DirtyVariable("fps_value");
         model_handle_.DirtyVariable("fps_view_value");
         context_->Update();
-        EXPECT_FLOAT_EQ(ui->GetOffsetWidth(), ui_width);
-        EXPECT_FLOAT_EQ(view->GetAbsoluteOffset().x, view_position);
+        EXPECT_FLOAT_EQ(view->GetOffsetWidth(), width);
+        EXPECT_FLOAT_EQ(view->GetAbsoluteOffset().x, position);
         // The reservation is a minimum: four-digit rates must remain visible.
-        model_.fps_value = "1234";
-        model_handle_.DirtyVariable("fps_value");
+        model_.fps_view_value = "1234";
+        model_handle_.DirtyVariable("fps_view_value");
         context_->Update();
-        EXPECT_GT(ui->GetOffsetWidth(), ui_width);
+        EXPECT_GT(view->GetOffsetWidth(), width);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
         document_->SetClass("fit-8", true);
@@ -624,19 +662,90 @@ namespace {
             document_->SetProperty("height", std::format("{}px", 22 * scale));
             context_->Update();
             lfs::vis::gui::RmlStatusBarTestAccess::attach(status_bar_, context_, document_);
-            for (const char* id : {"fps-value", "fps-view-value"}) {
-                auto* value = document_->GetElementById(id);
-                auto* caption = value->GetParentNode()->QuerySelector(".fps-caption");
-                ASSERT_NE(caption, nullptr);
-                EXPECT_NEAR(value->GetAbsoluteOffset().x - caption->GetAbsoluteOffset().x -
-                                caption->GetOffsetWidth(),
-                            3 * scale, 0.5f);
-            }
+            auto* value = document_->GetElementById("fps-view-value");
             auto* unit = document_->GetElementById("fps-label");
-            auto* ui_caption = document_->GetElementById("fps-value")->GetParentNode()->QuerySelector(".fps-caption");
-            EXPECT_NEAR(ui_caption->GetAbsoluteOffset().x - unit->GetAbsoluteOffset().x - unit->GetOffsetWidth(),
-                        8 * scale, 0.5f);
+            EXPECT_NEAR(value->GetAbsoluteOffset().x - unit->GetAbsoluteOffset().x - unit->GetOffsetWidth(),
+                        11 * scale, 0.5f);
         }
+    }
+
+    TEST_F(StatusBarFitTest, HiddenBarStopsAnimationsAndCancelsPendingTooltips) {
+        using lfs::vis::gui::RmlStatusBarTestAccess;
+        RmlStatusBarTestAccess::startAnimations(status_bar_);
+        RmlStatusBarTestAccess::prepareTooltip(status_bar_, "Status bar tooltip");
+        const auto now = std::chrono::steady_clock::now();
+        EXPECT_TRUE(status_bar_.animationFrameDue(now));
+        EXPECT_TRUE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        status_bar_.suspend();
+        EXPECT_FALSE(status_bar_.animationFrameDue(now + std::chrono::seconds(10)));
+        EXPECT_FALSE(status_bar_.secondsUntilAnimationFrame(now));
+        EXPECT_FALSE(RmlStatusBarTestAccess::tooltipPending(status_bar_));
+        EXPECT_FLOAT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    TEST_F(StatusBarFitTest, PreferencesHideItemsIndependentlyAndKeepWarnings) {
+        model_.preferences = {};
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_TRUE(document_->GetElementById("fps-group")->IsVisible());
+        EXPECT_FALSE(document_->GetElementById("loss-metric")->IsVisible());
+        EXPECT_FALSE(document_->GetElementById("mcp-chip")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("time-value")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
+        model_.preferences.fps = false;
+        model_.preferences.eta = false;
+        model_.preferences.elapsed = true;
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_FALSE(document_->GetElementById("fps-group")->IsVisible());
+        EXPECT_FALSE(document_->GetElementById("eta-value")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("time-value")->IsVisible());
+        model_.show_status_message = true;
+        model_handle_.DirtyAllVariables();
+        document_->GetElementById("body")->SetClass("fit-9", true);
+        context_->Update();
+        EXPECT_TRUE(document_->GetElementById("status-message-section")->IsVisible());
+    }
+
+    TEST_F(StatusBarFitTest, BottomPortalBadgePreservesConnectionStatesAndAccountTooltip) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        ASSERT_TRUE(loc.initialize((std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        ASSERT_TRUE(loc.setLanguage("en"));
+        auto& store = lfs::vis::app_store();
+        const auto previous_account = store.account_state.get();
+        const auto previous_gallery = store.gallery_state.get();
+        store.gallery_state.set({});
+        const auto label_for = [&](lfs::vis::AppStore::AccountState account) {
+            store.account_state.set(std::move(account));
+            return lfs::vis::gui::RmlStatusBarTestAccess::portalStatus(status_bar_, model_handle_);
+        };
+        EXPECT_EQ(label_for({}).first, "Portal: Not connected");
+        EXPECT_EQ(label_for({.authorized = true}).first, "Portal connected, switched off");
+        EXPECT_EQ(label_for({.linking = true, .label = "ABCD-EFGH"}).first, "Portal: Connecting… ABCD-EFGH");
+        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .disconnecting = true}).first, "Portal: Disconnecting…");
+        const std::string name = "Katharina Theodora Extremely Long Display Name";
+        const auto connected = label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = name});
+        EXPECT_EQ(connected.first, "KT · Portal");
+        EXPECT_NE(connected.second.find(name), std::string::npos);
+        store.account_state.set(previous_account);
+        store.gallery_state.set(previous_gallery);
+        loc.reset();
+    }
+
+    TEST_F(StatusBarFitTest, BuildVersionAndEstimatedTimeHaveIndependentToggles) {
+        model_.preferences = {};
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_FALSE(document_->GetElementById("git-commit")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
+        model_.preferences.build_version = true;
+        model_.preferences.training_progress = false;
+        model_handle_.DirtyAllVariables();
+        context_->Update();
+        EXPECT_TRUE(document_->GetElementById("git-commit")->IsVisible());
+        EXPECT_FALSE(document_->GetElementById("step-metric")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("eta-value")->IsVisible());
+        EXPECT_TRUE(document_->GetElementById("time-value")->IsVisible());
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

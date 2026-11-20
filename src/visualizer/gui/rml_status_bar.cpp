@@ -5,6 +5,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
@@ -299,6 +300,16 @@ namespace lfs::vis::gui {
 
         auto ctor = rml_context_->CreateDataModel("status_bar");
         assert(ctor);
+        for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS)
+            ctor.Bind("pref_" + std::string(field.key), &(model_.preferences.*field.member));
+        ctor.Bind("renderer_text", &model_.renderer_text);
+        ctor.Bind("camera_text", &model_.camera_text);
+        ctor.Bind("selected_text", &model_.selected_text);
+        ctor.Bind("training_speed_text", &model_.training_speed_text);
+        ctor.Bind("portal_text", &model_.portal_text);
+        ctor.Bind("portal_tooltip", &model_.portal_tooltip);
+        ctor.Bind("portal_icon", &model_.portal_icon);
+        ctor.Bind("portal_tone", &model_.portal_tone);
         ctor.Bind("safe_mode", &model_.safe_mode);
         ctor.Bind("safe_mode_text", &model_.safe_mode_text);
         ctor.Bind("mode_text", &model_.mode_text);
@@ -441,6 +452,8 @@ namespace lfs::vis::gui {
         model_animation_active_ = false;
         rml_animation_active_ = false;
         animation_active_ = false;
+        delete portal_listener_;
+        portal_listener_ = nullptr;
         delete git_commit_listener_;
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
@@ -530,6 +543,11 @@ namespace lfs::vis::gui {
         bind(store.scene_generation);
         bind(store.selection_generation);
         bind(store.mode_text);
+        bind(store.import_overlay_state);
+        bind(store.video_export_overlay_state);
+        bind(store.export_progress_state);
+        bind(store.account_state);
+        bind(store.gallery_state);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
             markModelDirty();
@@ -539,6 +557,20 @@ namespace lfs::vis::gui {
     void RmlStatusBar::markModelDirty() {
         model_dirty_ = true;
         next_refresh_at_ = {};
+    }
+
+    void RmlStatusBar::suspend() {
+        clearTooltip();
+        resetSaveStepInteraction();
+        setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
+        model_animation_active_ = rml_animation_active_ = animation_active_ = false;
+        markModelDirty();
+        if (rml_context_)
+            rml_context_->ProcessMouseLeave();
+        if (rml_manager_ && rml_context_) {
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, false);
+            rml_manager_->setContextTooltipRevealDeadline(rml_context_, std::nullopt);
+        }
     }
 
     bool RmlStatusBar::animationFrameDue(
@@ -696,6 +728,13 @@ namespace lfs::vis::gui {
             git_commit_listener_ = new GitCommitClickListener(&model_.git_commit);
         if (auto* el = document_->GetElementById("git-commit"))
             el->AddEventListener(Rml::EventId::Click, git_commit_listener_);
+
+        if (!portal_listener_)
+            portal_listener_ = new CallbackListener([] {
+                lfs::python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
+            });
+        if (auto* el = document_->GetElementById("portal-status"))
+            el->AddEventListener(Rml::EventId::Click, portal_listener_);
 
         if (!gpu_icon_listener_)
             gpu_icon_listener_ = new VramHudToggleListener();
@@ -856,6 +895,8 @@ namespace lfs::vis::gui {
     }
 
     std::optional<RmlStatusBar::ProgressBarGeometry> RmlStatusBar::progressBarGeometry() const {
+        if (!model_.preferences.activity)
+            return std::nullopt;
         if (!document_)
             return std::nullopt;
 
@@ -1048,6 +1089,84 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlStatusBar::updatePortalStatus() {
+        if (!model_handle_)
+            return;
+
+        const auto account = lfs::vis::app_store().account_state.get();
+        const auto gallery = lfs::vis::app_store().gallery_state.get();
+        const auto& localization = lfs::event::LocalizationManager::getInstance();
+        const bool needs_approval = account.signed_in && gallery.relink_required;
+        const std::string connection = account.disconnecting ? "disconnecting"
+                                       : account.linking     ? "linking"
+                                       : needs_approval      ? "approval_needed"
+                                       : account.signed_in   ? "connected"
+                                       : account.authorized  ? "switched_off"
+                                                             : "not_connected";
+        const bool connected = account.signed_in;
+        const bool checking = account.linking || account.disconnecting;
+        const bool transferring = connected && (gallery.active_uploads > 0 || gallery.active_downloads > 0);
+        const std::string tone = checking ? "connecting" : needs_approval || !account.error.empty() ? "error"
+                                                       : transferring                               ? "transferring"
+                                                       : connected                                  ? "connected"
+                                                                                                    : "disconnected";
+        const std::string icon = checking         ? "ring"
+                                 : needs_approval ? "cloud-bang"
+                                 : transferring   ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "cloud-updown"
+                                                     : gallery.active_uploads > 0                               ? "cloud-up"
+                                                                                                                : "cloud-down")
+                                 : connected      ? "cloud-check"
+                                                  : "cloud-strike";
+        const auto set = [this](const char* name, auto& current, auto value) {
+            if (current != value) {
+                current = std::move(value);
+                model_handle_.DirtyVariable(name);
+                model_dirty_ = true;
+            }
+        };
+        const std::string activity = transferring && connection == "connected"
+                                         ? (gallery.active_uploads > 0 && gallery.active_downloads > 0 ? "transferring"
+                                            : gallery.active_uploads > 0                               ? "uploading"
+                                                                                                       : "downloading")
+                                         : connection;
+        const auto connection_key = "portal.status." + (activity == "not_connected" ? "disconnected" : activity);
+        std::string label = localization.get(connection_key);
+        if (connection == "connected" && !account.label.empty()) {
+            label = localization.get("portal.status.toolbar_connected");
+            constexpr std::string_view kInitialsToken = "{initials}";
+            if (const auto initials = label.find(kInitialsToken); initials != std::string::npos)
+                label.replace(initials, kInitialsToken.size(), account.label);
+        } else if (account.linking && !account.label.empty())
+            label += " " + account.label;
+        set("portal_text", model_.portal_text, std::move(label));
+        std::string tooltip = localization.get(needs_approval       ? "portal.status.reauthorize"
+                                               : connected          ? "portal.status.disconnect"
+                                               : account.linking    ? "portal.status.cancel"
+                                               : account.authorized ? "portal.status.turn_on"
+                                                                    : "portal.status.connect");
+        if (connected && !account.display_name.empty()) {
+            std::string connected_as = localization.get("portal.status.connected_as");
+            constexpr std::string_view kNameToken = "{name}";
+            if (const auto name = connected_as.find(kNameToken); name != std::string::npos)
+                connected_as.replace(name, kNameToken.size(), account.display_name);
+            tooltip += "\n" + connected_as;
+        } else if (!account.tooltip.empty())
+            tooltip += "\n" + account.tooltip;
+        if (transferring)
+            tooltip += "\n" + gallery.tooltip;
+        if (!account.error.empty()) {
+            const std::string error_key = account.error == "sign_in_unavailable" ? "account.error.unavailable"
+                                          : account.error == "sign_in_failed"    ? "account.error.generic"
+                                          : account.error == "unsafe_portal_url" ? "projects.gallery.error.unsafe_url"
+                                                                                 : "account.error." + account.error;
+            tooltip += "\n" + std::string(localization.hasKey(error_key) ? localization.get(error_key)
+                                                                         : localization.get("account.error.generic"));
+        }
+        set("portal_tooltip", model_.portal_tooltip, std::move(tooltip));
+        set("portal_icon", model_.portal_icon, "../icon/gallery-" + icon + ".png");
+        set("portal_tone", model_.portal_tone, tone);
+    }
+
     bool RmlStatusBar::updateContent(const PanelDrawContext& ctx) {
         if (!document_)
             return false;
@@ -1056,6 +1175,14 @@ namespace lfs::vis::gui {
         model_dirty_ = false;
 
         const auto& p = lfs::vis::theme().palette;
+
+        const auto preferences = UserPreferences::instance().statusBar();
+        for (const auto& field : STATUS_BAR_PREFERENCE_FIELDS) {
+            const auto name = "pref_" + std::string(field.key);
+            setModelBool(name.c_str(), model_.preferences.*field.member, preferences.*field.member);
+        }
+        if (!preferences.mcp)
+            setModelBool("mcp_details_expanded", model_.mcp_details_expanded, false);
 
         setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
         setModelString("mcp_preferences_label", model_.mcp_preferences_label,
@@ -1156,6 +1283,7 @@ namespace lfs::vis::gui {
 
         std::string mode_rml;
         std::string mode_color;
+        std::string renderer_text;
 
         if (viewer && viewer->isTrainingStartPending()) {
             mode_rml = LOC("training_panel.preparing_training");
@@ -1185,7 +1313,8 @@ namespace lfs::vis::gui {
                 strat_name = LOC("status_bar.strategy_default");
             }
 
-            auto suffix = std::format(" ({}/{})", strat_name, method);
+            renderer_text = std::format("{}/{}", strat_name, method);
+            const std::string suffix;
 
             switch (training_state) {
             case TrainingState::Running:
@@ -1228,6 +1357,19 @@ namespace lfs::vis::gui {
                 break;
             }
         }
+        // Renderer details are optional; activity remains useful on its own.
+        if (renderer_text.empty() && rm && content_type != SceneManager::ContentType::Empty)
+            renderer_text = lfs::rendering::isGutBackend(rm->getSettings().raster_backend) ? "3DGUT" : "3DGS";
+        setModelString("renderer_text", model_.renderer_text, std::move(renderer_text));
+        const auto import_state = app_store().import_overlay_state.get();
+        const auto export_scene = app_store().export_progress_state.get();
+        const auto export_video = app_store().video_export_overlay_state.get();
+        if (import_state.active)
+            mode_rml = std::format("{} {:.0f}%", import_state.stage, import_state.progress * 100.0f);
+        else if (export_scene.active)
+            mode_rml = std::format("{} {:.0f}%", export_scene.stage, export_scene.progress * 100.0f);
+        else if (export_video.active)
+            mode_rml = std::format("{} {:.0f}%", export_video.stage, export_video.progress * 100.0f);
         setModelString("mode_text", model_.mode_text, std::move(mode_rml));
         setModelString("mode_color", model_.mode_color, std::move(mode_color));
 
@@ -1441,6 +1583,38 @@ namespace lfs::vis::gui {
             setModelString("split_detail", model_.split_detail, "");
         }
 
+        std::string camera_text;
+        if (preferences.camera && !split_enabled && sm && rm && rm->getCurrentCameraId() >= 0) {
+            if (const auto camera = sm->getScene().getCameraByUid(rm->getCurrentCameraId()))
+                camera_text = camera->image_name();
+        }
+        setModelString("camera_text", model_.camera_text, std::move(camera_text));
+        const auto selected = sm && preferences.selected ? sm->getScene().selectedCount() : 0;
+        setModelString("selected_text", model_.selected_text,
+                       selected > 0 ? std::format("{} {}", fmtCount(selected), LOC("status_bar.selected")) : "");
+        updatePortalStatus();
+        std::string rate_text;
+        if (running && tm && preferences.training_speed) {
+            const int iteration = tm->getCurrentIteration();
+            if (rate_sample_iteration_ < 0 || iteration < rate_sample_iteration_) {
+                rate_sample_iteration_ = iteration;
+                rate_sample_at_ = now;
+                training_rate_ = 0.0f;
+            }
+            const float seconds = std::chrono::duration<float>(now - rate_sample_at_).count();
+            if (seconds >= 1.0f) {
+                training_rate_ = (iteration - rate_sample_iteration_) / seconds;
+                rate_sample_iteration_ = iteration;
+                rate_sample_at_ = now;
+            }
+            if (training_rate_ > 0.0f)
+                rate_text = std::format("{:.1f} {}", training_rate_, LOC("status_bar.iterations_per_second"));
+        } else {
+            rate_sample_iteration_ = -1;
+            training_rate_ = 0.0f;
+        }
+        setModelString("training_speed_text", model_.training_speed_text, std::move(rate_text));
+
         // Speed overlays
         auto [wasd_speed, wasd_alpha] = speed_state_.getWasd();
         bool wasd_visible = wasd_alpha > 0.0f;
@@ -1509,7 +1683,7 @@ namespace lfs::vis::gui {
                                              : "")
                            : "LFS —");
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(mem.process_over_budget ? p.error : p.info));
-        setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
+        setModelBool("show_gpu_model", model_.show_gpu_model, preferences.gpu_name && !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
                        std::format("{} {}{}/{} GiB", LOC("status_bar.gpu"),
@@ -1536,7 +1710,7 @@ namespace lfs::vis::gui {
         setModelString("fps_view_label", model_.fps_view_label, "3D");
         setModelString("fps_color", model_.fps_color, colorToRml(p.text));
         setModelString("fps_label", model_.fps_label, LOC(lichtfeld::Strings::Status::FPS));
-        setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
+        setModelString("git_commit", model_.git_commit, GIT_TAGGED_VERSION);
 
         section_signature_ =
             (model_.show_training ? uint32_t{1} << 0 : 0) |
@@ -1549,8 +1723,13 @@ namespace lfs::vis::gui {
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
+        for (size_t index = 0; index < STATUS_BAR_PREFERENCE_FIELDS.size(); ++index) {
+            if (preferences.*STATUS_BAR_PREFERENCE_FIELDS[index].member)
+                section_signature_ |= uint32_t{1} << (index + 13);
+        }
+
         // Freeze themed progress animations while training is paused.
-        const bool progress_animation_visible = (model_.progress_miner || model_.progress_tessle) && show_training &&
+        const bool progress_animation_visible = preferences.activity && (model_.progress_miner || model_.progress_tessle) && show_training &&
                                                 training_state == TrainingState::Running;
         model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
                                   progress_animation_visible;

@@ -241,11 +241,6 @@ namespace lfs::vis::gui {
         }
         static float heightDp(const RmlMenuBar& bar) { return bar.bar_height_; }
         static RmlTooltipController& tooltip(RmlMenuBar& bar) { return bar.tooltip_; }
-        static void portalLabel(RmlMenuBar& bar, std::string label) {
-            bar.portal_connection_label_ = std::move(label);
-            bar.menu_model_.DirtyVariable("portal_connection_label");
-        }
-        static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
             bar.updateCompactLayout(width, dp);
             bar.rml_context_->Update();
@@ -990,7 +985,7 @@ namespace {
         input.screen_w = 800;
         input.screen_h = 600;
         bar_.processInput(input);
-        EXPECT_FLOAT_EQ(bar_.barHeight(), 60);
+        EXPECT_FLOAT_EQ(bar_.barHeight(), 30);
         for (int i = 0; i < 11; ++i) {
             const auto button = bounds(el(("toolbar-test-" + std::to_string(i)).c_str()));
             input.mouse_x = (button.left + button.right) / 2;
@@ -1005,13 +1000,6 @@ namespace {
 
     TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1000) {
         auto* body = el("body");
-        auto* portal = el("menu-portal-connection");
-        Rml::Element* portal_label = nullptr;
-        for (int i = 0; i < portal->GetNumChildren(); ++i) {
-            if (portal->GetChild(i)->GetTagName() == "span")
-                portal_label = portal->GetChild(i);
-        }
-        ASSERT_NE(portal_label, nullptr);
         const auto layout_at = [&](int width) {
             context_->SetDimensions({width, 700});
             context_->Update();
@@ -1022,14 +1010,11 @@ namespace {
         bar_.updateLabels({"Hilfe", "Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht"},
                           {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         bar_.updateProjectDisplay("Untitled", "/projects/scene.licht", false);
-        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Nicht verbunden");
         RmlMenuBarTestAccess::fullToolbar(bar_);
         layout_at(1000);
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
         EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
-        EXPECT_TRUE(body->IsClassSet("toolbar-squeeze"));
-        EXPECT_FALSE(portal_label->IsVisible());
         EXPECT_TRUE(el("menu-window-maximize")->IsVisible());
         EXPECT_LT(bounds(el("toolbar-test-0")).bottom, 30.5f);
         EXPECT_GT(bounds(el("toolbar-test-10")).right, bounds(el("menu-items")).right);
@@ -1037,16 +1022,13 @@ namespace {
         layout_at(1600);
         EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
-        EXPECT_TRUE(portal_label->IsVisible());
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
 
         bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
                           {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
-        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
         layout_at(1000);
         EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
-        EXPECT_TRUE(portal_label->IsVisible());
         EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
     }
 
@@ -1119,7 +1101,6 @@ namespace {
     TEST_F(MenuBarTitleTest, NarrowBarsKeepEveryMenuVisible) {
         bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
                           {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
-        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
         for (float dp : {1.0f, 1.5f, 2.0f}) {
             // The narrowest window SDL allows, and a little wider.
             for (int width : {640, 720}) {
@@ -1147,51 +1128,8 @@ namespace {
         }
     }
 
-    TEST_F(MenuBarTitleTest, PortalStatusKeepsLongNameInTooltipAtNarrowWidth) {
-        auto& store = lfs::vis::app_store();
-        const auto previous = store.account_state.get();
-        const std::string name = "Katharina Theodora Extremely Long Display Name Example";
-        store.account_state.set(lfs::vis::AppStore::AccountState{
-            .signed_in = true,
-            .authorized = true,
-            .label = "KE",
-            .display_name = name,
-        });
-        RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
-        resize(1280);
-        EXPECT_EQ(textContent(el("menu-portal-connection")), "KE · Portal");
-        const auto tooltip = el("menu-portal-connection")->GetAttribute<Rml::String>("title", "");
-        EXPECT_NE(tooltip.find("Portal connected as " + name), std::string::npos);
-        EXPECT_EQ(textContent(el("menu-portal-connection")).find(name), std::string::npos);
-        store.account_state.set(previous);
-    }
-
-    TEST_F(MenuBarTitleTest, PortalStatusShowsSpecificTransitionLabels) {
-        auto& store = lfs::vis::app_store();
-        const auto previous_account = store.account_state.get();
-        const auto previous_gallery = store.gallery_state.get();
-        store.gallery_state.set({});
-        const auto label_for = [&](lfs::vis::AppStore::AccountState state) {
-            store.account_state.set(std::move(state));
-            RmlMenuBarTestAccess::rebuildPortalStatus(bar_);
-            context_->Update();
-            return textContent(el("menu-portal-connection"));
-        };
-        EXPECT_EQ(label_for({}), "Portal: Not connected");
-        EXPECT_EQ(label_for({.authorized = true}), "Portal connected, switched off");
-        EXPECT_EQ(label_for({.linking = true, .label = "ABCD-EFGH"}), "Portal: Connecting… ABCD-EFGH");
-        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .disconnecting = true, .label = "KT", .display_name = "Kay Test"}),
-                  "Portal: Disconnecting…");
-        auto approval_gallery = previous_gallery;
-        approval_gallery.relink_required = true;
-        store.gallery_state.set(approval_gallery);
-        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
-                  "Portal: Approval needed");
-        store.gallery_state.set({});
-        EXPECT_EQ(label_for({.signed_in = true, .authorized = true, .label = "KT", .display_name = "Kay Test"}),
-                  "KT · Portal");
-        store.account_state.set(previous_account);
-        store.gallery_state.set(previous_gallery);
+    TEST_F(MenuBarTitleTest, PortalConnectionStatusIsNotInTheTopBar) {
+        EXPECT_EQ(document_->GetElementById("menu-portal-connection"), nullptr);
     }
 
     TEST_F(MenuBarTitleTest, AccountsForPendingToolbarPlacementInTheSameFrame) {
