@@ -8,10 +8,6 @@
 
 namespace lfs::io {
     namespace {
-        double edgeRatio(unsigned long long edges, int w, int h) {
-            return static_cast<double>(edges) * 100.0 / static_cast<double>(static_cast<long long>(w) * h);
-        }
-
         template <SharpnessAlgorithm Algorithm>
         long long countSharpEdges(const uint8_t* rgb, int w, int h) {
             const std::ptrdiff_t stride = static_cast<std::ptrdiff_t>(w) * 3;
@@ -44,6 +40,6 @@ namespace lfs::io {
             edges = countSharpEdges<SharpnessAlgorithm::TENENGRAD>(rgb, w, h);
             break;
         }
-        return edgeRatio(edges, w, h);
+        return detail::edgeRatio(edges, w, h);
     }
 } // namespace lfs::io

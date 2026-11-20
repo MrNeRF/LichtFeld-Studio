@@ -5,6 +5,7 @@
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
+#include "io/cuda/sharpness_score.cuh"
 #include "io/video/frame_color_range.hpp"
 #include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
@@ -30,12 +31,14 @@ extern "C" {
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <set>
@@ -3328,6 +3331,41 @@ TEST(VideoSharpnessScore, CpuPreservesOriginalIntegerContract) {
     }
 }
 
+TEST(VideoSharpnessScore, CudaMatchesScalarAcrossImageSizes) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for scorer equivalence";
+    using namespace lfs::io;
+    SharpnessScorer scorer;
+    uint32_t random = 4112;
+    for (const auto [w, h] : {std::pair{3, 3}, {257, 13}, {1920, 1080}, {3840, 2160}, {7, 11}}) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (int pattern = 0; pattern < 4; ++pattern) {
+            for (auto& pixel : rgb) {
+                random = random * 1664525U + 1013904223U;
+                pixel = pattern == 0 ? 17 : pattern == 1 ? static_cast<uint8_t>((random >> 24) % 12)
+                                                         : static_cast<uint8_t>(random >> 24);
+            }
+            if (pattern == 3) {
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                        rgb[(static_cast<size_t>(y) * w + x) * 3 + 1] = (x + y) % 2 ? 255 : 0;
+            }
+            uint8_t* device = nullptr;
+            ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+            ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+            for (const auto algorithm : {SharpnessAlgorithm::LAPLACIAN, SharpnessAlgorithm::TENENGRAD, SharpnessAlgorithm::COMBINED}) {
+                const auto expected = referenceSharpness(rgb, w, h, algorithm);
+                EXPECT_EQ(expected, computeSharpnessScore(rgb.data(), w, h, algorithm));
+                const auto gpu = scorer.scoreDevice(device, w, h, algorithm);
+                EXPECT_TRUE(gpu.has_value());
+                if (gpu)
+                    EXPECT_EQ(expected, *gpu);
+            }
+            EXPECT_EQ(cudaSuccess, cudaFree(device));
+        }
+    }
+}
+
 TEST(VideoSharpnessScore, StrictLaplacianAndSobelBoundaries) {
     using namespace lfs::io;
     for (int sample = 0; sample < 4; ++sample) {
@@ -3345,6 +3383,58 @@ TEST(VideoSharpnessScore, StrictLaplacianAndSobelBoundaries) {
             const bool edge = algorithm == SharpnessAlgorithm::LAPLACIAN ? sample == 1 : algorithm == SharpnessAlgorithm::TENENGRAD ? sample == 3
                                                                                                                                     : sample == 1 || sample == 3;
             EXPECT_EQ(edge ? 100.0 / 9.0 : 0.0, computeSharpnessScore(rgb.data(), 3, 3, algorithm));
+            if (cudaAvailable()) {
+                SharpnessScorer scorer;
+                uint8_t* device = nullptr;
+                ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+                ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+                EXPECT_EQ(std::optional<double>(edge ? 100.0 / 9.0 : 0.0), scorer.scoreDevice(device, 3, 3, algorithm));
+                EXPECT_EQ(cudaSuccess, cudaFree(device));
+            }
         }
     }
+}
+
+TEST(VideoSharpnessScore, WaitsForTheDefaultStreamProducer) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for stream ordering";
+    using namespace lfs::io;
+    int gpu = 0;
+    ASSERT_EQ(cudaSuccess, cudaGetDevice(&gpu));
+    std::vector<uint8_t> rgb(8 * 8 * 3, 0);
+    for (size_t pixel = 0; pixel < 64; ++pixel)
+        rgb[pixel * 3 + 1] = ((pixel / 8 + pixel % 8) % 2) ? 255 : 0;
+    uint8_t* device = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaMalloc(&device, rgb.size()));
+    ASSERT_EQ(cudaSuccess, cudaMemcpy(device, rgb.data(), rgb.size(), cudaMemcpyHostToDevice));
+    SharpnessScorer scorer;
+    ASSERT_EQ(std::optional<double>(56.25), scorer.scoreDevice(device, 8, 8, SharpnessAlgorithm::COMBINED));
+    struct Gate {
+        std::atomic<bool> entered{false};
+        std::atomic<bool> released{false};
+    } gate;
+    auto result = std::async(std::launch::async, [&]() -> std::optional<double> {
+        if (cudaSetDevice(gpu) != cudaSuccess || cudaLaunchHostFunc(nullptr, [](void* pointer) {
+                auto& producer_gate = *static_cast<Gate*>(pointer);
+                producer_gate.entered.store(true);
+                producer_gate.entered.notify_one();
+                producer_gate.released.wait(false); }, &gate) != cudaSuccess) {
+            gate.entered.store(true);
+            gate.entered.notify_one();
+            return std::nullopt;
+        }
+        if (cudaMemsetAsync(device, 17, rgb.size(), nullptr) != cudaSuccess)
+            return std::nullopt;
+        return scorer.scoreDevice(device, 8, 8, SharpnessAlgorithm::COMBINED);
+    });
+    gate.entered.wait(false);
+    const auto early = result.wait_for(std::chrono::milliseconds(100));
+    gate.released.store(true);
+    gate.released.notify_one();
+    // Complete the callback before its stack-owned gate can be destroyed, including on failure.
+    EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    const auto score = result.get();
+    EXPECT_EQ(std::future_status::timeout, early);
+    EXPECT_EQ(std::optional<double>(0.0), score);
+    EXPECT_EQ(cudaSuccess, cudaFree(device));
 }
