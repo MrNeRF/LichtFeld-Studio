@@ -2522,6 +2522,114 @@ TEST(VideoStreamProbe, VideosThatNeedPacketProbingOpenAndExtract) {
     }
 }
 
+TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepFirstMaximumAndMatchingPixels) {
+    TempDir temp("window_best");
+    for (const auto [pattern_step, codec] : {std::tuple{0, AV_CODEC_ID_MPEG4}, std::tuple{47, AV_CODEC_ID_MPEG4},
+                                             std::tuple{0, AV_CODEC_ID_FFV1}, std::tuple{47, AV_CODEC_ID_FFV1}}) {
+        const auto source = temp.path / ("source_" + std::to_string(pattern_step) + "_" + std::to_string(codec) + ".mkv");
+        ASSERT_TRUE(writeProbedVideoWithRate(source, "matroska", codec, 12, 0, 25, 1, false, pattern_step));
+        for (const auto algorithm : {lfs::io::SharpnessAlgorithm::LAPLACIAN,
+                                     lfs::io::SharpnessAlgorithm::TENENGRAD,
+                                     lfs::io::SharpnessAlgorithm::COMBINED}) {
+            for (const auto image_format : {lfs::io::ImageFormat::PNG, lfs::io::ImageFormat::JPG}) {
+                SCOPED_TRACE(::testing::Message() << "codec=" << codec << " pattern=" << pattern_step << " algorithm=" << static_cast<int>(algorithm)
+                                                  << " format=" << static_cast<int>(image_format));
+                const auto label = std::to_string(codec) + "_" + std::to_string(pattern_step) + "_" + std::to_string(static_cast<int>(algorithm)) +
+                                   "_" + std::to_string(static_cast<int>(image_format));
+                auto reference = extractionParams(source, temp.path / (label + "_all"));
+                reference.end_time = -1.0;
+                reference.format = image_format;
+                reference.rotation = image_format == lfs::io::ImageFormat::PNG ? 90 : 180;
+                reference.sharpness.enabled = true;
+                reference.sharpness.algorithm = algorithm;
+                reference.sharpness.threshold = 0.0;
+                // One-frame windows use the same encoder as the multi-frame windows (including JPEG).
+                reference.sharpness.window_mode = true;
+                reference.sharpness.window_candidates_target = 0;
+                std::string error;
+                VideoFrameExtractor extractor;
+                ASSERT_TRUE(extractor.extract(reference, error)) << error;
+                const auto all = readMetadata(reference.output_dir).at("frames");
+                ASSERT_EQ(all.size(), 12u);
+                for (const auto mode : {ExtractionMode::INTERVAL, ExtractionMode::FPS}) {
+                    SCOPED_TRACE(static_cast<int>(mode));
+                    auto window = reference;
+                    window.output_dir = temp.path / (label + "_window_" + std::to_string(static_cast<int>(mode)));
+                    window.mode = mode;
+                    window.frame_interval = 4;
+                    window.fps = 6.25;
+                    window.sharpness.window_mode = true;
+                    window.sharpness.window_candidates_target = 0;
+                    ASSERT_TRUE(extractor.extract(window, error)) << error;
+                    const auto selected = readMetadata(window.output_dir).at("frames");
+                    ASSERT_EQ(selected.size(), 3u);
+                    bool has_interior_maximum = false;
+                    for (size_t group = 0; group < selected.size(); ++group) {
+                        size_t best = group * 4;
+                        for (size_t index = best + 1; index < (group + 1) * 4; ++index)
+                            if (all[index].at("sharpness_score").get<double>() > all[best].at("sharpness_score").get<double>())
+                                best = index;
+                        if (pattern_step == 0) {
+                            EXPECT_EQ(best, group * 4);
+                            for (size_t index = group * 4; index < (group + 1) * 4; ++index)
+                                ASSERT_EQ(all[index].at("sharpness_score"), all[best].at("sharpness_score"))
+                                    << "Static fixture must produce equal scores";
+                        }
+                        has_interior_maximum |= best > group * 4 && best + 1 < (group + 1) * 4 &&
+                                                all[best + 1].at("sharpness_score").get<double>() < all[best].at("sharpness_score").get<double>();
+                        EXPECT_EQ(selected[group], all[best]);
+                        const auto filename = all[best].at("file").get<std::string>();
+                        std::ifstream expected(reference.output_dir / filename, std::ios::binary);
+                        std::ifstream actual(window.output_dir / filename, std::ios::binary);
+                        ASSERT_TRUE(expected && actual);
+                        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(actual), {}),
+                                  std::string(std::istreambuf_iterator<char>(expected), {}));
+                    }
+                    if (pattern_step != 0)
+                        EXPECT_TRUE(has_interior_maximum) << "Fixture must include a winner followed by a lower score";
+                }
+            }
+        }
+    }
+}
+
+TEST(VideoFrameExtractorTrim, SharpnessWindowMatchesAllCandidatesAt4K) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for 4K video fixture";
+    TempDir temp("window_4k");
+    const auto source = temp.path / "source.mp4";
+    std::string error;
+    ASSERT_TRUE(writeEncodedVideo(source, 60, 60, error, 3840, 2160)) << error;
+    auto reference = extractionParams(source, temp.path / "all");
+    reference.end_time = -1.0;
+    reference.format = lfs::io::ImageFormat::JPG;
+    reference.sharpness.enabled = true;
+    reference.sharpness.window_mode = true;
+    reference.sharpness.window_candidates_target = 0;
+    VideoFrameExtractor extractor;
+    ASSERT_TRUE(extractor.extract(reference, error)) << error;
+    const auto all = readMetadata(reference.output_dir).at("frames");
+    ASSERT_EQ(all.size(), 60u);
+    size_t best = 0;
+    for (size_t index = 1; index < all.size(); ++index)
+        if (all[index].at("sharpness_score").get<double>() > all[best].at("sharpness_score").get<double>())
+            best = index;
+    auto window = reference;
+    window.output_dir = temp.path / "window";
+    window.mode = ExtractionMode::FPS;
+    window.fps = 1.0;
+    ASSERT_TRUE(extractor.extract(window, error)) << error;
+    const auto selected = readMetadata(window.output_dir).at("frames");
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected[0], all[best]);
+    const auto filename = all[best].at("file").get<std::string>();
+    std::ifstream expected(reference.output_dir / filename, std::ios::binary);
+    std::ifstream actual(window.output_dir / filename, std::ios::binary);
+    ASSERT_TRUE(expected && actual);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(actual), {}),
+              std::string(std::istreambuf_iterator<char>(expected), {}));
+}
+
 TEST(VideoFrameExtractorTrim, SharpnessWindowsKeepTheDurationBoundary) {
     TempDir temp("window_duration");
     const auto video_path = temp.path / "source.mkv";
