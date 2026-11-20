@@ -37,6 +37,10 @@ namespace nvimgcodec {
         return encoder_desc_->backend_kind;
     }
 
+    const nvimgcodecEncoderDesc_t* ImageEncoderFactory::getEncoderDesc() const {
+        return encoder_desc_;
+    }
+
     std::unique_ptr<IImageEncoder> ImageEncoderFactory::createEncoder(
         const nvimgcodecExecutionParams_t* exec_params, const char* options) const {
         return std::make_unique<ImageEncoder>(encoder_desc_, exec_params, options);

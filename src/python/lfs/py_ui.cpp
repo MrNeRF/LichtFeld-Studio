@@ -70,6 +70,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -4468,11 +4469,12 @@ namespace lfs::python {
                 switch (rm->getGTComparisonMode()) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Get ground-truth comparison mode: rgb, normal, or depth.");
+            "Get ground-truth comparison mode: rgb, normal, depth, or loss.");
 
         m.def(
             "set_gt_comparison_mode",
@@ -4487,8 +4489,10 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
                 } else if (mode == "depth") {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                } else if (mode == "loss") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
                 } else {
-                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
+                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', 'depth', or 'loss'");
                 }
                 rm->updateSettings(settings, vis::DirtyFlag::ALL);
                 markProjectSessionChapterCommitted("VIEW");
@@ -4510,6 +4514,9 @@ namespace lfs::python {
                     settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
                     break;
                 case vis::GTComparisonMode::Depth:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Loss;
+                    break;
+                case vis::GTComparisonMode::Loss:
                 default:
                     settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
                     break;
@@ -4519,11 +4526,12 @@ namespace lfs::python {
                 switch (settings.gt_comparison_mode) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::Loss: return "loss";
                 case vis::GTComparisonMode::RGB:
                 default: return "rgb";
                 }
             },
-            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb.");
+            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> loss -> rgb.");
 
         m.def(
             "reveal_in_file_manager",
@@ -5006,7 +5014,7 @@ namespace lfs::python {
                 }
             }); }, nb::arg("callback"), nb::arg("include_sequence") = false, "Register the preview callback for extracted images; optionally receive extraction-run metadata as a third argument.");
 
-        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence) {
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude, nb::object sequence, nb::object semantic) {
             require_ui_texture_creation_thread();
             auto* gui = get_gui_manager();
             if (!gui)
@@ -5039,7 +5047,27 @@ namespace lfs::python {
                     };
                 }
             }
-            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), "UI thread: queue native SAM inference, sequence tracking/inspection, or render a selected original-resolution mask. Apply is a separate explicit action.");
+            if (!semantic.is_none()) {
+                const auto context = nb::cast<nb::dict>(semantic);
+                if (!context.contains("descriptions"))
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                vis::gui::AssistedMaskSemantic selection;
+                selection.prepare_weights = [](const std::function<bool()>& cancelled) {
+                    return preprocessing::ensure_llmdet_weights(true, cancelled);
+                };
+                const auto rows = nb::cast<nb::list>(context["descriptions"]);
+                if (rows.empty() || rows.size() > 16)
+                    throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                for (const auto row : rows) {
+                    if (nb::len(row) > 256)
+                        throw std::invalid_argument(LOC("image_preview.sam_semantic_invalid"));
+                    selection.descriptions.push_back(nb::cast<std::vector<int>>(row));
+                }
+                if (context.contains("confidence"))
+                    selection.confidence = nb::cast<float>(context["confidence"]);
+                input.semantic = std::move(selection);
+            }
+            return gui->asyncTasks().assistedMasking().submit(std::move(input)); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, nb::arg("sequence") = nb::none(), nb::arg("semantic") = nb::none(), "UI thread: queue native SAM inference, bounded text/category detection, sequence tracking/inspection, or render a selected original-resolution mask. Semantic descriptions are BERT token ID lists; the shared cache downloads the verified native LLMDet Tiny archive. Apply is a separate explicit action.");
         m.def("sam_preview_sequence_frames", [](const std::string& run, size_t first, size_t count) {
             require_ui_texture_creation_thread();
             nb::list result;
@@ -5054,6 +5082,8 @@ namespace lfs::python {
                     item["approved"] = frame.approved;
                     item["mask_path"] = core::path_to_utf8(frame.mask_path);
                     item["keyframe"] = frame.keyframe;
+                    item["matched_objects"] = frame.matched_objects;
+                    item["semantic_limited"] = frame.semantic_limited;
                     result.append(std::move(item));
                 }
             }
@@ -5095,6 +5125,9 @@ namespace lfs::python {
             result["completed"] = state.completed;
             result["total"] = state.total;
             result["approved"] = state.approved;
+            result["empty_approved"] = state.empty_approved;
+            result["matched_objects"] = state.matched_objects;
+            result["semantic_limited"] = state.semantic_limited;
             nb::list overlays;
             for (const auto& mask : state.overlays)
                 overlays.append(nb::cast(PyTensor(mask)));
@@ -6207,6 +6240,7 @@ namespace lfs::python {
                 result["resolution_scale"] = preferences.resolution_scale;
                 result["scene_units_per_meter"] = preferences.scene_units_per_meter;
                 result["move_speed"] = preferences.move_speed;
+                result["show_hands"] = preferences.show_hands;
                 return result;
             },
             "Get the VR preferences");
@@ -6214,18 +6248,47 @@ namespace lfs::python {
         m.def(
             "set_vr_preferences",
             [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
-               const float move_speed, const bool persist) {
+               const float move_speed, const bool show_hands, const bool persist) {
                 invoke_on_viewer([=] {
                     lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
                                                              .resolution_scale = resolution_scale,
                                                              .scene_units_per_meter = scene_units_per_meter,
                                                              .move_speed = move_speed,
+                                                             .show_hands = show_hands,
                                                              .persist = persist}
                         .emit();
                 });
             },
             nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
-            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
+            nb::arg("show_hands") = true, nb::arg("persist") = true,
+            "Set the VR preferences; VR support takes effect after restart");
+
+        m.def(
+            "get_vr_runtimes",
+            [] {
+                const auto runtimes = vis::vr::installedOpenXrRuntimes();
+                nb::dict result;
+                result["active"] = runtimes.active;
+                result["selected"] = vis::UserPreferences::instance().vrRuntime();
+                nb::list installed;
+                for (const auto& runtime : runtimes.installed) {
+                    nb::dict entry;
+                    entry["name"] = runtime.name;
+                    entry["manifest"] = runtime.manifest;
+                    installed.append(entry);
+                }
+                result["installed"] = installed;
+                return result;
+            },
+            "Get the OpenXR runtimes installed on this computer, the name of the system's active one, and the "
+            "manifest of the one chosen for VR (empty: the active one)");
+
+        m.def(
+            "set_vr_runtime",
+            [](const std::string& manifest) { vis::UserPreferences::instance().setVrRuntime(manifest); },
+            nb::arg("manifest"),
+            "Choose the OpenXR runtime VR uses by its manifest path; empty follows the system's active runtime. "
+            "Takes effect after restart");
 
         m.def(
             "get_mcp_port_override",

@@ -17,6 +17,7 @@
 
 #include "lossless_decoder.h"
 #include "errors_handling.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "log.h"
 #include "nvjpeg_utils.h"
@@ -135,7 +136,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->getMetadata(code_stream, metadata, metadata_count);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
                 }
             }
@@ -148,7 +149,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->canDecode(image, code_stream, params, thread_idx);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_PROCESSING_STATUS_FAIL;
                 }
             }
@@ -161,7 +162,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->decodeBatch(images, code_streams, batch_size, params, thread_idx);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_INTERNAL_ERROR;
                 }
             }
@@ -344,6 +345,7 @@ namespace nvjpeg {
     DecoderImpl::DecoderImpl(
         const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
         : plugin_id_(plugin_id), device_allocator_{nullptr, nullptr, nullptr}, pinned_allocator_{nullptr, nullptr, nullptr}, framework_(framework), exec_params_(exec_params), nvjpeg_version_(get_nvjpeg_version()) {
+        (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any decoder lives
         bool use_nvjpeg_create_ex_v2 = false;
         if (nvjpegIsSymbolAvailable("nvjpegCreateExV2")) {
             if (exec_params->device_allocator && exec_params->device_allocator->device_malloc && exec_params->device_allocator->device_free) {
@@ -430,6 +432,13 @@ namespace nvjpeg {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "nvjpeg_lossless_destroy");
 
+            // See imgproc/exit_guard.h: at process exit, the CUDA driver or the
+            // nvJPEG library may already be tearing down, so skip the teardown
+            // calls below and intentionally leak instead of risking a segfault.
+            if (nvimgcodec::IsProcessExiting()) {
+                return;
+            }
+
             for (auto& nvjpeg_stream : nvjpeg_streams_)
                 XM_NVJPEG_LOG_DESTROY(nvjpegJpegStreamDestroy(nvjpeg_stream));
 
@@ -494,6 +503,13 @@ namespace nvjpeg {
                 unsigned char* device_buffer = reinterpret_cast<unsigned char*>(image_info.buffer);
                 if (image_info.num_planes == 0) {
                     throw std::logic_error("Expected at least one plane for all the samples in the minibatch");
+                }
+                // nvjpegImage_t only has NVJPEG_MAX_COMPONENT channel/pitch slots.
+                if (image_info.num_planes > NVJPEG_MAX_COMPONENT) {
+                    NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                         "Too many planes for nvjpeg: " << image_info.num_planes << " > " << NVJPEG_MAX_COMPONENT);
+                    image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED);
+                    continue;
                 }
                 if (sample_idx == 0) {
                     nvjpeg_format = nvimgcodec_to_nvjpeg_format(image_info.sample_format, image_info.plane_info[0].sample_type);

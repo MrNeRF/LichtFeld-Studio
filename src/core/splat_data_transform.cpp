@@ -11,6 +11,7 @@
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "geometry/bounding_box.hpp"
 
 #include <algorithm>
@@ -611,24 +612,30 @@ namespace lfs::core {
             cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), layout_rest, 3},
                                         splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
+                const cudaStream_t stream =
+                    prepare_inputs_for_stream({&splat_data._shN, &indices}, cropped_shN.stream());
                 shN_swizzled_gather_to_linear_i64(
                     splat_data._shN.ptr<float>(),
                     indices.ptr<int64_t>(),
                     cropped_shN.ptr<float>(),
                     static_cast<size_t>(points_selected),
                     static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    stream);
             } else {
                 auto indices_i32 = indices.dtype() == DataType::Int32
                                        ? indices
                                        : indices.to(DataType::Int32);
+                const cudaStream_t stream =
+                    prepare_inputs_for_stream({&splat_data._shN, &indices_i32}, cropped_shN.stream());
                 shN_swizzled_gather_to_linear(
                     splat_data._shN.ptr<float>(),
                     indices_i32.ptr<int>(),
                     cropped_shN.ptr<float>(),
                     static_cast<size_t>(points_selected),
                     static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    stream);
             }
         }
         auto cropped_scaling = splat_data._scaling.index_select(0, indices).contiguous();
@@ -897,13 +904,16 @@ namespace lfs::core {
             auto indices_i32 = indices_tensor.dtype() == DataType::Int32
                                    ? indices_tensor
                                    : indices_tensor.to(DataType::Int32);
+            const cudaStream_t stream = prepare_inputs_for_stream(
+                {&splat_data._shN, &indices_i32}, shN_selected_swizzled.stream());
             shN_swizzled_gather_self(
                 splat_data._shN.ptr<float>(),
                 shN_selected_swizzled.ptr<float>(),
                 indices_i32.ptr<int>(),
                 static_cast<size_t>(num_required_splat),
                 0,
-                layout_rest);
+                layout_rest,
+                stream);
         }
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
@@ -1135,24 +1145,30 @@ namespace lfs::core {
             shN_selected = Tensor::empty({static_cast<size_t>(count), layout_rest, 3},
                                          splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
+                const cudaStream_t stream =
+                    prepare_inputs_for_stream({&splat_data._shN, &indices}, shN_selected.stream());
                 shN_swizzled_gather_to_linear_i64(
                     splat_data._shN.ptr<float>(),
                     indices.ptr<int64_t>(),
                     shN_selected.ptr<float>(),
                     static_cast<size_t>(count),
                     static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    stream);
             } else {
                 auto indices_i32 = indices.dtype() == DataType::Int32
                                        ? indices
                                        : indices.to(DataType::Int32);
+                const cudaStream_t stream =
+                    prepare_inputs_for_stream({&splat_data._shN, &indices_i32}, shN_selected.stream());
                 shN_swizzled_gather_to_linear(
                     splat_data._shN.ptr<float>(),
                     indices_i32.ptr<int>(),
                     shN_selected.ptr<float>(),
                     static_cast<size_t>(count),
                     static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    stream);
             }
         }
 

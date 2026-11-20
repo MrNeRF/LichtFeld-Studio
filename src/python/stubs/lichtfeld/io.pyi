@@ -961,12 +961,12 @@ def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os
 
 def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None, include_provenance: bool = True) -> None:
     """
-    Save splat data as SOG compressed file. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    Save splat data as SOG compressed file. kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
     """
 
 def save_ssog(splat: lichtfeld.scene.SplatData, path: str | os.PathLike, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None, include_provenance: bool = True) -> None:
     """
-    Save splat data as a PlayCanvas multi-LOD SSOG (.ssog, lod-meta.json). include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    Save splat data as a PlayCanvas multi-LOD SSOG (.ssog, lod-meta.json). kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
     """
 
 def save_spz(data: lichtfeld.scene.SplatData, path: str | os.PathLike, version: int = 4, include_provenance: bool = True) -> None:
@@ -989,7 +989,7 @@ def save_nurec_usdz(data: lichtfeld.scene.SplatData, path: str | os.PathLike, in
 
 def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, progress: object | None = None, include_provenance: bool = True, background_color: object | None = None) -> None:
     """
-    Export splat data as self-contained HTML viewer. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
+    Export splat data as self-contained HTML viewer. kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
     """
 
 def is_ssog_path(path: str | os.PathLike) -> bool:

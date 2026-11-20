@@ -334,7 +334,10 @@ float gut_splat_view_depth(
     }
 
     float3 closest_ws = ray_origin + t * ray_direction;
-    float depth = geom_transform_points(closest_ws, cam.world_view_transform).z;
+    // Panorama projection stores radial depth, including rays behind the camera.
+    float depth = cam.model == int(CameraModel::EQUIRECTANGULAR)
+                      ? t
+                      : geom_transform_points(closest_ws, cam.world_view_transform).z;
     return depth > NEAR_CLIP && isfinite(depth) ? depth : FAR_DEPTH;
 }
 #endif

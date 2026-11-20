@@ -4287,7 +4287,10 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCollision() {
-        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
+        // Look the label up only for a live job: shutdown also runs from the
+        // destructor, after the localization tables are gone.
+        if (const auto state = collisionJob(); state && state->running())
+            jobs_.requestCancel(collision_job_, LOC("common.cancel"));
         collision_stop_.request_stop();
         publish_viewport_toolbar_generation();
     }
@@ -4977,7 +4980,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCameraSelection() {
-        jobs_.requestCancel(camera_selection_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+        if (const auto state = cameraSelectionStatus(); state && state->running())
+            jobs_.requestCancel(camera_selection_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         publishCameraSelectionState();
         if (camera_selection_state_.thread)
             camera_selection_state_.thread->request_stop();

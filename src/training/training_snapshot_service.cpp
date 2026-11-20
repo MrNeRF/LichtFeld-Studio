@@ -1792,10 +1792,7 @@ namespace lfs::training {
             }
             slots.clear();
             if (d2h_stream) {
-                LFS_CUDA_LOG_TEARDOWN(
-                    cudaStreamDestroy(d2h_stream),
-                    d2h_stream,
-                    "training snapshot D2H stream teardown");
+                LFS_CUDA_LOG_STREAM_DESTROY(d2h_stream, "training snapshot D2H stream teardown");
                 d2h_stream = nullptr;
             }
         }
@@ -2358,7 +2355,8 @@ namespace lfs::training {
                     request.strategy, request.params,
                     request.bilateral_grid, request.ppisp,
                     request.ppisp_controller_pool,
-                    request.popspa_controller, request.popspa_optimizer);
+                    request.popspa_controller, request.popspa_optimizer,
+                    request.calibration_correction);
                 if (!serialized) {
                     return lfs::Status::failure(
                         std::move(serialized)
@@ -2441,7 +2439,8 @@ namespace lfs::training {
                 request.strategy, request.params,
                 request.bilateral_grid, request.ppisp,
                 request.ppisp_controller_pool,
-                request.popspa_controller, request.popspa_optimizer);
+                request.popspa_controller, request.popspa_optimizer,
+                request.calibration_correction);
             if (!serialized) {
                 return std::move(serialized)
                     .error()
@@ -2742,7 +2741,8 @@ namespace lfs::training {
                         request
                             .ppisp_controller_pool,
                         request.popspa_controller,
-                        request.popspa_optimizer);
+                        request.popspa_optimizer,
+                        request.calibration_correction);
                 if (!serialized) {
                     const auto& error =
                         serialized.error();

@@ -122,6 +122,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_split_view_mode=lambda: "independent_dual",
         get_vr_state=lambda: dict(state["vr"]),
+        get_vr_preferences=lambda: {"enabled": state.get("vr_support", False)},
         get_active_tool=lambda: state["active_tool"],
         copy_gaussian_selection=lambda: state.__setitem__("copy_called", True),
         cut_gaussian_selection=lambda: state.__setitem__("cut_called", True),
@@ -185,6 +186,7 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.toggle_side_dock = lambda side: state.__setitem__("dock_toggled", side)
     lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
     lf_stub.set_vr_active = lambda active: state["vr_calls"].append(("active", active))
+    lf_stub.detect_vr = lambda: state["vr_calls"].append(("detect",))
     lf_stub.recenter_vr = lambda: state["vr_calls"].append(("recenter",))
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
@@ -408,6 +410,22 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
     assert (enter["label"], enter["enabled"], enter["tooltip"], enter["shortcut"]) == (
         "tr:menu.view.enter_vr", False, "No OpenXR runtime", "")
     assert (recenter["enabled"], recenter["shortcut"]) == (False, "R")
+
+    # With VR support on and no headset found, detecting it again is offered
+    # right under the unavailable Enter VR.
+    state["vr_support"] = True
+    enter, detect, recenter = view_mod.ViewMenu().menu_items()[9:12]
+    assert (enter["enabled"], enter["tooltip"]) == (False, "No OpenXR runtime")
+    assert (detect["label"], detect["enabled"]) == ("tr:menu.view.detect_vr", True)
+    assert recenter["shortcut"] == "R"
+    detect["callback"]()
+    assert state["vr_calls"] == [("detect",)]
+    state["vr_calls"].clear()
+    # Once a headset is found, the offer goes away.
+    state["vr"] = {"available": True, "active": False, "status": "Ready"}
+    assert view_mod.ViewMenu().menu_items()[10]["shortcut"] == "R"
+    state["vr"] = {"available": False, "active": False, "status": "No OpenXR runtime"}
+    state["vr_support"] = False
 
     state["vr"] = {"available": True, "active": False, "status": "Ready"}
     enter = view_mod.ViewMenu().menu_items()[9]

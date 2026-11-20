@@ -180,6 +180,14 @@ _lfs_sync_resource_directory(
     OFF
 )
 _lfs_sync_resource_directory(
+    "${LFS_VISUALIZER_SOURCE_DIR}/gui/assets/vr"
+    "assets/vr"
+    "*"
+    OFF
+    ON
+    OFF
+)
+_lfs_sync_resource_directory(
     "${LFS_VISUALIZER_SOURCE_DIR}/gui/rmlui/resources"
     "assets/rmlui"
     "*"

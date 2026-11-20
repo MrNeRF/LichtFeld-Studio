@@ -478,7 +478,7 @@ namespace {
         EXPECT_FLOAT_EQ(width("äöü"), width("abc"));
     }
 
-    TEST(PythonEditorDisplayTest, TextMeasuresAfterFontResourcesAreReleased) {
+    void expectTextMeasuresAfterRelease(void (*release)()) {
         struct RmlSession {
             bool ready = Rml::Initialise();
             ~RmlSession() {
@@ -504,13 +504,22 @@ namespace {
         const float before = width("print(42)");
         // The app adds fallback faces (CJK, emoji) while it runs and then releases every font face handle.
         ASSERT_TRUE(Rml::LoadFontFace(cjk, "Noto Sans JP", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal, true));
-        lfs::vis::gui::releaseFontResources();
+        release();
         // Reuse the freed memory, so a stale handle cannot measure correctly by luck.
         for (int size = 8; size < 64; ++size)
             (void)Rml::GetFontEngineInterface()->GetFontFaceHandle("noto sans jp", Rml::Style::FontStyle::Normal,
                                                                    Rml::Style::FontWeight::Normal, size);
         EXPECT_FLOAT_EQ(width("print(42)"), before);
         EXPECT_FLOAT_EQ(width("λ"), width("a"));
+    }
+
+    TEST(PythonEditorDisplayTest, TextMeasuresAfterFontResourcesAreReleased) {
+        expectTextMeasuresAfterRelease(lfs::vis::gui::releaseFontResources);
+    }
+
+    // Closing a desktop panel window releases the render managers, and with them every font face handle.
+    TEST(PythonEditorDisplayTest, TextMeasuresAfterRenderManagersAreReleased) {
+        expectTextMeasuresAfterRelease(lfs::vis::gui::releaseRenderManagers);
     }
 
     TEST(PythonConsoleInputTest, DirtyShaderSaveAsReloadPreservesExactBytes) {

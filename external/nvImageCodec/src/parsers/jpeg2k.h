@@ -27,6 +27,8 @@ namespace nvimgcodec {
     public:
         explicit JPEG2KParserPlugin(const nvimgcodecFrameworkDesc_t* framework);
         nvimgcodecParserDesc_t* getParserDesc();
+        static constexpr const char* codecName() { return "jpeg2k"; }
+        static constexpr std::array<const char*, 3> fileExtensions() { return {{".jp2", ".j2k", ".j2c"}}; }
 
     private:
         struct Parser {

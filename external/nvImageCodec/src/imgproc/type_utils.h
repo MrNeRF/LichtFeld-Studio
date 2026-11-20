@@ -135,6 +135,12 @@ namespace nvimgcodec {
      * @brief Whether given precision needs scaling to use the full width of the type
      */
     inline bool NeedDynamicRangeScaling(int precision, nvimgcodecSampleDataType_t dtype) {
+        // Floating point samples are normalised to [0, 1] by the ConvertNorm contract
+        // (ConvertNorm<float, uint8_t>(255) == 1.0f), so there is no sub-range packing to undo and a
+        // declared precision is descriptive only. PositiveBits()/MagnitudeBits() model an integer
+        // layout and assert on anything else, so they must not be reached for these types.
+        if (!IsIntegral(dtype))
+            return false;
         return PositiveBits(dtype) != MagnitudeBits(precision, dtype);
     }
 
@@ -143,8 +149,12 @@ namespace nvimgcodec {
      */
     inline bool NeedDynamicRangeScaling(
         int out_precision, nvimgcodecSampleDataType_t out_dtype, int in_precision, nvimgcodecSampleDataType_t in_dtype) {
-        if (out_dtype == in_dtype && MagnitudeBits(out_precision, out_dtype) == MagnitudeBits(in_precision, in_dtype))
-            return false;
+        if (out_dtype == in_dtype) {
+            if (!IsIntegral(out_dtype))
+                return false;
+            if (MagnitudeBits(out_precision, out_dtype) == MagnitudeBits(in_precision, in_dtype))
+                return false;
+        }
         return NeedDynamicRangeScaling(in_precision, in_dtype) || NeedDynamicRangeScaling(out_precision, out_dtype);
     }
 
@@ -153,6 +163,9 @@ namespace nvimgcodec {
      *        width of the data type
      */
     inline double DynamicRangeMultiplier(int precision, nvimgcodecSampleDataType_t dtype) {
+        // A float plane already spans its normalised range, so it contributes no rescaling of its own.
+        if (!IsIntegral(dtype))
+            return 1.0;
         double input_max_value = (uint64_t(1) << MagnitudeBits(precision, dtype)) - 1;
         return MaxValue(dtype) / input_max_value;
     }

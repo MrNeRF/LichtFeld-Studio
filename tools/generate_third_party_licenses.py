@@ -52,7 +52,7 @@ def license_id_from_text(text: str, fallback: str) -> str:
             return label_ids[normalized]
     patterns = [
         (r"(?i)Apache-2\.0 WITH LLVM-exception", "Apache-2.0 WITH LLVM-exception"),
-        (r"(?i)Apache License(?:,? Version)?\s*2\.0|Apache-2\.0", "Apache-2.0"),
+        (r"(?i)Apache\s+License(?:,?\s+Version)?\s*2\.0|Apache-2\.0", "Apache-2.0"),
         (r"(?i)MIT License", "MIT"),
         (r"(?i)BSD 3-Clause|BSD-3-Clause", "BSD-3-Clause"),
         (r"(?i)BSD 2-Clause|BSD-2-Clause", "BSD-2-Clause"),
@@ -299,7 +299,7 @@ def generate(args: argparse.Namespace) -> str:
     components += vendored_components(args.source / "resources/licenses", args.source)
     components += python_components([args.install_prefix, args.triplet_dir / "tools" / "python3", args.source])
     # Include bundled font and icon notices that are shipped as application assets.
-    assets = [args.source / "src/visualizer/gui/assets/fonts", args.source / "src/visualizer/gui/assets/icon", args.source / "src/rendering/resources/assets"]
+    assets = [args.source / "src/visualizer/gui/assets/fonts", args.source / "src/visualizer/gui/assets/icon", args.source / "src/rendering/resources/assets", args.source / "src/python/lfs_plugins/assets"]
     for root in assets:
         if root.exists():
             components += vendored_components(root, args.source)

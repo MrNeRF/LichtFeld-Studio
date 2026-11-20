@@ -57,6 +57,7 @@ void fast_lfs::rasterization::backward(
     float* grad_depth_helper,
     float3* grad_normal_helper,
     float4* grad_w2c,
+    float3* grad_cam_position,
     float* densification_weight,
     float* densification_error,
     const int n_primitives,
@@ -71,6 +72,7 @@ void fast_lfs::rasterization::backward(
     const float cx,
     const float cy,
     bool mip_filter,
+    float dilation_scale,
     DensificationType densification_type,
     FusedAdamSettings fused_adam,
     // model-truth shN-rest decode binds (independent of fused Adam
@@ -195,8 +197,8 @@ void fast_lfs::rasterization::backward(
     float clip_left, clip_right, clip_top, clip_bottom;
     ewa_clip_bounds(w_f, h_f, fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom);
     if (n_primitives > 0) {
-        auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES>() {
-            kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES, DISABLED_FEATURES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward, 0, stream>>>(
+        auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES, bool DISABLED_FEATURES, bool CAMERA_GRAD>() {
+            kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES, DISABLED_FEATURES, CAMERA_GRAD><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward, 0, stream>>>(
                 means,
                 scales_raw,
                 rotations_raw,
@@ -214,6 +216,7 @@ void fast_lfs::rasterization::backward(
                 grad_opacity_helper,
                 grad_color_helper,
                 grad_w2c,
+                grad_cam_position,
                 (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_weight : nullptr,
                 (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_error : nullptr,
                 n_primitives,
@@ -227,6 +230,7 @@ void fast_lfs::rasterization::backward(
                 clip_right,
                 clip_top,
                 clip_bottom,
+                dilation_scale,
                 sh_layout_slots,
                 fused_adam,
                 shN_value_bounds,
@@ -240,21 +244,23 @@ void fast_lfs::rasterization::backward(
                                        fused_adam.flatten_reg_weight <= 0.0f &&
                                        !fused_adam.scale_reg_log &&
                                        !fused_adam.per_splat_mean_step &&
+                                       fused_adam.ray_depth_state == nullptr &&
                                        fused_adam.rendered_count == nullptr;
-        auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES, bool DISABLED_FEATURES>() {
+        auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES, bool DISABLED_FEATURES, bool CAMERA_GRAD>() {
             if (mip_filter) {
-                launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES, DISABLED_FEATURES>();
+                launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES, DISABLED_FEATURES, CAMERA_GRAD>();
             } else {
-                launch_preprocess_backward.template operator()<false, ACTIVE_SH_BASES, DISABLED_FEATURES>();
+                launch_preprocess_backward.template operator()<false, ACTIVE_SH_BASES, DISABLED_FEATURES, CAMERA_GRAD>();
             }
         };
         auto launch_specialized = [&]<int ACTIVE_SH_BASES>() {
-            if (force_generic_preprocess_for_testing()) {
-                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false>();
-            } else if (disabled_features) {
-                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, true>();
+            if (grad_w2c != nullptr) {
+                // The camera gradient is only instantiated in the runtime-generic kernel.
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false, true>();
+            } else if (disabled_features && !force_generic_preprocess_for_testing()) {
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, true, false>();
             } else {
-                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false>();
+                launch_preprocess_backward_for_mip.template operator()<ACTIVE_SH_BASES, false, false>();
             }
         };
         if (active_sh_bases <= 1) {

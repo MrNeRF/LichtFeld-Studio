@@ -145,6 +145,7 @@ jobs:
             -DLFS_HIDDEN_SYMBOLS=${{ matrix.build_type == 'Debug' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_FORMAT_TESTS=ON \
+            -DBUILD_VISUALIZER_TESTS=ON \
             -DBUILD_SELECTION_OUTLINE_TESTS=ON \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \

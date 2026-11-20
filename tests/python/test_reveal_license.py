@@ -7,10 +7,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from generate_third_party_licenses import generate
+from generate_third_party_licenses import generate, license_id_from_text
 
 
 class RevealLicenseTest(unittest.TestCase):
+    def test_wrapped_apache_titles_and_specific_exceptions(self):
+        for name in ("LLMDET-LICENSE.txt", "TRANSFORMERS-LICENSE.txt"):
+            text = (ROOT / "src/python/lfs_plugins/assets/bert" / name).read_text(encoding="utf-8")
+            with self.subTest(name=name):
+                self.assertEqual(license_id_from_text(text, "unknown"), "Apache-2.0")
+        self.assertEqual(license_id_from_text("Apache-2.0 WITH LLVM-exception", "unknown"), "Apache-2.0 WITH LLVM-exception")
+        self.assertEqual(license_id_from_text("Apache License, Version 1.0", "unknown"), "unknown")
+
     def test_distribution_contains_spark_notice(self):
         args = argparse.Namespace(
             source=ROOT,

@@ -31,7 +31,7 @@ namespace lfs::preprocessing {
             ~Stream() {
                 LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(value), value, "video masking stream drain");
                 core::CudaMemoryPool::instance().release_stream(value);
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(value), value, "video masking stream teardown");
+                LFS_CUDA_LOG_STREAM_DESTROY(value, "video masking stream teardown");
             }
         } stream;
         const core::CUDAStreamGuard guard(stream.value);

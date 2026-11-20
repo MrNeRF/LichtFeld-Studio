@@ -5,6 +5,7 @@
 #include "core/export.hpp"
 #include "core/extracted_frame.hpp"
 #include "core/job_registry.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include "preprocessing/video_masking.hpp"
@@ -21,6 +22,13 @@ namespace lfs::vis::gui {
     struct AssistedMaskTracking {
         int first = 0, last = 0, seed = 0;
         preprocessing::VideoMaskDirection direction = preprocessing::VideoMaskDirection::Both;
+    };
+    struct AssistedMaskSemantic {
+        // Acquisition adapter runs on the owned worker and retains no Python objects.
+        std::function<lfs::Result<core::nn::WeightFile>(const std::function<bool()>&)> prepare_weights;
+        std::vector<std::vector<int>> descriptions;
+        // Default threshold in the official LLMDet Tiny detection example.
+        float confidence = 0.4f;
     };
     struct AssistedMaskRequest {
         std::filesystem::path image;
@@ -39,6 +47,7 @@ namespace lfs::vis::gui {
         core::Uuid run{};
         bool retain_frame = false;
         bool publish_approved = false;
+        std::optional<AssistedMaskSemantic> semantic{};
     };
     struct AssistedMaskFrameSummary {
         // Proposal request ID; distinct from the sequence's change counter.
@@ -46,6 +55,8 @@ namespace lfs::vis::gui {
         float score = 0;
         bool reliable = false, approved = false, keyframe = false;
         std::filesystem::path mask_path{};
+        int matched_objects = -1;
+        bool semantic_limited = false;
     };
     struct AssistedMaskApproval {
         size_t index = 0;
@@ -67,6 +78,9 @@ namespace lfs::vis::gui {
         uint64_t sequence_revision = 0;
         size_t completed = 0, total = 0;
         size_t approved = 0;
+        size_t empty_approved = 0;
+        int matched_objects = -1;
+        bool semantic_limited = false;
     };
 
     // App-owned worker. Closing an editor requests retirement; only app shutdown joins.

@@ -37,6 +37,31 @@ namespace {
 
 } // namespace
 
+TEST(ArgumentParserTest, HeadlessScriptsWithoutDatasetPreserveOrderAndUtf8Paths) {
+    const char* argv[]{"LichtFeld-Studio", "--headless", "--python-script", "local check.py",
+                       "--python-script", "caf\xc3\xa9.py"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.headless);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    ASSERT_EQ((*parsed)->python_scripts.size(), 2);
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[0]), "local check.py");
+    EXPECT_EQ(lfs::core::path_to_utf8((*parsed)->python_scripts[1]), "caf\xc3\xa9.py");
+}
+
+TEST(ArgumentParserTest, HeadlessStillRequiresSourceWithoutScriptsOrWithTcp) {
+    const auto initial = (std::filesystem::path(make_test_path("lfs_headless_script_init")) / "initial.ply").string();
+    std::ofstream(initial).put('\n');
+    for (const std::vector<const char*> argv : {
+             std::vector<const char*>{"LichtFeld-Studio", "--headless"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--tcp-connection"},
+             {"LichtFeld-Studio", "--headless", "--python-script", "check.py", "--init", initial.c_str()}}) {
+        const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("requires --data-path or --resume"), std::string::npos) << parsed.error();
+    }
+}
+
 // An untrained .licht on --data-path is its own destination, so
 // --output-path is optional and the project stays bound for the run.
 TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
@@ -214,7 +239,8 @@ TEST(ArgumentParserTest, EvalHelpDescribesTheEvaluationOptions) {
     ASSERT_TRUE(parsed);
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
     for (const char* flag : {"--eval-all", "--eval-mask", "--eval-mask-report", "--eval-mask-opacity", "--eval-flip",
-                             "--eval-green-infill", "--noise-infill-mesh", "--no-save-eval-images"})
+                             "--eval-green-infill", "--noise-infill-mesh", "--no-save-eval-images",
+                             "--no-calibration-correction"})
         EXPECT_NE(help.find(flag), std::string::npos) << flag;
     EXPECT_NE(help.find("opaque green filling the inside of a mesh"), std::string::npos) << help;
 }
@@ -320,6 +346,7 @@ TEST(ArgumentParserTest, CompareSubcommandParsesAndRejectsTrainedModelMasks) {
     EXPECT_TRUE(evaluation.eval_flip);
     EXPECT_TRUE(evaluation.enable_save_eval_images);
     EXPECT_EQ(evaluation.eval_bit_depth, lfs::core::param::EvalBitDepth::Sixteen);
+    EXPECT_FALSE(evaluation.calibration_correction);
     EXPECT_EQ(mode->params.output_path, std::filesystem::weakly_canonical(directory) / "test_compare");
 
     for (const std::vector<const char*>& bad : std::vector<std::vector<const char*>>{
@@ -1429,8 +1456,20 @@ TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
-    EXPECT_NE(help.find(".licht (project)"), std::string::npos);
+    EXPECT_NE(help.find(".licht (visible splat nodes of a project"), std::string::npos);
     EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, ConvertCapabilitiesPrintsStableIdentifiersWithoutInput) {
+    // The Blender plugin matches this line exactly before downloading a Portal project.
+    const char* argv[] = {"LichtFeld-Studio", "convert", "--capabilities"};
+    testing::internal::CaptureStdout();
+    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    const auto output = testing::internal::GetCapturedStdout();
+
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    EXPECT_EQ(output, "visible-project-splats-v1\n");
 }
 
 TEST(ArgumentParserTest, TrainingParsesAddSplats) {
@@ -3365,4 +3404,55 @@ TEST(ArgumentParserTest, JoinedShortIterationValueIsUsed) {
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.iterations, 2500u);
     EXPECT_TRUE((*parsed)->cli_iterations_set);
+}
+
+// Catches calibration correction losing its default, its off switch for training and eval, or the recorded
+// override that makes the switch win over a resumed run's own setting.
+TEST(ArgumentParserTest, CalibrationCorrectionIsOnByDefaultAndTurnsOff) {
+    using lfs::core::param::OptimizationParameters;
+    for (const auto& defaults : {OptimizationParameters{}, OptimizationParameters::mrnf_defaults(),
+                                 OptimizationParameters::mcmc_defaults(), OptimizationParameters::igs_plus_defaults()})
+        EXPECT_TRUE(defaults.calibration_correction);
+    OptimizationParameters defaults;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000);
+    defaults.steps_scaler = .7506f;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 751);
+    // Zero or below means no step scaling, and the correction never starts on the untrained scene.
+    for (const float unscaled : {0.f, -1.f}) {
+        defaults.steps_scaler = unscaled;
+        EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1000) << unscaled;
+    }
+    defaults.steps_scaler = 1e-4f;
+    EXPECT_EQ(defaults.calibration_correction_start_iteration(), 1);
+
+    const auto data = make_test_path("calibration_args");
+    const char* plain[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str()};
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(plain)), plain);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.calibration_correction);
+    EXPECT_FALSE((*parsed)->overrides.has_optimization_key("calibration_correction"));
+
+    const char* off[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--no-calibration-correction"};
+    parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(off)), off);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto& opt = (*parsed)->optimization;
+    EXPECT_FALSE(opt.calibration_correction);
+    EXPECT_FALSE(OptimizationParameters::from_json(opt.to_json()).calibration_correction);
+    EXPECT_TRUE((*parsed)->overrides.has_optimization_key("calibration_correction"));
+
+    const char* removed[]{"trainer", "--headless", "-d", data.c_str(), "-o", data.c_str(), "--calibration-correction"};
+    EXPECT_FALSE(lfs::core::args::parse_args_and_params(static_cast<int>(std::size(removed)), removed));
+
+    const auto project = std::filesystem::path(data) / "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const auto output_text = (std::filesystem::path(data) / "eval").string();
+    const char* eval[]{"LichtFeld-Studio", "eval", project_text.c_str(), "-o", output_text.c_str(),
+                       "--no-calibration-correction"};
+    const auto evaluated = lfs::core::args::parse_args(static_cast<int>(std::size(eval)), eval);
+    ASSERT_TRUE(evaluated) << evaluated.error();
+    const auto* mode = std::get_if<lfs::core::args::TrainingMode>(&*evaluated);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_FALSE(mode->params->optimization.calibration_correction);
+    EXPECT_TRUE(mode->params->overrides.has_optimization_key("calibration_correction"));
 }

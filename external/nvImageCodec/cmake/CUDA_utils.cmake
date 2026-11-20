@@ -112,24 +112,37 @@ endfunction()
 
 # Given the list of arch values, check which are supported by
 #
-# @param out_arch_values_allowed  List of arch values supported by the specified compiler
+# Each value may optionally carry a standard CMAKE_CUDA_ARCHITECTURES "-real" or
+# "-virtual" suffix (e.g. "90a-real", "121-virtual") as produced by conda-forge's
+# global build config or by CUDA_get_cmake_cuda_archs() below. That suffix only
+# selects real vs. virtual code generation for the architecture and is not part
+# of the sm_ identifier the compiler expects, so it is stripped before checking
+# support and the returned values are the bare architecture identifiers.
+#
+# @param out_arch_values_allowed  List of (suffix-stripped) arch values supported by the
+#                                 specified compiler
 # @param compiler                 What compiler to use for this check
-# @param arch_values_to_check     List of values to be checked against the specified compiler
-#                                 for example: 60;61;70;75
+# @param arch_values_to_check     List of values to be checked against the specified compiler,
+#                                 for example: 60;61;70;75 or 90a-real;100f-real;121-virtual
 # @return out_arch_values_allowed
 function(CUDA_find_supported_arch_values out_arch_values_allowed compiler arch_values_to_check)
   # allow the user to pass the list like a normal variable
   set(arch_list ${arch_values_to_check} ${ARGN})
-  foreach(arch IN LISTS arch_list ITEMS)
+  set(out_list "")
+  foreach(arch IN LISTS arch_list)
+    string(REGEX REPLACE "-(real|virtual)$" "" stripped_arch "${arch}")
     if (${compiler} MATCHES "clang")
-      CUDA_check_cudacc_flag(supported ${compiler} "--cuda-gpu-arch=sm_${arch}")
+      CUDA_check_cudacc_flag(supported ${compiler} "--cuda-gpu-arch=sm_${stripped_arch}")
     else()
-      CUDA_check_cudacc_flag(supported ${compiler} "-arch=sm_${arch}")
+      CUDA_check_cudacc_flag(supported ${compiler} "-arch=sm_${stripped_arch}")
     endif()
     if (supported)
-      set(out_list ${out_list} ${arch})
+      set(out_list ${out_list} ${stripped_arch})
     endif()
   endforeach(arch)
+  if (out_list)
+    list(REMOVE_DUPLICATES out_list)
+  endif()
   set(${out_arch_values_allowed} ${out_list} PARENT_SCOPE)
 endfunction()
 

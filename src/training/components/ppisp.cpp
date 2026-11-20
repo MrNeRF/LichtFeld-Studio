@@ -247,6 +247,20 @@ namespace lfs::training {
 
     bool PPISP::is_known_frame(int uid) const { return uid_to_frame_idx_.find(uid) != uid_to_frame_idx_.end(); }
 
+    bool PPISP::rename_frames(const std::unordered_map<int, int>& renamed) {
+        std::unordered_map<int, int> frames, cameras;
+        for (const auto& [uid, frame] : uid_to_frame_idx_) {
+            const auto it = renamed.find(uid);
+            const int id = it == renamed.end() ? uid : it->second;
+            if (!frames.emplace(id, frame).second)
+                return false;
+            cameras.emplace(id, uid_to_camera_id_.at(uid));
+        }
+        uid_to_frame_idx_ = std::move(frames);
+        uid_to_camera_id_ = std::move(cameras);
+        return true;
+    }
+
     bool PPISP::is_known_camera(int camera_id) const {
         return camera_id_to_idx_.find(camera_id) != camera_id_to_idx_.end();
     }

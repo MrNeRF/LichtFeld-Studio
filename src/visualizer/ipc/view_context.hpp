@@ -132,6 +132,7 @@ namespace lfs::vis {
         bool orthographic = false;
         float ortho_scale = 100.0f;
         bool depth_view = false;
+        bool normal_view = false;
         float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
         float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
         int depth_visualization_mode = 0;

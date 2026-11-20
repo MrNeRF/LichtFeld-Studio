@@ -87,6 +87,23 @@ namespace lfs::core::nn::device {
         return (static_cast<float>(dst) + 0.5f) * scale - 0.5f;
     }
 
+    // The source pixel of nearest resizing: the floor of resize_coord, in integers. A float scale puts whole
+    // coordinates a little below themselves for some sizes (33 / 66 is not 0.5 under fast math), and the floor then
+    // picks the neighbour.
+    __device__ __forceinline__ int nearest_source(const int dst, const int src_len, const int dst_len,
+                                                  const int coord) {
+        long long source = 0;
+        if (dst_len > 1 && coord == 2) {
+            source = static_cast<long long>(dst) * (src_len - 1) / (dst_len - 1);
+        } else if (dst_len > 1 && coord == 1) {
+            source = static_cast<long long>(dst) * src_len / dst_len;
+        } else if (dst_len > 1) {
+            const long long doubled = (2LL * dst + 1) * src_len - dst_len;
+            source = doubled > 0 ? doubled / (2LL * dst_len) : 0;
+        }
+        return static_cast<int>(source < src_len ? source : src_len - 1);
+    }
+
     __device__ __forceinline__ void cp_async16(void* smem_addr, const void* glob_addr) {
 #if __CUDA_ARCH__ >= 800
         const unsigned smem = __cvta_generic_to_shared(smem_addr);

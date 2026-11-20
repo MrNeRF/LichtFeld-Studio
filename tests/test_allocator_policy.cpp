@@ -5,8 +5,16 @@
 #include "core/tensor/internal/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <thread>
+#include <vector>
+
+namespace tensor_hardening {
+    cudaError_t launch_delay_kernel(cudaStream_t stream, uint64_t cycles);
+}
 
 using namespace lfs::core;
 
@@ -205,4 +213,58 @@ TEST(AllocatorPolicyTest, EmptyExactTensorSkipsBucketRounding) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     EXPECT_EQ(bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed), cached_before);
     EXPECT_EQ(bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed), waste_before);
+}
+
+// cudaDeviceSynchronize does not wait for work submitted while it waits. A
+// block freed then, with its last write still queued, must not reach another
+// stream before that write lands.
+TEST(AllocatorPolicyTest, TrimKeepsBlocksFreedDuringItsSyncOnTheirStream) {
+    int device_count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
+    if (device_count == 0) {
+        GTEST_SKIP() << "No CUDA device available";
+    }
+    int clock_khz = 0;
+    ASSERT_EQ(cudaDeviceGetAttribute(&clock_khz, cudaDevAttrClockRate, 0), cudaSuccess);
+    const auto cycles_for_ms = [clock_khz](const uint64_t ms) { return ms * static_cast<uint64_t>(clock_khz); };
+
+    constexpr size_t kBytes = 64 * 1024;
+    auto& pool = CudaMemoryPool::instance();
+    cudaStream_t held = nullptr;
+    cudaStream_t writer = nullptr;
+    cudaStream_t reader = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&held, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&writer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&reader, cudaStreamNonBlocking), cudaSuccess);
+    // A live block keeps the slab of this size class from being reclaimed.
+    void* keeper = pool.allocate(kBytes, reader);
+    ASSERT_NE(keeper, nullptr);
+
+    // The trim waits for `held`; meanwhile `writer` frees a block whose write
+    // is queued behind a longer delay.
+    EXPECT_EQ(tensor_hardening::launch_delay_kernel(held, cycles_for_ms(400)), cudaSuccess);
+    std::thread trimmer([&pool] { pool.trim_cached_memory(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    void* freed = pool.allocate(kBytes, writer);
+    EXPECT_NE(freed, nullptr);
+    EXPECT_EQ(tensor_hardening::launch_delay_kernel(writer, cycles_for_ms(800)), cudaSuccess);
+    EXPECT_EQ(cudaMemsetAsync(freed, 0xAB, kBytes, writer), cudaSuccess);
+    pool.deallocate(freed, writer);
+    trimmer.join();
+
+    void* mine = pool.allocate(kBytes, reader);
+    ASSERT_NE(mine, nullptr);
+    EXPECT_EQ(cudaMemsetAsync(mine, 0, kBytes, reader), cudaSuccess);
+    EXPECT_EQ(cudaStreamSynchronize(writer), cudaSuccess);
+    std::vector<unsigned char> host(kBytes, 0xFF);
+    EXPECT_EQ(cudaMemcpyAsync(host.data(), mine, kBytes, cudaMemcpyDeviceToHost, reader), cudaSuccess);
+    EXPECT_EQ(cudaStreamSynchronize(reader), cudaSuccess);
+    EXPECT_EQ(static_cast<size_t>(std::count(host.begin(), host.end(), 0)), kBytes);
+
+    pool.deallocate(mine, reader);
+    pool.deallocate(keeper, reader);
+    for (cudaStream_t stream : {held, writer, reader}) {
+        pool.release_stream(stream);
+        EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
 }

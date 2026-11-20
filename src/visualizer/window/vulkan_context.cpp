@@ -2361,6 +2361,11 @@ namespace lfs::vis {
             populateDebugMessengerCreateInfo(debug_create_info, &validation_errors_fatal_);
         }
 
+        for (const std::string& wanted : device_hooks_.wanted_instance_extensions) {
+            if (extensionAvailable(available_extensions, wanted.c_str()))
+                appendUniqueExtension(extensions, wanted.c_str());
+        }
+
         VkInstanceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         create_info.pNext = validation_enabled_ ? &debug_create_info : nullptr;
@@ -2376,10 +2381,19 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
         }
+        instance_extensions_.assign(extensions.begin(), extensions.end());
         if (validation_enabled_ && !createDebugMessenger()) {
             return false;
         }
         return true;
+    }
+
+    bool VulkanContext::instanceExtensionEnabled(const std::string_view name) const {
+        return std::ranges::find(instance_extensions_, name) != instance_extensions_.end();
+    }
+
+    bool VulkanContext::deviceExtensionEnabled(const std::string_view name) const {
+        return std::ranges::find(device_extensions_, name) != device_extensions_.end();
     }
 
     bool VulkanContext::createSurface(SDL_Window* window) {
@@ -2979,6 +2993,11 @@ namespace lfs::vis {
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
+        for (const std::string& wanted : device_hooks_.wanted_device_extensions) {
+            if (extensionAvailable(available_extensions, wanted.c_str()))
+                appendUniqueExtension(extensions, wanted.c_str());
+        }
+
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         create_info.pNext = &features2;
@@ -2993,6 +3012,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);
         }
+        device_extensions_.assign(extensions.begin(), extensions.end());
 
         if (debug_utils_enabled_) {
             debug_name_writer_.initialize(device_);

@@ -1409,6 +1409,7 @@ namespace lfs::python {
             nb::arg("progress") = nb::none(),
             nb::arg("include_provenance") = true,
             "Save splat data as SOG compressed file. "
+            "kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
@@ -1447,6 +1448,7 @@ namespace lfs::python {
             nb::arg("progress") = nb::none(),
             nb::arg("include_provenance") = true,
             "Save splat data as a PlayCanvas multi-LOD SSOG (.ssog, lod-meta.json). "
+            "kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
@@ -1561,6 +1563,7 @@ namespace lfs::python {
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
             nb::arg("include_provenance") = true, nb::arg("background_color") = nb::none(),
             "Export splat data as self-contained HTML viewer. "
+            "kmeans_iterations sets the 1D codebook quantization passes; the SH palette uses 10 e-means epochs. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def("is_ssog_path", &io::is_ssog_path, nb::arg("path"),

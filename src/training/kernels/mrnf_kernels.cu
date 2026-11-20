@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_generic_ops.cuh"
 #include "lfs/cuda_scratch.hpp"
+#include "lfs/training/ray_depth_step.cuh"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
 #include <climits>
@@ -431,6 +432,20 @@ namespace lfs::training::mrnf_strategy {
             output[idx] = means[idx * 3 + axis];
     }
 
+    std::pair<size_t, size_t> percentile_bounds_ranks(const size_t n, const float percentile) {
+        LFS_ASSERT(n > 0);
+        LFS_ASSERT_MSG(std::isfinite(percentile) && percentile >= 0.0f && percentile <= 1.0f,
+                       "MRNF bounds percentile must be finite and within [0, 1]");
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MRNF percentile input exceeds CUB's int item-count limit");
+        const size_t last = n - 1;
+        const auto rank = [last](const double fraction) {
+            return std::min(last, static_cast<size_t>(fraction * static_cast<double>(last)));
+        };
+        const double low = (1.0 - static_cast<double>(percentile)) * 0.5;
+        return {rank(low), rank(1.0 - low)};
+    }
+
     void launch_percentile_bounds(
         const float* means,
         size_t N,
@@ -438,19 +453,9 @@ namespace lfs::training::mrnf_strategy {
         MRNFBounds* bounds,
         void* stream) {
 
-        LFS_ASSERT(N > 0);
         LFS_ASSERT(bounds != nullptr);
-        LFS_ASSERT_MSG(std::isfinite(percentile) && percentile >= 0.0f && percentile <= 1.0f,
-                       "MRNF bounds percentile must be finite and within [0, 1]");
-        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                       "MRNF percentile input exceeds CUB's int item-count limit");
-
+        const auto [low_idx, high_idx] = percentile_bounds_ranks(N, percentile);
         cudaStream_t s = resolve_stream(stream);
-
-        const float low_pct = (1.0f - percentile) / 2.0f;
-        const float high_pct = 1.0f - low_pct;
-        const size_t low_idx = static_cast<size_t>(low_pct * static_cast<float>(N - 1));
-        const size_t high_idx = static_cast<size_t>(high_pct * static_cast<float>(N - 1));
 
         const int n_int = static_cast<int>(N);
 
@@ -952,6 +957,43 @@ namespace lfs::training::mrnf_strategy {
         far_field_mask_kernel<<<blocks, threads, 0, s>>>(
             means, centroid_x, centroid_y, centroid_z, far_radius_sq, far_out, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.far_field_mask");
+    }
+
+    __global__ void ray_depth_inherit_kernel(
+        float* __restrict__ state,
+        const int64_t* __restrict__ parents,
+        const int64_t* __restrict__ children,
+        size_t K) {
+        namespace rd = lfs::training::ray_depth;
+        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
+        if (idx >= K)
+            return;
+        float* const parent = state + parents[idx] * rd::kStateStride;
+        float* const child = state + children[idx] * rd::kStateStride;
+        if (parent[5] < 0.0f) {
+            for (int k = 0; k < rd::kStateStride; ++k)
+                child[k] = rd::kUnobserved;
+            return;
+        }
+        for (int k = 0; k < 4; ++k)
+            child[k] = parent[k];
+        child[4] = child[5] = parent[4] = parent[5] = 0.0f;
+    }
+
+    void launch_ray_depth_inherit(
+        float* state,
+        const int64_t* parents,
+        const int64_t* children,
+        size_t K,
+        void* stream) {
+        if (K == 0)
+            return;
+        LFS_ASSERT(state != nullptr && parents != nullptr && children != nullptr);
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((K + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        ray_depth_inherit_kernel<<<blocks, threads, 0, s>>>(state, parents, children, K);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.ray_depth_inherit");
     }
 
 } // namespace lfs::training::mrnf_strategy

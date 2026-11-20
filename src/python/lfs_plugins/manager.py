@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin manager for discovery, loading, and lifecycle."""
-from _lfs_path_io import logical_path, native_path, open
+from _lfs_path_io import native_path, open
 
 import importlib.machinery
 import importlib.util
@@ -213,113 +213,64 @@ class PluginManager:
         auto_load: bool,
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> str:
-        plugin: Optional[PluginInstance] = None
-        info: Optional[PluginInfo] = None
         target_dir: Optional[Path] = None
-        published = False
         try:
             self._raise_if_cancelled(should_cancel)
             info = self._parse_manifest(staging_dir)
             name = self._validate_plugin_name(info.name)
             with self._plugin_lifecycle(name):
+                plugin: Optional[PluginInstance] = None
+                published = False
                 target_dir = self._plugins_dir / name
-                if target_dir.exists() and target_dir != staging_dir:
-                    raise PluginError(f"Plugin directory already exists: {target_dir}")
+                try:
+                    if target_dir.exists() and target_dir != staging_dir:
+                        raise PluginError(f"Plugin directory already exists: {target_dir}")
 
-                self._safe_write_source_metadata(staging_dir, source_info)
-                if auto_load:
-                    plugin = PluginInstance(info=info)
-                    with self._plugins_lock:
-                        if name in self._plugins:
-                            raise PluginError(f"Plugin '{name}' is already managed")
-                        self._plugins[name] = plugin
-                    loaded = self.load(name, on_progress, should_cancel=should_cancel)
-                    if not loaded:
-                        detail = plugin.error or f"Failed to load plugin '{name}'"
-                        raise PluginError(detail)
+                    self._safe_write_source_metadata(staging_dir, source_info)
                     self._raise_if_cancelled(should_cancel)
+                    info.path = target_dir
+                    if auto_load:
+                        plugin = PluginInstance(info=info)
+                        with self._plugins_lock:
+                            if name in self._plugins:
+                                raise PluginError(f"Plugin '{name}' is already managed")
+                            self._plugins[name] = plugin
+                    # Imports and on_load may retain asset paths in Python or
+                    # native panels, so activate only at the permanent location.
+                    if staging_dir != target_dir:
+                        staging_dir.replace(target_dir)
+                        published = True
+                    if auto_load:
+                        loaded = self.load(name, on_progress, should_cancel=should_cancel)
+                        if not loaded:
+                            detail = plugin.error or f"Failed to load plugin '{name}'"
+                            raise PluginError(detail)
+                        self._raise_if_cancelled(should_cancel)
 
-                if staging_dir != target_dir:
-                    staging_dir.replace(target_dir)
-                    published = True
-                if plugin is not None:
-                    self._rebase_published_plugin(plugin, staging_dir, target_dir)
-                    self._update_file_mtimes(plugin)
-                info.path = target_dir
-                self._notify_plugin_changed(info)
-                return name
-        except BaseException:
-            if plugin is not None:
-                if plugin.state == PluginState.ACTIVE:
-                    self.unload(plugin.info.name)
-                with self._plugins_lock:
-                    if self._plugins.get(plugin.info.name) is plugin:
-                        del self._plugins[plugin.info.name]
-            if published and target_dir is not None and target_dir.exists():
-                shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
-            if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
-            raise
-            if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
-                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
-            raise
-
-    @staticmethod
-    def _rebase_published_plugin(
-        plugin: PluginInstance,
-        staging_dir: Path,
-        target_dir: Path,
-    ) -> None:
-        """Move runtime paths from the private staging tree to its public path."""
-        old_root = str(staging_dir)
-        new_root = str(target_dir)
-
-        def rebase(path: str) -> str:
-            logical = logical_path(path)
-            if logical == old_root or logical.startswith(old_root + os.sep):
-                relocated = new_root + logical[len(old_root):]
-                return native_path(relocated) if logical != path else relocated
-            return path
-
-        plugin.info.path = target_dir
-        if plugin.venv_path is not None:
-            plugin.venv_path = Path(rebase(str(plugin.venv_path)))
-        old_sys_paths = list(plugin.sys_paths)
-        plugin.sys_paths = [rebase(path) for path in old_sys_paths]
-        for old_path, new_path in zip(old_sys_paths, plugin.sys_paths):
-            if old_path == new_path:
-                continue
-            try:
-                index = sys.path.index(old_path)
-            except ValueError:
-                continue
-            if new_path not in sys.path:
-                sys.path[index] = new_path
-            else:
-                sys.path.pop(index)
-        module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
-        for module_name, module in list(sys.modules.items()):
-            if module is None or (
-                module_name != module_prefix
-                and not module_name.startswith(f"{module_prefix}.")
+                    self._notify_plugin_changed(info)
+                    return name
+                except BaseException:
+                    if plugin is not None:
+                        if plugin.state == PluginState.ACTIVE:
+                            self.unload(plugin.info.name)
+                        with self._plugins_lock:
+                            if self._plugins.get(name) is plugin:
+                                del self._plugins[name]
+                    if published and target_dir.exists():
+                        # Loaded native libraries can prevent deletion on Windows.
+                        # Restore the private path so a failed install remains retryable.
+                        try:
+                            target_dir.replace(staging_dir)
+                        except OSError:
+                            _log.exception("Failed to restore staging directory for '%s'", name)
+                            shutil.rmtree(native_path(target_dir, force_extended=True), ignore_errors=True)
+                    raise
+        finally:
+            if (
+                staging_dir != target_dir and staging_dir.exists()
+                and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith(".")
             ):
-                continue
-            if hasattr(module, "__file__") and module.__file__:
-                module.__file__ = rebase(module.__file__)
-            if hasattr(module, "__path__"):
-                module.__path__ = [rebase(path) for path in module.__path__]
-            spec = getattr(module, "__spec__", None)
-            if spec is not None:
-                if spec.origin:
-                    spec.origin = rebase(spec.origin)
-                if spec.submodule_search_locations:
-                    spec.submodule_search_locations[:] = [
-                        rebase(path) for path in spec.submodule_search_locations
-                    ]
-            loader = getattr(module, "__loader__", None)
-            if loader is not None and hasattr(loader, "path"):
-                loader.path = rebase(loader.path)
-        plugin.file_mtimes.clear()
+                shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
 
     def _replace_plugin_install(
         self,
@@ -531,8 +482,8 @@ class PluginManager:
             t_onload = time.monotonic()
 
             self._raise_if_cancelled(should_cancel)
-            plugin.state = PluginState.ACTIVE
             self._update_file_mtimes(plugin)
+            plugin.state = PluginState.ACTIVE
             self._emit_stage(on_stage, "complete", f"Loaded {name}")
 
             _log.info(
@@ -923,11 +874,12 @@ class PluginManager:
         return plugin.error_traceback if plugin else None
 
     def _update_file_mtimes(self, plugin: PluginInstance):
-        """Record file modification times for hot reload."""
-        plugin.file_mtimes.clear()
+        """Publish a complete snapshot for the concurrent hot reload watcher."""
+        file_mtimes = {}
         for py_file in plugin.info.path.rglob("*.py"):
             if ".venv" not in py_file.parts:
-                plugin.file_mtimes[py_file] = py_file.stat().st_mtime
+                file_mtimes[py_file] = py_file.stat().st_mtime
+        plugin.file_mtimes = file_mtimes
 
     def start_watcher(self, poll_interval: float = 1.0):
         """Start hot reload file watcher."""

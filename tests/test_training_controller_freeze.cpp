@@ -6,13 +6,16 @@
 #include "core/image_io.hpp"
 #include "core/scene.hpp"
 #include "licht_test_support.hpp"
+#include "training/components/calibration_correction.hpp"
 #include "training/trainer.hpp"
 #include "training_snapshot_test_helpers.hpp"
 
 #include <array>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <sstream>
 #include <tuple>
+#include <vector>
 
 namespace {
     using namespace lfs::core;
@@ -36,11 +39,22 @@ namespace {
 
     class TrainingControllerFreeze : public testing::TestWithParam<std::tuple<std::string, bool>> {
     protected:
-        void run(const bool freeze, const bool controller = true, const int activation = 10) {
+        void run(const bool freeze, const bool controller = true, const int activation = 10,
+                 const bool calibration = false) {
             const auto [strategy, gut] = GetParam();
             const lfs::test::licht::TemporaryDirectory directory("controller-freeze");
             const auto image_path = directory.path / "image.png";
-            save_image(image_path, Tensor::full({3, 32, 32}, 0.7f, Device::CPU));
+            if (calibration) {
+                // The calibration field needs image structure to move.
+                std::vector<float> pixels(3 * 32 * 32);
+                for (int c = 0; c < 3; ++c)
+                    for (int y = 0; y < 32; ++y)
+                        for (int x = 0; x < 32; ++x)
+                            pixels[(c * 32 + y) * 32 + x] = .5f + .3f * std::sin(.7f * x + .4f * y + 2.f * c);
+                save_image(image_path, Tensor::from_vector(pixels, {3, 32, 32}, Device::CPU));
+            } else {
+                save_image(image_path, Tensor::full({3, 32, 32}, 0.7f, Device::CPU));
+            }
             Scene scene;
             auto camera = std::make_shared<Camera>(
                 Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
@@ -89,6 +103,8 @@ namespace {
             opt.ppisp_use_controller = controller;
             opt.ppisp_controller_activation_step = activation;
             opt.ppisp_freeze_gaussians_on_distill = freeze;
+            opt.calibration_correction = calibration;
+            opt.steps_scaler = calibration ? .005f : opt.steps_scaler; // The field starts at step 5.
 
             Trainer trainer(scene);
             const auto initialized = trainer.initialize(params);
@@ -97,6 +113,8 @@ namespace {
             ModelSnapshot boundary;
             int boundary_degree = -1;
             std::string controller_before, controller_after;
+            std::vector<float> field_before;
+            const auto field = [&] { return trainer.getCalibrationCorrection()->field().to_vector(); };
             int samples = 0;
             auto& hooks = ControlBoundary::instance();
             const auto handle = hooks.register_callback(ControlHook::PostStep, [&](const HookContext& ctx) {
@@ -106,6 +124,10 @@ namespace {
                 if (ctx.iteration == 9) {
                     boundary = capture(current);
                     boundary_degree = current.get_active_sh_degree();
+                    if (calibration) {
+                        field_before = field();
+                        EXPECT_NE(field_before, std::vector<float>(field_before.size())) << "The field must learn before the freeze";
+                    }
                     EXPECT_NE(initial[0].bytes, boundary[0].bytes) << "Pre-activation Gaussian learning must continue";
                     if (const auto* pool = trainer.getPPISPControllerPool()) {
                         std::ostringstream stream;
@@ -120,6 +142,9 @@ namespace {
                         const auto tensors = fields(current);
                         for (size_t i = 0; i < tensors.size(); ++i)
                             expect_tensor_bytes_equal(boundary[i], *tensors[i], "Frozen Gaussian field");
+                        // Frozen splats would hand their error to the field: it stays applied but does not move.
+                        if (calibration)
+                            EXPECT_EQ(field(), field_before) << "Calibration field at " << ctx.iteration;
                     } else {
                         EXPECT_NE(boundary[0].bytes, capture(current)[0].bytes)
                             << "Gaussian learning must continue when freeze is inactive";
@@ -142,6 +167,9 @@ namespace {
 
     TEST_P(TrainingControllerFreeze, FrozenModelIsUnchangedAcrossRefinementAndStopBoundary) {
         run(true);
+    }
+    TEST_P(TrainingControllerFreeze, FrozenModelFreezesTheCalibrationField) {
+        run(true, true, 10, true);
     }
     TEST_P(TrainingControllerFreeze, DisabledFreezeKeepsGaussianLearning) {
         run(false);

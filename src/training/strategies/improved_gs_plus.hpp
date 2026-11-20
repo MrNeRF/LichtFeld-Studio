@@ -19,6 +19,7 @@ namespace lfs::training::sh_value {
 }
 
 class CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
+class MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
 
 namespace lfs::training {
 
@@ -95,6 +96,7 @@ namespace lfs::training {
 
     private:
         friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
+        friend class ::MRNFStrategyTest_FreeSlotCountIsExactPastFloat32Precision_Test;
 
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }

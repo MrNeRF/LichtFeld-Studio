@@ -6,6 +6,9 @@
 #define LFS_COLOR_MIX mix
 #include "../../../../rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
 
+#define LFS_EQUIRECT_GLSL
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/equirect_projection.inc"
+
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
@@ -21,7 +24,10 @@ layout(push_constant) uniform PushConstants {
     float color_exposure;
     uint color_tonemapping;
     uint splat_render_profile;
-    uint color_padding;
+    uint normal_view;
+    vec4 normal_intrinsics;
+    uvec4 normal_camera;
+    uvec4 normal_projection;
 } pc;
 
 layout(set = 0, binding = 0) readonly buffer PixelStateBuffer {
@@ -77,6 +83,62 @@ vec3 depthPalette(float near_t) {
     return mix(near_0, near_1, smoothstep(0.86, 1.00, near_t));
 }
 
+// Pixel centers use the same camera convention as the rasterizer: +Y down,
+// +Z forward. Output normals are converted to +Y up, +Z toward the camera.
+vec3 normalRay(ivec2 pixel) {
+    vec2 p = vec2(pixel) + vec2(pc.normal_camera.zw) + 0.5;
+    uint model = pc.normal_projection.x & 255u;
+    if (model == 3u) {
+        vec3 shared_ray = lfs_equirect_direction(p / vec2(pc.normal_camera.xy));
+        return vec3(shared_ray.x, -shared_ray.y, -shared_ray.z);
+    }
+    return vec3((p - pc.normal_intrinsics.zw) / pc.normal_intrinsics.xy, 1.0);
+}
+
+bool normalDepth(ivec2 pixel, out float depth) {
+    uint index = uint(pixel.y) * pc.width + uint(pixel.x);
+    depth = pixel_depth[index];
+    bool orthographic = (pc.normal_projection.x & 255u) == 1u;
+    return !isnan(depth) && !isinf(depth) && abs(depth) < 1.0e9 &&
+           (orthographic || depth > 1.0e-6) && (1.0 - pixel_state[index].a) >= 0.02;
+}
+
+vec3 normalPosition(ivec2 pixel, float depth) {
+    vec3 ray = normalRay(pixel);
+    return (pc.normal_projection.x & 255u) == 1u ? vec3(ray.xy, depth) : ray * depth;
+}
+
+vec3 normalColor(ivec2 pixel) {
+    vec3 empty = pc.background.rgb;
+    if (pc.width < 3u || pc.height < 3u || pixel.y < 1 || pixel.y + 1 >= int(pc.height))
+        return empty;
+    bool wrap = (pc.normal_projection.x & 255u) == 3u && pc.normal_camera.x == pc.width;
+    if (!wrap && (pixel.x < 1 || pixel.x + 1 >= int(pc.width)))
+        return empty;
+    ivec2 left = ivec2((pixel.x + int(pc.width) - 1) % int(pc.width), pixel.y);
+    ivec2 right = ivec2((pixel.x + 1) % int(pc.width), pixel.y);
+    ivec2 up = pixel - ivec2(0, 1), down = pixel + ivec2(0, 1);
+    float center, dl, dr, du, dd;
+    if (!normalDepth(pixel, center) || !normalDepth(left, dl) || !normalDepth(right, dr) ||
+        !normalDepth(up, du) || !normalDepth(down, dd))
+        return empty;
+    // Reject depth discontinuities instead of inventing surfaces across silhouettes.
+    float limit = 0.05 * max(abs(center), 1.0e-4);
+    if ((pc.normal_projection.x & 255u) == 1u)
+        limit = max(limit, 2.0 / max(pc.normal_intrinsics.x, 1.0e-6));
+    if (max(max(abs(dl-center), abs(dr-center)), max(abs(du-center), abs(dd-center))) > limit)
+        return empty;
+    vec3 n = cross(normalPosition(right, dr) - normalPosition(left, dl),
+                   normalPosition(down, dd) - normalPosition(up, du));
+    float magnitude = dot(n, n);
+    if (isnan(magnitude) || isinf(magnitude) || magnitude < 1.0e-24)
+        return empty;
+    vec3 ray = (pc.normal_projection.x & 255u) == 1u ? vec3(0, 0, 1) : normalRay(pixel);
+    if (dot(n, ray) > 0.0) n = -n;
+    n = normalize(n) * vec3(1.0, -1.0, -1.0);
+    return clamp(n * 0.5 + 0.5, 0.0, 1.0);
+}
+
 void main() {
     const uvec2 gid = gl_GlobalInvocationID.xy;
     if (gid.x >= pc.width || gid.y >= pc.height) {
@@ -90,6 +152,11 @@ void main() {
 
     const float transmittance = clamp(state.a, 0.0, 1.0);
     const float alpha = 1.0 - transmittance;
+
+    if (pc.normal_view != 0u) {
+        imageStore(out_image, ivec2(gid), vec4(normalColor(ivec2(gid)), 1.0));
+        return;
+    }
 
     if (pc.depth_view != 0u) {
         float lo = pc.depth_min;

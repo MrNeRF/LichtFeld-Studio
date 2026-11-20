@@ -611,6 +611,10 @@
 .gamepad-navigation-indicator.is-ready .gamepad-indicator-dot { background-color: @{success}; }
 .gamepad-navigation-indicator.needs-action .gamepad-indicator-dot { background-color: @{warning}; }
 
+.viewport-gt-color-scale {
+    border-color: @{overlay.border};
+}
+
 .side-dock-toggle {
     color: @{overlay.icon};
     background-color: transparent;
