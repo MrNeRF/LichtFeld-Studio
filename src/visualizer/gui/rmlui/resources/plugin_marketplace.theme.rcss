@@ -17,7 +17,7 @@
 }
 
 .mp-empty-mark {
-    border-radius: @{radius.surface}dp;
+    border-radius: @{radius.round}dp;
 }
 
 .plugin-card {

@@ -17,7 +17,7 @@ input[type="range"] sliderprogress {
 }
 
 input[type="range"] sliderbar {
-    border-radius: @{radius.control}dp;
+    border-radius: @{radius.round}dp;
 }
 
 select:focus-visible,

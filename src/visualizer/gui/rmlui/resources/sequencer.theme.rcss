@@ -9,7 +9,7 @@
 }
 
 .play-btn {
-    border-radius: @{radius.surface}dp;
+    border-radius: @{radius.round}dp;
 }
 
 .sequence-fps-field {
@@ -64,7 +64,7 @@
 }
 
 .keyframe.loop-point {
-    border-radius: @{radius.control}dp;
+    border-radius: @{radius.round}dp;
     background-color: @{info};
 }
 
@@ -73,7 +73,7 @@
 }
 
 #playhead-handle {
-    border-radius: @{radius.control}dp;
+    border-radius: @{radius.round}dp;
 }
 
 #timeline-scrollbar {
