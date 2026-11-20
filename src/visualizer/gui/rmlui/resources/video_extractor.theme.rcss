@@ -110,7 +110,7 @@ body {
 }
 
 #preview-shell {
-    background-color: @{background};
+    background-color: #11131a;
 }
 
 #preview-empty,

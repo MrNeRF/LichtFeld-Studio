@@ -91,12 +91,12 @@ MAIN_PANEL_RML = '''<rml>
 <head>
   <link type="text/rcss" href="main_panel.rcss"/>
 </head>
-<body id="body" class="plugin-panel {name}-panel text-body">
+<body id="body" class="plugin-panel {name}-panel">
   <div class="panel-shell">
     <div class="panel-header">
-      <span class="panel-kicker text-accent">Plugin Scaffold</span>
+      <span class="panel-kicker">Plugin Scaffold</span>
       <span class="panel-title">{title}</span>
-      <span class="panel-note text-muted">RML and RCSS are set up already. Immediate widgets mount into the slot below.</span>
+      <span class="panel-note">RML and RCSS are set up already. Immediate widgets mount into the slot below.</span>
     </div>
     <div id="im-root"></div>
   </div>
@@ -105,6 +105,7 @@ MAIN_PANEL_RML = '''<rml>
 '''
 
 MAIN_PANEL_RCSS = '''body.plugin-panel {
+    font-family: Inter;
     padding: 0;
 }
 
@@ -119,6 +120,23 @@ MAIN_PANEL_RCSS = '''body.plugin-panel {
     display: flex;
     flex-direction: column;
     gap: 4dp;
+}
+
+.panel-kicker {
+    color: #7fb8ff;
+    font-size: 12dp;
+    font-weight: 600;
+    letter-spacing: 0.8dp;
+    text-transform: uppercase;
+}
+
+.panel-title {
+    font-size: 18dp;
+    font-weight: 600;
+}
+
+.panel-note {
+    color: #a0a8b7;
 }
 
 #im-root {
