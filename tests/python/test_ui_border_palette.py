@@ -131,7 +131,12 @@ class BorderPaletteTest(unittest.TestCase):
                 with self.subTest(sheet=path.name, property=prop, value=value):
                     if prop.endswith("radius"):
                         for corner in value.split():
-                            self.assertIn(corner, radii)
+                            if (path.name == "components.theme.rcss"
+                                    and selector in {"scrollbarvertical slidertrack", "scrollbarvertical sliderbar",
+                                                     "scrollbarhorizontal slidertrack", "scrollbarhorizontal sliderbar"}):
+                                self.assertEqual(corner, "@{components.scrollbar_rounding}dp")
+                            else:
+                                self.assertIn(corner, radii)
                     else:
                         if not prop.endswith("color"):
                             value = value.split(maxsplit=1)[1]

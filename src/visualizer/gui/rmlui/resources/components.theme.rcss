@@ -603,13 +603,13 @@ scrollbarvertical {
 
 scrollbarvertical slidertrack {
     background-color: @{components.scroll_track};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
 }
 
 scrollbarvertical sliderbar {
     background-color: @{components.scroll_thumb};
     min-height: @{num(size.grab_min_size)}dp;
-    border-radius: @{radius.surface}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
 }
 
 scrollbarvertical sliderbar:hover {
@@ -622,13 +622,13 @@ scrollbarhorizontal {
 
 scrollbarhorizontal slidertrack {
     background-color: @{components.scroll_track};
-    border-radius: @{radius.surface}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
 }
 
 scrollbarhorizontal sliderbar {
     background-color: @{components.scroll_thumb};
     min-width: @{num(size.grab_min_size)}dp;
-    border-radius: @{radius.surface}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
 }
 
 scrollbarhorizontal sliderbar:hover {

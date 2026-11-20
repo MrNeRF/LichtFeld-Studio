@@ -88,7 +88,8 @@ Application chrome uses two corner sizes: `sizes.frame_rounding` for controls
 and `sizes.window_rounding` for containers and popups. Bundled themes use 4dp
 and 8dp respectively. Square joins remain 0; radio buttons, circular indicators,
 and pills use a full radius. Custom themes can change the two sizes; containers
-use at least the control radius.
+use at least the control radius. Scrollbar tracks and thumbs use
+`sizes.scrollbar_rounding`, with a minimum of half the scrollbar size.
 
 In `.theme.rcss`, use `@{radius.control}dp`, `@{radius.surface}dp`, or
 `@{radius.round}dp`. Keep border colors on `@{border}` for neutral edges,
