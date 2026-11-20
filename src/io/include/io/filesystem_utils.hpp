@@ -507,38 +507,11 @@ namespace lfs::io {
         }
 
         [[nodiscard]] FileLookupResult lookup(const std::string& image_name) const {
-            if (dir_indices_.empty())
-                return {};
+            return lookup_impl(image_name, false);
+        }
 
-            const std::vector<std::filesystem::path> lookup_keys = build_lookup_keys(image_name);
-            bool saw_ambiguous_match = false;
-
-            for (const auto& dir_index : dir_indices_) {
-                for (const auto& key : lookup_keys) {
-                    if (auto result = dir_index.lookup(key); result.found()) {
-                        return result;
-                    } else if (result.ambiguous()) {
-                        saw_ambiguous_match = true;
-                    }
-                }
-            }
-
-            // Frame-number fallback. Ambiguity here means the convention does
-            // not apply (e.g. several sidecar kinds per frame), so it degrades
-            // to "no match" instead of failing the dataset.
-            const std::string digit_key = RecursiveFileCache::trailing_digit_run(
-                lfs::core::path_to_utf8(lfs::core::utf8_to_path(image_name).stem()));
-            for (const auto& dir_index : dir_indices_) {
-                if (auto result = dir_index.lookup_by_digit_suffix(digit_key); result.found()) {
-                    return result;
-                }
-            }
-
-            if (saw_ambiguous_match) {
-                return FileLookupResult{LookupStatus::Ambiguous, {}};
-            }
-
-            return {};
+        [[nodiscard]] FileLookupResult lookup_exact(const std::string& image_name) const {
+            return lookup_impl(image_name, true);
         }
 
         [[nodiscard]] bool has_dirs() const { return !dir_indices_.empty(); }
@@ -551,6 +524,43 @@ namespace lfs::io {
         }
 
     private:
+        [[nodiscard]] FileLookupResult lookup_impl(const std::string& image_name, const bool exact_only) const {
+            if (dir_indices_.empty())
+                return {};
+
+            const std::vector<std::filesystem::path> lookup_keys = build_lookup_keys(image_name);
+            bool saw_ambiguous_match = false;
+
+            for (const auto& dir_index : dir_indices_) {
+                for (const auto& key : lookup_keys) {
+                    const auto result = exact_only ? dir_index.lookup_exact(key) : dir_index.lookup(key);
+                    if (result.found()) {
+                        return result;
+                    } else if (result.ambiguous()) {
+                        saw_ambiguous_match = true;
+                    }
+                }
+            }
+
+            if (!exact_only) {
+                // Frame-number fallback. Ambiguity here means the convention does
+                // not apply (e.g. several sidecar kinds per frame), so it degrades
+                // to "no match" instead of failing the dataset.
+                const std::string digit_key = RecursiveFileCache::trailing_digit_run(
+                    lfs::core::path_to_utf8(lfs::core::utf8_to_path(image_name).stem()));
+                for (const auto& dir_index : dir_indices_) {
+                    if (auto result = dir_index.lookup_by_digit_suffix(digit_key); result.found()) {
+                        return result;
+                    }
+                }
+            }
+
+            if (saw_ambiguous_match) {
+                return FileLookupResult{LookupStatus::Ambiguous, {}};
+            }
+
+            return {};
+        }
         std::vector<std::filesystem::path> build_lookup_keys(const std::string& image_name) const {
             const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
             const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
@@ -621,15 +631,41 @@ namespace lfs::io {
         return normalized;
     }
 
+    // Resolves a directory path once to a normalized absolute path for batch sidecar operations.
+    [[nodiscard]] inline std::filesystem::path normalize_absolute_dir_path(const std::filesystem::path& path) {
+        if (path.empty())
+            return {};
+        if (path.is_absolute())
+            return normalize_dir_path(path);
+        std::error_code ec;
+        const auto abs = std::filesystem::absolute(path, ec);
+        return normalize_dir_path(ec ? path : abs);
+    }
+
     namespace detail {
+        [[nodiscard]] inline std::filesystem::path normalize_absolute_file_path(
+            const std::filesystem::path& path) {
+            if (path.empty())
+                return {};
+            if (path.is_absolute())
+                return lfs::core::native_fs::display_path(path).lexically_normal();
+            std::error_code ec;
+            const auto abs = std::filesystem::absolute(path, ec);
+            return lfs::core::native_fs::display_path(ec ? path : abs).lexically_normal();
+        }
+
         [[nodiscard]] inline std::filesystem::path strictly_relative_to(
             const std::filesystem::path& target,
             const std::filesystem::path& base) {
             if (target.empty() || base.empty())
                 return {};
             const auto rel = target.lexically_relative(base);
-            const auto generic = lfs::core::path_to_generic_utf8(rel);
-            if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
+            if (rel.empty())
+                return {};
+            static const std::filesystem::path kDot(".");
+            static const std::filesystem::path kDotDot("..");
+            const auto first = *rel.begin();
+            if (first == kDot || first == kDotDot)
                 return {};
             return rel;
         }
@@ -660,69 +696,89 @@ namespace lfs::io {
         }
     } // namespace detail
 
-    // Canonical relative path shared by prior/sidecar generation and lookup:
-    // 1) relative to images_dir when inside it,
-    // 2) relative to dataset_root when inside the dataset outside images_dir,
-    // 3) under "_external/" when outside dataset_root so distinct files never collide.
-    [[nodiscard]] inline std::filesystem::path sidecar_relative_path(
+    // Canonical relative path shared by prior/sidecar generation and lookup, taking
+    // pre-normalized absolute directory roots (see normalize_absolute_dir_path):
+    // 1) relative to norm_images_dir when inside it,
+    // 2) relative to norm_dataset_root when inside the dataset outside norm_images_dir,
+    // 3) under "_external/<absolute path>" when outside norm_dataset_root so distinct files never collide.
+    // Because "_external/" keys on the resolved absolute source path, moving external photos to a
+    // different location changes their key and causes priors to be regenerated under the new path
+    // unless moved to match (unique basenames still fall back to the existing sidecar).
+    [[nodiscard]] inline std::filesystem::path sidecar_relative_path_normalized(
         const std::filesystem::path& image_path,
-        const std::filesystem::path& dataset_root,
-        const std::filesystem::path& images_dir = {}) {
+        const std::filesystem::path& norm_dataset_root,
+        const std::filesystem::path& norm_images_dir = {}) {
         if (image_path.empty())
             return {};
 
-        const auto abs_normalized = [](const std::filesystem::path& path) {
-            if (path.empty())
-                return std::filesystem::path{};
-            std::error_code ec;
-            const auto abs = std::filesystem::absolute(path, ec);
-            return lfs::core::native_fs::display_path(ec ? path : abs).lexically_normal();
-        };
-
-        const auto norm_image = abs_normalized(image_path);
-        const auto norm_images_dir =
-            images_dir.empty() ? std::filesystem::path{} : normalize_dir_path(abs_normalized(images_dir));
-        const auto norm_root =
-            dataset_root.empty() ? std::filesystem::path{} : normalize_dir_path(abs_normalized(dataset_root));
-
+        const auto norm_image = detail::normalize_absolute_file_path(image_path);
         if (auto rel = detail::strictly_relative_to(norm_image, norm_images_dir); !rel.empty())
             return rel;
-        if (auto rel = detail::strictly_relative_to(norm_image, norm_root); !rel.empty())
+        if (auto rel = detail::strictly_relative_to(norm_image, norm_dataset_root); !rel.empty())
             return rel;
         return detail::external_sidecar_relative_path(norm_image);
     }
 
-    // Resolves a sidecar for an image, disambiguating matching basenames with the shared
-    // canonical relative path (and suffix subpaths below leading dataset folders).
+    [[nodiscard]] inline std::filesystem::path sidecar_relative_path(
+        const std::filesystem::path& image_path,
+        const std::filesystem::path& dataset_root,
+        const std::filesystem::path& images_dir = {}) {
+        return sidecar_relative_path_normalized(
+            image_path,
+            normalize_absolute_dir_path(dataset_root),
+            normalize_absolute_dir_path(images_dir));
+    }
+
+    // Resolves a sidecar using pre-normalized directory roots: checks exact matches along
+    // the shared canonical relative path (and suffix subpaths below leading dataset folders)
+    // before falling back to image_name.
+    [[nodiscard]] inline FileLookupResult lookup_sidecar_normalized(
+        const SidecarDirCache& cache,
+        const std::filesystem::path& image_path,
+        const std::string& image_name,
+        const std::filesystem::path& norm_dataset_root,
+        const std::filesystem::path& norm_images_dir = {}) {
+        if (!cache.has_dirs())
+            return {};
+
+        if (!image_path.empty()) {
+            auto relative = sidecar_relative_path_normalized(
+                image_path, norm_dataset_root, norm_images_dir);
+            if (!relative.empty()) {
+                if (auto result = cache.lookup_exact(lfs::core::path_to_utf8(relative)); result.found())
+                    return result;
+
+                static const std::filesystem::path kExternal("_external");
+                if (*relative.begin() != kExternal) {
+                    // Sidecars can mirror either the dataset root or a suffix below leading image folders.
+                    while (std::distance(relative.begin(), relative.end()) > 2) {
+                        relative = relative.lexically_relative(*relative.begin());
+                        if (relative.empty())
+                            break;
+                        if (auto result = cache.lookup_exact(lfs::core::path_to_utf8(relative)); result.found())
+                            return result;
+                    }
+                }
+            }
+        }
+
+        return cache.lookup(image_name);
+    }
+
     [[nodiscard]] inline FileLookupResult lookup_sidecar(
         const SidecarDirCache& cache,
         const std::filesystem::path& image_path,
         const std::string& image_name,
         const std::filesystem::path& dataset_root,
         const std::filesystem::path& images_dir = {}) {
-        auto original = cache.lookup(image_name);
-        if (!original.ambiguous() || image_path.empty())
-            return original;
-
-        auto relative = sidecar_relative_path(image_path, dataset_root, images_dir);
-        if (relative.empty())
-            return original;
-
-        if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-            return result;
-
-        if (lfs::core::path_to_utf8(*relative.begin()) == "_external")
-            return original;
-
-        // Sidecars can mirror either the dataset root or a suffix below leading image folders.
-        while (std::distance(relative.begin(), relative.end()) > 2) {
-            relative = relative.lexically_relative(*relative.begin());
-            if (relative.empty())
-                break;
-            if (auto result = cache.lookup(lfs::core::path_to_utf8(relative)); result.found())
-                return result;
-        }
-        return original;
+        if (!cache.has_dirs())
+            return {};
+        return lookup_sidecar_normalized(
+            cache,
+            image_path,
+            image_name,
+            normalize_absolute_dir_path(dataset_root),
+            normalize_absolute_dir_path(images_dir));
     }
 
     inline bool paths_equivalent_or_lexically_equal(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {

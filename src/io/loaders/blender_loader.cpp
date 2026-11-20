@@ -226,7 +226,7 @@ namespace lfs::io {
                 LOG_INFO("mask maps present but unused (mask usage disabled)");
             }
 
-            const auto absolute_base_path = std::filesystem::absolute(transforms_file).parent_path().lexically_normal();
+            const auto absolute_base_path = normalize_absolute_dir_path(transforms_file.parent_path());
             std::optional<MaskDirCache> mask_cache;
             DepthDirCache depth_cache(base_path, options.cancel_requested);
             NormalDirCache normal_cache(base_path, options.cancel_requested);
@@ -269,7 +269,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path depth_path;
-                    if (auto depth_lookup = lookup_sidecar(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
+                    if (auto depth_lookup = lookup_sidecar_normalized(depth_cache, info._image_path, info._image_name, absolute_base_path); depth_lookup.found()) {
                         depth_path = std::move(depth_lookup.path);
                     } else if (depth_lookup.ambiguous()) {
                         if (options.load_depths) {
@@ -285,7 +285,7 @@ namespace lfs::io {
                     }
 
                     std::filesystem::path normal_path;
-                    if (auto normal_lookup = lookup_sidecar(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
+                    if (auto normal_lookup = lookup_sidecar_normalized(normal_cache, info._image_path, info._image_name, absolute_base_path); normal_lookup.found()) {
                         normal_path = std::move(normal_lookup.path);
                     } else if (normal_lookup.ambiguous()) {
                         if (options.load_normals) {

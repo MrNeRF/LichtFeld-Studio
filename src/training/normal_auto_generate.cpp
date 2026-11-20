@@ -40,9 +40,7 @@ namespace lfs::training {
         }
 
         [[nodiscard]] std::filesystem::path resolve_dataset_root(const std::filesystem::path& data_path) {
-            std::error_code ec;
-            auto root = std::filesystem::absolute(data_path, ec);
-            root = lfs::io::normalize_dir_path(ec ? data_path : root);
+            auto root = lfs::io::normalize_absolute_dir_path(data_path);
             if (lfs::io::safe_is_regular_file(root))
                 root = lfs::io::normalize_dir_path(root.parent_path());
             return root;
@@ -96,7 +94,7 @@ namespace lfs::training {
             const std::string& image_name,
             const std::filesystem::path& dataset_root,
             const std::filesystem::path& images_dir) {
-            auto rel = lfs::io::sidecar_relative_path(image_path, dataset_root, images_dir);
+            auto rel = lfs::io::sidecar_relative_path_normalized(image_path, dataset_root, images_dir);
             if (rel.empty()) {
                 rel = lfs::core::utf8_to_path(image_name);
                 if (rel.empty())
@@ -146,7 +144,7 @@ namespace lfs::training {
             for (const auto& cam : cameras) {
                 if (!cam || cam->has_depth())
                     continue;
-                if (auto lookup = lfs::io::lookup_sidecar(
+                if (auto lookup = lfs::io::lookup_sidecar_normalized(
                         cache, cam->image_path(), cam->image_name(), dataset_root, images_dir);
                     lookup.found()) {
                     cam->set_depth_path(std::move(lookup.path));
@@ -164,7 +162,7 @@ namespace lfs::training {
             for (const auto& cam : cameras) {
                 if (!cam || cam->has_normal())
                     continue;
-                if (auto lookup = lfs::io::lookup_sidecar(
+                if (auto lookup = lfs::io::lookup_sidecar_normalized(
                         cache, cam->image_path(), cam->image_name(), dataset_root, images_dir);
                     lookup.found()) {
                     cam->set_normal_path(std::move(lookup.path));

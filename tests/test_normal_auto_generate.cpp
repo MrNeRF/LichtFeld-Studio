@@ -827,3 +827,58 @@ TEST(NormalAutoGenerateIntegration, FlatSharedNormalMapRemainsSupportedForExtern
 
     fs::remove_all(base);
 }
+
+TEST(NormalAutoGenerateIntegration, MixedImagesAndExtraFolderKeepDistinctNormalMaps) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_mixed_images_extra";
+    fs::remove_all(root);
+    const auto img_images = root / "images/frame.png";
+    const auto img_extra = root / "extra/frame.png";
+    write_png_2x2(img_images, 10);
+    write_png_2x2(img_extra, 20);
+    write_transforms_dataset(root, {"images/frame.png", "extra/frame.png"});
+
+    lfs::core::param::PreprocessParameters pp;
+    pp.dataset_path = root;
+    pp.images_folder = "images";
+    pp.mode = lfs::core::param::PreprocessOutputMode::Normals;
+    pp.overwrite = true;
+    pp.image_paths = {img_images, img_extra};
+    const auto plan = lfs::preprocessing::build_preprocess_plan(pp);
+    ASSERT_EQ(plan.jobs.size(), 2u);
+    EXPECT_EQ(plan.jobs[0].normals_path, root / "normals/extra/frame.png");
+    EXPECT_EQ(plan.jobs[1].normals_path, root / "normals/frame.png");
+
+    auto cam_images = make_camera("frame.png", img_images);
+    auto cam_extra = make_camera("frame.png", img_extra);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_images, cam_extra};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (std::size_t i = 0; i < jobs.size(); ++i) {
+                write_png_2x2(jobs[i].normal_output_path, static_cast<unsigned char>(40 + i));
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    EXPECT_EQ(cam_images->normal_path(), root / "normals/frame.png");
+    EXPECT_EQ(cam_extra->normal_path(), root / "normals/extra/frame.png");
+
+    auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+    ASSERT_TRUE(reloaded) << reloaded.error().format();
+    const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+    ASSERT_EQ(loaded_cams.size(), 2u);
+    EXPECT_EQ(loaded_cams[0]->normal_path(), root / "normals/frame.png");
+    EXPECT_EQ(loaded_cams[1]->normal_path(), root / "normals/extra/frame.png");
+
+    fs::remove_all(root);
+}

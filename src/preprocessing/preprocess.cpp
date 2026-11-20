@@ -739,7 +739,7 @@ namespace {
                              std::string_view folder,
                              const fs::path& image_path,
                              const fs::path& images_dir) {
-        fs::path rel = lfs::io::sidecar_relative_path(image_path, dataset_root, images_dir);
+        fs::path rel = lfs::io::sidecar_relative_path_normalized(image_path, dataset_root, images_dir);
         if (rel.empty())
             rel = image_path.filename();
         rel.replace_extension(".png");
@@ -1533,11 +1533,10 @@ namespace lfs::preprocessing {
 
     PreprocessPlan build_preprocess_plan(const lfs::core::param::PreprocessParameters& params) {
         PreprocessPlan plan;
+        plan.dataset_root = lfs::io::normalize_absolute_dir_path(params.dataset_path);
         std::error_code ec;
-        const fs::path abs_dataset = fs::absolute(params.dataset_path, ec);
-        plan.dataset_root = lfs::io::normalize_dir_path(ec ? params.dataset_path : abs_dataset);
         if (fs::is_regular_file(plan.dataset_root, ec))
-            plan.dataset_root = plan.dataset_root.parent_path();
+            plan.dataset_root = lfs::io::normalize_dir_path(plan.dataset_root.parent_path());
         plan.images_dir = lfs::io::normalize_dir_path(
             plan.dataset_root / lfs::core::utf8_to_path(params.images_folder));
 
