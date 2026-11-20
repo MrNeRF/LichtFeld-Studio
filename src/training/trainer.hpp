@@ -1008,6 +1008,9 @@ namespace lfs::training {
 
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;
+        // Bound between a FastGS forward and its backward: scratch the loss reads only before the
+        // backward, taken from the frame's phase slice. Empty otherwise.
+        std::function<char*(size_t)> loss_step_scratch_;
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;

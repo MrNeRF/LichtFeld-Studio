@@ -997,6 +997,15 @@ namespace lfs::training {
         info.set_name("splat.densification_info");
     }
 
+    lfs::core::Tensor zero_splat_vector(const size_t n, const lfs::core::Device device) {
+        if (device != lfs::core::Device::CUDA) {
+            return lfs::core::Tensor::zeros({n}, device);
+        }
+        auto tensor = lfs::core::Tensor::empty_exact({n}, lfs::core::DataType::Float32);
+        tensor.zero_();
+        return tensor;
+    }
+
     void ensure_score_buffer_inplace(
         lfs::core::Tensor& scores,
         const size_t n,

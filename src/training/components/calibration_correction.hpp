@@ -4,6 +4,8 @@
 #include "core/camera_types.h"
 #include "core/tensor.hpp"
 
+#include <functional>
+
 namespace lfs::training {
     namespace kernels {
         struct DecoupledRawGradient;
@@ -42,8 +44,10 @@ namespace lfs::training {
         // `gradient` is the loss gradient with respect to the render tile. With the decoupled appearance loss, `raw`
         // holds its contrast and structure part, taken with respect to the raw render. `margin` is the loss's valid
         // padding: pixels that close to the tile's edge have no loss term of their own and add no curvature.
+        // `scratch`, when given, holds the summed decoupled gradient for this call instead of a kept buffer.
         void accumulate(const core::Tensor& render, const core::Tensor& gradient, const core::Tensor& weight,
-                        float values, int margin = 0, const kernels::DecoupledRawGradient* raw = nullptr);
+                        float values, int margin = 0, const kernels::DecoupledRawGradient* raw = nullptr,
+                        const std::function<char*(size_t)>& scratch = {});
         // Clears a gradient of the last warped tile where the sample falls outside the photograph: the target there
         // is the render itself, and no loss term may push it.
         void clear_outside(core::Tensor& gradient) const;
