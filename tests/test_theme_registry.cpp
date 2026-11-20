@@ -810,6 +810,7 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
 
 TEST(ThemeStyleTokens, NativeMenusUsePaletteAndTypographyRoles) {
     lfs::vis::Theme t;
+    t.palette.surface = {0.3f, 0.4f, 0.5f, 0.8f};
     t.palette.border = {0.2f, 0.3f, 0.4f, 0.8f};
     t.palette.text_dim = {0.4f, 0.5f, 0.6f, 1.0f};
     t.fonts.small_size = 13.0f;
@@ -818,6 +819,9 @@ TEST(ThemeStyleTokens, NativeMenusUsePaletteAndTypographyRoles) {
     EXPECT_FLOAT_EQ(style.border.w, t.palette.border.w);
     EXPECT_FLOAT_EQ(style.border.x, t.palette.border.x);
     EXPECT_FLOAT_EQ(style.disabled_text.w, t.palette.text_dim.w);
+    EXPECT_FLOAT_EQ(style.disabled_surface.x, style.surface.x);
+    EXPECT_FLOAT_EQ(style.disabled_surface.w, style.surface.w * 0.55f);
+    EXPECT_LT(style.disabled_surface.w, style.surface.w);
     EXPECT_FLOAT_EQ(style.label_size, t.fonts.small_size);
     EXPECT_FLOAT_EQ(style.submode_label_size, t.fonts.small_size);
     EXPECT_FLOAT_EQ(style.fallback_icon_size, t.fonts.large_size);

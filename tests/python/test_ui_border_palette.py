@@ -5,6 +5,8 @@ import json
 import re
 import unittest
 
+from rcss_test_support import rule_body
+
 ROOT = Path(__file__).resolve().parents[2]
 RESOURCES = ROOT / "src/visualizer/gui/rmlui/resources"
 BORDER = re.compile(
@@ -141,6 +143,44 @@ class BorderPaletteTest(unittest.TestCase):
                         if not prop.endswith("color"):
                             value = value.split(maxsplit=1)[1]
                         self.assertIn(value.strip(), colors)
+
+    def test_hybrid_and_immediate_panels_share_theme_rules(self):
+        theme = (RESOURCES.parent / "rml_theme.cpp").read_text()
+        shared = theme.split("const std::string& getComponentsThemeMedia()", 1)[1]
+        shared = shared.split("void invalidateThemeMediaCache()", 1)[0]
+        self.assertIn('loadBaseRCSS("rmlui/im_mode_panel.theme.rcss")', shared)
+        widgets = (RESOURCES / "im_mode_panel.theme.rcss").read_text()
+        self.assertIn("border-radius: @{radius.control}dp;", rule_body(widgets, ".im-box"))
+
+    def test_copy_button_has_a_transparent_idle_border(self):
+        css = (RESOURCES / "image_preview.theme.rcss").read_text()
+        self.assertIn("border-color: transparent;", rule_body(css, ".btn-copy"))
+        self.assertIn("border-color: @{primary};", rule_body(css, ".btn-copy:focus-visible"))
+
+    def test_round_controls_use_the_round_radius(self):
+        controls = {
+            "sequencer": (".play-btn", ".keyframe.loop-point", "#playhead-handle"),
+            "image_preview": (".nav-arrow",),
+            "components": ('input[type="range"] sliderbar',),
+            "plugin_marketplace": (".mp-empty-mark",),
+        }
+        for name, selectors in controls.items():
+            css = (RESOURCES / f"{name}.theme.rcss").read_text()
+            for selector in selectors:
+                with self.subTest(sheet=name, selector=selector):
+                    self.assertIn("border-radius: @{radius.round}dp;", rule_body(css, selector))
+
+    def test_plugin_examples_use_theme_presentation(self):
+        examples = ROOT / "docs/plugins/examples"
+        for name in ("03_hybrid_plugin", "scrub_controls_demo"):
+            panel = examples / name / "panels"
+            with self.subTest(example=name):
+                base = (panel / "main_panel.rcss").read_text()
+                self.assertNotRegex(base, r"\b(?:color|background-color|border-radius|font-weight)\s*:")
+                self.assertIn("@{radius.surface}dp", (panel / "main_panel.theme.rcss").read_text())
+                self.assertIn("text-body", (panel / "main_panel.rml").read_text())
+        status_bar = (examples / "02_status_bar_mixed.py").read_text()
+        self.assertNotRegex(status_bar, r"color\s*:|font-weight\s*:\s*bold")
 
     def test_bundled_themes_share_two_corner_sizes(self):
         variants = 0

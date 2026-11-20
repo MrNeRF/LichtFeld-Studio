@@ -30,9 +30,8 @@ body.status-bar-panel {
 }
 
 #im-root .im-label {
-    color: #f3c96d;
     font-size: 10dp;
-    font-weight: bold;
+    font-weight: 600;
 }
 """
 
