@@ -306,6 +306,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<ReferenceRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert(const ReferenceRecord& record);
+        [[nodiscard]] lfs::Result<void> update_locator(const lfs::core::Uuid& uuid, const ReferenceLocator& locator);
         [[nodiscard]] lfs::Result<bool> remove(const lfs::core::Uuid& uuid);
 
         // A matching size+content fingerprint with mtime-only drift updates just

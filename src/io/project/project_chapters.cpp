@@ -1935,6 +1935,21 @@ namespace lfs::io::project {
         return element->set("unresolved", record.unresolved);
     }
 
+    lfs::Result<void> ReferencesChapter::update_locator(const lfs::core::Uuid& uuid, const ReferenceLocator& locator) {
+        auto element = dom_.array_find("references", uuid.to_string());
+        if (!element) {
+            return fail<void>(
+                lfs::ErrorCode::NotFound, "The external reference record is missing.",
+                std::format("REFS UUID {} does not exist", uuid.to_string()), "REFS",
+                "references.uuid");
+        }
+        auto value = element->get_json("locator").value_or(Json::object());
+        value.update(locator_json(locator));
+        if (!locator.absolute_fallback)
+            value.erase("absolute_fallback");
+        return element->set_json("locator", std::move(value));
+    }
+
     lfs::Result<bool> ReferencesChapter::remove(const lfs::core::Uuid& uuid) {
         if (uuid.is_nil()) {
             return fail<bool>(

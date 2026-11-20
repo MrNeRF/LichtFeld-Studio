@@ -4526,9 +4526,10 @@ namespace lfs::io::project {
                         if (locator.base == LocatorBase::Project) {
                             const auto relative = lfs::core::utf8_to_path(locator.preferred);
                             if (*relative.begin() != "..") {
-                                (*reference)->locator = std::move(locator);
+                                if ((*reference)->locator.absolute_fallback)
+                                    locator.absolute_fallback = (*reference)->locator.absolute_fallback;
                                 staged_references = impl_->references;
-                                if (auto updated = staged_references->upsert(**reference); !updated)
+                                if (auto updated = staged_references->update_locator(**dataset, locator); !updated)
                                     return std::move(updated).error();
                             }
                         }

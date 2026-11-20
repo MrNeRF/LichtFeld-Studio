@@ -6012,7 +6012,30 @@ namespace {
             const auto uuid = require_result(upsert_path_reference(
                 document->edit_references(), {}, dataset, "dataset", "dataset"));
             require_status(document->edit_project().set_dataset_reference(uuid));
-            ASSERT_TRUE(document->save_as(destination, save_options(19'157, 200)));
+            auto element = document->edit_references().dom().array_find("references", uuid.to_string());
+            ASSERT_TRUE(element);
+            require_status(element->set("locator.future_path_flag", true));
+            require_status(element->set("fingerprint.future_hash", "retained"));
+            const auto original_reference = document->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(original_reference);
+
+            if (adjacent) {
+                auto fail_options = save_options(19'157, 200);
+                bool reached_chunks = false;
+                fail_options.boundary_observer = [&](CommitBoundary boundary) {
+                    if (boundary == CommitBoundary::ChunksWritten) {
+                        reached_chunks = true;
+                        throw std::runtime_error("Injected save failure before publication");
+                    }
+                };
+                EXPECT_FALSE(document->save_as(destination, fail_options));
+                ASSERT_TRUE(reached_chunks);
+                EXPECT_FALSE(document->source_path());
+                EXPECT_FALSE(fs::exists(destination));
+                EXPECT_EQ(document->references().dom().array_get("references", uuid.to_string()), original_reference);
+            }
+
+            ASSERT_TRUE(document->save_as(destination, save_options(19'158, 300)));
             const auto saved = require_result(document->references().find(uuid));
             ASSERT_TRUE(saved);
             EXPECT_EQ(saved->locator.base, adjacent ? LocatorBase::Project : LocatorBase::Absolute);
@@ -6023,6 +6046,14 @@ namespace {
             fs::create_directories(moved);
             fs::rename(original, relocated);
             auto reopened = require_result_ptr(ProjectDocument::open(relocated / destination.filename()));
+            const auto persisted = reopened->references().dom().array_get("references", uuid.to_string());
+            ASSERT_TRUE(persisted);
+            auto expected = *original_reference;
+            if (adjacent) {
+                expected["locator"]["base"] = "project";
+                expected["locator"]["preferred"] = "images";
+            }
+            EXPECT_EQ(*persisted, expected);
             const auto resolved = resolve_path_reference(reopened->references(), relocated, uuid);
             ASSERT_TRUE(resolved);
             EXPECT_EQ(*resolved, adjacent ? relocated / "images" : dataset);
