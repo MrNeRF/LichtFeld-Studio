@@ -26,6 +26,7 @@
 #ifdef LFS_GRAPHICS_VULKAN
 #include "vulkan_graphics_context.hpp"
 #endif
+#include "win32_trackpad.hpp"
 #include "window_state_utils.hpp"
 #include "x11_input_modifier.hpp"
 #include <SDL3/SDL.h>
@@ -48,6 +49,8 @@ namespace lfs::vis {
 
     namespace {
         constexpr double kPendingResizeMinWaitSeconds = 0.001;
+        // Touchpads report at about 120-240 Hz; poll Direct Manipulation that often mid-gesture.
+        constexpr double kTrackpadPumpSeconds = 0.004;
         constexpr int kResizeBorder = 6;
         constexpr int kMinWindowWidth = 640;
         constexpr int kMinWindowHeight = 360;
@@ -598,6 +601,7 @@ namespace lfs::vis {
         // Release our Wayland proxies/queue while SDL's borrowed display is
         // still alive. One context also avoids rebinding globals on panel reload.
         native_file_drag_.reset();
+        trackpad_.reset();
         SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
@@ -937,6 +941,15 @@ namespace lfs::vis {
             return false;
         }
         SDL_AddEventWatch(watchEvent, this);
+        if (lfs::core::environment::flag("LFS_TRACKPAD_DIRECT_MANIPULATION", true)) {
+            trackpad_ = std::make_unique<Win32Trackpad>();
+            const bool trackpad_ready = trackpad_->init(
+                window_,
+                [this] { return input_controller_ && input_controller_->wantsTrackpadGesture(); },
+                [this] { wakeEventLoop(); });
+            if (!trackpad_ready)
+                trackpad_.reset();
+        }
         return true;
     }
 
@@ -1113,6 +1126,7 @@ namespace lfs::vis {
             dispatchPolledEvent(event);
         pumping_events_ = false;
         dispatched_events_.clear();
+        pumpTrackpad();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -1152,6 +1166,10 @@ namespace lfs::vis {
         if (isManualResizeActive())
             timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 1.0 / 60.0)
                                               : std::optional<double>{1.0 / 60.0};
+        // A trackpad gesture produces no SDL events; keep pumping its updates.
+        if (trackpad_ && trackpad_->active())
+            timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, kTrackpadPumpSeconds)
+                                              : std::optional<double>{kTrackpadPumpSeconds};
         const int timeout_ms = drainQueuedEvents() ? 0
                                : timeout_seconds   ? static_cast<int>(std::ceil(*timeout_seconds * 1000.0))
                                                    : -1;
@@ -1163,6 +1181,7 @@ namespace lfs::vis {
         }
         pumping_events_ = false;
         dispatched_events_.clear();
+        pumpTrackpad();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -1171,6 +1190,19 @@ namespace lfs::vis {
         suppressFrameInputForManualResize();
         pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
+    }
+
+    void WindowManager::pumpTrackpad() {
+        if (!trackpad_)
+            return;
+        trackpad_->update();
+        const auto motion = trackpad_->takeMotion();
+        if (!input_controller_)
+            return;
+        if (motion.pan != glm::vec2(0.0f))
+            input_controller_->handleTrackpadPan(motion.pan);
+        if (motion.pinch != 1.0f)
+            input_controller_->handlePinch(motion.pinch);
     }
 
     bool WindowManager::shouldClose() const {

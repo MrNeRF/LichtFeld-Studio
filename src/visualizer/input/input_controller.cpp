@@ -2095,6 +2095,34 @@ namespace lfs::vis {
     }
 
     void InputController::handleScroll(double xoff, double yoff) {
+        handleScrollInput(xoff, yoff, false);
+    }
+
+    void InputController::handleTrackpadPan(const glm::vec2 pan) {
+        // Measured on a Windows precision touchpad: the same swipe that
+        // Direct Manipulation reports as about 24 logical pixels arrives as
+        // one wheel step through scroll-wheel emulation, so the swipe speed
+        // preference keeps its meaning. Wheel x is the reverse of where the
+        // content goes (see handleScrollInput).
+        constexpr double kPixelsPerWheelStep = 24.0;
+        handleScrollInput(-pan.x / kPixelsPerWheelStep, pan.y / kPixelsPerWheelStep, true);
+    }
+
+    bool InputController::wantsTrackpadGesture() const {
+        if (vr_viewing_ || bindings_.isCapturing() || trackpad_.device == NavigationDevice::Mouse)
+            return false;
+        if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return false;
+        // Gestures over panels keep scrolling them.
+        const glm::vec2 pointer = input::wheelPointerInPixels(window_);
+        const bool over_gui = input_router_
+                                  ? input_router_->pointerTargets(pointer.x, pointer.y).pointer_target ==
+                                        input::InputTarget::Gui
+                                  : isPointerOverBlockingUi(pointer.x, pointer.y);
+        return !over_gui && isInViewport(pointer.x, pointer.y);
+    }
+
+    void InputController::handleScrollInput(double xoff, double yoff, const bool known_trackpad) {
         if (vr_viewing_)
             return;
         // Capture mode (input settings panel) consumes scroll first so the user
@@ -2145,7 +2173,8 @@ namespace lfs::vis {
         // and Alt depth-box swipes keep their bindings, and Ctrl+swipe still
         // resizes the selection brush (pinch zooms there). Automatic mode does
         // this only while two fingers rest on the trackpad, so a mouse wheel
-        // or a resting thumb keeps the wheel bindings.
+        // or a resting thumb keeps the wheel bindings; a gesture the OS
+        // recognized as a trackpad's swipes in Automatic mode too.
         enum class Swipe {
             None,
             Orbit,
@@ -2155,7 +2184,8 @@ namespace lfs::vis {
         Swipe swipe = Swipe::None;
         const bool chord = !held_keys_.empty() &&
                            scroll_action != bindings_.getActionForScroll(tool_mode, mods);
-        const bool trackpad_swipe = input::trackpadSwipe(trackpad_, trackpad_touches_);
+        const bool trackpad_swipe = known_trackpad ? trackpad_.device != NavigationDevice::Mouse
+                                                   : input::trackpadSwipe(trackpad_, trackpad_touches_);
         if (trackpad_swipe && !chord) {
             if (mods == input::MODIFIER_NONE)
                 swipe = trackpad_.swipe_pans ? Swipe::Pan : Swipe::Orbit;
