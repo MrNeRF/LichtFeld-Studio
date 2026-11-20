@@ -2,10 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "sharpness_score.hpp"
+#include <cuda_runtime_api.h>
 #include <memory>
 #include <optional>
 
 namespace lfs::io {
+    namespace detail {
+        void launchSharpnessCount(const uint8_t* rgb, int w, int h, SharpnessAlgorithm algorithm,
+                                  unsigned long long* count, cudaStream_t stream);
+    }
+
     // One instance per extraction worker. CUDA resources are lazy and reused; failure permits CPU fallback.
     class SharpnessScorer {
     public:
