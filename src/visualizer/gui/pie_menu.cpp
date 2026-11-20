@@ -352,10 +352,10 @@ namespace lfs::vis::gui {
         const float sector_size = TWO_PI / static_cast<float>(n);
         const float angle_offset = sectorAngleOffset(n);
         const auto border_col = toOverlay(style.border);
-        const auto shadow_col = toOverlay(style.shadow);
+        const auto shadow_col = toOverlay(style.text_shadow);
 
         overlay.addCircleFilled(center_, outer_r + ui_style::emphasis_stroke * scale,
-                                shadow_col, 64);
+                                toOverlay(style.halo), 64);
 
         for (int i = 0; i < n; ++i) {
             const auto& item = items_[i];
@@ -434,8 +434,8 @@ namespace lfs::vis::gui {
             const float a0 = start + static_cast<float>(si) * sub_size;
             const float a1 = a0 + sub_size;
             const auto fill = si == hovered_submode_
-                                  ? toOverlay(style.hovered)
-                                  : toOverlay(style.surface);
+                                  ? toOverlay(style.submode_hovered)
+                                  : toOverlay(style.submode_surface);
             addRingSector(overlay, center_, sm_inner_radius, sm_radius, a0, a1, 12, fill);
             const float mid = (a0 + a1) * 0.5f;
             const glm::vec2 item_center{

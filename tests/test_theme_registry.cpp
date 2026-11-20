@@ -808,38 +808,40 @@ TEST(ThemePreferencesContract, SafeModeNeitherReadsNorWritesPreferences) {
     std::filesystem::remove_all(root, error);
 }
 
-TEST(ThemeStyleTokens, NativeMenusUsePaletteAndTypographyRoles) {
+TEST(ThemeStyleTokens, NativeMenusPreservePaletteAlphaAndTextSizes) {
     lfs::vis::Theme t;
     t.palette.surface = {0.3f, 0.4f, 0.5f, 0.8f};
+    t.palette.primary = {0.3f, 0.4f, 0.5f, 0.7f};
+    t.palette.primary_dim = {0.3f, 0.4f, 0.5f, 0.6f};
     t.palette.border = {0.2f, 0.3f, 0.4f, 0.8f};
-    t.palette.text_dim = {0.4f, 0.5f, 0.6f, 1.0f};
-    t.fonts.small_size = 13.0f;
-    t.fonts.large_size = 19.0f;
+    t.palette.background = {0.1f, 0.2f, 0.3f, 0.9f};
+    t.palette.text_dim = {0.4f, 0.5f, 0.6f, 0.8f};
     const auto style = lfs::vis::ui_style::menuStyle(t);
-    EXPECT_FLOAT_EQ(style.border.w, t.palette.border.w);
-    EXPECT_FLOAT_EQ(style.border.x, t.palette.border.x);
-    EXPECT_FLOAT_EQ(style.disabled_text.w, t.palette.text_dim.w);
-    EXPECT_FLOAT_EQ(style.disabled_surface.x, style.surface.x);
-    EXPECT_FLOAT_EQ(style.disabled_surface.w, style.surface.w * 0.55f);
-    EXPECT_LT(style.disabled_surface.w, style.surface.w);
-    EXPECT_FLOAT_EQ(style.label_size, t.fonts.small_size);
-    EXPECT_FLOAT_EQ(style.submode_label_size, t.fonts.small_size);
-    EXPECT_FLOAT_EQ(style.fallback_icon_size, t.fonts.large_size);
+    EXPECT_FLOAT_EQ(style.surface.w, t.palette.surface.w * 0.92f);
+    EXPECT_FLOAT_EQ(style.disabled_surface.w, t.palette.surface.w * 0.55f);
+    EXPECT_FLOAT_EQ(style.hovered.w, t.palette.primary.w * 0.92f);
+    EXPECT_FLOAT_EQ(style.active.w, t.palette.primary_dim.w * 0.80f);
+    EXPECT_FLOAT_EQ(style.submode_surface.w, t.palette.surface.w * 0.70f);
+    EXPECT_FLOAT_EQ(style.submode_hovered.w, t.palette.primary.w * 0.85f);
+    EXPECT_FLOAT_EQ(style.border.w, t.palette.border.w * 0.50f);
+    EXPECT_FLOAT_EQ(style.disabled_text.w, t.palette.text_dim.w * 0.40f);
+    EXPECT_FLOAT_EQ(style.center.w, t.palette.background.w * 0.55f);
+    EXPECT_FLOAT_EQ(style.halo.w, t.palette.background.w * 0.30f);
+    EXPECT_FLOAT_EQ(style.text_shadow.w, 0.45f);
+    EXPECT_FLOAT_EQ(style.label_size, 11.0f);
+    EXPECT_FLOAT_EQ(style.submode_label_size, 10.0f);
+    EXPECT_FLOAT_EQ(style.fallback_icon_size, 16.0f);
     EXPECT_FLOAT_EQ(style.stroke_width, lfs::vis::ui_style::normal_stroke);
 }
 
-TEST(ThemeStyleTokens, NativeMenusResolveNewThemesAndShadowPreferences) {
+TEST(ThemeStyleTokens, NativeMenusResolveNewThemeColors) {
     lfs::vis::Theme first;
     first.palette.primary = {0.1f, 0.2f, 0.3f, 1.0f};
-    first.shadows.alpha = 0.25f;
     const auto old_style = lfs::vis::ui_style::menuStyle(first);
     auto next = first;
     next.palette.primary = {0.8f, 0.7f, 0.6f, 1.0f};
-    next.shadows.enabled = false;
     const auto new_style = lfs::vis::ui_style::menuStyle(next);
     EXPECT_FLOAT_EQ(old_style.hovered.x, first.palette.primary.x);
     EXPECT_FLOAT_EQ(new_style.hovered.x, next.palette.primary.x);
     EXPECT_NE(old_style.hovered.x, new_style.hovered.x);
-    EXPECT_FLOAT_EQ(old_style.shadow.w, first.shadows.alpha);
-    EXPECT_FLOAT_EQ(new_style.shadow.w, 0.0f);
 }

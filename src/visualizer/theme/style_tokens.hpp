@@ -16,11 +16,14 @@ namespace lfs::vis::ui_style {
         ThemeColor disabled_surface;
         ThemeColor hovered;
         ThemeColor active;
+        ThemeColor submode_surface;
+        ThemeColor submode_hovered;
         ThemeColor border;
         ThemeColor text;
         ThemeColor disabled_text;
         ThemeColor center;
-        ThemeColor shadow;
+        ThemeColor halo;
+        ThemeColor text_shadow;
         float stroke_width;
         float label_size;
         float submode_label_size;
@@ -30,21 +33,28 @@ namespace lfs::vis::ui_style {
     // Native menus use the same palette, typography and stroke roles as panels.
     // Resolve on each draw so theme switches and hot reload need no local cache.
     [[nodiscard]] inline MenuStyle menuStyle(const Theme& theme) {
+        const auto with_alpha = [](ThemeColor color, float scale) {
+            color.w *= scale;
+            return color;
+        };
+        const auto& palette = theme.palette;
         return {
-            .surface = theme.palette.surface,
-            .disabled_surface = {theme.palette.surface.x, theme.palette.surface.y,
-                                 theme.palette.surface.z, theme.palette.surface.w * 0.55f},
-            .hovered = theme.palette.primary,
-            .active = theme.palette.primary_dim,
-            .border = theme.palette.border,
-            .text = theme.palette.text,
-            .disabled_text = theme.palette.text_dim,
-            .center = theme.palette.background,
-            .shadow = {0.0f, 0.0f, 0.0f, theme.shadows.enabled ? theme.shadows.alpha : 0.0f},
+            .surface = with_alpha(palette.surface, 0.92f),
+            .disabled_surface = with_alpha(palette.surface, 0.55f),
+            .hovered = with_alpha(palette.primary, 0.92f),
+            .active = with_alpha(palette.primary_dim, 0.80f),
+            .submode_surface = with_alpha(palette.surface, 0.70f),
+            .submode_hovered = with_alpha(palette.primary, 0.85f),
+            .border = with_alpha(palette.border, 0.50f),
+            .text = palette.text,
+            .disabled_text = with_alpha(palette.text_dim, 0.40f),
+            .center = with_alpha(palette.background, 0.55f),
+            .halo = with_alpha(palette.background, 0.30f),
+            .text_shadow = {0.0f, 0.0f, 0.0f, 0.45f},
             .stroke_width = normal_stroke,
-            .label_size = theme.fonts.small_size,
-            .submode_label_size = theme.fonts.small_size,
-            .fallback_icon_size = theme.fonts.large_size,
+            .label_size = 11.0f,
+            .submode_label_size = 10.0f,
+            .fallback_icon_size = 16.0f,
         };
     }
 
