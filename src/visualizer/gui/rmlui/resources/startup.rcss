@@ -116,16 +116,12 @@ body {
     width: 300dp;
     height: 14dp;
     border-width: 1dp;
-
-    background-color: rgba(255, 255, 255, 0.06);
-
     overflow: hidden;
 }
 
 #plugin-load-fill {
     width: 0%;
     height: 100%;
-    background-color: rgb(85, 171, 255);
 }
 
 #plugin-load-stage {
@@ -145,6 +141,27 @@ body {
     display: block;
     width: 52dp;
     text-align: right;
+}
+
+#plugin-load-row.is-complete {
+    height: 18dp;
+}
+
+#plugin-load-row.is-complete #plugin-load-track,
+#plugin-load-row.is-complete #plugin-load-stage {
+    width: 360dp;
+    height: 18dp;
+}
+
+#plugin-load-row.is-complete #plugin-load-stage {
+    margin-left: 0;
+    margin-top: 0;
+    line-height: 18dp;
+}
+
+#plugin-load-row.is-complete #plugin-load-fill,
+#plugin-load-row.is-complete #plugin-load-percent {
+    display: none;
 }
 
 select {

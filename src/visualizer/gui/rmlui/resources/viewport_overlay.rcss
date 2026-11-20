@@ -732,7 +732,6 @@ body {
     display: flex;
     overflow: hidden;
     border-width: 1dp;
-    border-radius: 3dp;
 }
 
 .viewport-gt-color-scale__segment {
@@ -2400,14 +2399,13 @@ body {
     min-width: 0;
     padding: 0;
     font-size: 12dp;
-    border-radius: 3dp;
     z-index: 15;
 }
 .side-dock-toggle.hidden { display: none; }
 /* Keep targets beyond the 4 dp dock resize bands. */
 .side-dock-toggle.left { left: 6dp; }
 .side-dock-toggle.right { right: 6dp; }
-.side-dock-grip { width: 2dp; height: 16dp; border-radius: 1dp; }
+.side-dock-grip { width: 2dp; height: 16dp; }
 .side-dock-toggle .dock-collapse-arrow,
 .side-dock-toggle .dock-expand-arrow { display: none; }
 .side-dock-toggle:hover .side-dock-grip,

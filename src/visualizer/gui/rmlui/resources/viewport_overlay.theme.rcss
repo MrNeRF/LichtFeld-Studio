@@ -777,15 +777,17 @@
 .gamepad-navigation-indicator.needs-action .gamepad-indicator-dot { background-color: @{warning}; }
 
 .viewport-gt-color-scale {
-    border-color: @{overlay.border};
+    border-color: @{border};
+    border-radius: @{radius.control}dp;
 }
 
 .side-dock-toggle {
+    border-radius: @{radius.control}dp;
     color: @{overlay.icon};
     background-color: transparent;
     border-color: transparent;
 }
-.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; }
+.side-dock-grip { background-color: @{alpha(overlay.icon,0.55)}; border-radius: @{radius.round}dp; }
 .side-dock-toggle:hover,
 .side-dock-toggle:focus-visible { background-color: @{alpha(overlay.icon,0.12)}; }
 .side-dock-toggle:active { background-color: @{alpha(overlay.icon,0.20)}; }

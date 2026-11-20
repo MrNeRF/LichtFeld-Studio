@@ -584,4 +584,4 @@ body.floating-panel {
 .preferences-model-status > span { margin: 0; }
 .preferences-model-actions > .btn:first-child,
 .preferences-model-actions > .btn:nth-child(2) { min-width: 130dp; }
-.preferences-model-dot { width: 8dp; height: 8dp; border-radius: 4dp; }
+.preferences-model-dot { width: 8dp; height: 8dp; }
