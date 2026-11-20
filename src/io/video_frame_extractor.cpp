@@ -1580,9 +1580,13 @@ namespace lfs::io {
                     int source_frame = 0;
                 };
                 CandidateFrame window_best;
+                SharpnessScorer sharpness_scorer;
+                const auto improves_window = [&](const double score) {
+                    return window_best.rgb.empty() || score > window_best.score;
+                };
                 const auto retain_window_candidate = [&](const double score) {
                     // Keep the first maximum, matching max_element's tie-breaking.
-                    if (!window_best.rgb.empty() && score <= window_best.score)
+                    if (!improves_window(score))
                         return;
                     window_best.rgb.assign(cpu_contiguous_buffer, cpu_contiguous_buffer + frame_size);
                     window_best.score = score;
@@ -1819,12 +1823,16 @@ namespace lfs::io {
 
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
-                            requireCudaSuccess(
-                                cudaMemcpy(cpu_contiguous_buffer, gpu_rgb_buffer,
-                                           frame_size, cudaMemcpyDeviceToHost),
-                                "CUDA sharpness readback failed");
-                            frame_score = computeSharpnessScore(
-                                cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+                            const auto gpu_score = sharpness_scorer.scoreDevice(
+                                gpu_rgb_buffer, out_width, out_height, params.sharpness.algorithm);
+                            if (!gpu_score || (params.sharpness.window_mode &&
+                                               improves_window(*gpu_score))) {
+                                requireCudaSuccess(
+                                    cudaMemcpy(cpu_contiguous_buffer, gpu_rgb_buffer,
+                                               frame_size, cudaMemcpyDeviceToHost),
+                                    "CUDA sharpness readback failed");
+                            }
+                            frame_score = gpu_score ? *gpu_score : computeSharpnessScore(cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
                             if (params.sharpness.window_mode) {
                                 retain_window_candidate(frame_score);
                                 return;
