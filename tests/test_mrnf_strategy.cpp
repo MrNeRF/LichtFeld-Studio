@@ -1503,7 +1503,7 @@ TEST_F(MRNFStrategyTest, FreeSlotCountIsExactPastFloat32Precision) {
     for (const size_t rows : {b + 1, b + 3}) {
         SCOPED_TRACE(rows);
         // A broadcast view supplies the logical row count without allocating a large model.
-        splats.means() = one_mean.expand({rows, 3});
+        splats.means() = one_mean.expand(TensorShape{rows, 3});
         EXPECT_EQ(mrnf.free_count(), rows);
         EXPECT_EQ(mrnf.active_count(), 0u);
         EXPECT_EQ(igs.free_count(), rows);
