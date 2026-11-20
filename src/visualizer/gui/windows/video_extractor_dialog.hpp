@@ -80,6 +80,7 @@ namespace lfs::gui {
         [[nodiscard]] bool isVideoPlaying() const override;
         [[nodiscard]] bool openVideoPath(const std::filesystem::path& path) override;
         void shutdown() override;
+        void suspendInput() override;
         [[nodiscard]] bool supportsDirectDraw() const override { return true; }
         void preloadDirect(float w, float h, const lfs::vis::gui::PanelDrawContext& ctx,
                            float clip_y_min, float clip_y_max,

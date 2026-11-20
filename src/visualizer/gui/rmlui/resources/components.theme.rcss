@@ -576,3 +576,16 @@ button.window-control .window-maximize-box,
 button.window-control .window-restore-box {
     border-color: @{text_dim};
 }
+
+.window-pin-icon {
+    image-color: @{text_dim};
+}
+#pin-btn.pinned {
+    background-color: @{alpha(primary,0.16)};
+}
+#pin-btn.pinned:hover {
+    background-color: @{alpha(primary,0.28)};
+}
+#pin-btn.pinned .window-pin-icon {
+    image-color: @{primary};
+}

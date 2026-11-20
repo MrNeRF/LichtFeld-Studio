@@ -143,6 +143,16 @@ body.window-controls button.window-control {
     align-items: center;
     justify-content: center;
 }
+body.window-controls #pin-btn {
+    display: none;
+}
+body.window-controls #pin-btn.available {
+    display: flex;
+}
+.window-pin-icon {
+    width: 14dp;
+    height: 14dp;
+}
 button.window-control.maximized .window-icon-maximize {
     display: none;
 }

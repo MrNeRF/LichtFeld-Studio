@@ -259,11 +259,12 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100, desktop_requested_);
-        if (auto* native = nativeWindow()) {
-            SDL_SetWindowPosition(native, static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]));
-            SDL_SetWindowSize(native, static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3]));
-        }
+        const std::optional<WindowRectangle> bounds = desktop_requested_
+                                                          ? std::optional<WindowRectangle>{{static_cast<int>(desktop_bounds_[0]), static_cast<int>(desktop_bounds_[1]),
+                                                                                            static_cast<int>(desktop_bounds_[2]), static_cast<int>(desktop_bounds_[3])}}
+                                                          : std::nullopt;
+        rml_context_ = manager_->createContext(context_name_, bounds ? bounds->width : 100, bounds ? bounds->height : 100,
+                                               desktop_requested_, bounds);
         return rml_context_ != nullptr;
     }
 
@@ -327,7 +328,7 @@ namespace lfs::vis::gui {
         // across UnloadDocument(), where they immediately become dangling.
         live_inspector_resize_target_ = nullptr;
         close_button_ = nullptr;
-        minimize_button_ = maximize_button_ = nullptr;
+        pin_button_ = minimize_button_ = maximize_button_ = nullptr;
         close_button_bound_ = false;
         resize_cursor_override_.clear();
         if (document_) {
@@ -1227,14 +1228,19 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::WindowControlListener::ProcessEvent(Rml::Event& event) {
         auto* target = event.GetTargetElement();
-        while (target && target->GetId() != "minimize-btn" && target->GetId() != "maximize-btn" && target->GetId() != "title-text")
+        while (target && target->GetId() != "pin-btn" && target->GetId() != "minimize-btn" && target->GetId() != "maximize-btn" && target->GetId() != "title-text")
             target = target->GetParentNode();
         if (!target)
             return;
         const auto& id = target->GetId();
         auto& registry = PanelRegistry::instance();
         const std::string panel_id(host_->panelId());
-        if (id == "minimize-btn") {
+        if (id == "pin-btn") {
+            if (const auto pinned = host_->manager_->nativeWindowPinned(panel_id)) {
+                host_->manager_->setNativeWindowPinned(panel_id, !*pinned);
+                host_->syncWindowControls();
+            }
+        } else if (id == "minimize-btn") {
             if (host_->nativeWindow())
                 host_->manager_->minimizeNativeWindow(host_->rml_context_);
             else
@@ -1279,8 +1285,11 @@ namespace lfs::vis::gui {
             return;
         if (auto* native = nativeWindow(); native && state)
             state = (SDL_GetWindowFlags(native) & SDL_WINDOW_MAXIMIZED) ? FloatingWindowState::Maximized : FloatingWindowState::Normal;
-        if (presentation_ == state)
+        if (presentation_ == state) {
+            if (desktop_requested_)
+                syncWindowControls();
             return;
+        }
         presentation_ = state;
         syncWindowControls();
     }
@@ -1289,6 +1298,18 @@ namespace lfs::vis::gui {
         if (!document_)
             return;
         const bool allowed = floating_ && presentation_.has_value();
+        if (pin_button_) {
+            const auto pinned = manager_->nativeWindowPinned(panelId());
+            if (pin_button_->IsClassSet("available") != (allowed && pinned.has_value())) {
+                pin_button_->SetClass("available", allowed && pinned.has_value());
+                render_needed_ = direct_cache_dirty_ = true;
+            }
+            if (pin_button_->IsClassSet("pinned") != pinned.value_or(false)) {
+                pin_button_->SetClass("pinned", pinned.value_or(false));
+                pin_button_->SetAttribute("aria-pressed", pinned.value_or(false) ? "true" : "false");
+                render_needed_ = direct_cache_dirty_ = true;
+            }
+        }
         const auto desired = allowed ? windowState() : FloatingWindowState::Normal;
         const bool was_minimized = document_->IsClassSet("window-minimized");
         const bool was_maximized = document_->IsClassSet("window-maximized");
@@ -1319,7 +1340,7 @@ namespace lfs::vis::gui {
 
     std::optional<PanelDrawBounds> RmlPanelHost::titleControlsBounds() const {
         std::optional<PanelDrawBounds> bounds;
-        for (auto* control : {minimize_button_, maximize_button_, close_button_}) {
+        for (auto* control : {pin_button_, minimize_button_, maximize_button_, close_button_}) {
             if (!control || !control->IsVisible())
                 continue;
             const auto pos = control->GetAbsoluteOffset(Rml::BoxArea::Border);
@@ -1349,6 +1370,7 @@ namespace lfs::vis::gui {
         if (close_button_)
             close_button_->AddEventListener("click", &close_listener_);
         minimize_button_ = document_->GetElementById("minimize-btn");
+        pin_button_ = document_->GetElementById("pin-btn");
         maximize_button_ = document_->GetElementById("maximize-btn");
         if (auto* title = document_->GetElementById("title-bar"))
             title->AddEventListener("click", &window_control_listener_);
