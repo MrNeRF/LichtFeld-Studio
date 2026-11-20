@@ -1,3 +1,4 @@
+#include "io/cuda/sharpness_score.cuh"
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
@@ -8,6 +9,7 @@
 #include "io/video/frame_color_range.hpp"
 #include "io/video/probed_stream_rewind.hpp"
 #include "io/video/video_encoder.hpp"
+#include "io/cuda/sharpness_score.cuh"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 

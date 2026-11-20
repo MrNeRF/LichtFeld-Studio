@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#include "cuda/sharpness_score.cuh"
 #include "core/image_codecs.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/native_fs.hpp"
@@ -1581,6 +1582,7 @@ namespace lfs::io {
                 };
                 CandidateFrame window_best;
                 SharpnessScorer sharpness_scorer;
+                bool logged_cuda_sharpness = false;
                 const auto improves_window = [&](const double score) {
                     return window_best.rgb.empty() || score > window_best.score;
                 };
@@ -1825,6 +1827,10 @@ namespace lfs::io {
                         if (params.sharpness.enabled) {
                             const auto gpu_score = sharpness_scorer.scoreDevice(
                                 gpu_rgb_buffer, out_width, out_height, params.sharpness.algorithm);
+                            if (gpu_score && !logged_cuda_sharpness && out_width >= 3 && out_height >= 3) {
+                                LOG_DEBUG("Video extraction is using CUDA sharpness scoring");
+                                logged_cuda_sharpness = true;
+                            }
                             if (!gpu_score || (params.sharpness.window_mode &&
                                                improves_window(*gpu_score))) {
                                 requireCudaSuccess(
