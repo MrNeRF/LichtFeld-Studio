@@ -227,6 +227,10 @@ namespace lfs::io {
             mix_float(undistort.dst_cy * grid.scale_y);
             for (int i = 0; i < undistort.num_distortion; ++i)
                 mix_float(undistort.distortion[i]);
+            if (is_view(undistort)) {
+                for (const float value : undistort.view_rotation)
+                    mix_float(value);
+            }
             std::ostringstream key;
             key << lfs::core::path_to_utf8(path) << ":udr4_" << std::hex << hash;
             if (include_output_format)
@@ -348,6 +352,38 @@ namespace lfs::io {
             return output;
         }
 
+        // Every tensor here, the result included, lives on the caller's stream, which the kernels run on.
+        lfs::core::Tensor undistort_cached_rgb(lfs::core::Tensor tensor, const LoadParams& params) {
+            using namespace lfs::core;
+            const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+            const CUDAStreamGuard guard(stream);
+            if (tensor.dtype() == DataType::UInt8) {
+                tensor = tensor.to(DataType::Float32) / 255.0f;
+            }
+            tensor = tensor.clamp(0.0f, 1.0f).contiguous();
+            const auto scaled = lfs::core::prepare_undistort_params(
+                *params.undistort,
+                static_cast<int>(tensor.shape()[2]),
+                static_cast<int>(tensor.shape()[1]),
+                params.resize_factor,
+                params.max_width);
+            tensor = lfs::core::undistort_image(tensor, scaled, stream);
+            if (params.output_uint8) {
+                auto uint8_tensor = Tensor::empty(tensor.shape(), Device::CUDA, DataType::UInt8);
+                lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                    tensor.ptr<float>(),
+                    uint8_tensor.ptr<uint8_t>(),
+                    tensor.shape()[1],
+                    tensor.shape()[2],
+                    tensor.shape()[0],
+                    stream);
+                tensor = std::move(uint8_tensor);
+            } else {
+                tensor = quantize_rgb_to_u16_grid(tensor, stream);
+            }
+            return tensor;
+        }
+
     } // namespace
 
     const char* masked_image_fill_error() {
@@ -382,10 +418,33 @@ namespace lfs::io {
             if (!data || channels != 3)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
         };
-        if (decode_16bit) {
+        if (params.undistort && !decode_16bit && lfs::core::image_quantization_step(path) == 1.0f / 255.0f) {
+            // An 8-bit file decodes at 8 bits; the device widens it to the samples a 16-bit decode gives.
+            auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
+            const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
+            require_rgb(data, channels);
+            const auto stream = static_cast<cudaStream_t>(params.cuda_stream);
+            const auto bytes = upload_hwc(owned.get(), width, height, channels, stream);
+            auto staging = lfs::core::Tensor::empty(bytes.shape(), lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+            staging.set_stream(bytes.stream());
+            cuda::launch_uint8_to_uint16(bytes.ptr<uint8_t>(), static_cast<uint16_t*>(staging.data_ptr()),
+                                         bytes.numel(), bytes.stream());
+            if (params.masked_fill)
+                fill_masked_image(staging, *params.masked_fill, staging.stream());
+            return undistort_cached_rgb(hwc_to_chw(staging, 1, 0, false, stream), params);
+        }
+        if (decode_16bit || params.undistort) {
             auto [data, width, height, channels] = lfs::core::load_image_u16(path, 1, 0);
             const std::unique_ptr<uint16_t, decltype(&lfs::core::free_image)> owned(data, &lfs::core::free_image);
             require_rgb(data, channels);
+            if (params.undistort) {
+                // The mapping consumes source pixels at their original resolution.
+                auto raw = params;
+                raw.resize_factor = 1;
+                raw.max_width = 0;
+                raw.output_uint8 = false;
+                return undistort_cached_rgb(upload_rgb_image(owned.get(), width, height, channels, raw), params);
+            }
             return upload_rgb_image(owned.get(), width, height, channels, params);
         }
         auto [data, width, height, channels] = lfs::core::load_image(path, 1, 0);
@@ -744,6 +803,9 @@ namespace lfs::io {
 
                 if (from_cache) {
                     if (is_jpeg2k) {
+                        // An undistorted image cached losslessly: the decode and the conversions all run on the
+                        // caller's stream, which the result carries.
+                        const CUDAStreamGuard guard(static_cast<cudaStream_t>(params.cuda_stream));
                         auto tensor = nvcodec.decode_jpeg2k_16bit_from_memory_gpu(
                             jpeg_bytes, params.cuda_stream);
                         tensor = tensor.permute({2, 0, 1}).contiguous();
@@ -770,35 +832,8 @@ namespace lfs::io {
                     params.cuda_stream,
                     DecodeFormat::RGB, params.output_uint8);
 
-                if (params.undistort) {
-                    const bool restore_uint8 = params.output_uint8;
-                    if (tensor.dtype() == DataType::UInt8) {
-                        tensor = tensor.to(DataType::Float32) / 255.0f;
-                    }
-                    tensor = tensor.clamp(0.0f, 1.0f).contiguous();
-                    const auto scaled = lfs::core::prepare_undistort_params(
-                        *params.undistort,
-                        static_cast<int>(tensor.shape()[2]),
-                        static_cast<int>(tensor.shape()[1]),
-                        params.resize_factor,
-                        params.max_width);
-                    tensor = lfs::core::undistort_image(
-                        tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
-                    if (restore_uint8) {
-                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::CUDA, DataType::UInt8);
-                        lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                            tensor.ptr<float>(),
-                            uint8_tensor.ptr<uint8_t>(),
-                            tensor.shape()[1],
-                            tensor.shape()[2],
-                            tensor.shape()[0],
-                            static_cast<cudaStream_t>(params.cuda_stream));
-                        tensor = std::move(uint8_tensor);
-                    } else {
-                        tensor = quantize_rgb_to_u16_grid(
-                            tensor, static_cast<cudaStream_t>(params.cuda_stream));
-                    }
-                }
+                if (params.undistort)
+                    tensor = undistort_cached_rgb(std::move(tensor), params);
 
                 if (!params.skip_blob_cache) {
                     bool should_cache = false;
@@ -814,6 +849,8 @@ namespace lfs::io {
                         std::vector<uint8_t> cache_bytes;
                         if (params.undistort) {
                             try {
+                                // The encoder reads its input on the caller's stream, where the conversion runs too.
+                                const CUDAStreamGuard guard(static_cast<cudaStream_t>(params.cuda_stream));
                                 const auto encode_tensor = tensor.dtype() == DataType::UInt8
                                                                ? tensor.to(DataType::Float32) / 255.0f
                                                                : tensor;

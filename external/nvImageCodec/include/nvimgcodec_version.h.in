@@ -23,13 +23,15 @@
 #define NVIMGCODEC_VER_PATCH @PROJECT_VERSION_PATCH@
 #define NVIMGCODEC_VER_BUILD @PROJECT_VERSION_TWEAK@
 
-#define MAKE_SEMANTIC_VERSION(major, minor, patch) ((major * 1000) + (minor * 100) + patch)
-#define NVIMGCODEC_MAJOR_FROM_SEMVER(ver) (ver / 1000)
-#define NVIMGCODEC_MINOR_FROM_SEMVER(ver) ((ver % 1000) / 100)
-#define NVIMGCODEC_PATCH_FROM_SEMVER(ver) ((ver % 1000) % 100)
+// Two decimal digits are reserved for the minor and two for the patch component,
+// so packed values are unique and ordered only while both stay below 100.
+#define NVIMGCODEC_MAKE_SEMANTIC_VERSION(major, minor, patch) (((major) * 10000u) + ((minor) * 100u) + (patch))
+#define NVIMGCODEC_MAJOR_FROM_SEMVER(ver) ((ver) / 10000u)
+#define NVIMGCODEC_MINOR_FROM_SEMVER(ver) (((ver) % 10000u) / 100u)
+#define NVIMGCODEC_PATCH_FROM_SEMVER(ver) ((ver) % 100u)
 #define NVIMGCODEC_STREAM_VER(ver) \
     NVIMGCODEC_MAJOR_FROM_SEMVER(ver) << "." << NVIMGCODEC_MINOR_FROM_SEMVER(ver) << "." << NVIMGCODEC_PATCH_FROM_SEMVER(ver)
-    
-#define NVIMGCODEC_VER MAKE_SEMANTIC_VERSION(NVIMGCODEC_VER_MAJOR, NVIMGCODEC_VER_MINOR, NVIMGCODEC_VER_PATCH)
+
+#define NVIMGCODEC_VER NVIMGCODEC_MAKE_SEMANTIC_VERSION(NVIMGCODEC_VER_MAJOR, NVIMGCODEC_VER_MINOR, NVIMGCODEC_VER_PATCH)
 
 #endif // NVIMGCODEC_VERSION 

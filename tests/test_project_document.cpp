@@ -24,6 +24,7 @@
 #include "training/checkpoint.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
+#include "training/training_setup.hpp"
 #include "user_shader_sources.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 
@@ -7843,6 +7844,50 @@ namespace {
         adopt(relocated);
         EXPECT_EQ(params.optimization.bg_image_path, fs::path("cli-background.png"));
         EXPECT_EQ(params.optimization.ppisp_sidecar_path, fs::path("cli.ppisp"));
+    }
+
+    TEST(ProjectDocumentTest, HeadlessDatasetRunSkipsCamerasDisabledInTheProject) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        TemporaryDirectory temporary;
+        const auto project_path = temporary.path / "training.licht";
+        const auto dataset = temporary.path / "dataset";
+        fs::create_directories(dataset / "images");
+        for (const auto* name : {"a.png", "b.png", "c.png"})
+            write_solid_png(dataset / "images" / name, 1, 1);
+        std::ofstream(dataset / "transforms.json") << R"({
+            "w":1,"h":1,"fl_x":1,"fl_y":1,"cx":0.5,"cy":0.5,"frames":[
+            {"file_path":"images/a.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images/b.png","transform_matrix":[[1,0,0,1],[0,1,0,0],[0,0,1,0],[0,0,0,1]]},
+            {"file_path":"images/c.png","transform_matrix":[[1,0,0,2],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})";
+
+        // The project as saved after loading the dataset and disabling one camera.
+        lfs::core::param::TrainingParameters loaded_params;
+        loaded_params.dataset.data_path = dataset;
+        loaded_params.dataset.images = "images";
+        Scene edited;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(loaded_params, edited));
+        edited.setCameraTrainingEnabled(std::string("b.png"), false);
+        edited.removeNode("PointCloud", false);
+        auto document = make_empty_document(fixed_uuid(2392), 100);
+        bind_dataset(*document, dataset);
+        document->edit_scene_graph() = require_result(capture_scene_graph(edited, ScenePayloadBindings{}));
+        (void)require_result(document->save(project_path, save_options(2393, 200)));
+
+        // `--data-path training.licht --headless` adopts the project, then loads its dataset.
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        lfs::core::param::TrainingParameters params;
+        params.dataset_project = project_path;
+        params.optimization.headless = true;
+        adopt_project_training_parameters(params, require_result(reopened->parameters().snapshot()), dataset,
+                                          "images", reopened->references(), temporary.path);
+        params.disabled_camera_uids = require_result(disabled_camera_uids(reopened->scene_graph()));
+        Scene scene;
+        ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+
+        const auto active = scene.getActiveCameras();
+        EXPECT_EQ(active.size(), 2u);
+        EXPECT_TRUE(std::ranges::none_of(active, [](const auto& camera) { return camera->image_name() == "b.png"; }));
     }
 
     TEST(ProjectDocumentTest, EmbeddedDatasetRoundTripAndCompaction) {

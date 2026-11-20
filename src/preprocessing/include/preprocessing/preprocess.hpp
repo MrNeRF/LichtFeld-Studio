@@ -20,7 +20,8 @@ namespace lfs::preprocessing {
     enum class CachedModel : unsigned char {
         Sam2,
         Moge2,
-        Lpips
+        Lpips,
+        LlmDet
     };
 
     struct ModelDescriptor {
@@ -58,6 +59,9 @@ namespace lfs::preprocessing {
     [[nodiscard]] lfs::Result<core::nn::WeightFile> ensure_lpips_weights(bool allow_download);
 
     [[nodiscard]] lfs::Result<core::nn::WeightFile> ensure_sam2_weights(
+        bool allow_download, const std::function<bool()>& cancel_requested = {});
+
+    [[nodiscard]] lfs::Result<core::nn::WeightFile> ensure_llmdet_weights(
         bool allow_download, const std::function<bool()>& cancel_requested = {});
 
     using PreprocessProgressCallback = std::function<void(

@@ -84,6 +84,8 @@ log_option_value(BUILD_SAMPLES)
 option(BUILD_CVCUDA_SAMPLES "Build CVCUDA samples" OFF)
 log_option_value(BUILD_CVCUDA_SAMPLES)
 option(BUILD_DOCS "Build documentation" OFF)
+option(NVIMGCODEC_PYTHON_VERSIONS_STRICT
+       "Fail the configure if an interpreter listed in PYTHON_VERSIONS is missing" OFF)
 log_option_value(BUILD_DOCS)
 option(BUILD_EXTENSIONS "Build extensions modules" ON)
 log_option_value(BUILD_EXTENSIONS)
@@ -386,7 +388,7 @@ if(BUILD_EXTENSIONS)
     add_subdirectory(extensions)
 endif()
 
-if(UNIX)
+if(UNIX AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/coverity.sh")
 add_custom_target(coverity COMMAND ../coverity.sh
   WORKING_DIRECTORY
     ${CMAKE_CURRENT_BINARY_DIR}

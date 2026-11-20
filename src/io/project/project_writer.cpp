@@ -773,7 +773,7 @@ namespace lfs::io::project {
             if (*total > MAX_INDEX_UNCOMPRESSED_BYTES ||
                 *total > std::numeric_limits<std::size_t>::max()) {
                 return writer_error(
-                    lfs::ErrorCode::ResourceExhausted, path,
+                    lfs::ErrorCode::BoundsViolation, path,
                     "The project index is too large.",
                     std::format("decoded index size {} exceeds the {}-byte limit",
                                 *total, MAX_INDEX_UNCOMPRESSED_BYTES),

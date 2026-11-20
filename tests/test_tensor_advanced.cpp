@@ -1,11 +1,15 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <tuple>
 #include <vector>
 
 using namespace lfs::core;
@@ -30,6 +34,150 @@ TEST(TensorAdvancedTest, ArangeCreatesOnRequestedDevice) {
     const auto device = Tensor::arange(0.0f, 2.0f, 0.5f, Device::CUDA);
     EXPECT_EQ(device.device(), Device::CUDA);
     EXPECT_EQ(device.cpu().to_vector(), host.to_vector());
+}
+
+namespace {
+    constexpr int64_t kFloat32IntegerLimit = int64_t{1} << 24;
+
+    std::vector<int64_t> integer_values(const Tensor& tensor) {
+        const auto host = tensor.cpu();
+        if (host.dtype() == DataType::Int64)
+            return host.to_vector_int64();
+        const auto values = host.to_vector_int();
+        return {values.begin(), values.end()};
+    }
+
+    void expect_integer_range(const Tensor& rows, const DataType dtype, const Device device,
+                              const std::vector<int64_t>& expected) {
+        ASSERT_EQ(rows.dtype(), dtype);
+        ASSERT_EQ(rows.device(), device);
+        ASSERT_EQ(rows.shape(), TensorShape({expected.size()}));
+        EXPECT_EQ(integer_values(rows), expected);
+    }
+
+    const char* device_label(const Device device) {
+        return device == Device::CUDA ? "cuda" : "cpu";
+    }
+
+    Tensor arange_from_float_bounds(const float start, const float end, const float step, const Device device) {
+        LoadArgs args;
+        args.shape = TensorShape{};
+        args.device = device;
+        args.dtype = DataType::Int32;
+        args.args = std::tuple<float, float, float>{start, end, step};
+        return Tensor::load(LoadOp::Arange, args);
+    }
+
+    template <typename Step>
+    constexpr bool integer_arange_takes_step = requires(Step step) {
+        Tensor::arange(int64_t{0}, int64_t{4}, step, Device::CPU, DataType::Int64);
+    };
+} // namespace
+
+// Implicit narrowing would turn a step of 1.5 into 1.
+static_assert(integer_arange_takes_step<int> && integer_arange_takes_step<int64_t> &&
+              integer_arange_takes_step<size_t>);
+static_assert(!integer_arange_takes_step<float> && !integer_arange_takes_step<double>);
+
+// Through float32 the range [B, B+1) at B = 2^24 comes out empty and [B, B+4) as B + {0, 0, 2, 4}.
+TEST(TensorAdvancedTest, IntegerArangeIsExactPastFloat32Precision) {
+    constexpr int64_t b = kFloat32IntegerLimit;
+    for (const DataType dtype : {DataType::Int32, DataType::Int64}) {
+        for (const Device device : {Device::CPU, Device::CUDA}) {
+            SCOPED_TRACE(::testing::Message() << dtype_name(dtype) << " on " << device_label(device));
+            expect_integer_range(Tensor::arange(b, b + 1, 1, device, dtype), dtype, device, {b});
+            expect_integer_range(Tensor::arange(b, b + 4, 1, device, dtype), dtype, device, {b, b + 1, b + 2, b + 3});
+            expect_integer_range(Tensor::arange(b - 2, b + 3, 1, device, dtype), dtype, device,
+                                 {b - 2, b - 1, b, b + 1, b + 2});
+            expect_integer_range(Tensor::arange(3 * b + 1, 3 * b + 4, 1, device, dtype), dtype, device,
+                                 {3 * b + 1, 3 * b + 2, 3 * b + 3});
+            expect_integer_range(Tensor::arange(b + 5, b - 4, -3, device, dtype), dtype, device,
+                                 {b + 5, b + 2, b - 1});
+        }
+    }
+}
+
+TEST(TensorAdvancedTest, IntegerArangeWritesByteResultsDirectly) {
+    constexpr int64_t end = std::numeric_limits<int64_t>::max();
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        const auto before = PinnedMemoryAllocator::instance().get_stats();
+        const auto bytes = Tensor::arange(end - 3, end, 1, device, DataType::UInt8);
+        if (device == Device::CPU) {
+            const auto after = PinnedMemoryAllocator::instance().get_stats();
+            EXPECT_EQ((after.cache_hits - before.cache_hits) + (after.cache_misses - before.cache_misses), 1u);
+        }
+        EXPECT_EQ(bytes.device(), device);
+        ASSERT_EQ(bytes.dtype(), DataType::UInt8);
+        EXPECT_EQ(bytes.bytes(), 3u);
+        EXPECT_EQ(bytes.cpu().to_vector_uint8(), (std::vector<uint8_t>{252, 253, 254}));
+        const auto descending = Tensor::arange(1, -3, -1, device, DataType::UInt8);
+        EXPECT_EQ(descending.cpu().to_vector_uint8(), (std::vector<uint8_t>{1, 0, 255, 254}));
+    }
+}
+
+TEST(TensorAdvancedTest, IntegerArangeStepsAwayEmptyAndRejectsInvalidRanges) {
+    for (const DataType dtype : {DataType::Int32, DataType::Int64}) {
+        for (const Device device : {Device::CPU, Device::CUDA}) {
+            SCOPED_TRACE(::testing::Message() << dtype_name(dtype) << " on " << device_label(device));
+            expect_integer_range(Tensor::arange(int64_t{5}, int64_t{2}, 1, device, dtype), dtype, device, {});
+            expect_integer_range(Tensor::arange(int64_t{2}, int64_t{5}, -1, device, dtype), dtype, device, {});
+            expect_integer_range(Tensor::arange(int64_t{3}, int64_t{3}, 1, device, dtype), dtype, device, {});
+            EXPECT_THROW(Tensor::arange(int64_t{0}, int64_t{4}, 0, device, dtype), std::runtime_error);
+        }
+    }
+    EXPECT_THROW(Tensor::arange(int64_t{0}, int64_t{4}, 1, Device::CPU, DataType::Float32), std::runtime_error);
+    constexpr int64_t int32_max = std::numeric_limits<int32_t>::max();
+    expect_integer_range(Tensor::arange(int32_max, int32_max + 1, 1, Device::CPU, DataType::Int32), DataType::Int32,
+                         Device::CPU, {int32_max});
+    EXPECT_THROW(Tensor::arange(int32_max, int32_max + 2, 1, Device::CPU, DataType::Int32), std::runtime_error);
+    EXPECT_THROW(Tensor::arange(int32_max - 1, int32_max + 2, 1, Device::CPU, DataType::Int32), std::runtime_error);
+    expect_integer_range(Tensor::arange(int32_max - 1, int32_max + 2, 1, Device::CUDA, DataType::Int64),
+                         DataType::Int64, Device::CUDA, {int32_max - 1, int32_max, int32_max + 1});
+
+    constexpr int64_t int64_min = std::numeric_limits<int64_t>::min();
+    constexpr int64_t int64_max = std::numeric_limits<int64_t>::max();
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        expect_integer_range(Tensor::arange(int64_min, int64_max, int64_max, device, DataType::Int64),
+                             DataType::Int64, device, {int64_min, -1, int64_max - 1});
+        expect_integer_range(Tensor::arange(int64_max, int64_min, int64_min, device, DataType::Int64),
+                             DataType::Int64, device, {int64_max, -1});
+        EXPECT_THROW(Tensor::arange(int64_min, int64_max, 1, device, DataType::Int64), std::runtime_error);
+    }
+}
+
+// Int32 values from whole float bounds were summed in float32: B + 1 came out as B.
+TEST(TensorAdvancedTest, Int32ArangeFromWholeFloatBoundsIsExactPastFloat32Precision) {
+    constexpr float start = static_cast<float>(kFloat32IntegerLimit);
+    constexpr size_t count = 10;
+    std::vector<int64_t> expected(count);
+    for (size_t i = 0; i < count; ++i)
+        expected[i] = kFloat32IntegerLimit + static_cast<int64_t>(i);
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        expect_integer_range(arange_from_float_bounds(start, start + static_cast<float>(count), 1.0f, device),
+                             DataType::Int32, device, expected);
+    }
+}
+
+// Fractional bounds keep the float32 sum: 0.9f + 0.1f rounds to 1.0f, the double sum 0.99999998 truncates to 0.
+TEST(TensorAdvancedTest, Int32ArangeFromFractionalFloatBoundsKeepsTheFloatSum) {
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        expect_integer_range(arange_from_float_bounds(0.9f, 1.5f, 0.1f, device), DataType::Int32, device,
+                             {0, 1, 1, 1, 1, 1, 1});
+        expect_integer_range(arange_from_float_bounds(2.5f, -1.0f, -0.5f, device), DataType::Int32, device,
+                             {2, 2, 1, 1, 0, 0, 0});
+    }
+}
+
+TEST(TensorAdvancedTest, FractionalInt32ArangeEndsAtIntMax) {
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_label(device));
+        expect_integer_range(arange_from_float_bounds(2147483520.0f, 2147483648.0f, 63.5f, device),
+                             DataType::Int32, device, {2147483520, 2147483520, 2147483647});
+    }
 }
 
 TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {

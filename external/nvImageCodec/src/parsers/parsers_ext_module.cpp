@@ -17,6 +17,7 @@
 
 #include "imgproc/exception.h"
 #include "log_ext.h"
+#include "parsers/codec_file_extensions.h"
 #include "parsers/jpeg.h"
 #include "parsers/jpeg2k.h"
 #include <nvimgcodec.h>
@@ -29,8 +30,12 @@ namespace nvimgcodec {
             : framework_(framework), jpeg_parser_plugin_(framework), jpeg2k_parser_plugin_(framework) {
             framework->registerParser(framework->instance, jpeg_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
             framework->registerParser(framework->instance, jpeg2k_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
+            registerCodecFileExtensions(framework, JPEGParserPlugin::codecName(), JPEGParserPlugin::fileExtensions());
+            registerCodecFileExtensions(framework, JPEG2KParserPlugin::codecName(), JPEG2KParserPlugin::fileExtensions());
         }
         ~ParsersExtension() {
+            unregisterCodecFileExtensions(framework_, JPEGParserPlugin::codecName(), JPEGParserPlugin::fileExtensions());
+            unregisterCodecFileExtensions(framework_, JPEG2KParserPlugin::codecName(), JPEG2KParserPlugin::fileExtensions());
             framework_->unregisterParser(framework_->instance, jpeg_parser_plugin_.getParserDesc());
             framework_->unregisterParser(framework_->instance, jpeg2k_parser_plugin_.getParserDesc());
         }
@@ -41,7 +46,7 @@ namespace nvimgcodec {
                 NVIMGCODEC_LOG_TRACE(framework, "nvimgcodec_builtin_parsers", "parsers_extension_create");
                 CHECK_NULL(extension)
                 *extension = reinterpret_cast<nvimgcodecExtension_t>(new ParsersExtension(framework));
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_INVALID_PARAMETER;
             }
             return NVIMGCODEC_STATUS_SUCCESS;
@@ -53,7 +58,7 @@ namespace nvimgcodec {
                 auto ext_handle = reinterpret_cast<nvimgcodec::ParsersExtension*>(extension);
                 NVIMGCODEC_LOG_TRACE(ext_handle->framework_, "nvimgcodec_builtin_parsers", "parsers_extension_destroy");
                 delete ext_handle;
-            } catch (const std::runtime_error& e) {
+            } catch (const std::exception& e) {
                 return NVIMGCODEC_STATUS_INVALID_PARAMETER;
             }
             return NVIMGCODEC_STATUS_SUCCESS;

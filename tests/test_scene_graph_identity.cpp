@@ -1263,6 +1263,89 @@ TEST(SceneCameraAssetPathTest, RebaseRewritesUnderOldRootAndRefreshesNodeMirrors
     EXPECT_TRUE(outside_node->mask_path.empty());
 }
 
+TEST(SceneCameraAssetPathTest, RebaseSourceFormatsAndImageFolderOverrides) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count <= 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+
+    struct Source {
+        const char* root;
+        const char* images;
+        const char* separator;
+        const char* expected_images;
+    };
+    const Source sources[] = {
+        {R"(D:\datasets\zandspêeltuin)", R"(images\original)", "\\", "images/original"},
+        {"D:/datasets/zandspêeltuin/", "images/original", "/", "images/original"},
+        {R"(\\server\share\dataset)", R"(images\original)", "\\", "images/original"},
+        {"/datasets/zandspêeltuin", "images/original", "/", "images/original"},
+#ifndef _WIN32
+        {R"(/datasets/literal\name)", R"(images/literal\folder)", "/", R"(images/literal\folder)"},
+#endif
+    };
+    const auto destination = std::filesystem::temp_directory_path() / "lfs-rebased";
+    for (const auto& source : sources) {
+        SCOPED_TRACE(source.root);
+        const auto root = lfs::core::utf8_to_path(source.root);
+        auto path = [&](const std::string& suffix) {
+            return lfs::core::utf8_to_path(std::string(source.root) + source.separator + suffix);
+        };
+        auto camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "frame.png",
+            path(std::string(source.images) + source.separator + "rigA" + source.separator + "frame.png"),
+            path("masks/rigA/frame.png"), 64, 64, 1, 0,
+            path("depth/rigA/frame.exr"), path("normals/rigA/frame.png"));
+        lfs::core::Scene scene;
+        const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
+        scene.addCamera("frame.png", group, camera);
+        auto other_camera = std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f, Tensor(), Tensor(),
+            lfs::core::CameraModelType::PINHOLE, "frame.png",
+            path(std::string(source.images) + source.separator + "rigB" + source.separator + "frame.png"),
+            std::filesystem::path(), 64, 64, 2, 0);
+        scene.addCamera("other-frame.png", group, other_camera);
+        scene.rebaseCameraAssetPaths(root, destination);
+        const auto original_images = destination / source.expected_images;
+        EXPECT_EQ(camera->image_path(), destination / source.expected_images / "rigA/frame.png");
+        EXPECT_EQ(camera->mask_path(), destination / "masks/rigA/frame.png");
+        EXPECT_EQ(camera->depth_path(), destination / "depth/rigA/frame.exr");
+        EXPECT_EQ(camera->normal_path(), destination / "normals/rigA/frame.png");
+
+        scene.rebaseCameraAssetPaths(original_images, destination / "photos");
+        EXPECT_EQ(camera->image_path(), destination / "photos/rigA/frame.png");
+        EXPECT_EQ(other_camera->image_path(), destination / "photos/rigB/frame.png");
+        EXPECT_EQ(camera->mask_path(), destination / "masks/rigA/frame.png");
+        EXPECT_EQ(lfs::core::utf8_to_path(scene.getNode("frame.png")->image_path),
+                  destination / "photos/rigA/frame.png");
+
+        // A sibling prefix and an escaping path must not be captured by root rebasing.
+        auto sibling = std::string(source.root);
+        while (sibling.ends_with('/'))
+            sibling.pop_back();
+        const auto outside = lfs::core::utf8_to_path(sibling + "-other/frame.png");
+        camera->set_depth_path(outside);
+        camera->set_normal_path(path("../elsewhere/frame.png"));
+        const auto normal = camera->normal_path();
+        const auto embedded_mask = lfs::core::generate_uuid_v4();
+        const auto mask = path("masks/embedded.png");
+        camera->set_mask_path(mask, embedded_mask);
+        scene.rebaseCameraAssetPaths(root, destination);
+        EXPECT_EQ(camera->depth_path(), outside);
+        EXPECT_EQ(camera->normal_path(), normal);
+        EXPECT_EQ(camera->mask_path(), mask);
+        EXPECT_EQ(camera->mask_asset_uuid(), embedded_mask);
+        if (std::string_view(source.root).starts_with("\\\\")) {
+            const std::filesystem::path external("/server/share/dataset/external.png");
+            camera->set_normal_path(external);
+            scene.rebaseCameraAssetPaths(root, destination);
+            EXPECT_EQ(camera->normal_path(), external);
+        }
+    }
+}
+
 // Fails when the camera caches are rebuilt without a lock: the training thread and the UI thread both rebuild them
 // after every render invalidation (adding a crop box before starting training is enough) and free the cache buffer
 // twice, which aborts with heap corruption.

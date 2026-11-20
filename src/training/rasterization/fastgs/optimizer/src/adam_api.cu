@@ -145,6 +145,26 @@ namespace fast_lfs::optimizer {
             launch.template operator()<false>();
     }
 
+    void ray_depth_propose(const RayDepthStepArgs& args, cudaStream_t stream) {
+        if (args.n <= 0)
+            return;
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(args.state, "ray_depth_state");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(args.means_grad, "means_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(args.camera, "ray_depth_camera");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(args.proposals, "ray_depth_proposals");
+        constexpr int kBS = 256;
+        kernels::adam::ray_depth_propose_cu<<<(args.n + kBS - 1) / kBS, kBS, 0, stream>>>(args);
+        LFS_CUDA_LAUNCH_CHECK(stream, "ray_depth_propose");
+    }
+
+    void ray_depth_commit(const RayDepthStepArgs& args, cudaStream_t stream) {
+        if (args.n <= 0)
+            return;
+        constexpr int kBS = 256;
+        kernels::adam::ray_depth_commit_cu<<<(args.n + kBS - 1) / kBS, kBS, 0, stream>>>(args);
+        LFS_CUDA_LAUNCH_CHECK(stream, "ray_depth_commit");
+    }
+
     void joint_encode_zero_rows_at_indices(
         std::uint8_t* packed,
         float* bounds,

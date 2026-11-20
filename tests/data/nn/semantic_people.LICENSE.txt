@@ -1,0 +1,11 @@
+SPDX-License-Identifier: CC-BY-3.0
+
+Tears of Steel (2012), directed by Ian Hubert.
+(CC) Blender Foundation | mango.blender.org
+https://mango.blender.org/sharing/
+https://mango.blender.org/about/
+https://creativecommons.org/licenses/by/3.0/
+
+Derived from the movie frame at approximately 509 seconds, resized to 640x268.
+Video source: https://download.blender.org/demo/movies/ToS/
+Only the video frame is included; no soundtrack is distributed.

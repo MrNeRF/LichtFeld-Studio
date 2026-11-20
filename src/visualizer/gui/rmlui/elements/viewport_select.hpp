@@ -37,6 +37,13 @@ namespace lfs::vis::gui {
     public:
         explicit ViewportSelect(const Rml::String& tag) : FormControlLayout(tag) {}
 
+        void SetInnerRML(const Rml::String& rml) override {
+            // Options move into the widget's non-DOM selectbox after layout.
+            // Element::SetInnerRML alone cannot remove them on replacement.
+            RemoveAll();
+            Rml::ElementFormControlSelect::SetInnerRML(rml);
+        }
+
     protected:
         void OnRender() override {
             if (constrained_ && (!IsSelectBoxVisible() || constrained_bounds_ != SelectViewportScope::bounds())) {

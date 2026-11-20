@@ -95,6 +95,15 @@ namespace lfs::vis {
         check(true);
         EXPECT_EQ(wakes, settled); // An unchanged tool does not request work.
         EXPECT_EQ(rm->pendingDirtyMask(), 0u);
+        frame.frame_dirty = DirtyFlag::CAMERA | DirtyFlag::OVERLAY;
+        rm->configureSurfacePicking(frame);
+        EXPECT_FALSE(buildViewportRenderRequest(frame, {640, 480}).require_exact_depth);
+        frame.frame_dirty |= DirtyFlag::VIEWPORT; // Explicit point request during motion.
+        rm->configureSurfacePicking(frame);
+        EXPECT_TRUE(buildViewportRenderRequest(frame, {640, 480}).require_exact_depth);
+        frame.frame_dirty = 0;
+        rm->configureSurfacePicking(frame);
+        EXPECT_TRUE(buildViewportRenderRequest(frame, {640, 480}).require_exact_depth);
         const auto crop = sm->getScene().addCropBox("crop", sm->getScene().getNode(group)->id);
         sm->selectNode(crop);
         registry.setActiveTool("builtin.align");

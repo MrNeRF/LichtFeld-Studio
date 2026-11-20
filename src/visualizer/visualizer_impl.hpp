@@ -499,6 +499,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
         friend class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+        friend class VisualizerImplResetTest_CleanCloseDeletesAutosaveSidecarOnTeardown_Test;
         friend class VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;

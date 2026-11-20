@@ -77,6 +77,7 @@ namespace {
 
         auto document = require_result(ProjectDocument::open(destination));
         EXPECT_FALSE(require_result(document.bound_checkpoint_uuid()).has_value());
+        EXPECT_TRUE(require_result(disabled_camera_uids(document.scene_graph())).empty());
         const auto parameters = require_result(document.parameters().snapshot());
         EXPECT_EQ(parameters.mrnf_current.iterations, 1234u);
         EXPECT_EQ(parameters.dataset.images, "images");

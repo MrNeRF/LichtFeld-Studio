@@ -37,6 +37,11 @@ namespace lfs::io::project {
 
     class AsyncSplatCapture;
 
+    enum class SplatCaptureFallback {
+        Synchronous,
+        Defer,
+    };
+
     class LFS_IO_API SplatChapterPayload {
     public:
         [[nodiscard]] static lfs::Result<SplatChapterPayload>
@@ -50,11 +55,14 @@ namespace lfs::io::project {
         // Enqueue a device-only snapshot on a dedicated stream. Before returning,
         // order later source-stream writes after the snapshot without a host wait.
         // A null pointer requests synchronous capture() when device capture is
-        // unavailable (including insufficient allocation headroom).
+        // unavailable. Defer reports ResourceExhausted with RetryableWithBackoff
+        // instead of requesting a synchronous CUDA capture when allocation
+        // headroom is unavailable.
         [[nodiscard]] static lfs::Result<std::unique_ptr<AsyncSplatCapture>>
         start_async_capture(const lfs::core::SplatData& model,
                             SplatSourceKind source_kind,
-                            bool is_training_model);
+                            bool is_training_model,
+                            SplatCaptureFallback fallback = SplatCaptureFallback::Synchronous);
 
         [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
             return bytes_;

@@ -38,6 +38,8 @@ namespace lfs::vis {
         // Timeline value signalled by the compute submission that produced
         // this exact ring image. Graphics-queue readbacks wait this value.
         std::uint64_t completion_value = 0;
+        // Coverage belongs to this published image, including cached-frame reuse.
+        bool full_exact_depth = false;
     };
 
     // Host bookkeeping for the 3-deep frame ring × 6 logical output slots.

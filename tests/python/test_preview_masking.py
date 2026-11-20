@@ -402,18 +402,20 @@ def test_settled_chrome_reflow_moves_image_proposal_and_markers_together(panel_m
     assert f"left: {x:.3f}dp; top: {y:.3f}dp;" in markers.inner_rml
 
 
-def test_refinement_only_uses_a_prior_after_prompt_changes(panel_modules):
+@pytest.mark.parametrize("matched_objects", (-1, 1, 2))
+def test_refinement_only_uses_a_prior_after_prompt_changes(panel_modules, matched_objects):
     module, _ = panel_modules
     value = editor(module)
     value.point(0.3, 0.5, 1)
     value.request = 9
     value.submitted_signature = value.signature
     value.accept({"request": 9, "revision": "revision-a", "phase": "ready",
-                  "overlays": ["one.png"], "scores": [0.9]})
+                  "overlays": ["one.png"], "scores": [0.9], "matched_objects": matched_objects})
     assert not value.can_refine
     value.point(0.8, 0.8, 0)
-    assert value.can_refine
+    assert value.can_refine == (matched_objects <= 1)
     value.remove_selected()
+    assert value.refinement is None
     assert not value.can_refine, "deletion must not retain a mask prior containing the deleted constraint"
 
 
@@ -547,6 +549,17 @@ def test_mask_keymap_respects_rebinding_unbinding_modifiers_and_capture(panel_mo
     assert len(value.draft.points) == 1
     panel._on_keydown(event(key_identifier=13, ctrl_key=True))
     assert not value.draft.points
+    generated = []
+    monkeypatch.setattr(keymap, "get_action_for_key", lambda *args: keymap.Action.IMAGE_PREVIEW_GENERATE)
+    monkeypatch.setattr(panel, "_sam_generate", lambda **kwargs: generated.append(kwargs))
+    panel._set_sam_method("semantic")
+    panel._on_keydown(event(Element("textarea"), key_identifier=13))
+    assert not generated
+    panel._on_keydown(event(key_identifier=13))
+    assert generated == [{"semantic": True}]
+    panel._set_sam_method("manual")
+    panel._on_keydown(event(key_identifier=13))
+    assert generated[-1] == {"semantic": False}
 
 
 def test_candidate_texture_is_reused_and_released_before_its_owner(panel_modules, monkeypatch):
@@ -652,11 +665,17 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._sam_progress = (0, 0, 1)
 
     class Control(Element):
+        option_updates = 0
+
         def get_attribute(self, name, default):
             return self.attributes.get(name, default)
 
         def get_inner_rml(self):
-            return getattr(self, "inner_rml", "")
+            return ""  # RmlUI selects store their options outside inner RML.
+
+        def set_inner_rml(self, value):
+            self.option_updates += 1
+            super().set_inner_rml(value)
 
         def set_class(self, name, enabled):
             self.attributes[name] = enabled
@@ -664,11 +683,16 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     controls = {name: Control() for name in (
         "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls",
         "sam-tracking", "sam-track-first", "sam-track-last", "sam-track-direction",
-        "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading", "sam-hint")}
+        "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading", "sam-hint", "sam-generate-row", "sam-semantic-find-row")}
     panel._doc = doc = _DocumentStub(controls)
     panel._show_help = True
     controls["sam-hint"].set_text("image_preview.sam_tracking_hint")
     panel._update_sam_sequence(doc, False)
+    direction = controls["sam-track-direction"]
+    panel._sam_track_direction = "reverse"
+    panel._update_sam_sequence(doc, False)
+    assert direction.option_updates == 1
+    assert direction.get_attribute("value", "") == "reverse"
     assert controls["sam-hint"].text == "image_preview.sam_tracking_hint"
     last = controls["sam-track-last"]
     assert last.get_attribute("value", "") == "7"
@@ -683,18 +707,42 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._update_sam_page(doc)
     assert controls["sam-controls"].scroll_top == 0
     assert controls["sam-frame-controls"].attributes["hidden"]
+    assert controls["sam-generate-row"].attributes["hidden"]
     assert not controls["sam-tracking"].attributes["hidden"]
     assert controls["sam-page-sequence"].attributes["aria-pressed"] == "true"
     panel._set_sam_page("frame")
     panel._update_sam_page(doc)
     assert not controls["sam-frame-controls"].attributes["hidden"]
+    assert not controls["sam-generate-row"].attributes["hidden"]
     assert controls["sam-tracking"].attributes["hidden"]
+    assert controls["sam-semantic-find-row"].attributes["hidden"]
+    panel._sam_method = "semantic"
+    panel._update_sam_page(doc)
+    assert controls["sam-generate-row"].attributes["hidden"]
+    assert not controls["sam-semantic-find-row"].attributes["hidden"]
+    panel._set_sam_page("sequence")
+    panel._update_sam_page(doc)
+    assert controls["sam-semantic-find-row"].attributes["hidden"]
+    panel._sam_method = "manual"
+    panel._set_sam_page("frame")
+    panel._update_sam_page(doc)
     assert value.request == 7 and value.draft.points == [(.3, .5, 1)]
     panel._update_sam_sequence(doc, False)
     assert last.get_attribute("value", "") == ""
     panel._path_stat_cache["frame.png"] = (True, 11, 22)
     submitted = []
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append(kw), raising=False)
+    value.matched_objects = 0
+    panel._update_sam_sequence(doc, False)
+    assert controls["sam-track"].has_attribute("disabled")
+    panel._sam_track()
+    assert not submitted
+    assert value.error == "image_preview.sam_semantic_no_matches"
+    panel._sam_tracking_request = 9
+    panel._update_sam_sequence(doc, True)
+    assert not controls["sam-track"].has_attribute("disabled")
+    panel._sam_tracking_request = 0
+    value.matched_objects = -1
     panel._sam_track()
     assert not submitted
     assert value.error == "image_preview.sam_range_invalid"
@@ -703,6 +751,12 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._update_sam_sequence(doc, False)
     assert panel._sam_track_last == 5
     assert last.get_attribute("value", "") == "6"
+    assert direction.option_updates == 1
+    translate = module.lf.ui.tr
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translate(key) + " translated")
+    panel._update_sam_sequence(doc, False)
+    assert direction.option_updates == 2
+    assert direction.get_attribute("value", "") == "reverse"
 
 
 def test_retaining_another_candidate_preserves_its_native_refinement_identity(tracked_sequence, monkeypatch):
@@ -1168,6 +1222,295 @@ def test_saving_after_releasing_sam_does_not_reopen_gpu_inspection(tracked_seque
     assert panel._mask_paths == [module.Path("masks/frame.png.png")]
 
 
+@pytest.mark.parametrize("all_categories", (False, True))
+def test_semantic_search_reuses_submit_with_owned_tokens_and_no_manual_geometry(panel_modules, monkeypatch, all_categories):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(.25, .5, 1)
+    value.set_box((.1, .2), (.8, .9))
+    original = value.signature
+    value.semantic_categories = tuple(module.SEMANTIC_CATEGORIES) if all_categories else ("person",)
+    value.semantic_text = "PERSON\nred car"
+    value.request, value.phase, value.overlays = 42, "ready", [object()]
+    panel._preview_state = "ready"
+    panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append((a, kw)) or 77, raising=False)
+    panel._sam_generate(semantic=True)
+    assert len(submitted) == 1
+    args, kwargs = submitted[0]
+    assert args[4:6] == ([], None)
+    assert "weights" not in kwargs["semantic"]
+    assert kwargs["semantic"]["confidence"] == .4
+    descriptions = kwargs["semantic"]["descriptions"]
+    assert len(descriptions) == len(value.semantic_categories) + 1  # PERSON shares the preset embedding.
+    assert descriptions[0] == [101, 2711, 1012, 102]
+    assert all(isinstance(row, list) for row in descriptions)
+    assert value.signature == original
+    assert value.request == 77 and value.phase == "queued" and not value.overlays
+    panel._metadata.close()
+
+
+def test_semantic_settings_preserve_manual_edits_and_sequence_approval(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(.5, .5, 1)
+    original, edits = value.signature, list(value.edits)
+    proposal = object()
+    value.request, value.phase, value.overlays, value.scores = 42, "ready", [proposal], [.9]
+    value.refinement, value.refinement_object_count = (42, 0), 2
+    panel._sam_add_category(event(value="person"))
+    panel._sam_add_category(event(value="person"))  # Programmatic select updates are idempotent.
+    panel._sam_semantic_edit("semantic_text", "red car")
+    panel._sam_set_semantic_confidence("65")
+    assert value.semantic_confidence == 65
+    assert panel._sam_semantic_payload()["confidence"] == .65
+    panel._sam_set_semantic_confidence("nan")
+    assert value.semantic_confidence == 65
+    assert value.signature == original and value.edits == edits
+    assert value.semantic_categories == ("person",)
+    assert value.phase == "ready" and value.request == 42 and value.overlay is proposal
+    assert value.scores == [.9] and value.refinement == (42, 0) and value.refinement_object_count == 2
+    value.bind("next-frame.png", "revision-b")
+    assert value.semantic_categories == ("person",)
+    assert value.semantic_text == "red car"
+    assert value.semantic_confidence == 65
+    assert panel._sam_apply_reset("semantic_confidence", panel._sam_reset_default("semantic_confidence"))
+    assert value.semantic_confidence == 40
+    assert not panel._sam_apply_reset("unrelated", 1)
+    value.phase = "predicting"
+    assert not panel._sam_apply_reset("semantic_confidence", 65)
+    assert value.semantic_confidence == 40
+    value.phase = "idle"
+    panel._sam_remove_category("person")
+    assert value.semantic_categories == ()
+    assert value.edits == edits
+    panel._metadata.close()
+
+
+
+@pytest.mark.parametrize("target", ["dataset", "unbound", "read_only"])
+def test_semantic_proposal_apply_availability_explains_missing_dataset_target(panel_modules, monkeypatch, target):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    panel._sam_method = "semantic"
+    value.request, value.phase, value.overlays = 42, "ready", [object()]
+    class Button(Element):
+        def set_class(self, name, enabled):
+            self.attributes["class"] = name if enabled else ""
+    buttons = {name: Button("button") for name in ("sam-apply", "sam-exclude")}
+    doc = _DocumentStub(buttons)
+    node = None if target == "unbound" else SimpleNamespace(read_only=target == "read_only")
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kwargs: node)
+    panel._update_sam(doc)
+    for button in buttons.values():
+        assert button.has_attribute("disabled") == (target != "dataset")
+        if target != "dataset":
+            assert button.attributes["title"] == "image_preview.sam_apply_dataset"
+    panel._sam_semantic_edit("semantic_text", "chair")
+    panel._update_sam(doc)
+    assert value.request == 42 and value.phase == "ready" and value.overlays
+    assert buttons["sam-apply"].has_attribute("disabled") == (target != "dataset")
+    panel._metadata.close()
+
+
+def test_semantic_category_menu_tracks_repeated_additions_and_removals(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = editor(module)
+    panel._sam_method = "semantic"
+    panel._sam_semantic_ui_state = None
+    category = Element("select")
+    doc = _DocumentStub({"sam-semantic-category": category})
+    panel._doc = doc
+    records = []
+    panel._handle = SimpleNamespace(update_record_list=lambda name, rows: records.append(rows),
+                                    dirty=lambda name: None, dirty_all=lambda: None)
+    for selected in (("person",), (), ("chair",), ("chair", "person"), ("person",), ()):
+        current = panel._mask_editor.semantic_categories
+        for key in current:
+            if key not in selected:
+                panel._sam_remove_category(key)
+        for key in selected:
+            panel._sam_add_category(event(value=key))
+        panel._update_sam_semantic(doc)
+        assert [row["value"] for row in records[-1]] == list(selected)
+        for key in module.SEMANTIC_CATEGORIES:
+            assert (f'value="{key}"' in category.inner_rml) == (key not in selected)
+        assert category.attributes["value"] == ""
+    panel._metadata.close()
+
+
+@pytest.mark.parametrize("description", ("cat " * 254, "cat " * 130 + "\n" + "dog " * 130))
+def test_semantic_validation_does_not_queue_or_drop_tracking(panel_modules, monkeypatch, description):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.semantic_text = description
+    value.request, value.phase, value.overlays = 42, "ready", [object()]
+    panel._preview_state = "ready"
+    panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
+    calls = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: calls.append(kw), raising=False)
+    panel._sam_generate(semantic=True)
+    assert not calls
+    assert value.phase == "ready" and value.request == 42 and value.overlays
+    assert value.error == "image_preview.sam_semantic_text_error"
+    panel._sam_semantic_edit("semantic_text", "person")
+    assert not value.error and value.phase == "ready" and value.request == 42
+    def fail_submit(*args, **kwargs):
+        raise RuntimeError("submission failed")
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", fail_submit)
+    panel._sam_generate(semantic=True)
+    assert value.error == "submission failed"
+    assert value.phase == "ready" and value.request == 42 and value.overlays
+    value.semantic_text = "person " * 76
+    value.phase = "tracking"
+    panel._sam_tracking_request = 27
+    panel._sam_semantic_edit("semantic_text", "cat")
+    panel._sam_generate(semantic=True)
+    assert panel._sam_tracking_request == 27 and not calls
+    assert value.semantic_text == "person " * 76
+    panel._metadata.close()
+
+
+def test_semantic_metadata_and_lexical_resource_retire_with_the_editor(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.semantic_categories = ("person",)
+    value.request = 7
+    assert value.accept({"request": 7, "revision": "revision-a", "phase": "ready",
+                         "overlays": [object()], "scores": [0], "matched_objects": 0})
+    assert value.matched_objects == 0
+    panel._sam_tokenizer = object()
+    closed = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_close", lambda: closed.append(True))
+    panel._sam_cancel()
+    assert closed == [True] and panel._sam_tokenizer is None
+    assert value.matched_objects == -1 and value.request == 0
+    assert value.semantic_categories == ("person",)
+    assert not value.accept({"request": 7, "revision": "revision-a", "phase": "ready", "overlays": [object()]})
+    panel._metadata.close()
+
+
+def test_selection_methods_preserve_draft_and_proposal_and_do_not_edit_hidden_controls(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.point(.3, .5, 1)
+    value.request, value.phase, value.overlays = 7, "ready", [object()]
+    value.semantic_text = "person"
+    original = (value.draft, value.request, value.overlays)
+    panel._set_sam_method("semantic")
+    panel._sam_edit("remove_selected")
+    panel._sam_pointer(None)  # Hidden manual controls must not receive canvas input.
+    assert value.draft.points == [(.3, .5, 1)]
+    assert (value.draft, value.request, value.overlays) == original
+    panel._set_sam_method("manual")
+    assert value.semantic_text == "person"
+    assert (value.draft, value.request, value.overlays) == original
+    panel._metadata.close()
+
+
+def test_new_review_resets_semantic_fields_in_the_bound_view(panel_modules):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor.semantic_text = "person"
+    panel._mask_editor.semantic_confidence = 70
+    panel._sam_semantic_ui_state = (("person",), 0, False)
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append, request_update=lambda: None)
+    panel.open([module.Path("other.png")], [None], 0, assisted=True)
+    assert not panel._mask_editor.semantic_text
+    assert "semantic_text" in dirty
+    assert "semantic_confidence" in dirty
+    assert panel._mask_editor.semantic_confidence == 40
+    panel._sam_semantic_edit("semantic_text", "person")
+    assert panel._sam_semantic_payload()["confidence"] == .4
+    assert panel._sam_semantic_ui_state is None
+    panel._metadata.close()
+
+
+def test_semantic_no_match_keeps_exportable_mask_without_uploading_an_empty_overlay(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.request = 9
+    mask = object()
+    value.accept({"request": 9, "revision": "revision-a", "phase": "ready",
+                  "overlays": [mask], "scores": [0], "matched_objects": 0})
+    panel._preview_state = "ready"
+    def unexpected_upload(*args, **kwargs):
+        raise AssertionError("An empty semantic result has no visible selection")
+    monkeypatch.setattr(module.lf.ui, "DynamicTexture", unexpected_upload, raising=False)
+    released = []
+    monkeypatch.setattr(module.lf.ui, "release_rml_texture", released.append, raising=False)
+    panel._sam_texture = object()
+    panel._sam_texture_source = "previous-selection"
+    overlay = Element()
+    panel._update_sam_geometry(_DocumentStub({"sam-overlay": overlay}))
+    assert "hidden" in overlay.attributes["class"]
+    assert released == ["previous-selection"]
+    assert value.overlay is mask
+    panel._metadata.close()
+
+
+def test_empty_semantic_selection_cannot_keep_all_pixels_hidden_but_can_exclude_none(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.phase, value.overlays, value.matched_objects = "ready", [object()], 0
+    panel._path_stat_cache["frame.png"] = (True, 100, 200)
+    monkeypatch.setattr(panel, "_current_camera_node", lambda **kw: SimpleNamespace(uuid="camera", read_only=False))
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append((a, kw)) or 10, raising=False)
+    panel._sam_apply(False)
+    assert not submitted and value.phase == "ready"
+    panel._sam_apply(True)
+    assert len(submitted) == 1 and submitted[0][0][-1] is True
+    panel._metadata.close()
+
+
+def test_empty_semantic_refinement_uses_only_the_new_visual_controls(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.request = 9
+    value.submitted_signature = value.signature
+    value.accept({"request": 9, "revision": "revision-a", "phase": "ready",
+                  "overlays": [object()], "scores": [0], "matched_objects": 0})
+    value.point(.5, .5, 1)
+    assert not value.can_refine
+    panel._preview_state = "ready"
+    panel._path_stat_cache["frame.png"] = (True, 100, 200)
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append(a) or 10, raising=False)
+    panel._sam_generate(True)
+    assert len(submitted) == 1 and submitted[0][6:8] == (0, -1)
+    assert submitted[0][4] == [(.5, .5, 1)]
+    panel._metadata.close()
+
+
+def test_sequence_with_an_approved_empty_selection_refuses_keep_before_confirmation(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
+    panel._mask_editor = value = editor(module)
+    panel._sam_progress = (1, 1, 1)
+    panel._sam_sequence["output"] = "frames"
+    dialogs, submitted = [], []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"approved": 1, "empty_approved": 1, "phase": "ready"}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "form_dialog", lambda *a: dialogs.append(a), raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append(a), raising=False)
+    panel._sam_save(False)
+    assert not dialogs and not submitted
+    assert panel._sam_sequence_error == "image_preview.sam_empty_keep"
+    panel._sam_save(True)
+    assert len(dialogs) == 1 and not submitted
+
+
 @pytest.mark.parametrize("sequence", [False, True])
 def test_read_only_camera_cannot_submit_mask_apply(tracked_sequence, monkeypatch, sequence):
     module, panel = tracked_sequence
@@ -1182,3 +1525,23 @@ def test_read_only_camera_cannot_submit_mask_apply(tracked_sequence, monkeypatch
     assert not submitted
     assert panel._sam_apply_target is None
     assert value.phase == "ready"
+
+
+def test_combined_semantic_point_refinement_does_not_queue_a_replacement(panel_modules, monkeypatch):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._mask_editor = value = editor(module)
+    value.request = 9
+    value.submitted_signature = value.signature
+    value.accept({"request": 9, "revision": "revision-a", "phase": "ready",
+                  "overlays": [object()], "scores": [.9], "matched_objects": 2})
+    value.point(.7, .6, 1)
+    panel._preview_state = "ready"
+    panel._path_stat_cache["frame.png"] = (True, 100, 200, 0, 0, 0)
+    calls = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: calls.append(a), raising=False)
+    panel._sam_generate(True)
+    assert not calls
+    assert value.error == "image_preview.sam_semantic_refine_combined"
+    assert value.draft.points == [(.7, .6, 1)]
+    panel._metadata.close()

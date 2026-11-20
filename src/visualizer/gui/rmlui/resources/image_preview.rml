@@ -96,6 +96,33 @@
       </div>
       <div id="sam-controls" class="hidden">
         <div id="sam-frame-controls">
+        <div id="sam-methods" class="sam-tool-row">
+          <button type="button" class="btn" id="sam-method-manual"></button>
+          <button type="button" class="btn" id="sam-semantic-heading"></button>
+        </div>
+        <div id="sam-semantic-controls" class="hidden">
+        <select id="sam-semantic-category"></select>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" data-for="category : semantic_categories"
+                  data-event-click="remove_semantic_category(category.value)"
+                  data-attrif-disabled="category.disabled" data-attr-title="category.remove_label"
+                  data-attr-aria-label="category.remove_label">{{ category.label }} ×</button>
+        </div>
+        <label for="sam-semantic-text" id="sam-semantic-descriptions"></label>
+        <textarea id="sam-semantic-text" data-value="semantic_text" rows="2" maxlength="1024"></textarea>
+        <div id="sam-semantic-help" class="sam-note"></div>
+        <button type="button" class="btn" id="sam-semantic-advanced" aria-controls="sam-semantic-options">@tr:image_preview.sam_semantic_advanced</button>
+        <div id="sam-semantic-options" class="hidden">
+          <div data-reset-row="true" data-tooltip="image_preview.sam_semantic_confidence_help">
+            <label id="sam-semantic-confidence-label" for="sam-semantic-confidence" data-reset-prop="semantic_confidence">@tr:image_preview.sam_semantic_confidence</label>
+            <div class="sam-confidence-row" title="@tr:image_preview.sam_semantic_confidence_help">
+              <input type="range" class="setting-slider" id="sam-semantic-confidence" data-value="semantic_confidence" min="1" max="99" step="1"/>
+              <span>{{semantic_confidence}}%</span>
+            </div>
+          </div>
+        </div>
+        </div>
+        <div id="sam-manual-controls">
         <span class="section-label-ip" id="sam-heading"></span>
         <div class="sam-tool-row">
           <button type="button" class="btn" id="sam-positive"></button>
@@ -110,17 +137,12 @@
           <button type="button" class="btn" id="sam-undo"></button>
           <button type="button" class="btn" id="sam-clear"></button>
         </div>
-        <span class="section-label-ip" id="sam-proposals-heading"></span>
-        <div class="sam-tool-row">
-          <button type="button" class="btn btn--primary" id="sam-generate"></button>
-          <button type="button" class="btn" id="sam-refine"></button>
-          <button type="button" class="btn" id="sam-cancel"></button>
         </div>
-        <div class="sam-tool-row">
+        <span class="section-label-ip" id="sam-proposals-heading"></span>
+        <div class="sam-tool-row" id="sam-candidates-row">
           <button type="button" class="btn" id="sam-candidate-0"></button>
           <button type="button" class="btn" id="sam-candidate-1"></button>
           <button type="button" class="btn" id="sam-candidate-2"></button>
-          <button type="button" class="btn" id="sam-show"></button>
         </div>
         <div id="sam-quality" class="sam-note"></div>
         </div>
@@ -215,6 +237,17 @@
       </div>
       </div>
       <div id="sam-apply-controls" class="hidden">
+        <div class="sam-tool-row hidden" id="sam-semantic-find-row">
+          <button type="button" class="btn btn--primary" id="sam-semantic-find"></button>
+        </div>
+        <div class="sam-tool-row" id="sam-generate-row">
+          <button type="button" class="btn btn--primary" id="sam-generate"></button>
+          <button type="button" class="btn" id="sam-refine"></button>
+        </div>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-show"></button>
+          <button type="button" class="btn" id="sam-cancel"></button>
+        </div>
         <span class="section-label-ip" id="sam-apply-heading"></span>
         <div class="sam-tool-row">
           <button type="button" class="btn btn--primary" id="sam-apply"></button>

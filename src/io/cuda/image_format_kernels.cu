@@ -160,6 +160,17 @@ namespace lfs::io::cuda {
         output[idx] = static_cast<uint16_t>(scaled + 0.5f);
     }
 
+    __global__ void uint8_to_uint16_kernel(
+        const uint8_t* __restrict__ input,
+        uint16_t* __restrict__ output,
+        const size_t total) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= total)
+            return;
+        output[idx] = static_cast<uint16_t>(input[idx] * 257u);
+    }
+
     template <bool ExactAlpha = false>
     __global__ void uint16_hwc_to_float_hwc_kernel(
         const uint16_t* __restrict__ input,
@@ -435,6 +446,18 @@ namespace lfs::io::cuda {
         float32_hwc_to_uint16_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
         LFS_CUDA_LAUNCH_CHECK(stream, "io.image.f32_hwc_to_u16_hwc");
+    }
+
+    void launch_uint8_to_uint16(
+        const uint8_t* input,
+        uint16_t* output,
+        const size_t elements,
+        cudaStream_t stream) {
+        if (elements == 0)
+            return;
+        const int num_blocks = static_cast<int>((elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        uint8_to_uint16_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(input, output, elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_to_u16");
     }
 
     void launch_uint16_hwc_to_float32_hwc(

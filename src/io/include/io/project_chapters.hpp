@@ -459,6 +459,11 @@ namespace lfs::io::project {
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
 
+    struct PublishedSplatMetadata {
+        std::uint64_t count;
+        int sh_degree;
+    };
+
     class LFS_IO_API SceneGraphChapter {
     public:
         SceneGraphChapter();
@@ -480,6 +485,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_training_model_uuid(std::optional<lfs::core::Uuid> value);
         [[nodiscard]] lfs::Result<std::vector<SceneNodeRecord>> nodes() const;
+        [[nodiscard]] lfs::Result<std::optional<PublishedSplatMetadata>>
+        published_splat_metadata(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<std::optional<SceneNodeRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);
@@ -573,6 +580,11 @@ namespace lfs::io::project {
         std::string images_folder,
         const ReferencesChapter& references,
         const std::filesystem::path& project_root);
+
+    // Uids of the cameras disabled for training in SCNG, for the
+    // disabled_camera_uids of a headless run that reloads the dataset.
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<int>>
+    disabled_camera_uids(const SceneGraphChapter& scene_graph);
 
     class LFS_IO_API ParametersChapter {
     public:

@@ -72,22 +72,17 @@ const char* getErrorString(nvjpegStatus_t eStatus_) {
 }
 
 NvJpegException NvJpegException::FromNvJpegError(nvjpegStatus_t status, const std::string& where) {
-    NvJpegException e;
-    e.status_ = NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
+    auto nvimgcodec_status = NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
     auto it = nvjpeg_status_to_nvimgcodec_error_map.find(status);
     if (it != nvjpeg_status_to_nvimgcodec_error_map.end())
-        e.status_ = it->second;
+        nvimgcodec_status = it->second;
     std::stringstream ss;
     ss << "nvjpeg error #" << static_cast<int>(status) << " (" << getErrorString(status) << ")" << " when running " << where;
-    e.info_ = ss.str();
-    return e;
+    return {nvimgcodec_status, ss.str()};
 }
 
 NvJpegException NvJpegException::FromCUDAError(cudaError_t status, const std::string& where) {
-    NvJpegException e;
-    e.status_ = NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR;
     std::stringstream ss;
     ss << "CUDA error #" << static_cast<int>(status) << " when running " << where;
-    e.info_ = ss.str();
-    return e;
+    return {NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR, ss.str()};
 }

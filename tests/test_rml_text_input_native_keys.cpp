@@ -6,6 +6,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/RenderInterface.h>
 
@@ -61,7 +62,7 @@ namespace {
     <head>
         <title>native-text-input-keys</title>
         <style>
-            input { font-family: Inter; font-size: 12px; }
+            input, textarea { font-family: Inter; font-size: 12px; }
         </style>
     </head>
     <body>
@@ -139,6 +140,50 @@ namespace {
         Rml::ElementDocument* document_ = nullptr;
         Rml::ElementFormControlInput* input_ = nullptr;
     };
+
+    TEST_F(RmlTextInputNativeKeysTest, EnterInsertsNewlinesOnlyInMultilineControls) {
+        using namespace lfs::vis;
+        auto element = document_->CreateElement("textarea");
+        auto* textarea = rmlui_dynamic_cast<Rml::ElementFormControlTextArea*>(element.get());
+        ASSERT_NE(textarea, nullptr);
+        document_->AppendChild(std::move(element));
+        context_->Update();
+        for (const auto scancode : {SDL_SCANCODE_RETURN, SDL_SCANCODE_KP_ENTER}) {
+            ASSERT_TRUE(textarea->Focus());
+            textarea->SetValue("person");
+            textarea->SetSelectionRange(6, 6);
+            FrameInputEvent event{.kind = FrameInputEventKind::KeyDown, .scancode = scancode};
+            gui::rml_input::processKeyboardEvent(*context_, event, &text_input_handler_);
+            context_->ProcessTextInput("car");
+            EXPECT_EQ(textarea->GetValue(), "person\ncar");
+            event.kind = FrameInputEventKind::KeyUp;
+            gui::rml_input::processKeyboardEvent(*context_, event, &text_input_handler_);
+            EXPECT_EQ(textarea->GetValue(), "person\ncar");
+
+            ASSERT_TRUE(input_->Focus());
+            input_->SetValue("hello");
+            event.kind = FrameInputEventKind::KeyDown;
+            gui::rml_input::processKeyboardEvent(*context_, event, &text_input_handler_);
+            EXPECT_EQ(input_->GetValue(), "hello");
+        }
+        for (const auto modifiers : {SDL_KMOD_CTRL, SDL_KMOD_ALT, SDL_KMOD_GUI}) {
+            ASSERT_TRUE(textarea->Focus());
+            textarea->SetValue("person");
+            textarea->SetSelectionRange(6, 6);
+            FrameInputEvent shortcut{.kind = FrameInputEventKind::KeyDown, .scancode = SDL_SCANCODE_RETURN, .modifiers = static_cast<SDL_Keymod>(modifiers)};
+            gui::rml_input::processKeyboardEvent(*context_, shortcut, &text_input_handler_);
+            EXPECT_EQ(textarea->GetValue(), "person");
+        }
+        ASSERT_TRUE(textarea->Focus());
+        textarea->SetValue("");
+        ASSERT_TRUE(text_input_handler_.handleTextEditing("person", 6, 0));
+        FrameInputEvent enter{.kind = FrameInputEventKind::KeyDown, .scancode = SDL_SCANCODE_RETURN};
+        EXPECT_FALSE(gui::rml_input::processKeyboardEvent(*context_, enter, &text_input_handler_));
+        EXPECT_TRUE(text_input_handler_.isComposing());
+        EXPECT_EQ(textarea->GetValue(), "person");
+        EXPECT_TRUE(text_input_handler_.handleTextInput("person"));
+        EXPECT_FALSE(text_input_handler_.isComposing());
+    }
 
     TEST_F(RmlTextInputNativeKeysTest, DeletionUpdatesValueAndDispatchesChange) {
         ChangeListener listener;

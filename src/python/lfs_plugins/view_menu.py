@@ -134,6 +134,12 @@ class ViewMenu:
             )
 
         vr = lf.ui.get_vr_state()
+        vr_enterable = vr["active"] or vr["available"]
+        # Offered while VR support is on and no headset was found: one may have
+        # been connected since startup. Finding it makes Enter VR available.
+        detect_vr = [] if vr_enterable or not lf.ui.get_vr_preferences()["enabled"] else [
+            menu_action(tr("menu.view.detect_vr"), lf.detect_vr),
+        ]
         return [
             menu_action(tr("menu.view.home_view"), lf.go_home,
                         shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESET_HOME)),
@@ -155,9 +161,10 @@ class ViewMenu:
                 tr("input_settings.action.exit_vr") if vr["active"] else tr("menu.view.enter_vr"),
                 lambda active=vr["active"]: lf.set_vr_active(not active),
                 shortcut=keymap_shortcut(lf.keymap.Action.EXIT_VR, lf.keymap.ToolMode.VR) if vr["active"] else "",
-                enabled=vr["active"] or vr["available"],
-                tooltip="" if vr["active"] or vr["available"] else vr["status"],
+                enabled=vr_enterable,
+                tooltip="" if vr_enterable else vr["status"],
             ),
+            *detect_vr,
             menu_action(tr("input_settings.action.vr_recenter"), lf.recenter_vr,
                         shortcut=keymap_shortcut(lf.keymap.Action.VR_RECENTER, lf.keymap.ToolMode.VR),
                         enabled=vr["active"]),

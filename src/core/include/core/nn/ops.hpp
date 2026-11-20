@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace lfs::core::nn {
@@ -93,6 +94,10 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor layer_norm(const Tensor& input, const Tensor& weight,
                                                  const Tensor& bias, float eps = 1e-5f);
 
+    // NCHW GroupNorm: population variance over C/groups,H,W; per-channel affine.
+    [[nodiscard]] LFS_CORE_API Tensor group_norm(const Tensor& input, const Tensor& weight,
+                                                 const Tensor& bias, int groups, float eps = 1e-5f);
+
     // RMSNorm over the last dimension: y = x / sqrt(mean(x²) + eps) * weight.
     [[nodiscard]] LFS_CORE_API Tensor rms_norm(const Tensor& input, const Tensor& weight,
                                                float eps = 1e-6f);
@@ -107,6 +112,14 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor attention(const Tensor& query, const Tensor& key,
                                                 const Tensor& value, const Tensor* mask = nullptr,
                                                 float scale = 0.0f);
+
+    // Bilinear, zero-padded sampling with align_corners=false. Value is [B,S,H,D],
+    // locations [B,Q,H,L,P,2] in normalized xy coordinates, weights [B,Q,H,L,P].
+    // Spatial shapes are (height,width), concatenated in value's S dimension;
+    // supports 1..4 levels. Accumulates in Float32; returns [B,Q,H*D].
+    [[nodiscard]] LFS_CORE_API Tensor deformable_attention(
+        const Tensor& value, const Tensor& locations, const Tensor& weights,
+        std::span<const std::pair<int, int>> spatial_shapes);
 
     // Fold sequence dim N into windows: [B, H, N, d] -> [B * n_windows, H, window, d],
     // padding N up to a multiple of window with zeros.
@@ -168,8 +181,10 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor resize2d_bilinear_antialiased(const Tensor& input,
                                                                     int out_h, int out_w);
 
-    // PIL RGB bicubic resampling, including byte rounding after each axis. Input is NCHW in [0, 1].
-    [[nodiscard]] LFS_CORE_API Tensor resize2d_pil_bicubic(const Tensor& input, int out_h, int out_w);
+    // PIL RGB bilinear/bicubic resampling, with byte rounding after each axis.
+    // Input is NCHW in [0,1]; the default retains SAM video preprocessing.
+    [[nodiscard]] LFS_CORE_API Tensor resize2d_pil(const Tensor& input, int out_h, int out_w,
+                                                   ResizeMode mode = ResizeMode::Cubic);
 
     // Round to the bfloat16 storage grid while retaining Float32 tensor storage.
     [[nodiscard]] LFS_CORE_API Tensor round_bfloat16(const Tensor& input);

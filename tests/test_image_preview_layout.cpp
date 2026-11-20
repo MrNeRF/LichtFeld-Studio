@@ -5,6 +5,7 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/FontEngineInterface.h>
 #include <algorithm>
+#include <array>
 #include <core/event_bridge/localization_manager.hpp>
 #include <filesystem>
 #include <fstream>
@@ -41,6 +42,11 @@ namespace {
         Rml::String mask_decorator = "image(preview://memory=sam:fixture:0:1&thumb=256&mode=mask contain)";
     };
 
+    struct SemanticCategory {
+        Rml::String value = "person", label = "Person", remove_label = "Remove Person";
+        bool disabled = false;
+    };
+
     class ImagePreviewLayoutTest : public ::testing::TestWithParam<float> {
     protected:
         void SetUp() override {
@@ -60,6 +66,19 @@ namespace {
             thumb.RegisterMember("decorator", &Thumb::decorator);
             thumb.RegisterMember("mask_decorator", &Thumb::mask_decorator);
             model.RegisterArray<std::vector<Thumb>>();
+            auto category = model.RegisterStruct<SemanticCategory>();
+            ASSERT_TRUE(category);
+            category.RegisterMember("value", &SemanticCategory::value);
+            category.RegisterMember("label", &SemanticCategory::label);
+            category.RegisterMember("remove_label", &SemanticCategory::remove_label);
+            category.RegisterMember("disabled", &SemanticCategory::disabled);
+            model.RegisterArray<std::vector<SemanticCategory>>();
+            ASSERT_TRUE(model.Bind("semantic_categories", &categories));
+            ASSERT_TRUE(model.Bind("semantic_text", &semantic_text));
+            ASSERT_TRUE(model.Bind("semantic_confidence", &semantic_confidence));
+            ASSERT_TRUE(model.BindEventCallback("remove_semantic_category",
+                                                [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {}));
+            model_handle = model.GetModelHandle();
             ASSERT_TRUE(model.Bind("thumbs", &thumbs));
             ASSERT_TRUE(model.Bind("panel_label", &title));
             ASSERT_TRUE(model.Bind("filmstrip_top_spacer_height", &top));
@@ -99,7 +118,11 @@ namespace {
         PreviewLayoutRenderer renderer;
         Rml::Context* context = nullptr;
         Rml::ElementDocument* doc = nullptr;
+        Rml::DataModelHandle model_handle;
         std::vector<Thumb> thumbs = std::vector<Thumb>(12);
+        std::vector<SemanticCategory> categories = std::vector<SemanticCategory>(1);
+        Rml::String semantic_text = "person";
+        int semantic_confidence = 40;
         Rml::String title = "Dataset · 1 / 10,000", top = "0dp", bottom = "640000dp";
         const std::map<std::string, std::string> labels{
             {"btn-fit", "Adatta"},
@@ -193,6 +216,13 @@ namespace {
         doc->GetElementById("metadata-info")->SetClass("hidden", true);
         doc->GetElementById("sam-markers")->SetInnerRML("<div id='test-sam-box' class='sam-box'></div>");
         const std::map<std::string, std::string> sam_keys{
+            {"sam-method-manual", "sam_method_manual"},
+            {"sam-semantic-heading", "sam_semantic_heading"},
+            {"sam-semantic-descriptions", "sam_semantic_descriptions"},
+            {"sam-semantic-help", "sam_semantic_help"},
+            {"sam-semantic-find", "sam_semantic_find"},
+            {"sam-semantic-advanced", "sam_semantic_advanced"},
+            {"sam-semantic-confidence-label", "sam_semantic_confidence"},
             {"sam-positive", "sam_positive"},
             {"sam-negative", "sam_negative"},
             {"sam-box", "sam_box"},
@@ -222,6 +252,15 @@ namespace {
         for (const auto& language : locales.getAvailableLanguages()) {
             SCOPED_TRACE(language);
             ASSERT_TRUE(locales.setLanguage(language));
+            // Several long selected categories must scroll without moving Find/Apply.
+            const std::array category_keys{"person", "truck", "plant", "backpack", "suitcase", "motorcycle"};
+            categories.resize(category_keys.size());
+            for (size_t i = 0; i < category_keys.size(); ++i) {
+                categories[i].value = category_keys[i];
+                categories[i].label = locales.get("image_preview.sam_category_" + std::string(category_keys[i]));
+                categories[i].remove_label = categories[i].label;
+            }
+            model_handle.DirtyVariable("semantic_categories");
             std::map<std::string, std::string> sam_labels{
                 {"sam-candidate-0", "1"},
                 {"sam-candidate-1", "2"},
@@ -229,89 +268,107 @@ namespace {
             for (const auto& [id, key] : sam_keys)
                 sam_labels[id] = locales.get("image_preview." + key);
             sam_labels["sam-quality"] = Rml::StringUtilities::Replace(sam_labels["sam-quality"], "{score}", "97");
-            for (const auto& [id, text] : sam_labels)
-                doc->GetElementById(id)->SetInnerRML(text);
+            for (const auto& [id, text] : sam_labels) {
+                auto* element = doc->GetElementById(id);
+                ASSERT_NE(element, nullptr) << id;
+                element->SetInnerRML(text);
+            }
             doc->GetElementById("btn-sam")->SetInnerRML(locales.get("image_preview.sam_title"));
             auto* selection = doc->GetElementById("sam-selection");
             selection->SetInnerRML("<option value='0'>1</option><option value='box'>Box</option>");
-            for (const bool help : {false, true}) {
-                SCOPED_TRACE(help);
-                doc->GetElementById("shortcut-help")->SetClass("hidden", !help);
-                for (int width : {600, 760, 900, 1200}) {
-                    SCOPED_TRACE(width);
-                    doc->GetElementById("sam-pages")->SetClass("hidden", width != 900);
-                    doc->GetElementById("sam-heading")->SetClass("hidden", width == 900);
-                    resize(width);
-                    EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
-                    Rml::ElementList buttons;
-                    controls->QuerySelectorAll(buttons, "button");
-                    Rml::ElementList apply_buttons;
-                    apply->QuerySelectorAll(apply_buttons, "button");
-                    std::erase_if(buttons, [](auto* button) { return !button->IsVisible(true); });
-                    std::erase_if(apply_buttons, [](auto* button) { return !button->IsVisible(true); });
-                    buttons.insert(buttons.end(), apply_buttons.begin(), apply_buttons.end());
-                    ASSERT_EQ(buttons.size(), 17u);
-                    checkWithin(apply, sidebar);
-                    EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y + apply->GetBox().GetSize(Rml::BoxArea::Border).y,
-                                sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).y + sidebar->GetBox().GetSize(Rml::BoxArea::Border).y, 1.5f * GetParam());
-                    const float apply_top = apply->GetAbsoluteOffset(Rml::BoxArea::Border).y;
-                    checkWithin(doc->GetElementById("btn-sam"), doc->GetElementById("preview-toolbar"));
-                    for (auto* button : buttons) {
-                        button->ScrollIntoView(false);
-                        context->Update();
-                        EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y, apply_top, 0.5f);
-                        checkWithin(button, std::find(apply_buttons.begin(), apply_buttons.end(), button) != apply_buttons.end() ? apply : controls);
-                        EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
-                        EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
-                        const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
-                            button->GetFontFaceHandle(), sam_labels.at(button->GetId()),
-                            Rml::TextShapingContext{button->GetComputedValues().language()});
-                        EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
-                    }
-                    EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
-                    EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
-
-                    // Inference status, empty scores and the proposal legend must not move
-                    // the canvas or the controls under the pointer between operations.
-                    controls->SetScrollTop(0);
-                    context->Update();
-                    if (width == 900 && !help) {
-                        for (const char* id : {"sam-generate", "sam-refine", "sam-cancel", "sam-show"})
-                            checkWithin(doc->GetElementById(id), controls);
-                    }
-                    const auto geometry = [&](const char* id) {
-                        auto* element = doc->GetElementById(id);
-                        return Rml::Rectanglef::FromPositionSize(element->GetAbsoluteOffset(Rml::BoxArea::Border),
-                                                                 element->GetBox().GetSize(Rml::BoxArea::Border));
-                    };
-                    const auto viewport_bounds = geometry("image-viewport");
-                    const auto generate_bounds = geometry("sam-generate");
-                    const auto apply_bounds = geometry("sam-apply");
-                    for (const char* phase : {"sam_generate_hint", "sam_loading", "sam_ready", "sam_closing", "sam_error"}) {
-                        SCOPED_TRACE(phase);
-                        const bool ready = Rml::String(phase) == "sam_ready";
-                        std::string text = locales.get("image_preview." + Rml::String(phase));
-                        if (Rml::String(phase) == "sam_error") {
-                            const auto detail = text;
-                            for (int i = 0; i < 20; ++i)
-                                text += " " + detail;
+            for (const bool semantic : {false, true}) {
+                SCOPED_TRACE(semantic);
+                doc->GetElementById("sam-semantic-controls")->SetClass("hidden", !semantic);
+                doc->GetElementById("sam-semantic-options")->SetClass("hidden", !semantic);
+                doc->GetElementById("sam-manual-controls")->SetClass("hidden", semantic);
+                doc->GetElementById("sam-semantic-find-row")->SetClass("hidden", !semantic);
+                for (const char* id : {"sam-proposals-heading", "sam-generate-row", "sam-candidates-row", "sam-quality"})
+                    doc->GetElementById(id)->SetClass("hidden", semantic);
+                const char* action_id = semantic ? "sam-semantic-find" : "sam-generate";
+                for (const bool help : {false, true}) {
+                    SCOPED_TRACE(help);
+                    doc->GetElementById("shortcut-help")->SetClass("hidden", !help);
+                    for (int width : {600, 760, 900, 1200}) {
+                        SCOPED_TRACE(width);
+                        doc->GetElementById("sam-pages")->SetClass("hidden", width != 900);
+                        doc->GetElementById("sam-heading")->SetClass("hidden", width == 900);
+                        resize(width);
+                        EXPECT_NEAR(doc->GetElementById("test-sam-box")->GetComputedValues().border_top_width(), 2 * GetParam(), 1);
+                        Rml::ElementList buttons;
+                        controls->QuerySelectorAll(buttons, "button");
+                        Rml::ElementList apply_buttons;
+                        apply->QuerySelectorAll(apply_buttons, "button");
+                        std::erase_if(buttons, [](auto* button) { return !button->IsVisible(true); });
+                        std::erase_if(apply_buttons, [](auto* button) { return !button->IsVisible(true); });
+                        buttons.insert(buttons.end(), apply_buttons.begin(), apply_buttons.end());
+                        ASSERT_FALSE(buttons.empty());
+                        const auto mode_buttons = semantic ? std::array{"sam-semantic-find", "sam-semantic-advanced"} : std::array{"sam-generate", "sam-refine"};
+                        for (const auto* id : mode_buttons) {
+                            EXPECT_NE(std::find(buttons.begin(), buttons.end(), doc->GetElementById(id)), buttons.end()) << id;
                         }
-                        auto* status = doc->GetElementById("sam-status");
-                        status->SetInnerRML(text);
-                        status->SetScrollTop(0);
-                        doc->GetElementById("sam-quality")->SetInnerRML(ready ? sam_labels.at("sam-quality") : "");
-                        auto* legend = doc->GetElementById("mask-legend");
-                        legend->SetInnerRML(locales.get("image_preview.sam_proposal_legend"));
-                        legend->SetClass("hidden", !ready);
+                        checkWithin(apply, sidebar);
+                        EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y + apply->GetBox().GetSize(Rml::BoxArea::Border).y,
+                                    sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).y + sidebar->GetBox().GetSize(Rml::BoxArea::Border).y, 1.5f * GetParam());
+                        const float apply_top = apply->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+                        checkWithin(doc->GetElementById("btn-sam"), doc->GetElementById("preview-toolbar"));
+                        for (auto* button : buttons) {
+                            button->ScrollIntoView(false);
+                            context->Update();
+                            EXPECT_NEAR(apply->GetAbsoluteOffset(Rml::BoxArea::Border).y, apply_top, 0.5f);
+                            checkWithin(button, std::find(apply_buttons.begin(), apply_buttons.end(), button) != apply_buttons.end() ? apply : controls);
+                            EXPECT_NEAR(button->GetBox().GetSize(Rml::BoxArea::Border).y, 28 * GetParam(), 1);
+                            EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Border).x, 28 * GetParam() - 1);
+                            const auto text_width = Rml::GetFontEngineInterface()->GetStringWidth(
+                                button->GetFontFaceHandle(), button->GetInnerRML(),
+                                Rml::TextShapingContext{button->GetComputedValues().language()});
+                            EXPECT_GE(button->GetBox().GetSize(Rml::BoxArea::Content).x + 1, text_width);
+                        }
+                        EXPECT_GT(doc->GetElementById("image-viewport")->GetClientHeight(), 180 * GetParam());
+                        EXPECT_GT(doc->GetElementById("image-viewport")->GetClientWidth(), 200 * GetParam());
+
+                        // Inference status, empty scores and the proposal legend must not move
+                        // the canvas or the controls under the pointer between operations.
+                        controls->SetScrollTop(0);
                         context->Update();
-                        EXPECT_EQ(geometry("image-viewport"), viewport_bounds);
-                        EXPECT_EQ(geometry("sam-generate"), generate_bounds);
-                        EXPECT_EQ(geometry("sam-apply"), apply_bounds);
-                        checkWithin(status, apply);
-                        if (ready) {
-                            checkWithin(legend, doc->GetElementById("status-bar"));
-                            EXPECT_GT(legend->GetClientWidth(), 100 * GetParam());
-                            EXPECT_NEAR(legend->GetClientHeight(), 18 * GetParam(), 0.5f);
+                        if (width == 900 && !help) {
+                            checkWithin(doc->GetElementById(action_id), apply);
+                            for (const char* id : {"sam-cancel", "sam-show"})
+                                checkWithin(doc->GetElementById(id), apply);
+                        }
+                        const auto geometry = [&](const char* id) {
+                            auto* element = doc->GetElementById(id);
+                            return Rml::Rectanglef::FromPositionSize(element->GetAbsoluteOffset(Rml::BoxArea::Border),
+                                                                     element->GetBox().GetSize(Rml::BoxArea::Border));
+                        };
+                        const auto viewport_bounds = geometry("image-viewport");
+                        const auto generate_bounds = geometry(action_id);
+                        const auto apply_bounds = geometry("sam-apply");
+                        for (const char* phase : {"sam_generate_hint", "sam_loading", "sam_ready", "sam_closing", "sam_error"}) {
+                            SCOPED_TRACE(phase);
+                            const bool ready = Rml::String(phase) == "sam_ready";
+                            std::string text = locales.get("image_preview." + Rml::String(phase));
+                            if (Rml::String(phase) == "sam_error") {
+                                const auto detail = text;
+                                for (int i = 0; i < 20; ++i)
+                                    text += " " + detail;
+                            }
+                            auto* status = doc->GetElementById("sam-status");
+                            status->SetInnerRML(text);
+                            status->SetScrollTop(0);
+                            doc->GetElementById("sam-quality")->SetInnerRML(ready ? sam_labels.at("sam-quality") : "");
+                            auto* legend = doc->GetElementById("mask-legend");
+                            legend->SetInnerRML(locales.get("image_preview.sam_proposal_legend"));
+                            legend->SetClass("hidden", !ready);
+                            context->Update();
+                            EXPECT_EQ(geometry("image-viewport"), viewport_bounds);
+                            EXPECT_EQ(geometry(action_id), generate_bounds);
+                            EXPECT_EQ(geometry("sam-apply"), apply_bounds);
+                            checkWithin(status, apply);
+                            if (ready) {
+                                checkWithin(legend, doc->GetElementById("status-bar"));
+                                EXPECT_GT(legend->GetClientWidth(), 100 * GetParam());
+                                EXPECT_NEAR(legend->GetClientHeight(), 18 * GetParam(), 0.5f);
+                            }
                         }
                     }
                 }
@@ -338,7 +395,7 @@ namespace {
         doc->GetElementById("metadata-info")->SetClass("hidden", true);
         for (const auto* id : {"sam-pages", "sam-controls", "sam-apply-controls", "sam-tracking", "sam-save-controls"})
             doc->GetElementById(id)->SetClass("hidden", false);
-        for (const auto* id : {"sam-frame-controls", "sam-apply", "sam-exclude"})
+        for (const auto* id : {"sam-frame-controls", "sam-generate-row", "sam-apply", "sam-exclude"})
             doc->GetElementById(id)->SetClass("hidden", true);
         for (const auto& language : locales.getAvailableLanguages()) {
             SCOPED_TRACE(language);

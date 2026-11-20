@@ -53,6 +53,7 @@
 #include <sched.h>
 #include <sys/file.h>
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -291,6 +292,35 @@ namespace {
         EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
         EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
     }
+
+#ifndef _WIN32
+    TEST(ProjectFileNativeFile, FileSizeLimitPreservesNativeErrorWithoutMemoryClassification) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "file-size-limit.licht";
+        const int status = run_child_process([&] {
+            struct rlimit limit {};
+            if (::getrlimit(RLIMIT_FSIZE, &limit) != 0 ||
+                std::signal(SIGXFSZ, SIG_IGN) == SIG_ERR) {
+                ::_exit(1);
+            }
+            limit.rlim_cur = std::min<rlim_t>(4096, limit.rlim_max);
+            if (::setrlimit(RLIMIT_FSIZE, &limit) != 0) {
+                ::_exit(2);
+            }
+            auto file = require_result(detail::NativeFile::create_new(path));
+            const std::array payload{std::byte{0x42}};
+            const auto written = file->write_exact(limit.rlim_cur, payload);
+            if (written || written.error().code() != lfs::ErrorCode::BoundsViolation ||
+                !written.error().native() || written.error().native()->code != EFBIG ||
+                lfs::core::is_disk_space_save_error(written.error().user_message())) {
+                ::_exit(3);
+            }
+        });
+        ASSERT_TRUE(WIFEXITED(status));
+        ASSERT_EQ(WEXITSTATUS(status), 0);
+        EXPECT_TRUE(read_file_bytes(path).empty());
+    }
+#endif
 
     TEST(ProjectContainerFormat, SupportedCapabilitiesReserveTilesetsAndIncludeCollision) {
         EXPECT_EQ(TILESET_REFERENCES, 10);

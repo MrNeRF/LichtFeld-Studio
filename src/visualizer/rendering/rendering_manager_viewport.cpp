@@ -8,6 +8,7 @@
 #include "mesh_offscreen_renderer.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/viewport_request_builder.hpp"
 #include "rendering_manager.hpp"
@@ -265,52 +266,15 @@ namespace lfs::vis {
         const RenderSettings& frame_settings);
 
     RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
-        const int viewport_width = std::max(viewport_size.x, 0);
-        const int viewport_height = std::max(viewport_size.y, 0);
-        ContentBounds bounds{
-            0.0f,
-            0.0f,
-            static_cast<float>(viewport_width),
-            static_cast<float>(viewport_height),
-            false};
-
-        if (split_view_service_.isGTComparisonActive(settings_)) {
-            glm::ivec2 content_dims{0, 0};
-            if (const auto service_dims = split_view_service_.gtContentDimensions()) {
-                content_dims = *service_dims;
-            } else {
-                content_dims = vulkan_gt_comparison_content_size_;
+        if (split_view_service_.isGTComparisonActive(settings_) && viewport_size.x > 0 && viewport_size.y > 0) {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            const auto& split = vulkan_mesh_frame_.split_view;
+            if (split.enabled) {
+                const auto rect = split.contentRectAt(viewport_size);
+                return {float(rect.x), float(rect.y), float(rect.z), float(rect.w), true};
             }
-            if (content_dims.x <= 0 || content_dims.y <= 0 ||
-                viewport_width <= 0 || viewport_height <= 0) {
-                return bounds;
-            }
-
-            const float content_aspect = static_cast<float>(content_dims.x) / content_dims.y;
-            const float viewport_aspect = static_cast<float>(viewport_width) / viewport_height;
-
-            if (content_aspect > viewport_aspect) {
-                const int content_height =
-                    std::clamp(static_cast<int>(std::lround(static_cast<float>(viewport_width) / content_aspect)),
-                               1,
-                               viewport_height);
-                bounds.width = static_cast<float>(viewport_width);
-                bounds.height = static_cast<float>(content_height);
-                bounds.x = 0.0f;
-                bounds.y = static_cast<float>(std::max((viewport_height - content_height) / 2, 0));
-            } else {
-                const int content_width =
-                    std::clamp(static_cast<int>(std::lround(static_cast<float>(viewport_height) * content_aspect)),
-                               1,
-                               viewport_width);
-                bounds.height = static_cast<float>(viewport_height);
-                bounds.width = static_cast<float>(content_width);
-                bounds.x = static_cast<float>(std::max((viewport_width - content_width) / 2, 0));
-                bounds.y = 0.0f;
-            }
-            bounds.letterboxed = true;
         }
-        return bounds;
+        return {0.0f, 0.0f, float(std::max(viewport_size.x, 0)), float(std::max(viewport_size.y, 0)), false};
     }
 
     std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
@@ -804,6 +768,7 @@ namespace lfs::vis {
         settings.depth_clip_enabled = false;
         settings.orthographic = false;
         settings.depth_view = false;
+        settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_rings = false;
         settings.show_center_markers = false;
@@ -1503,7 +1468,7 @@ namespace lfs::vis {
 
     RenderSettings RenderingManager::vrRenderSettings(RenderSettings settings) {
         settings.split_view_mode = SplitViewMode::Disabled;
-        settings.orthographic = settings.equirectangular = settings.depth_view = false;
+        settings.orthographic = settings.equirectangular = settings.depth_view = settings.normal_view = false;
         settings.point_cloud_mode = false;
         settings.show_grid = settings.show_coord_axes = settings.show_pivot = false;
         settings.show_camera_frustums = settings.show_rings = settings.show_center_markers = false;
@@ -1844,7 +1809,11 @@ namespace lfs::vis {
             return {};
         }
 
-        int band_height_limit = tile_height_limit;
+        // Normals sample adjacent pixels. Keep the halo tile-aligned so raster
+        // grouping stays stable, then read back only each band's interior rows.
+        const auto settings = getSettings();
+        const int halo = viewportDisplayMode(settings) == ViewportDisplayMode::Normal ? kPreviewTileHeightAlignment : 0;
+        int band_height_limit = std::max(kPreviewTileHeightAlignment, tile_height_limit - 2 * halo);
         // #1574 1-deep export pipelining: submit ticket for band N, render band N+1,
         // then wait ticket N (memcpy on deliver), submit N+1, ... At most one outstanding
         // export ticket. With the 3-deep OutputSlotRing + cell pin, Preview reuse of the
@@ -1853,8 +1822,10 @@ namespace lfs::vis {
         std::optional<std::uint64_t> outstanding_export_ticket;
         for (int tile_y = 0; tile_y < height;) {
             int tile_height = std::min(band_height_limit, height - tile_y);
+            const int render_y = std::max(tile_y - halo, 0);
             const auto intrinsics = equirectangular ? std::nullopt : std::optional{previewTileIntrinsics(width, height, focal_length_mm)};
             while (true) {
+                const int render_height = std::min(tile_y + tile_height + halo, height) - render_y;
                 auto rendered = renderPreviewImageToPreviewSlotWithState(
                     scene_manager,
                     model,
@@ -1863,10 +1834,10 @@ namespace lfs::vis {
                     position,
                     focal_length_mm,
                     tile_width,
-                    tile_height,
+                    render_height,
                     render_lock_held,
                     intrinsics,
-                    {0, tile_y},
+                    {0, render_y},
                     {width, height},
                     orthographic_override,
                     ortho_scale_override,
@@ -1911,7 +1882,9 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Preview,
                 output,
                 0,
-                tile_y);
+                tile_y,
+                tile_y - render_y,
+                tile_height);
             if (!ticket) {
                 LOG_TRACE("Gaussian preview tiled readback submit failed at tile y={} height={}: {}",
                           tile_y,
@@ -1935,12 +1908,37 @@ namespace lfs::vis {
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,
                                             const std::optional<SplitViewPanelId> panel, const bool nonblocking) const {
+        return sampleDepthAtPixel(x, y, panel, nonblocking, false);
+    }
+
+    float RenderingManager::getSurfaceDepthAtPixel(const int x, const int y, const glm::ivec2 source_size,
+                                                   const std::optional<SplitViewPanelId> panel) {
+        if (x < 0 || y < 0 || x >= source_size.x || y >= source_size.y)
+            return -1.0f;
+        const float depth = sampleDepthAtPixel(x, y, panel, true, exact_surface_picking_, source_size);
+        // Point-cloud readback already schedules its own GUI-only retry.
+        if (depth == PointCloudVulkanRenderer::kDepthSamplePending && !viewport_artifact_service_.hasDepthSampler()) {
+            markDirty(DirtyFlag::VIEWPORT, FrameReason::Overlay);
+            // Resolve a pending click after the requested image has been published,
+            // even if there is no further mouse or camera input.
+            lfs::python::request_redraw_after(1.0 / 60.0);
+        }
+        return depth;
+    }
+
+    float RenderingManager::sampleDepthAtPixel(const int x, const int y,
+                                               const std::optional<SplitViewPanelId> panel, const bool nonblocking,
+                                               const bool require_exact_depth, glm::ivec2 source_size) const {
         const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
             panel, nonblocking);
-        if (cached_depth > 0.0f || viewport_artifact_service_.hasDepthSampler()) {
+        // Captured Gaussian tensors do not carry the published exact-depth coverage.
+        // Dedicated samplers (point clouds / GT) retain their own depth contract.
+        const bool full_frame_depth = !require_exact_depth || splitViewUsesGTComparison(settings_.split_view_mode) ||
+                                      splitViewUsesPLYComparison(settings_.split_view_mode);
+        if (viewport_artifact_service_.hasDepthSampler() || (full_frame_depth && cached_depth > 0.0f)) {
             return cached_depth;
         }
 
@@ -1955,11 +1953,13 @@ namespace lfs::vis {
                               : VksplatViewportRenderer::OutputSlot::SplitLeft;
         }
 
-        glm::ivec2 source_size = frame_lifecycle_service_.lastViewportSize();
-        if (source_size.x > 0 && source_size.y > 0 && panel && isIndependentSplitViewActive()) {
-            if (const auto layouts = split_view_service_.panelLayouts(settings_, source_size.x)) {
-                const auto& layout = (*layouts)[splitViewPanelIndex(*panel)];
-                source_size.x = std::max(layout.width, 1);
+        if (source_size.x <= 0 || source_size.y <= 0) {
+            source_size = frame_lifecycle_service_.lastViewportSize();
+            if (source_size.x > 0 && source_size.y > 0 && panel && isIndependentSplitViewActive()) {
+                if (const auto layouts = split_view_service_.panelLayouts(settings_, source_size.x)) {
+                    const auto& layout = (*layouts)[splitViewPanelIndex(*panel)];
+                    source_size.x = std::max(layout.width, 1);
+                }
             }
         }
 
@@ -1969,6 +1969,7 @@ namespace lfs::vis {
                 .pixel = {x, y},
                 .source_size = source_size,
                 .output_slot = output_slot,
+                .require_exact_depth = require_exact_depth,
             });
         if (!depth) {
             LOG_TRACE("VkSplat depth sample failed: {}", depth.error());

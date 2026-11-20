@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_LOSS_INLINE
+#define LFS_LOSS_VEC3 vec3
+#define LFS_LOSS_ISFINITE(value) (!(isnan(value) || isinf(value)))
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/gt_loss_heatmap.inc"
 
 layout(location = 0) in vec2 TexCoord;
 layout(location = 0) out vec4 frag_color;
@@ -25,8 +30,9 @@ layout(push_constant) uniform Push {
     // Per-panel flags packed as (left normalize, right normalize, left filter, right filter).
     vec4 panel_flags;
 
-    // Background color for letterboxed regions.
-    vec4 background;
+    // Background RGB for letterboxed regions.
+    vec3 background;
+    float loss_visualization;
 
     // Divider visual constants: bar half-width, handle half-width, handle half-height,
     // corner radius (px).
@@ -88,6 +94,21 @@ void main() {
     vec2 content_uv = vec2(
         (px.x - pc.rect.x) / max(pc.rect.z, 1.0),
         (px.y - pc.rect.y) / max(pc.rect.w, 1.0));
+
+    if (pc.loss_visualization > 0.5) {
+        vec3 ground_truth = sample_panel(
+            u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
+            pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
+            pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw,
+            pc.left_texcoord_scale_offset.xy, pc.left_texcoord_scale_offset.zw).rgb;
+        vec3 rendered = sample_panel(
+            u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
+            pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
+            pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw,
+            pc.right_texcoord_scale_offset.xy, pc.right_texcoord_scale_offset.zw).rgb;
+        frag_color = vec4(lfsGtLossHeatmapColor(ground_truth, rendered), 1.0);
+        return;
+    }
 
     float split_x = pc.rect.x + clamp(pc.split.x, 0.0, 1.0) * pc.rect.z;
     float divider_pixel = pc.rect.x + floor(pc.split.x * pc.rect.z + 0.5);

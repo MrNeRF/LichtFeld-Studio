@@ -2364,19 +2364,7 @@ namespace lfs::vis {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
                 VulkanSplitViewParams adjusted = params.split_view;
-                if (adjusted.coordinate_extent.x > 0 && adjusted.coordinate_extent.y > 0) {
-                    const float scale_x = static_cast<float>(rect.width) /
-                                          static_cast<float>(adjusted.coordinate_extent.x);
-                    const float scale_y = static_cast<float>(rect.height) /
-                                          static_cast<float>(adjusted.coordinate_extent.y);
-                    const int left = static_cast<int>(std::lround(adjusted.content_rect.x * scale_x));
-                    const int top = static_cast<int>(std::lround(adjusted.content_rect.y * scale_y));
-                    const int right = static_cast<int>(std::lround(
-                        (adjusted.content_rect.x + adjusted.content_rect.z) * scale_x));
-                    const int bottom = static_cast<int>(std::lround(
-                        (adjusted.content_rect.y + adjusted.content_rect.w) * scale_y));
-                    adjusted.content_rect = {left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
-                }
+                adjusted.content_rect = adjusted.contentRectAt({rect.width, rect.height});
                 adjusted.content_rect.x += rect.x;
                 adjusted.content_rect.y += rect.y;
                 const VkRect2D panel_rect{
@@ -2416,7 +2404,24 @@ namespace lfs::vis {
                                    0,
                                    sizeof(scene_push),
                                    &scene_push);
+                const bool crop = params.scene_image_crop_to_fill && valid.x > 0 && valid.y > 0 &&
+                                  rect.width > 0 && rect.height > 0;
+                if (crop) {
+                    // A centered viewport larger than the panel: the scissor,
+                    // still the panel, cuts off what overflows.
+                    const float scale = std::max(static_cast<float>(rect.width) / static_cast<float>(valid.x),
+                                                 static_cast<float>(rect.height) / static_cast<float>(valid.y));
+                    VkViewport viewport{};
+                    viewport.width = static_cast<float>(valid.x) * scale;
+                    viewport.height = static_cast<float>(valid.y) * scale;
+                    viewport.x = static_cast<float>(rect.x) + (static_cast<float>(rect.width) - viewport.width) * 0.5f;
+                    viewport.y = static_cast<float>(rect.y) + (static_cast<float>(rect.height) - viewport.height) * 0.5f;
+                    viewport.maxDepth = 1.0f;
+                    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+                }
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
+                if (crop)
+                    bindViewport(command_buffer, rect);
             }
         }
 

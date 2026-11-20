@@ -275,18 +275,14 @@ namespace lfs::vis::gui {
             node.name = record.name;
             node.snapshot.world_transform = world;
             node.metadata_known = false;
-            const auto element = document->scene_graph().dom().array_find("nodes", record.uuid.to_string());
-            if (element) {
-                const auto metadata = element->get_json("publication");
-                if (dsrc && metadata && metadata->is_object() && metadata->contains("count") && metadata->contains("sh_degree") &&
-                    metadata->at("count").is_number_integer() && metadata->at("sh_degree").is_number_integer()) {
-                    const auto count = metadata->at("count").get<int64_t>();
-                    const auto degree = metadata->at("sh_degree").get<int64_t>();
-                    if (count > 0 && degree >= 0 && degree <= 3) {
-                        node.snapshot.row_count = static_cast<size_t>(count);
-                        node.snapshot.active_sh_degree = static_cast<int>(degree);
-                        node.metadata_known = !record.payload_diverged;
-                    }
+            if (dsrc && !record.payload_diverged) {
+                const auto metadata = document->scene_graph().published_splat_metadata(record.uuid);
+                if (!metadata)
+                    throw std::runtime_error("gallery_project_not_supported: " + std::string(metadata.error().user_message()));
+                if (*metadata) {
+                    node.snapshot.row_count = static_cast<size_t>((*metadata)->count);
+                    node.snapshot.active_sh_degree = (*metadata)->sh_degree;
+                    node.metadata_known = true;
                 }
             }
             if (dsrc && galleryEncodedAssetReusable(source.payload_format, binding.source_kind, record.payload_diverged)) {

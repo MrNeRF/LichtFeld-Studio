@@ -31,6 +31,7 @@
 #include "imgproc/exception.h"
 #include "imgproc/pinned_buffer.h"
 #include "log.h"
+#include "plugin_selection.h"
 #include "processing_results.h"
 #include "user_executor.h"
 #include <algorithm>
@@ -111,7 +112,15 @@ namespace nvimgcodec {
         nvimgcodecImageInfo_t orig_image_info{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), 0};
         nvimgcodecImageInfo_t image_info{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), 0};
         ProcessorEntry* processor = nullptr;
+        // The batched processor that completeSetup() assigned the sample to, or nullptr. Unlike `processor`, it
+        // doesn't change until the next submission, so the worker threads can still go through the samples while
+        // batchProcess() hands the ones that failed to a single-image fallback.
+        ProcessorEntry* batch_processor = nullptr;
         bool should_copy = false;
+        // Set by ImageGenericEncoder::canProcessImpl() when the selected encoder rejected the
+        // caller's planar layout but accepted the interleaved equivalent, so the core interleaves
+        // before encode(). Unused by the decoder.
+        bool convert_to_interleaved = false;
         // Per-submission params, set in initState() AFTER executor->wait() drains
         // the previous submission. Read by workers via
         // static_cast<const nvimgcodec{Encode,Decode}Params_t*>(params).
@@ -140,12 +149,14 @@ namespace nvimgcodec {
             for (int i = 0; i < 2; ++i) {
                 device_buffers.emplace_back(device_allocator);
             }
+            convert_buffer = DeviceBuffer(device_allocator);
         }
+
         PerThread(const PerThread& oth) = delete;
         PerThread& operator=(const PerThread& oth) = delete;
 
         PerThread(PerThread&& other) noexcept
-            : stream_idx(std::exchange(other.stream_idx, -1)), event(std::exchange(other.event, nullptr)), pinned_buffers(std::move(other.pinned_buffers)), device_buffers(std::move(other.device_buffers)), user_streams(std::move(other.user_streams)) {
+            : stream_idx(std::exchange(other.stream_idx, -1)), event(std::exchange(other.event, nullptr)), pinned_buffers(std::move(other.pinned_buffers)), device_buffers(std::move(other.device_buffers)), convert_buffer(std::move(other.convert_buffer)), user_streams(std::move(other.user_streams)) {
         }
 
         PerThread& operator=(PerThread&& other) noexcept {
@@ -158,6 +169,7 @@ namespace nvimgcodec {
                 event = std::exchange(other.event, nullptr);
                 pinned_buffers = std::move(other.pinned_buffers);
                 device_buffers = std::move(other.device_buffers);
+                convert_buffer = std::move(other.convert_buffer);
                 user_streams = std::move(other.user_streams);
                 elligible_samples_snapshot_ = std::move(other.elligible_samples_snapshot_);
             }
@@ -167,6 +179,7 @@ namespace nvimgcodec {
         ~PerThread() {
             pinned_buffers.clear();
             device_buffers.clear();
+            convert_buffer = DeviceBuffer();
             if (event) {
                 LOG_CUDA_ERROR(cudaEventDestroy(event));
                 event = nullptr;
@@ -179,6 +192,10 @@ namespace nvimgcodec {
         // reusable temporary buffers
         std::vector<PinnedBuffer> pinned_buffers;
         std::vector<DeviceBuffer> device_buffers;
+        // Destination for a layout conversion. Kept out of the device_buffers ring: that ring is
+        // rotated one entry per sample so a buffer is never reused while still in flight, and a
+        // conversion may need a second buffer for the same sample.
+        DeviceBuffer convert_buffer;
         size_t pinned_buffer_idx = 0;
         size_t device_buffer_idx = 0;
 
@@ -353,6 +370,9 @@ namespace nvimgcodec {
                                    const nvimgcodecExecutionParams_t* exec_params,
                                    const char* options = nullptr)
             : logger_(logger), codec_registry_(codec_registry), exec_params_(*exec_params), backends_(exec_params->num_backends), options_(options ? options : ""), executor_(std::move(GetExecutor(exec_params, logger))), num_threads_(executor_->getExecutorDesc()->getNumThreads(executor_->getExecutorDesc()->instance)), num_streams_(0), setup_barrier_(num_threads_ + 1, SetupCompletionFunction{this}) {
+            PluginSelection plugin_selection(exec_params);
+            exec_params_.num_selections = 0;
+            exec_params_.selections = nullptr;
 
             if (exec_params_.device_id == NVIMGCODEC_DEVICE_CURRENT) {
                 CHECK_CUDA(cudaGetDevice(&exec_params_.device_id));
@@ -367,6 +387,63 @@ namespace nvimgcodec {
             }
             exec_params_.backends = backends_.data();
             exec_params_.executor = executor_->getExecutorDesc();
+
+            std::unordered_map<ICodec*, std::vector<Factory*>> selected_factories;
+            const std::string plugin_kind = Impl::process_name() + "r";
+            if (plugin_selection.specified()) {
+                std::unordered_map<std::string, std::vector<std::pair<ICodec*, Factory*>>> factories_by_id;
+                for (size_t codec_idx = 0; codec_idx < codec_registry_->getCodecsCount(); ++codec_idx) {
+                    ICodec* codec = codec_registry_->getCodecByIndex(codec_idx);
+                    for (Factory* factory : Impl::getFactories(codec)) {
+                        if (factory != nullptr) {
+                            factories_by_id[Impl::getId(factory)].emplace_back(codec, factory);
+                        }
+                    }
+                }
+
+                if (plugin_selection.global()) {
+                    for (const std::string& plugin_id : plugin_selection.rules()[0].plugin_ids) {
+                        auto matches = factories_by_id.find(plugin_id);
+                        if (matches == factories_by_id.end()) {
+                            throw Exception(INVALID_PARAMETER, "Unknown " + plugin_kind + " plugin identifier: " + plugin_id);
+                        }
+                        if (matches->second.size() != 1) {
+                            throw Exception(INVALID_PARAMETER, "Ambiguous " + plugin_kind + " plugin identifier: " + plugin_id);
+                        }
+                        selected_factories[matches->second[0].first].push_back(matches->second[0].second);
+                    }
+                } else {
+                    for (const auto& rule : plugin_selection.rules()) {
+                        ICodec* codec = codec_registry_->getCodecByName(rule.codec_name->c_str());
+                        if (codec == nullptr) {
+                            throw Exception(INVALID_PARAMETER, "Unknown codec name in plugin selection: " + *rule.codec_name);
+                        }
+                        for (const std::string& plugin_id : rule.plugin_ids) {
+                            Factory* matching_factory = nullptr;
+                            int num_matches = 0;
+                            auto registrations = factories_by_id.find(plugin_id);
+                            if (registrations != factories_by_id.end()) {
+                                for (const auto& registration : registrations->second) {
+                                    if (registration.first == codec) {
+                                        matching_factory = registration.second;
+                                        ++num_matches;
+                                    }
+                                }
+                            }
+                            if (num_matches != 1) {
+                                throw Exception(INVALID_PARAMETER, "Plugin identifier '" + plugin_id +
+                                                                       "' is not registered exactly once for codec '" + *rule.codec_name + "'");
+                            }
+                            selected_factories[codec].push_back(matching_factory);
+                        }
+                    }
+                }
+            } else {
+                for (size_t codec_idx = 0; codec_idx < codec_registry_->getCodecsCount(); ++codec_idx) {
+                    ICodec* codec = codec_registry_->getCodecByIndex(codec_idx);
+                    selected_factories[codec] = Impl::getFactories(codec);
+                }
+            }
 
             // Deciding number of CUDA streams:
             // Environment variable takes precedence, otherwise default value is the same as num_threads_
@@ -437,21 +514,21 @@ namespace nvimgcodec {
             size_t total_num_processors = 0;
             for (size_t codec_idx = 0; codec_idx < codec_registry_->getCodecsCount(); codec_idx++) {
                 auto* codec = codec_registry_->getCodecByIndex(codec_idx);
-                total_num_processors += Impl::getProcessorsNum(codec);
+                total_num_processors += selected_factories[codec].size();
             }
             processors_.resize(total_num_processors);
 
             size_t processor_count = 0;
+            bool any_backend_allowed = false;
             NVIMGCODEC_LOG_TRACE(logger_, "initializing " << codec_registry_->getCodecsCount() << " codecs");
             for (size_t codec_idx = 0; codec_idx < codec_registry_->getCodecsCount(); codec_idx++) {
                 auto* codec = codec_registry_->getCodecByIndex(codec_idx);
                 NVIMGCODEC_LOG_TRACE(logger_, "initializing " << codec->name());
 
                 ProcessorEntry*& first_processor = codec_to_first_processor_[codec];
-                size_t num_processors = Impl::getProcessorsNum(codec);
-                NVIMGCODEC_LOG_TRACE(logger_, "initializing " << num_processors << " processors for " << codec->name());
-                for (size_t i = 0; i < num_processors; i++) {
-                    auto* factory = Impl::getFactory(codec, i);
+                NVIMGCODEC_LOG_TRACE(
+                    logger_, "initializing " << selected_factories[codec].size() << " processors for " << codec->name());
+                for (auto* factory : selected_factories[codec]) {
                     if (!factory) {
                         continue;
                     }
@@ -474,9 +551,16 @@ namespace nvimgcodec {
                         }
                     }
                     if (!backend_allowed) {
-                        NVIMGCODEC_LOG_DEBUG(logger_, "backend " << backend_kind << " not allowed. Skipping " << Impl::getId(factory));
+                        if (plugin_selection.specified()) {
+                            NVIMGCODEC_LOG_WARNING(logger_, "Selected " << plugin_kind << " plugin '" << Impl::getId(factory)
+                                                                        << "' uses backend kind " << backend_kind
+                                                                        << ", which is excluded by the backend configuration");
+                        } else {
+                            NVIMGCODEC_LOG_DEBUG(logger_, "backend " << backend_kind << " not allowed. Skipping " << Impl::getId(factory));
+                        }
                         continue;
                     }
+                    any_backend_allowed = true;
 
                     assert(processor_count < total_num_processors);
                     auto& processor = processors_[processor_count++];
@@ -487,13 +571,11 @@ namespace nvimgcodec {
                     processor.sample_count_ = 0;
                     processor.elligible_samples_.store(0, std::memory_order_relaxed);
 
-                    if (exec_params->pre_init) {
-                        NVIMGCODEC_LOG_INFO(logger_, "create " << processor.id_ << " load_hint " << processor.backend_params_.load_hint
-                                                               << " load_hint_policy " << processor.backend_params_.load_hint_policy);
-                        processor.instance_ = Impl::createInstance(processor.factory_, &exec_params_, options_.c_str());
-                        processor.has_batched_api = Impl::hasBatchedAPI(processor.instance_.get());
-                        if (processor.has_batched_api)
-                            batched_processors_.insert(&processor);
+                    if (exec_params->pre_init && !createProcessorInstance(processor)) {
+                        // Not linked into the fallback chain, so no sample can be routed to it. Its slot is reused.
+                        processor = ProcessorEntry();
+                        processor_count--;
+                        continue;
                     }
                     if (!first_processor) {
                         first_processor = &processor;
@@ -507,22 +589,15 @@ namespace nvimgcodec {
 
                     NVIMGCODEC_LOG_TRACE(logger_, "initializing " << Impl::getId(factory) << " DONE");
                 }
+                adjustLoadHintOfLastProcessor(first_processor);
             }
             assert(processor_count <= total_num_processors);
-            if (total_num_processors > 0 && processor_count == 0) {
+            // Processors that failed to create don't count here: whether the decoder/encoder can be created
+            // must not depend on pre_init, and without pre_init their creation is only attempted later.
+            if (total_num_processors > 0 && !any_backend_allowed) {
                 throw Exception(ARCH_MISMATCH, "Requested backends not among available processors.");
             }
             processors_.resize(processor_count); // actual number of processors instantiated
-            for (auto& processor : processors_) {
-                if (processor.fallback_ == nullptr &&
-                    (processor.backend_params_.load_hint < 1.0f ||
-                     processor.backend_params_.load_hint_policy == NVIMGCODEC_LOAD_HINT_POLICY_ADAPTIVE_MINIMIZE_IDLE_TIME)) {
-                    NVIMGCODEC_LOG_INFO(
-                        logger_, processor.id_ << ": adjusting load hint to 1.0f (non-adaptive), as there's no fallback processor available");
-                    processor.backend_params_.load_hint = 1.0f;
-                    processor.backend_params_.load_hint_policy = NVIMGCODEC_LOAD_HINT_POLICY_FIXED;
-                }
-            }
         }
 
         virtual ~ImageGenericCodec() {
@@ -553,6 +628,9 @@ namespace nvimgcodec {
         std::vector<nvimgcodecBackend_t> backends_;
         std::string options_;
         std::unique_ptr<IExecutor> executor_;
+        // Whether tasks have been started with executor->run() since the last executor->wait(). The executor
+        // contract allows wait() only after run().
+        bool tasks_started_ = false;
         size_t num_threads_;
         size_t num_streams_;
 
@@ -677,6 +755,7 @@ namespace nvimgcodec {
             sample.orig_image->getImageInfo(&sample.orig_image_info);
             sample.codec = sample.code_stream->getCodec();
             sample.image_info = sample.orig_image_info;
+            sample.convert_to_interleaved = false;
         }
 
         void setupSample(int sample_idx, int tid) {
@@ -699,7 +778,14 @@ namespace nvimgcodec {
             }
 
             auto it = codec_to_first_processor_.find(sample.codec);
-            assert(it != codec_to_first_processor_.end());
+            if (it == codec_to_first_processor_.end()) {
+                sample.processor = nullptr;
+                sample.status = NVIMGCODEC_PROCESSING_STATUS_CODEC_UNSUPPORTED;
+                NVIMGCODEC_LOG_DEBUG(logger_, tid << ": failure #" << sample_idx
+                                                  << " : NVIMGCODEC_PROCESSING_STATUS_CODEC_UNSUPPORTED");
+                curr_promise_->set(sample_idx, ProcessingResult::failure(sample.status));
+                return;
+            }
             sample.processor = it->second;
             sample.status = NVIMGCODEC_PROCESSING_STATUS_CODEC_UNSUPPORTED;
             sample.fallback_status = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
@@ -766,6 +852,7 @@ namespace nvimgcodec {
             nvtx3::scoped_range marker{"completeSetup"};
             for (int sample_idx : curr_order_) {
                 auto& sample = samples_[sample_idx];
+                sample.batch_processor = nullptr;
                 if (sample.status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
                     NVIMGCODEC_LOG_INFO(logger_, "Sample #" << sample.sample_idx << " can't be processed");
                     continue;
@@ -790,28 +877,74 @@ namespace nvimgcodec {
                 assert(sample.status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
                 NVIMGCODEC_LOG_DEBUG(logger_, "Sample #" << sample.sample_idx << " assigned to " << sample.processor->id_);
                 sample.processor->sample_count_++;
+                if (sample.processor->has_batched_api)
+                    sample.batch_processor = sample.processor;
             }
             atomic_idx_.store(0, std::memory_order_relaxed);
         }
 
+        // Creates the processor's instance. Returns false if it could not be created; such a processor must
+        // not be offered any samples, so the caller has to keep it out of its codec's fallback chain.
+        bool createProcessorInstance(ProcessorEntry& processor) {
+            NVIMGCODEC_LOG_INFO(logger_, "create " << processor.id_ << " load_hint " << processor.backend_params_.load_hint
+                                                   << " load_hint_policy " << processor.backend_params_.load_hint_policy);
+            try {
+                processor.instance_ = Impl::createInstance(processor.factory_, &exec_params_, options_.c_str());
+            } catch (const std::exception& e) {
+                NVIMGCODEC_LOG_INFO(logger_, "Skipping " << processor.id_ << ", which could not be created: " << e.what());
+                return false;
+            }
+            if (!processor.instance_) {
+                NVIMGCODEC_LOG_INFO(logger_, "Skipping " << processor.id_ << ", which could not be created");
+                return false;
+            }
+            processor.has_batched_api = Impl::hasBatchedAPI(processor.instance_.get());
+            if (processor.has_batched_api)
+                batched_processors_.insert(&processor);
+            return true;
+        }
+
+        // The last processor in a fallback chain has nowhere to pass samples on to, so it has to take all
+        // of them.
+        void adjustLoadHintOfLastProcessor(ProcessorEntry* processor) {
+            if (!processor)
+                return;
+            while (processor->fallback_)
+                processor = processor->fallback_;
+            if (processor->backend_params_.load_hint < 1.0f ||
+                processor->backend_params_.load_hint_policy == NVIMGCODEC_LOAD_HINT_POLICY_ADAPTIVE_MINIMIZE_IDLE_TIME) {
+                NVIMGCODEC_LOG_INFO(
+                    logger_, processor->id_ << ": adjusting load hint to 1.0f (non-adaptive), as there's no fallback processor available");
+                processor->backend_params_.load_hint = 1.0f;
+                processor->backend_params_.load_hint_policy = NVIMGCODEC_LOAD_HINT_POLICY_FIXED;
+            }
+        }
+
+        // Creates the instances of the codec's processors that haven't been created yet. Processors that
+        // fail to create are removed from the fallback chain.
         ProcessorEntry* initProcessorsAndGetFirstForCodec(const ICodec* codec) {
             auto it = codec_to_first_processor_.find(codec);
-            assert(it != codec_to_first_processor_.end());
-            auto* firstProcessor = it->second;
-            auto* processor = firstProcessor;
-            while (processor) {
-                if (processor->instance_)
-                    break;
-
-                NVIMGCODEC_LOG_INFO(logger_, "create " << processor->id_ << " load_hint " << processor->backend_params_.load_hint
-                                                       << " load_hint_policy " << processor->backend_params_.load_hint_policy);
-                processor->instance_ = Impl::createInstance(processor->factory_, &exec_params_, options_.c_str());
-                processor->has_batched_api = Impl::hasBatchedAPI(processor->instance_.get());
-                if (processor->has_batched_api)
-                    batched_processors_.insert(processor);
-                processor = processor->fallback_;
+            if (it == codec_to_first_processor_.end()) {
+                return nullptr;
             }
-            return firstProcessor;
+            bool removed_any = false;
+            // `link` is the pointer that refers to `*link` in the chain: the codec's first processor
+            // entry or the previous processor's fallback_. Through it, a processor can be unlinked in place.
+            for (ProcessorEntry** link = &it->second; *link;) {
+                auto* processor = *link;
+                if (processor->instance_)
+                    break; // the rest of the chain has been created by an earlier call
+                if (createProcessorInstance(*processor)) {
+                    link = &processor->fallback_;
+                } else {
+                    *link = processor->fallback_;
+                    processor->fallback_ = nullptr;
+                    removed_any = true;
+                }
+            }
+            if (removed_any)
+                adjustLoadHintOfLastProcessor(it->second);
+            return it->second;
         }
 
         void initState(const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images,
@@ -853,12 +986,30 @@ namespace nvimgcodec {
             }
         }
 
+        // A previous submission's future can be ready while its tasks are still running, and initState()
+        // replaces the state they use. Throws, before anything is changed, if the wait fails.
+        void waitForPreviousTasks() {
+            if (!tasks_started_)
+                return;
+            auto executor = executor_->getExecutorDesc();
+            if (executor->wait(executor->instance, exec_params_.device_id) != NVIMGCODEC_STATUS_SUCCESS)
+                throw Exception(INTERNAL_ERROR, "Could not wait for the tasks of the previous " + Impl::process_name());
+            tasks_started_ = false;
+        }
+
         void canProcess(const std::vector<ICodeStream*>& code_streams, const std::vector<IImage*>& images,
                         nvimgcodecProcessingStatus_t* processing_status, int force_format, const void* params) {
             DeviceGuard device_guard(exec_params_.device_id);
+            waitForPreviousTasks();
             initState(code_streams, images, params);
             for (int sample_idx : curr_order_) {
                 auto& sample = samples_[sample_idx];
+                if (exec_params_.pre_init) {
+                    // initState() leaves this to setupSample(), which is only part of processing.
+                    initSample(sample_idx);
+                    auto it = sample.codec ? codec_to_first_processor_.find(sample.codec) : codec_to_first_processor_.end();
+                    sample.processor = it != codec_to_first_processor_.end() ? it->second : nullptr;
+                }
                 processing_status[sample_idx] = sample.status = NVIMGCODEC_PROCESSING_STATUS_CODEC_UNSUPPORTED;
                 if (!sample.codec) {
                     continue;
@@ -887,15 +1038,13 @@ namespace nvimgcodec {
 
         bool shouldProcessSingleImage(int sample_idx) {
             auto& sample = samples_[sample_idx];
-            if (curr_promise_->isSet(sample_idx))
-                return false;
-            else if (sample.processor->has_batched_api)
-                return false;
-            else
-                return true;
+            return !sample.batch_processor && !curr_promise_->isSet(sample_idx);
         }
 
-        void processSample(int sample_idx, int tid) {
+        // Processes the sample with sample.processor or, if that fails, with the next suitable processors in
+        // the fallback chain. check_first_processor: sample.processor has not been asked yet whether it can
+        // process the sample (setupSample() asks it).
+        void processSample(int sample_idx, int tid, bool check_first_processor = false) {
             auto& t = per_thread_[tid];
             NVIMGCODEC_LOG_TRACE(logger_, tid << ": processSample");
 
@@ -907,7 +1056,7 @@ namespace nvimgcodec {
 
             preSync(sample, tid);
 
-            bool failed = false;
+            bool failed = check_first_processor;
             for (auto*& processor = sample.processor; processor; processor = nextParallelProcessor(processor->fallback_)) {
                 if (failed) {
                     NVIMGCODEC_LOG_DEBUG(logger_, tid << ": " << processor->id_ << " canProcess #" << sample.sample_idx);
@@ -950,7 +1099,7 @@ namespace nvimgcodec {
             auto executor = executor_->getExecutorDesc();
 
             NVIMGCODEC_LOG_TRACE(logger_, "waiting for previous tasks to finish");
-            executor->wait(executor->instance, exec_params_.device_id);
+            waitForPreviousTasks();
             NVIMGCODEC_LOG_TRACE(logger_, "previous tasks finished");
 
             assert(static_cast<int>(per_thread_.size()) >= executor->getNumThreads(executor->instance));
@@ -1002,6 +1151,7 @@ namespace nvimgcodec {
                     executor->schedule(executor->instance, exec_params_.device_id, task_idx, this, setup_task);
                 }
                 executor->run(executor->instance, exec_params_.device_id);
+                tasks_started_ = true;
                 cooperativeSetup(num_threads_); // one past the last thread idx
                 setup_barrier_.arrive_and_wait();
                 // completeSetup() is automatically executed by the last thread to arrive at the barrier
@@ -1030,7 +1180,7 @@ namespace nvimgcodec {
                 for (int sample_idx : curr_order_) {
                     auto& sample = samples_[sample_idx];
                     assert(sample_idx == sample.sample_idx);
-                    if (sample.processor == processor_ptr && sample.status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                    if (sample.batch_processor == processor_ptr && sample.status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
                         batched_processed_.push_back(&sample);
                         batched_code_stream_descs_.push_back(sample.code_stream->getCodeStreamDesc());
                         batched_image_descs_.push_back(sample.getImageDesc());
@@ -1062,12 +1212,16 @@ namespace nvimgcodec {
                         NVIMGCODEC_LOG_INFO(
                             logger_, processor.id_ << " failed #" << sample->sample_idx << ". Trying next: " << next_processor->id_);
                         sample->processor = next_processor;
+                        // The failed batch may have pointed the descriptor at its temporary buffers, and the next
+                        // processor must be asked about the caller's output.
+                        sample->image_info = sample->orig_image_info;
                         auto parallel_process_task = [](int tid, int sample_idx, void* context) -> void {
                             auto* this_ptr = reinterpret_cast<ImageGenericCodec<Impl, Factory, Processor>*>(context);
                             DeviceGuard device_guard(this_ptr->exec_params_.device_id);
-                            this_ptr->setupSample(sample_idx, tid);
-                            assert(this_ptr->shouldProcessSingleImage(sample_idx));
-                            this_ptr->processSample(sample_idx, tid);
+                            // Continue from the processor selected above. setupSample() would start over from
+                            // the codec's first processor and could select the batched one that just failed.
+                            assert(!this_ptr->curr_promise_->isSet(sample_idx));
+                            this_ptr->processSample(sample_idx, tid, true);
                             // We don't have a way to know if this thread has already executed postSync, so we need to add sync with user stream here.
                             auto& t = this_ptr->per_thread_[tid];
                             auto& s = this_ptr->per_stream_[t.stream_idx];
@@ -1087,6 +1241,7 @@ namespace nvimgcodec {
                 }
                 if (fallback_count > 0) {
                     executor->run(executor->instance, exec_params_.device_id);
+                    tasks_started_ = true;
                 }
 
                 NVIMGCODEC_LOG_DEBUG(logger_, processor.id_ + " DONE");
@@ -1133,6 +1288,15 @@ namespace nvimgcodec {
             };
 
             for (auto* processor : batched_processors_) {
+                // With a full fixed load hint, give all samples to the batch decoder.
+                // Otherwise, a first call with one sample limits all later batches to one.
+                // Fractional and adaptive hints still divide the load.
+                if (processor->has_batched_api &&
+                    processor->backend_params_.load_hint_policy == NVIMGCODEC_LOAD_HINT_POLICY_FIXED &&
+                    processor->backend_params_.load_hint >= 1.0f) {
+                    processor->sample_count_hint_ = num_samples_;
+                    continue;
+                }
                 if (!processor->has_batched_api || !processor->fallback_) {
                     processor->sample_count_hint_ = num_samples_;
                 } else if (processor->backend_params_.load_hint_policy == NVIMGCODEC_LOAD_HINT_POLICY_ADAPTIVE_MINIMIZE_IDLE_TIME) {
