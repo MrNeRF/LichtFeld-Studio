@@ -32,3 +32,14 @@ body {
 .context-menu-label {
     white-space: normal;
 }
+
+.context-menu-item[disabled] {
+    opacity: 0.45;
+    cursor: default;
+    pointer-events: none;
+}
+
+.context-menu-item[disabled]:hover,
+.context-menu-item[disabled]:active {
+    background-color: transparent;
+}

@@ -27,9 +27,20 @@ namespace lfs::vis::vr {
 
         // Finds the runtime and headset; the status explains a failure.
         bool prepare();
+        // The same for a headset connected after startup: it is joined on the
+        // Vulkan device the app already runs on, when that device has what the
+        // runtime asks for.
+        bool prepareOn(const VulkanContext& context);
         // Vulkan instance and device creation through the runtime; valid while available().
         [[nodiscard]] VulkanDeviceHooks deviceHooks();
+        // For an app that starts without a headset: the Vulkan extensions that let
+        // prepareOn() join one later.
+        [[nodiscard]] static VulkanDeviceHooks lateJoinHooks();
         void setUnavailable(std::string reason);
+        // The runtime and its headset were found. Between two sessions the
+        // runtime is given back, so that it does not count the app as running
+        // (SteamVR would show it as the running application, and close it
+        // when it quits); start() joins it again.
         [[nodiscard]] bool available() const;
         [[nodiscard]] bool active() const;
         // The runtime has begun the session and paces frames.
@@ -40,10 +51,12 @@ namespace lfs::vis::vr {
 
         // Reads the VR preferences; the view starts at the desktop camera.
         lfs::Status start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position);
+        // Ends the session the way the runtime expects, then gives the runtime back.
         void stop();
         void recenter();
         void snapTurn(int direction);
         void setMoveSpeed(float meters_per_second);
+        void setShowHands(bool show);
         // move: keyboard axes (+x right, +y up, +z back). Returns false once the
         // runtime ends the session; a failure stops it.
         lfs::Result<bool> frame(glm::vec3 move, const RenderEyes& render);

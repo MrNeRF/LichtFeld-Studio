@@ -61,6 +61,7 @@ namespace lfs::vis::gui {
         void releaseRendererResources();
 
         void setInput(const PanelInputState* input) { input_ = input; }
+        void suspendInput(bool keep_pointer_input = false);
         void setKeyboardHandler(std::function<bool(const FrameInputEvent&)> handler) { keyboard_handler_ = std::move(handler); }
         bool hasInput() const { return input_ != nullptr; }
         bool wantsKeyboard() const { return wants_keyboard_; }

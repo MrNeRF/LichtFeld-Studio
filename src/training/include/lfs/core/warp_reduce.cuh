@@ -118,6 +118,28 @@ namespace lfs::core {
             return val;
         }
 
+        // block_reduce_sum of N values at once, with two block syncs instead of 2N. Sums are valid only in thread 0.
+        template <int N>
+        __device__ void block_reduce_sum_n(float (&values)[N]) {
+            __shared__ float shared[32][N];
+            const int lane = threadIdx.x % 32;
+            const int warp_id = threadIdx.x / 32;
+#pragma unroll
+            for (int i = 0; i < N; ++i) {
+                values[i] = warp_reduce_sum(values[i]);
+                if (lane == 0)
+                    shared[warp_id][i] = values[i];
+            }
+            __syncthreads();
+            if (warp_id == 0) {
+                const bool has_warp = threadIdx.x < (blockDim.x + 31) / 32;
+#pragma unroll
+                for (int i = 0; i < N; ++i)
+                    values[i] = warp_reduce_sum(has_warp ? shared[lane][i] : 0.0f);
+            }
+            __syncthreads();
+        }
+
         /**
          * @brief Block-level max reduction using warp primitives
          */

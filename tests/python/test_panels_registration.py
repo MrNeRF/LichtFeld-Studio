@@ -146,6 +146,8 @@ def _install_recording_lf(monkeypatch):
         "IMAGE_PREVIEW_DELETE",
         "IMAGE_PREVIEW_GENERATE",
         "IMAGE_PREVIEW_REMOVE_POINT",
+        "TOGGLE_LEFT_DOCK",
+        "TOGGLE_RIGHT_DOCK",
     )
     tool_mode = IntEnum("ToolMode", {name: i for i, name in enumerate(tool_mode_names)})
     action_enum = IntEnum("Action", {name: i for i, name in enumerate(action_names)})

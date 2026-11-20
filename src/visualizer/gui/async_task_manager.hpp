@@ -21,6 +21,7 @@
 #include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "scene/external_preview.hpp"
 #include "training/training_cropbox_mask.hpp"
 #include "visualizer/apriltag_calibration.hpp"
@@ -65,6 +66,24 @@ namespace lfs::vis {
 
             void shutdown();
             AssistedMasking& assistedMasking() { return *assisted_masking_; }
+            enum class ModelCacheAction { Download,
+                                          Verify,
+                                          Remove };
+            struct ModelCacheEntry {
+                preprocessing::ModelDescriptor descriptor;
+                preprocessing::ModelCacheState cache;
+                std::string status, message, error, error_code;
+                bool running = false, canceling = false, show_progress = false;
+                float progress = 0;
+                bool can_download = false, can_verify = false, can_remove = false;
+            };
+            [[nodiscard]] std::vector<ModelCacheEntry> modelCacheEntries() const;
+            [[nodiscard]] std::string_view modelCacheActionName() const;
+            bool startModelCache(preprocessing::CachedModel model, ModelCacheAction action);
+            void cancelModelCache(uint64_t expected_job = 0);
+            [[nodiscard]] std::optional<JobSnapshot> modelCacheJob() const { return jobs_.peek(model_cache_job_); }
+            [[nodiscard]] preprocessing::CachedModel modelCacheModel() const { return model_cache_model_; }
+            [[nodiscard]] ModelCacheAction modelCacheAction() const { return model_cache_action_; }
             bool uploadExternalPreview(std::shared_ptr<ExternalPreviewUpdate> update);
             void cancelExternalPreviewUpload();
             void removeExternalPreview(const core::Uuid& uuid);
@@ -415,6 +434,10 @@ namespace lfs::vis {
             AprilTagScanState apriltag_state_;
 
             JobRegistry& jobs_;
+            JobHandle model_cache_job_;
+            preprocessing::CachedModel model_cache_model_ = preprocessing::CachedModel::Sam2;
+            ModelCacheAction model_cache_action_ = ModelCacheAction::Download;
+            std::optional<std::jthread> model_cache_thread_;
             std::unique_ptr<AssistedMasking> assisted_masking_;
             JobHandle collision_job_;
             std::future<void> collision_worker_;

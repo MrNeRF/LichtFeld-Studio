@@ -51,6 +51,11 @@ set(TENSOR_SOURCES
         nn/weight_file.cpp
         nn/weight_file_open.cpp
         nn/activation_arena.cpp
+        nn/models/bert_text.cpp
+        nn/models/swin_tiny.cpp
+        nn/models/llmdet_encoder.cpp
+        nn/models/llmdet_decoder.cpp
+        nn/models/llmdet.cpp
         nn/models/moge2.cpp
         nn/models/sam2.cpp
         nn/models/sam2_video.cpp
@@ -82,6 +87,7 @@ set(CORE_SOURCES
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
+        camera_views.cpp
         collision_volume.cpp
         collision_walk.cpp
         collision_voxelization.cpp

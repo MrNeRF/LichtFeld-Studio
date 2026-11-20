@@ -199,7 +199,7 @@ namespace lfs::diagnostics {
                 }
             }
             for (const std::string_view name : {
-                     "refine_weight_max", "refine_ratio_max", "vis_count", "free_mask",
+                     "refine_weight_max", "refine_ratio_max", "vis_count", "free_mask", "ray_depth_state",
                      "refine_counts_device", "edge.precomputed_scores", "edge.score_sum",
                      "edge.view_scores", "explore.score_sum", "explore.error_hw",
                      "explore.view_scores", "explore.means2d", "explore.radii",

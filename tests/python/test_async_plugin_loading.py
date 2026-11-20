@@ -336,3 +336,88 @@ def test_cancelled_dependency_sync_never_writes_stamp(tmp_path, monkeypatch):
     with pytest.raises(PluginLoadCancelled):
         installer.install_dependencies()
     assert not installer._deps_stamp_path().exists()
+
+
+def test_install_autoload_keeps_panel_template_usable(
+    async_plugin_manager, bypass_plugin_installer, monkeypatch
+):
+    from lfs_plugins.installer import PluginSourceInfo
+
+    manager, plugins_dir = async_plugin_manager
+    name = "async_test_installed_panel"
+    staging = plugins_dir / ".panel-stage"
+    _write_plugin(
+        staging, name,
+        "from pathlib import Path\n"
+        "class Panel:\n"
+        "    template = str(Path(__file__).with_name('panel.rml'))\n",
+    )
+    (staging / "panel.rml").write_text("panel content")
+    monkeypatch.setattr(
+        "lfs_plugins.manager.prepare_github_archive",
+        lambda *args: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
+    )
+
+    assert manager.install("owner/repo") == name
+    template = Path(manager._plugins[name].module.Panel.template)
+    assert template == plugins_dir / name / "panel.rml"
+    assert template.read_text() == "panel content"
+
+
+def test_cancel_after_install_activation_unloads_before_removing_files(
+    async_plugin_manager, bypass_plugin_installer, monkeypatch, tmp_path
+):
+    from lfs_plugins import PluginLoadCancelled
+    from lfs_plugins.installer import PluginSourceInfo
+
+    manager, plugins_dir = async_plugin_manager
+    name = "async_test_cancelled_install"
+    staging = plugins_dir / ".cancelled-stage"
+    marker = tmp_path / "unloaded.txt"
+    _write_plugin(
+        staging, name,
+        "from pathlib import Path\n"
+        "def on_unload():\n"
+        f"    Path({str(marker)!r}).write_text(Path(__file__).read_text())\n",
+    )
+    monkeypatch.setattr(
+        "lfs_plugins.manager.prepare_github_archive",
+        lambda *args, **kwargs: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
+    )
+    cancel = threading.Event()
+    manager.on_plugin_loaded(lambda info: cancel.set())
+
+    with pytest.raises(PluginLoadCancelled):
+        manager.install("owner/repo", should_cancel=cancel.is_set)
+
+    assert "def on_unload()" in marker.read_text()
+    assert not (plugins_dir / name).exists()
+    assert manager.get_state(name) is None
+
+
+def test_install_preserves_existing_plugin_on_name_conflict(
+    async_plugin_manager, bypass_plugin_installer, monkeypatch
+):
+    from lfs_plugins import PluginError, PluginState
+    from lfs_plugins.installer import PluginSourceInfo
+
+    manager, plugins_dir = async_plugin_manager
+    name = "async_test_existing_install"
+    target = plugins_dir / name
+    _write_plugin(target, name, "VALUE = 'original'\n")
+    assert manager.load(name)
+    original = manager._plugins[name]
+    staging = plugins_dir / ".conflicting-stage"
+    _write_plugin(staging, name, "")
+    monkeypatch.setattr(
+        "lfs_plugins.manager.prepare_github_archive",
+        lambda *args: (staging, PluginSourceInfo(transport="archive", origin="owner/repo")),
+    )
+
+    with pytest.raises(PluginError, match="already exists"):
+        manager.install("owner/repo")
+
+    assert manager._plugins[name] is original
+    assert original.state == PluginState.ACTIVE
+    assert (target / "__init__.py").read_text() == "VALUE = 'original'\n"
+    assert not staging.exists()

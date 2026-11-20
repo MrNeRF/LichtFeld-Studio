@@ -990,6 +990,7 @@ namespace lfs::vis {
         impl_->values["vr_resolution_scale"] = clamped.resolution_scale;
         impl_->values["vr_scene_units_per_meter"] = clamped.scene_units_per_meter;
         impl_->values["vr_move_speed"] = clamped.move_speed;
+        impl_->values["vr_show_hands"] = clamped.show_hands;
         if (persist)
             impl_->saveLocked();
     }
@@ -1005,7 +1006,25 @@ namespace lfs::vis {
             .resolution_scale = field<float>(values, "vr_resolution_scale", defaults.resolution_scale),
             .scene_units_per_meter = field<float>(values, "vr_scene_units_per_meter", defaults.scene_units_per_meter),
             .move_speed = field<float>(values, "vr_move_speed", defaults.move_speed),
+            .show_hands = field<bool>(values, "vr_show_hands", defaults.show_hands),
         });
+    }
+
+    void UserPreferences::setVrRuntime(const std::string& manifest) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        if (manifest.empty())
+            impl_->values.erase("vr_runtime");
+        else
+            impl_->values["vr_runtime"] = manifest;
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::vrRuntime() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("vr_runtime");
+        return it != impl_->values.end() && it->is_string() ? it->get<std::string>() : std::string{};
     }
     void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);

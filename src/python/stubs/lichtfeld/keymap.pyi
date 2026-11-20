@@ -17,6 +17,10 @@ class Action(enum.Enum):
 
     IMAGE_PREVIEW_REMOVE_POINT = 109
 
+    TOGGLE_LEFT_DOCK = 110
+
+    TOGGLE_RIGHT_DOCK = 111
+
     NONE = 0
 
     CAMERA_ORBIT = 1

@@ -318,6 +318,47 @@ namespace lfs::core {
             publish_cache_bytes();
         }
 
+        struct TakenBlock {
+            void* ptr = nullptr;
+            cudaStream_t stream = nullptr;
+        };
+
+        // Takes every cached block out of the cache, so that blocks freed later
+        // are not mixed in. Release them with free_taken.
+        std::vector<TakenBlock> take_cache() {
+            std::vector<TakenBlock> taken;
+            for (size_t i = 0; i < NUM_BUCKETS; ++i) {
+                std::lock_guard<std::mutex> lock(buckets_[i].mutex);
+                for (const CachedBlock& block : buckets_[i].cache) {
+                    taken.push_back({block.ptr, block.stream});
+                }
+                stats_.bytes_cached.fetch_sub(buckets_[i].cached_bytes, std::memory_order_relaxed);
+                buckets_[i].cache.clear();
+                buckets_[i].cached_bytes = 0;
+            }
+            publish_cache_bytes();
+            return taken;
+        }
+
+        // Frees blocks from take_cache: on the legacy stream when their streams
+        // have since been synchronized, else after their last use.
+        static void free_taken(const std::vector<TakenBlock>& taken, const bool synchronized) {
+            for (const TakenBlock& block : taken) {
+                const cudaStream_t stream = synchronized ? nullptr : block.stream;
+                LFS_CUDA_BREADCRUMB_STREAM_ARGS(
+                    "tensor.bucket.trim", stream, reinterpret_cast<uintptr_t>(block.ptr), 0,
+                    reinterpret_cast<uintptr_t>(stream));
+                const cudaError_t free_status = cudaFreeAsync(block.ptr, stream);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFreeAsync(size-bucket cache trim)",
+                        ::lfs::core::detail::format_cuda_safe("ptr={}, stream={}", block.ptr,
+                                                              static_cast<void*>(stream)),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                }
+            }
+        }
+
         const Stats& stats() const { return stats_; }
 
         // Fresh bucket allocations are issued by CudaMemoryPool so it can keep

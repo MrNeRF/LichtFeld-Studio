@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/nn/weight_file.hpp"
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -23,7 +24,7 @@ namespace lfs::app {
     void install_image_loader(bool use_cpu_memory);
 
     // LFS_LPIPS_WEIGHTS, else the downloaded weights; nullopt with a warning when neither is available.
-    [[nodiscard]] std::optional<std::filesystem::path> prepare_lpips_weights(bool allow_download);
+    [[nodiscard]] std::optional<core::nn::WeightFile> prepare_lpips_weights(bool allow_download);
 
     class Application {
     public:

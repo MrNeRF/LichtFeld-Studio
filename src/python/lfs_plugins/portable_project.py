@@ -233,7 +233,7 @@ class ProjectFile:
         graph = self.chapters[b'SCNG']
         nodes = graph['nodes']
         _check(isinstance(nodes, list) and 0 < len(nodes) <= codec.MAX_NODES)
-        self._nodes, manifest_nodes, bound, total = [], [], set(), 0
+        self._nodes, manifest_nodes, bound = [], [], set()
         for i, node in enumerate(nodes):
             _check(node['type'] == 'splat' and node.get('parent_uuid') is None and node['visible'] is True)
             _check(node.get('training_enabled') is False)
@@ -247,9 +247,10 @@ class ProjectFile:
             transform = node['local_transform']
             _check(isinstance(transform, list) and len(transform) == 16)
             matrix = codec._matrix([[transform[column * 4 + row] for column in range(4)] for row in range(4)])
-            publication = node['publication']
-            count, degree = publication['count'], publication['sh_degree']
-            _check(type(count) is int and 0 < count <= codec.MAX_SPLATS)
+            publication = node.get('publication')
+            _check(isinstance(publication, dict), 'Published splat metadata is invalid.')
+            count, degree = publication.get('count'), publication.get('sh_degree')
+            _check(type(count) is int and 0 < count)
             codec._degree(degree)
             stream = SliceReader(source, asset['offset'], asset['size'])
             if extension == 'ply':
@@ -261,8 +262,6 @@ class ProjectFile:
             else:
                 _check(degree <= validate_compressed(stream, extension, count),
                        'Published lighting detail exceeds the encoded splat data.')
-            total += count
-            _check(total <= codec.MAX_SPLATS)
             self._nodes.append(asset)
             manifest_nodes.append({'file': f'nodes/{i:06d}.{extension}', 'count': count, 'shDegree': degree,
                                    'transform': matrix, 'sha256': '', 'bytes': asset['size']})
@@ -341,7 +340,7 @@ def spz_stream_sizes(count, degree):
 def validate_spz(stream, count):
     """Bounded SPZ v4 NGSP header/TOC checks. Does not decode ZSTD payloads."""
     size = stream.size
-    _check(type(count) is int and 0 < count <= codec.MAX_SPLATS)
+    _check(type(count) is int and 0 < count)
     _check(size >= SPZ_HEADER_SIZE, 'Incomplete SPZ payload.')
     header = stream.read(SPZ_HEADER_SIZE)
     _check(len(header) == SPZ_HEADER_SIZE)

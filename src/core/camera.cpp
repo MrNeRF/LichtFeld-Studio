@@ -11,6 +11,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
+#include "core/normal_prior_rotation.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -61,6 +62,27 @@ namespace lfs::core {
                 result[row * 3 + col] = R_acc(row, col);
             }
         }
+        return result;
+    }
+
+    std::optional<std::array<float, 9>> normal_prior_rotation(
+        const Camera& camera, const bool world_space, const std::array<float, 9>& prior_world_rotation) {
+        std::array<float, 9> result{};
+        if (!world_space) {
+            if (!camera.is_undistort_prepared() || !is_view(camera.undistort_params()))
+                return std::nullopt;
+            const auto& view_to_source = camera.undistort_params().view_rotation;
+            for (size_t row = 0; row < 3; ++row)
+                for (size_t col = 0; col < 3; ++col)
+                    result[row * 3 + col] = view_to_source[col * 3 + row];
+            return result;
+        }
+
+        const auto w2c = camera_rotation_to_cpu_array(camera.R());
+        for (size_t row = 0; row < 3; ++row)
+            for (size_t col = 0; col < 3; ++col)
+                for (size_t k = 0; k < 3; ++k)
+                    result[row * 3 + col] += w2c[row * 3 + k] * prior_world_rotation[k * 3 + col];
         return result;
     }
 
@@ -170,11 +192,41 @@ namespace lfs::core {
         }
     }
 
+    std::shared_ptr<Camera> Camera::make_pinhole_view(const UndistortParams& params, const int uid,
+                                                      const std::string& image_name) const {
+        const auto rotation = Tensor::from_vector(
+                                  std::vector<float>(std::begin(params.view_rotation), std::end(params.view_rotation)),
+                                  {3, 3}, Device::CPU)
+                                  .transpose(0, 1)
+                                  .contiguous();
+        auto view = std::make_shared<Camera>(
+            rotation.matmul(_R.cpu()), rotation.matmul(_T.cpu().reshape({3, 1})).reshape({3}),
+            params.dst_fx, params.dst_fy, params.dst_cx, params.dst_cy, Tensor{}, Tensor{},
+            CameraModelType::PINHOLE, image_name, _image_path, _mask_path,
+            params.dst_width, params.dst_height, uid, _camera_id, _depth_path, _normal_path);
+        view->_photograph_uid = _uid;
+        view->_split = _split;
+        view->_has_alpha = _has_alpha;
+        view->_has_image = _has_image;
+        view->_mask_asset_uuid = _mask_asset_uuid;
+        view->_mask_asset_owner = _mask_asset_owner;
+        view->_in_memory_mask_raw = _in_memory_mask_raw;
+        view->_mask_revision = _mask_revision;
+        view->_sfm_observations = _sfm_observations;
+        view->_sfm_observation_source = _sfm_observation_source;
+        view->_sfm_observation_node = _sfm_observation_node;
+        view->_sfm_observation_count = _sfm_observation_count;
+        view->adopt_undistortion(params, UndistortDestination::Calibration);
+        view->prepare_undistortion();
+        view->restore_image_dimensions(view->camera_width(), view->camera_height(), false);
+        return view;
+    }
+
     Camera::~Camera() {
         // Destroy CUDA stream if it was created
         if (_stream) {
             CudaMemoryPool::instance().release_stream(_stream);
-            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
+            LFS_CUDA_LOG_STREAM_DESTROY(_stream, "camera stream teardown");
             _stream = nullptr;
         }
     }
@@ -184,6 +236,7 @@ namespace lfs::core {
           _FoVy(other._FoVy),
           _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),
@@ -198,6 +251,8 @@ namespace lfs::core {
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
           _normal_path(std::move(other._normal_path)),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -251,7 +306,7 @@ namespace lfs::core {
             // Destroy our current stream
             if (_stream) {
                 CudaMemoryPool::instance().release_stream(_stream);
-                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
+                LFS_CUDA_LOG_STREAM_DESTROY(_stream, "camera stream teardown");
             }
 
             // Move all members
@@ -259,6 +314,7 @@ namespace lfs::core {
             _FoVy = other._FoVy;
             _uid = other._uid;
             _camera_id = other._camera_id;
+            _photograph_uid = other._photograph_uid;
             _focal_x = other._focal_x;
             _focal_y = other._focal_y;
             _center_x = other._center_x;
@@ -273,6 +329,8 @@ namespace lfs::core {
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
             _normal_path = std::move(other._normal_path);
+            _depth_prior_size = other._depth_prior_size;
+            _normal_prior_size = other._normal_prior_size;
             _has_alpha = other._has_alpha;
             _has_image = other._has_image;
             _split = other._split;
@@ -327,6 +385,7 @@ namespace lfs::core {
     Camera::Camera(const Camera& other, const Tensor& transform)
         : _uid(other._uid),
           _camera_id(other._camera_id),
+          _photograph_uid(other._photograph_uid),
           _focal_x(other._focal_x),
           _focal_y(other._focal_y),
           _center_x(other._center_x),
@@ -341,6 +400,8 @@ namespace lfs::core {
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
           _normal_path(other._normal_path),
+          _depth_prior_size(other._depth_prior_size),
+          _normal_prior_size(other._normal_prior_size),
           _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
@@ -351,7 +412,8 @@ namespace lfs::core {
           _image_size_loaded(other._image_size_loaded),
           _source_image_width(other._source_image_width),
           _source_image_height(other._source_image_height),
-          _cam_position(other._cam_position),
+          // Its own position, like the transform the caller hands it: moving one camera never moves the other.
+          _cam_position(other._cam_position.is_valid() ? other._cam_position.clone() : Tensor{}),
           _FoVx(other._FoVx),
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
@@ -557,8 +619,15 @@ namespace lfs::core {
     static bool path_is_under_root(const std::filesystem::path& stored,
                                    const std::filesystem::path& old_root,
                                    std::filesystem::path& relative_out) {
+        // A saved UNC root must not capture a native POSIX path that happens
+        // to spell /server/share after separator normalization.
+        if (path_to_utf8(old_root).starts_with("\\\\")) {
+            const auto text = path_to_utf8(stored);
+            if (!text.starts_with("\\\\") && !text.starts_with("//"))
+                return false;
+        }
         const auto relative =
-            stored.lexically_normal().lexically_relative(old_root.lexically_normal());
+            path_from_source_format(stored, old_root).lexically_normal().lexically_relative(path_from_source_format(old_root, old_root).lexically_normal());
         if (relative.empty()) {
             return false;
         }
@@ -594,12 +663,14 @@ namespace lfs::core {
 
     void Camera::set_depth_path(std::filesystem::path path) {
         _depth_path = std::move(path);
+        _depth_prior_size = {};
         _depth_quantization_step = -1.0f;
         release_depth_cache();
     }
 
     void Camera::set_normal_path(std::filesystem::path path) {
         _normal_path = std::move(path);
+        _normal_prior_size = {};
         release_normal_cache();
     }
 
@@ -940,7 +1011,8 @@ namespace lfs::core {
         // Decode vectors before validity-aware resampling and normalization.
         normal = normal.mul(2.0f).sub(1.0f);
 
-        if (decode.srgb || decode.flip_yz || decode.world_space) {
+        const auto rotation = normal_prior_rotation(*this, decode.world_space, decode.world_rotation);
+        if (decode.srgb || decode.flip_yz || rotation) {
             auto normal_cpu = normal.cpu().contiguous();
             const size_t pixel_count = normal_cpu.shape()[1] * normal_cpu.shape()[2];
             if (decode.srgb) {
@@ -949,22 +1021,8 @@ namespace lfs::core {
             if (decode.flip_yz) {
                 flip_normal_prior_yz_chw(normal_cpu.ptr<float>(), pixel_count);
             }
-            if (decode.world_space) {
-                const std::array<float, 9> r_w2c = camera_rotation_to_cpu_array(_R);
-                std::array<float, 9> world_to_camera{};
-                for (size_t row = 0; row < 3; ++row) {
-                    for (size_t col = 0; col < 3; ++col) {
-                        float sum = 0.0f;
-                        for (size_t k = 0; k < 3; ++k) {
-                            sum += r_w2c[row * 3 + k] * decode.world_rotation[k * 3 + col];
-                        }
-                        world_to_camera[row * 3 + col] = sum;
-                    }
-                }
-                transform_normal_prior_world_to_camera_chw(
-                    normal_cpu.ptr<float>(),
-                    pixel_count,
-                    world_to_camera);
+            if (rotation) {
+                transform_normal_prior_world_to_camera_chw(normal_cpu.ptr<float>(), pixel_count, *rotation);
             }
             normal = normal_cpu.to(Device::CUDA, _stream);
             if (_stream) {
@@ -1102,10 +1160,47 @@ namespace lfs::core {
         }
     }
 
+    void Camera::set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream) {
+        set_pose(R, T, stream, nullptr);
+    }
+
+    void Camera::set_pose(const Tensor& R, const Tensor& T, cudaStream_t stream, const float* shared_centre) {
+        auto R_cpu = R.cpu().contiguous();
+        auto T_cpu = T.cpu().contiguous();
+        if (R_cpu.numel() != 9 || T_cpu.numel() != 3)
+            throw std::invalid_argument("Camera::set_pose expects a 3x3 R and a 3-element T");
+        const auto r = R_cpu.to_vector();
+        const auto t = T_cpu.to_vector();
+        const std::array<float, 16> w2c{r[0], r[1], r[2], t[0], r[3], r[4], r[5], t[1],
+                                        r[6], r[7], r[8], t[2], 0.0f, 0.0f, 0.0f, 1.0f};
+        std::array<float, 3> centre{};
+        if (!shared_centre) {
+            for (int j = 0; j < 3; ++j)
+                centre[j] = -(r[j] * t[0] + r[3 + j] * t[1] + r[6 + j] * t[2]);
+            shared_centre = centre.data();
+        }
+        LFS_CUDA_TRY(cudaMemcpyAsync(_world_view_transform.ptr<float>(), w2c.data(), sizeof(w2c),
+                                     cudaMemcpyHostToDevice, stream),
+                     stream, "camera pose upload");
+        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), shared_centre, sizeof(centre),
+                                     cudaMemcpyHostToDevice, stream),
+                     stream, "camera position upload");
+        LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, "camera pose upload sync");
+        _R = R_cpu.reshape({3, 3});
+        _T = T_cpu.reshape({3});
+    }
+
+    void Camera::set_device_pose(const float* w2c, const float* cam_position, cudaStream_t stream) {
+        LFS_CUDA_TRY(cudaMemcpyAsync(_world_view_transform.ptr<float>(), w2c, 16 * sizeof(float),
+                                     cudaMemcpyDeviceToDevice, stream),
+                     stream, "camera device pose");
+        LFS_CUDA_TRY(cudaMemcpyAsync(_cam_position.ptr<float>(), cam_position, 3 * sizeof(float),
+                                     cudaMemcpyDeviceToDevice, stream),
+                     stream, "camera device position");
+    }
+
     bool Camera::has_distortion() const noexcept {
-        // Equirectangular is a complete projection model handled natively by the
-        // rasterizer; there is no pinhole image to "undistort" to, so it must not
-        // be routed through the undistortion path.
+        // A panorama has no lens correction of its own.
         if (_camera_model_type == CameraModelType::EQUIRECTANGULAR)
             return false;
         if (_radial_distortion.is_valid() && _radial_distortion.numel() > 0)

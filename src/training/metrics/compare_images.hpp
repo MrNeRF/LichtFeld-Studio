@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "metrics.hpp"
 
@@ -60,7 +61,7 @@ namespace lfs::training {
     // Scores every test image against its reference with the evaluation pipeline and writes compare.json and
     // compare_report.txt to params.output_path.
     [[nodiscard]] lfs::Result<CompareResult> compare_image_sets(
-        const lfs::core::param::CompareParameters& params, std::optional<std::filesystem::path> lpips_weights);
+        const lfs::core::param::CompareParameters& params, std::function<std::optional<core::nn::WeightFile>()> lpips_weights);
 
     // The inputs, the settings, the mean scores and each image's scores, as written to compare.json.
     [[nodiscard]] nlohmann::ordered_json compare_json(const lfs::core::param::CompareParameters& params,

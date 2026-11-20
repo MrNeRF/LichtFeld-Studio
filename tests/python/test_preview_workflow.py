@@ -123,7 +123,8 @@ def test_remount_populates_the_new_filmstrip_model_without_navigation(panel_modu
     panel.on_unmount(doc)
     new_records = []
     handle = SimpleNamespace(update_record_list=lambda _, rows: new_records.append(rows), dirty=lambda _: None)
-    model = SimpleNamespace(bind_func=lambda *args: None, bind_record_list=lambda *args: None, get_handle=lambda: handle)
+    model = SimpleNamespace(bind_func=lambda *args: None, bind=lambda *args: None,
+                            bind_event=lambda *args: None, bind_record_list=lambda *args: None, get_handle=lambda: handle)
     panel.on_bind_model(SimpleNamespace(create_data_model=lambda _: model))
     panel._update_filmstrip(doc, True)
     assert new_records == [expected]

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <new>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -470,30 +471,44 @@ namespace {
             before->bytes().begin()));
     }
 
-    TEST_F(SplatRawPayloadTest, AsyncCaptureFallsBackWithoutHeadroom) {
-        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) /
-                          "tests/data/bike.ply";
-        auto loaded = lfs::io::load_ply(path);
-        ASSERT_TRUE(loaded.has_value())
-            << lfs::format_for_developer(loaded.error());
-        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
-            GTEST_SKIP() << "async capture requires a CUDA-backed splat";
-        }
-        struct HeadroomGuard {
-            HeadroomGuard() {
-                lfs::io::project::detail::
-                    set_splat_capture_no_headroom_for_testing(true);
+    TEST(SplatChapterCaptureTest, AsyncCaptureRespectsFallbackPolicyUnderMemoryPressure) {
+        using namespace lfs::core;
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device required";
+        auto cpu = lfs::test::licht::make_splat(64);
+        const SplatData model(0, cpu->means().to(Device::CUDA), cpu->sh0().to(Device::CUDA),
+                              Tensor{}, cpu->scaling_raw().to(Device::CUDA),
+                              cpu->rotation_raw().to(Device::CUDA), cpu->opacity_raw().to(Device::CUDA), 1.0f);
+        CaptureHeadroomGuard headroom(true);
+        auto deferred = SplatChapterPayload::start_async_capture(
+            model, lfs::io::project::SplatSourceKind::Generated, false,
+            lfs::io::project::SplatCaptureFallback::Defer);
+        ASSERT_FALSE(deferred.has_value());
+        EXPECT_EQ(deferred.error().code(), lfs::ErrorCode::ResourceExhausted);
+        EXPECT_EQ(deferred.error().retryability(), lfs::Retryability::RetryableWithBackoff);
+
+        // Allocation can fail after a successful preflight too.
+        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+        struct AllocationFailureGuard {
+            AllocationFailureGuard() {
+                lfs::io::project::detail::set_splat_capture_stream_hook_for_testing(
+                    [](cudaStream_t) { throw std::bad_alloc(); });
             }
-            ~HeadroomGuard() {
-                lfs::io::project::detail::
-                    set_splat_capture_no_headroom_for_testing(std::nullopt);
+            ~AllocationFailureGuard() {
+                lfs::io::project::detail::set_splat_capture_stream_hook_for_testing({});
             }
-        } headroom;
+        } allocation_failure;
         auto pending = SplatChapterPayload::start_async_capture(
-            loaded->value, lfs::io::project::SplatSourceKind::Generated, false);
-        ASSERT_TRUE(pending.has_value())
-            << lfs::format_for_developer(pending.error());
+            model, lfs::io::project::SplatSourceKind::Generated, false);
+        ASSERT_TRUE(pending.has_value());
         EXPECT_FALSE(*pending);
+        deferred = SplatChapterPayload::start_async_capture(
+            model, lfs::io::project::SplatSourceKind::Generated, false,
+            lfs::io::project::SplatCaptureFallback::Defer);
+        ASSERT_FALSE(deferred.has_value());
+        EXPECT_EQ(deferred.error().code(), lfs::ErrorCode::ResourceExhausted);
+        EXPECT_EQ(deferred.error().retryability(), lfs::Retryability::RetryableWithBackoff);
     }
 
     TEST_F(SplatRawPayloadTest, AsyncCaptureReportsCudaSetupFailure) {

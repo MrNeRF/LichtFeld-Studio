@@ -8,6 +8,7 @@
 #include "core/error_latch.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/export.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "io/session_chapters.hpp"
@@ -105,7 +106,7 @@ namespace lfs::vis {
 
         // Training control
         using EvaluationWeightsPreparer =
-            std::function<std::optional<std::filesystem::path>(bool allow_download)>;
+            std::function<std::optional<core::nn::WeightFile>(bool allow_download)>;
 
         void set_evaluation_weights_preparer(EvaluationWeightsPreparer preparer) {
             evaluation_weights_preparer_ = std::move(preparer);

@@ -74,6 +74,11 @@ namespace lfs::vis::gui {
         Rml::ReleaseFontResources();
     }
 
+    void releaseRenderManagers() {
+        font_resource_generation.fetch_add(1, std::memory_order_relaxed);
+        Rml::ReleaseRenderManagers();
+    }
+
     std::uint64_t fontResourceGeneration() {
         return font_resource_generation.load(std::memory_order_relaxed);
     }
@@ -1037,7 +1042,7 @@ namespace lfs::vis::gui {
             if (external)
                 disableExternalWindows(name);
             if (native)
-                Rml::ReleaseRenderManagers();
+                releaseRenderManagers();
             LOG_ERROR("RmlUI: failed to create context '{}'", name);
             return nullptr;
         }
@@ -1148,7 +1153,7 @@ namespace lfs::vis::gui {
         // RmlUi keeps render managers after RemoveContext. Retire their font,
         // texture and geometry caches while the owning renderer/device is alive.
         if (native_windows_.contains(context)) {
-            Rml::ReleaseRenderManagers();
+            releaseRenderManagers();
         }
         context_windows_.erase(context);
         native_windows_.erase(context);

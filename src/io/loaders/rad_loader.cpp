@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <string>
 
 namespace lfs::io {
@@ -91,14 +92,17 @@ namespace lfs::io {
         }
 
         LOG_INFO("Loading RAD file: {}", lfs::core::path_to_utf8(path));
-        auto splat_result = load_rad(path);
+        auto splat_result = load_rad(path, {
+                                               .out_of_core = options.full_detail ? std::optional<bool>{false} : std::nullopt,
+                                               .preview_splats = std::nullopt,
+                                           });
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Failed to load RAD: {}", splat_result.error()), path);
         }
 
         SplatData& data = *splat_result;
-        if (radPagedGpuUploadRequested(data)) {
+        if (!options.full_detail && radPagedGpuUploadRequested(data)) {
             // Paged residency streams chunk payloads from disk, and that path
             // is sidecar-backed end to end (upload engine, page sink, and
             // selector metadata all gate on the meta view). Out-of-core loads

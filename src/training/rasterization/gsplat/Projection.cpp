@@ -38,6 +38,7 @@ namespace gsplat_lfs {
         float* depths,
         float* conics,
         float* compensations,
+        float* dilations,
         cudaStream_t stream) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
@@ -60,7 +61,7 @@ namespace gsplat_lfs {
             eps2d, near_plane, far_plane, radius_clip,
             camera_model, ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
-            radii, means2d, depths, conics, compensations,
+            radii, means2d, depths, conics, compensations, dilations,
             stream);
     }
 

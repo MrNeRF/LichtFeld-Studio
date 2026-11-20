@@ -15,6 +15,7 @@
 #include "app/view_info_json.hpp"
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -2516,6 +2517,27 @@ namespace lfs::app {
                     if (!handle)
                         return json{{"error", std::string(handle.error().user_message())}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
+                });
+            });
+        registry.register_tool(
+            McpTool{
+                .name = "camera_group.remove_disabled",
+                .description = "Remove disabled direct cameras from a camera group in one undoable operation",
+                .input_schema = {.type = "object", .properties = json{{"camera_group", {{"type", "string"}}}}, .required = {"camera_group"}},
+                .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .destructive = true, .user_visible = true}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto group_id = scene_manager->getScene().getNodeIdByName(args.at("camera_group").get<std::string>());
+                    const auto* const group = scene_manager->getScene().getNodeById(group_id);
+                    if (!group || group->type != core::NodeType::CAMERA_GROUP)
+                        return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
+                    const auto removal = scene_manager->removeDisabledCamerasWithResult(group_id);
+                    if (!removal)
+                        return json{{"error", lfs::format_for_developer(removal.error())}};
+                    return json{{"removed", *removal}};
                 });
             });
         registry.register_tool(

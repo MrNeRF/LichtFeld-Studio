@@ -331,6 +331,8 @@ namespace lfs::io {
                         }
                         return *image_info;
                     };
+                    lfs::core::Camera::PriorSize depth_size;
+                    lfs::core::Camera::PriorSize normal_size;
                     if (info._has_image && options.load_masks && !mask_path.empty()) {
                         auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
@@ -360,6 +362,7 @@ namespace lfs::io {
                             depth_path.clear();
                         } else {
                             prior_resolutions.add({depth_w, depth_h, img_w, img_h}, false);
+                            depth_size = {depth_w, depth_h};
                         }
                     }
                     if (info._has_image && options.load_normals && !normal_path.empty()) {
@@ -380,8 +383,10 @@ namespace lfs::io {
                                                   normal_path);
                             }
                         }
-                        if (!normal_path.empty())
+                        if (!normal_path.empty()) {
                             prior_resolutions.add({normal_w, normal_h, img_w, img_h}, true);
+                            normal_size = {normal_w, normal_h};
+                        }
                     }
 
                     auto cam = std::make_shared<lfs::core::Camera>(
@@ -403,6 +408,8 @@ namespace lfs::io {
                         0,
                         depth_path,
                         normal_path);
+                    // The probed prior sizes decide whether the priors travel at their own size, and size the loader's slots.
+                    cam->set_prior_sizes(depth_size, normal_size);
 
                     cam->set_has_image(info._has_image);
                     cameras.push_back(cam);

@@ -74,6 +74,16 @@ namespace nvimgcodec {
 #endif
     }
 
+    /// @brief Ceil division: smallest integer >= x / d. The divisor d must be non-zero.
+    ///
+    /// Overflow-safe: the naive (x + d - 1) / d wraps the numerator for large x (e.g. x near the
+    /// type maximum), silently producing 0 and causing a downstream division-by-zero when the
+    /// result is later used as a divisor. x / d + (x % d != 0) never overflows.
+    template <typename T, typename V>
+    NVIMGCODEC_HOST_DEV constexpr T div_up(T x, V d) {
+        return x / d + (x % d != 0 ? 1 : 0);
+    }
+
     /// @brief Calculate square root reciprocal.
     NVIMGCODEC_HOST_DEV inline float rsqrt(float x) {
 #ifdef __CUDA_ARCH__

@@ -52,13 +52,7 @@ namespace nvimgcodec {
             return name;
         };
 
-        static size_t getProcessorCount(ICodec* codec) {
-            return codec->getDecodersNum();
-        }
-
-        static IImageDecoderFactory* getFactory(ICodec* codec, int i) {
-            return codec->getDecoderFactory(i);
-        }
+        static std::vector<IImageDecoderFactory*> getFactories(ICodec* codec) { return codec->getDecoderFactories(); }
 
         static std::string getId(Factory* factory) {
             return factory->getDecoderId();
@@ -75,10 +69,6 @@ namespace nvimgcodec {
 
         static int getMiniBatchSize(Processor* processor) {
             return processor->getMiniBatchSize();
-        }
-
-        static int getProcessorsNum(ICodec* codec) {
-            return codec->getDecodersNum();
         }
 
         void sortSamples();

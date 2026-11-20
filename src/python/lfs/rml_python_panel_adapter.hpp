@@ -38,6 +38,7 @@ namespace lfs::vis::gui {
         void setPollVisibility(bool visible) override;
         bool isVisibleForAnimation() const override;
         void on_visibility_changed(bool visible) override;
+        void suspendInput() override;
         void on_layout_changed() override;
         void on_content_changed() override;
         void preload(const PanelDrawContext& ctx) override;

@@ -51,6 +51,11 @@ extern "C" {
 #define NVIMGCODEC_MAX_CODEC_NAME_SIZE 256
 
 /**
+ * @brief Maximal size of a file extension string (including the leading dot and terminator).
+ */
+#define NVIMGCODEC_MAX_FILE_EXTENSION_SIZE 32
+
+/**
  * @brief Defines device id as current device
  */
 #define NVIMGCODEC_DEVICE_CURRENT -1
@@ -213,6 +218,7 @@ typedef enum {
     NVIMGCODEC_STRUCTURE_TYPE_METADATA_KIND,
     NVIMGCODEC_STRUCTURE_TYPE_METADATA_FORMAT,
     NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO,
+    NVIMGCODEC_STRUCTURE_TYPE_PLUGIN_SELECTION,
     NVIMGCODEC_STRUCTURE_TYPE_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecStructureType_t;
 
@@ -339,6 +345,7 @@ typedef enum {
     NVIMGCODEC_STATUS_EXTENSION_INCOMPLETE_BITSTREAM = 19,
     NVIMGCODEC_STATUS_EXTENSION_EXECUTION_FAILED = 20,
     NVIMGCODEC_STATUS_EXTENSION_CUDA_CALL_ERROR = 21,
+    NVIMGCODEC_STATUS_RESOURCE_IN_USE = 22,
     NVIMGCODEC_STATUS_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecStatus_t;
 
@@ -562,7 +569,10 @@ typedef struct
     nvimgcodecChromaSubsampling_t chroma_subsampling; /**< Image chroma subsampling. Only valid with chroma components. */
     nvimgcodecSampleFormat_t sample_format;           /**< Defines how color components are matched to channels in given order and channels
                                                           are matched to planes. */
-    nvimgcodecOrientation_t orientation;              /**< Image orientation. */
+    nvimgcodecOrientation_t orientation;              /**< Image orientation. When decoding with nvimgcodecDecodeParams_t::apply_exif_orientation
+                                                          set, the decoder applies this transform to the pixels but does not reset it in the
+                                                          output image's information. Encoders accept only the identity orientation, so reset it
+                                                          before encoding a decoded image. */
 
     uint32_t num_planes;                                              /**< Number of image planes. */
     nvimgcodecImagePlaneInfo_t plane_info[NVIMGCODEC_MAX_NUM_PLANES]; /**< Array with information about image planes. */
@@ -691,6 +701,7 @@ typedef struct
  * @brief Defines decoding/encoding backend kind.
  */
 typedef enum {
+    NVIMGCODEC_BACKEND_KIND_ANY = 0,            /**< Any registered backend kind. Used only for filtering queries. */
     NVIMGCODEC_BACKEND_KIND_CPU_ONLY = 1,       /**< Decoding/encoding is executed only on CPU. */
     NVIMGCODEC_BACKEND_KIND_GPU_ONLY = 2,       /**< Decoding/encoding is executed only on GPU. */
     NVIMGCODEC_BACKEND_KIND_HYBRID_CPU_GPU = 3, /**< Decoding/encoding is executed on both CPU and GPU.*/
@@ -1087,6 +1098,24 @@ typedef struct
 } nvimgcodecExecutorDesc_t;
 
 /**
+ * @brief Ordered selection of registered plugins.
+ *
+ * The plugin identifiers are decoder identifiers when the containing execution parameters
+ * are passed to nvimgcodecDecoderCreate, and encoder identifiers when passed to
+ * nvimgcodecEncoderCreate.
+ */
+typedef struct
+{
+    nvimgcodecStructureType_t struct_type; /**< The type of the structure. */
+    size_t struct_size;                    /**< The size of the structure, in bytes. */
+    void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
+
+    const char* codec_name;        /**< Codec-name filter, or NULL for a global selection across codecs. */
+    int num_plugin_ids;            /**< Number of entries in plugin_ids. Must be greater than zero. */
+    const char* const* plugin_ids; /**< Ordered array of registered decoder or encoder identifiers. */
+} nvimgcodecPluginSelection_t;
+
+/**
  * @brief Execution parameters
  */
 typedef struct
@@ -1112,6 +1141,10 @@ typedef struct
                                                        in backends parameter. For 0, all backends are allowed.*/
     const nvimgcodecBackend_t* backends;           /**< Points a nvimgcodecBackend_t array with defined allowed backends.
                                                        For nullptr, all backends are allowed. */
+    int num_selections;                            /**< Number of plugin selections. For 0, all registered plugins are used. */
+    const nvimgcodecPluginSelection_t* selections; /**< Ordered plugin selections. A single selection with codec_name set to NULL
+                                                       applies globally. Otherwise each entry selects plugins for one codec and
+                                                       codecs without an entry are disabled. */
 } nvimgcodecExecutionParams_t;
 
 /**
@@ -1575,7 +1608,16 @@ typedef nvimgcodecStatus_t (*nvimgcodecLogFunc_t)(void* instance, const nvimgcod
                                                   const nvimgcodecDebugMessageCategory_t message_category, const nvimgcodecDebugMessageData_t* data);
 
 /**
- * @brief Plugin Framework
+ * @brief Plugin framework descriptor.
+ *
+ * Descriptions returned by the query functions are borrowed executable plugin interfaces.
+ * Callers must externally synchronize their use with registration, unregistration, extension
+ * destruction, and instance destruction. Any plugin-private object created through a returned
+ * description must be destroyed through the same description before its registration is removed.
+ *
+ * Registration and unregistration return NVIMGCODEC_STATUS_RESOURCE_IN_USE while any decoder,
+ * encoder, or code stream associated with the framework instance is alive. Destroy those
+ * registry clients before changing plugins or file-extension mappings.
  */
 typedef struct
 {
@@ -1646,6 +1688,144 @@ typedef struct
      */
     nvimgcodecStatus_t (*unregisterParser)(void* instance, const nvimgcodecParserDesc_t* desc);
 
+    /**
+     * @brief Registers a file extension for a codec.
+     *
+     * A codec may have many file extensions. A file extension may be registered for more than
+     * one codec; the first registered codec is the default used when resolving an extension
+     * to a codec name, unless a later registration passes a non-zero \p is_default.
+     *
+     * File-extension mappings support output codec selection for encoding. They are not used
+     * to identify encoded input: registered parsers inspect bitstream contents to identify the
+     * codec, and decoder selection then uses that parsed codec independently of the filename.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param codec [in] Codec name e.g. "jpeg".
+     * @param file_extension [in] File extension, with or without a leading dot e.g. ".jpg" or "jpg".
+     * @param is_default [in] Non-zero to make this codec the default for \p file_extension.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*registerFileExtension)(void* instance, const char* codec, const char* file_extension, int is_default);
+
+    /**
+     * @brief Unregisters a file extension from a codec.
+     *
+     * Registrations are reference-counted. The mapping is removed when the last registration
+     * of this (codec, file extension) pair is unregistered. If that codec was the default for
+     * the extension, the next remaining codec (if any) becomes the default.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param codec [in] Codec name e.g. "jpeg".
+     * @param file_extension [in] File extension, with or without a leading dot e.g. ".jpg" or "jpg".
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*unregisterFileExtension)(void* instance, const char* codec, const char* file_extension);
+
+    /**
+     * @brief Lists registered codec names, optionally filtered by file extension.
+     *
+     * With @p file_extension set to NULL, codecs with at least one registered parser, decoder,
+     * encoder, or file-extension mapping are listed. A listed codec may therefore have no
+     * executable plugin descriptions.
+     *
+     * With @p file_extension set, only codecs registered for that extension are listed. The
+     * first name is the default codec used when resolving the extension. An unknown extension
+     * is not an error and produces an empty list.
+     *
+     * Pass @p codec_names as NULL to query the number of names. Otherwise, @p count on input
+     * is the exact number of leading names requested and must not exceed the filtered total.
+     * The function writes exactly that many NVIMGCODEC_MAX_CODEC_NAME_SIZE slots and leaves
+     * @p count unchanged. A larger request returns NVIMGCODEC_STATUS_INVALID_PARAMETER without
+     * writing output. Query with @p codec_names set to NULL first when the total is required.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param codec_names [in/out] Consecutive codec-name slots, or NULL for a count query.
+     * @param count [in/out] Requested name count on input and number of names written on output.
+     * @param file_extension [in] File-extension filter with or without a leading dot, or NULL for all codecs.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*getCodecNames)(
+        void* instance, char* codec_names, int* count, const char* file_extension);
+
+    /**
+     * @brief Lists registered file extensions, optionally filtered by codec name.
+     *
+     * With @p codec_name set to NULL, each registered file extension is listed once. Use
+     * getCodecNames with that extension to retrieve its codec mappings and default codec.
+     * With @p codec_name set, only extensions registered for that codec are listed. An unknown
+     * codec name is not an error and produces an empty list.
+     *
+     * Pass @p file_extensions as NULL to query the number of extensions. Otherwise, @p count
+     * on input is the exact number of leading extensions requested and must not exceed the
+     * filtered total. The function writes exactly that many
+     * NVIMGCODEC_MAX_FILE_EXTENSION_SIZE slots and leaves @p count unchanged. A larger request
+     * returns NVIMGCODEC_STATUS_INVALID_PARAMETER without writing output.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param file_extensions [in/out] Consecutive file-extension slots, or NULL for a count query.
+     * @param count [in/out] Requested extension count on input and number of extensions written on output.
+     * @param codec_name [in] Codec-name filter, or NULL for all unique file extensions.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*getFileExtensions)(
+        void* instance, char* file_extensions, int* count, const char* codec_name);
+
+    /**
+     * @brief Lists registered decoder descriptions.
+     *
+     * Returned pointers are borrowed. They remain valid until the corresponding registration
+     * is removed or the framework instance is destroyed.
+     * With non-NULL output, @p count is the exact prefix length requested and must not exceed
+     * the registered total. A larger request returns NVIMGCODEC_STATUS_INVALID_PARAMETER
+     * without writing output. Query with @p decoder_descs set to NULL first for the total.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param decoder_descs [in/out] Array receiving borrowed decoder descriptions, or NULL for a count query.
+     * @param count [in/out] Requested entry count on input and number of descriptions written on output.
+     * @param codec_name [in] Codec-name filter, or NULL to include all codecs.
+     * @param backend_kind [in] Backend-kind filter, or NVIMGCODEC_BACKEND_KIND_ANY to include all backends.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*getDecoderDescs)(void* instance, const nvimgcodecDecoderDesc_t** decoder_descs, int* count,
+                                          const char* codec_name, nvimgcodecBackendKind_t backend_kind);
+
+    /**
+     * @brief Lists registered encoder descriptions.
+     *
+     * Returned pointers are borrowed. They remain valid until the corresponding registration
+     * is removed or the framework instance is destroyed.
+     * With non-NULL output, @p count is the exact prefix length requested and must not exceed
+     * the registered total. A larger request returns NVIMGCODEC_STATUS_INVALID_PARAMETER
+     * without writing output. Query with @p encoder_descs set to NULL first for the total.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param encoder_descs [in/out] Array receiving borrowed encoder descriptions, or NULL for a count query.
+     * @param count [in/out] Requested entry count on input and number of descriptions written on output.
+     * @param codec_name [in] Codec-name filter, or NULL to include all codecs.
+     * @param backend_kind [in] Backend-kind filter, or NVIMGCODEC_BACKEND_KIND_ANY to include all backends.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*getEncoderDescs)(void* instance, const nvimgcodecEncoderDesc_t** encoder_descs, int* count,
+                                          const char* codec_name, nvimgcodecBackendKind_t backend_kind);
+
+    /**
+     * @brief Lists registered parser descriptions.
+     *
+     * Returned pointers are borrowed. They remain valid until the corresponding registration
+     * is removed or the framework instance is destroyed.
+     * With non-NULL output, @p count is the exact prefix length requested and must not exceed
+     * the registered total. A larger request returns NVIMGCODEC_STATUS_INVALID_PARAMETER
+     * without writing output. Query with @p parser_descs set to NULL first for the total.
+     *
+     * @param instance [in] Pointer to nvimgcodecFrameworkDesc_t instance.
+     * @param parser_descs [in/out] Array receiving borrowed parser descriptions, or NULL for a count query.
+     * @param count [in/out] Requested entry count on input and number of descriptions written on output.
+     * @param codec_name [in] Codec-name filter, or NULL to include all codecs.
+     * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+     */
+    nvimgcodecStatus_t (*getParserDescs)(
+        void* instance, const nvimgcodecParserDesc_t** parser_descs, int* count, const char* codec_name);
+
 } nvimgcodecFrameworkDesc_t;
 
 /**
@@ -1658,7 +1838,7 @@ typedef struct
     void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
 
     void* instance;           /**< Extension instance pointer which will be passed back in functions */
-    const char* id;           /**< Extension named identifier e.g. nvjpeg_ext */
+    const char* id;           /**< Extension named identifier e.g. nvjpeg_ext. Must remain valid while registered. */
     uint32_t version;         /**< Extension version. Used when registering extension to check if there are newer.*/
     uint32_t ext_api_version; /**< The version of nvImageCodec extension API with which the extension was built. */
 
@@ -1706,6 +1886,20 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecExtensionModuleEntry(nvimgcodecExtens
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecGetProperties(nvimgcodecProperties_t* properties);
 
 /**
+ * @brief Returns the plugin framework description associated with a library instance.
+ *
+ * The returned pointer is borrowed and remains valid until @p instance is destroyed. Descriptions
+ * registered through the returned framework, including their callback code, instance pointers,
+ * strings, and chained structures, must remain valid until they are unregistered.
+ *
+ * @param instance [in] The library instance handle.
+ * @param framework_desc [out] Where to return the borrowed framework description.
+ * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ */
+NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecGetFrameworkDesc(
+    nvimgcodecInstance_t instance, const nvimgcodecFrameworkDesc_t** framework_desc);
+
+/**
  * @brief The nvImageCodec library instance create information structure.
  */
 typedef struct
@@ -1739,6 +1933,8 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecInstanceCreate(
  * @brief Destroys the nvImageCodec library instance.
  *
  * @param instance [in] The library instance handle to destroy
+ * @retval NVIMGCODEC_STATUS_RESOURCE_IN_USE A decoder, encoder, or code stream created from
+ *         the instance has not been destroyed.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecInstanceDestroy(nvimgcodecInstance_t instance);
@@ -1749,15 +1945,56 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecInstanceDestroy(nvimgcodecInstance_t 
  * @param instance [in] The library instance handle the extension will be used with.
  * @param extension [in/out] Points a nvimgcodecExtension_t handle in which the resulting extension is returned.
  * @param extension_desc [in] Pointer to a nvimgcodecExtensionDesc_t structure which defines extension to create.
+ *        The structure is copied, but its identifier string, instance, callback code, and data
+ *        referenced through struct_next must remain valid until the extension is destroyed.
+ * @retval NVIMGCODEC_STATUS_RESOURCE_IN_USE A decoder, encoder, or code stream associated
+ *         with the instance is still alive.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecExtensionCreate(
     nvimgcodecInstance_t instance, nvimgcodecExtension_t* extension, nvimgcodecExtensionDesc_t* extension_desc);
 
 /**
+ * @brief Lists extensions registered with a library instance.
+ *
+ * Pass @p extensions as NULL to query the total number of extensions. Otherwise, @p count on
+ * input is the exact number of leading handles requested and must not exceed the registered
+ * total. The function writes exactly that many handles and leaves @p count unchanged. A larger
+ * request returns NVIMGCODEC_STATUS_INVALID_PARAMETER without writing output. Query with
+ * @p extensions set to NULL first when the total is required.
+ * Returned handles are owned by the registry and require no release. Calling
+ * nvimgcodecExtensionDestroy unregisters the selected extension and invalidates its handle.
+ *
+ * @param instance [in] The library instance handle.
+ * @param extensions [in/out] Array receiving registered extension handles, or NULL for a count query.
+ * @param count [in/out] Requested handle count on input and number of handles written on output.
+ * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ */
+NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecGetExtensions(nvimgcodecInstance_t instance, nvimgcodecExtension_t* extensions, int* count);
+
+/**
+ * @brief Returns the executable description for a registered extension.
+ *
+ * The returned pointer is borrowed and becomes invalid when the extension is unregistered or
+ * replaced, or when its library instance is destroyed. The description's destroy callback
+ * accepts only handles returned by that description's create callback; it must not be passed
+ * the public registry handle supplied to this function. A returned description must not be
+ * registered with a different nvimgcodecInstance. All pointer-backed fields retain the lifetime
+ * requirements documented by nvimgcodecExtensionCreate.
+ *
+ * @param extension [in] Registered extension handle.
+ * @param extension_desc [out] Where to return the borrowed extension description.
+ * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ */
+NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecExtensionGetExtensionDesc(
+    nvimgcodecExtension_t extension, const nvimgcodecExtensionDesc_t** extension_desc);
+
+/**
  * @brief Destroys library extension.
  *
  * @param extension [in] The extension handle to destroy
+ * @retval NVIMGCODEC_STATUS_RESOURCE_IN_USE A decoder, encoder, or code stream still retains
+ *         registered plugin code from the instance.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecExtensionDestroy(nvimgcodecExtension_t extension);
@@ -1806,8 +2043,10 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecFutureDestroy(nvimgcodecFuture_t futu
  * @brief Receives processing statuses of batch items scheduled for decoding or encoding
  *
  * @param future [in] The future handle returned by decode or encode function for given batch items.
- * @param processing_status [in/out] Points a nvimgcodecProcessingStatus_t handle in which the processing statuses is returned.
- * @param size [in/out]  Points a size_t in which the size of processing statuses returned.
+ * @param processing_status [in/out] Points to an array of nvimgcodecProcessingStatus_t in which the processing statuses
+ *                          are returned. The array must have room for one entry per batch item submitted to the
+ *                          corresponding decode/encode call.
+ * @param size [out]  Points a size_t in which the number of processing statuses is returned.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecFutureGetProcessingStatus(
@@ -1846,6 +2085,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecImageGetImageInfo(nvimgcodecImage_t i
 /**
  * @brief Creates code stream which wraps file source of compressed data
  *
+ * Registered parsers identify the codec from the encoded contents. The extension of
+ * @p file_name is not used to select the codec, parser, or decoder.
+ *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
  *        If *code_stream is NULL, a new code stream instance will be created.
@@ -1882,6 +2124,10 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamCreateFromHostMem(
 
 /**
  * @brief Creates code stream which wraps file sink for compressed data with given format.
+ *
+ * The output codec is specified by @p image_info. The C API does not infer it directly from
+ * @p file_name; an application can use the getCodecNames callback in
+ * nvimgcodecFrameworkDesc_t when it wants extension-based output selection.
  *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
@@ -1992,6 +2238,23 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderDestroy(nvimgcodecDecoder_t de
  * @param metadata [in/out] Points to a nvimgcodecMetadata_t handle where the metadata will be stored. When set to nullptr (first call), only metadata_count will be returned.
  * @param metadata_count [in/out] Points to an int handle where the metadata count will be stored.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ *
+ * @note How each entry of `metadata` is matched to the metadata in the code stream depends on
+ *       its `kind` field:
+ *       - `kind` set to a specific kind: that kind is returned, regardless of the entry's
+ *         position in the array. For `NVIMGCODEC_METADATA_KIND_TIFF_TAG` the entry's `id`
+ *         selects the tag, so several tags may be requested in a single call. If the code
+ *         stream does not carry the requested kind, `metadata_count` is set to 0 and
+ *         {@link NVIMGCODEC_STATUS_SUCCESS} is returned. This applies to the call as a
+ *         whole, so a request that mixes a kind the stream carries with one it does not
+ *         reports nothing rather than the part it could satisfy.
+ *       - A kind may be requested without asking for the count first.
+ *       - `kind` left as `NVIMGCODEC_METADATA_KIND_UNKNOWN`: the entry is matched by its
+ *         position in the array, and its `kind` is filled in on return. This is how a caller
+ *         enumerates what a code stream carries, after asking for the count.
+ *
+ * @note The code stream must have been created on the same nvimgcodecInstance as the decoder. Otherwise
+ *       {@link NVIMGCODEC_STATUS_INVALID_PARAMETER} is returned.
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderGetMetadata(nvimgcodecDecoder_t decoder, nvimgcodecCodeStream_t code_stream, nvimgcodecMetadata_t** metadata, int* metadata_count);
 
@@ -2010,6 +2273,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderGetMetadata(nvimgcodecDecoder_
  *                          return processing status with flags which shows what format or parameters need to be changed to
  *                          avoid fallback to lower priority codec.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ *
+ * @note Each code stream and output image must have been created on the same nvimgcodecInstance as the decoder.
+ *       Otherwise {@link NVIMGCODEC_STATUS_INVALID_PARAMETER} is returned.
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderCanDecode(nvimgcodecDecoder_t decoder, const nvimgcodecCodeStream_t* streams,
                                                             const nvimgcodecImage_t* images, int batch_size, const nvimgcodecDecodeParams_t* params,
@@ -2029,6 +2295,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderCanDecode(nvimgcodecDecoder_t 
  *
  * @see nvimgcodecFutureGetProcessingStatus
  * @see nvimgcodecFutureWaitForAll
+ *
+ * @note Each code stream and output image must have been created on the same nvimgcodecInstance as the decoder.
+ *       Otherwise {@link NVIMGCODEC_STATUS_INVALID_PARAMETER} is returned.
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderDecode(nvimgcodecDecoder_t decoder, const nvimgcodecCodeStream_t* streams,
                                                          const nvimgcodecImage_t* images, int batch_size, const nvimgcodecDecodeParams_t* params, nvimgcodecFuture_t* future);
@@ -2070,6 +2339,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecEncoderDestroy(nvimgcodecEncoder_t en
  *                          return processing status with flags which shows what format or parameters need to be changed to
  *                          avoid fallback to lower priority codec.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
+ *
+ * @note Each input image and output code stream must have been created on the same nvimgcodecInstance as the encoder.
+ *       Otherwise {@link NVIMGCODEC_STATUS_INVALID_PARAMETER} is returned.
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecEncoderCanEncode(nvimgcodecEncoder_t encoder, const nvimgcodecImage_t* images,
                                                             const nvimgcodecCodeStream_t* streams, int batch_size, const nvimgcodecEncodeParams_t* params,
@@ -2089,6 +2361,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecEncoderCanEncode(nvimgcodecEncoder_t 
  *
  * @see nvimgcodecFutureGetProcessingStatus
  * @see nvimgcodecFutureWaitForAll
+ *
+ * @note Each input image and output code stream must have been created on the same nvimgcodecInstance as the encoder.
+ *       Otherwise {@link NVIMGCODEC_STATUS_INVALID_PARAMETER} is returned.
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecEncoderEncode(nvimgcodecEncoder_t encoder, const nvimgcodecImage_t* images,
                                                          const nvimgcodecCodeStream_t* streams, int batch_size, const nvimgcodecEncodeParams_t* params, nvimgcodecFuture_t* future);

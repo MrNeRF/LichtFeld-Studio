@@ -1067,7 +1067,7 @@ namespace lfs::python {
             }
             if (camera_needs_distortion_handling(*cam)) {
                 has_any = true;
-                if (!cam->has_distortion()) {
+                if (!cam->has_distortion() && cam->camera_model_type() != core::CameraModelType::EQUIRECTANGULAR) {
                     return false;
                 }
             }

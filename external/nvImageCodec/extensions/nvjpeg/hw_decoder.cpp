@@ -48,6 +48,7 @@
 #include "imgproc/convert_kernel_gpu.h"
 #include "imgproc/device_buffer.h"
 #include "imgproc/device_guard.h"
+#include "imgproc/exit_guard.h"
 #include "imgproc/image_info_checks.h"
 #include "imgproc/out_of_bound_roi_fill.h"
 #include "imgproc/region_orientation.h"
@@ -694,26 +695,12 @@ namespace nvjpeg {
             return *contexts;
         }
 
-        // True once std::atexit has fired.  ~DecoderImpl consults this to decide
-        // whether dropping the last shared_ptr<SharedContext> is safe while CUDA may
-        // already be tearing down; during process exit the context is retained.
-        std::atomic<bool>& getInAtexit() {
-            static auto* flag = new std::atomic<bool>(false);
-            static std::once_flag register_once;
-            std::call_once(register_once, []() {
-                if (std::atexit([]() { getInAtexit().store(true, std::memory_order_relaxed); }) != 0) {
-                    throw std::runtime_error("Failed to register nvJPEG HW decoder atexit handler");
-                }
-            });
-            return *flag;
-        }
-
         std::shared_ptr<SharedContext> getSharedHwContext(
             int device_id, const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework, unsigned int nvjpeg_flags,
             const nvjpegDevAllocatorV2_t& device_allocator, const nvjpegPinnedAllocatorV2_t& pinned_allocator,
             const nvimgcodecDeviceAllocator_t* device_allocator_desc,
             size_t device_mem_padding, size_t pinned_mem_padding) {
-            (void)getInAtexit(); // ensure atexit handler is registered before any decoder lives
+            (void)nvimgcodec::IsProcessExiting(); // ensure atexit handler is registered before any decoder lives
             std::lock_guard<std::mutex> lock(getSharedHwContextMutex());
             auto& shared_hw_contexts = getSharedHwContexts();
             SharedContextKey key = makeSharedContextKey(
@@ -756,7 +743,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->getMetadata(code_stream, metadata, metadata_count);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_EXTENSION_INTERNAL_ERROR;
                 }
             }
@@ -773,7 +760,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->canDecode(image, code_stream, params, thread_idx);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_PROCESSING_STATUS_FAIL;
                 }
             }
@@ -789,7 +776,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->decode(image, code_stream, params, thread_idx);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_INTERNAL_ERROR;
                 }
             }
@@ -803,7 +790,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->decodeBatch(images, code_streams, batch_size, params, thread_idx);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_INTERNAL_ERROR;
                 }
             }
@@ -816,7 +803,7 @@ namespace nvjpeg {
                     XM_CHECK_NULL(decoder);
                     auto handle = reinterpret_cast<DecoderImpl*>(decoder);
                     return handle->getMiniBatchSize(batch_size);
-                } catch (const std::runtime_error& e) {
+                } catch (const std::exception& e) {
                     return NVIMGCODEC_STATUS_INTERNAL_ERROR;
                 }
             }
@@ -1344,6 +1331,17 @@ namespace nvjpeg {
                 return NVIMGCODEC_PROCESSING_STATUS_SAMPLE_TYPE_UNSUPPORTED;
             }
 
+            // nvjpegImage_t has exactly NVJPEG_MAX_COMPONENT channel/pitch slots. Both num_planes and
+            // (for the I_YUV path, which promotes channels to planes) plane_info[0].num_channels end up
+            // driving the fill loops in the decode paths, so both have to be bounded before we accept
+            // the sample.
+            if (image_info.num_planes > NVJPEG_MAX_COMPONENT || image_info.plane_info[0].num_channels > NVJPEG_MAX_COMPONENT) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_,
+                                       "nvjpeg supports at most " << NVJPEG_MAX_COMPONENT << " components, got num_planes=" << image_info.num_planes
+                                                                  << ", num_channels=" << image_info.plane_info[0].num_channels);
+                return NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED;
+            }
+
             // Chroma-subsampling early reject.  The HW path supports a fixed
             // subset; 4:1:0 / 4:1:1 are reported unsupported.
             static const std::set<nvimgcodecChromaSubsampling_t> supported_css{NVIMGCODEC_SAMPLING_444, NVIMGCODEC_SAMPLING_422,
@@ -1824,7 +1822,7 @@ namespace nvjpeg {
         // per-instance state AND our shared_context_ reference; the registry's
         // weak_ptr will simply find an expired entry next time. The leak is
         // intentional and bounded (one shared_ptr per decoder at process exit).
-        if (getInAtexit().load(std::memory_order_relaxed)) {
+        if (nvimgcodec::IsProcessExiting()) {
             // `new` would throw std::bad_alloc on OOM; this destructor is implicitly
             // noexcept, and at atexit there's nothing useful left to do. Use the
             // nothrow form so a (highly unlikely) allocation failure cannot escape.
@@ -1992,6 +1990,22 @@ namespace nvjpeg {
 
         auto& slot = shared_context_->decode_slots_[t.currentDecodeSlot()];
 
+        // canDecode() rejects this, but decode() is reachable directly through the C API, so the
+        // bound on the fixed-size nvjpegImage_t arrays is re-checked here rather than assumed. It has
+        // to come before the I_YUV promotion below, which writes plane_info[] up to num_channels.
+        if (slot.image_info_.num_planes > NVJPEG_MAX_COMPONENT ||
+            slot.image_info_.plane_info[0].num_channels > NVJPEG_MAX_COMPONENT) {
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                 "Too many components for nvjpeg: num_planes=" << slot.image_info_.num_planes
+                                                                               << ", num_channels=" << slot.image_info_.plane_info[0].num_channels
+                                                                               << " > " << NVJPEG_MAX_COMPONENT);
+            // Record the event even though no GPU work was submitted here: decodeBatchSingle waits on
+            // it unconditionally before freeing this image's buffer.
+            XM_CUDA_LOG_DESTROY(cudaEventRecord(t.decode_done_event_, t.stream_));
+            slot.image_->imageReady(slot.image_->instance, NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED);
+            return;
+        }
+
         try {
             auto working_image_info = slot.image_info_;
             working_image_info.cuda_stream = t.stream_;
@@ -2049,7 +2063,7 @@ namespace nvjpeg {
                 //   code_stream_view && code_stream_view->region.ndim != 0 && is_region_out_of_bounds(...)
                 // so taking this branch implies code_stream_view != nullptr.  Coverity
                 // can't track that invariant across the host/device-stage boundary.
-                // coverity[forward_null : FALSE]
+                // coverity[var_deref_model : FALSE]
                 nvimgcodec::fill_out_of_bounds_region(
                     working_image_info,
                     slot.roi_image_width_,
@@ -2468,6 +2482,17 @@ namespace nvjpeg {
                 // pageable |= cudaPointerGetAttributes(&attributes, encoded_stream_data) == cudaErrorInvalidValue ||
                 //             attributes.type == cudaMemoryTypeUnregistered;
 
+                // Same bound as canDecode(): nvjpegImage_t has exactly NVJPEG_MAX_COMPONENT
+                // channel/pitch slots, and the I_YUV path below promotes num_channels to num_planes.
+                if (image_info.num_planes > NVJPEG_MAX_COMPONENT || image_info.plane_info[0].num_channels > NVJPEG_MAX_COMPONENT) {
+                    NVIMGCODEC_LOG_ERROR(framework_, plugin_id_,
+                                         "Too many components for nvjpeg: num_planes=" << image_info.num_planes
+                                                                                       << ", num_channels=" << image_info.plane_info[0].num_channels
+                                                                                       << " > " << NVJPEG_MAX_COMPONENT);
+                    image->imageReady(image->instance, NVIMGCODEC_PROCESSING_STATUS_NUM_PLANES_UNSUPPORTED);
+                    continue;
+                }
+
                 nvimgcodecProcessingStatus_t tmp_status;
                 bool need_params_tmp = false;
                 if (!setDecodeParams(need_params_tmp, tmp_status, legacy_batch_nvjpeg_params_[i], code_stream, image_info, cs_image_info, params)) {
@@ -2515,7 +2540,6 @@ namespace nvjpeg {
                 // get output image
                 nvjpegImage_t nvjpeg_image;
                 unsigned char* ptr = reinterpret_cast<unsigned char*>(decoded_image_info.buffer);
-                ;
                 for (uint32_t c = 0; c < decoded_image_info.num_planes; ++c) {
                     nvjpeg_image.channel[c] = ptr;
                     nvjpeg_image.pitch[c] = decoded_image_info.plane_info[c].row_stride;

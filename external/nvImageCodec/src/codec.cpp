@@ -27,6 +27,10 @@ namespace nvimgcodec {
         : logger_(logger), name_(name) {
     }
 
+    bool Codec::hasRegistrations() const {
+        return !parsers_.empty() || !encoders_.empty() || !decoders_.empty() || !file_extensions_.empty();
+    }
+
     std::unique_ptr<IImageParser> Codec::createParser(nvimgcodecCodeStreamDesc_t* code_stream) const {
         NVIMGCODEC_LOG_TRACE(logger_, "Codec::getParser " << name_);
         for (const auto& entry : parsers_) {
@@ -40,32 +44,31 @@ namespace nvimgcodec {
         return nullptr;
     }
 
-    int Codec::getDecodersNum() const {
-        return decoders_.size();
-    }
-
-    IImageDecoderFactory* Codec::getDecoderFactory(int index) const {
-        if (size_t(index) >= decoders_.size()) {
-            return nullptr;
+    std::vector<IImageParserFactory*> Codec::getParserFactories() const {
+        std::vector<IImageParserFactory*> factories;
+        factories.reserve(parsers_.size());
+        for (const auto& entry : parsers_) {
+            factories.push_back(entry.second.get());
         }
-        auto it = decoders_.begin();
-        for (int i = 0; i < index; ++i)
-            it++;
-        return it != decoders_.end() ? it->second.get() : nullptr;
+        return factories;
     }
 
-    int Codec::getEncodersNum() const {
-        return encoders_.size();
-    }
-
-    IImageEncoderFactory* Codec::getEncoderFactory(int index) const {
-        if (size_t(index) >= encoders_.size()) {
-            return nullptr;
+    std::vector<IImageDecoderFactory*> Codec::getDecoderFactories() const {
+        std::vector<IImageDecoderFactory*> factories;
+        factories.reserve(decoders_.size());
+        for (const auto& entry : decoders_) {
+            factories.push_back(entry.second.get());
         }
-        auto it = encoders_.begin();
-        for (int i = 0; i < index; ++i)
-            it++;
-        return it != encoders_.end() ? it->second.get() : nullptr;
+        return factories;
+    }
+
+    std::vector<IImageEncoderFactory*> Codec::getEncoderFactories() const {
+        std::vector<IImageEncoderFactory*> factories;
+        factories.reserve(encoders_.size());
+        for (const auto& entry : encoders_) {
+            factories.push_back(entry.second.get());
+        }
+        return factories;
     }
 
     const std::string& Codec::name() const {
@@ -78,14 +81,15 @@ namespace nvimgcodec {
         parsers_.emplace(priority, std::move(parserFactory));
     }
 
-    void Codec::unregisterParserFactory(const std::string parser_id) {
+    bool Codec::unregisterParserFactory(const nvimgcodecParserDesc_t* desc) {
         NVIMGCODEC_LOG_TRACE(logger_, "Codec::unregisterParser");
         for (auto it = parsers_.begin(); it != parsers_.end(); ++it) {
-            if (it->second->getParserId() == parser_id) {
+            if (it->second->getParserDesc() == desc) {
                 parsers_.erase(it);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     void Codec::registerEncoderFactory(
@@ -94,14 +98,15 @@ namespace nvimgcodec {
         encoders_.emplace(priority, std::move(encoderFactory));
     }
 
-    void Codec::unregisterEncoderFactory(const std::string encoder_id) {
+    bool Codec::unregisterEncoderFactory(const nvimgcodecEncoderDesc_t* desc) {
         NVIMGCODEC_LOG_TRACE(logger_, "Codec::unregisterEncoder");
         for (auto it = encoders_.begin(); it != encoders_.end(); ++it) {
-            if (it->second->getEncoderId() == encoder_id) {
+            if (it->second->getEncoderDesc() == desc) {
                 encoders_.erase(it);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     void Codec::registerDecoderFactory(
@@ -110,13 +115,63 @@ namespace nvimgcodec {
         decoders_.emplace(priority, std::move(decoderFactory));
     }
 
-    void Codec::unregisterDecoderFactory(const std::string decoder_id) {
+    bool Codec::unregisterDecoderFactory(const nvimgcodecDecoderDesc_t* desc) {
         NVIMGCODEC_LOG_TRACE(logger_, "Codec::unregisterDecoder");
         for (auto it = decoders_.begin(); it != decoders_.end(); ++it) {
-            if (it->second->getDecoderId() == decoder_id) {
+            if (it->second->getDecoderDesc() == desc) {
                 decoders_.erase(it);
-                return;
+                return true;
             }
+        }
+        return false;
+    }
+
+    void Codec::registerFileExtension(const std::string& file_extension) {
+        NVIMGCODEC_LOG_TRACE(logger_, "Codec::registerFileExtension " << name_ << " " << file_extension);
+        auto& count = file_extension_refcount_[file_extension];
+        if (count == 0) {
+            file_extensions_.push_back(file_extension);
+        }
+        ++count;
+    }
+
+    void Codec::unregisterFileExtension(const std::string& file_extension) {
+        NVIMGCODEC_LOG_TRACE(logger_, "Codec::unregisterFileExtension " << name_ << " " << file_extension);
+        auto it = file_extension_refcount_.find(file_extension);
+        if (it == file_extension_refcount_.end()) {
+            return;
+        }
+        --it->second;
+        if (it->second <= 0) {
+            file_extension_refcount_.erase(it);
+            default_file_extensions_.erase(file_extension);
+            for (auto ext_it = file_extensions_.begin(); ext_it != file_extensions_.end(); ++ext_it) {
+                if (*ext_it == file_extension) {
+                    file_extensions_.erase(ext_it);
+                    break;
+                }
+            }
+        }
+    }
+
+    const std::vector<std::string>& Codec::getFileExtensions() const {
+        return file_extensions_;
+    }
+
+    bool Codec::hasFileExtension(const std::string& file_extension) const {
+        auto it = file_extension_refcount_.find(file_extension);
+        return it != file_extension_refcount_.end() && it->second > 0;
+    }
+
+    bool Codec::isDefaultFileExtension(const std::string& file_extension) const {
+        return default_file_extensions_.count(file_extension) != 0;
+    }
+
+    void Codec::setDefaultFileExtension(const std::string& file_extension, bool is_default) {
+        if (is_default) {
+            default_file_extensions_.insert(file_extension);
+        } else {
+            default_file_extensions_.erase(file_extension);
         }
     }
 

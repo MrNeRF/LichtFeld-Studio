@@ -832,3 +832,14 @@ def test_token_material_never_appears_in_logs_or_urls(tmp_path, monkeypatch, cap
     for token in (access_token, refresh_token, device_code):
         assert token not in log_output
         assert all(token not in request.full_url for request in stub.requests)
+
+
+def test_sign_out_without_network_permission_never_refreshes_or_revokes(tmp_path, monkeypatch):
+    path = tmp_path / "account" / "credentials.json"
+    write_credentials(path, access_expires_at=time.time() - 1)
+    stub = StubUrlopen()
+    monkeypatch.setattr(portal_account, "urlopen", stub)
+    service = make_service(tmp_path)
+    service.sign_out(revoke=False)
+    assert stub.requests == []
+    assert not path.exists() and not service.snapshot().signed_in

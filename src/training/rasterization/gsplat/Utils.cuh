@@ -82,6 +82,15 @@ namespace gsplat_lfs {
         return vec3(expf(raw.x), expf(raw.y), expf(raw.z));
     }
 
+    // The mip filter's low-pass: every squared scale grows by the world variance sigma2 of the camera and splat.
+    inline __device__ vec3 dilated_scale(const vec3 scale, const float sigma2) {
+        return glm::sqrt(scale * scale + sigma2);
+    }
+
+    inline __device__ mat3 inverse_scale_matrix(const vec3 scale) {
+        return mat3(1.0f / scale[0], 0.f, 0.f, 0.f, 1.0f / scale[1], 0.f, 0.f, 0.f, 1.0f / scale[2]);
+    }
+
     inline __device__ int32_t chw_pix(const uint32_t channel,
                                       const int32_t pix_id,
                                       const uint32_t image_height,

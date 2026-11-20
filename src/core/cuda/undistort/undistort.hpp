@@ -6,6 +6,7 @@
 
 #include "core/camera_types.h"
 #include "core/tensor.hpp"
+#include <cassert>
 #include <cuda_runtime.h>
 
 namespace lfs::core {
@@ -19,7 +20,15 @@ namespace lfs::core {
         float distortion[12];
         int num_distortion;
         bool crop_solve_failed = false;
+        bool view = false;
+        // Row-major rotation from the destination pinhole frame to the source frame.
+        float view_rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     };
+
+    __host__ __device__ inline bool is_view(const UndistortParams& params) {
+        assert(params.model_type != CameraModelType::EQUIRECTANGULAR || params.view);
+        return params.view;
+    }
 
     struct UndistortGrid {
         int width;

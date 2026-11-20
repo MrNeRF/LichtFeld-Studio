@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared protocol contracts independent of Blender, Python ABI and CUDA."""
 import threading
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,87 @@ def arrays(count=3):
     return {"means": np.zeros((count, 3), np.float32), "scale": np.zeros((count, 3), np.float32),
             "rotation": np.tile([1, 0, 0, 0], (count, 1)).astype(np.float32),
             "opacity": np.zeros((count, 1), np.float32), "sh": np.zeros((count, 1, 3), np.float32)}
+
+
+def test_saved_result_integrity_coordinates_and_cancellation(tmp_path):
+    path = tmp_path / "result-à.ply"
+    path.write_bytes(b"saved full model")
+    presentation = {"schema": 1, "source_frame": "blender-world", "data_to_source": geometry.FLIP,
+                    "model_to_data": np.diag([2., 3., 4., 1.]).tolist()}
+    result = {"kind": "best", "root": str(tmp_path), "path": path.name, "bytes": path.stat().st_size,
+              "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "iteration": 10,
+              "count": 1234, "sh_degree": 3, "presentation": presentation}
+    record = {"state": "completed", "result": result}
+    loaded, coordinates = transport.resolve_result(record)
+    assert loaded == path.resolve()
+    assert loaded.read_bytes() == b"saved full model"
+    assert coordinates == presentation
+    with pytest.raises(InterruptedError):
+        transport.resolve_result(record, lambda: True)
+    with pytest.raises(ValueError, match="finished"):
+        transport.resolve_result({**record, "state": "training"})
+    path.write_bytes(b"modified model!!")
+    with pytest.raises(ValueError, match="integrity"):
+        transport.resolve_result(record)
+    for field, value in (("path", "../outside.ply"), ("root", "relative"), ("bytes", True),
+                         ("count", -1), ("sh_degree", 4), ("sha256", "no checksum"),
+                         ("presentation", {"schema": 99})):
+        with pytest.raises(ValueError):
+            transport.resolve_result({**record, "result": {**result, field: value}})
+    legacy = {"protocol": 1, "id": "legacy", "pid": os.getpid(), "state": "completed",
+              "result": {"path": "artifacts/best.ply"}}
+    assert transport.validate_session(legacy) is legacy
+    invalid_result = {**legacy, "result": {**result, "count": "invalid"}}
+    # A malformed optional artifact cannot hide a valid terminal session.
+    assert transport.validate_session(invalid_result) is invalid_result
+    with pytest.raises(ValueError, match="count"):
+        transport.resolve_result(invalid_result)
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        transport.resolve_result(record)
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_saved_result_rejects_non_regular_files(tmp_path, kind):
+    path = tmp_path / "result.ply"
+    descriptor = None
+    if kind == "directory":
+        path.mkdir()
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("Named pipes require POSIX")
+        os.mkfifo(path)
+        # Keep the regression bounded even if a reader incorrectly opens it.
+        descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    result = {"kind": "last", "root": str(tmp_path), "path": path.name, "bytes": 1,
+              "sha256": "0" * 64, "iteration": 1, "count": 1, "sh_degree": 0,
+              "presentation": {"schema": 1}}
+    try:
+        with pytest.raises(ValueError, match="regular file"):
+            transport.resolve_result({"state": "completed", "result": result})
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def test_saved_result_cancellation_leaves_source_intact(tmp_path):
+    path = tmp_path / "result.ply"
+    payload = b"x" * (4 * 1024 * 1024 + 1)
+    path.write_bytes(payload)
+    result = {"kind": "last", "root": str(tmp_path), "path": path.name, "bytes": len(payload),
+              "sha256": hashlib.sha256(payload).hexdigest(), "iteration": 1, "count": 1, "sh_degree": 0,
+              "presentation": {"schema": 1}}
+    checks = 0
+
+    def cancel():
+        nonlocal checks
+        checks += 1
+        return checks == 3  # After the first hashed block, not before opening.
+
+    with pytest.raises(InterruptedError):
+        transport.resolve_result({"state": "completed", "result": result}, cancel)
+    assert list(tmp_path.iterdir()) == [path]
+    assert path.read_bytes() == payload
 
 
 @pytest.mark.parametrize("field,value", [("iteration", -1), ("iterations", True), ("count", "12"),

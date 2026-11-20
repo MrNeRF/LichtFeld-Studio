@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Linker version script shared by every lib*_ext.so extension module.
+#
+# The plugin framework resolves exactly one symbol out of an extension: the
+# module entry point. Everything else is an implementation detail and is demoted
+# to LOCAL.
+#
+# See cmake/version_scripts/nvimgcodec.map for why the version node is anonymous.
+
+{
+    global:
+        nvimgcodecExtensionModuleEntry;
+
+    local:
+        *;
+};

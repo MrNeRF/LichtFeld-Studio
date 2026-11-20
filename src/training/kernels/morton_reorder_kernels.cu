@@ -11,15 +11,14 @@
 #include "lfs/training/joint_adam_codec.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cub/device/device_radix_sort.cuh>
 #include <cuda_runtime.h>
-#include <limits>
 #include <stdexcept>
 #include <thrust/execution_policy.h>
-#include <thrust/iterator/counting_iterator.h>
 #include <thrust/sequence.h>
-#include <thrust/transform_reduce.h>
+#include <vector>
 
 namespace lfs::training::kernels {
     namespace {
@@ -49,23 +48,35 @@ namespace lfs::training::kernels {
             return min(1023u, static_cast<std::uint32_t>(t));
         }
 
+        // Codes over a contracted space: p = (x - centre) / radius, and p * (2 - 1/|p|) / |p| beyond the unit
+        // ball, so every point lands in the ball of radius 2 and the grid spans [-2, 2]^3. The bulk of the scene
+        // keeps the inner half of the grid at a resolution set by its own extent: a few distant points must not
+        // stretch a global bounding box and collapse the rest of the scene into a handful of cells.
+        constexpr float kContractedHalfExtent = 2.0f;
+
         __global__ void morton_encode_kernel(
             const float* __restrict__ means,
             std::uint32_t* __restrict__ codes,
             int n,
-            float min_x, float min_y, float min_z,
-            float xmul, float ymul, float zmul) {
+            float cx, float cy, float cz, float inv_radius) {
             const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
             if (i >= n) {
                 return;
             }
-            const float x = means[i * 3 + 0];
-            const float y = means[i * 3 + 1];
-            const float z = means[i * 3 + 2];
-            const std::uint32_t ix = quantize_axis(x, min_x, xmul);
-            const std::uint32_t iy = quantize_axis(y, min_y, ymul);
-            const std::uint32_t iz = quantize_axis(z, min_z, zmul);
-            codes[i] = encode_morton3(ix, iy, iz);
+            float x = (means[i * 3 + 0] - cx) * inv_radius;
+            float y = (means[i * 3 + 1] - cy) * inv_radius;
+            float z = (means[i * 3 + 2] - cz) * inv_radius;
+            const float r = sqrtf(x * x + y * y + z * z);
+            if (r > 1.0f) {
+                const float f = (2.0f - 1.0f / r) / r;
+                x *= f;
+                y *= f;
+                z *= f;
+            }
+            constexpr float origin = -kContractedHalfExtent;
+            constexpr float mul = 1024.0f / (2.0f * kContractedHalfExtent);
+            codes[i] = encode_morton3(quantize_axis(x, origin, mul), quantize_axis(y, origin, mul),
+                                      quantize_axis(z, origin, mul));
         }
 
         __global__ void widen_order_kernel(
@@ -93,37 +104,6 @@ namespace lfs::training::kernels {
                 "morton argsort workspace query (n={})", n);
             return bytes;
         }
-
-        struct float3_minmax {
-            float3 min_val;
-            float3 max_val;
-        };
-
-        struct minmax_op {
-            __host__ __device__ float3_minmax operator()(
-                const float3_minmax& a, const float3_minmax& b) const {
-                float3_minmax r;
-                r.min_val.x = fminf(a.min_val.x, b.min_val.x);
-                r.min_val.y = fminf(a.min_val.y, b.min_val.y);
-                r.min_val.z = fminf(a.min_val.z, b.min_val.z);
-                r.max_val.x = fmaxf(a.max_val.x, b.max_val.x);
-                r.max_val.y = fmaxf(a.max_val.y, b.max_val.y);
-                r.max_val.z = fmaxf(a.max_val.z, b.max_val.z);
-                return r;
-            }
-        };
-
-        struct position_to_minmax {
-            const float* positions;
-            __host__ __device__ explicit position_to_minmax(const float* pos) : positions(pos) {}
-            __host__ __device__ float3_minmax operator()(int idx) const {
-                float3 p;
-                p.x = positions[idx * 3 + 0];
-                p.y = positions[idx * 3 + 1];
-                p.z = positions[idx * 3 + 2];
-                return float3_minmax{p, p};
-            }
-        };
 
         __device__ __forceinline__ float4 reduce_us_block(
             float u_min, float u_max, float s_min, float s_max) {
@@ -305,6 +285,54 @@ namespace lfs::training::kernels {
             return std::max(1, (n_prims + kThreads - 1) / kThreads);
         }
 
+        struct ContractionFrame {
+            float centre[3] = {0.0f, 0.0f, 0.0f};
+            float radius = 1.0f;
+        };
+
+        // Centre (per-axis median) and radius (median distance from it) of the splat means, from a strided
+        // sample of at most kSample rows copied to the host. Runs once per reorder.
+        ContractionFrame contraction_frame(const float* means, const int n, cudaStream_t stream) {
+            constexpr int kSample = 65536;
+            const int stride = std::max(1, n / kSample);
+            const int m = (n + stride - 1) / stride;
+            std::vector<float> host(static_cast<std::size_t>(m) * 3);
+            LFS_CUDA_CHECK(cudaMemcpy2DAsync(host.data(), 3 * sizeof(float), means,
+                                             static_cast<std::size_t>(stride) * 3 * sizeof(float), 3 * sizeof(float),
+                                             static_cast<std::size_t>(m), cudaMemcpyDeviceToHost, stream));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            // Non-finite rows would break the selection's ordering; they get code 0 either way.
+            std::size_t finite = 0;
+            for (int j = 0; j < m; ++j) {
+                const float* p = host.data() + static_cast<std::size_t>(j) * 3;
+                if (std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]))
+                    std::copy(p, p + 3, host.begin() + static_cast<std::ptrdiff_t>(3 * finite++));
+            }
+            ContractionFrame frame;
+            if (finite == 0)
+                return frame;
+            std::vector<float> values(finite);
+            const auto median = [&] {
+                const auto mid = values.begin() + static_cast<std::ptrdiff_t>(finite / 2);
+                std::nth_element(values.begin(), mid, values.end());
+                return *mid;
+            };
+            for (int k = 0; k < 3; ++k) {
+                for (std::size_t j = 0; j < finite; ++j)
+                    values[j] = host[j * 3 + k];
+                frame.centre[k] = median();
+            }
+            for (std::size_t j = 0; j < finite; ++j) {
+                const float* p = host.data() + j * 3;
+                const float dx = p[0] - frame.centre[0], dy = p[1] - frame.centre[1], dz = p[2] - frame.centre[2];
+                values[j] = std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            const float radius = median();
+            if (std::isfinite(radius) && radius > 0.0f)
+                frame.radius = radius;
+            return frame;
+        }
+
     } // namespace
 
     std::size_t morton_permutation_scratch_bytes(const std::size_t n) {
@@ -339,30 +367,7 @@ namespace lfs::training::kernels {
             lfs::core::waitForCUDAStream(stream, means.stream());
         }
 
-        float3_minmax init;
-        init.min_val = make_float3(
-            std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity(),
-            std::numeric_limits<float>::infinity());
-        init.max_val = make_float3(
-            -std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity());
-        position_to_minmax transform_op(means.ptr<float>());
-        const float3_minmax bbox = thrust::transform_reduce(
-            thrust::cuda::par_nosync.on(stream),
-            thrust::counting_iterator<int>(0),
-            thrust::counting_iterator<int>(n),
-            transform_op,
-            init,
-            minmax_op());
-
-        const float xlen = bbox.max_val.x - bbox.min_val.x;
-        const float ylen = bbox.max_val.y - bbox.min_val.y;
-        const float zlen = bbox.max_val.z - bbox.min_val.z;
-        const float xmul = (xlen == 0.0f) ? 0.0f : 1024.0f / xlen;
-        const float ymul = (ylen == 0.0f) ? 0.0f : 1024.0f / ylen;
-        const float zmul = (zlen == 0.0f) ? 0.0f : 1024.0f / zlen;
+        const ContractionFrame frame = contraction_frame(means.ptr<float>(), n, stream);
 
         // Codes, the int32 order and their sort double buffers; the caller
         // may lend idle memory for them, so only the int64 result is new.
@@ -386,8 +391,7 @@ namespace lfs::training::kernels {
             means.ptr<float>(),
             codes.Current(),
             n,
-            bbox.min_val.x, bbox.min_val.y, bbox.min_val.z,
-            xmul, ymul, zmul);
+            frame.centre[0], frame.centre[1], frame.centre[2], 1.0f / frame.radius);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.encode");
 
         thrust::sequence(thrust::cuda::par_nosync.on(stream), order.Current(), order.Current() + n, 0);

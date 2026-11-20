@@ -14,6 +14,39 @@ namespace gsplat_lfs {
 
     namespace cg = cooperative_groups;
 
+    // Pixels per world unit along two directions perpendicular to the view ray through the splat centre, from the
+    // camera model's own projection: forward differences with a step of 1e-3 of the distance. Zero if a point fails.
+    template <class CameraModel>
+    inline __device__ glm::fmat2 view_plane_jacobian(
+        CameraModel const& camera_model, RollingShutterParameters const& rs_params, const float margin,
+        const glm::fvec3& mean, const glm::fvec3& mean_c, const glm::fquat& world_to_camera) {
+        const glm::fvec3 dir = glm::normalize(mean_c);
+        const glm::fvec3 u_c = glm::normalize(glm::cross(dir, fabsf(dir.x) < 0.9f ? glm::fvec3(1.f, 0.f, 0.f) : glm::fvec3(0.f, 1.f, 0.f)));
+        const glm::fquat camera_to_world = glm::inverse(world_to_camera);
+        const float h = 1e-3f * glm::length(mean_c);
+        auto project = [&](const glm::fvec3& point) {
+            return camera_model.template world_point_to_image_point_shutter_pose<>(point, rs_params, margin);
+        };
+        const auto p0 = project(mean);
+        const auto pu = project(mean + h * glm::rotate(camera_to_world, u_c));
+        const auto pv = project(mean + h * glm::rotate(camera_to_world, glm::cross(dir, u_c)));
+        if (!p0.valid_flag || !pu.valid_flag || !pv.valid_flag)
+            return glm::fmat2(0.f);
+        return glm::fmat2((pu.imagePoint - p0.imagePoint) / h, (pv.imagePoint - p0.imagePoint) / h);
+    }
+
+    // sqrt(N(s) / N(s')): N is the determinant of the splat's covariance marginalised perpendicular to the view
+    // direction d (splat frame), so the factor keeps the splat's integrated contribution when every squared scale
+    // grows by sigma2. Written without divisions so needle-thin splats stay finite.
+    inline __device__ float mip_compensation(const vec3 scale, const vec4 quat, const vec3 view_dir, const float sigma2) {
+        const vec3 d = glm::transpose(quat_to_rotmat(quat)) * view_dir;
+        const vec3 a = scale * scale;
+        const vec3 b = a + sigma2;
+        const float n = d.x * d.x * a.y * a.z + d.y * d.y * a.x * a.z + d.z * d.z * a.x * a.y;
+        const float n_dilated = d.x * d.x * b.y * b.z + d.y * d.y * b.x * b.z + d.z * d.z * b.x * b.y;
+        return n_dilated > 0.f ? sqrtf(n / n_dilated) : 1.f;
+    }
+
     template <typename scalar_t>
     __global__ void projection_ut_3dgs_fused_kernel(
         const uint32_t C,
@@ -39,11 +72,12 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ tangential_coeffs, // [C, 2] optional
         const scalar_t* __restrict__ thin_prism_coeffs, // [C, 2] optional
         // outputs
-        int32_t* __restrict__ radii,         // [C, N, 2]
-        scalar_t* __restrict__ means2d,      // [C, N, 2]
-        scalar_t* __restrict__ depths,       // [C, N]
-        scalar_t* __restrict__ conics,       // [C, N, 3]
-        scalar_t* __restrict__ compensations // [C, N] optional
+        int32_t* __restrict__ radii,          // [C, N, 2]
+        scalar_t* __restrict__ means2d,       // [C, N, 2]
+        scalar_t* __restrict__ depths,        // [C, N]
+        scalar_t* __restrict__ conics,        // [C, N, 3]
+        scalar_t* __restrict__ compensations, // [C, N] optional
+        scalar_t* __restrict__ dilations      // [C, N] optional: mip filter on, world variance added to s^2
     ) {
         // parallelize over C * N.
         uint32_t idx = cg::this_grid().thread_rank();
@@ -87,6 +121,13 @@ namespace gsplat_lfs {
 
         // projection using uncented transform
         ImageGaussianReturn image_gaussian_return;
+        glm::fmat2 J(0.f); // mip filter: pixels per world unit at the splat
+        auto project = [&](auto const& camera_model) {
+            if (dilations != nullptr)
+                J = view_plane_jacobian(camera_model, rs_params, ut_params.in_image_margin_factor, mean, mean_c, shutter_pose.q);
+            return world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+                camera_model, rs_params, ut_params, mean, scale, quat);
+        };
         if (camera_model_type == CameraModelType::PINHOLE) {
             if (radial_coeffs == nullptr && tangential_coeffs == nullptr && thin_prism_coeffs == nullptr) {
                 PerfectPinholeCameraModel::Parameters cm_params = {};
@@ -95,9 +136,7 @@ namespace gsplat_lfs {
                 cm_params.principal_point = {principal_point.x, principal_point.y};
                 cm_params.focal_length = {focal_length.x, focal_length.y};
                 PerfectPinholeCameraModel camera_model(cm_params);
-                image_gaussian_return =
-                    world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                        camera_model, rs_params, ut_params, mean, scale, quat);
+                image_gaussian_return = project(camera_model);
             } else {
                 OpenCVPinholeCameraModel<>::Parameters cm_params = {};
                 cm_params.resolution = {image_width, image_height};
@@ -114,9 +153,7 @@ namespace gsplat_lfs {
                     cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
                 }
                 OpenCVPinholeCameraModel camera_model(cm_params);
-                image_gaussian_return =
-                    world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                        camera_model, rs_params, ut_params, mean, scale, quat);
+                image_gaussian_return = project(camera_model);
             }
         } else if (camera_model_type == CameraModelType::FISHEYE) {
             OpenCVFisheyeCameraModel<>::Parameters cm_params = {};
@@ -128,9 +165,7 @@ namespace gsplat_lfs {
                 cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
             }
             OpenCVFisheyeCameraModel camera_model(cm_params);
-            image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                    camera_model, rs_params, ut_params, mean, scale, quat);
+            image_gaussian_return = project(camera_model);
         } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
             // For equirectangular cameras in tile mode, the K matrix encodes tile information:
             //   K[0][0] (focal_length.x) = full_image_width
@@ -150,9 +185,7 @@ namespace gsplat_lfs {
             EquirectangularCameraModel::Parameters cm_params = {};
             cm_params.resolution = {full_image_width, full_image_height};
             EquirectangularCameraModel camera_model(cm_params);
-            image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                    camera_model, rs_params, ut_params, mean, scale, quat);
+            image_gaussian_return = project(camera_model);
 
             // Convert from full image coordinates to tile-local coordinates
             image_gaussian_return.mean.x -= tile_x_offset;
@@ -170,9 +203,7 @@ namespace gsplat_lfs {
                 cm_params.thin_prism_coeffs = make_array<float, 4>(thin_prism_coeffs + cid * 4);
             }
             ThinPrismFisheyeCameraModel camera_model(cm_params);
-            image_gaussian_return =
-                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
-                    camera_model, rs_params, ut_params, mean, scale, quat);
+            image_gaussian_return = project(camera_model);
         } else {
             // should never reach here
             assert(false);
@@ -188,8 +219,23 @@ namespace gsplat_lfs {
             return;
         }
 
+        // Mip filter: eps2d px^2 in the image is the isotropic world variance sigma2 = eps2d / |det J| at the
+        // splat. The ray kernels add it to every squared scale; the bounds take its largest image eigenvalue.
+        float sigma2 = 0.f;
+        float blur = eps2d;
+        if (dilations != nullptr) {
+            const float det_J = J[0][0] * J[1][1] - J[1][0] * J[0][1];
+            const float variance = eps2d / fabsf(det_J);
+            if (isfinite(variance)) {
+                const glm::fmat2 JJt = J * glm::transpose(J);
+                const float half_trace = 0.5f * (JJt[0][0] + JJt[1][1]);
+                sigma2 = variance;
+                blur = max(eps2d, variance * (half_trace + sqrtf(max(0.f, half_trace * half_trace - det_J * det_J))));
+            }
+        }
+
         float compensation;
-        float det = add_blur(eps2d, covar2d, compensation);
+        float det = add_blur(blur, covar2d, compensation);
         if (det <= 0.f) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
@@ -198,6 +244,11 @@ namespace gsplat_lfs {
 
         // compute the inverse of the 2d covariance
         mat2 covar2d_inv = glm::inverse(covar2d);
+
+        if (dilations != nullptr) {
+            const vec3 view_dir = glm::rotate(glm::inverse(shutter_pose.q), glm::normalize(mean_c));
+            compensation = mip_compensation(scale, vec4(quat.w, quat.x, quat.y, quat.z), view_dir, sigma2);
+        }
 
         float extend = 3.33f;
         if (opacities != nullptr) {
@@ -248,6 +299,9 @@ namespace gsplat_lfs {
         if (compensations != nullptr) {
             compensations[idx] = compensation;
         }
+        if (dilations != nullptr) {
+            dilations[idx] = sigma2;
+        }
     }
 
     void launch_projection_ut_3dgs_fused_kernel(
@@ -280,6 +334,7 @@ namespace gsplat_lfs {
         float* depths,        // [C, N]
         float* conics,        // [C, N, 3]
         float* compensations, // [C, N] optional (can be nullptr)
+        float* dilations,     // [C, N] optional (can be nullptr)
         cudaStream_t stream) {
         int64_t n_elements = C * N;
         dim3 threads(256);
@@ -318,7 +373,8 @@ namespace gsplat_lfs {
                 means2d,
                 depths,
                 conics,
-                compensations);
+                compensations,
+                dilations);
         LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.projection_ut_3dgs_fused");
     }
 

@@ -6,6 +6,7 @@
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/extracted_frame.hpp"
+#include "core/side_dock.hpp"
 #include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -108,8 +109,9 @@ namespace lfs::core {
             EVENT(ResetCamera, );
             EVENT(SetVrActive, bool active;);
             EVENT(RecenterVr, );
+            EVENT(DetectVr, );                 // look again for a headset connected after startup
             EVENT(SnapTurnVr, int direction;); // -1 left, +1 right
-            EVENT(SetVrPreferences, bool enabled; float resolution_scale; float scene_units_per_meter; float move_speed; bool persist;);
+            EVENT(SetVrPreferences, bool enabled; float resolution_scale; float scene_units_per_meter; float move_speed; bool show_hands; bool persist;);
             EVENT(ShowWindow, std::string window_name; bool show;);
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
@@ -346,6 +348,8 @@ namespace lfs::core {
             EVENT(SplitPositionChanged, float position;);
             EVENT(FocusTrainingPanel, );
             EVENT(ToggleUI, );
+            EVENT(ToggleSideDock, SideDock side;);
+            EVENT(RevealPanel, std::string id;);
             EVENT(ToggleFullscreen, );
             EVENT(ToggleVramHud, );
             EVENT(TogglePerfHudExpanded, );

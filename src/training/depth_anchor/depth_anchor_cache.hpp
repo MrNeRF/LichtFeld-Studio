@@ -41,6 +41,10 @@ namespace lfs::training {
     // projected, with (done, total_depth_cameras).
     // The camera's lens as the GPU projection models it; pinhole once undistortion is prepared.
     [[nodiscard]] kernels::DepthCameraProjection depth_camera_projection(const lfs::core::Camera& cam);
+    [[nodiscard]] kernels::DepthCameraProjection photograph_projection(const lfs::core::Camera& cam);
+
+    [[nodiscard]] std::optional<kernels::DepthRayGrid> depth_prior_ray_grid(
+        const lfs::core::Camera& cam, int tile_x, int tile_y);
 
     using DepthAnchorProgress = std::function<void(std::size_t done, std::size_t total)>;
     [[nodiscard]] RawDepthAnchorMap computeRawDepthAnchors(

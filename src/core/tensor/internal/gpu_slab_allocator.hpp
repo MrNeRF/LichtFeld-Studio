@@ -112,10 +112,44 @@ namespace lfs::core {
             }
         }
 
-        // Free slabs whose every block is currently free. Caller must have
-        // synchronized the device and preferably merged streams into virgin
-        // (see CudaMemoryPool::trim_cached_memory). Safe only when no live
-        // allocation holds a block from a reclaimed slab.
+        using StreamFreeLists =
+            std::array<std::unordered_map<cudaStream_t, std::vector<void*>>, NUM_SIZE_CLASSES>;
+
+        // Takes every free block still bound to the stream of its last use out
+        // of the free lists, so that blocks freed later are not mixed in.
+        StreamFreeLists take_stream_free_lists() {
+            StreamFreeLists taken;
+            for (size_t size_class = 0; size_class < NUM_SIZE_CLASSES; ++size_class) {
+                FreeLists& lists = free_lists_[size_class];
+                std::lock_guard<std::mutex> lock(lists.mutex);
+                size_t blocks = 0;
+                for (const auto& entry : lists.per_stream) {
+                    blocks += entry.second.size();
+                }
+                taken[size_class] = std::move(lists.per_stream);
+                lists.per_stream.clear();
+                lists.count.fetch_sub(blocks, std::memory_order_release);
+            }
+            return taken;
+        }
+
+        // Returns blocks from take_stream_free_lists: to the virgin list when
+        // their streams have since been synchronized, else to their streams.
+        void return_stream_free_lists(StreamFreeLists&& taken, const bool synchronized) {
+            for (size_t size_class = 0; size_class < NUM_SIZE_CLASSES; ++size_class) {
+                FreeLists& lists = free_lists_[size_class];
+                std::lock_guard<std::mutex> lock(lists.mutex);
+                for (auto& [stream, blocks] : taken[size_class]) {
+                    auto& destination = synchronized ? lists.virgin : lists.per_stream[stream];
+                    destination.insert(destination.end(), blocks.begin(), blocks.end());
+                    lists.count.fetch_add(blocks.size(), std::memory_order_release);
+                }
+            }
+        }
+
+        // Free slabs whose every block is on the virgin list. A block still on
+        // a stream's list may have work queued on that stream. Safe only when no
+        // live allocation holds a block from a reclaimed slab.
         // Serialized with expand_slab via expand_mutex_. Candidate blocks are
         // detached under the metadata locks, but the driver free is deliberately
         // performed after releasing them. A failed free remains tracked and
@@ -153,10 +187,6 @@ namespace lfs::core {
                     };
                     for (void* p : lists.virgin)
                         bump(p);
-                    for (auto& entry : lists.per_stream) {
-                        for (void* p : entry.second)
-                            bump(p);
-                    }
 
                     const uintptr_t slab_start = reinterpret_cast<uintptr_t>(slab.base);
                     size_t free_in_slab = 0;
@@ -172,26 +202,11 @@ namespace lfs::core {
                         continue;
                     }
 
-                    // Fully empty: strip every block of this slab from free lists.
-                    auto strip = [&](std::vector<void*>& vec) {
-                        vec.erase(std::remove_if(vec.begin(), vec.end(),
-                                                 [&](void* p) {
-                                                     const uintptr_t addr =
-                                                         reinterpret_cast<uintptr_t>(p);
-                                                     return addr >= slab_start &&
-                                                            addr < slab_start + slab.size;
-                                                 }),
-                                  vec.end());
-                    };
-                    strip(lists.virgin);
-                    for (auto it = lists.per_stream.begin(); it != lists.per_stream.end();) {
-                        strip(it->second);
-                        if (it->second.empty()) {
-                            it = lists.per_stream.erase(it);
-                        } else {
-                            ++it;
-                        }
-                    }
+                    // Fully empty: strip every block of this slab from the virgin list.
+                    std::erase_if(lists.virgin, [&](void* p) {
+                        const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+                        return addr >= slab_start && addr < slab_start + slab.size;
+                    });
                     const size_t prev = lists.count.load(std::memory_order_relaxed);
                     lists.count.store(prev >= num_blocks ? prev - num_blocks : 0,
                                       std::memory_order_release);

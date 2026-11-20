@@ -18,6 +18,7 @@ set(EXT_LIBRARY_NAME nvjpeg2k_ext)
 set(EXT_SRCS
   nvjpeg2k_ext.cpp
   cuda_encoder.cpp
+  encoder_output.cpp
   cuda_decoder.cpp
   exception.cpp
   nvjpeg2k_utils.cpp
@@ -26,6 +27,7 @@ set(EXT_SRCS
 set(EXT_HEADERS
   cuda_decoder.h
   cuda_encoder.h
+  encoder_output.h
   error_handling.h
   exception.h
   log.h
@@ -38,6 +40,9 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 add_library(${EXT_LIBRARY_NAME}_obj OBJECT ${EXT_SRCS} ${EXT_HEADERS})
 add_library(${EXT_LIBRARY_NAME} SHARED $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static> ext_module.cpp)
+
+nvimgcodec_apply_version_script(${EXT_LIBRARY_NAME} extension.map)
+
 add_library(${EXT_LIBRARY_NAME}_static STATIC $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
 
 if (WITH_DYNAMIC_CUDA)

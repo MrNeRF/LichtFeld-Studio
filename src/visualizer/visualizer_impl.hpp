@@ -113,7 +113,7 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         void set_evaluation_weights_preparer(
-            std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) override;
+            std::function<std::optional<core::nn::WeightFile>(bool allow_download)> preparer) override;
         std::expected<void, std::string> startTraining() override;
         [[nodiscard]] bool isTrainingStartPending() const {
             return project_lifecycle_ && project_lifecycle_->isTrainingStartPending();
@@ -499,6 +499,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;
         friend class VisualizerImplResetTest_EmergencyForceExitKeepsAutosaveSidecarOnTeardown_Test;
+        friend class VisualizerImplResetTest_CleanCloseDeletesAutosaveSidecarOnTeardown_Test;
         friend class VisualizerImplResetTest_DiscardSwitchDeletesOldProjectAutosaveSidecar_Test;
         friend class VisualizerImplResetTest_DiscardSamePathReopenSkipsRecoveryPromptAndDeletesSidecar_Test;
         friend class VisualizerImplResetTest_DirtyRequireCleanSwitchKeepsAutosaveSidecar_Test;

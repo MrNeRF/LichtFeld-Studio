@@ -7,6 +7,7 @@
 #include "../dataset.hpp"
 #include "core/error.hpp"
 #include "core/nn/models/lpips.hpp"
+#include "core/nn/weight_file.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -76,6 +77,10 @@ namespace lfs::training {
         std::optional<float> flip;
         float evaluated_pixel_fraction = 0.0f;
         std::string skipped_reason;
+        // With calibration correction, the headline set's scores after aligning the render onto the photograph.
+        std::optional<float> psnr_aligned;
+        std::optional<float> ssim_aligned;
+        std::optional<float> lpips_aligned;
     };
 
     // The scores of every scored pixel set, the headline set's included.
@@ -125,6 +130,10 @@ namespace lfs::training {
         bool validity_mask_applied = false;
         std::string skipped_reason;
         PixelSetScores sets;
+        // With calibration correction, the scores after aligning the render onto the photograph.
+        std::optional<float> psnr_aligned;
+        std::optional<float> ssim_aligned;
+        std::optional<float> lpips_aligned;
     };
 
     struct EvalMetrics {
@@ -149,6 +158,12 @@ namespace lfs::training {
         lfs::core::param::EvalPixelSet headline = lfs::core::param::EvalPixelSet::Mask;
         PixelSetScores sets;
         std::vector<ViewMetrics> views;
+        // With calibration correction, the mean scores after aligning each render onto its photograph; the scores
+        // above stay the plain ones.
+        std::optional<float> psnr_aligned;
+        std::optional<float> ssim_aligned;
+        std::optional<float> lpips_aligned;
+        std::string alignment_summary;
 
         [[nodiscard]] std::string to_string() const {
             if (cancelled) {
@@ -182,6 +197,17 @@ namespace lfs::training {
             return ss.str();
         }
 
+        // "PSNR: ..., SSIM: ..., LPIPS: ..." of the aligned scores, empty without them.
+        [[nodiscard]] std::string aligned_scores() const {
+            if (!psnr_aligned && !ssim_aligned && !lpips_aligned)
+                return {};
+            const auto score = [](const std::optional<float>& value) {
+                return value && std::isfinite(*value) ? std::format("{:.4f}", *value) : std::string("-");
+            };
+            return std::format("PSNR: {}, SSIM: {}, LPIPS: {}", score(psnr_aligned), score(ssim_aligned),
+                               score(lpips_aligned));
+        }
+
         [[nodiscard]] std::vector<std::string> mask_set_summaries() const {
             const auto score = [](const std::optional<float>& value) {
                 return value && std::isfinite(*value) ? std::format("{:.4f}", *value) : std::string("-");
@@ -198,11 +224,13 @@ namespace lfs::training {
             return lines;
         }
 
-        static std::string to_csv_header() {
-            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip";
+        // The aligned scores are appended last, so the columns before them keep their positions.
+        static std::string to_csv_header(const bool aligned = false) {
+            return std::string("iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b,flip") +
+                   (aligned ? ",psnr_aligned,ssim_aligned,lpips_aligned" : "");
         }
 
-        [[nodiscard]] std::string to_csv_row() const {
+        [[nodiscard]] std::string to_csv_row(const bool aligned = false) const {
             std::stringstream ss;
             ss << iteration << ","
                << std::fixed << std::setprecision(6)
@@ -225,6 +253,13 @@ namespace lfs::training {
                << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ",";
             if (flip && std::isfinite(*flip)) {
                 ss << *flip;
+            }
+            if (aligned) {
+                for (const auto& score : {psnr_aligned, ssim_aligned, lpips_aligned}) {
+                    ss << ",";
+                    if (score && std::isfinite(*score))
+                        ss << *score;
+                }
             }
             return ss.str();
         }
@@ -263,6 +298,9 @@ namespace lfs::training {
         EvaluationViewInputs inputs;
         RenderOutput output;
         lfs::core::Tensor raw_image;
+        // With calibration correction, output.image before it is put on the reference's grid, so the aligned scores
+        // round their render once, after aligning it.
+        lfs::core::Tensor unrounded_image;
         lfs::core::Tensor metric_mask;
         lfs::core::Tensor validity_mask; // [H,W] where the render warped to the source grid has a pixel
         EvaluationRenderGeometry render_geometry;
@@ -389,7 +427,8 @@ namespace lfs::training {
     // Metrics reporter class
     class MetricsReporter {
     public:
-        explicit MetricsReporter(const std::filesystem::path& output_dir);
+        // `aligned_scores` adds the aligned score columns to a new metrics.csv; an existing file keeps its columns.
+        explicit MetricsReporter(const std::filesystem::path& output_dir, bool aligned_scores = false);
 
         void add_metrics(const EvalMetrics& metrics);
 
@@ -408,6 +447,7 @@ namespace lfs::training {
         const std::filesystem::path csv_path_;
         const std::filesystem::path txt_path_;
         const std::filesystem::path per_image_path_;
+        bool aligned_columns_ = false;
     };
 
     // Main evaluator class that handles all metrics computation and visualization
@@ -421,8 +461,8 @@ namespace lfs::training {
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
-        void set_lpips_weights_path(std::optional<std::filesystem::path> path) {
-            _lpips_weights_path = std::move(path);
+        void set_lpips_weights_preparer(std::function<std::optional<core::nn::WeightFile>()> preparer) {
+            _lpips_weights_preparer = std::move(preparer);
             _lpips_metric.reset();
             _lpips_load_attempted = false;
         }
@@ -504,7 +544,7 @@ namespace lfs::training {
         std::unique_ptr<PSNR> _psnr_metric;
         std::unique_ptr<SSIM> _ssim_metric;
         std::optional<lfs::core::nn::models::Lpips> _lpips_metric;
-        std::optional<std::filesystem::path> _lpips_weights_path;
+        std::function<std::optional<core::nn::WeightFile>()> _lpips_weights_preparer;
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;

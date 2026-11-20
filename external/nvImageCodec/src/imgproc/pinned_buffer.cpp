@@ -23,32 +23,8 @@
 
 namespace nvimgcodec {
 
-    namespace {
-
-        struct StrategyDeleter {
-            std::shared_ptr<DeleterStrategy> strategy;
-
-            void operator()(void* ptr) const noexcept {
-                if (strategy && strategy->fn) {
-                    strategy->fn(ptr);
-                }
-            }
-        };
-
-        std::shared_ptr<void> MakeBufferOwner(void* data, const std::shared_ptr<DeleterStrategy>& strategy) {
-            // The unique_ptr `rollback` provides exception-safety while constructing the shared_ptr:
-            // if the shared_ptr's control-block allocation throws, ~rollback frees `data` via the
-            // strategy. Once `owner` is constructed, both wrappers point at the same `data`, so we
-            // must detach `rollback` to prevent a double-free. Coverity flags release() as a leak
-            // because it cannot see the alias already held by `owner`.
-            std::unique_ptr<void, StrategyDeleter> rollback(data, StrategyDeleter{strategy});
-            std::shared_ptr<void> owner(rollback.get(), StrategyDeleter{strategy});
-            // coverity[leaked_storage : FALSE]
-            rollback.release();
-            return owner;
-        }
-
-    } // namespace
+    // MakeBufferOwner (and the process-exit-aware deleter it installs) is shared
+    // with DeviceBuffer; defined once in device_buffer.cpp.
 
     PinnedBuffer::PinnedBuffer(nvimgcodecPinnedAllocator_t* pinned_allocator)
         : allocator(pinned_allocator) {
