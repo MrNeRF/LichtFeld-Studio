@@ -199,7 +199,7 @@ class FrameMaskEditor:
         self.phase = phase
         # A repeated completed result must not erase feedback from a local
         # validation/approval action performed after accepting that result.
-        if changed or phase != "ready" or not self.overlays:
+        if changed or phase not in ("ready", "searched") or (phase == "ready" and not self.overlays):
             self.error = snapshot.get("error", "")
         if phase == "ready" and not self.overlays:
             self.overlays = list(snapshot["overlays"])

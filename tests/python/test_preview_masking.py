@@ -108,11 +108,12 @@ def test_newer_request_wins_and_refinement_survives_prompt_correction(panel_modu
     assert value.draft.points == [(0.4, 0.6, 0)]
 
 
-def test_repeated_ready_poll_preserves_local_validation_feedback(panel_modules):
+@pytest.mark.parametrize("phase", ["ready", "searched"])
+def test_repeated_ready_poll_preserves_local_validation_feedback(panel_modules, phase):
     module, _ = panel_modules
     value = editor(module)
     value.request = 9
-    snapshot = {"request": 9, "revision": "revision-a", "phase": "ready",
+    snapshot = {"request": 9, "revision": "revision-a", "phase": phase,
                 "overlays": ["mask"], "scores": [.9]}
     assert value.accept(snapshot)
     value.error = "Enter a valid frame range."
@@ -560,6 +561,15 @@ def test_mask_keymap_respects_rebinding_unbinding_modifiers_and_capture(panel_mo
     panel._set_sam_method("manual")
     panel._on_keydown(event(key_identifier=13))
     assert generated[-1] == {"semantic": False}
+    panel._sam_sequence = {"run": "clip-a"}
+    panel._sam_page = "sequence"
+    for method in ("manual", "semantic"):
+        panel._sam_method = method
+        panel._on_keydown(event(key_identifier=13))
+    assert len(generated) == 2
+    panel._sam_page = "frame"
+    panel._on_keydown(event(key_identifier=13))
+    assert generated[-1] == {"semantic": True} and len(generated) == 3
 
 
 def test_candidate_texture_is_reused_and_released_before_its_owner(panel_modules, monkeypatch):
@@ -651,7 +661,7 @@ def test_tracking_submits_the_selected_seed_and_rejects_a_range_without_it(track
     args, kwargs = submitted[0]
     assert args[6:8] == (7, 2)
     assert kwargs == {"sequence": {"run": "clip-a", "first": 2, "last": 8, "seed": 4, "direction": "both"}}
-    assert panel._sam_tracking_request == value.request == 8
+    assert panel._sam_sequence_request == value.request == 8
 
 
 def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_modules, monkeypatch):
@@ -681,7 +691,7 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
             self.attributes[name] = enabled
 
     controls = {name: Control() for name in (
-        "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls",
+        "sam-controls", "sam-pages", "sam-page-frame", "sam-page-sequence", "sam-frame-controls", "sam-sequence-action-row",
         "sam-tracking", "sam-track-first", "sam-track-last", "sam-track-direction",
         "sam-approve", "sam-track", "sam-save", "sam-save-exclude", "sam-apply-heading", "sam-hint", "sam-generate-row", "sam-semantic-find-row")}
     panel._doc = doc = _DocumentStub(controls)
@@ -708,12 +718,14 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     assert controls["sam-controls"].scroll_top == 0
     assert controls["sam-frame-controls"].attributes["hidden"]
     assert controls["sam-generate-row"].attributes["hidden"]
+    assert not controls["sam-sequence-action-row"].attributes["hidden"]
     assert not controls["sam-tracking"].attributes["hidden"]
     assert controls["sam-page-sequence"].attributes["aria-pressed"] == "true"
     panel._set_sam_page("frame")
     panel._update_sam_page(doc)
     assert not controls["sam-frame-controls"].attributes["hidden"]
     assert not controls["sam-generate-row"].attributes["hidden"]
+    assert controls["sam-sequence-action-row"].attributes["hidden"]
     assert controls["sam-tracking"].attributes["hidden"]
     assert controls["sam-semantic-find-row"].attributes["hidden"]
     panel._sam_method = "semantic"
@@ -738,10 +750,10 @@ def test_tracking_range_keeps_partial_edits_and_blocks_invalid_submission(panel_
     panel._sam_track()
     assert not submitted
     assert value.error == "image_preview.sam_semantic_no_matches"
-    panel._sam_tracking_request = 9
+    panel._sam_sequence_request = 9
     panel._update_sam_sequence(doc, True)
     assert not controls["sam-track"].has_attribute("disabled")
-    panel._sam_tracking_request = 0
+    panel._sam_sequence_request = 0
     value.matched_objects = -1
     panel._sam_track()
     assert not submitted
@@ -830,14 +842,17 @@ def test_saving_requires_confirmation_of_the_same_review_revision(panel_modules,
     assert value.phase == "saving"
 
 
-def test_range_approval_pages_summaries_and_uses_one_reversible_group(tracked_sequence, monkeypatch):
+@pytest.mark.parametrize("phase", ["ready", "searched", "idle", "error"])
+def test_range_approval_pages_summaries_and_uses_one_reversible_group(tracked_sequence, monkeypatch, phase):
     module, panel = tracked_sequence
     panel._mask_editor = editor(module)
-    panel._mask_editor.phase = "ready"
+    panel._mask_editor.phase = phase
     panel._image_paths = [module.Path(f"frame-{i}.png") for i in range(257)]
     panel._sam_track_last = 256
     frames = [{"revision": i + 1, "approved": i == 0, "reliable": i != 1} for i in range(257)]
     frames[2]["revision"] = 0
+    frames[3]["matched_objects"] = 0
+    frames[3]["reliable"] = False
     pages, dialogs, writes, history = [], [], [], []
     def summaries(run, first, count):
         pages.append((run, first, count))
@@ -847,14 +862,14 @@ def test_range_approval_pages_summaries_and_uses_one_reversible_group(tracked_se
     monkeypatch.setattr(module.lf.ui, "sam_preview_approve_frames", lambda run, updates: writes.append((run, updates)) or True, raising=False)
     monkeypatch.setattr(module.lf.ui, "form_dialog", lambda *a: dialogs.append(a), raising=False)
     monkeypatch.setattr(module.lf.undo, "push", lambda *a, **kw: history.append((a, kw)))
-    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{first}-{last}:{count}:{uncertain}:{missing}" if key.endswith("sam_approve_range_hint") else key)
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: "{first}-{last}:{count}:{uncertain}:{missing}:{empty}" if key.endswith("sam_approve_range_hint") else key)
     panel._sam_approve_range()
     assert pages == [("clip-a", 0, 256), ("clip-a", 256, 1)]
     assert not writes and not history
-    assert "1-257:255:1:1" in dialogs[0][2]
+    assert "1-257:254:1:1:1" in dialogs[0][2]
     dialogs[0][4](dialogs[0][3][1]["label"], {})
     dialogs[0][4](dialogs[0][3][1]["label"], {})
-    expected = [(i, i + 1, True) for i in range(1, 257) if i != 2]
+    expected = [(i, i + 1, True) for i in range(1, 257) if i not in (2, 3)]
     assert writes == [("clip-a", expected)]
     assert len(history) == 1
     panel._mask_editor.phase = "saving"
@@ -863,7 +878,7 @@ def test_range_approval_pages_summaries_and_uses_one_reversible_group(tracked_se
     assert len(writes) == 1, "busy playback must refuse before mutating any approval"
     panel._mask_editor.phase = "ready"
     history[0][0][1]()
-    assert writes[-1] == ("clip-a", [(i, i + 1, False) for i in range(1, 257) if i != 2])
+    assert writes[-1] == ("clip-a", [(i, i + 1, False) for i in range(1, 257) if i not in (2, 3)])
     history[0][0][2]()
     assert writes[-1] == ("clip-a", expected)
     panel._sam_sequence = {"run": "clip-b"}
@@ -1085,7 +1100,7 @@ def test_prompt_edit_during_native_work_restores_draft_without_history(tracked_s
     module, panel = tracked_sequence
     panel._image_paths = [module.Path("frame.png")]
     panel._mask_editor.bind("frame.png", "r1")
-    panel._sam_tracking_request = 42
+    panel._sam_sequence_request = 42
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": "saving"}, raising=False)
     history = []
     monkeypatch.setattr(module.lf.undo, "push", lambda *a, **kw: history.append(a))
@@ -1093,7 +1108,7 @@ def test_prompt_edit_during_native_work_restores_draft_without_history(tracked_s
         panel._mask_editor.point(.4, .6, 1)
     assert panel._mask_editor.draft.points == []
     assert not history
-    assert panel._sam_tracking_request == 42
+    assert panel._sam_sequence_request == 42
 
 
 def test_sequence_summary_pages_preserve_saved_masks_after_proposal_revocation(tracked_sequence, monkeypatch):
@@ -1115,12 +1130,12 @@ def test_sequence_summary_pages_preserve_saved_masks_after_proposal_revocation(t
 def test_failed_inspection_submit_preserves_tracking_handle(tracked_sequence, monkeypatch):
     module, panel = tracked_sequence
     panel._mask_editor = value = editor(module)
-    panel._sam_tracking_request = 42
+    panel._sam_sequence_request = 42
     def reject(*a, **kw):
         raise RuntimeError("admission failed")
     monkeypatch.setattr(module.lf.ui, "sam_preview_submit", reject, raising=False)
     panel._sam_inspect_current()
-    assert panel._sam_tracking_request == 42
+    assert panel._sam_sequence_request == 42
     assert value.error == "admission failed"
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"request": 42, "phase": "tracking"}, raising=False)
     monkeypatch.setattr(module.lf.ui, "sam_preview_sequence_frames", lambda *a: [], raising=False)
@@ -1128,7 +1143,7 @@ def test_failed_inspection_submit_preserves_tracking_handle(tracked_sequence, mo
     monkeypatch.setattr(panel, "_request_async_update", lambda: updates.append(True))
     panel._service_sam()
     assert updates  # A rejected replacement must not stop polling the live job.
-    assert panel._sam_tracking_request == 42
+    assert panel._sam_sequence_request == 42
     assert panel._sam_worker_busy
     value.draft.points = [(.4, .6, 1)]
     panel._sam_edit("clear")
@@ -1136,7 +1151,7 @@ def test_failed_inspection_submit_preserves_tracking_handle(tracked_sequence, mo
     assert value.draft.points == [(.4, .6, 1)]
     monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {"phase": "idle"}, raising=False)
     panel._service_sam()
-    assert panel._sam_tracking_request == 0
+    assert panel._sam_sequence_request == 0
     assert not panel._sam_worker_busy
 
 
@@ -1302,11 +1317,13 @@ def test_semantic_proposal_apply_availability_explains_missing_dataset_target(pa
         def set_class(self, name, enabled):
             self.attributes["class"] = name if enabled else ""
     buttons = {name: Button("button") for name in ("sam-apply", "sam-exclude")}
+    buttons["sam-status"] = Element()
     doc = _DocumentStub(buttons)
     node = None if target == "unbound" else SimpleNamespace(read_only=target == "read_only")
     monkeypatch.setattr(panel, "_current_camera_node", lambda **kwargs: node)
     panel._update_sam(doc)
-    for button in buttons.values():
+    for name in ("sam-apply", "sam-exclude"):
+        button = buttons[name]
         assert button.has_attribute("disabled") == (target != "dataset")
         if target != "dataset":
             assert button.attributes["title"] == "image_preview.sam_apply_dataset"
@@ -1314,6 +1331,16 @@ def test_semantic_proposal_apply_availability_explains_missing_dataset_target(pa
     panel._update_sam(doc)
     assert value.request == 42 and value.phase == "ready" and value.overlays
     assert buttons["sam-apply"].has_attribute("disabled") == (target != "dataset")
+    value.phase = "idle"
+    panel._sam_sequence_request, panel._sam_sequence_action = 99, "search"
+    panel._sam_progress = (3, 10, 0)
+    panel._update_sam(doc)
+    assert buttons["sam-status"].text.startswith("image_preview.sam_predicting")
+    assert buttons["sam-status"].text.endswith("3 / 10")
+    panel._sam_sequence_request, value.phase = 0, "searched"
+    panel._sam_progress = (0, 0, 0)
+    panel._update_sam(doc)
+    assert buttons["sam-status"].text == "image_preview.sam_range_protected"
     panel._metadata.close()
 
 
@@ -1369,10 +1396,10 @@ def test_semantic_validation_does_not_queue_or_drop_tracking(panel_modules, monk
     assert value.phase == "ready" and value.request == 42 and value.overlays
     value.semantic_text = "person " * 76
     value.phase = "tracking"
-    panel._sam_tracking_request = 27
+    panel._sam_sequence_request = 27
     panel._sam_semantic_edit("semantic_text", "cat")
     panel._sam_generate(semantic=True)
-    assert panel._sam_tracking_request == 27 and not calls
+    assert panel._sam_sequence_request == 27 and not calls
     assert value.semantic_text == "person " * 76
     panel._metadata.close()
 
@@ -1545,3 +1572,60 @@ def test_combined_semantic_point_refinement_does_not_queue_a_replacement(panel_m
     assert value.error == "image_preview.sam_semantic_refine_combined"
     assert value.draft.points == [(.7, .6, 1)]
     panel._metadata.close()
+
+
+def test_semantic_range_needs_no_seed_and_uses_the_sequence_job(tracked_sequence, monkeypatch):
+    module, panel = tracked_sequence
+    panel._mask_editor = value = editor(module)
+    panel._preview_state = "ready"
+    panel._sam_method = "semantic"
+    panel._sam_track_first, panel._sam_track_last = 2, 8
+    panel._current_index = 0  # Search does not require a seed inside the range.
+    value.semantic_categories = ("person",)
+    value.semantic_confidence = 61
+    submitted = []
+    monkeypatch.setattr(module.lf.ui, "sam_preview_submit", lambda *a, **kw: submitted.append((a, kw)) or 77, raising=False)
+    panel._sam_run_sequence()
+    args, kwargs = submitted[0]
+    assert args[4] == []
+    assert kwargs["sequence"] == {"run": "clip-a"}
+    assert kwargs["semantic"] == {"descriptions": [[101, 2711, 1012, 102]], "confidence": .61, "frames": [2, 8]}
+    assert panel._sam_sequence_request == value.request == 77
+    assert panel._sam_sequence_action == "search"
+    assert panel._sam_session_active
+    assert value.phase == "queued"
+    stopped = []
+    monkeypatch.setattr(panel, "_sam_cancel", lambda: stopped.append(True))
+    panel._sam_run_sequence()
+    assert stopped == [True]
+    assert len(submitted) == 1
+
+
+@pytest.mark.parametrize("phase", ["tracked", "searched"])
+def test_finished_sequence_job_retires_without_inspecting_a_frame_outside_results(tracked_sequence, monkeypatch, phase):
+    module, panel = tracked_sequence
+    panel._mask_editor = value = editor(module)
+    value.request, value.phase = 42, "predicting"
+    panel._sam_sequence_request = 42
+    panel._preview_state = "ready"
+    monkeypatch.setattr(module.lf.ui, "sam_preview_poll", lambda: {
+        "request": 42, "revision": "revision-a", "phase": phase, "completed": 2, "total": 2}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "sam_preview_sequence_frames", lambda *a: [{"revision": 0}], raising=False)
+    inspections = []
+    monkeypatch.setattr(panel, "_sam_inspect_current", lambda: inspections.append(True))
+    panel._service_sam()
+    assert not panel._sam_sequence_request
+    assert not panel._sam_inspect_pending
+    assert value.phase == phase
+    assert not inspections
+
+
+@pytest.mark.parametrize("flags, expected", [
+    ({}, "image_preview.sam_semantic_no_matches"),
+    ({"approved": True}, "image_preview.sam_frame_approved · image_preview.sam_semantic_no_matches"),
+    ({"keyframe": True}, "image_preview.sam_frame_keyframe · image_preview.sam_semantic_no_matches"),
+])
+def test_empty_semantic_frame_preserves_review_status_without_low_confidence(tracked_sequence, flags, expected):
+    module, panel = tracked_sequence
+    panel._sam_frame_summaries = {0: {"revision": 3, "matched_objects": 0, "reliable": False, **flags}}
+    assert panel._sam_frame_status(0) == expected

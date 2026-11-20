@@ -60,7 +60,7 @@ The filmstrip overlays each visible frame's retained proposal using the same the
 
 To review many frames, set **First frame** and **Last frame**, then choose **Approve range…**. The confirmation counts masks awaiting approval, those with low model confidence, and frames without a proposal. Missing proposals remain unapproved so you can return to them later. Approval remains an explicit review decision, and one shared **Undo** step restores the entire group. Stale proposals reject the group without partially changing its approvals.
 
-Frames extracted without camera association can therefore save masks directly. Dataset images opened outside an extraction sequence continue to use **Keep selection** or **Exclude selection** on the current camera, with project persistence and shared undo as described above. Automatic operator tracking remains available through the extraction options. Brush painting, independent object tracks and equirectangular projection tools are separate capabilities. Text/category search applies to the current frame; it does not redetect a category throughout the sequence.
+Frames extracted without camera association can therefore save masks directly. Dataset images opened outside an extraction sequence continue to use **Keep selection** or **Exclude selection** on the current camera, with project persistence and shared undo as described above. Automatic operator tracking remains available through the extraction options. Brush painting, independent object tracks and equirectangular projection tools are separate capabilities. Text/category search is available for the current frame or an interval of the extraction sequence.
 
 ## Select objects by text or category
 
@@ -99,8 +99,23 @@ Use **Generate** with new points or a box to correct an empty result, without an
 On an extracted-frame sequence, **Track subject** propagates the selected mask
 through the chosen range. It does not search subsequent frames for new members of
 a category. For example, tracking a mask found with `person` does not find a new
-person entering the video later. Searching every frame by category is a separate
-capability.
+person entering the video later.
+
+To include newly appearing objects, open **Sequence**, choose **Text and categories**,
+and select the first and last frames. **Find in range** searches every extracted
+frame in that interval using the current categories, descriptions and threshold.
+The displayed frame does not need an existing mask or lie inside the interval.
+Each frame gets its own combined proposal; there are no individual object identities.
+Approved frames and keyframes are kept. **Stop search** preserves completed proposals
+and discards the unfinished frame. Review the filmstrip overlays, approve the desired
+frames individually or with **Approve range**, then save explicitly. Searching an
+interval never approves or saves masks automatically.
+
+Range approval leaves semantic results with no detected objects unapproved and reports their count separately. They remain available for individual review and explicit approval when saving an empty exclusion mask. Completed proposals remain available for range approval after stopping a search or an error. On the Sequence page, use the range action; the single-frame Generate shortcut is available on the Frame page.
+
+Single-frame searches create keyframes, which later range searches preserve even
+if the search terms change. Starting another range search reprocesses all
+unapproved frames that are not keyframes; approve the results you want to protect.
 
 Semantic inference uses native CUDA operations; this feature adds no Torch or
 ONNX Runtime dependency. The model is loaded only when a semantic search is
