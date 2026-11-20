@@ -1268,7 +1268,7 @@ namespace lfs::io {
             return {};
         };
 
-        if (auto jpeg_data = params.skip_blob_cache ? nullptr : load_cached_jpeg_blob(cache_key)) {
+        if (auto jpeg_data = load_cached_jpeg_blob(cache_key, params)) {
             if (auto tensor = decode_cached_hit(jpeg_data);
                 tensor.is_valid() && tensor.numel() > 0) {
                 return tensor;
@@ -1392,7 +1392,7 @@ namespace lfs::io {
         const std::filesystem::path& path, const LoadParams& params) {
         if (!decodes_16bit(params) && !load_params_need_processing(params))
             return std::nullopt;
-        if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params)))
+        if (is_jpeg_file_signature(path) || load_cached_jpeg_blob(make_cache_key(path, params), params))
             return std::nullopt;
         if (params.undistort || decodes_float(path, params))
             return HostDecodeKind::Float32;
@@ -1487,8 +1487,9 @@ namespace lfs::io {
     }
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::load_cached_jpeg_blob(
-        const std::string& cache_key) {
-        return get_from_jpeg_cache(cache_key);
+        const std::string& cache_key, const LoadParams& params) {
+        relieve_host_memory_pressure();
+        return params.skip_blob_cache ? nullptr : get_from_jpeg_cache(cache_key);
     }
 
     lfs::core::Tensor PipelinedImageLoader::decode_file_on_cpu(
@@ -1571,6 +1572,8 @@ namespace lfs::io {
                                                    const std::string& cache_key,
                                                    void* cuda_stream,
                                                    const LoadParams& params) {
+        if (params.skip_blob_cache)
+            return;
         const bool lossless = decodes_16bit(params);
         if (lossless && !jpeg2k_cache_available_.load(std::memory_order_relaxed))
             return;
@@ -1649,7 +1652,7 @@ namespace lfs::io {
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
         // Cache hits go to the hot queue, which only the GPU decode thread drains.
-        if (!is_nvcodec_available())
+        if (item.params.skip_blob_cache || !is_nvcodec_available())
             return;
         const bool raw = kind == SidecarCacheFormat::DepthFloat || kind == SidecarCacheFormat::NormalSamplesFloat ||
                          kind == SidecarCacheFormat::NormalSamples8;
@@ -1843,7 +1846,6 @@ namespace lfs::io {
     }
 
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::get_from_jpeg_cache(const std::string& cache_key) {
-        relieve_host_memory_pressure();
         std::filesystem::path spill_path;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
@@ -2478,7 +2480,7 @@ namespace lfs::io {
                 depth_result.aux_target_height = request.aux_target_height;
                 depth_result.prior_own_size = request.depth_own_size && !request.undistort;
                 depth_result.cache_key = make_sidecar_key(depth_result, SidecarCacheFormat::Depth);
-                if (auto cached = load_cached_jpeg_blob(depth_result.cache_key)) {
+                if (auto cached = load_cached_jpeg_blob(depth_result.cache_key, depth_result.params)) {
                     depth_result.jpeg_data = std::move(cached);
                     depth_result.is_cache_hit = true;
                     hot_queue_.push(std::move(depth_result));
@@ -2521,7 +2523,7 @@ namespace lfs::io {
                 normal_result.aux_target_height = request.aux_target_height;
                 normal_result.prior_own_size = request.normal_own_size && !request.undistort;
                 normal_result.cache_key = make_sidecar_key(normal_result, SidecarCacheFormat::Normal);
-                if (auto cached = load_cached_jpeg_blob(normal_result.cache_key)) {
+                if (auto cached = load_cached_jpeg_blob(normal_result.cache_key, normal_result.params)) {
                     normal_result.jpeg_data = std::move(cached);
                     normal_result.is_cache_hit = true;
                     hot_queue_.push(std::move(normal_result));
@@ -2565,8 +2567,8 @@ namespace lfs::io {
             }
             if (request.extract_alpha_as_mask) {
                 const auto alpha_key = make_mask_cache_key(request.path, request.params) + (request.alpha_is_transparency ? "_transparency" : "");
-                auto cached_rgb = get_from_jpeg_cache(rgb_key);
-                auto cached_alpha = get_from_jpeg_cache(alpha_key);
+                auto cached_rgb = load_cached_jpeg_blob(rgb_key, request.params);
+                auto cached_alpha = load_cached_jpeg_blob(alpha_key, request.params);
 
                 if (cached_rgb && cached_alpha) {
                     PrefetchedImage img_item;
@@ -2640,7 +2642,7 @@ namespace lfs::io {
                 // Only the GPU decode thread drains the hot queue; without it every image decodes on the CPU.
                 const bool gpu_decode = is_nvcodec_available();
 
-                if (auto cached = gpu_decode ? load_cached_jpeg_blob(result.cache_key) : nullptr) {
+                if (auto cached = gpu_decode ? load_cached_jpeg_blob(result.cache_key, result.params) : nullptr) {
                     result.jpeg_data = std::move(cached);
                     result.is_cache_hit = true;
                     result.needs_processing = false;
@@ -2661,10 +2663,11 @@ namespace lfs::io {
                         // An unchanged JPEG is already a usable encoded cache
                         // entry. Avoid a decode/re-encode and its quality loss.
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
-                        put_in_jpeg_cache(result.cache_key, data);
+                        if (!result.params.skip_blob_cache)
+                            put_in_jpeg_cache(result.cache_key, data);
                         result.jpeg_data = std::move(data);
                         result.needs_processing = false;
-                        result.is_cache_hit = true;
+                        result.is_cache_hit = !result.params.skip_blob_cache;
                         hot_queue_.push(std::move(result));
                         std::lock_guard<std::mutex> lock(stats_mutex_);
                         ++stats_.hot_path_hits;
@@ -2696,7 +2699,7 @@ namespace lfs::io {
                 mask_result.undistort = request.undistort;
 
                 try {
-                    if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
+                    if (auto cached = load_cached_jpeg_blob(mask_result.cache_key, mask_result.params)) {
                         mask_result.jpeg_data = cached;
                         mask_result.is_cache_hit = true;
                         hot_queue_.push(std::move(mask_result));
@@ -3206,7 +3209,7 @@ namespace lfs::io {
                         }
                     }
 
-                    if (is_nvcodec_available()) {
+                    if (!item.params.skip_blob_cache && is_nvcodec_available()) {
                         try {
                             write_derived_cache(*nvcodec, rgb, item.cache_key, nullptr, item.params);
 
@@ -3394,12 +3397,13 @@ namespace lfs::io {
                     }
 
                     // The first visit must use the same bytes as every cache visit.
+                    const bool cache_mask = item.is_mask && !item.params.skip_blob_cache && is_nvcodec_available();
                     auto mask_bytes = item.is_mask ? lfs::core::cuda::quantize_mask_to_byte_grid(
-                                                         aux_tensor, is_nvcodec_available() || share_processed_mask_source)
+                                                         aux_tensor, cache_mask || share_processed_mask_source)
                                                    : lfs::core::Tensor{};
                     if (share_processed_mask_source)
                         item.mask_source_promise->set_value(mask_bytes);
-                    if (item.is_mask && is_nvcodec_available()) {
+                    if (cache_mask) {
                         try {
                             auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg2k(mask_bytes, nullptr, true, true);
                             put_in_jpeg_cache(item.cache_key,
