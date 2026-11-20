@@ -83,6 +83,9 @@
 #include <random>
 #include <shared_mutex>
 #include <string_view>
+#include <tbb/info.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
 #include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
@@ -4856,18 +4859,43 @@ namespace lfs::vis::gui {
                             selected.push_back(index);
                     }
                 } else if (options.operation == CameraSelectionOperation::Blurry) {
-                    for (size_t index = 0; index < count; ++index) {
+                    std::vector<size_t> eligible;
+                    for (size_t index = 0; index < count; ++index)
+                        if (snapshot_enabled[index] && cameras[index].has_image)
+                            eligible.push_back(index);
+                    std::vector<unsigned char> matches(eligible.size(), 0);
+                    std::mutex progress_mutex;
+                    size_t completed = count - eligible.size();
+                    const auto analyze = [&](const size_t item) {
                         if (cancelled())
-                            break;
-                        if (snapshot_enabled[index] && cameras[index].has_image) {
+                            return;
+                        const auto index = eligible[item];
+                        {
                             const auto [data, width, height, channels] = core::load_image(cameras[index].image_path);
                             const std::unique_ptr<unsigned char, decltype(&core::free_image)> pixels(data, &core::free_image);
-                            if (io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED) < options.sharpness_threshold)
-                                selected.push_back(index);
+                            matches[item] = io::computeSharpnessScore(pixels.get(), width, height, io::SharpnessAlgorithm::COMBINED) < options.sharpness_threshold;
                         }
-                        jobs_.report(job, static_cast<float>(index + 1) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
+                        const std::lock_guard lock(progress_mutex);
+                        jobs_.report(job, static_cast<float>(++completed) / static_cast<float>(count), LOC("scene.camera_selection_progress"));
                         publishCameraSelectionState();
+                    };
+                    if (eligible.size() > 1) {
+                        // Bound simultaneous full-resolution decodes and reuse TBB's existing pool.
+                        constexpr size_t MAX_CONCURRENT_BLURRY_IMAGES = 8;
+                        const auto concurrency = static_cast<int>(std::min(MAX_CONCURRENT_BLURRY_IMAGES, eligible.size()));
+                        tbb::task_arena arena(std::min(concurrency, tbb::info::default_concurrency()));
+                        arena.execute([&] {
+                            tbb::parallel_for(size_t{0}, eligible.size(), [&](const size_t item) {
+                                // Nested image/scoring tasks must not admit another full decode on this thread.
+                                tbb::this_task_arena::isolate([&] { analyze(item); });
+                            });
+                        });
+                    } else if (!eligible.empty()) {
+                        analyze(0);
                     }
+                    for (size_t item = 0; item < eligible.size(); ++item)
+                        if (matches[item])
+                            selected.push_back(eligible[item]);
                 } else if (options.operation == CameraSelectionOperation::Random) {
                     std::mt19937 generator{std::random_device{}()};
                     selected = camera_selection::random(count, options.percentage, generator);
