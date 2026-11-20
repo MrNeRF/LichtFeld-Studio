@@ -3276,7 +3276,7 @@ namespace lfs::vis::gui {
                     items.push_back(makeAction(
                         tr(string_keys::Scene::DELETE_ITEM),
                         prefixedAction(std::format("delete:{}", node->id)),
-                        true));
+                        true, false, false, static_cast<bool>(node->locked)));
                 }
                 break;
             case core::NodeType::KEYFRAME_GROUP:

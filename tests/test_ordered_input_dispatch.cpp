@@ -3827,17 +3827,18 @@ namespace lfs::vis {
         ctx.scene = &scene;
         auto& history = op::undoHistory();
         for (const size_t index : {0u, 1u, 2u}) {
-            for (const bool locked : {true, false}) {
-                SCOPED_TRACE(std::format("index={} locked={}", index, locked));
+            for (const auto [locked_at_open, locked] : {std::pair{true, true}, {false, true}, {false, false}}) {
+                SCOPED_TRACE(std::format("index={} locked_at_open={} locked_at_click={}", index, locked_at_open, locked));
                 history.clear();
                 const auto name = std::format("Keyframe {}", index + 1);
+                scene.setNodeLocked(name, locked_at_open);
                 const auto* node = scene.getNode(name);
                 ASSERT_NE(node, nullptr);
                 auto* menu_document = openCameraMenu(panel, ctx, node->id);
                 ASSERT_NE(menu_document, nullptr);
                 auto* remove = menu_document->QuerySelector("[data-ctx-action^='scene_panel:delete']");
                 ASSERT_NE(remove, nullptr);
-                ASSERT_FALSE(remove->HasAttribute("disabled"));
+                EXPECT_EQ(remove->HasAttribute("disabled"), locked_at_open);
                 const auto other = ids[(index + 1) % ids.size()];
                 ASSERT_TRUE(sequencer.selectKeyframeById(other));
                 // Validate the live lock even when it changes after opening the menu.
