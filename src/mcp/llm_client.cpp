@@ -6,6 +6,9 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib/httplib.h"
 
+#define LLM_RETRY_IMPLEMENTATION
+#include "llm_retry/llm_retry.hpp"
+
 #include "core/tls_distrust.hpp"
 
 #include <nlohmann/json.hpp>
@@ -217,14 +220,25 @@ namespace lfs::mcp {
             client.set_read_timeout(120);
 
             std::string body_str = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-            auto result = client.Post(path, headers, body_str, "application/json");
-
-            if (!result) {
-                return std::unexpected("HTTP request failed: " + httplib::to_string(result.error()));
-            }
-
-            if (result->status != 200) {
-                return std::unexpected("HTTP " + std::to_string(result->status) + ": " + result->body);
+            std::optional<httplib::Response> result;
+            try {
+                result = llm::with_retry<httplib::Response>([&] {
+                             auto res = client.Post(path, headers, body_str, "application/json");
+                             if (!res) {
+                                 throw llm::LLMError{0, "HTTP request failed: " + httplib::to_string(res.error()), true};
+                             }
+                             if (res->status != 200) {
+                                 llm::LLMError err{res->status, "HTTP " + std::to_string(res->status) + ": " + res->body, true};
+                                 try {
+                                     err.retry_after_seconds = std::stod(res->get_header_value("Retry-After"));
+                                 } catch (...) {
+                                 }
+                                 throw err;
+                             }
+                             return *res;
+                         }).value;
+            } catch (const llm::LLMError& err) {
+                return std::unexpected(err.message);
             }
 
             switch (provider) {

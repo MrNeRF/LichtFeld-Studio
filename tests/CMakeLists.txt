@@ -660,6 +660,16 @@ set_tests_properties(lichtfeld_frame_tests PROPERTIES
     TIMEOUT 30
 )
 
+add_executable(lichtfeld_mcp_llm_retry_tests test_mcp_llm_retry.cpp)
+target_compile_features(lichtfeld_mcp_llm_retry_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_mcp_llm_retry_tests PRIVATE ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_mcp_llm_retry_tests PRIVATE GTest::gtest_main)
+if(WIN32)
+    target_link_libraries(lichtfeld_mcp_llm_retry_tests PRIVATE ws2_32)
+endif()
+add_test(NAME lichtfeld.mcp_llm_retry COMMAND lichtfeld_mcp_llm_retry_tests)
+set_tests_properties(lichtfeld.mcp_llm_retry PROPERTIES LABELS "cpu;mcp" TIMEOUT 30)
+
 add_executable(lichtfeld_tls_distrust_tests test_tls_distrust.cpp)
 target_include_directories(lichtfeld_tls_distrust_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
 target_link_libraries(lichtfeld_tls_distrust_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
