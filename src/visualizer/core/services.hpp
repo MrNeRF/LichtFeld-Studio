@@ -228,12 +228,20 @@ namespace lfs::vis {
         [[nodiscard]] const glm::vec3& getAlignCameraPosition() const { return align_camera_position_; }
 
         void setAlignPreviewEnabled(const bool enabled) {
+            if (!enabled)
+                align_preview_feedback_ = {};
             if (align_preview_enabled_ == enabled)
                 return;
             align_preview_enabled_ = enabled;
             align_point_pick_.notifyChanged();
         }
         [[nodiscard]] bool getAlignPreviewEnabled() const { return align_preview_enabled_; }
+        struct AlignPreviewFeedback {
+            std::optional<int> focus;
+            std::string summary;
+        };
+        void setAlignPreviewFeedback(AlignPreviewFeedback feedback) { align_preview_feedback_ = std::move(feedback); }
+        [[nodiscard]] const AlignPreviewFeedback& getAlignPreviewFeedback() const { return align_preview_feedback_; }
 
         void clear() {
             scene_manager_ = nullptr;
@@ -268,6 +276,7 @@ namespace lfs::vis {
         bool align_axis_snap_enabled_ = true;
         bool align_edge_to_axis_enabled_ = false;
         bool align_preview_enabled_ = false;
+        AlignPreviewFeedback align_preview_feedback_;
         glm::vec3 align_camera_position_{};
     };
 

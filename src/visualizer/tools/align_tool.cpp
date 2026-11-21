@@ -280,8 +280,10 @@ namespace lfs::vis::tools {
             const auto count = picked_points.size();
             const float divider_x = panel_proj.info.x +
                                     splitViewDividerPixel(static_cast<int>(panel_proj.info.width), settings.split_position);
-            drawPointMarkers(*overlay, panel_proj, picked_points, selected_point, SPHERE_COLOR, label_size, divider_x);
             const bool preview = services().getAlignPreviewEnabled();
+            const auto& feedback = services().getAlignPreviewFeedback();
+            const auto focus = preview ? feedback.focus : selected_point;
+            drawPointMarkers(*overlay, panel_proj, picked_points, focus, SPHERE_COLOR, label_size, divider_x);
             const auto hint = preview
                                   ? LOC("align.pair_preview")
                               : op::hasEnoughAlignmentPairs(count)
@@ -290,15 +292,18 @@ namespace lfs::vis::tools {
                                   ? LOC("align.pair_reference")
                                   : LOC("align.pair_mobile");
             const auto remove_key = pointPickShortcut(input::Action::REMOVE_LAST_POINT);
-            const auto help = !preview && count && !remove_key.empty()
-                                  ? LOCF("align.pair_remove", remove_key)
-                                  : std::string{};
+            auto help = !preview && count && !remove_key.empty()
+                            ? LOCF("align.pair_remove", remove_key)
+                            : std::string{};
             const auto delete_key = pointPickShortcut(input::Action::DELETE_SELECTED);
-            const auto edit_help = !preview && selected_point && !delete_key.empty()
-                                       ? LOCF("align.pair_delete", delete_key)
-                                       : help;
+            if (!preview && selected_point && !delete_key.empty() &&
+                static_cast<size_t>(*selected_point) / 2 < count / 2) {
+                if (!help.empty())
+                    help += ' ';
+                help += LOCF("align.pair_delete", delete_key);
+            }
             drawPointPickHud(*overlay, panel_proj, hint, LOCF("align.pair_progress", count / 2),
-                             services().alignPointPick().getStatusMessage(), edit_help);
+                             preview ? &feedback.summary : services().alignPointPick().getStatusMessage(), help);
             return;
         }
         const bool in_review = picked_points.size() == 3;

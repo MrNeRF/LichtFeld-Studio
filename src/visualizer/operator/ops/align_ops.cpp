@@ -224,8 +224,6 @@ namespace lfs::vis::op {
         scene.invalidateTransformCache();
         preview_targets_.clear();
         preview_snap_world_.reset();
-        if (pair_ && services().getAlignPreviewEnabled())
-            services().alignPointPick().clearStatusMessage();
         services().setAlignPreviewEnabled(false);
         syncPickedPointsToServices();
         if (auto* rm = services().renderingOrNull()) {
@@ -271,7 +269,11 @@ namespace lfs::vis::op {
         if (!transform) {
             restorePreview(ctx);
             if (pair_) {
-                setStatus(hasEnoughAlignmentPairs(picked_points_.size()) ? "align.pair_degenerate" : "align.pair_incomplete", 3.0);
+                const auto count = picked_points_.size();
+                setStatus(hasEnoughAlignmentPairs(count) ? "align.pair_degenerate"
+                          : count >= 6                   ? "align.pair_finish"
+                                                         : "align.pair_incomplete",
+                          3.0);
             }
             return false;
         }
@@ -301,28 +303,39 @@ namespace lfs::vis::op {
             displayed_points[i] = glm::vec3(*transform * glm::vec4(displayed_points[i], 1.0f));
         }
         services().alignPointPick().setPickedPoints(std::move(displayed_points));
-        services().setAlignPreviewEnabled(true);
         if (pair_) {
             const auto& points = services().alignPointPick().getPickedPoints();
             double squared_error = 0.0;
-            double largest_squared_error = -1.0;
-            size_t largest_error_pair = 1;
+            double largest_squared_error = 0.0;
+            double squared_coordinate_scale = 0.0;
+            size_t largest_error_index = 0;
             for (size_t i = 0; i < points.size(); i += 2) {
-                const glm::dvec3 delta = glm::dvec3(points[i]) - glm::dvec3(points[i + 1]);
+                const glm::dvec3 reference(points[i]), mobile(points[i + 1]);
+                const auto delta = reference - mobile;
                 const double error = glm::dot(delta, delta);
                 squared_error += error;
+                squared_coordinate_scale = std::max({squared_coordinate_scale,
+                                                     glm::dot(reference, reference), glm::dot(mobile, mobile)});
                 if (error > largest_squared_error) {
                     largest_squared_error = error;
-                    largest_error_pair = i / 2 + 1;
+                    largest_error_index = i;
                 }
             }
-            selected_point_ = static_cast<int>(2 * (largest_error_pair - 1));
-            services().alignPointPick().setSelectedPoint(selected_point_);
-            services().alignPointPick().setStatusMessage(
-                LOCF("align.pair_fit", glm::length(glm::dvec3((*transform)[0])),
-                     std::sqrt(squared_error / (points.size() / 2)), largest_error_pair),
-                8.0);
+            const auto pair_count = points.size() / 2;
+            const double mean_squared_error = squared_error / static_cast<double>(pair_count);
+            // Suppress ties and residuals at the precision of the viewport coordinates.
+            constexpr double float_tolerance = 8.0 * std::numeric_limits<float>::epsilon();
+            const bool distinct = pair_count > 3 && largest_squared_error >
+                                                        std::max(2.25 * mean_squared_error, float_tolerance * float_tolerance * squared_coordinate_scale);
+            const auto scale = glm::length(glm::dvec3((*transform)[0]));
+            const auto rms = std::sqrt(mean_squared_error);
+            services().setAlignPreviewFeedback({
+                .focus = distinct ? std::optional{static_cast<int>(largest_error_index)} : std::nullopt,
+                .summary = distinct ? LOCF("align.pair_fit_worst", scale, rms, largest_error_index / 2 + 1)
+                                    : LOCF("align.pair_fit", scale, rms),
+            });
         }
+        services().setAlignPreviewEnabled(true);
         press_active_ = false;
         press_point_index_.reset();
         drag_active_ = false;

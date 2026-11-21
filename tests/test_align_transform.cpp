@@ -662,6 +662,48 @@ namespace lfs::vis::op {
         EXPECT_EQ(undoHistory().undoCount(), 0u);
     }
 
+    TEST_F(AlignPreviewTest, PreviewFocusDoesNotChangeSelectionOrAllowRemoval) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        selectPoint(3);
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
+        action(PointPickState::UiAction::TogglePreview);
+
+        addPairPoint({2, 2, 0});
+        addPairPoint({1, 1, 0});
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
+        action(PointPickState::UiAction::TogglePreview);
+
+        addPairPoint({1, 1, 1});
+        addPairPoint({0.5f, 0.5f, 0});
+        const auto original_points = services().alignPointPick().getPickedPoints();
+        const auto original_mobile = manager_->getNodeTransform("mobile");
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(services().getAlignPreviewFeedback().focus, 8);
+        EXPECT_EQ(services().alignPointPick().getSelectedPoint(), 3);
+        const auto preview_points = services().alignPointPick().getPickedPoints();
+        const auto preview_mobile = manager_->getNodeTransform("mobile");
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(services().alignPointPick().getPickedPoints(), preview_points);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), preview_mobile);
+
+        send({});
+        action(PointPickState::UiAction::TogglePreview);
+        EXPECT_FALSE(services().getAlignPreviewFeedback().focus);
+        EXPECT_TRUE(services().getAlignPreviewFeedback().summary.empty());
+        EXPECT_EQ(services().alignPointPick().getSelectedPoint(), 3);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints(), original_points);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), original_mobile);
+    }
+
     TEST_F(AlignPreviewTest, ExtraPairsParticipateInFitAndCanBeRemovedTogether) {
         pair_rendering_ = std::make_unique<RenderingManager>();
         startPairAlignment(*pair_rendering_);

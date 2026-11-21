@@ -281,11 +281,15 @@ namespace lfs::vis::op {
                 return OperatorResult::CANCELLED;
 
             case lfs::vis::input::Action::REMOVE_LAST_POINT:
+                if (sequentialPoints() && pointEditingBlocked())
+                    return OperatorResult::RUNNING_MODAL;
                 beforePointEdit(ctx);
                 removeLastPoint();
                 return OperatorResult::RUNNING_MODAL;
 
             case lfs::vis::input::Action::DELETE_SELECTED:
+                if (sequentialPoints() && pointEditingBlocked())
+                    return OperatorResult::RUNNING_MODAL;
                 beforePointEdit(ctx);
                 removeSelectedPoint();
                 return OperatorResult::RUNNING_MODAL;
