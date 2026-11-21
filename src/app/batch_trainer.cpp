@@ -125,8 +125,11 @@ namespace lfs::app {
         struct TileFeasibility {
             bool feasible = false;
             int camera_count = 0;
+            int observed_cells = 0;
             int multi_view_cells = 0;
+            bool multi_view_requirement_enforced = false;
             std::vector<std::string> reasons;
+            std::vector<std::string> notes;
         };
 
         TileFeasibility assess_tile_feasibility(
@@ -135,16 +138,33 @@ namespace lfs::app {
             const lfs::core::param::TrainingParameters& params) {
             TileFeasibility result;
             result.camera_count = static_cast<int>(cameras.size());
+            result.observed_cells = diagnostics.observed_cells;
             result.multi_view_cells = diagnostics.multi_view_covered_cells;
             if (result.camera_count < params.tile_min_cameras) {
                 result.reasons.push_back(std::format(
                     "selected cameras {} < required {}", result.camera_count,
                     params.tile_min_cameras));
             }
-            if (result.multi_view_cells < params.tile_min_multi_view_cells) {
+            // A zero observed-cell count means this loader/dataset did not
+            // provide enough spatially localised SfM observations to measure
+            // the cell gate at all.  That is not proof that a tile has no
+            // multi-view coverage: large outdoor boxes, filtered sparse
+            // clouds, and camera-only imports commonly take this path.
+            //
+            // Keep the selected-camera threshold strict, but do not convert
+            // an unavailable diagnostic into a false negative.  The later
+            // dense coarse rasterization still validates actual image-space
+            // visibility before local jobs start.
+            result.multi_view_requirement_enforced =
+                params.tile_min_multi_view_cells > 0 && result.observed_cells > 0;
+            if (result.multi_view_requirement_enforced &&
+                result.multi_view_cells < params.tile_min_multi_view_cells) {
                 result.reasons.push_back(std::format(
                     "multi-view cells {} < required {}", result.multi_view_cells,
                     params.tile_min_multi_view_cells));
+            } else if (params.tile_min_multi_view_cells > 0 && result.observed_cells == 0) {
+                result.notes.push_back(
+                    "no spatial SfM cell evidence; accepted using the selected-camera gate");
             }
             result.feasible = result.reasons.empty();
             return result;
@@ -2223,6 +2243,16 @@ namespace lfs::app {
             return 1;
         }
 
+        const size_t tiles_without_cell_evidence = static_cast<size_t>(std::count_if(
+            tile_feasibility.begin(), tile_feasibility.end(),
+            [](const TileFeasibility& status) {
+                return !status.multi_view_requirement_enforced && !status.notes.empty();
+            }));
+        if (tiles_without_cell_evidence > 0) {
+            LOG_WARN("Auto-tile feasibility: skipped the multi-view-cell gate for {} tile(s) without spatial SfM cell evidence; selected-camera minimum remains enforced",
+                     tiles_without_cell_evidence);
+        }
+
         json feasibility_report;
         feasibility_report["requested_tile_count"] = requested_tile_count;
         feasibility_report["resolved_tile_count"] = tiles.size();
@@ -2241,8 +2271,11 @@ namespace lfs::app {
                 {"name", tiles[index].name},
                 {"feasible", status.feasible},
                 {"camera_count", status.camera_count},
+                {"observed_cells", status.observed_cells},
                 {"multi_view_cells", status.multi_view_cells},
+                {"multi_view_requirement_enforced", status.multi_view_requirement_enforced},
                 {"reasons", status.reasons},
+                {"notes", status.notes},
                 {"coalesced_from", coalesced_from[index]}});
             all_tiles_feasible = all_tiles_feasible && status.feasible;
         }
@@ -2646,7 +2679,11 @@ namespace lfs::app {
             entry["coalesced_from"] = coalesced_from[index];
             entry["feasibility"] = {
                 {"camera_count", tile_feasibility[index].camera_count},
+                {"observed_cells", tile_feasibility[index].observed_cells},
                 {"multi_view_cells", tile_feasibility[index].multi_view_cells},
+                {"multi_view_requirement_enforced",
+                 tile_feasibility[index].multi_view_requirement_enforced},
+                {"notes", tile_feasibility[index].notes},
                 {"feasible", tile_feasibility[index].feasible}};
             entry["boundary_extension"] = {
                 {"frame", "tile_local_obb"},

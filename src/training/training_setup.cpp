@@ -1131,6 +1131,7 @@ namespace lfs::training {
 
                 auto cameras = data.cameras;
                 if (params.tile_camera_uids_path) {
+                    const size_t loaded_camera_count = cameras.size();
                     std::ifstream input(lfs::core::native_fs::native_path(*params.tile_camera_uids_path),
                                         std::ios::binary);
                     if (!input) return std::unexpected("Cannot open tile camera allowlist");
@@ -1164,6 +1165,8 @@ namespace lfs::training {
                     });
                     if (mismatched || !allowed.empty() || cameras.empty())
                         return std::unexpected("Tile camera allowlist does not match this dataset");
+                    LOG_INFO("Applied tile camera allowlist: retained {} of {} loaded cameras",
+                             cameras.size(), loaded_camera_count);
                 }
                 if (auto attached = attachDatasetPointCloud(
                         params, scene, dataset_id, data, true,

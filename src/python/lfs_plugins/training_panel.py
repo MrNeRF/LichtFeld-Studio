@@ -302,6 +302,8 @@ class TrainingPanel(Panel):
         self._auto_tile_preview_settings = None
         self._auto_tile_preview_dataset = ""
         self._auto_tile_preview_tiles = []
+        self._auto_tile_preview_enabled_camera_count = 0
+        self._auto_tile_preview_unique_selected_camera_count = 0
         self._auto_tile_selected_index = 0
         self._auto_tile_preview_running = False
         self._auto_tile_preview_poll_generation = 0
@@ -458,6 +460,10 @@ class TrainingPanel(Panel):
         model.bind_record_list("auto_tile_selected_cameras")
         model.bind_func("auto_tile_selected_camera_count",
                         lambda: len(self._auto_tile_selected_cameras()))
+        model.bind_func("auto_tile_preview_enabled_camera_count",
+                        lambda: self._auto_tile_preview_enabled_camera_count)
+        model.bind_func("auto_tile_preview_unique_selected_camera_count",
+                        lambda: self._auto_tile_preview_unique_selected_camera_count)
         model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
         model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
         model.bind_func("auto_tile_preview_running", lambda: self._auto_tile_preview_running)
@@ -3159,6 +3165,8 @@ class TrainingPanel(Panel):
         self._handle.dirty("auto_tile_has_preview")
         self._handle.dirty("auto_tile_selected_index")
         self._handle.dirty("auto_tile_selected_camera_count")
+        self._handle.dirty("auto_tile_preview_enabled_camera_count")
+        self._handle.dirty("auto_tile_preview_unique_selected_camera_count")
         self._handle.dirty("auto_tile_preview_running")
 
     def _sync_auto_tile_preview_records(self):
@@ -3206,6 +3214,32 @@ class TrainingPanel(Panel):
     def _refresh_auto_tile_preview_details(self):
         details = lf.auto_tile_preview_details(self._auto_tile_preview_group)
         self._auto_tile_preview_tiles = list(details)
+        selected_uids = set()
+        for tile in self._auto_tile_preview_tiles:
+            for camera in tile.get("cameras", []):
+                try:
+                    uid = int(camera.get("uid", -1))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if uid >= 0:
+                    selected_uids.add(uid)
+        self._auto_tile_preview_unique_selected_camera_count = len(selected_uids)
+        self._auto_tile_preview_enabled_camera_count = 0
+        scene = lf.get_scene()
+        active_cameras = getattr(scene, "get_active_cameras", None) if scene else None
+        if callable(active_cameras):
+            try:
+                self._auto_tile_preview_enabled_camera_count = len({
+                    int(camera.camera_uid)
+                    for camera in active_cameras()
+                    if int(camera.camera_uid) >= 0
+                })
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+        if self._auto_tile_preview_enabled_camera_count == 0:
+            # Retain a useful summary in lightweight API/test contexts where
+            # active-camera enumeration is unavailable.
+            self._auto_tile_preview_enabled_camera_count = len(selected_uids)
         self._auto_tile_selected_index = 0
         self._sync_auto_tile_preview_records()
         self._dirty_auto_tile_preview()

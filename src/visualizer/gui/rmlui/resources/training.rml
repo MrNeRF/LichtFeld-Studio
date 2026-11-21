@@ -1159,12 +1159,17 @@
           </div>
           <div class="setting-row">
             <span class="prop-label"><span>@tr:auto_tiles.associated_cameras</span></span>
-            <span class="status-text">{{auto_tile_selected_camera_count}}</span>
+            <span class="status-text">{{auto_tile_selected_camera_count}} / {{auto_tile_preview_enabled_camera_count}}</span>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label"><span>@tr:auto_tiles.cameras_used_by_tiles</span></span>
+            <span class="status-text">{{auto_tile_preview_unique_selected_camera_count}} / {{auto_tile_preview_enabled_camera_count}}</span>
           </div>
           <div class="setting-row" data-for="camera : auto_tile_selected_cameras">
             <span class="status-text status-muted">{{camera.name}} [{{camera.uid}}]</span>
           </div>
           <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_focus')">@tr:auto_tiles.inspect_selected</button>
+          <span class="status-text status-muted">@tr:auto_tiles.inspect_help</span>
           <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_restore')">@tr:auto_tiles.restore_scene</button>
         </div>
         <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-attrif-disabled="auto_tile_preview_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>

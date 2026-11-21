@@ -68,7 +68,8 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
             "section_inspect", "section_feasibility", "section_visibility", "overlap_help",
             "target_size", "source", "source_points", "source_both", "source_cameras",
             "coarse_iterations", "coarse_resize", "coarse_help", "inspect_tile",
-            "inspect_selected", "restore_scene", "associated_cameras", "cameras_short",
+            "inspect_selected", "restore_scene", "associated_cameras", "cameras_used_by_tiles",
+            "inspect_help", "cameras_short",
             "preview_before_inspect", "previewing", "inspecting", "inspection_restored",
             "boundary_padding", "boundary_help", "min_cameras", "max_cameras", "max_cameras_help",
             "min_multiview_cells",
@@ -388,6 +389,30 @@ def test_auto_tile_inspector_selection_accepts_any_preview_index(training_panel_
         "Tile 0", "Tile 1", "Tile 2"
     ]
     assert panel._handle.record_lists["auto_tile_selected_cameras"] == []
+
+
+def test_auto_tile_preview_reports_per_tile_and_unique_camera_coverage(
+    training_panel_module, monkeypatch
+):
+    module = training_panel_module
+    active = [SimpleNamespace(camera_uid=10), SimpleNamespace(camera_uid=11),
+              SimpleNamespace(camera_uid=12), SimpleNamespace(camera_uid=13)]
+    monkeypatch.setattr(module.lf, "get_scene",
+                        lambda: SimpleNamespace(get_active_cameras=lambda: active))
+    monkeypatch.setattr(module.lf, "auto_tile_preview_details", lambda _group: [
+        {"name": "Tile 0", "cameras": [{"uid": 10}, {"uid": 11}]},
+        {"name": "Tile 1", "cameras": [{"uid": 11}, {"uid": 12}]},
+    ], raising=False)
+
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+    panel._auto_tile_preview_group = 7
+    panel._refresh_auto_tile_preview_details()
+
+    assert panel._auto_tile_preview_enabled_camera_count == 4
+    assert panel._auto_tile_preview_unique_selected_camera_count == 3
+    assert "auto_tile_preview_enabled_camera_count" in panel._handle.dirty_fields
+    assert "auto_tile_preview_unique_selected_camera_count" in panel._handle.dirty_fields
 
 
 def test_auto_tile_quantile_slider_exposes_the_full_cli_range(training_panel_module):
