@@ -1927,7 +1927,11 @@
     "trigger.drag": " Ziehen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Unbekannt",
-    "action.toggle_performance_hud": "Leistungs-HUD umschalten"
+    "action.toggle_performance_hud": "Leistungs-HUD umschalten",
+    "mode.image_preview": "Bildvorschau",
+    "action.image_preview_delete": "Punkt oder Rahmen entfernen",
+    "action.image_preview_generate": "Maske erzeugen",
+    "action.image_preview_remove_point": "Kontrollpunkt am Zeiger entfernen"
   },
   "debug_info": {
     "free_memory": "Frei: %.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "Deaktiviert"
   },
   "image_preview": {
+    "sam_title": "Maske · SAM2.1",
+    "sam_positive": "Vordergrund +",
+    "sam_negative": "Hintergrund −",
+    "sam_box": "Rahmen",
+    "sam_pan": "Ansicht verschieben",
+    "sam_undo": "Rückgängig",
+    "sam_clear": "Punkte und Rahmen löschen",
+    "sam_generate": "Erzeugen",
+    "sam_cancel": "SAM freigeben",
+    "sam_candidate": "Kandidat · von SAM geschätzte Qualität",
+    "sam_apply_failed": "Maske konnte nicht angewendet werden",
+    "sam_apply_dataset": "Zum Anwenden muss das Bild zum aktuellen Datensatz gehören.",
+    "sam_apply": "Anwenden: Auswahl behalten",
+    "sam_exclude": "Anwenden: Auswahl ausschließen",
+    "sam_hint": "Anwenden ersetzt die Maske dieses Bildes. Sie wird im .licht-Projekt gespeichert; wähle den Maskierungsmodus in den Trainingseinstellungen. SAM vor dem Training schließen.",
+    "sam_queued": "In Warteschlange",
+    "sam_loading": "Modell wird geladen",
+    "sam_encoding": "Bild wird kodiert",
+    "sam_predicting": "Vorhersage",
+    "sam_rendering": "Overlay wird vorbereitet",
+    "sam_closing": "Ressourcen werden freigegeben",
+    "sam_ready": "Vorschlag bereit",
+    "sam_error": "Vorgang fehlgeschlagen",
+    "sam_heading": "1 · Punkte und Rahmen",
+    "sam_proposals_heading": "2 · Vorschlag",
+    "sam_edit": "Steuerpunkte bearbeiten",
+    "sam_remove": "Löschen",
+    "sam_flip": "+/− wechseln",
+    "sam_show": "Überlagerung",
+    "sam_edit_hint": "Ziehe Punkte, um sie zu verschieben. Ziehe Rahmenkanten oder Ecken zum Skalieren; im Modus Rahmen verschiebst du ihn durch Ziehen im Inneren. Die Auswahlliste unterstützt die Tastatur. Löschen entfernt Steuerelemente, keine Maskenpixel.",
+    "sam_selection_none": "Steuerelement auswählen",
+    "sam_quality": "SAM-Wert: {score}%",
+    "sam_generate_hint": "Erzeuge einen neuen Vorschlag aus den aktuellen Punkten und dem Rahmen.",
+    "sam_positive_hint": "Positiver Punkt auf dem Objekt.",
+    "sam_negative_hint": "Negativer Punkt im Hintergrund.",
+    "sam_box_hint": "Einen Begrenzungsrahmen zeichnen oder anpassen.",
+    "sam_pan_hint": "Die Bildansicht verschieben, ohne Punkte hinzuzufügen. Bei vergrößertem Bild zum Verschieben ziehen.",
+    "sam_review_frames": "Frames prüfen · SAM",
+    "sam_source_changed": "Das Bild wurde geändert. Aktualisieren Sie es, bevor Sie einen weiteren Vorschlag erzeugen.",
+    "sam_proposal_expired": "Der ausgewählte Vorschlag ist nicht mehr aktuell. Erzeugen Sie einen neuen Vorschlag.",
+    "sam_write_failed": "Die Maske konnte nicht kodiert werden.",
+    "sam_shutting_down": "Der SAM-Vorschaudienst wird beendet.",
+    "sam_invalid_input": "Eine Bildrevision und Punkte oder ein Rahmen sind erforderlich (höchstens 256 Punkte).",
+    "sam_invalid_point": "Punktkoordinaten müssen zwischen 0 und 1 liegen und die Kennzeichnung 0 oder 1 haben.",
+    "sam_invalid_box": "Die Rahmengrenzen müssen zwischen 0 und 1 liegen; Breite und Höhe müssen positiv sein.",
+    "sam_unavailable": "Beenden Sie das Training und warten Sie auf laufende Importe oder Videoexporte, bevor Sie SAM verwenden.",
+    "sam_reset_training": "Setzen Sie das Training zurück, bevor Sie Bildmasken ändern.",
+    "sam_training_blocked": "Schließen Sie die SAM-Vorschau, bevor Sie das Training starten.",
     "source_changed": "Das Bild wurde geändert. Aktualisieren Sie es und nehmen Sie die Farbe erneut auf.",
     "scene_changed": "Die Szene wurde geändert. Nehmen Sie die Farbe erneut auf.",
     "color_sample_failed": "Die Farbe konnte nicht aufgenommen werden: {}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "Overlay: %s",
     "file_label": "Datei: %s",
     "visible": "Sichtbar",
-    "hidden": "Ausgeblendet"
+    "hidden": "Ausgeblendet",
+    "sam_refine": "Vorherigen verfeinern",
+    "sam_refine_hint": "Verfeinere den zuvor ausgewählten Vorschlag mit den hinzugefügten Steuerelementen.",
+    "sam_apply_heading": "3 · Auf dieses Bild anwenden",
+    "sam_undo_hint": "Macht die letzte Aktion im gemeinsamen Verlauf rückgängig, auch auf anderen Bildern.",
+    "sam_proposal_legend": "Vorschlag · markierte Auswahl · nicht angewendet",
+    "mask_kept_legend": "Bildmaske · markierte Pixel: behalten",
+    "mask_excluded_legend": "Bildmaske · markierte Pixel: ausschließen (invertiert)",
+    "sam_applied": "Maske auf dieses Bild angewendet. Speichere das Projekt, um sie zu behalten."
   },
   "startup": {
     "supported_by": "Unterstützt von",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "Viewer wird beendet",
     "viewer_work_failed": "Viewer-Aufgabe fehlgeschlagen",
     "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
-    "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
+    "no_splat_node_named": "Kein Splat-Knoten namens '{}'",
+    "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden."
   },
   "align": {
     "preview": "Ausrichtung vorschauen",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "Trainer nicht wiederhergestellt",
       "message": "Das Projektmodell ist zum Anzeigen verfügbar, aber das Training konnte nicht fortgesetzt werden. Prüfen Sie den Dataset-Pfad und die Protokolle."
-    }
+    },
+    "camera_masks_disabled": "Dieser Datensatz enthält Bildmasken, aber die Maskierung ist deaktiviert. Wählen Sie in den Trainingseinstellungen einen Maskenmodus, um sie zu verwenden."
   },
   "recovery": {
     "crash_title": "LichtFeld Studio wurde unerwartet beendet",

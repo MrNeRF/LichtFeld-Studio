@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 40; // Editor document commands.
+        constexpr int PROFILE_VERSION = 41; // Image preview segmentation commands.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::EDITOR_STOP;
+        constexpr Action LAST_ACTION = Action::IMAGE_PREVIEW_REMOVE_POINT;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -1314,7 +1314,8 @@ namespace lfs::vis::input {
                 ((version < 27 || version == 28) &&
                  (def.action == Action::ASSET_GALLERY_PRIMARY ||
                   def.action == Action::ASSET_GALLERY_COPY_LINK ||
-                  def.action == Action::ASSET_REFRESH));
+                  def.action == Action::ASSET_REFRESH)) ||
+                (version < 41 && def.mode == ToolMode::IMAGE_PREVIEW);
             if (!should_add) {
                 continue;
             }
@@ -2139,6 +2140,10 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_ALT},
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
+        profile.bindings.push_back({ToolMode::IMAGE_PREVIEW, KeyTrigger{KEY_DELETE}, Action::IMAGE_PREVIEW_DELETE, "Remove Control Point or Box"});
+        profile.bindings.push_back({ToolMode::IMAGE_PREVIEW, KeyTrigger{KEY_ENTER}, Action::IMAGE_PREVIEW_GENERATE, "Generate Mask"});
+        profile.bindings.push_back({ToolMode::IMAGE_PREVIEW, MouseButtonTrigger{MouseButton::RIGHT}, Action::IMAGE_PREVIEW_REMOVE_POINT, "Remove Control Point at Cursor"});
+
         profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_F5}, Action::EDITOR_RUN, "Run Document"});
         profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
         profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_KP_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
@@ -2275,6 +2280,9 @@ namespace lfs::vis::input {
         case Action::EDITOR_TOGGLE_KIND: return "Toggle Document Kind";
         case Action::EDITOR_RUN: return "Run Document";
         case Action::EDITOR_STOP: return "Stop Document";
+        case Action::IMAGE_PREVIEW_DELETE: return "Remove Control Point or Box";
+        case Action::IMAGE_PREVIEW_GENERATE: return "Generate Mask";
+        case Action::IMAGE_PREVIEW_REMOVE_POINT: return "Remove Control Point at Cursor";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
@@ -2386,6 +2394,9 @@ namespace lfs::vis::input {
         case Action::EDITOR_TOGGLE_KIND: return "editor_toggle_kind";
         case Action::EDITOR_RUN: return "editor_run";
         case Action::EDITOR_STOP: return "editor_stop";
+        case Action::IMAGE_PREVIEW_DELETE: return "image_preview_delete";
+        case Action::IMAGE_PREVIEW_GENERATE: return "image_preview_generate";
+        case Action::IMAGE_PREVIEW_REMOVE_POINT: return "image_preview_remove_point";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
@@ -2444,6 +2455,7 @@ namespace lfs::vis::input {
             {ToolMode::WALK, "walk", "Walk"},
             {ToolMode::VR, "vr", "VR"},
             {ToolMode::EDITOR, "editor", "Editor"},
+            {ToolMode::IMAGE_PREVIEW, "image_preview", "Image Preview"},
         };
     } // namespace
 
@@ -3055,6 +3067,14 @@ namespace lfs::vis::input {
             .inherits_from_global = true,
             .ui_section = ActionSection::UI,
         };
+        static constexpr ActionDescriptor d_preview_key{
+            .allowed_kinds = K::TRIGGER_KIND_KEY,
+            .ui_section = ActionSection::UI,
+        };
+        static constexpr ActionDescriptor d_preview_mouse{
+            .allowed_kinds = K::TRIGGER_KIND_MOUSE_BUTTON,
+            .ui_section = ActionSection::UI,
+        };
         static constexpr ActionDescriptor d_ui_scroll{
             .allowed_kinds = K::TRIGGER_KIND_MOUSE_SCROLL,
             .inherits_from_global = true,
@@ -3202,6 +3222,11 @@ namespace lfs::vis::input {
         case Action::EDITOR_RUN:
         case Action::EDITOR_STOP:
             return d_ui_key;
+        case Action::IMAGE_PREVIEW_DELETE:
+        case Action::IMAGE_PREVIEW_GENERATE:
+            return d_preview_key;
+        case Action::IMAGE_PREVIEW_REMOVE_POINT:
+            return d_preview_mouse;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
 

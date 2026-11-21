@@ -1769,6 +1769,31 @@ namespace lfs::core::image_codecs {
         }
     } // namespace
 
+    std::vector<std::byte> encode_png(std::span<const std::uint8_t> pixels,
+                                      const int width, const int height, const int channels) {
+        if (width <= 0 || height <= 0 || channels < 1 || channels > 4 ||
+            std::uint64_t(width) * height * channels != pixels.size())
+            return {};
+        png_image image{};
+        const std::unique_ptr<png_image, decltype(&png_image_free)> guard(&image, png_image_free);
+        image.version = PNG_IMAGE_VERSION;
+        image.width = width;
+        image.height = height;
+        constexpr png_uint_32 formats[]{PNG_FORMAT_GRAY, PNG_FORMAT_GA, PNG_FORMAT_RGB, PNG_FORMAT_RGBA};
+        image.format = formats[channels - 1];
+        image.flags = PNG_IMAGE_FLAG_FAST;
+        png_alloc_size_t size = 0;
+        if (!png_image_write_to_memory(&image, nullptr, &size, 0, pixels.data(), 0, nullptr)) {
+            return {};
+        }
+        std::vector<std::byte> encoded(size);
+        const bool written = png_image_write_to_memory(&image, encoded.data(), &size, 0, pixels.data(), 0, nullptr) != 0;
+        if (!written)
+            return {};
+        encoded.resize(size);
+        return encoded;
+    }
+
     bool write_png(const std::filesystem::path& path, const void* data,
                    const int width, const int height, const int channels, const int bit_depth,
                    const int compression_level, const std::optional<std::string>& comment,

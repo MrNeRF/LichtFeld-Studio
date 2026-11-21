@@ -1927,7 +1927,11 @@
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
     "trigger.unknown": "未知",
-    "action.toggle_performance_hud": "切换性能 HUD"
+    "action.toggle_performance_hud": "切换性能 HUD",
+    "mode.image_preview": "图像预览",
+    "action.image_preview_delete": "删除点或边界框",
+    "action.image_preview_generate": "生成蒙版",
+    "action.image_preview_remove_point": "删除光标处的控制点"
   },
   "debug_info": {
     "free_memory": "可用：%.2f GB",
@@ -2031,6 +2035,54 @@
     "disabled": "已禁用"
   },
   "image_preview": {
+    "sam_title": "蒙版 · SAM2.1",
+    "sam_positive": "前景 +",
+    "sam_negative": "背景 −",
+    "sam_box": "矩形框",
+    "sam_pan": "平移",
+    "sam_undo": "撤销",
+    "sam_clear": "清除点和矩形框",
+    "sam_generate": "生成",
+    "sam_cancel": "释放 SAM",
+    "sam_candidate": "候选 · SAM预测质量",
+    "sam_apply_failed": "无法应用遮罩",
+    "sam_apply_dataset": "要应用遮罩，图像必须属于当前数据集。",
+    "sam_apply": "应用：保留选区",
+    "sam_exclude": "应用：排除选区",
+    "sam_hint": "应用会替换此图像的遮罩。遮罩随 .licht 项目保存；请在训练设置中选择遮罩模式，并在训练前关闭 SAM。",
+    "sam_queued": "已排队",
+    "sam_loading": "正在加载模型",
+    "sam_encoding": "正在编码图像",
+    "sam_predicting": "正在预测",
+    "sam_rendering": "正在准备叠加层",
+    "sam_closing": "正在释放资源",
+    "sam_ready": "候选掩码已就绪",
+    "sam_error": "操作失败",
+    "sam_heading": "1 · 点和矩形框",
+    "sam_proposals_heading": "2 · 候选",
+    "sam_edit": "编辑控制点",
+    "sam_remove": "删除",
+    "sam_flip": "切换 +/−",
+    "sam_show": "叠加",
+    "sam_edit_hint": "拖动点可移动位置。拖动框的边缘或角可调整大小；在“矩形框”模式下，拖动内部可移动整个框。也可通过列表使用键盘选择控制点。“删除”会移除控制点，而不是擦除蒙版像素。",
+    "sam_selection_none": "选择控制点",
+    "sam_quality": "SAM 评分：{score}%",
+    "sam_generate_hint": "根据当前的点和框生成新的候选结果。",
+    "sam_positive_hint": "在对象上添加正点。",
+    "sam_negative_hint": "在背景上添加负点。",
+    "sam_box_hint": "绘制或调整一个边界框。",
+    "sam_pan_hint": "平移图像视图，不添加点。放大后可拖动图像以平移。",
+    "sam_review_frames": "查看帧 · SAM",
+    "sam_source_changed": "图像已更改。请先刷新，再生成其他候选。",
+    "sam_proposal_expired": "所选候选已过期。请生成新候选。",
+    "sam_write_failed": "无法编码蒙版。",
+    "sam_shutting_down": "SAM预览服务正在关闭。",
+    "sam_invalid_input": "需要图像修订版本以及点或矩形框（最多256个点）。",
+    "sam_invalid_point": "点坐标必须介于0和1之间，标签必须为0或1。",
+    "sam_invalid_box": "矩形框边界必须介于0和1之间，且宽度和高度必须为正。",
+    "sam_unavailable": "使用SAM前，请停止训练并等待正在进行的导入或视频导出完成。",
+    "sam_reset_training": "修改图像蒙版前，请重置训练。",
+    "sam_training_blocked": "开始训练前请关闭SAM预览。",
     "source_changed": "图像已更改。请刷新后重新拾取颜色。",
     "scene_changed": "场景已更改。请重新拾取颜色。",
     "color_sample_failed": "无法拾取颜色：{}",
@@ -2102,7 +2154,15 @@
     "overlay_status": "叠加：%s",
     "file_label": "文件：%s",
     "visible": "可见",
-    "hidden": "隐藏"
+    "hidden": "隐藏",
+    "sam_refine": "细化上一结果",
+    "sam_refine_hint": "使用新增的控制点细化之前选中的候选结果。",
+    "sam_apply_heading": "3 · 应用于此图像",
+    "sam_undo_hint": "撤销共享历史记录中的最后一项操作，包括其他图像上的操作。",
+    "sam_proposal_legend": "候选结果 · 高亮选区 · 尚未应用",
+    "mask_kept_legend": "图像蒙版 · 高亮像素：保留",
+    "mask_excluded_legend": "图像蒙版 · 高亮像素：排除（已反转）",
+    "sam_applied": "蒙版已应用于此图像。请保存项目以保留蒙版。"
   },
   "startup": {
     "supported_by": "支持：",
@@ -3011,7 +3071,8 @@
     "viewer_shutting_down": "正在关闭查看器",
     "viewer_work_failed": "查看器操作失败",
     "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
-    "no_splat_node_named": "没有名为 '{}' 的 splat 节点"
+    "no_splat_node_named": "没有名为 '{}' 的 splat 节点",
+    "training_session_not_ready": "训练会话尚未准备好恢复。"
   },
   "align": {
     "preview": "预览对齐",
@@ -3041,7 +3102,8 @@
     "trainer_not_restored": {
       "title": "未能恢复训练器",
       "message": "项目模型可供查看，但无法恢复训练。请检查数据集路径和日志。"
-    }
+    },
+    "camera_masks_disabled": "此数据集包含图像蒙版，但蒙版功能已禁用。请在训练设置中选择蒙版模式以使用它们。"
   },
   "recovery": {
     "crash_title": "LichtFeld Studio 意外关闭",

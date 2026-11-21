@@ -34,6 +34,7 @@ namespace lfs::vis::input {
         WALK = 8,
         VR = 9,
         EDITOR = 10,
+        IMAGE_PREVIEW = 11,
     };
 
     enum class SelectionOp : uint8_t {
@@ -57,7 +58,7 @@ namespace lfs::vis::input {
         ToolMode::SCALE,
     };
 
-    inline constexpr std::array<ToolMode, 10> kAllKeymapScopes = {
+    inline constexpr std::array<ToolMode, 11> kAllKeymapScopes = {
         ToolMode::WALK,
         ToolMode::VR,
         ToolMode::GLOBAL,
@@ -68,6 +69,7 @@ namespace lfs::vis::input {
         ToolMode::ROTATE,
         ToolMode::SCALE,
         ToolMode::EDITOR,
+        ToolMode::IMAGE_PREVIEW,
     };
 
     enum class Action {
@@ -190,6 +192,9 @@ namespace lfs::vis::input {
         EDITOR_TOGGLE_KIND,
         EDITOR_RUN,
         EDITOR_STOP,
+        IMAGE_PREVIEW_DELETE,
+        IMAGE_PREVIEW_GENERATE,
+        IMAGE_PREVIEW_REMOVE_POINT,
     };
 
     enum class ShortcutScope : uint8_t {

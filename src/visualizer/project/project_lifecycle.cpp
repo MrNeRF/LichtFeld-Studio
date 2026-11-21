@@ -4,6 +4,7 @@
  */
 
 #include "project_lifecycle.hpp"
+#include "core/image_io.hpp"
 #include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -41,6 +42,7 @@
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "ipc/view_context.hpp"
+#include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
 #include "project/project_switch_error.hpp"
@@ -1492,6 +1494,13 @@ namespace lfs::vis::project {
     ProjectLifecycle::restoreTrainingSession(
         const bool then_start,
         const bool then_reset) {
+        if (!training_session_hydrated_.load(std::memory_order_acquire) && stored_training_kind_ != StoredTrainingKind::None) {
+            if (const auto* trainer = viewer_.getTrainerManager()) {
+                if (const auto blocked = trainer->getResourceBlockedReason(); !blocked.empty())
+                    return fail<void>(lfs::ErrorCode::FailedPrecondition, std::string(blocked),
+                                      "Stored trainer restoration refused before resource allocation", "training.restore");
+            }
+        }
         if (then_start) {
             restore_then_start_.store(
                 true, std::memory_order_release);
@@ -1753,6 +1762,24 @@ namespace lfs::vis::project {
                             minted.error()));
                 }
             }
+            decltype(lfs::training::ProjectSnapshotDocumentContext::camera_mask_sources) mask_sources;
+            std::unordered_set<lfs::core::Uuid> mask_assets;
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (!node || !node->camera || !node->camera->mask_asset_uuid())
+                    continue;
+                const auto asset = *node->camera->mask_asset_uuid();
+                if (!mask_assets.insert(asset).second)
+                    continue;
+                const auto* source = document.find_dataset_source(asset);
+                if (!source)
+                    return fail<lfs::training::ProjectSnapshotDocumentContext>(
+                        lfs::ErrorCode::DataLoss, "A saved camera mask is missing.",
+                        "Training snapshot camera mask has no DSRC payload", "camera.mask");
+                auto shared = source->share();
+                if (!shared)
+                    return std::move(shared).error();
+                mask_sources.emplace_back(asset, std::make_shared<const lfs::io::project::LazyChunkValue>(std::move(*shared)));
+            }
             return lfs::training::
                 ProjectSnapshotDocumentContext{
                     .project_uuid =
@@ -1788,6 +1815,7 @@ namespace lfs::vis::project {
                     .writer_lock_lease =
                         std::move(
                             writer_lock_lease),
+                    .camera_mask_sources = std::move(mask_sources),
                 };
         }
 
@@ -6321,6 +6349,152 @@ namespace lfs::vis::project {
             render_ms, open_to_present_ms);
     }
 
+    std::shared_ptr<op::CameraMaskAssetSnapshot> ProjectLifecycle::retainCameraMaskAsset(const core::Uuid& asset_uuid) {
+        const auto* payload = document_ ? document_->find_dataset_source(asset_uuid) : nullptr;
+        if (!payload)
+            throw std::runtime_error("Camera mask payload is missing from its project");
+        auto retained = payload->share();
+        if (!retained)
+            throw std::runtime_error(developerError(retained.error()));
+        auto owner = std::make_shared<io::project::LazyChunkValue>(std::move(*retained));
+        const auto document = document_;
+        auto snapshot = std::make_shared<op::CameraMaskAssetSnapshot>();
+        snapshot->bytes = owner->size();
+        snapshot->restore = [this, origin = document, asset_uuid, owner] {
+            const auto document = document_;
+            if (!document || (document != origin && document->project_uuid() != origin->project_uuid()))
+                throw op::HistoryStaleEntryError("Camera mask belongs to a replaced project");
+            auto shared = owner->share();
+            if (!shared)
+                throw std::runtime_error(developerError(shared.error()));
+            if (auto stored = document->set_dataset_source(asset_uuid, std::move(*shared)); !stored)
+                throw std::runtime_error(developerError(stored.error()));
+            if (auto file = document->resolve_camera_mask(asset_uuid); !file)
+                throw std::runtime_error(developerError(file.error()));
+        };
+        return snapshot;
+    }
+
+    lfs::Result<io::project::ResolvedCameraMask> ProjectLifecycle::materializeCameraMask(const core::Uuid& asset_uuid) const {
+        if (!document_)
+            return fail<io::project::ResolvedCameraMask>(lfs::ErrorCode::FailedPrecondition, LOC("image_preview.sam_apply_failed"), "No project document", "camera.mask");
+        return document_->resolve_camera_mask(asset_uuid);
+    }
+
+    lfs::Result<void> ProjectLifecycle::applyCameraMask(
+        const core::Uuid& uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) {
+        auto* manager = viewer_.getSceneManager();
+        auto* trainer = viewer_.getTrainerManager();
+        if (project_write_job_)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, LOC("project_cleanup.wait"), "Camera-mask edit requires an idle project writer", "camera.mask");
+        if (!document_ || !manager || project_open_job_ ||
+            viewer_.isTrainingStartPending() || (trainer && (!trainer->isDatasetEditable() || (trainer->getTrainer() && trainer->getTrainer()->isInitialized()))))
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The image mask cannot be changed now.", "Apply requires an editable dataset and an idle project", "camera.mask");
+        auto& scene = manager->getScene();
+        auto* node = scene.getNodeByUuid(uuid);
+        std::error_code ec;
+        if (!node || !node->camera || !core::native_fs::equivalent(node->camera->image_path(), image, ec) || ec)
+            return fail<void>(lfs::ErrorCode::FailedPrecondition, "The source camera has changed.", "Mask target no longer matches the source image", "camera.mask");
+        try {
+            const auto [width, height, channels] = core::probe_image_info(image);
+            if (!png || png->empty() || png->size() > 256ull * 1024 * 1024 || mask_width != width || mask_height != height)
+                return fail<void>(lfs::ErrorCode::InvalidArgument, "The image mask has invalid dimensions or format.", "Expected an original-resolution encoded mask", "camera.mask");
+            const auto asset = core::generate_uuid_v4();
+            auto value = io::project::LazyChunkValue::from_owned(std::move(png), asset);
+            if (!value)
+                return lfs::Status::failure(std::move(value).error());
+            struct MaskState {
+                std::filesystem::path path;
+                std::optional<core::Uuid> asset;
+                std::shared_ptr<io::project::LazyChunkValue> payload;
+                core::Tensor raw;
+            };
+            auto& camera = *node->camera;
+            MaskState before{camera.mask_path(), camera.mask_asset_uuid(), {}, camera.raw_mask_tensor()};
+            // History owns a CPU snapshot; GPU memory must remain reclaimable before training.
+            if (before.raw.is_valid())
+                before.raw = before.raw.device() == core::Device::CUDA ? before.raw.cpu().contiguous() : before.raw.clone();
+            if (before.asset) {
+                const auto* old = document_->find_dataset_source(*before.asset);
+                if (!old)
+                    return fail<void>(lfs::ErrorCode::DataLoss, "The previous camera mask is missing.", "Cannot retain the previous DSRC mask for undo", "camera.mask");
+                auto shared = old->share();
+                if (!shared)
+                    return lfs::Status::failure(std::move(shared).error());
+                before.payload = std::make_shared<io::project::LazyChunkValue>(std::move(*shared));
+            }
+            MaskState after{{}, asset, std::make_shared<io::project::LazyChunkValue>(std::move(*value)), {}};
+            const auto document = document_;
+            const auto apply = [this, origin = document, uuid](const MaskState& state) {
+                auto* manager = viewer_.getSceneManager();
+                auto* trainer = viewer_.getTrainerManager();
+                if (project_write_job_)
+                    throw std::runtime_error(LOC("project_cleanup.wait"));
+                if (trainer && trainer->getTrainer() && trainer->getTrainer()->isInitialized())
+                    throw std::runtime_error(LOC("image_preview.sam_reset_training"));
+                if (project_open_job_ || viewer_.isTrainingStartPending() ||
+                    (trainer && !trainer->isDatasetEditable()))
+                    throw std::runtime_error(LOC("image_preview.sam_unavailable"));
+                const auto document = document_;
+                if (!document || !manager || (document != origin && document->project_uuid() != origin->project_uuid()))
+                    throw op::HistoryStaleEntryError("Camera-mask edit is no longer applicable");
+                auto& scene = manager->getScene();
+                auto* node = scene.getNodeByUuid(uuid);
+                if (!node || !node->camera)
+                    throw op::HistoryStaleEntryError("Camera-mask target is no longer available");
+                auto path = state.path;
+                std::shared_ptr<const void> owner;
+                if (state.asset) {
+                    auto payload = state.payload->share();
+                    if (!payload)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(payload.error()));
+                    auto stored = document->set_dataset_source(*state.asset, std::move(*payload));
+                    if (!stored)
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(stored.error()));
+                    auto materialized = document->resolve_camera_mask(*state.asset);
+                    if (!materialized) {
+                        (void)document->remove_dataset_source(*state.asset);
+                        throw op::HistoryCorruptionError(lfs::format_for_developer(materialized.error()));
+                    }
+                    path = std::move(materialized->path);
+                    owner = std::move(materialized->owner);
+                }
+                const auto old = node->camera->mask_asset_uuid();
+                node->camera->set_mask_path(path, state.asset, std::move(owner));
+                if (state.raw.is_valid())
+                    node->camera->set_mask_tensor(state.raw);
+                node->mask_path = core::path_to_utf8(path);
+                if (old && old != state.asset && std::ranges::none_of(scene.getNodes(), [&](const auto* n) {
+                        return n && n->camera && n->camera->mask_asset_uuid() == old;
+                    }))
+                    (void)document->remove_dataset_source(*old);
+                scene.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED);
+            };
+            class MaskUndo final : public op::UndoEntry {
+            public:
+                MaskUndo(std::function<void(bool)> apply, size_t bytes) : apply_(std::move(apply)), bytes_(bytes) {}
+                void undo() override { apply_(false); }
+                void redo() override { apply_(true); }
+                std::string name() const override { return LOC("image_preview.mask"); }
+                size_t estimatedBytes() const override { return bytes_; }
+                DirtyMask dirtyFlags() const override { return DirtyFlag::OVERLAY; }
+
+            private:
+                std::function<void(bool)> apply_;
+                size_t bytes_;
+            };
+            const size_t retained = after.payload->size() + (before.payload ? before.payload->size() : 0) +
+                                    (before.raw.is_valid() ? before.raw.bytes() : 0);
+            auto undo = std::make_unique<MaskUndo>([apply, before, after](bool redo) { apply(redo ? after : before); }, retained);
+            undo->redo();
+            op::undoHistory().push(std::move(undo));
+            return {};
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): convert legacy image I/O and undo exceptions at the project boundary.
+            return fail<void>(lfs::ErrorCode::Unavailable, "The image mask could not be applied.", error.what(), "camera.mask");
+        }
+    }
+
     void ProjectLifecycle::markSceneMutation(
         const std::uint32_t mutation_flags) {
         cached_project_info_.reset();
@@ -6748,8 +6922,12 @@ namespace lfs::vis::project {
         // Same bookkeeping as the trainer writer after a
         // wholesale SCNG install: drop SPLT/PCLD/MESH/COLV
         // payloads the captured scene no longer binds.
-        document_
-            ->remove_geometry_payloads_not_bound_by_scene();
+        std::vector<core::Uuid> previous_camera_masks;
+        for (const auto& node : *existing_nodes) {
+            if (node.camera && node.camera->mask_asset_uuid)
+                previous_camera_masks.push_back(*node.camera->mask_asset_uuid);
+        }
+        document_->remove_geometry_payloads_not_bound_by_scene(previous_camera_masks);
         for (const auto& [uuid, volume] : collisions) {
             if (auto stored = document_->set_collision(uuid, volume); !stored)
                 return stored;

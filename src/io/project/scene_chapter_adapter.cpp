@@ -232,6 +232,9 @@ namespace lfs::io::project {
             result.image_name = camera.image_name();
             result.image_path = lfs::core::path_to_utf8(camera.image_path());
             result.mask_path = lfs::core::path_to_utf8(camera.mask_path());
+            result.mask_asset_uuid = camera.mask_asset_uuid();
+            if (result.mask_asset_uuid)
+                result.mask_path.clear();
             result.depth_path = lfs::core::path_to_utf8(camera.depth_path());
             result.normal_path = lfs::core::path_to_utf8(camera.normal_path());
             result.has_alpha = camera.has_alpha();
@@ -857,6 +860,16 @@ namespace lfs::io::project {
                             "A saved camera could not be constructed.", error.what(),
                             record.uuid);
                     }
+                    if (record.camera->mask_asset_uuid) {
+                        if (!resolver.camera_mask)
+                            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                              "A saved camera mask cannot be resolved.",
+                                              "Camera-mask asset resolver is missing", record.uuid);
+                        auto path = resolver.camera_mask(*record.camera->mask_asset_uuid);
+                        if (!path)
+                            return lfs::Result<void>::failure(std::move(path).error());
+                        desc.camera->set_mask_path(std::move(path->path), record.camera->mask_asset_uuid, std::move(path->owner));
+                    }
                 }
                 if (defer_geometry_payloads && is_geometry) {
                     staged.push_back(StagedNode{record, std::move(desc)});
@@ -1058,12 +1071,13 @@ namespace lfs::io::project {
         const SceneGraphChapter& chapter,
         lfs::core::Scene& target,
         std::shared_ptr<const SfmObservationChapterSource> sfm_observations,
-        CollisionPayloadResolver collision) {
+        CollisionPayloadResolver collision,
+        CameraMaskResolver camera_mask) {
         auto staged =
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, ScenePayloadResolver{.splat = {}, .point_cloud = {}, .mesh = {}, .sfm_observations = std::move(sfm_observations), .collision = std::move(collision)},
+                    chapter, *staged, ScenePayloadResolver{.splat = {}, .point_cloud = {}, .mesh = {}, .sfm_observations = std::move(sfm_observations), .collision = std::move(collision), .camera_mask = std::move(camera_mask)},
                     true, false);
             !populated) {
             return std::move(populated).error();

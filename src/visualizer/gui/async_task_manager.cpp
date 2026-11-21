@@ -19,6 +19,7 @@
 #include "core/scene.hpp"
 #include "core/scene_export_path.hpp"
 #include "core/services.hpp"
+#include "gui/assisted_masking.hpp"
 #include "gui/camera_selection_algorithms.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
@@ -868,7 +869,12 @@ namespace lfs::vis::gui {
 
     AsyncTaskManager::AsyncTaskManager(VisualizerImpl* viewer)
         : viewer_(viewer),
-          jobs_(viewer->jobs()) {}
+          jobs_(viewer->jobs()),
+          assisted_masking_(std::make_unique<AssistedMasking>(jobs_, [this] {
+              const auto* trainer = viewer_->getTrainerManager();
+              return !viewer_->isTrainingStartPending() && !viewer_->projectTrainingSessionState().restoring && (!trainer || trainer->isDatasetEditable()) &&
+                     !jobs_.anyRunning(JobType::Import) && !jobs_.anyRunning(JobType::VideoExport);
+          })) {}
 
     AsyncTaskManager::~AsyncTaskManager() {
         shutdown();
@@ -978,6 +984,7 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        assisted_masking_->shutdown();
         shutdownAprilTagScan();
 
         cancelCollision();
@@ -1925,6 +1932,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::pollImportCompletion() {
+        if (jobs_.anyRunning(JobType::AssistedMask))
+            (void)assisted_masking_->poll();
         pollCollision();
         pollAprilTagScanCompletion();
         if (import_cancel_pending_) {
@@ -1940,6 +1949,8 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = jobs_.active(JobType::AssistedMask); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)
             return true;
         if (import_cancel_pending_)

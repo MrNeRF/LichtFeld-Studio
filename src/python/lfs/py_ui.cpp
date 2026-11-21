@@ -18,6 +18,8 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/user_paths.hpp"
+#include "gui/assisted_masking.hpp"
+#include "gui/async_task_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -362,6 +364,9 @@ namespace lfs::python {
         nb::object
             g_stop_training_confirmation_callback;
         nb::object g_open_camera_preview_callback;
+        nb::object g_open_image_preview_callback;
+        lfs::event::HandlerId g_open_camera_preview_handler_id = 0;
+        lfs::event::HandlerId g_open_image_preview_handler_id = 0;
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
         const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
@@ -4043,14 +4048,30 @@ namespace lfs::python {
             "on_open_camera_preview",
             [](nb::object callback) {
                 g_open_camera_preview_callback = callback;
-                lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
-                    if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                if (g_open_camera_preview_handler_id != 0) {
+                    lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                    g_open_camera_preview_handler_id = 0;
+                }
+                if (!callback || callback.is_none())
+                    return;
+                g_open_camera_preview_handler_id = lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
+                    const auto open = [cam_id = e.cam_id] {
+                        if (!lfs::python::can_acquire_gil())
+                            return;
                         nb::gil_scoped_acquire guard;
-                        try {
-                            g_open_camera_preview_callback(e.cam_id);
-                        } catch (const std::exception& ex) {
-                            LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                        if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                            try {
+                                g_open_camera_preview_callback(cam_id);
+                            } catch (const std::exception& ex) {
+                                LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                            }
                         }
+                    };
+                    if (lfs::python::on_graphics_thread()) {
+                        open();
+                    } else {
+                        lfs::python::schedule_graphics_callback(open);
+                        lfs::python::request_redraw();
                     }
                 });
             },
@@ -4850,6 +4871,81 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
+        m.def("on_open_image_preview", [](nb::object callback) {
+            g_open_image_preview_callback = callback;
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
+            if (!callback || callback.is_none())
+                return;
+            g_open_image_preview_handler_id = core::events::cmd::OpenImagePreview::when([](const auto& event) {
+                nb::gil_scoped_acquire guard;
+                if (g_open_image_preview_callback && !g_open_image_preview_callback.is_none()) {
+                    try {
+                        std::vector<std::string> paths;
+                        for (const auto& path : event.paths)
+                            paths.push_back(core::path_to_utf8(path));
+                        g_open_image_preview_callback(paths, core::path_to_utf8(event.weights));
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("OpenImagePreview callback error: {}", error.what());
+                    }
+                }
+            }); }, nb::arg("callback"), "Register the preview callback for extracted images.");
+
+        m.def("sam_preview_submit", [](const std::string& path, const std::string& revision, int64_t mtime_ns, uint64_t size_bytes, std::vector<std::array<float, 3>> points, std::optional<std::array<float, 4>> box, uint64_t refine_request, int refine_candidate, const std::string& weights, int export_candidate, bool exclude) {
+            require_ui_texture_creation_thread();
+            auto* gui = get_gui_manager();
+            if (!gui)
+                throw std::runtime_error(LOC("runtime.video_gui_manager_unavailable"));
+            return gui->asyncTasks().assistedMasking().submit({.image = core::utf8_to_path(path), .weights = core::utf8_to_path(weights), .revision = revision,
+                .mtime_ns = mtime_ns, .size_bytes = size_bytes, .points = std::move(points), .box = box,
+                .refine_request = refine_request, .refine_candidate = refine_candidate, .export_candidate = export_candidate, .exclude = exclude}); }, nb::arg("path"), nb::arg("revision"), nb::arg("mtime_ns"), nb::arg("size_bytes"), nb::arg("points"), nb::arg("box") = nb::none(), nb::arg("refine_request") = 0, nb::arg("refine_candidate") = -1, nb::arg("weights") = "", nb::arg("export_candidate") = -1, nb::arg("exclude") = false, "UI thread: queue native SAM inference or render a selected original-resolution mask. Apply is a separate explicit action.");
+        m.def("sam_preview_poll", [] {
+            require_ui_texture_creation_thread();
+            nb::dict result;
+            auto* gui = get_gui_manager();
+            if (!gui)
+                return result;
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            result["request"] = state.request;
+            result["revision"] = state.revision;
+            result["phase"] = state.phase;
+            result["error"] = state.error;
+            result["scores"] = state.scores;
+            nb::list overlays;
+            for (const auto& mask : state.overlays)
+                overlays.append(nb::cast(PyTensor(mask)));
+            result["overlays"] = overlays;
+            return result; }, "UI thread: inspect the current disposable SAM proposal.");
+        m.def("sam_preview_close", [] {
+            require_ui_texture_creation_thread();
+            if (auto* gui = get_gui_manager())
+                gui->asyncTasks().assistedMasking().close(); }, "UI thread: cancel the SAM session and retire GPU resources asynchronously.");
+        m.def("sam_preview_apply", [](const std::string& uuid, uint64_t request) {
+            require_ui_texture_creation_thread();
+            auto* viewer = get_visualizer();
+            auto* gui = get_gui_manager();
+            auto id = core::Uuid::from_string(uuid);
+            if (!viewer || !gui || !id || id->is_nil())
+                throw std::runtime_error(LOC("image_preview.sam_unavailable"));
+            const auto state = gui->asyncTasks().assistedMasking().poll();
+            if (!request || state.request != request || state.phase != "mask_ready")
+                throw std::runtime_error(LOC("image_preview.sam_proposal_expired"));
+            std::error_code ec;
+            const auto stamp = core::native_fs::last_write_time(state.image, ec);
+            if (ec || stamp != state.source_time)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            const auto size = core::native_fs::file_size(state.image, ec);
+            if (ec || size != state.source_bytes)
+                throw std::runtime_error(LOC("image_preview.sam_source_changed"));
+            auto applied = viewer->applyCameraMask(*id, state.image, state.mask, state.width, state.height);
+            if (!applied)
+                throw std::runtime_error(std::string(LOC("image_preview.sam_apply_failed")) + ": " + std::string(applied.error().user_message()));
+            gui->enqueueToast({.title = LOC("image_preview.sam_title"),
+                               .message = LOC("image_preview.sam_applied"),
+                               .level = vis::gui::ErrorNoticeLevel::Info}); }, nb::arg("camera_uuid"), nb::arg("request"), "UI thread: apply the rendered full-resolution proposal to its unchanged source camera, with shared undo and project persistence.");
+
         m.def("preview_texture_status", [](const std::string& source, PyRmlDocument* document) {
             lfs::python::require_ui_texture_creation_thread();
             const auto* gui = lfs::python::get_gui_manager();
@@ -5388,6 +5484,7 @@ namespace lfs::python {
                 nb::arg("tensor"), nb::arg("plugin_name") = "")
             .def("update", &PyDynamicTexture::update, nb::arg("tensor"))
             .def("destroy", &PyDynamicTexture::destroy)
+            .def("rml_src", &PyDynamicTexture::rml_src_url, nb::arg("width") = 0, nb::arg("height") = 0, "RmlUI image source owned by this texture; release it before destroying the texture")
             .def_prop_ro("id", &PyDynamicTexture::texture_id)
             .def_prop_ro("width", &PyDynamicTexture::width)
             .def_prop_ro("height", &PyDynamicTexture::height)
@@ -6296,6 +6393,15 @@ namespace lfs::python {
             g_stop_training_confirmation_callback =
                 nb::object();
             g_open_camera_preview_callback = nb::object();
+            g_open_image_preview_callback = nb::object();
+            if (g_open_camera_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenCameraPreview), g_open_camera_preview_handler_id);
+                g_open_camera_preview_handler_id = 0;
+            }
+            if (g_open_image_preview_handler_id != 0) {
+                lfs::event::EventBridge::instance().unsubscribe(typeid(core::events::cmd::OpenImagePreview), g_open_image_preview_handler_id);
+                g_open_image_preview_handler_id = 0;
+            }
         };
         set_bridge(bridge);
 

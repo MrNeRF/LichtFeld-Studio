@@ -985,21 +985,35 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
+    std::string_view TrainerManager::getResourceBlockedReason() const {
+        if (viewer_ && viewer_->jobs().anyRunning(JobType::AssistedMask))
+            return LOC("image_preview.sam_training_blocked");
+        return {};
+    }
+
+    std::string_view TrainerManager::getActionBlockedReason(const TrainingAction action) const {
+        if (action == TrainingAction::Start || action == TrainingAction::Resume)
+            if (const auto blocked = getResourceBlockedReason(); !blocked.empty())
+                return blocked;
+        if (action == TrainingAction::Resume && !trainer_ && viewer_ && getState() == TrainingState::Paused) {
+            const auto session = viewer_->projectTrainingSessionState();
+            if (session.available && !session.hydrated && !session.restoring && session.error.empty())
+                return {};
+            return LOC("runtime.training_session_not_ready");
+        }
+        return state_machine_.getActionBlockedReason(action);
+    }
+
     bool TrainerManager::canPerform(const TrainingAction action) const {
         if (viewer_ && viewer_->isTrainingStartPending()) {
             return action == TrainingAction::Stop;
         }
-        if ((action == TrainingAction::Stop || action == TrainingAction::Resume) && !trainer_ && viewer_ &&
+        if (action == TrainingAction::Stop && !trainer_ && viewer_ &&
             getState() == TrainingState::Paused) {
             const auto session = viewer_->projectTrainingSessionState();
-            if (action == TrainingAction::Stop) {
-                return session.available && !session.hydrated &&
-                       !session.restoring;
-            }
-            return session.available && !session.hydrated &&
-                   !session.restoring && session.error.empty();
+            return session.available && !session.hydrated && !session.restoring;
         }
-        return state_machine_.canPerform(action);
+        return getActionBlockedReason(action).empty();
     }
 
     TrainingState TrainerManager::getState() const {
@@ -1287,6 +1301,20 @@ namespace lfs::vis {
         if (!crop || !scene_)
             return std::nullopt;
         return lfs::training::resolve_training_cropbox_geom(*scene_);
+    }
+
+    void TrainerManager::notifyUnusedCameraMasks() {
+        auto* const gui = viewer_ ? viewer_->getGuiManager() : nullptr;
+        if (!gui || !scene_ || !trainer_)
+            return;
+        detail::dispatch_unused_camera_mask_notice(*scene_, trainer_->getParams().optimization.mask_mode, [gui] {
+            gui->enqueueToast({
+                .title = LOC("window.training"),
+                .message = LOC("toast.camera_masks_disabled"),
+                .level = gui::ErrorNoticeLevel::Warning,
+                .fingerprint = 0x4c46534d41530001ULL,
+            });
+        });
     }
 
     bool TrainerManager::startTraining() {
@@ -1607,6 +1635,11 @@ namespace lfs::vis {
                     }
                 }
 
+                // Initialization has applied the editable parameters and the
+                // worker is still behind this handoff's gate.
+                if (!stop_token.stop_requested() && !trainer_->has_stopped()) {
+                    notifyUnusedCameraMasks();
+                }
                 if (state_machine_.getState() == TrainingState::Starting &&
                     !stop_token.stop_requested() &&
                     !trainer_->has_stopped()) {
@@ -1681,6 +1714,10 @@ namespace lfs::vis {
     }
 
     void TrainerManager::resumeTraining() {
+        if (!canResume()) {
+            LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
+            return;
+        }
         if (!trainer_ && viewer_) {
             const auto session =
                 viewer_->projectTrainingSessionState();
@@ -1696,10 +1733,6 @@ namespace lfs::vis {
                 return;
             }
         }
-        if (!canResume()) {
-            LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
-            return;
-        }
         if (!trainer_)
             return;
 
@@ -1707,6 +1740,7 @@ namespace lfs::vis {
         const bool need_thread = !isCompletionPending();
 
         if (!need_thread) {
+            notifyUnusedCameraMasks();
             trainer_->request_resume();
         }
 

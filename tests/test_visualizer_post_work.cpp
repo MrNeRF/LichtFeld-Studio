@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
+#include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
@@ -27,6 +28,7 @@
 #include "gui/import_error.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "io/cache_image_loader.hpp"
 // Python's Windows headers define PLATFORM, also used as a localization key.
 #pragma push_macro("PLATFORM")
 #undef PLATFORM
@@ -1630,6 +1632,272 @@ namespace lfs::vis {
         const auto source = viewer.projectTrainingSource();
         ASSERT_FALSE(source);
         EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
+    class CameraMaskApplyTest : public VisualizerImplResetTest {};
+
+    TEST_F(CameraMaskApplyTest, ApplyIsImageBoundUndoableAndRejectsInvalidReplacement) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        io::CacheLoader::getInstance(false);
+        core::set_image_loader([](const core::ImageLoadParams& p) {
+            io::LoadParams params{};
+            params.resize_factor = p.resize_factor;
+            params.max_width = p.max_width;
+            params.cuda_stream = p.stream;
+            params.output_uint8 = p.output_uint8;
+            params.skip_blob_cache = p.skip_blob_cache;
+            params.mask_grayscale = p.mask_grayscale;
+            return io::CacheLoader::getInstance().load_cached_image(p.path, params);
+        });
+        const auto image = temporary_.path / "image.png";
+        const auto wrong = temporary_.path / "wrong.png";
+        std::vector<std::uint8_t> rgb(64 * 64 * 3, 127), pixels(64 * 64, 255);
+        pixels[0] = 0;
+        ASSERT_TRUE(core::save_png(image, rgb.data(), 64, 64, 3, 8, 1));
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
+        ASSERT_TRUE(core::save_png(wrong, rgb.data(), 64, 64, 3, 8, 1));
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto& scene = viewer.getScene();
+        auto camera = make_project_request_test_camera(image);
+        camera->set_image_dimensions(64, 64);
+        const auto id = scene.addCamera("image.png", scene.addGroup("Cameras"), camera);
+        const auto uuid = scene.getNodeUuid(id);
+        const auto applied = viewer.applyCameraMask(uuid, image, png, 64, 64);
+        ASSERT_TRUE(applied) << lfs::format_for_developer(applied.error());
+        ASSERT_TRUE(camera->has_mask());
+        const auto asset = camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        EXPECT_EQ(scene.getNodeById(id)->mask_path, core::path_to_utf8(camera->mask_path()));
+        png.reset(); // The project owns the bytes after the caller releases them.
+        const auto decoded = camera->load_and_get_mask(-1, 0, false, 0.5f, true, false).cpu().to_vector_uint8();
+        EXPECT_EQ(decoded[0], 0);
+        EXPECT_EQ(decoded[1], 1);
+        const auto replacement = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(pixels, 64, 64, 1));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, replacement, 32, 32));
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, wrong, replacement, 64, 64));
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, {}, 64, 64));
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        const auto project = temporary_.path / "busy-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        const auto count = op::undoHistory().undoCount();
+        const auto memory = op::undoHistory().totalMemory().totalBytes();
+        EXPECT_FALSE(op::undoHistory().undo().success);
+        EXPECT_EQ(op::undoHistory().undoCount(), count);
+        EXPECT_EQ(op::undoHistory().totalMemory().totalBytes(), memory);
+        EXPECT_EQ(op::undoHistory().redoCount(), 0u);
+        EXPECT_FALSE(viewer.applyCameraMask(uuid, image, replacement, 64, 64));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        (void)op::undoHistory().undo();
+        EXPECT_FALSE(camera->has_mask());
+        EXPECT_FALSE(camera->mask_asset_uuid());
+        (void)op::undoHistory().redo();
+        EXPECT_EQ(camera->mask_asset_uuid(), asset);
+        EXPECT_TRUE(camera->has_mask());
+
+        // A direct-scene caller may provide a GPU mask. Replacing it must not
+        // pin VRAM in history or lose its original values when undo restores it.
+        op::undoHistory().clear();
+        camera->set_mask_path({});
+        camera->set_mask_tensor(core::Tensor::full({64, 64}, 0.25f, core::Device::CUDA));
+        ASSERT_TRUE(viewer.applyCameraMask(uuid, image, replacement, 64, 64));
+        op::undoHistory().shrinkToFit(0);
+        EXPECT_EQ(op::undoHistory().totalMemory().gpu_bytes, 0);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_TRUE(camera->raw_mask_tensor().is_valid());
+        EXPECT_EQ(camera->raw_mask_tensor().device(), core::Device::CPU);
+        EXPECT_FLOAT_EQ(camera->raw_mask_tensor().to_vector().front(), 0.25f);
+    }
+
+    TEST_F(CameraMaskApplyTest, ResetPreservesProjectMasksByImageAndSavesTheirBinding) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = temporary_.path / "reset-mask-dataset";
+        write_minimal_transforms_dataset(dataset);
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        viewer.getDataLoader()->setParameters(params);
+        ASSERT_TRUE(viewer.getDataLoader()->loadDataset(dataset));
+        auto& scene = viewer.getScene();
+        const auto original_nodes = scene.getNodes();
+        const auto found = std::ranges::find_if(original_nodes, [](const auto* n) { return n && n->camera; });
+        ASSERT_NE(found, original_nodes.end());
+        const auto* node = *found;
+        const auto original_uuid = node->uuid;
+        const auto image = node->camera->image_path();
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(std::vector<std::uint8_t>{255}, 1, 1, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(original_uuid, image, png, 1, 1));
+        const auto asset = node->camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        ASSERT_TRUE(core::native_fs::remove(node->camera->mask_path()));
+        core::events::cmd::ResetTraining{}.emit();
+        const auto cameras = scene.getAllCameras();
+        ASSERT_EQ(cameras.size(), 1u);
+        EXPECT_EQ(cameras.front()->image_path(), image);
+        EXPECT_EQ(cameras.front()->mask_asset_uuid(), asset);
+        EXPECT_TRUE(core::native_fs::is_regular_file(cameras.front()->mask_path()));
+        const auto project = temporary_.path / "reset-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        const auto saved = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(saved);
+        EXPECT_NE(saved->find_dataset_source(*asset), nullptr);
+        const auto nodes = saved->scene_graph().nodes();
+        ASSERT_TRUE(nodes);
+        EXPECT_TRUE(std::ranges::any_of(*nodes, [&](const auto& n) { return n.camera && n.camera->mask_asset_uuid == asset; }));
+    }
+
+    TEST_F(CameraMaskApplyTest, UnsavedMaskSurvivesTrainingCompletionAndReopen) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = temporary_.path / "training-mask-dataset";
+        const auto init = temporary_.path / "init.ply";
+        const auto project = temporary_.path / "training-mask.licht";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        const std::array<std::uint8_t, 3> rgb{128, 128, 128};
+        for (int i = 1; i <= 2; ++i)
+            ASSERT_TRUE(core::save_png(dataset / std::format("frame_{:04}.png", i), rgb.data(), 1, 1, 3, 8, 1));
+        ASSERT_TRUE(event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        auto splat = lfs::test::licht::make_splat(8);
+        ASSERT_TRUE(io::save_ply(*splat, {.output_path = init, .binary = true, .async = false}));
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        const auto* context = viewer.getWindowManager()->getVulkanContext();
+        if (!context || !context->externalMemoryInteropEnabled())
+            GTEST_SKIP() << "Vulkan external memory interop unavailable";
+        const auto wait = [&](auto condition) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!condition() && std::chrono::steady_clock::now() < deadline) {
+                viewer.pumpPostedWorkForProjectWrite();
+                viewer.getGuiManager()->asyncTasks().pollImportCompletion();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return condition();
+        };
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) {
+            params.iterations = 2;
+            params.max_cap = 64;
+            params.enable_eval = false;
+            params.save_steps.clear();
+            params.eval_steps.clear();
+        });
+        core::events::cmd::LoadFile{.path = dataset, .is_dataset = true, .init_path = init, .centralize_dataset = "off", .discard_changes = true}.emit();
+        ASSERT_TRUE(wait([&] { return !viewer.getGuiManager()->asyncTasks().isImporting(); }));
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        ASSERT_TRUE(viewer.projectSaveAs(project, false));
+        ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        auto& scene = viewer.getScene();
+        const auto nodes = scene.getNodes();
+        const auto found = std::ranges::find_if(nodes, [](const auto* node) { return node && node->camera; });
+        ASSERT_NE(found, nodes.end());
+        const auto* node = *found;
+        const auto [width, height, channels] = core::probe_image_info(node->camera->image_path());
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(
+            std::vector<std::uint8_t>(width * height, 255), width, height, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(node->uuid, node->camera->image_path(), png, width, height));
+        const auto asset = node->camera->mask_asset_uuid();
+        ASSERT_TRUE(asset);
+        auto before = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(before);
+        EXPECT_EQ(before->find_dataset_source(*asset), nullptr);
+        viewer.getTrainer()->set_trainer_project_save_policy(
+            {.on_completion = true, .on_stop_or_error = false, .at_step_boundaries = false});
+        ASSERT_TRUE(viewer.startTraining());
+        ASSERT_TRUE(wait([&] {
+            return viewer.getTrainerManager()->isFinished() && !viewer.getTrainerManager()->isCompletionPending();
+        }));
+        const auto undo_count = op::undoHistory().undoCount();
+        const auto undo = op::undoHistory().undo();
+        EXPECT_FALSE(undo.success);
+        EXPECT_NE(undo.error.find(LOC("image_preview.sam_reset_training")), std::string::npos);
+        EXPECT_EQ(op::undoHistory().undoCount(), undo_count);
+        auto saved = io::project::ProjectDocument::open(project);
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        EXPECT_FALSE(saved->checkpoint_uuids().empty());
+        const auto* payload = saved->find_dataset_source(*asset);
+        ASSERT_NE(payload, nullptr);
+        ASSERT_EQ(payload->size(), png->size());
+        std::vector<std::byte> restored_png(png->size());
+        ASSERT_TRUE(payload->read_at(0, restored_png));
+        EXPECT_EQ(restored_png, *png);
+        auto mask = saved->resolve_camera_mask(*asset);
+        ASSERT_TRUE(mask) << lfs::format_for_developer(mask.error());
+        EXPECT_TRUE(core::native_fs::is_regular_file(mask->path));
+        const auto restored = saved->scene_graph().nodes();
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(std::ranges::any_of(*restored, [&](const auto& item) {
+            return item.camera && item.camera->mask_asset_uuid == asset;
+        }));
+    }
+
+    TEST_F(CameraMaskApplyTest, DeletedCameraMaskIsPrunedButRetainedBySharedUndo) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto image = temporary_.path / "deleted-camera.png";
+        lfs::test::licht::write_file_bytes(image, lfs::test::licht::one_pixel_png());
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto& scene = viewer.getScene();
+        auto camera = make_project_request_test_camera(image);
+        camera->set_image_dimensions(1, 1);
+        const auto id = scene.addCamera("deleted-camera", scene.addGroup("Cameras"), camera);
+        const auto uuid = scene.getNodeUuid(id);
+        auto png = std::make_shared<const std::vector<std::byte>>(core::image_codecs::encode_png(std::vector<std::uint8_t>{255}, 1, 1, 1));
+        ASSERT_TRUE(viewer.applyCameraMask(uuid, image, png, 1, 1));
+        const auto asset = *camera->mask_asset_uuid();
+        const auto cache_path = camera->mask_path();
+        const auto project = temporary_.path / "delete-mask.licht";
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        op::undoHistory().clear();
+        ASSERT_TRUE(viewer.getSceneManager()->removeNodeWithResult(id));
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        {
+            auto saved = io::project::ProjectDocument::open(project);
+            ASSERT_TRUE(saved);
+            EXPECT_EQ(saved->find_dataset_source(asset), nullptr);
+        }
+        EXPECT_TRUE(core::native_fs::is_regular_file(cache_path));
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        const auto* restored = scene.getNodeByUuid(uuid);
+        ASSERT_TRUE(restored && restored->camera);
+        EXPECT_EQ(restored->camera->mask_asset_uuid(), asset);
+        EXPECT_EQ(restored->camera->mask_path(), cache_path);
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        {
+            auto saved = io::project::ProjectDocument::open(project);
+            ASSERT_TRUE(saved);
+            EXPECT_NE(saved->find_dataset_source(asset), nullptr);
+        }
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty());
+        op::undoHistory().clear();
+        EXPECT_TRUE(core::native_fs::exists(cache_path)); // An external camera still owns its lease.
+        camera.reset();
+        EXPECT_FALSE(core::native_fs::exists(cache_path));
     }
 
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
@@ -20121,6 +20389,20 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
             EXPECT_EQ(manager->getCurrentIteration(), 11);
             EXPECT_EQ(manager->getTotalIterations(), scenario.expected_total);
             EXPECT_EQ(manager->getState(), TrainingState::Paused);
+            EXPECT_TRUE(manager->canResume());
+            EXPECT_TRUE(manager->getActionBlockedReason(TrainingAction::Resume).empty());
+            const auto sam = viewer.jobs().init(JobType::AssistedMask, "ready");
+            ASSERT_TRUE(sam);
+            EXPECT_FALSE(manager->canResume());
+            manager->resumeTraining();
+            EXPECT_FALSE(viewer.projectTrainingSessionState().restoring);
+            EXPECT_FALSE(viewer.startTraining());
+            EXPECT_FALSE(viewer.restoreProjectTrainingSession(true));
+            EXPECT_FALSE(viewer.restoreProjectTrainingSession(false));
+            EXPECT_FALSE(manager->hasTrainer());
+            EXPECT_FALSE(viewer.projectTrainingSessionState().restoring);
+            viewer.jobs().canceled(*sam);
+            viewer.jobs().free(*sam);
             EXPECT_TRUE(manager->canResume());
             EXPECT_FALSE(manager->canStart());
             EXPECT_FALSE(manager->canPause());

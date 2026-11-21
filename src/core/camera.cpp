@@ -220,6 +220,8 @@ namespace lfs::core {
           _cached_mask_was_undistorted(other._cached_mask_was_undistorted),
           _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
           _mask_revision(other._mask_revision),
+          _mask_asset_uuid(other._mask_asset_uuid),
+          _mask_asset_owner(std::move(other._mask_asset_owner)),
           _cached_depth(std::move(other._cached_depth)),
           _depth_loaded(other._depth_loaded),
           _depth_quantization_step(other._depth_quantization_step),
@@ -293,6 +295,8 @@ namespace lfs::core {
             _cached_mask_was_undistorted = other._cached_mask_was_undistorted;
             _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
             _mask_revision = other._mask_revision;
+            _mask_asset_uuid = other._mask_asset_uuid;
+            _mask_asset_owner = std::move(other._mask_asset_owner);
             _cached_depth = std::move(other._cached_depth);
             _depth_loaded = other._depth_loaded;
             _depth_quantization_step = other._depth_quantization_step;
@@ -351,6 +355,8 @@ namespace lfs::core {
           _FoVx(other._FoVx),
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
+        _mask_asset_uuid = other._mask_asset_uuid;
+        _mask_asset_owner = other._mask_asset_owner;
         _sfm_observations = other._sfm_observations;
         _sfm_observation_source = other._sfm_observation_source;
         _sfm_observation_node = other._sfm_observation_node;
@@ -580,7 +586,8 @@ namespace lfs::core {
     void Camera::rebase_asset_paths(const std::filesystem::path& old_root,
                                     const std::filesystem::path& new_root) {
         rebase_path_if_under(_image_path, old_root, new_root);
-        rebase_path_if_under(_mask_path, old_root, new_root);
+        if (!_mask_asset_uuid)
+            rebase_path_if_under(_mask_path, old_root, new_root);
         rebase_path_if_under(_depth_path, old_root, new_root);
         rebase_path_if_under(_normal_path, old_root, new_root);
     }
@@ -596,8 +603,14 @@ namespace lfs::core {
         release_normal_cache();
     }
 
-    void Camera::set_mask_path(std::filesystem::path path) {
+    void Camera::set_mask_path(std::filesystem::path path, std::optional<Uuid> asset_uuid,
+                               std::shared_ptr<const void> asset_owner) {
         _mask_path = std::move(path);
+        _mask_asset_uuid = asset_uuid;
+        _mask_asset_owner = std::move(asset_owner);
+        if (asset_uuid)
+            _in_memory_mask_raw = Tensor();
+        ++_mask_revision;
         _cached_mask = Tensor();
         _mask_loaded = false;
     }

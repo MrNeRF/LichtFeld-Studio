@@ -5,9 +5,11 @@
 
 #include "core/export.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -78,6 +80,8 @@ namespace lfs::core::image_codecs {
                                 int width, int height, int channels, int bit_depth,
                                 int compression_level, const std::optional<std::string>& comment,
                                 std::string& error);
+    LFS_CORE_API std::vector<std::byte> encode_png(std::span<const std::uint8_t> pixels,
+                                                   int width, int height, int channels);
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
                     int width, int height, int channels, std::string& error);
 

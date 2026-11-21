@@ -389,4 +389,20 @@ namespace {
         round_trip_images_around_the_extended_path_switch(share->network / run.path.filename());
     }
 #endif
+    TEST(ProductionCodecs, MemoryEncodingPreservesBinaryMaskAndRejectsInvalidLayout) {
+        const std::vector<std::uint8_t> pixels{0, 255, 255, 0, 0, 255};
+        const auto encoded = codec::encode_png(pixels, 3, 2, 1);
+        ASSERT_FALSE(encoded.empty());
+        codec::Image image;
+        std::string error;
+        ASSERT_TRUE(codec::decode_memory(reinterpret_cast<const std::uint8_t*>(encoded.data()), encoded.size(), image, error)) << error;
+        EXPECT_EQ(image.width, 3);
+        EXPECT_EQ(image.height, 2);
+        EXPECT_EQ(image.channels, 1);
+        EXPECT_EQ(image.sample_type, codec::SampleType::UInt8);
+        EXPECT_EQ(image.data, pixels);
+        EXPECT_TRUE(codec::encode_png(pixels, 2, 2, 1).empty());
+        EXPECT_TRUE(codec::encode_png(pixels, -3, 2, 1).empty());
+        EXPECT_TRUE(codec::encode_png(pixels, 3, 2, 5).empty());
+    }
 } // namespace

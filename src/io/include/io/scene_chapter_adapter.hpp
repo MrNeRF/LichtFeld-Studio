@@ -28,6 +28,13 @@ namespace lfs::io::project {
     using CollisionPayloadResolver =
         std::function<lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>(
             const lfs::core::Uuid&)>;
+    struct ResolvedCameraMask {
+        std::filesystem::path path;
+        std::shared_ptr<const void> owner;
+    };
+
+    using CameraMaskResolver =
+        std::function<lfs::Result<ResolvedCameraMask>(const lfs::core::Uuid&)>;
 
     struct ScenePayloadResolver {
         std::function<lfs::Result<std::unique_ptr<lfs::core::SplatData>>(
@@ -41,6 +48,7 @@ namespace lfs::io::project {
             mesh;
         std::shared_ptr<const SfmObservationChapterSource> sfm_observations;
         CollisionPayloadResolver collision;
+        CameraMaskResolver camera_mask;
     };
 
     // Detached value-only scene state. Capturing this does not allocate or
@@ -83,7 +91,8 @@ namespace lfs::io::project {
         stage_scene_shell(const SceneGraphChapter& chapter,
                           lfs::core::Scene& target,
                           std::shared_ptr<const SfmObservationChapterSource> sfm_observations = {},
-                          CollisionPayloadResolver collision = {});
+                          CollisionPayloadResolver collision = {},
+                          CameraMaskResolver camera_mask = {});
 
     // Transactional convenience wrapper for SCNG alone.
     [[nodiscard]] LFS_IO_API lfs::Result<void>

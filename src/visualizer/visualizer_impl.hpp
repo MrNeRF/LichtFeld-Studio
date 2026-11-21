@@ -191,6 +191,7 @@ namespace lfs::vis {
             std::string expected_project_uuid = {}) override;
         lfs::Result<ProjectWritePoll>
         projectPollWrite() override;
+        lfs::Result<void> applyCameraMask(const lfs::core::Uuid& camera_uuid, const std::filesystem::path& image, std::shared_ptr<const std::vector<std::byte>> png, int mask_width, int mask_height) override;
         lfs::Result<ProjectTrainingSource>
         projectTrainingSource() override;
         bool consumeProjectSaveStarted() override;

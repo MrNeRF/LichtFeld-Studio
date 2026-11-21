@@ -415,6 +415,7 @@ namespace lfs::io::project {
         std::string image_name;
         std::string image_path;
         std::string mask_path;
+        std::optional<lfs::core::Uuid> mask_asset_uuid;
         std::string depth_path;
         std::string normal_path;
         bool has_alpha = false;

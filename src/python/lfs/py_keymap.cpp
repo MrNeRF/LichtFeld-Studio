@@ -109,6 +109,9 @@ namespace lfs::python {
             .value("EDITOR_TOGGLE_KIND", Action::EDITOR_TOGGLE_KIND)
             .value("EDITOR_RUN", Action::EDITOR_RUN)
             .value("EDITOR_STOP", Action::EDITOR_STOP)
+            .value("IMAGE_PREVIEW_DELETE", Action::IMAGE_PREVIEW_DELETE)
+            .value("IMAGE_PREVIEW_GENERATE", Action::IMAGE_PREVIEW_GENERATE)
+            .value("IMAGE_PREVIEW_REMOVE_POINT", Action::IMAGE_PREVIEW_REMOVE_POINT)
             .value("NONE", Action::NONE)
             .value("CAMERA_ORBIT", Action::CAMERA_ORBIT)
             .value("CAMERA_PAN", Action::CAMERA_PAN)
@@ -215,6 +218,7 @@ namespace lfs::python {
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
             .value("EDITOR", ToolMode::EDITOR)
+            .value("IMAGE_PREVIEW", ToolMode::IMAGE_PREVIEW)
             .value("GLOBAL", ToolMode::GLOBAL)
             .value("SELECTION", ToolMode::SELECTION)
             .value("TRANSLATE", ToolMode::TRANSLATE)
@@ -265,6 +269,16 @@ namespace lfs::python {
             },
             nb::arg("mode"), nb::arg("key"), nb::arg("modifiers") = 0,
             "Get action bound to a key in given mode");
+
+        keymap.def(
+            "get_action_for_mouse_button",
+            [](ToolMode mode, MouseButton button, int modifiers, bool is_double_click) {
+                if (!get_keymap_bindings())
+                    return Action::NONE;
+                return get_keymap_bindings()->getActionForMouseButton(mode, button, modifiers, is_double_click);
+            },
+            nb::arg("mode"), nb::arg("button"), nb::arg("modifiers") = 0, nb::arg("is_double_click") = false,
+            "Get action bound to a mouse button in given mode");
 
         keymap.def(
             "get_action_for_scroll",

@@ -32,6 +32,22 @@ If automatic detection cannot localize an operator, the result shows a warning w
 
 Seed boxes, background points, multiple foreground points, and off-center or elliptical circles are available through the CLI.
 
+## Assisted frame preview
+
+After extracting a single video, choose **Review frames · SAM** to open the frames written by that extraction in Image Preview. The action also remains available for successfully written frames after stopping extraction. Image Preview offers the same tools through its **Mask · SAM2.1** button when opened on dataset images.
+
+The **Mask · SAM2.1** button opens an editor in the side panel. Use **Foreground +** for positive points on the object and **Background −** for negative points outside it, or drag a **Box** (bounding box) around the subject. These are visual prompts: they guide segmentation rather than painting or erasing mask pixels. Click or drag an existing point to select or move it. The control list also lets you select points and the box with the keyboard. **Swap +/−** changes the selected point’s label, and **Delete** removes the selected control; the default shortcuts are Delete for the selected control and right-click for the control under the cursor. Removing a point removes a constraint; it does not turn that point into background. Drag a box edge or corner to resize it. In **Box**, drag inside the box to move it; draw outside the existing box to replace it. There is one box per proposal. **Undo** uses the shared history for point, box, and applied-mask changes, including edits made while browsing other images. **Pan** returns to normal pan gestures without adding points. Generate, removal, and mouse shortcuts can be rebound in the keymap preferences; Help and tooltips show the current bindings.
+
+Choose **Generate** and inspect candidates **1**, **2**, and **3**. **Generate** always computes a new proposal from the current points and box. After adding controls, **Refine previous** optionally uses the previously selected proposal as a mask prior. Moving, deleting, or relabeling points, or changing an existing box, discards that prior. **Overlay** hides the proposal for comparison with the original. The displayed quality is SAM's estimate, not verified accuracy. Points and boxes belong to the original image, including when the preview is zoomed or rotated. Text-based object selection is not available in this preview.
+
+Generating or selecting a proposal does not change the image's mask. For an image associated with a camera in the current dataset, choose **Apply: keep selection** or **Apply: exclude selection** to replace its mask at the original image resolution. Apply confirms the change, closes SAM, and updates the image’s mask overlay. Proposals and applied masks use the same theme color; the legend identifies whether the highlighted pixels are a proposal, kept mask pixels, or excluded mask pixels under the current inversion setting. The shared **Undo** and **Redo** actions restore mask changes. Applying requires an editable dataset before training initialization.
+
+Save the project normally to store the PNG mask inside the `.licht` file. Reopening the project and resetting training preserve the image's mask. The source dataset files are preserved. Apply stores the chosen keep/exclude selection; **Invert** is a training setting and does not change the stored PNG. **Segment and Ignore** ignores Invert. Starting or resuming training warns when saved mask assets exist but the mask mode is still None.
+
+Points and boxes are kept per image while browsing the current preview. **Clear points and box** clears these working controls through the shared history. **Release SAM** retains points and boxes and releases the model asynchronously. Close SAM before starting training. Escape first cancels a box gesture or exits SAM mode.
+
+The assisted preview reviews one image at a time. Frames opened directly from the extractor can be inspected and corrected as proposals; applying requires their association with a camera in the current dataset. Interactive propagation is not available. Automatic operator tracking remains available through the extraction options described above. The preview uses the extractor's selected model file, or the existing verified SAM2.1 model cache when no file was selected.
+
 ## Command line
 
 Extract and mask a video at one frame per second:

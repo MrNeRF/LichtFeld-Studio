@@ -3,12 +3,28 @@
 
 #pragma once
 
+#include "core/camera.hpp"
+#include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include <algorithm>
 
 #include <cstdint>
 #include <functional>
 
 namespace lfs::vis::detail {
+
+    inline bool dispatch_unused_camera_mask_notice(const core::Scene& scene,
+                                                   const core::param::MaskMode mode,
+                                                   const std::function<void()>& post_notice) {
+        if (mode != core::param::MaskMode::None || !post_notice)
+            return false;
+        if (!std::ranges::any_of(scene.getAllCameras(), [](const auto& camera) {
+                return camera && camera->mask_asset_uuid().has_value();
+            }))
+            return false;
+        post_notice();
+        return true;
+    }
 
     inline bool dispatch_camera_training_notice(const std::uint32_t mutation_flags,
                                                 const bool training_active,

@@ -15,6 +15,7 @@ import pytest
 
 TOOL_MODE_NAMES = (
     "EDITOR",
+    "IMAGE_PREVIEW",
     "GLOBAL",
     "SELECTION",
     "TRANSLATE",
@@ -30,6 +31,9 @@ ACTION_NAMES = (
     "EDITOR_TOGGLE_KIND",
     "EDITOR_RUN",
     "EDITOR_STOP",
+    "IMAGE_PREVIEW_DELETE",
+    "IMAGE_PREVIEW_GENERATE",
+    "IMAGE_PREVIEW_REMOVE_POINT",
     "EXIT_WALK",
     "NONE",
     "CAMERA_ORBIT",
@@ -234,7 +238,7 @@ def _install_lf_stub(monkeypatch):
             action.SELECTION_INTERSECT,
         ):
             return ["mouse_button", "mouse_drag"]
-        if action_value == action.NODE_PICK:
+        if action_value in (action.NODE_PICK, action.IMAGE_PREVIEW_REMOVE_POINT):
             return ["mouse_button"]
         if action_value == action.NODE_RECT_SELECT:
             return ["mouse_drag"]
@@ -642,6 +646,7 @@ def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
         {"index": "7", "label": "Mode WALK"},
         {"index": "8", "label": "Mode VR"},
         {"index": "9", "label": "Mode EDITOR"},
+        {"index": "10", "label": "Mode IMAGE_PREVIEW"},
     ]
 
 
@@ -1113,3 +1118,19 @@ def test_keymap_section_delegates_rebind_and_cancel_clicks(keymap_bindings_modul
     assert section._rebinding_mode is None
     assert section._previous_trigger is None
     assert state.capturing[0] is False
+
+
+def test_image_preview_scope_exposes_all_controls_in_preferences(keymap_bindings_module):
+    prefs, _state = keymap_bindings_module
+    panel, model = _bind_panel(prefs)
+    section = panel._keymap
+    mode = prefs.lf.keymap.ToolMode.IMAGE_PREVIEW
+    assert mode in section.TOOL_MODES
+    section._rebuild_binding_rows(mode)
+    rows = [row for row in model.handle.records["binding_rows"] if not row["is_section"]]
+    assert {row["action_id"] for row in rows} == {
+        str(action.value) for action in (prefs.lf.keymap.Action.IMAGE_PREVIEW_DELETE,
+                                        prefs.lf.keymap.Action.IMAGE_PREVIEW_GENERATE,
+                                        prefs.lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT)}
+    assert all(row["mode_id"] == str(mode.value) for row in rows)
+    assert section._capture_prompt(prefs.lf.keymap.Action.IMAGE_PREVIEW_REMOVE_POINT) == "input_settings.click_mouse"

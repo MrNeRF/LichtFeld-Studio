@@ -20,8 +20,11 @@
 
 namespace lfs::core::nn::models {
 
+    enum class Sam2MaskOutput { OriginalResolution,
+                                LowResolutionOnly };
+
     struct Sam2Prediction {
-        Tensor masks;          // [num_masks, H, W] fp32 logits, original image size
+        Tensor masks;          // [num_masks, H, W] fp32 logits; absent for LowResolutionOnly
         Tensor iou;            // [num_masks] fp32 predicted mask quality
         Tensor low_res_logits; // [num_masks, 256, 256] fp32
         Tensor object_pointer;
@@ -51,7 +54,8 @@ namespace lfs::core::nn::models {
         // prediction (1 x 1 x 256 x 256) to refine. Requires set_image first.
         lfs::Result<Sam2Prediction> predict(const std::vector<Sam2PointPrompt>& points,
                                             const std::optional<std::array<float, 4>>& box,
-                                            bool multimask = true, const Tensor* mask_logits = nullptr);
+                                            bool multimask = true, const Tensor* mask_logits = nullptr,
+                                            Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
 
         // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
         lfs::Result<void> set_video_image(const Tensor& image);
@@ -64,12 +68,15 @@ namespace lfs::core::nn::models {
         // Runs the image encoder in `dtype` (tensor cores for Float16) while prompts, the mask decoder and video
         // tracking keep the compute dtype; the encoder's features are converted on the way out.
         void set_encoder_dtype(DataType dtype);
+        [[nodiscard]] std::size_t weights_bytes() const;
+        [[nodiscard]] std::size_t arena_bytes() const { return arena_.capacity(); }
 
     private:
         lfs::Result<void> run_encoder(const Tensor& image, bool video = false);
         lfs::Result<Sam2Prediction> run_decoder(const std::vector<Sam2PointPrompt>& points,
                                                 const std::optional<std::array<float, 4>>& box,
-                                                bool multimask, bool video = false, const Tensor* mask_input = nullptr);
+                                                bool multimask, bool video = false, const Tensor* mask_input = nullptr,
+                                                Sam2MaskOutput output = Sam2MaskOutput::OriginalResolution);
 
         const Tensor& w(std::string_view name) const;
         Tensor conv1x1(const Tensor& x, std::string_view weight, std::string_view bias);

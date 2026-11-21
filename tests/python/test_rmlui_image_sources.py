@@ -25,6 +25,7 @@ def _install_lf_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.get_scene = lambda: None
+    lf_stub.optimization_params = lambda: None
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
@@ -38,7 +39,24 @@ def _install_lf_stub(monkeypatch):
         get_image_info=lambda _path: (0, 0, 0),
         preview_texture_status=lambda _source, _document=None: "ready",
         request_redraw=lambda _delay=0.0: None,
+        sam_preview_poll=lambda: {"phase": "idle"},
+        sam_preview_close=lambda: None,
     )
+    actions = SimpleNamespace(NONE="none", IMAGE_PREVIEW_DELETE="delete",
+                              IMAGE_PREVIEW_GENERATE="generate", IMAGE_PREVIEW_REMOVE_POINT="remove")
+    keys = {(261, 0): actions.IMAGE_PREVIEW_DELETE, (257, 0): actions.IMAGE_PREVIEW_GENERATE}
+    mouse = {(1, 0): actions.IMAGE_PREVIEW_REMOVE_POINT}
+    lf_stub.keymap = SimpleNamespace(
+        Action=actions, ToolMode=SimpleNamespace(IMAGE_PREVIEW="image_preview"),
+        MouseButton=SimpleNamespace(LEFT=0, RIGHT=1, MIDDLE=2),
+        is_capturing=lambda: False,
+        bindings_revision=lambda: 0,
+        get_action_for_key=lambda scope, key, mods: keys.get((key, mods), actions.NONE),
+        get_action_for_mouse_button=lambda scope, button, mods, double=False: mouse.get((button, mods), actions.NONE) if not double else actions.NONE,
+        get_trigger_description=lambda action, scope: action,
+        get_action_name=lambda action: action,
+    )
+    lf_stub.undo = SimpleNamespace(push=lambda *a, **kw: None, undo=lambda: False, can_undo=lambda: False)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
 
@@ -169,6 +187,9 @@ class _ElementStub:
 
     def set_text(self, value):
         self.text = value
+
+    def set_inner_rml(self, value):
+        self.inner_rml = value
 
     def query_selector(self, selector):
         if selector == ".card-body":

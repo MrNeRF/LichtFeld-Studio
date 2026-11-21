@@ -4,6 +4,7 @@
 
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
@@ -516,10 +517,19 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::startExtraction(const VideoExtractionParams& params) {
         joinExtractionThread();
+        {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+            review_weights_ = params.masking.masking.weights;
+        }
 
         extraction_thread_.emplace([this, params]() {
             io::VideoFrameExtractor::Params extract_params;
             extract_params.video_path = params.video_path;
+            extract_params.frame_written = [this](const io::VideoFrameExtractor::WrittenFrame& frame) {
+                std::lock_guard lock(review_mutex_);
+                review_frames_.push_back(frame);
+            };
             extract_params.output_dir = params.output_dir;
             extract_params.mode = params.mode;
             extract_params.fps = params.fps;
@@ -574,6 +584,10 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::startBatchExtraction(std::vector<VideoExtractionParams> params) {
         joinExtractionThread();
+        {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
         const bool continue_on_failure = continue_batch_on_failure_;
         extraction_thread_.emplace([this, params = std::move(params), continue_on_failure]() {
             const auto make_extractor_params = [this](const VideoExtractionParams& item,
@@ -789,6 +803,10 @@ namespace lfs::gui {
 
         // A finished worker must publish its status before the new source clears it.
         joinExtractionThread();
+        if (path != video_path_) {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
         if (!player_->open(path)) {
             video_path_.clear();
             output_dir_.clear();
@@ -1101,6 +1119,10 @@ namespace lfs::gui {
     void VideoExtractorDialog::clearBatchVideos() {
         if (extracting_.load())
             return;
+        {
+            std::lock_guard lock(review_mutex_);
+            review_frames_.clear();
+        }
         {
             std::lock_guard lock(batch_probe_mutex_);
             ++batch_probe_generation_;
@@ -1556,6 +1578,8 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::bindEventListeners() {
+        if (auto* review = document_->GetElementById("btn-review-frames"))
+            review->AddEventListener(Rml::EventId::Click, &listener_);
         const auto listen_click = [this](Rml::Element* const el) {
             if (el)
                 el->AddEventListener(Rml::EventId::Click, &listener_);
@@ -2125,6 +2149,10 @@ namespace lfs::gui {
         }
 
         const auto snapshot = getExtractionStatusSnapshot();
+        if (auto* review = document_ ? document_->GetElementById("btn-review-frames") : nullptr) {
+            std::lock_guard lock(review_mutex_);
+            changed |= setCachedProperty(review, "display", review_frames_.empty() || extracting ? "none" : "inline-block");
+        }
         changed |= setCachedProperty(complete_section_el_, "display",
                                      snapshot.status_message == ExtractionStatusMessage::Complete && !extracting
                                          ? "flex"
@@ -2359,6 +2387,22 @@ namespace lfs::gui {
                 overwrite_overlay_el_->SetClass("hidden", true);
             controls_dirty_ = true;
             markContentDirty();
+        } else if (id == "btn-review-frames") {
+            std::vector<std::filesystem::path> paths;
+            std::vector<io::VideoFrameExtractor::WrittenFrame> frames;
+            std::filesystem::path weights;
+            {
+                std::lock_guard lock(review_mutex_);
+                frames = review_frames_;
+                weights = review_weights_;
+            }
+            std::ranges::stable_sort(frames, [](const auto& a, const auto& b) {
+                return a.timestamp != b.timestamp ? a.timestamp < b.timestamp : a.source_frame < b.source_frame;
+            });
+            for (const auto& frame : frames)
+                paths.push_back(frame.path);
+            if (!extracting_.load() && !paths.empty())
+                core::events::cmd::OpenImagePreview{.paths = std::move(paths), .weights = std::move(weights)}.emit();
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);

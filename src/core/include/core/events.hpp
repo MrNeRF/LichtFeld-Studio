@@ -113,6 +113,7 @@ namespace lfs::core {
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
             EVENT(OpenCameraPreview, int cam_id;);
+            EVENT(OpenImagePreview, std::vector<std::filesystem::path> paths; std::filesystem::path weights;);
             EVENT(PrepareTrainingFromScene, );
             EVENT(AddPLY, std::filesystem::path path; std::string name;);
             EVENT(RemovePLY, std::string name; bool keep_children = false;);

@@ -32,6 +32,7 @@
       <button type="button" class="btn" id="btn-thumbnails"></button>
       <button type="button" class="btn" id="btn-info"></button>
       <button type="button" class="btn" id="btn-picker"></button>
+      <button type="button" class="btn" id="btn-sam"></button>
       <button type="button" class="btn" id="btn-refresh"></button>
       <button type="button" class="btn" id="btn-help"></button>
     </div>
@@ -54,6 +55,9 @@
       <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
       <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
     </div>
+    <div id="sam-edit-hint" class="sam-note"></div>
+    <div id="sam-shortcuts" class="sam-note"></div>
+    <div id="sam-hint" class="sam-note"></div>
   </div>
   <div id="preview-message" role="status"></div>
 
@@ -77,12 +81,47 @@
         <div id="main-image-a" class="image-layer"></div>
         <div id="main-image-b" class="image-layer hidden"></div>
         <div id="mask-overlay"></div>
+        <div id="sam-overlay" class="image-layer hidden"></div>
+        <div id="sam-markers"></div>
         <div id="no-image-text"><span id="preview-state-text"></span></div>
       </div>
       <button type="button" class="nav-arrow" id="nav-prev" title="@tr:image_preview.previous">&#x25C0;</button>
       <button type="button" class="nav-arrow" id="nav-next" title="@tr:image_preview.next">&#x25B6;</button>
     </div>
     <div id="sidebar">
+
+      <div id="sam-controls" class="hidden">
+        <span class="section-label-ip" id="sam-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-positive"></button>
+          <button type="button" class="btn" id="sam-negative"></button>
+          <button type="button" class="btn" id="sam-box"></button>
+          <button type="button" class="btn" id="sam-pan"></button>
+        </div>
+        <select id="sam-selection"></select>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-remove"></button>
+          <button type="button" class="btn" id="sam-flip"></button>
+        </div>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-undo"></button>
+          <button type="button" class="btn" id="sam-clear"></button>
+        </div>
+        <span class="section-label-ip" id="sam-proposals-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-generate"></button>
+          <button type="button" class="btn" id="sam-refine"></button>
+          <button type="button" class="btn" id="sam-cancel"></button>
+        </div>
+        <div class="sam-tool-row">
+          <button type="button" class="btn" id="sam-candidate-0"></button>
+          <button type="button" class="btn" id="sam-candidate-1"></button>
+          <button type="button" class="btn" id="sam-candidate-2"></button>
+          <button type="button" class="btn" id="sam-show"></button>
+        </div>
+        <div id="sam-quality" class="sam-note"></div>
+      </div>
+      <div id="metadata-info">
       <div class="sidebar-header-ip">
         <span class="sidebar-header-label-ip" id="sidebar-file-header"></span>
         <span id="sidebar-filename"></span>
@@ -144,11 +183,21 @@
           <label for="cb-mask" id="cb-mask-label"></label>
         </div>
       </div>
+      </div>
+      <div id="sam-apply-controls" class="hidden">
+        <span class="section-label-ip" id="sam-apply-heading"></span>
+        <div class="sam-tool-row">
+          <button type="button" class="btn btn--primary" id="sam-apply"></button>
+          <button type="button" class="btn" id="sam-exclude"></button>
+        </div>
+        <div id="sam-status" role="status"></div>
+      </div>
     </div>
   </div>
 
   <div id="status-bar">
     <span class="status-item" id="st-zoom"></span>
+    <div id="mask-legend" class="sam-note hidden" role="status"></div>
     <span class="status-position" id="st-position"></span>
   </div>
 
