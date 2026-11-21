@@ -391,6 +391,8 @@ namespace {
         const std::vector<glm::dvec3> source{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
         std::vector<glm::dvec3> reference{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}};
         EXPECT_FALSE(lfs::vis::op::computePairAlignment(source, reference, true));
+        reference.back().y = 1e-5;
+        EXPECT_FALSE(lfs::vis::op::computePairAlignment(source, reference, true));
         reference.back().y = std::numeric_limits<double>::quiet_NaN();
         EXPECT_FALSE(lfs::vis::op::computePairAlignment(source, reference, true));
     }
@@ -637,6 +639,51 @@ namespace lfs::vis::op {
         ASSERT_TRUE(undoHistory().undo().success);
         EXPECT_EQ(manager_->getNodeTransform("mobile"), original);
         EXPECT_EQ(manager_->getNodeTransform("reference"), reference);
+    }
+
+    TEST_F(AlignPreviewTest, MovedReferenceInvalidatesPairsBeforeApply) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        const auto mobile = manager_->getNodeTransform("mobile");
+        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
+        ASSERT_TRUE(manager_->setNodeTransform("reference", moved));
+
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(services().alignPointPick().getPickedPoints().empty());
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("reference"), moved);
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), mobile);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(AlignPreviewTest, ExternalMobileEditSupersedesThePreview) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        action(PointPickState::UiAction::TogglePreview);
+        ASSERT_TRUE(services().getAlignPreviewEnabled());
+        const auto moved = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
+        ASSERT_TRUE(manager_->setNodeTransform("mobile", moved));
+
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::RUNNING_MODAL);
+        EXPECT_TRUE(services().alignPointPick().getPickedPoints().empty());
+        EXPECT_FALSE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(manager_->getNodeTransform("mobile"), moved);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
+    }
+
+    TEST_F(AlignPreviewTest, ComparisonRequiresAnEditableMobileSplat) {
+        pair_rendering_ = std::make_unique<RenderingManager>();
+        startPairAlignment(*pair_rendering_);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_TRUE(operation_.poll(*context_));
+        manager_->getScene().setNodeLocked("reference", true);
+        EXPECT_TRUE(operation_.poll(*context_));
+        manager_->getScene().setNodeLocked("mobile", true);
+        EXPECT_FALSE(operation_.poll(*context_));
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::CANCELLED);
+        EXPECT_EQ(undoHistory().undoCount(), 0u);
     }
 
     TEST_F(AlignPreviewTest, MousePressPassesThroughAndClickReleaseIsConsumed) {

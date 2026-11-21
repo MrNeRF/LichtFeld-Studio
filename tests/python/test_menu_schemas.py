@@ -124,6 +124,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_selection=lambda: state["has_gaussian_selection"],
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_split_view_mode=lambda: "independent_dual",
+        toggle_model_comparison=lambda: state.__setitem__("model_comparison_toggled", True),
         get_vr_state=lambda: dict(state["vr"]),
         get_vr_preferences=lambda: {"enabled": state.get("vr_support", False)},
         get_active_tool=lambda: state["active_tool"],
@@ -136,6 +137,7 @@ def _install_lichtfeld_stub(monkeypatch):
     )
     keymap = SimpleNamespace(
         Action=SimpleNamespace(
+            TOGGLE_SPLIT_VIEW="toggle_split_view",
             UNDO="undo",
             REDO="redo",
             COPY_SELECTION="copy_selection",
@@ -363,9 +365,9 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert appearance[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
-    assert view_items[12]["label"] == "tr:menu.view.performance_hud"
-    assert view_items[12]["shortcut"] == "F10"
-    view_items[12]["callback"]()
+    assert view_items[13]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[13]["shortcut"] == "F10"
+    view_items[13]["callback"]()
     assert state.get("vram_hud_toggled") is True
     assert [(item["label"], item["shortcut"]) for item in view_items[:3]] == [
         ("tr:menu.view.home_view", "H"),
@@ -377,11 +379,15 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert state["home_calls"] == ["go", "set", "reset"]
     assert view_items[4]["selected"]
     view_items[4]["callback"]()
+    assert view_items[5]["label"] == "tr:menu.view.compare_models"
+    assert not view_items[5]["selected"]
     view_items[5]["callback"]()
-    assert state["dock_toggled"] == "left"
+    assert state["model_comparison_toggled"]
     view_items[6]["callback"]()
-    assert state["dock_toggled"] == "right"
+    assert state["dock_toggled"] == "left"
     view_items[7]["callback"]()
+    assert state["dock_toggled"] == "right"
+    view_items[8]["callback"]()
     assert state["split_toggled"] and state["ui_toggled"]
 
     keymap = sys.modules["lichtfeld"].keymap
@@ -390,11 +396,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
         "open_preferences": "Alt+P",
         "copy_selection": "Alt+C",
     }.get(action, "")
-    assert view_mod.ViewMenu().menu_items()[12]["shortcut"] == "Ctrl+F10"
+    assert view_mod.ViewMenu().menu_items()[13]["shortcut"] == "Ctrl+F10"
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == "Alt+P"
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == "Alt+C"
     keymap.is_bound = lambda _action, _mode: False
-    assert view_mod.ViewMenu().menu_items()[12]["shortcut"] == ""
+    assert view_mod.ViewMenu().menu_items()[13]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == ""
 
@@ -409,7 +415,7 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
         monkeypatch.delitem(sys.modules, name, raising=False)
     view_mod = import_module("lfs_plugins.view_menu")
 
-    enter, recenter = view_mod.ViewMenu().menu_items()[9:11]
+    enter, recenter = view_mod.ViewMenu().menu_items()[10:12]
     assert (enter["label"], enter["enabled"], enter["tooltip"], enter["shortcut"]) == (
         "tr:menu.view.enter_vr", False, "No OpenXR runtime", "")
     assert (recenter["enabled"], recenter["shortcut"]) == (False, "R")
@@ -417,7 +423,7 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
     # With VR support on and no headset found, detecting it again is offered
     # right under the unavailable Enter VR.
     state["vr_support"] = True
-    enter, detect, recenter = view_mod.ViewMenu().menu_items()[9:12]
+    enter, detect, recenter = view_mod.ViewMenu().menu_items()[10:13]
     assert (enter["enabled"], enter["tooltip"]) == (False, "No OpenXR runtime")
     assert (detect["label"], detect["enabled"]) == ("tr:menu.view.detect_vr", True)
     assert recenter["shortcut"] == "R"
@@ -426,17 +432,17 @@ def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
     state["vr_calls"].clear()
     # Once a headset is found, the offer goes away.
     state["vr"] = {"available": True, "active": False, "status": "Ready"}
-    assert view_mod.ViewMenu().menu_items()[10]["shortcut"] == "R"
+    assert view_mod.ViewMenu().menu_items()[11]["shortcut"] == "R"
     state["vr"] = {"available": False, "active": False, "status": "No OpenXR runtime"}
     state["vr_support"] = False
 
     state["vr"] = {"available": True, "active": False, "status": "Ready"}
-    enter = view_mod.ViewMenu().menu_items()[9]
+    enter = view_mod.ViewMenu().menu_items()[10]
     assert enter["enabled"] and "tooltip" not in enter
     enter["callback"]()
 
     state["vr"]["active"] = True
-    exit_vr, recenter = view_mod.ViewMenu().menu_items()[9:11]
+    exit_vr, recenter = view_mod.ViewMenu().menu_items()[10:12]
     assert (exit_vr["label"], exit_vr["shortcut"]) == ("tr:input_settings.action.exit_vr", "Escape")
     assert recenter["enabled"]
     exit_vr["callback"]()

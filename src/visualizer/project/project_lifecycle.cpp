@@ -5148,6 +5148,11 @@ namespace lfs::vis::project {
                 std::memory_order_acquire));
     }
 
+    static bool hasAlignmentPreview() {
+        return services().getAlignPreviewEnabled() &&
+               op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint);
+    }
+
     lfs::Result<void>
     ProjectLifecycle::startAutosave() {
         if (hydration_.load(std::memory_order_acquire) ==
@@ -5197,7 +5202,7 @@ namespace lfs::vis::project {
             return {};
         }
 
-        if (services().getAlignPreviewEnabled()) {
+        if (hasAlignmentPreview()) {
             return {};
         }
 
@@ -6762,9 +6767,12 @@ namespace lfs::vis::project {
     ProjectLifecycle::synchronizeDocumentFromViewer(
         const DocumentSyncMode mode) try {
         // A modal alignment preview is provisional and must never be saved.
-        if (services().getAlignPreviewEnabled() &&
-            op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
-            op::operators().cancelModalOperator();
+        if (hasAlignmentPreview()) {
+            auto& state = services().alignPointPick();
+            state.requestUiAction(PointPickState::UiAction::TogglePreview);
+            op::operators().dispatchModalEvent({});
+            if (!state.getPickedPoints().empty())
+                state.setStatusMessage(LOC("align.preview_ended_for_save"), 4.0);
         }
         const auto sync_started = std::chrono::steady_clock::now();
         const auto sync_scene_serial = scene_mutation_serial_.load(

@@ -2339,6 +2339,9 @@ def go_to_camera_view(cam_uid: int) -> None:
 def open_camera_preview(cam_uid: int) -> None:
     """Open the image preview panel for a camera UID"""
 
+def toggle_model_comparison() -> None:
+    """Toggle model comparison with a shared camera and a divider"""
+
 def toggle_gt_comparison() -> None:
     """Toggle ground-truth comparison split view"""
 
@@ -2391,10 +2394,10 @@ def start_crop_polygon() -> None:
     """
 
 def can_apply_align() -> bool:
-    """True when the align tool has 3 non-degenerate points ready to apply"""
+    """Whether the align tool has enough picked points to attempt alignment"""
 
 def apply_align() -> bool:
-    """Request the running align modal to apply the current triangle"""
+    """Request the running align modal to apply its current alignment"""
 
 def clear_align_points() -> None:
     """Request the running align modal to clear all picked points"""

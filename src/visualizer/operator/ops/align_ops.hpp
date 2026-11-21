@@ -25,7 +25,11 @@ namespace lfs::vis::op {
 
     private:
         friend class AlignPreviewTest;
-        std::optional<std::array<core::Uuid, 2>> pair_;
+        struct Pair {
+            std::array<core::Uuid, 2> ids;
+            std::array<glm::mat4, 2> world;
+        };
+        std::optional<Pair> pair_;
         bool sequentialPoints() const override { return pair_.has_value(); }
         bool acceptsPointSample(const PointSample& sample, std::optional<int> index) const override;
         [[nodiscard]] std::optional<glm::mat4> computePairPreviewTransform() const;
@@ -35,6 +39,8 @@ namespace lfs::vis::op {
             core::Uuid uuid;
             glm::mat4 local;
             glm::mat4 world;
+            std::optional<glm::mat4> preview_local;
+            std::optional<glm::mat4> preview_world;
         };
         std::vector<PreviewTarget> preview_targets_;
         std::optional<glm::mat4> preview_snap_world_;
@@ -54,6 +60,8 @@ namespace lfs::vis::op {
 
     void registerAlignOperators();
     void unregisterAlignOperators();
+
+    [[nodiscard]] LFS_VIS_API bool canAlignComparisonPair(const core::Scene& scene, size_t offset);
 
     // Shared by apply path and overlay preview. Returns true if normal was snapped.
     inline constexpr float kAlignAxisSnapDegrees = 3.0f;

@@ -4442,6 +4442,11 @@ namespace lfs::python {
             nb::arg("cam_uid"), "Open the image preview panel for a camera UID");
 
         m.def(
+            "toggle_model_comparison",
+            [] { lfs::core::events::cmd::ToggleSplitView{}.emit(); },
+            "Toggle model comparison with a shared camera and a divider");
+
+        m.def(
             "toggle_gt_comparison",
             []() {
                 auto* const rendering = lfs::python::get_rendering_manager();
@@ -4618,13 +4623,17 @@ namespace lfs::python {
             []() -> bool {
                 const auto* scene = lfs::vis::services().sceneOrNull();
                 const auto* rendering = lfs::vis::services().renderingOrNull();
-                if (scene && rendering && lfs::vis::splitViewUsesPLYComparison(rendering->getSettings().split_view_mode))
-                    return lfs::vis::services().alignPointPick().getPickedPoints().size() == 6;
+                if (scene && rendering) {
+                    const auto settings = rendering->getSettings();
+                    if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode))
+                        return lfs::vis::services().alignPointPick().getPickedPoints().size() == 6 &&
+                               lfs::vis::op::canAlignComparisonPair(scene->getScene(), settings.split_view_offset);
+                }
                 return scene &&
                        lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
                        lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
             },
-            "True when the align tool has 3 non-degenerate points ready to apply");
+            "Whether the align tool has enough picked points to attempt alignment");
 
         m.def(
             "apply_align",
@@ -4633,7 +4642,7 @@ namespace lfs::python {
                                                  vis::services().alignPointPick(), vis::PointPickState::UiAction::Apply)
                     .has_value();
             },
-            "Request the running align modal to apply the current triangle");
+            "Request the running align modal to apply its current alignment");
 
         m.def(
             "clear_align_points",

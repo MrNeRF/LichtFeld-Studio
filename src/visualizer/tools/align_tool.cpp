@@ -11,7 +11,6 @@
 #include "point_pick_overlay.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
-#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include <algorithm>
@@ -271,26 +270,36 @@ namespace lfs::vis::tools {
         const auto& picked_points = services().alignPointPick().getPickedPoints();
         const auto selected_point = services().alignPointPick().getSelectedPoint();
         const auto settings = rendering_manager ? rendering_manager->getSettings() : RenderSettings{};
+        auto* const sm = tool_context_->getSceneManager();
         if (splitViewUsesPLYComparison(settings.split_view_mode)) {
+            if (!sm || !op::canAlignComparisonPair(sm->getScene(), settings.split_view_offset)) {
+                drawPointPickHud(*overlay, panel_proj, LOC("align.pair_unavailable"), "",
+                                 services().alignPointPick().getStatusMessage(), "");
+                return;
+            }
             const auto count = picked_points.size();
             const float divider_x = panel_proj.info.x +
                                     splitViewDividerPixel(static_cast<int>(panel_proj.info.width), settings.split_position);
             drawPointMarkers(*overlay, panel_proj, picked_points, selected_point, SPHERE_COLOR, label_size, divider_x);
-            const auto hint = services().getAlignPreviewEnabled()
-                                  ? LOCF("align.pair_preview", pointPickShortcut(input::Action::CANCEL_POLYGON))
+            const bool preview = services().getAlignPreviewEnabled();
+            const auto hint = preview
+                                  ? LOC("align.pair_preview")
                               : count >= 6
-                                  ? LOCF("align.pair_apply", pointPickShortcut(input::Action::APPLY_ALIGNMENT))
+                                  ? LOC("align.pair_apply")
                               : count % 2 == 0
                                   ? LOC("align.pair_reference")
                                   : LOC("align.pair_mobile");
-            drawPointPickHud(*overlay, panel_proj, hint, "",
-                             services().alignPointPick().getStatusMessage(), "");
+            const auto remove_key = pointPickShortcut(input::Action::REMOVE_LAST_POINT);
+            const auto help = !preview && count && !remove_key.empty()
+                                  ? LOCF("align.pair_remove", remove_key)
+                                  : std::string{};
+            drawPointPickHud(*overlay, panel_proj, hint, LOCF("align.pair_progress", count / 2),
+                             services().alignPointPick().getStatusMessage(), help);
             return;
         }
         const bool in_review = picked_points.size() == 3;
         const glm::vec3 camera_pos = in_review ? services().getAlignCameraPosition()
                                                : panel_proj.viewport.camera.t;
-        auto* const sm = tool_context_->getSceneManager();
         const auto snap_target_world =
             sm ? op::resolveAlignSnapTargetWorld(*sm) : std::optional<glm::mat4>{};
 
@@ -313,10 +322,10 @@ namespace lfs::vis::tools {
         if (in_review) {
             option_help = LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help");
         } else if (picked_points.empty() && sm && op::operators().activeModalId().empty() &&
-                   plyComparisonNodes(sm->getScene()).size() >= 2) {
+                   op::canAlignComparisonPair(sm->getScene(), settings.split_view_offset)) {
             const auto compare_key = pointPickShortcut(input::Action::TOGGLE_SPLIT_VIEW);
-            if (!compare_key.empty())
-                option_help = LOCF("align.pair_entry", compare_key);
+            option_help = LOCF("align.pair_entry",
+                               compare_key.empty() ? std::string(LOC("menu.view.compare_models")) : compare_key);
         }
         drawPointPickHud(*overlay, panel_proj, hint,
                          LOCF(lichtfeld::Strings::Align::POINTS_COUNT, lfs::core::format_count(picked_points.size())),
