@@ -17,6 +17,7 @@
 #include <cmath>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace lfs::vis::op {
 
@@ -270,6 +271,108 @@ namespace lfs::vis::op {
 
         normal = best_axis * static_cast<float>(best_sign);
         return true;
+    }
+
+    std::optional<glm::dmat4> computePairAlignment(
+        std::span<const glm::dvec3> source, std::span<const glm::dvec3> reference, bool adjust_scale) {
+        if (source.size() < 3 || source.size() != reference.size())
+            return std::nullopt;
+
+        glm::dvec3 source_center(0.0), reference_center(0.0);
+        for (size_t i = 0; i < source.size(); ++i) {
+            source_center += source[i];
+            reference_center += reference[i];
+        }
+        source_center /= static_cast<double>(source.size());
+        reference_center /= static_cast<double>(reference.size());
+
+        const auto has_plane = [](std::span<const glm::dvec3> points, glm::dvec3 center) {
+            glm::dvec3 axis(0.0);
+            double radius_squared = 0.0;
+            for (const auto point : points) {
+                const auto offset = point - center;
+                const double squared = glm::dot(offset, offset);
+                if (!std::isfinite(squared))
+                    return false;
+                if (squared > radius_squared) {
+                    axis = offset;
+                    radius_squared = squared;
+                }
+            }
+            if (radius_squared <= 0.0)
+                return false;
+            for (const auto point : points) {
+                const auto cross = glm::cross(axis, point - center);
+                if (glm::length(cross) / radius_squared > 1e-6)
+                    return true;
+            }
+            return false;
+        };
+        if (!has_plane(source, source_center) || !has_plane(reference, reference_center))
+            return std::nullopt;
+
+        glm::dmat3 covariance(0.0);
+        double variance = 0.0;
+        for (size_t i = 0; i < source.size(); ++i) {
+            const auto from = source[i] - source_center;
+            const auto to = reference[i] - reference_center;
+            covariance += glm::outerProduct(from, to);
+            variance += glm::dot(from, from);
+        }
+        double magnitude = 0.0;
+        for (int i = 0; i < 3; ++i)
+            magnitude = std::max(magnitude, glm::length(covariance[i]));
+        if (!(magnitude > 0.0) || !std::isfinite(magnitude) || !std::isfinite(variance))
+            return std::nullopt;
+        covariance /= magnitude;
+
+        // Horn's quaternion matrix for the source-to-reference rotation.
+        const double xx = covariance[0][0], xy = covariance[1][0], xz = covariance[2][0];
+        const double yx = covariance[0][1], yy = covariance[1][1], yz = covariance[2][1];
+        const double zx = covariance[0][2], zy = covariance[1][2], zz = covariance[2][2];
+        glm::dmat4 symmetric(
+            xx + yy + zz, yz - zy, zx - xz, xy - yx,
+            yz - zy, xx - yy - zz, xy + yx, zx + xz,
+            zx - xz, xy + yx, -xx + yy - zz, yz + zy,
+            xy - yx, zx + xz, yz + zy, -xx - yy + zz);
+        glm::dmat4 eigenvectors(1.0);
+        for (int sweep = 0; sweep < 12; ++sweep) {
+            for (int p = 0; p < 4; ++p) {
+                for (int q = p + 1; q < 4; ++q) {
+                    if (std::abs(symmetric[q][p]) <= 1e-14)
+                        continue;
+                    const double angle = 0.5 * std::atan2(
+                        2.0 * symmetric[q][p], symmetric[p][p] - symmetric[q][q]);
+                    glm::dmat4 jacobi(1.0);
+                    jacobi[p][p] = jacobi[q][q] = std::cos(angle);
+                    jacobi[p][q] = std::sin(angle);
+                    jacobi[q][p] = -jacobi[p][q];
+                    symmetric = glm::transpose(jacobi) * symmetric * jacobi;
+                    eigenvectors *= jacobi;
+                }
+            }
+        }
+        int best = 0;
+        for (int i = 1; i < 4; ++i) {
+            if (symmetric[i][i] > symmetric[best][best])
+                best = i;
+        }
+        for (int i = 0; i < 4; ++i) {
+            if (i != best && symmetric[best][best] - symmetric[i][i] <= 1e-10)
+                return std::nullopt;
+        }
+        const auto q = eigenvectors[best];
+        const auto rotation = glm::mat3_cast(glm::dquat(q[0], q[1], q[2], q[3]));
+        const double scale = adjust_scale ? symmetric[best][best] * magnitude / variance : 1.0;
+        if (!(scale > 0.0) || !std::isfinite(scale))
+            return std::nullopt;
+        const glm::dmat3 linear = scale * rotation;
+        const auto translation = reference_center - linear * source_center;
+        if (!std::isfinite(glm::length(translation)))
+            return std::nullopt;
+        glm::dmat4 result(linear);
+        result[3] = glm::dvec4(translation, 1.0);
+        return result;
     }
 
     std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in) {

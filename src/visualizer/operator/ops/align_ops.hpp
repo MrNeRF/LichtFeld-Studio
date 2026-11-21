@@ -7,6 +7,7 @@
 #include "point_pick_operator.hpp"
 #include <glm/glm.hpp>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace lfs::vis::op {
@@ -78,6 +79,10 @@ namespace lfs::vis::op {
     // Visualizer-world transform mapping the picked plane normal (camera-facing, optionally
     // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
+
+    // Least-squares source-to-reference fit with optional positive uniform scale.
+    [[nodiscard]] LFS_VIS_API std::optional<glm::dmat4> computePairAlignment(
+        std::span<const glm::dvec3> source, std::span<const glm::dvec3> reference, bool adjust_scale);
 
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
 

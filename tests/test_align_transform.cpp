@@ -373,6 +373,28 @@ namespace {
         EXPECT_NEAR(rotated_edge.y, 0.0f, 1e-4f);
     }
 
+    TEST(PairAlignment, RecoversUniformScaleAndHalfTurnFromPlanarPoints) {
+        const std::vector<glm::dvec3> source{{0, 0, 0}, {3, 0, 0}, {1, 2, 0}, {-1, 3, 0}};
+        std::vector<glm::dvec3> reference;
+        for (const auto p : source)
+            reference.emplace_back(7.0 - 2.5 * p.x, -4.0 - 2.5 * p.y, 3.0);
+        const auto fit = lfs::vis::op::computePairAlignment(source, reference, true);
+        ASSERT_TRUE(fit);
+        for (size_t i = 0; i < source.size(); ++i)
+            EXPECT_LT(glm::distance(glm::dvec3(*fit * glm::dvec4(source[i], 1.0)), reference[i]), 1e-10);
+        const auto rigid = lfs::vis::op::computePairAlignment(source, reference, false);
+        ASSERT_TRUE(rigid);
+        EXPECT_NEAR(glm::length(glm::dvec3((*rigid)[0])), 1.0, 1e-12);
+    }
+
+    TEST(PairAlignment, RejectsCollinearAndNonFiniteCorrespondences) {
+        const std::vector<glm::dvec3> source{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
+        std::vector<glm::dvec3> reference{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}};
+        EXPECT_FALSE(lfs::vis::op::computePairAlignment(source, reference, true));
+        reference.back().y = std::numeric_limits<double>::quiet_NaN();
+        EXPECT_FALSE(lfs::vis::op::computePairAlignment(source, reference, true));
+    }
+
     TEST(AlignTransform, NormalMapsToPlusY) {
         lfs::vis::op::AlignTransformInputs in;
         in.p0 = glm::vec3(0.0f, 1.0f, 0.0f);
