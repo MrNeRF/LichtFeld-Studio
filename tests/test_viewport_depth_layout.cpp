@@ -352,19 +352,32 @@ namespace {
                 right = pos.x + size.x;
             }
         }
-        lfs::vis::gui::rml_theme::applyTheme(
-            doc, {}, lfs::vis::gui::rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
         pin->SetClass("pinned", true);
+        // Stylesheets only expand the active theme, so each preset is made current and re-applied like the app does.
+        const std::string original_theme = lfs::vis::currentThemeId();
+        std::vector<std::string> theme_ids;
         lfs::vis::visitThemePresets([&](const std::string_view theme_id, const lfs::vis::Theme&) {
-            real_context_->ActivateTheme(std::string(theme_id), true);
+            theme_ids.emplace_back(theme_id);
+        });
+        for (const auto& theme_id : theme_ids) {
+            if (!lfs::vis::setThemeByName(theme_id)) {
+                ADD_FAILURE() << "cannot activate " << theme_id;
+                continue;
+            }
+            lfs::vis::gui::rml_theme::applyTheme(
+                doc, {}, lfs::vis::gui::rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
+            real_context_->ActivateTheme(theme_id, true);
             pin->SetPseudoClass("hover", false);
             real_context_->Update();
             const auto normal = pin->GetProperty("background-color")->Get<Rml::Colourb>();
             pin->SetPseudoClass("hover", true);
             real_context_->Update();
             EXPECT_NE(normal, pin->GetProperty("background-color")->Get<Rml::Colourb>()) << theme_id;
-            real_context_->ActivateTheme(std::string(theme_id), false);
-        });
+            real_context_->ActivateTheme(theme_id, false);
+        }
+        if (!original_theme.empty()) {
+            EXPECT_TRUE(lfs::vis::setThemeByName(original_theme));
+        }
     }
 
     TEST_F(ViewportDepthLayoutTest, SideDockHandlesRemainReachableWhenNarrowAndScaled) {
