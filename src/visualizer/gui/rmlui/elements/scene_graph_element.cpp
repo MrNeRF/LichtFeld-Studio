@@ -31,6 +31,7 @@
 #include "gui/utils/splat_drag_selection.hpp"
 #include "gui/utils/splat_export_request.hpp"
 #include "gui/utils/splat_transfer.hpp"
+#include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "operator/operator_registry.hpp"
@@ -43,6 +44,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 
@@ -3178,6 +3180,16 @@ namespace lfs::vis::gui {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
         }
+        if (selected_ids_.size() == 2 && selected_ids_.contains(node_id) &&
+            std::ranges::all_of(selected_ids_, [&](const auto id) {
+                const auto* candidate = scene->getNodeById(id);
+                return candidate && candidate->type == core::NodeType::SPLAT &&
+                       candidate->model && candidate->model->size() > 0 &&
+                       scene->isNodeEffectivelyVisible(id) &&
+                       (id == node_id || !scene->isNodeEffectivelyLocked(id));
+            })) {
+            items.push_back(makeAction(tr("align.models"), prefixedAction("align_models")));
+        }
         const bool selected_cameras_in_group = selectionContainsOnlyCamerasInGroup(node_id);
         if (selected_ids_.size() > 1 && !selected_cameras_in_group) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
@@ -3469,6 +3481,34 @@ namespace lfs::vis::gui {
             return;
 
         const std::string& kind = parts[0];
+        if (kind == "align_models") {
+            auto* gui = services().guiOrNull();
+            auto* renderer = services().renderingOrNull();
+            if (!gui || !gui->getViewer() || !renderer || renderer->modelAlignmentView() ||
+                selected_ids_.size() != 2 || !selected_ids_.contains(context_menu_node_id_))
+                return;
+            const auto other = std::ranges::find_if(selected_ids_, [&](const auto id) {
+                return id != context_menu_node_id_;
+            });
+            const auto* reference = scene->getNodeById(context_menu_node_id_);
+            const auto* mobile = scene->getNodeById(*other);
+            if (!reference || !mobile)
+                return;
+            auto& viewer = *gui->getViewer();
+            auto* input = viewer.getInputController();
+            auto left = viewer.getViewport();
+            auto right = left;
+            if (!input || !input->frameVisibleNode(left, *scene, *reference) ||
+                !input->frameVisibleNode(right, *scene, *mobile))
+                return;
+            op::operators().cancelModalOperator();
+            if (!renderer->beginModelAlignment(viewer.getViewport(), *scene, *reference, *mobile, left, right))
+                return;
+            op::operators().invoke(op::BuiltinOp::AlignPickPoint);
+            if (!op::operators().hasModalOperator())
+                renderer->endModelAlignment(viewer.getViewport());
+            return;
+        }
         if (kind == "select_hierarchy") {
             if (selectionContainsOnlyCamerasInGroup(context_menu_node_id_))
                 selectHierarchy(context_menu_node_id_);

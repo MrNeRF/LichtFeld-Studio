@@ -10,6 +10,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/uuid.hpp"
 #include "dirty_flags.hpp"
 #include "frame_demand.hpp"
 #include "framerate_controller.hpp"
@@ -60,6 +61,7 @@
 namespace lfs::core {
     class Camera;
     class Scene;
+    class SceneNode;
     class SplatData;
     struct SplatLodTree;
     class Tensor;
@@ -418,6 +420,35 @@ namespace lfs::vis {
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
                                   Viewport& primary_viewport);
+        // Transient viewer-thread state. Project capture uses the saved view instead.
+        struct ModelAlignmentView {
+            std::array<core::Uuid, 2> nodes;
+            SplitViewMode previous_mode;
+            float previous_position;
+            size_t previous_offset;
+            SplitViewPanelId previous_focus;
+            Viewport previous_primary;
+            Viewport previous_secondary;
+            std::optional<glm::mat4> preview;
+            std::optional<SplitViewPanelId> composite;
+            std::optional<std::array<Viewport, 2>> free_views;
+            std::optional<std::array<Viewport, 2>> unlinked_preview_views;
+            bool linked = false;
+        };
+
+        bool beginModelAlignment(Viewport& primary, const core::Scene& scene,
+                                 const core::SceneNode& reference, const core::SceneNode& mobile,
+                                 const Viewport& left, const Viewport& right);
+        void endModelAlignment(Viewport& primary);
+        [[nodiscard]] const ModelAlignmentView* modelAlignmentView() const {
+            return model_alignment_view_ ? &*model_alignment_view_ : nullptr;
+        }
+        void setModelAlignmentPreview(Viewport& primary, std::optional<glm::mat4> transform);
+        void setModelAlignmentComposite(Viewport& primary, std::optional<SplitViewPanelId> panel);
+        [[nodiscard]] bool canSwapModelAlignmentRoles(const core::Scene& scene) const;
+        void swapModelAlignmentRoles(Viewport& primary, const core::Scene& scene);
+        void toggleModelAlignmentCameraLink(Viewport& primary);
+        void syncModelAlignmentCamera(Viewport& primary, const Viewport& source);
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
@@ -743,6 +774,9 @@ namespace lfs::vis {
                 return;
             exact_surface_picking_ = enabled;
             markDirty(DirtyFlag::VIEWPORT, FrameReason::SettingsChange);
+        }
+        [[nodiscard]] bool exactSurfacePicking() const {
+            return model_alignment_view_ ? !model_alignment_view_->preview : exact_surface_picking_;
         }
         void configureSurfacePicking(FrameContext& frame) const;
 
@@ -1179,6 +1213,7 @@ namespace lfs::vis {
 
         CameraInteractionService camera_interaction_service_;
         SplitViewService split_view_service_;
+        std::optional<ModelAlignmentView> model_alignment_view_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings

@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "トレーニングセッションはまだ再開できません。"
   },
   "align": {
+    "swap_roles": "役割を入れ替え",
+    "models": "モデルを位置合わせ",
+    "link_cameras": "カメラを連動",
+    "separate": "個別表示",
+    "composite_left": "左に重ねて表示",
+    "composite_right": "右に重ねて表示",
+    "reference_name": "基準モデル：{}",
+    "mobile_name": "移動するモデル：{}",
+    "cancel_session": "キャンセル",
     "pair_entry": "{0}：2つのスプラットを比較し、対応する点を位置合わせします。",
     "pair_preview": "「適用」で位置合わせを確定します。点を編集するにはプレビューをオフにします。",
     "pair_incomplete": "対応する点を少なくとも3組選んでください。",

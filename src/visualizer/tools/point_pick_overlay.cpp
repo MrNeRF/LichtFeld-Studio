@@ -60,7 +60,8 @@ namespace lfs::vis::tools {
 
     [[nodiscard]] std::optional<PanelProjection> resolvePanelProjection(const ToolContext& ctx,
                                                                         const glm::vec2& screen_point,
-                                                                        const float fallback_focal_length_mm) {
+                                                                        const float fallback_focal_length_mm,
+                                                                        const std::optional<SplitViewPanelId> panel) {
         auto* const rm = ctx.getRenderingManager();
         if (!rm) {
             return std::nullopt;
@@ -73,7 +74,7 @@ namespace lfs::vis::tools {
             ctx.getViewport(),
             viewport_pos,
             viewport_size,
-            screen_point);
+            screen_point, panel);
         if (!panel_info || !panel_info->valid()) {
             return std::nullopt;
         }
@@ -141,7 +142,7 @@ namespace lfs::vis::tools {
             panel_proj.screen_scale_y);
     }
 
-    PointPickOverlayFrame pointPickOverlayFrame(const ToolContext& ctx) {
+    PointPickOverlayFrame pointPickOverlayFrame(const ToolContext& ctx, const std::optional<SplitViewPanelId> panel) {
         float mx = 0.0f;
         float my = 0.0f;
         input::mouseStateInPixels(ctx.getWindow(), &mx, &my);
@@ -157,7 +158,7 @@ namespace lfs::vis::tools {
         const auto panel_proj_opt = resolvePanelProjection(
             ctx,
             mouse_pos,
-            fallback_focal_length_mm);
+            fallback_focal_length_mm, panel);
 
         const glm::ivec2 rendered_size = rendering_manager
                                              ? rendering_manager->getRenderedSize()
@@ -194,23 +195,27 @@ namespace lfs::vis::tools {
     void drawPointMarkers(lfs::rendering::ScreenOverlayRenderer& overlay, const PanelProjection& panel_proj,
                           const std::vector<glm::vec3>& picked_points, std::optional<int> selected_point,
                           const lfs::rendering::OverlayColor& color, float label_size,
-                          std::optional<float> pair_divider_x) {
+                          std::optional<float> pair_divider_x,
+                          std::optional<SplitViewPanelId> pair_panel) {
         const auto& t = theme();
+        const bool paired = pair_divider_x || pair_panel;
         for (size_t i = 0; i < picked_points.size(); ++i) {
+            if (pair_panel && splitViewPanelIndex(*pair_panel) != i % 2)
+                continue;
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
             if (pair_divider_x && (screen_pos.x >= *pair_divider_x) != (i % 2 != 0))
                 continue;
             const float screen_radius = markerScreenRadius(picked_points[i], panel_proj);
 
             const bool is_selected = selected_point &&
-                                     (pair_divider_x ? *selected_point / 2 == static_cast<int>(i / 2)
-                                                     : *selected_point == static_cast<int>(i));
+                                     (paired ? *selected_point / 2 == static_cast<int>(i / 2)
+                                             : *selected_point == static_cast<int>(i));
             overlay.addCircleFilled(screen_pos, screen_radius, color, 32);
             overlay.addCircle(screen_pos, screen_radius,
                               is_selected ? toOverlay(t.palette.primary) : toOverlay(t.overlay.text),
                               32, is_selected ? 2.5f : 1.5f);
 
-            const auto label = std::to_string((pair_divider_x ? i / 2 : i) + 1);
+            const auto label = std::to_string((paired ? i / 2 : i) + 1);
             overlay.addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
                             label, toOverlay(t.overlay.text), label_size);
         }

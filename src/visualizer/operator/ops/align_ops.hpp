@@ -17,6 +17,7 @@ namespace lfs::vis::op {
     public:
         AlignPickPointOperator();
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
+        void cancel(OperatorContext& ctx) override;
 
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
@@ -30,6 +31,9 @@ namespace lfs::vis::op {
             std::array<glm::mat4, 2> world;
         };
         std::optional<Pair> pair_;
+        bool model_alignment_ = false;
+        void endModelAlignment();
+        void publishPairPreviewFeedback(const glm::mat4& transform);
         bool sequentialPoints() const override { return pair_.has_value(); }
         bool acceptsPointSample(const PointSample& sample, std::optional<int> index) const override;
         [[nodiscard]] std::optional<glm::mat4> computePairPreviewTransform() const;

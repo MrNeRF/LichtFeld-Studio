@@ -70,6 +70,7 @@
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer/visualizer_impl.hpp"
 #include "vr/openxr_runtimes.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
@@ -120,19 +121,6 @@ extern char** environ;
 
 namespace lfs::python {
 
-    namespace {
-        std::optional<vis::op::OperatorResult> dispatchPointPickUiAction(
-            const vis::op::BuiltinOp id, vis::PointPickState& state,
-            const vis::PointPickState::UiAction action, const float value = 0.0f) {
-            if (vis::op::operators().activeModalId() != vis::op::to_string(id))
-                return std::nullopt;
-            state.requestUiAction(action, value);
-            vis::op::ModalEvent event{};
-            event.type = vis::op::ModalEvent::Type::NONE;
-            return vis::op::operators().dispatchModalEvent(event);
-        }
-    } // namespace
-
     using lfs::training::CommandCenter;
 
     namespace {
@@ -172,6 +160,19 @@ namespace lfs::python {
                     return viewer->postWork(std::move(work));
                 },
                 std::forward<F>(fn), [] {});
+        }
+
+        std::optional<vis::op::OperatorResult> dispatchPointPickUiAction(
+            const vis::op::BuiltinOp id, vis::PointPickState& state,
+            const vis::PointPickState::UiAction action, const float value = 0.0f) {
+            return invoke_on_viewer([id, &state, action, value]() -> std::optional<vis::op::OperatorResult> {
+                if (vis::op::operators().activeModalId() != vis::op::to_string(id))
+                    return std::nullopt;
+                state.requestUiAction(action, value);
+                vis::op::ModalEvent event{};
+                event.type = vis::op::ModalEvent::Type::NONE;
+                return vis::op::operators().dispatchModalEvent(event);
+            }, std::nullopt);
         }
 
         std::string get_class_id(nb::object cls) {
@@ -4621,17 +4622,22 @@ namespace lfs::python {
         m.def(
             "can_apply_align",
             []() -> bool {
-                const auto* scene = lfs::vis::services().sceneOrNull();
-                const auto* rendering = lfs::vis::services().renderingOrNull();
-                if (scene && rendering) {
-                    const auto settings = rendering->getSettings();
-                    if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode))
-                        return lfs::vis::op::hasEnoughAlignmentPairs(lfs::vis::services().alignPointPick().getPickedPoints().size()) &&
-                               lfs::vis::op::canAlignComparisonPair(scene->getScene(), settings.split_view_offset);
-                }
-                return scene &&
-                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
-                       lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
+                return invoke_on_viewer([] {
+                    const auto* scene = lfs::vis::services().sceneOrNull();
+                    const auto* rendering = lfs::vis::services().renderingOrNull();
+                    if (scene && rendering) {
+                        const auto settings = rendering->getSettings();
+                        if (rendering->modelAlignmentView())
+                            return lfs::vis::op::hasEnoughAlignmentPairs(
+                                lfs::vis::services().alignPointPick().getPickedPoints().size());
+                        if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode))
+                            return lfs::vis::op::hasEnoughAlignmentPairs(lfs::vis::services().alignPointPick().getPickedPoints().size()) &&
+                                   lfs::vis::op::canAlignComparisonPair(scene->getScene(), settings.split_view_offset);
+                    }
+                    return scene &&
+                           lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
+                           lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
+                }, false);
             },
             "Whether the align tool has enough picked points to attempt alignment");
 
@@ -4652,7 +4658,50 @@ namespace lfs::python {
             },
             "Request the running align modal to clear all picked points");
 
-        m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
+        m.def(
+            "model_alignment_controls",
+            [](const std::string& action) {
+                using Controls = std::tuple<bool, int, bool>;
+                return invoke_on_viewer([action]() -> Controls {
+                    auto* renderer = get_rendering_manager();
+                    auto* gui = vis::services().guiOrNull();
+                    auto* viewer = gui ? gui->getViewer() : nullptr;
+                    if (!renderer || !viewer || !renderer->modelAlignmentView())
+                        return {false, -1, false};
+                    if (action == "cancel") {
+                        if (vis::op::operators().activeModalId() == vis::op::to_string(vis::op::BuiltinOp::AlignPickPoint))
+                            vis::op::operators().cancelModalOperator();
+                        renderer->endModelAlignment(viewer->getViewport());
+                        return {false, -1, false};
+                    }
+                    const auto* manager = viewer->getSceneManager();
+                    const bool can_swap = manager && vis::services().alignPointPick().getPickedPoints().empty() &&
+                                          renderer->canSwapModelAlignmentRoles(manager->getScene());
+                    if (action == "swap" && can_swap)
+                        renderer->swapModelAlignmentRoles(viewer->getViewport(), manager->getScene());
+                    else if (action == "link")
+                        renderer->toggleModelAlignmentCameraLink(viewer->getViewport());
+                    else if (action == "left")
+                        renderer->setModelAlignmentComposite(viewer->getViewport(), vis::SplitViewPanelId::Left);
+                    else if (action == "right")
+                        renderer->setModelAlignmentComposite(viewer->getViewport(), vis::SplitViewPanelId::Right);
+                    else if (action == "separate")
+                        renderer->setModelAlignmentComposite(viewer->getViewport(), std::nullopt);
+                    const auto& view = *renderer->modelAlignmentView();
+                    return {view.linked, view.composite ? static_cast<int>(vis::splitViewPanelIndex(*view.composite)) : -1, can_swap};
+                }, Controls{false, -1, false});
+            },
+            nb::arg("action") = "", "Query or change the transient model alignment view");
+
+        m.def(
+            "get_align_preview", [] {
+                return invoke_on_viewer([] {
+                    const auto* renderer = get_rendering_manager();
+                    const auto* view = renderer ? renderer->modelAlignmentView() : nullptr;
+                    return view ? view->preview.has_value() : lfs::vis::services().getAlignPreviewEnabled();
+                }, false);
+            },
+            "Whether the alignment result is being previewed");
         m.def("toggle_align_preview", [] { (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
                                                                            vis::services().alignPointPick(), vis::PointPickState::UiAction::TogglePreview); }, "Switch between the original scene and the alignment preview");
 
@@ -6924,17 +6973,21 @@ namespace lfs::python {
 
         m.def(
             "get_split_view_mode", []() -> const char* {
-                auto* rm = get_rendering_manager();
-                if (!rm)
-                    return "none";
-                switch (rm->getSplitViewMode()) {
-                case vis::SplitViewMode::GTComparison: return "gt_comparison";
-                case vis::SplitViewMode::PLYComparison: return "ply_comparison";
-                case vis::SplitViewMode::IndependentDual: return "independent_dual";
-                default: return "none";
-                }
+                return invoke_on_viewer([]() -> const char* {
+                    auto* rm = get_rendering_manager();
+                    if (!rm)
+                        return "none";
+                    if (rm->modelAlignmentView())
+                        return "model_alignment";
+                    switch (rm->getSplitViewMode()) {
+                    case vis::SplitViewMode::GTComparison: return "gt_comparison";
+                    case vis::SplitViewMode::PLYComparison: return "ply_comparison";
+                    case vis::SplitViewMode::IndependentDual: return "independent_dual";
+                    default: return "none";
+                    }
+                }, "none");
             },
-            "Get split view mode (none, gt_comparison, ply_comparison, independent_dual)");
+            "Get split view mode (none, gt_comparison, ply_comparison, independent_dual, model_alignment)");
 
         m.def(
             "get_speed_overlay", []() -> std::tuple<float, float, float, float> {

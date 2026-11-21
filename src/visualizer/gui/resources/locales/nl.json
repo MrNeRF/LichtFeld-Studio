@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "De trainingssessie is nog niet klaar om te hervatten."
   },
   "align": {
+    "swap_roles": "Rollen omwisselen",
+    "models": "Modellen uitlijnen",
+    "link_cameras": "Camera’s koppelen",
+    "separate": "Afzonderlijk",
+    "composite_left": "Links overlappen",
+    "composite_right": "Rechts overlappen",
+    "reference_name": "Referentie: {}",
+    "mobile_name": "Te verplaatsen model: {}",
+    "cancel_session": "Annuleren",
     "pair_entry": "{0}: vergelijk twee splats om overeenkomende punten uit te lijnen.",
     "pair_preview": "Kies Toepassen om de uitlijning te behouden. Schakel het voorbeeld uit om de punten te bewerken.",
     "pair_incomplete": "Kies minstens drie volledige paren.",

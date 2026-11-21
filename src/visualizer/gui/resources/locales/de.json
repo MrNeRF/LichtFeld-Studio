@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "Die Trainingssitzung kann noch nicht fortgesetzt werden."
   },
   "align": {
+    "swap_roles": "Rollen tauschen",
+    "models": "Modelle ausrichten",
+    "link_cameras": "Kameras koppeln",
+    "separate": "Getrennt",
+    "composite_left": "Überlagerung links",
+    "composite_right": "Überlagerung rechts",
+    "reference_name": "Referenz: {}",
+    "mobile_name": "Bewegliches Modell: {}",
+    "cancel_session": "Abbrechen",
     "pair_entry": "{0}: Zwei Splats vergleichen und übereinstimmende Punkte ausrichten.",
     "pair_preview": "Übernimm die Ausrichtung mit „Anwenden“. Schalte die Vorschau aus, um die Punkte zu bearbeiten.",
     "pair_incomplete": "Wähle mindestens drei vollständige Paare.",

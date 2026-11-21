@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "학습 세션을 아직 재개할 수 없습니다."
   },
   "align": {
+    "swap_roles": "역할 바꾸기",
+    "models": "모델 정렬",
+    "link_cameras": "카메라 연결",
+    "separate": "분리 표시",
+    "composite_left": "왼쪽에 겹쳐 보기",
+    "composite_right": "오른쪽에 겹쳐 보기",
+    "reference_name": "참조 모델: {}",
+    "mobile_name": "이동할 모델: {}",
+    "cancel_session": "취소",
     "pair_entry": "{0}: 두 스플랫을 비교해 대응하는 점을 정렬합니다.",
     "pair_preview": "적용을 눌러 정렬을 유지합니다. 점을 편집하려면 미리보기를 끕니다.",
     "pair_incomplete": "완성된 쌍을 최소 세 개 선택하세요.",

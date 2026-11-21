@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "训练会话尚未准备好恢复。"
   },
   "align": {
+    "swap_roles": "交换角色",
+    "models": "对齐模型",
+    "link_cameras": "联动相机",
+    "separate": "分别显示",
+    "composite_left": "在左侧叠加",
+    "composite_right": "在右侧叠加",
+    "reference_name": "参考模型：{}",
+    "mobile_name": "待移动模型：{}",
+    "cancel_session": "取消",
     "pair_entry": "{0}：比较两个溅射模型，对齐对应的点。",
     "pair_preview": "点击“应用”保留对齐结果。关闭预览即可编辑点。",
     "pair_incomplete": "请至少选择三对完整的对应点。",

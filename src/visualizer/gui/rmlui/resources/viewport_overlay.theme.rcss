@@ -196,6 +196,10 @@
     background-color: @{menu.background};
 }
 
+.toolbar-layer-primary.model-alignment-active {
+    background-color: @{menu.background};
+}
+
 .empty-state-icon {
     image-color: @{overlay.icon};
 }

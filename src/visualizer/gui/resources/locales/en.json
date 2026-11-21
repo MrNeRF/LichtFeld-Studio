@@ -3225,6 +3225,15 @@
     "training_session_not_ready": "The training session is not ready to resume."
   },
   "align": {
+    "swap_roles": "Swap roles",
+    "models": "Align models",
+    "link_cameras": "Link cameras",
+    "separate": "Separate",
+    "composite_left": "Composite left",
+    "composite_right": "Composite right",
+    "reference_name": "Reference: {}",
+    "mobile_name": "Moving model: {}",
+    "cancel_session": "Cancel",
     "pair_entry": "{0}: compare two splats to align matching points.",
     "pair_preview": "Apply to keep the alignment. Turn Preview off to edit the points.",
     "pair_incomplete": "Choose at least three complete pairs.",

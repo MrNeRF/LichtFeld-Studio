@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -1513,6 +1514,8 @@ namespace lfs::vis::gui {
         lfs::core::events::tools::SetToolbarTool::when([this](const auto& e) {
             auto& editor = viewer_->getEditorContext();
             const auto tool = static_cast<ToolType>(e.tool_mode);
+            if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+                return;
 
             auto& registry = UnifiedToolRegistry::instance();
             // Undo can reselect a crop volume without entering the crop tool.
@@ -1742,6 +1745,7 @@ namespace lfs::vis::gui {
         auto* const scale_distance_tool = ctx.viewer->getScaleDistanceTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
         auto* const rendering_manager = ctx.viewer->getRenderingManager();
+        ui_hidden = ui_hidden || (rendering_manager && rendering_manager->modelAlignmentView());
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
         const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
@@ -2767,6 +2771,8 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+            return;
         if (last_tool_state_stamp_.gt_compare)
             return;
 
@@ -3330,6 +3336,8 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (const auto* renderer = services().renderingOrNull(); renderer && renderer->modelAlignmentView())
+            return;
         if (last_tool_state_stamp_.gt_compare)
             return;
 

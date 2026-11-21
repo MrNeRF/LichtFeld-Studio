@@ -3226,6 +3226,15 @@
     "training_session_not_ready": "La sessione di training non è pronta per essere ripresa."
   },
   "align": {
+    "swap_roles": "Scambia ruoli",
+    "models": "Allinea modelli",
+    "link_cameras": "Collega camere",
+    "separate": "Separati",
+    "composite_left": "Composta a sinistra",
+    "composite_right": "Composta a destra",
+    "reference_name": "Riferimento: {}",
+    "mobile_name": "Modello da spostare: {}",
+    "cancel_session": "Annulla",
     "pair_entry": "{0}: confronta due splat per allineare i punti corrispondenti.",
     "pair_preview": "Usa Applica per mantenere l’allineamento. Disattiva l’anteprima per modificare i punti.",
     "pair_incomplete": "Scegli almeno tre coppie complete.",

@@ -423,15 +423,18 @@ class _GizmoToolbarController:
         crop_object_buttons = self._build_crop_object_records(active_tool_id) if crop_tool_active else []
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
-        align_tool_active = active_tool_id == self._ALIGN_TOOL_ID
-        align_action_buttons = self._build_align_action_records(active_tool_id) if align_tool_active else []
+        model_alignment = getattr(lf.ui, "get_split_view_mode", lambda: "")() == "model_alignment"
+        align_tool_active = model_alignment or active_tool_id == self._ALIGN_TOOL_ID
+        align_action_buttons = self._build_align_action_records(
+            self._ALIGN_TOOL_ID if model_alignment else active_tool_id
+        ) if align_tool_active else []
         scale_distance_tool_active = active_tool_id == self._SCALE_DISTANCE_TOOL_ID
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
         multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
         submode_buttons = self._build_submode_records(active_tool_id, tool_def, multi_transform_selection)
         pivot_buttons = self._build_pivot_records(tool_def)
 
-        return {
+        state = {
             "show_transform_toolbar": (
                 active_tool_id in self._TRANSFORM_TOOL_IDS and
                 not selected_nodes and
@@ -465,6 +468,14 @@ class _GizmoToolbarController:
             "submode_buttons": submode_buttons,
             "pivot_buttons": pivot_buttons,
         }
+        if model_alignment:
+            return {
+                **{key: [] if isinstance(value, list) else False for key, value in state.items()},
+                "show_align_toolbar": True,
+                "show_model_alignment_toolbar": True,
+                "align_action_buttons": align_action_buttons,
+            }
+        return state
 
     def _tool_button_record(self, tool_def, active_tool_id, context):
         tooltip_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
@@ -815,7 +826,25 @@ class _GizmoToolbarController:
                 enabled=active,
             ),
         ]
-        if lf.ui.get_split_view_mode() == "ply_comparison":
+        split_mode = lf.ui.get_split_view_mode()
+        if split_mode == "model_alignment":
+            linked, composite, can_swap = lf.ui.model_alignment_controls()
+            preview = lf.ui.get_align_preview()
+            controls = (
+                ("swap", "align.swap_roles", "Swap roles", False, can_swap),
+                ("link", "align.link_cameras", "Link cameras", linked, preview),
+                ("separate", "align.separate", "Separate", composite == -1, preview),
+                ("left", "align.composite_left", "Composite left", composite == 0, preview),
+                ("right", "align.composite_right", "Composite right", composite == 1, preview),
+                ("cancel", "align.cancel_session", "Cancel", False, True),
+            )
+            return records + [
+                _button_record(f"model-alignment-{action}", "model_alignment_control", action,
+                               "", tooltip_key=key, tooltip_text=fallback,
+                               label=_ui_label(key, fallback), selected=selected, enabled=enabled)
+                for action, key, fallback, selected, enabled in controls
+            ]
+        if split_mode == "ply_comparison":
             return records
 
         return records + [
@@ -1177,6 +1206,10 @@ class _GizmoToolbarController:
                 apply_crop_tool()
             return
 
+        if action == "model_alignment_control":
+            lf.ui.model_alignment_controls(value)
+            return
+
         if action == "align_toggle_preview":
             lf.ui.toggle_align_preview()
             return
@@ -1483,6 +1516,7 @@ class _ViewportToolbarController:
         "show_transform_toolbar",
         "show_mirror_toolbar",
         "show_align_toolbar",
+        "show_model_alignment_toolbar",
         "show_scale_distance_toolbar",
         "scale_distance_can_apply",
         "scale_distance_can_reset",
@@ -1541,6 +1575,7 @@ class _ViewportToolbarController:
         self._show_transform_toolbar = False
         self._show_mirror_toolbar = False
         self._show_align_toolbar = False
+        self._show_model_alignment_toolbar = False
         self._show_scale_distance_toolbar = False
         self._scale_distance_can_apply = False
         self._scale_distance_can_reset = False
@@ -1788,6 +1823,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"])
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"])
         dirty |= self._sync_flag("show_align_toolbar", gizmo_state["show_align_toolbar"])
+        dirty |= self._sync_flag("show_model_alignment_toolbar", gizmo_state.get("show_model_alignment_toolbar", False))
         dirty |= self._sync_flag("show_scale_distance_toolbar", gizmo_state["show_scale_distance_toolbar"])
         dirty |= self._sync_scale_distance()
         dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"] and not gt_compare_active)
@@ -2135,8 +2171,9 @@ class _ViewportToolbarController:
                 _UtilityToolbarController._PLUGIN_MARKETPLACE_PANEL_ID,
             )
         )
-        if active_tool == "builtin.align":
-            align_split_mode = lf.ui.get_split_view_mode()
+        split_mode = call("", getattr(lf.ui, "get_split_view_mode", None))
+        if active_tool == "builtin.align" or split_mode == "model_alignment":
+            align_split_mode = (split_mode, lf.ui.model_alignment_controls()) if split_mode == "model_alignment" else split_mode
             align_can_apply = bool(call(False, getattr(lf.ui, "can_apply_align", None)))
             align_axis_snap = bool(call(True, getattr(lf.ui, "get_align_axis_snap", None)))
             align_edge_to_axis = lf.ui.get_align_edge_to_axis()
@@ -2273,6 +2310,7 @@ class _ViewportToolbarController:
             "crop_apply",
             "crop_delete",
             "crop_toggle_enabled",
+            "model_alignment_control",
             "align_toggle_preview",
             "align_apply",
             "align_clear",

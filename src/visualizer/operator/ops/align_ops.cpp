@@ -52,6 +52,15 @@ namespace lfs::vis::op {
             }
             return {left.node, right.node};
         }
+        std::array<const core::SceneNode*, 2> sessionPair(
+            const core::Scene& scene, const RenderingManager::ModelAlignmentView& view) {
+            const auto* reference = scene.getNodeByUuid(view.nodes[0]);
+            const auto* mobile = scene.getNodeByUuid(view.nodes[1]);
+            if (!reference || !mobile || !scene.isNodeEffectivelyVisible(reference->id) ||
+                !scene.isNodeEffectivelyVisible(mobile->id) || scene.isNodeEffectivelyLocked(mobile->id))
+                return {};
+            return {reference, mobile};
+        }
     } // namespace
 
     bool canAlignComparisonPair(const core::Scene& scene, const size_t offset) {
@@ -64,8 +73,11 @@ namespace lfs::vis::op {
         const auto* rm = services().renderingOrNull();
         const auto settings = rm ? rm->getSettings() : RenderSettings{};
         const auto& scene = ctx.scene().getScene();
-        if (splitViewUsesPLYComparison(settings.split_view_mode)) {
-            const auto [reference, mobile] = comparisonPair(scene, settings.split_view_offset);
+        const auto* alignment = rm ? rm->modelAlignmentView() : nullptr;
+        model_alignment_ = alignment != nullptr;
+        if (alignment || splitViewUsesPLYComparison(settings.split_view_mode)) {
+            const auto [reference, mobile] = alignment ? sessionPair(scene, *alignment)
+                                                       : comparisonPair(scene, settings.split_view_offset);
             if (!reference || !mobile)
                 return OperatorResult::CANCELLED;
             pair_ = Pair{{reference->uuid, mobile->uuid},
@@ -74,6 +86,21 @@ namespace lfs::vis::op {
             max_points_ = std::numeric_limits<int>::max();
         }
         return PointPickOperator::invoke(ctx, props);
+    }
+
+    void AlignPickPointOperator::endModelAlignment() {
+        if (!model_alignment_)
+            return;
+        model_alignment_ = false;
+        auto* gui = services().guiOrNull();
+        auto* renderer = services().renderingOrNull();
+        if (renderer && gui && gui->getViewer())
+            renderer->endModelAlignment(gui->getViewer()->getViewport());
+    }
+
+    void AlignPickPointOperator::cancel(OperatorContext& ctx) {
+        PointPickOperator::cancel(ctx);
+        endModelAlignment();
     }
 
     bool AlignPickPointOperator::acceptsPointSample(const PointSample& sample, std::optional<int> index) const {
@@ -103,12 +130,22 @@ namespace lfs::vis::op {
         const bool comparing = splitViewUsesPLYComparison(settings.split_view_mode);
         if (pair_) {
             const auto& scene = ctx.scene().getScene();
-            const auto [reference, mobile] = comparing ? comparisonPair(scene, settings.split_view_offset)
-                                                       : std::array<const core::SceneNode*, 2>{};
-            if (!reference || !mobile || reference->uuid != pair_->ids[0] || mobile->uuid != pair_->ids[1])
+            const auto* alignment = rm ? rm->modelAlignmentView() : nullptr;
+            if (model_alignment_ && (!alignment || !rm->isIndependentSplitViewActive()))
+                return OperatorResult::CANCELLED;
+            const auto [reference, mobile] = alignment   ? sessionPair(scene, *alignment)
+                                             : comparing ? comparisonPair(scene, settings.split_view_offset)
+                                                         : std::array<const core::SceneNode*, 2>{};
+            if (!reference || !mobile)
                 return OperatorResult::CANCELLED;
             const std::array world{vis::scene_coords::nodeVisualizerWorldTransform(scene, reference->id),
                                    vis::scene_coords::nodeVisualizerWorldTransform(scene, mobile->id)};
+            if (reference->uuid != pair_->ids[0] || mobile->uuid != pair_->ids[1]) {
+                if (!model_alignment_ || !picked_points_.empty())
+                    return OperatorResult::CANCELLED;
+                clearAllPoints();
+                pair_ = Pair{{reference->uuid, mobile->uuid}, world};
+            }
             auto expected = pair_->world;
             if (!preview_targets_.empty())
                 expected[1] = preview_targets_.front().preview_world.value_or(expected[1]);
@@ -146,6 +183,11 @@ namespace lfs::vis::op {
     }
 
     bool AlignPickPointOperator::pointEditingBlocked() const {
+        if (model_alignment_) {
+            const auto* renderer = services().renderingOrNull();
+            const auto* view = renderer ? renderer->modelAlignmentView() : nullptr;
+            return view && view->preview.has_value();
+        }
         return services().getAlignPreviewEnabled();
     }
 
@@ -163,11 +205,11 @@ namespace lfs::vis::op {
 
     void AlignPickPointOperator::handleToolUiAction(OperatorContext& ctx, const PointPickState::UiAction action) {
         if (action == PointPickState::UiAction::TogglePreview) {
-            if (services().getAlignPreviewEnabled())
+            if (pointEditingBlocked())
                 restorePreview(ctx);
             else
                 (void)updatePreview(ctx);
-        } else if (action == PointPickState::UiAction::RefreshPreview && services().getAlignPreviewEnabled()) {
+        } else if (action == PointPickState::UiAction::RefreshPreview && pointEditingBlocked()) {
             (void)updatePreview(ctx);
         }
     }
@@ -186,6 +228,8 @@ namespace lfs::vis::op {
                                       const OperatorProperties* /*props*/) const {
         const auto* rm = services().renderingOrNull();
         const auto settings = rm ? rm->getSettings() : RenderSettings{};
+        if (const auto* alignment = rm ? rm->modelAlignmentView() : nullptr)
+            return sessionPair(ctx.scene().getScene(), *alignment)[0] != nullptr;
         return splitViewUsesPLYComparison(settings.split_view_mode)
                    ? canAlignComparisonPair(ctx.scene().getScene(), settings.split_view_offset)
                    : !resolvePointPickTargets(ctx, true).empty();
@@ -213,6 +257,13 @@ namespace lfs::vis::op {
     }
 
     void AlignPickPointOperator::restorePreview(OperatorContext& ctx) {
+        if (model_alignment_) {
+            auto* gui = services().guiOrNull();
+            auto* renderer = services().renderingOrNull();
+            if (renderer && gui && gui->getViewer())
+                renderer->setModelAlignmentPreview(gui->getViewer()->getViewport(), std::nullopt);
+            return;
+        }
         auto& scene = ctx.scene().getScene();
         for (const auto& saved : preview_targets_) {
             if (auto* node = scene.getNodeById(saved.id); node && node->uuid == saved.uuid &&
@@ -232,6 +283,18 @@ namespace lfs::vis::op {
     }
 
     bool AlignPickPointOperator::updatePreview(OperatorContext& ctx) {
+        if (model_alignment_) {
+            const auto transform = computePairPreviewTransform();
+            auto* gui = services().guiOrNull();
+            auto* renderer = services().renderingOrNull();
+            if (!transform || !renderer || !gui || !gui->getViewer()) {
+                setStatus("align.pair_degenerate", 3.0);
+                return false;
+            }
+            renderer->setModelAlignmentPreview(gui->getViewer()->getViewport(), transform);
+            publishPairPreviewFeedback(*transform);
+            return true;
+        }
         if (!pair_ && !pointsAreNonDegenerate(picked_points_)) {
             return false;
         }
@@ -303,38 +366,8 @@ namespace lfs::vis::op {
             displayed_points[i] = glm::vec3(*transform * glm::vec4(displayed_points[i], 1.0f));
         }
         services().alignPointPick().setPickedPoints(std::move(displayed_points));
-        if (pair_) {
-            const auto& points = services().alignPointPick().getPickedPoints();
-            double squared_error = 0.0;
-            double largest_squared_error = 0.0;
-            double squared_coordinate_scale = 0.0;
-            size_t largest_error_index = 0;
-            for (size_t i = 0; i < points.size(); i += 2) {
-                const glm::dvec3 reference(points[i]), mobile(points[i + 1]);
-                const auto delta = reference - mobile;
-                const double error = glm::dot(delta, delta);
-                squared_error += error;
-                squared_coordinate_scale = std::max({squared_coordinate_scale,
-                                                     glm::dot(reference, reference), glm::dot(mobile, mobile)});
-                if (error > largest_squared_error) {
-                    largest_squared_error = error;
-                    largest_error_index = i;
-                }
-            }
-            const auto pair_count = points.size() / 2;
-            const double mean_squared_error = squared_error / static_cast<double>(pair_count);
-            // Suppress ties and residuals at the precision of the viewport coordinates.
-            constexpr double float_tolerance = 8.0 * std::numeric_limits<float>::epsilon();
-            const bool distinct = pair_count > 3 && largest_squared_error >
-                                                        std::max(2.25 * mean_squared_error, float_tolerance * float_tolerance * squared_coordinate_scale);
-            const auto scale = glm::length(glm::dvec3((*transform)[0]));
-            const auto rms = std::sqrt(mean_squared_error);
-            services().setAlignPreviewFeedback({
-                .focus = distinct ? std::optional{static_cast<int>(largest_error_index)} : std::nullopt,
-                .summary = distinct ? LOCF("align.pair_fit_worst", scale, rms, largest_error_index / 2 + 1)
-                                    : LOCF("align.pair_fit", scale, rms),
-            });
-        }
+        if (pair_)
+            publishPairPreviewFeedback(*transform);
         services().setAlignPreviewEnabled(true);
         press_active_ = false;
         press_point_index_.reset();
@@ -345,30 +378,83 @@ namespace lfs::vis::op {
         return true;
     }
 
-    bool AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {
-        if (!services().getAlignPreviewEnabled() && !updatePreview(ctx)) {
-            return false;
+    void AlignPickPointOperator::publishPairPreviewFeedback(const glm::mat4& transform) {
+        const auto& points = picked_points_;
+        double squared_error = 0.0;
+        double largest_squared_error = 0.0;
+        double squared_coordinate_scale = 0.0;
+        size_t largest_error_index = 0;
+        for (size_t i = 0; i < points.size(); i += 2) {
+            const glm::dvec3 reference(points[i]);
+            const glm::dvec3 mobile(transform * glm::vec4(points[i + 1], 1.0f));
+            const auto delta = reference - mobile;
+            const double error = glm::dot(delta, delta);
+            squared_error += error;
+            squared_coordinate_scale = std::max({squared_coordinate_scale,
+                                                 glm::dot(reference, reference), glm::dot(mobile, mobile)});
+            if (error > largest_squared_error) {
+                largest_squared_error = error;
+                largest_error_index = i;
+            }
         }
+        const auto pair_count = points.size() / 2;
+        const double mean_squared_error = squared_error / static_cast<double>(pair_count);
+        // Suppress ties and residuals at the precision of the viewport coordinates.
+        constexpr double float_tolerance = 8.0 * std::numeric_limits<float>::epsilon();
+        const bool distinct = pair_count > 3 && largest_squared_error >
+                                                    std::max(2.25 * mean_squared_error, float_tolerance * float_tolerance * squared_coordinate_scale);
+        const auto scale = glm::length(glm::dvec3(transform[0]));
+        const auto rms = std::sqrt(mean_squared_error);
+        services().setAlignPreviewFeedback({
+            .focus = distinct ? std::optional{static_cast<int>(largest_error_index)} : std::nullopt,
+            .summary = distinct ? LOCF("align.pair_fit_worst", scale, rms, largest_error_index / 2 + 1)
+                                : LOCF("align.pair_fit", scale, rms),
+        });
+    }
 
+    bool AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {
         auto& scene = ctx.scene().getScene();
         std::vector<glm::mat4> originals;
         std::vector<std::string> names;
-        for (const auto& saved : preview_targets_) {
-            const auto* node = scene.getNodeById(saved.id);
-            if (!node || node->uuid != saved.uuid || scene.isNodeEffectivelyLocked(saved.id)) {
-                restorePreview(ctx);
+        std::optional<glm::mat4> model_alignment_local;
+        if (model_alignment_) {
+            const auto* mobile = scene.getNodeByUuid(pair_->ids[1]);
+            const auto fit = computePairPreviewTransform();
+            if (!mobile || !fit || scene.isNodeEffectivelyLocked(mobile->id))
                 return false;
+            model_alignment_local = vis::scene_coords::nodeLocalTransformFromVisualizerWorld(
+                scene, mobile->id, *fit * pair_->world[1]);
+            if (!model_alignment_local)
+                return false;
+            names.push_back(mobile->name);
+            originals.push_back(mobile->transform());
+        } else {
+            if (!services().getAlignPreviewEnabled() && !updatePreview(ctx))
+                return false;
+            for (const auto& saved : preview_targets_) {
+                const auto* node = scene.getNodeById(saved.id);
+                if (!node || node->uuid != saved.uuid || scene.isNodeEffectivelyLocked(saved.id)) {
+                    restorePreview(ctx);
+                    return false;
+                }
+                names.push_back(node->name);
+                originals.push_back(saved.local);
             }
-            names.push_back(node->name);
-            originals.push_back(saved.local);
         }
+
         auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
         if (!entry->captureTransformsBefore(names, originals)) {
             restorePreview(ctx);
             return false;
         }
+        if (model_alignment_local && !ctx.scene().setNodeTransform(names.front(), *model_alignment_local))
+            return false;
         entry->captureAfter();
         pushSceneSnapshotIfChanged(std::move(entry));
+        if (model_alignment_) {
+            restorePreview(ctx);
+            endModelAlignment();
+        }
         preview_targets_.clear();
         preview_snap_world_.reset();
         services().setAlignPreviewEnabled(false);

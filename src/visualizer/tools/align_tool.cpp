@@ -77,7 +77,7 @@ namespace lfs::vis::tools {
     }
 
     void AlignTool::update(const ToolContext& ctx) {
-        if (isEnabled() && op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+        if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
             op::ModalEvent event{};
             event.type = op::ModalEvent::Type::NONE;
             op::operators().dispatchModalEvent(event);
@@ -244,7 +244,11 @@ namespace lfs::vis::tools {
 
     void AlignTool::renderUI([[maybe_unused]] const lfs::vis::gui::UIContext& ui_ctx,
                              [[maybe_unused]] bool* p_open) {
-        if (!isEnabled() || !tool_context_)
+        if (!tool_context_)
+            return;
+        const auto* renderer = tool_context_->getRenderingManager();
+        const auto* alignment = renderer ? renderer->modelAlignmentView() : nullptr;
+        if (!isEnabled() && !alignment)
             return;
 
         auto* const overlay = getOverlayRenderer(*tool_context_);
@@ -271,6 +275,33 @@ namespace lfs::vis::tools {
         const auto selected_point = services().alignPointPick().getSelectedPoint();
         const auto settings = rendering_manager ? rendering_manager->getSettings() : RenderSettings{};
         auto* const sm = tool_context_->getSceneManager();
+        if (alignment) {
+            if (!alignment->preview) {
+                for (const auto panel : {SplitViewPanelId::Left, SplitViewPanelId::Right}) {
+                    const auto projection = pointPickOverlayFrame(*tool_context_, panel).panel;
+                    const auto& info = projection.info;
+                    const lfs::rendering::ScreenOverlayRenderer::ScopedClipRect pane_clip(
+                        *overlay, {info.x, info.y}, {info.x + info.width, info.y + info.height});
+                    drawPointMarkers(*overlay, projection, picked_points, selected_point,
+                                     SPHERE_COLOR, label_size, std::nullopt, panel);
+                }
+                const auto count = picked_points.size();
+                const auto next = count % 2 ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+                const auto projection = pointPickOverlayFrame(*tool_context_, next).panel;
+                drawPointPickHud(*overlay, projection,
+                                 LOC(count % 2 ? "align.pair_mobile" : "align.pair_reference"),
+                                 LOCF("align.pair_progress", count / 2),
+                                 services().alignPointPick().getStatusMessage());
+            } else {
+                const auto projection = pointPickOverlayFrame(
+                                            *tool_context_, alignment->composite.value_or(SplitViewPanelId::Right))
+                                            .panel;
+                drawPointPickHud(*overlay, projection, LOC("align.pair_preview"),
+                                 LOCF("align.pair_progress", picked_points.size() / 2),
+                                 &services().getAlignPreviewFeedback().summary);
+            }
+            return;
+        }
         if (splitViewUsesPLYComparison(settings.split_view_mode)) {
             if (!sm || !op::canAlignComparisonPair(sm->getScene(), settings.split_view_offset)) {
                 drawPointPickHud(*overlay, panel_proj, LOC("align.pair_unavailable"), "",
@@ -382,11 +413,13 @@ namespace lfs::vis::tools {
         if (enabled) {
             forceGridOn();
         } else {
-            if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
-                op::operators().cancelModalOperator();
+            const auto* renderer = tool_context_ ? tool_context_->getRenderingManager() : nullptr;
+            if (!renderer || !renderer->modelAlignmentView()) {
+                if (op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint))
+                    op::operators().cancelModalOperator();
+                services().alignPointPick().clearPickedPoints();
             }
             restoreGridIfNeeded();
-            services().alignPointPick().clearPickedPoints();
         }
         if (tool_context_) {
             tool_context_->requestRender();

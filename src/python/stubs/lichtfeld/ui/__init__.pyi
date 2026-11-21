@@ -2402,6 +2402,9 @@ def apply_align() -> bool:
 def clear_align_points() -> None:
     """Request the running align modal to clear all picked points"""
 
+def model_alignment_controls(action: str = '') -> tuple[bool, int, bool]:
+    """Query or change the transient model alignment view"""
+
 def get_align_preview() -> bool:
     """Whether the alignment result is being previewed"""
 
@@ -3305,7 +3308,7 @@ def get_current_camera_id() -> int:
 
 def get_split_view_mode() -> str:
     """
-    Get split view mode (none, gt_comparison, ply_comparison, independent_dual)
+    Get split view mode (none, gt_comparison, ply_comparison, independent_dual, model_alignment)
     """
 
 def get_speed_overlay() -> tuple[float, float, float, float]:

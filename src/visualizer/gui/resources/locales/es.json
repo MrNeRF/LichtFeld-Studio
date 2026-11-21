@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "La sesión de entrenamiento no está lista para reanudarse."
   },
   "align": {
+    "swap_roles": "Intercambiar roles",
+    "models": "Alinear modelos",
+    "link_cameras": "Vincular cámaras",
+    "separate": "Separados",
+    "composite_left": "Superposición a la izquierda",
+    "composite_right": "Superposición a la derecha",
+    "reference_name": "Referencia: {}",
+    "mobile_name": "Modelo móvil: {}",
+    "cancel_session": "Cancelar",
     "pair_entry": "{0}: compara dos splats para alinear los puntos correspondientes.",
     "pair_preview": "Pulsa Aplicar para conservar la alineación. Desactiva la vista previa para editar los puntos.",
     "pair_incomplete": "Elige al menos tres pares completos.",

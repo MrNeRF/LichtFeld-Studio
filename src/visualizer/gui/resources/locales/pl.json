@@ -3213,6 +3213,15 @@
     "training_session_not_ready": "Sesja treningowa nie jest gotowa do wznowienia."
   },
   "align": {
+    "swap_roles": "Zamień role",
+    "models": "Dopasuj modele",
+    "link_cameras": "Połącz kamery",
+    "separate": "Osobno",
+    "composite_left": "Nałożenie po lewej",
+    "composite_right": "Nałożenie po prawej",
+    "reference_name": "Odniesienie: {}",
+    "mobile_name": "Przesuwany model: {}",
+    "cancel_session": "Anuluj",
     "pair_entry": "{0}: porównaj dwa splaty, aby wyrównać odpowiadające sobie punkty.",
     "pair_preview": "Kliknij Zastosuj, aby zachować wyrównanie. Wyłącz podgląd, aby edytować punkty.",
     "pair_incomplete": "Wybierz co najmniej trzy pełne pary.",

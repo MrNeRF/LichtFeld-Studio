@@ -2160,6 +2160,7 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
     toolbar_block = gui_manager[toolbar_start:toolbar_end]
 
     assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
+    assert "!rendering->modelAlignmentView()" in toolbar_block
     assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
 
     divider_start = gui_manager.index(
@@ -2171,11 +2172,8 @@ def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui
     )
     divider_block = gui_manager[divider_start:divider_end]
 
-    assert (
-        "rendering && rendering->isSplitViewActive() && "
-        "!rendering->isIndependentSplitViewActive())"
-        in divider_block
-    )
+    assert "rendering && rendering->isSplitViewActive()" in divider_block
+    assert "(!rendering->isIndependentSplitViewActive() || rendering->modelAlignmentView())" in divider_block
     assert "rendering->getSplitDividerScreenX" in divider_block
     assert "rendering->getContentBounds" in divider_block
 
@@ -2771,6 +2769,46 @@ def test_align_toolbar_actions_route_to_gizmo_dispatch(toolbar_module):
         controller._on_toolbar_action(None, None, [action, ""])
 
     assert calls == [("preview", None), ("snap", False), ("edge", True), ("apply", None), ("clear", None)]
+
+
+def test_model_alignment_replaces_active_tool_controls_and_refreshes_on_preview(toolbar_module):
+    module, *_ = toolbar_module
+    lf = sys.modules["lichtfeld"]
+    lf.ui.get_active_tool = lambda: "builtin.scale_distance"
+    lf.ui.get_split_view_mode = lambda: "model_alignment"
+    lf.ui.can_apply_align = lambda: False
+    lf.ui.get_align_preview = lambda: False
+    lf.ui.get_align_edge_to_axis = lambda: False
+    calls = []
+
+    def controls(action=""):
+        if action:
+            calls.append(action)
+        return False, -1, True
+
+    lf.ui.model_alignment_controls = controls
+    controller = module._ViewportToolbarController()
+    snapshot = controller._gizmo.snapshot()
+    assert snapshot["show_model_alignment_toolbar"]
+    assert not snapshot["show_scale_distance_toolbar"]
+    assert not snapshot["show_crop_toolbar"]
+    assert not snapshot["selection_group_buttons"]
+    assert not snapshot["transform_group_buttons"]
+    assert not snapshot["gizmo_buttons"]
+    signature = controller._toolbar_signature(None)
+
+    lf.ui.can_apply_align = lambda: True
+    lf.ui.get_align_preview = lambda: True
+    lf.ui.model_alignment_controls = lambda action="": (True, 0, False) if not action else controls(action)
+    assert controller._toolbar_signature(None) != signature
+    records = controller._gizmo.snapshot()["align_action_buttons"]
+    by_value = {record["value"]: record for record in records if record["action"] == "model_alignment_control"}
+    assert by_value["left"]["selected"]
+    assert by_value["link"]["selected"]
+    assert not by_value["swap"]["enabled"]
+    for action in ("right", "separate", "cancel"):
+        controller._on_toolbar_action(None, None, ["model_alignment_control", action])
+    assert calls == ["right", "separate", "cancel"]
 
 
 def test_align_toolbar_buttons_follow_native_state(toolbar_module):
