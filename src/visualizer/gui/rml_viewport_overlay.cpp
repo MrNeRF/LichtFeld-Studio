@@ -1015,9 +1015,10 @@ namespace lfs::vis::gui {
         if (auto* const overlay = document_->GetElementById("split-divider-overlay")) {
             overlay->SetClass("hidden", !split_divider_overlay_.visible);
             overlay->SetProperty("left", std::format("{:.1f}px", split_divider_overlay_.x - viewport_content_offset_));
-            overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y));
+            overlay->SetProperty("top", std::format("{:.1f}px", split_divider_overlay_.y + split_divider_toolbar_clearance_));
             overlay->SetProperty("width", std::format("{:.1f}px", std::max(split_divider_overlay_.width, 0.0f)));
-            overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
+            overlay->SetProperty("height", std::format("{:.1f}px",
+                std::max(split_divider_overlay_.height - split_divider_toolbar_clearance_, 0.0f)));
             markRenderNeeded(RenderReason::SplitDivider);
         }
         const auto apply_name = [&](const char* id, const std::string& name, float right) {
@@ -1031,6 +1032,36 @@ namespace lfs::vis::gui {
         };
         apply_name("comparison-name-left", split_divider_overlay_.left_name, split_divider_overlay_.left_name_right);
         apply_name("comparison-name-right", split_divider_overlay_.right_name, split_divider_overlay_.right_name_right);
+    }
+
+    bool RmlViewportOverlay::updateSplitDividerToolbarClearance() {
+        if (!document_ || !split_divider_overlay_.visible)
+            return false;
+        auto* divider = document_->GetElementById("split-divider-overlay");
+        if (!divider)
+            return false;
+
+        const auto divider_offset = divider->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float top = divider_offset.y - split_divider_toolbar_clearance_;
+        float clearance = 0.0f;
+        for (const auto* id : {"primary-align-toolbar", "primary-scale-distance-toolbar",
+                               "secondary-align-toolbar", "secondary-scale-distance-toolbar"}) {
+            auto* toolbar = document_->GetElementById(id);
+            if (!toolbar || !toolbar->IsVisible(true))
+                continue;
+            const auto offset = toolbar->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
+            if (offset.x < divider_offset.x + split_divider_overlay_.width &&
+                offset.x + size.x > divider_offset.x) {
+                clearance = std::max(clearance, offset.y + size.y - top);
+            }
+        }
+
+        if (std::abs(clearance - split_divider_toolbar_clearance_) < 0.5f)
+            return false;
+        split_divider_toolbar_clearance_ = clearance;
+        applySplitDividerOverlay();
+        return true;
     }
 
     void RmlViewportOverlay::applyLeftDockResizeIndicator() {
@@ -1822,6 +1853,8 @@ namespace lfs::vis::gui {
                 if (updateViewportOverlayPanelLayout())
                     rml_context_->Update();
             }
+            if (updateSplitDividerToolbarClearance())
+                rml_context_->Update();
         }
 
         queueCachedVulkanContext(true);
