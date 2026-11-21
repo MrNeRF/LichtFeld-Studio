@@ -25,6 +25,17 @@ namespace lfs::vis::op {
         constexpr double kClickDragThresholdPx = 4.0;
         constexpr double kMarkerHitRadiusPx = 8.0;
 
+        [[nodiscard]] SplitViewPanelId pointPickPanel(
+            const RenderingManager::ViewerPanelInfo& panel, const RenderSettings& settings,
+            const int render_x, const bool use_comparison_panels) {
+            if (!use_comparison_panels) {
+                return panel.panel;
+            }
+            return render_x >= splitViewDividerPixel(panel.render_width, settings.split_position)
+                       ? SplitViewPanelId::Right
+                       : SplitViewPanelId::Left;
+        }
+
     } // namespace
 
     [[nodiscard]] core::NodeId resolvePointPickTargetId(const core::Scene& scene,
@@ -469,7 +480,7 @@ namespace lfs::vis::op {
 
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
-        const auto panel_info = rm->resolveViewerPanel(
+        const auto panel_info = std::as_const(*rm).resolveViewerPanel(
             gm->getViewer()->getViewport(),
             viewport_pos,
             viewport_size,
@@ -490,13 +501,14 @@ namespace lfs::vis::op {
         std::optional<int> best;
         float best_dist = std::numeric_limits<float>::max();
 
-        const auto comparison_panel = x >= panel_info->x +
-                                                  splitViewDividerPixel(static_cast<int>(panel_info->width), render_settings.split_position)
-                                          ? SplitViewPanelId::Right
-                                          : SplitViewPanelId::Left;
+        const bool use_comparison_panels =
+            sequentialPoints() && splitViewUsesPLYComparison(render_settings.split_view_mode);
+        const float render_scale_x = static_cast<float>(panel_info->render_width) / panel_info->width;
+        const int render_x = static_cast<int>((click_screen.x - panel_info->x) * render_scale_x);
+        const auto panel = pointPickPanel(*panel_info, render_settings, render_x, use_comparison_panels);
         for (size_t i = 0; i < picked_points_.size(); ++i) {
             if (sequentialPoints() &&
-                !acceptsPointSample({.panel = comparison_panel}, static_cast<int>(i)))
+                !acceptsPointSample({.panel = panel}, static_cast<int>(i)))
                 continue;
             const auto projected = lfs::rendering::projectWorldPoint(
                 projection_viewport.camera.R,
@@ -543,7 +555,7 @@ namespace lfs::vis::op {
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
 
-        const auto panel_info = rm->resolveViewerPanel(
+        const auto panel_info = std::as_const(*rm).resolveViewerPanel(
             gm->getViewer()->getViewport(),
             viewport_pos,
             viewport_size,
@@ -565,14 +577,12 @@ namespace lfs::vis::op {
         const int depth_y = static_cast<int>(render_y);
 
         // Hover, placement and marker dragging all follow the displayed surface.
-        const auto panel = sequentialPoints()
-                               ? (depth_x >= splitViewDividerPixel(panel_info->render_width, render_settings.split_position)
-                                      ? SplitViewPanelId::Right
-                                      : SplitViewPanelId::Left)
-                               : panel_info->panel;
+        const bool use_comparison_panels =
+            sequentialPoints() && splitViewUsesPLYComparison(render_settings.split_view_mode);
+        const auto panel = pointPickPanel(*panel_info, render_settings, depth_x, use_comparison_panels);
         if (!acceptsPointSample({.panel = panel}, pick.point_index))
             return {.panel = panel};
-        const float depth = sequentialPoints()
+        const float depth = use_comparison_panels
                                 ? rm->renderExpectedDepthAtPixel({.scene_manager = gm->getViewer()->getSceneManager(),
                                                                   .viewport = &projection_viewport,
                                                                   .render_size = projection_viewport.windowSize,
