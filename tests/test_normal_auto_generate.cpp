@@ -3,18 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "io/loader.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "training/normal_auto_generate.hpp"
 
 #include "core/error.hpp"
 #include "core/source_site.hpp"
+#include <array>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <string>
 #include <string_view>
@@ -60,6 +66,32 @@ namespace {
         std::ofstream out(path, std::ios::binary);
         ASSERT_TRUE(out.is_open()) << path;
         out << contents;
+    }
+
+    void write_png_2x2(const fs::path& path, const unsigned char seed = 128) {
+        fs::create_directories(path.parent_path());
+        std::array<unsigned char, 2 * 2 * 3> pixels{};
+        pixels.fill(seed);
+        ASSERT_TRUE(lfs::core::save_png(path, pixels.data(), 2, 2, 3, 8, 6)) << path;
+    }
+
+    void write_transforms_dataset(const fs::path& root, const std::vector<std::string>& frame_paths) {
+        const nlohmann::json identity = {
+            {1, 0, 0, 0},
+            {0, 1, 0, 0},
+            {0, 0, 1, 0},
+            {0, 0, 0, 1}};
+        nlohmann::json frames = nlohmann::json::array();
+        for (const auto& frame_path : frame_paths) {
+            frames.push_back({{"file_path", frame_path}, {"transform_matrix", identity}});
+        }
+        write_file(root / "transforms.json",
+                   nlohmann::json{{"w", 2}, {"h", 2}, {"fl_x", 2}, {"fl_y", 2}, {"frames", std::move(frames)}}.dump());
+        write_file(root / "pointcloud.ply",
+                   "ply\nformat ascii 1.0\nelement vertex 2\n"
+                   "property float x\nproperty float y\nproperty float z\n"
+                   "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+                   "end_header\n0 0 -2 255 0 0\n1 0 -2 0 255 0\n");
     }
 
 } // namespace
@@ -522,6 +554,331 @@ TEST(PriorAutoGenerateIntegration, DepthAutoGenerateOffKeepsDepthMissing) {
     EXPECT_FALSE(outcome.attempted);
     EXPECT_EQ(outcome.depth.missing, 1u);
     EXPECT_FALSE(cameras.front()->has_depth());
+
+    fs::remove_all(root);
+}
+
+TEST(NormalAutoGenerateIntegration, DefaultImagesConfigWithoutImagesDirUsesDatasetRelativePaths) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_auto_generate_custom_dir";
+    fs::remove_all(root);
+    const auto img_a = root / "rgb/a.jpg";
+    const auto img_b = root / "rgb/b.jpg";
+    write_file(img_a);
+    write_file(img_b);
+
+    auto cam_a = make_camera("a.jpg", img_a);
+    auto cam_b = make_camera("b.jpg", img_b);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_a, cam_b};
+
+    lfs::core::param::TrainingParameters params;
+    ASSERT_EQ(params.dataset.images, "images");
+    params.dataset.data_path = root / "";
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    lfs::core::param::PreprocessParameters pp;
+    pp.dataset_path = params.dataset.data_path;
+    pp.images_folder = params.dataset.images;
+    pp.mode = lfs::core::param::PreprocessOutputMode::Normals;
+    pp.overwrite = true;
+    pp.image_paths = {img_a, img_b};
+    const auto plan = lfs::preprocessing::build_preprocess_plan(pp);
+    ASSERT_EQ(plan.jobs.size(), 2u);
+    EXPECT_EQ(plan.jobs[0].normals_path, root / "normals/rgb/a.png");
+    EXPECT_EQ(plan.jobs[1].normals_path, root / "normals/rgb/b.png");
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (const auto& job : jobs) {
+                seen.push_back(job);
+                write_file(job.normal_output_path, "normal");
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].image_path, img_a);
+    EXPECT_EQ(seen[0].normal_output_path, root / "normals/rgb/a.png");
+    EXPECT_EQ(seen[1].image_path, img_b);
+    EXPECT_EQ(seen[1].normal_output_path, root / "normals/rgb/b.png");
+    EXPECT_EQ(cam_a->normal_path(), root / "normals/rgb/a.png");
+    EXPECT_EQ(cam_b->normal_path(), root / "normals/rgb/b.png");
+
+    fs::remove_all(root);
+}
+
+TEST(NormalAutoGenerateIntegration, MultiFolderImagesUseConsistentRelativeKeysAcrossConfigsAndReload) {
+    for (const bool empty_images_config : {false, true}) {
+        for (const bool create_empty_images_dir : {false, true}) {
+            const auto root = fs::temp_directory_path() /
+                              std::format("lfs_normal_auto_generate_multi_{}_{}",
+                                          empty_images_config ? "empty" : "default",
+                                          create_empty_images_dir ? "with_dir" : "no_dir");
+            SCOPED_TRACE(lfs::core::path_to_utf8(root));
+            fs::remove_all(root);
+            if (create_empty_images_dir)
+                fs::create_directories(root / "images");
+
+            const auto img_0 = root / "rgb/session/cam0/frame.png";
+            const auto img_1 = root / "rgb/session/cam1/frame.png";
+            write_png_2x2(img_0, 32);
+            write_png_2x2(img_1, 64);
+            write_transforms_dataset(root, {"rgb/session/cam0/frame.png", "rgb/session/cam1/frame.png"});
+
+            auto cam_0 = make_camera("frame.png", img_0);
+            auto cam_1 = make_camera("frame.png", img_1);
+            std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_0, cam_1};
+
+            lfs::core::param::TrainingParameters params;
+            params.dataset.data_path = root;
+            if (empty_images_config)
+                params.dataset.images.clear();
+            params.optimization.use_normal_loss = true;
+            params.optimization.normal_auto_generate = true;
+            params.optimization.normal_loss_weight = 0.05f;
+
+            lfs::core::param::PreprocessParameters pp;
+            pp.dataset_path = root;
+            pp.images_folder = empty_images_config ? "" : "images";
+            pp.mode = lfs::core::param::PreprocessOutputMode::Normals;
+            pp.overwrite = true;
+            pp.image_paths = {img_0, img_1};
+            const auto plan = lfs::preprocessing::build_preprocess_plan(pp);
+            ASSERT_EQ(plan.jobs.size(), 2u);
+            EXPECT_EQ(plan.jobs[0].normals_path, root / "normals/rgb/session/cam0/frame.png");
+            EXPECT_EQ(plan.jobs[1].normals_path, root / "normals/rgb/session/cam1/frame.png");
+
+            std::vector<lfs::training::PriorMapJob> seen;
+            const auto outcome = lfs::training::ensure_training_prior_maps(
+                params, cameras,
+                [&](const std::span<const lfs::training::PriorMapJob> jobs,
+                    const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+                    for (std::size_t i = 0; i < jobs.size(); ++i) {
+                        seen.push_back(jobs[i]);
+                        write_png_2x2(jobs[i].normal_output_path, static_cast<unsigned char>(10 + i));
+                    }
+                    return {};
+                });
+
+            ASSERT_FALSE(outcome.failed);
+            EXPECT_TRUE(outcome.generated);
+            ASSERT_EQ(seen.size(), 2u);
+            EXPECT_EQ(seen[0].normal_output_path, plan.jobs[0].normals_path);
+            EXPECT_EQ(seen[1].normal_output_path, plan.jobs[1].normals_path);
+            EXPECT_EQ(cam_0->normal_path(), plan.jobs[0].normals_path);
+            EXPECT_EQ(cam_1->normal_path(), plan.jobs[1].normals_path);
+
+            auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+            ASSERT_TRUE(reloaded) << reloaded.error().format();
+            const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+            ASSERT_EQ(loaded_cams.size(), 2u);
+            EXPECT_EQ(loaded_cams[0]->normal_path(), plan.jobs[0].normals_path);
+            EXPECT_EQ(loaded_cams[1]->normal_path(), plan.jobs[1].normals_path);
+
+            fs::remove_all(root);
+        }
+    }
+}
+
+TEST(NormalAutoGenerateIntegration, ExplicitMultiComponentImagesFolderAssociatesAndReloads) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_auto_generate_explicit_nested";
+    fs::remove_all(root);
+    const auto img_0 = root / "rgb/session/cam0/frame.png";
+    const auto img_1 = root / "rgb/session/cam1/frame.png";
+    write_png_2x2(img_0, 32);
+    write_png_2x2(img_1, 64);
+    write_transforms_dataset(root, {"rgb/session/cam0/frame.png", "rgb/session/cam1/frame.png"});
+
+    auto cam_0 = make_camera("frame.png", img_0);
+    auto cam_1 = make_camera("frame.png", img_1);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_0, cam_1};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.dataset.images = "rgb/session";
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (std::size_t i = 0; i < jobs.size(); ++i) {
+                seen.push_back(jobs[i]);
+                write_png_2x2(jobs[i].normal_output_path, static_cast<unsigned char>(20 + i));
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].normal_output_path, root / "normals/cam0/frame.png");
+    EXPECT_EQ(seen[1].normal_output_path, root / "normals/cam1/frame.png");
+    EXPECT_EQ(cam_0->normal_path(), root / "normals/cam0/frame.png");
+    EXPECT_EQ(cam_1->normal_path(), root / "normals/cam1/frame.png");
+
+    auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+    ASSERT_TRUE(reloaded) << reloaded.error().format();
+    const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+    ASSERT_EQ(loaded_cams.size(), 2u);
+    EXPECT_EQ(loaded_cams[0]->normal_path(), root / "normals/cam0/frame.png");
+    EXPECT_EQ(loaded_cams[1]->normal_path(), root / "normals/cam1/frame.png");
+
+    fs::remove_all(root);
+}
+
+TEST(NormalAutoGenerateIntegration, ExternalImagePathsPreserveDistinctOutputsAndReload) {
+    const auto base = fs::temp_directory_path() / "lfs_normal_auto_generate_external";
+    const auto root = base / "dataset";
+    fs::remove_all(base);
+    const auto img_0 = base / "photos/cam0/frame.png";
+    const auto img_1 = base / "photos/cam1/frame.png";
+    write_png_2x2(img_0, 10);
+    write_png_2x2(img_1, 20);
+    write_transforms_dataset(root, {"../photos/cam0/frame.png", "../photos/cam1/frame.png"});
+
+    lfs::core::param::PreprocessParameters pp;
+    pp.dataset_path = root;
+    pp.images_folder = "images";
+    pp.mode = lfs::core::param::PreprocessOutputMode::Normals;
+    pp.overwrite = true;
+    pp.image_paths = {img_0, img_1};
+    const auto plan = lfs::preprocessing::build_preprocess_plan(pp);
+    ASSERT_EQ(plan.jobs.size(), 2u);
+    EXPECT_NE(plan.jobs[0].normals_path, plan.jobs[1].normals_path);
+    const auto rel_0 = plan.jobs[0].normals_path.lexically_relative(root / "normals");
+    const auto rel_1 = plan.jobs[1].normals_path.lexically_relative(root / "normals");
+    ASSERT_FALSE(rel_0.empty());
+    ASSERT_FALSE(rel_1.empty());
+    EXPECT_EQ(lfs::core::path_to_utf8(*rel_0.begin()), "_external");
+    EXPECT_EQ(lfs::core::path_to_utf8(*rel_1.begin()), "_external");
+
+    auto cam_0 = make_camera("frame.png", img_0);
+    auto cam_1 = make_camera("frame.png", img_1);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_0, cam_1};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    std::vector<lfs::training::PriorMapJob> seen;
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (std::size_t i = 0; i < jobs.size(); ++i) {
+                seen.push_back(jobs[i]);
+                write_png_2x2(jobs[i].normal_output_path, static_cast<unsigned char>(100 + i));
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0].normal_output_path, plan.jobs[0].normals_path);
+    EXPECT_EQ(seen[1].normal_output_path, plan.jobs[1].normals_path);
+    EXPECT_NE(cam_0->normal_path(), cam_1->normal_path());
+    EXPECT_EQ(cam_0->normal_path(), plan.jobs[0].normals_path);
+    EXPECT_EQ(cam_1->normal_path(), plan.jobs[1].normals_path);
+
+    pp.overwrite = false;
+    const auto rerun = lfs::preprocessing::run_preprocess_ex(pp);
+    EXPECT_TRUE(rerun.ok) << rerun.error;
+    EXPECT_EQ(rerun.processed, 0u);
+    EXPECT_EQ(rerun.skipped, 2u);
+
+    auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+    ASSERT_TRUE(reloaded) << reloaded.error().format();
+    const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+    ASSERT_EQ(loaded_cams.size(), 2u);
+    EXPECT_EQ(loaded_cams[0]->normal_path(), plan.jobs[0].normals_path);
+    EXPECT_EQ(loaded_cams[1]->normal_path(), plan.jobs[1].normals_path);
+
+    fs::remove_all(base);
+}
+
+TEST(NormalAutoGenerateIntegration, FlatSharedNormalMapRemainsSupportedForExternalCameras) {
+    const auto base = fs::temp_directory_path() / "lfs_normal_shared_flat_external";
+    const auto root = base / "dataset";
+    fs::remove_all(base);
+    write_png_2x2(base / "photos/cam0/frame.png", 10);
+    write_png_2x2(base / "photos/cam1/frame.png", 20);
+    write_png_2x2(root / "normals/frame.png", 99);
+    write_transforms_dataset(root, {"../photos/cam0/frame.png", "../photos/cam1/frame.png"});
+
+    auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+    ASSERT_TRUE(reloaded) << reloaded.error().format();
+    const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+    ASSERT_EQ(loaded_cams.size(), 2u);
+    EXPECT_EQ(loaded_cams[0]->normal_path(), root / "normals/frame.png");
+    EXPECT_EQ(loaded_cams[1]->normal_path(), root / "normals/frame.png");
+
+    fs::remove_all(base);
+}
+
+TEST(NormalAutoGenerateIntegration, MixedImagesAndExtraFolderKeepDistinctNormalMaps) {
+    const auto root = fs::temp_directory_path() / "lfs_normal_mixed_images_extra";
+    fs::remove_all(root);
+    const auto img_images = root / "images/frame.png";
+    const auto img_extra = root / "extra/frame.png";
+    write_png_2x2(img_images, 10);
+    write_png_2x2(img_extra, 20);
+    write_transforms_dataset(root, {"images/frame.png", "extra/frame.png"});
+
+    lfs::core::param::PreprocessParameters pp;
+    pp.dataset_path = root;
+    pp.images_folder = "images";
+    pp.mode = lfs::core::param::PreprocessOutputMode::Normals;
+    pp.overwrite = true;
+    pp.image_paths = {img_images, img_extra};
+    const auto plan = lfs::preprocessing::build_preprocess_plan(pp);
+    ASSERT_EQ(plan.jobs.size(), 2u);
+    EXPECT_EQ(plan.jobs[0].normals_path, root / "normals/extra/frame.png");
+    EXPECT_EQ(plan.jobs[1].normals_path, root / "normals/frame.png");
+
+    auto cam_images = make_camera("frame.png", img_images);
+    auto cam_extra = make_camera("frame.png", img_extra);
+    std::vector<std::shared_ptr<lfs::core::Camera>> cameras{cam_images, cam_extra};
+
+    lfs::core::param::TrainingParameters params;
+    params.dataset.data_path = root;
+    params.optimization.use_normal_loss = true;
+    params.optimization.normal_auto_generate = true;
+    params.optimization.normal_loss_weight = 0.05f;
+
+    const auto outcome = lfs::training::ensure_training_prior_maps(
+        params, cameras,
+        [&](const std::span<const lfs::training::PriorMapJob> jobs,
+            const lfs::training::PriorMapProgress&) -> std::expected<void, lfs::Error> {
+            for (std::size_t i = 0; i < jobs.size(); ++i) {
+                write_png_2x2(jobs[i].normal_output_path, static_cast<unsigned char>(40 + i));
+            }
+            return {};
+        });
+
+    ASSERT_FALSE(outcome.failed);
+    EXPECT_TRUE(outcome.generated);
+    EXPECT_EQ(cam_images->normal_path(), root / "normals/frame.png");
+    EXPECT_EQ(cam_extra->normal_path(), root / "normals/extra/frame.png");
+
+    auto reloaded = lfs::io::Loader::create()->load(root, {.load_normals = true});
+    ASSERT_TRUE(reloaded) << reloaded.error().format();
+    const auto& loaded_cams = std::get<lfs::io::LoadedScene>(reloaded->data).cameras;
+    ASSERT_EQ(loaded_cams.size(), 2u);
+    EXPECT_EQ(loaded_cams[0]->normal_path(), root / "normals/frame.png");
+    EXPECT_EQ(loaded_cams[1]->normal_path(), root / "normals/extra/frame.png");
 
     fs::remove_all(root);
 }

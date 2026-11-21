@@ -28,7 +28,8 @@ def preview(panel_modules, monkeypatch, tmp_path):
     nodes = [node]
     scene = SimpleNamespace(get_nodes=lambda: nodes,
                             get_node_by_id=lambda node_id: next(
-                                (n for n in nodes if n.id == node_id), None))
+                                (n for n in nodes if n.id == node_id), None),
+                            refresh_sidecars=lambda: 0)
     monkeypatch.setattr(module.lf, "get_scene", lambda: scene, raising=False)
     monkeypatch.setattr(module.lf, "scene", SimpleNamespace(
         NodeType=SimpleNamespace(CAMERA="camera")), raising=False)

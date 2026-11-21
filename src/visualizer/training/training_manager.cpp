@@ -1638,6 +1638,9 @@ namespace lfs::vis {
                 // Initialization has applied the editable parameters and the
                 // worker is still behind this handoff's gate.
                 if (!stop_token.stop_requested() && !trainer_->has_stopped()) {
+                    if (scene_) {
+                        (void)scene_->syncCameraAssetPaths(true, /*transient=*/true);
+                    }
                     notifyUnusedCameraMasks();
                 }
                 if (state_machine_.getState() == TrainingState::Starting &&

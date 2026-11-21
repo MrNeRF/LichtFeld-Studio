@@ -14,6 +14,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
 from .panels import panel_class
+from .utils import refresh_scene_sidecars
 from .preview_geometry import THUMB_ROW_DP, visible_thumbnail_range, view_to_source, source_to_view
 from .preview_metadata import PreviewMetadata, SourceChangedError
 from .preview_masking import FrameMaskEditor, MaskApply
@@ -307,7 +308,7 @@ class ImagePreviewPanel(Panel):
             ("sam-candidate-1", lambda _ev: self._sam_candidate(1)),
             ("sam-candidate-2", lambda _ev: self._sam_candidate(2)),
             ("btn-picker", lambda _ev: self._toggle_picker()),
-            ("btn-refresh", lambda _ev: self._refresh_sources()),
+            ("btn-refresh", lambda _ev: self._refresh_sources_from_disk()),
             ("btn-apply-render-color", lambda _ev: self._apply_sampled_color("render")),
             ("btn-apply-training-color", lambda _ev: self._apply_sampled_color("training")),
         ]:
@@ -413,6 +414,10 @@ class ImagePreviewPanel(Panel):
             return True
 
         return needs_redraw
+
+    def _refresh_sources_from_disk(self):
+        refresh_scene_sidecars()
+        self._refresh_sources()
 
     def on_unmount(self, doc):
         self._default_reset.unmount()
@@ -2965,6 +2970,7 @@ def open_camera_preview_by_uid(cam_uid: int):
     scene = lf.get_scene()
     if not scene:
         return
+    refresh_scene_sidecars(scene)
     nodes = scene.get_nodes()
     target = None
     for node in nodes:

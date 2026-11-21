@@ -39,3 +39,11 @@ def cleanup_torch_model(model):
     """
     # Intentionally minimal - aggressive cleanup corrupts shared CUDA context
     pass
+
+
+def refresh_scene_sidecars(scene=None) -> int:
+    """Discover post-import dataset masks for the active scene."""
+    if scene is None:
+        import lichtfeld as lf
+        scene = lf.get_scene()
+    return scene.refresh_sidecars() if scene else 0

@@ -22,6 +22,7 @@ from .training_confirm import (
 )
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
+from .utils import refresh_scene_sidecars
 
 __lfs_panel_classes__ = ["TrainingPanel"]
 __lfs_panel_ids__ = ["lfs.training"]
@@ -2084,9 +2085,12 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
         try:
-            params.mask_mode = lf.MaskMode(int(val_str))
+            mode_value = int(val_str)
+            params.mask_mode = lf.MaskMode(mode_value)
         except (ValueError, TypeError):
             return False
+        if mode_value != 0:
+            refresh_scene_sidecars()
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
