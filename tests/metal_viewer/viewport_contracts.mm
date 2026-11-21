@@ -616,8 +616,9 @@ static void run(bool compare_vulkan) {
     const float elevation = float(M_PI) * (32.5f / 64.f - .5f);
     const float ray_z = std::cos(azimuth) * std::cos(elevation);
     const auto panorama_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = vis::RenderTargetId{1}});
-    require(panorama_depth.has_value() && std::abs(*panorama_depth - 3.f * ray_z * ray_z) < 1e-4f,
-            "Panorama depth did not use its spherical pixel ray");
+    // A panorama stores the distance along its unit ray to the closest point, as the Vulkan viewer does.
+    require(panorama_depth.has_value() && std::abs(*panorama_depth - 3.f * ray_z) < 1e-4f,
+            "Panorama depth is not the distance along its spherical pixel ray");
     model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, 3}, {1, 3}, Device::GPU);
     const auto seam = snapshot(request);
     const size_t seam_row = size_t(32) * 96 * 3;

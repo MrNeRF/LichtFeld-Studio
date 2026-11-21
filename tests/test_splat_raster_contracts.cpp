@@ -441,9 +441,10 @@ namespace {
                     EXPECT_NEAR(actual.depth[at * 4 + 1], a, 1e-5);
                     EXPECT_EQ(actual.pick[at], contributes ? 0u : 0xffffffffu);
                     if (contributes) {
-                        const double z = 3 * ray_z * ray_z;
-                        if (ray_z > 0 && z > r.clip[0])
-                            EXPECT_NEAR(actual.depth[at * 4 + 2], z, 1e-4);
+                        // The distance along the unit ray to the closest point, as the Vulkan viewer stores it.
+                        const double distance = 3 * ray_z;
+                        if (ray_z > 0 && distance > r.clip[0])
+                            EXPECT_NEAR(actual.depth[at * 4 + 2], distance, 1e-4);
                         else
                             EXPECT_GE(actual.depth[at * 4 + 2], 1e9);
                     }

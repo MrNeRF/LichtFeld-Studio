@@ -389,7 +389,8 @@ void tile_blend(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThreadID) {
                         continue;
                     alpha = g.mean_opacity.w * exp(-power);
                     const float t = -projected_origin / denom;
-                    const float z = gut_origin.z + t * gut_direction.z;
+                    // A panorama keeps the distance along its unit ray, behind the camera too, as Vulkan does.
+                    const float z = r.camera.z == 2u ? t : gut_origin.z + t * gut_direction.z;
                     splat_depth = t > 0 && z > r.clip.x && isfinite(z) ? z : 1e10f;
                 } else if (half_footprint) {
                     alpha = 0.f; // evaluated on the half footprint below
@@ -678,7 +679,8 @@ void tile_depth_compose(uint3 group_id : SV_GroupID, uint3 thread : SV_GroupThre
                         continue;
                     alpha = min(g.mean_opacity.w * exp(-power), .999f);
                     const float t = -projected_origin / denom;
-                    const float z = gut_origin.z + t * gut_direction.z;
+                    // A panorama keeps the distance along its unit ray, behind the camera too, as Vulkan does.
+                    const float z = r.camera.z == 2u ? t : gut_origin.z + t * gut_direction.z;
                     splat_depth = t > 0 && z > r.clip.x && isfinite(z) ? z : 1e10f;
                 } else {
                     const float2 d = float2(pixel) - replay_means[j].xy;
