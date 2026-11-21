@@ -1638,6 +1638,7 @@ namespace lfs::vis {
             ppisp_path_.clear();
             cached_params_.reset();
         }
+        mask_discovery_cache_.clear();
 
         state::SceneCleared{}.emit();
 
@@ -3529,6 +3530,60 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to prepare training from scene: {}", e.what());
         }
+    }
+
+    size_t SceneManager::refreshDatasetSidecars() {
+        if (!hasDataset() && !scene_.hasTrainingData()) {
+            return 0;
+        }
+        // Camera instances are shared without locking with an active Trainer
+        // worker and its prefetch threads; never mutate mask paths mid-run.
+        if (const auto* trainer_mgr = services().trainerOrNull();
+            trainer_mgr &&
+            (trainer_mgr->isTrainingActive() ||
+             trainer_mgr->getState() == TrainingState::Stopping ||
+             trainer_mgr->isCompletionPending())) {
+            return 0;
+        }
+
+        std::filesystem::path dataset_path;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            dataset_path = dataset_path_;
+        }
+        if (dataset_path.empty()) {
+            if (const auto* params = services().paramsOrNull()) {
+                dataset_path = params->getDatasetConfig().data_path;
+            }
+        }
+        if (dataset_path.empty()) {
+            return 0;
+        }
+
+        const auto cameras = scene_.getAllCameras();
+        if (cameras.empty()) {
+            return 0;
+        }
+
+        const auto associated = lfs::io::associate_dataset_masks(
+            cameras,
+            dataset_path,
+            {.fail_on_ambiguous_mask = false},
+            &mask_discovery_cache_);
+        if (!associated) {
+            LOG_WARN("Mask refresh failed: {}", associated.error().user_message());
+            return 0;
+        }
+
+        if (associated->masks_bound > 0) {
+            const size_t nodes_synced = scene_.syncCameraAssetPaths(true, /*transient=*/true);
+            if (nodes_synced == 0) {
+                scene_.notifyMutation(core::Scene::MutationType::CAMERA_MASK_CHANGED,
+                                      /*transient=*/true);
+            }
+            LOG_INFO("Refreshed dataset masks: {} mask(s) bound", associated->masks_bound);
+        }
+        return associated->masks_bound;
     }
 
     void SceneManager::loadCheckpointForTraining(const std::filesystem::path& path,

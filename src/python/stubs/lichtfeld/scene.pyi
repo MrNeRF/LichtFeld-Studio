@@ -868,6 +868,9 @@ class Scene:
     def apply_deleted(self) -> int:
         """Permanently remove soft-deleted Gaussians from all nodes"""
 
+    def refresh_sidecars(self) -> int:
+        """Rescan dataset mask folders and return the number bound"""
+
     def invalidate_cache(self) -> None:
         """Invalidate the combined model cache"""
 

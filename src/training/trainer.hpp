@@ -17,6 +17,7 @@
 #include "core/tensor.hpp"
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
+#include "io/sidecar_discovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "kernels/gradient_residual.hpp"
 #include "kernels/thin_structure.hpp"
@@ -676,7 +677,8 @@ namespace lfs::training {
             const lfs::core::Tensor& structure_map = {},
             int iteration = 0, CalibrationCorrection* fit = nullptr);
 
-        // Validate masks exist for all cameras when mask mode is enabled
+        // Refresh and validate masks exist for all cameras when mask mode is enabled
+        lfs::Status refresh_masks_from_dataset();
         std::expected<void, std::string> validate_masks();
 
         // Returns GPU tensor for loss (avoid sync!)
@@ -867,6 +869,7 @@ namespace lfs::training {
         mutable std::mutex params_mutex_;
         lfs::core::param::TrainingParameters params_;
         std::optional<lfs::core::param::TrainingParameters> pending_params_;
+        lfs::io::MaskDiscoveryCache mask_discovery_cache_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
 
         lfs::core::Tensor background_{};

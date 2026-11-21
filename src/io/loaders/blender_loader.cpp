@@ -29,19 +29,6 @@
 
 namespace lfs::io {
 
-    namespace {
-        std::string mask_lookup_name(const std::filesystem::path& image_path,
-                                     const std::filesystem::path& absolute_dataset_path) {
-            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
-            if (relative.empty() || *relative.begin() == "..")
-                return lfs::core::path_to_utf8(image_path.filename());
-            // Masks mirror the path below images/, or the dataset root for Blender layouts.
-            if (detail::normalize_lookup_key(*relative.begin()) == "images")
-                relative = relative.lexically_relative(*relative.begin());
-            return lfs::core::path_to_utf8(relative);
-        }
-    } // namespace
-
     // Import types from lfs::core for convenience
     using lfs::core::DataType;
     using lfs::core::Device;
@@ -251,7 +238,8 @@ namespace lfs::io {
                     } else {
                         if (!mask_cache)
                             mask_cache.emplace(base_path, options.cancel_requested);
-                        const auto lookup_name = mask_lookup_name(info._image_path, absolute_base_path);
+                        const auto lookup_name = dataset_mask_lookup_name(
+                            info._image_path, info._image_name, absolute_base_path);
                         if (auto mask_lookup = mask_cache->lookup(lookup_name); mask_lookup.found()) {
                             mask_path = std::move(mask_lookup.path);
                         } else if (mask_lookup.ambiguous()) {

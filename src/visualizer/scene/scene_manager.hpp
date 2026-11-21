@@ -14,6 +14,7 @@
 #include "core/splat_data_mirror.hpp"
 #include "geometry/bounding_box.hpp"
 #include "io/loader.hpp"
+#include "io/sidecar_discovery.hpp"
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
 #include "selection/selection_service.hpp"
@@ -226,6 +227,10 @@ namespace lfs::vis {
         void loadColmapCamerasOnly(const std::filesystem::path& sparse_path);
 
         void prepareTrainingFromScene();
+
+        // Rescans dataset mask folders for cameras missing masks
+        // and synchronizes scene camera node mirrors.
+        size_t refreshDatasetSidecars();
 
         // Apply pre-loaded dataset to scene (for async loading)
         // The LoadResult comes from background thread, scene modification happens on main thread
@@ -488,6 +493,7 @@ namespace lfs::vis {
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
         mutable bool cached_render_metadata_only_ = false;
+        lfs::io::MaskDiscoveryCache mask_discovery_cache_;
 
         lfs::event::ScopedHandler event_handlers_;
     };

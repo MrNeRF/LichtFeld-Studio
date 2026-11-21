@@ -2859,3 +2859,30 @@ def test_distorted_images_skipped_if_already_undistorted_or_gut(training_panel_m
     panel._check_distortion_and_start()
     assert len(dialog_opened) == 0
     assert len(started) == 1
+
+
+def test_mask_mode_control_refreshes_scene_sidecars(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    params.mask_mode = SimpleNamespace(value=0)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "MaskMode", lambda value: SimpleNamespace(value=value), raising=False)
+
+    refresh_calls = []
+    scene = SimpleNamespace(refresh_sidecars=lambda: refresh_calls.append(True) or 1)
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    # Disabling mask mode does not rescan masks; enabling any non-zero mask mode does.
+    assert panel._set_mask_mode("0") is True
+    assert refresh_calls == []
+    assert panel._set_mask_mode("1") is True
+    assert len(refresh_calls) == 1
+    assert panel._set_mask_mode("2") is True
+    assert len(refresh_calls) == 2
+
+    # Missing scene fails gracefully.
+    monkeypatch.setattr(module.lf, "get_scene", lambda: None)
+    assert panel._set_mask_mode("1") is True

@@ -188,11 +188,12 @@ namespace lfs::io {
     // fallback when that basename is unique under the indexed root.
     class RecursiveFileCache {
     public:
-        // Optional observer receives each regular file's path relative to root_path
-        // during the existing filesystem walk.
+        // Optional observers receive each regular file's path relative to root_path
+        // and each discovered subdirectory path during the existing filesystem walk.
         explicit RecursiveFileCache(const std::filesystem::path& root_path,
                                     const CancelCallback& cancel_requested = nullptr,
-                                    const std::function<void(const std::filesystem::path&)>& on_file = nullptr) {
+                                    const std::function<void(const std::filesystem::path&)>& on_file = nullptr,
+                                    const std::function<void(const std::filesystem::path&)>& on_dir = nullptr) {
             if (!safe_is_directory(root_path))
                 return;
 
@@ -213,8 +214,14 @@ namespace lfs::io {
 
                 const auto& entry = *it;
                 std::error_code file_ec;
-                if (!entry.is_regular_file(file_ec) || file_ec)
+                if (!entry.is_regular_file(file_ec) || file_ec) {
+                    if (on_dir && entry.is_directory(file_ec) && !file_ec) {
+                        const std::filesystem::path rel = entry.path().lexically_relative(traversal_root);
+                        if (!rel.empty())
+                            on_dir(root_path / rel);
+                    }
                     continue;
+                }
 
                 const std::filesystem::path rel = entry.path().lexically_relative(traversal_root);
                 if (rel.empty())
@@ -379,7 +386,8 @@ namespace lfs::io {
         }
 
         explicit MaskDirCache(const std::filesystem::path& base_path,
-                              const CancelCallback& cancel_requested = nullptr) {
+                              const CancelCallback& cancel_requested = nullptr,
+                              const std::function<void(const std::filesystem::path&)>& on_dir = nullptr) {
             for (const auto* folder : MASK_SEARCH_FOLDERS) {
                 detail::throw_if_scan_cancel_requested(cancel_requested,
                                                        "Mask directory scan cancelled");
@@ -387,9 +395,13 @@ namespace lfs::io {
                 if (!safe_is_directory(mask_dir))
                     continue;
 
-                dir_indices_.emplace_back(mask_dir, cancel_requested);
+                if (on_dir)
+                    on_dir(mask_dir);
+                dir_indices_.emplace_back(mask_dir, cancel_requested, nullptr, on_dir);
             }
         }
+
+        [[nodiscard]] bool has_mask_dirs() const { return !dir_indices_.empty(); }
 
         [[nodiscard]] FileLookupResult lookup(const std::string& image_name) const {
             if (dir_indices_.empty())
@@ -779,6 +791,52 @@ namespace lfs::io {
             image_name,
             normalize_absolute_dir_path(dataset_root),
             normalize_absolute_dir_path(images_dir));
+    }
+
+    // Resolves a dataset directory or manifest file (such as transforms.json) to its root directory.
+    [[nodiscard]] inline std::filesystem::path resolve_dataset_root(const std::filesystem::path& data_path) {
+        if (data_path.empty())
+            return {};
+        auto root = normalize_absolute_dir_path(data_path);
+        if (safe_is_regular_file(root) ||
+            (!safe_is_directory(root) &&
+             detail::normalize_lookup_key(root.extension()) == ".json")) {
+            root = normalize_dir_path(root.parent_path());
+        }
+        return root;
+    }
+
+    // Shared mask lookup key rule: COLMAP preserves subdirectories in image_name
+    // while Transforms/Blender stores only the filename and mirrors relative to root (stripping images/).
+    [[nodiscard]] inline std::string dataset_mask_lookup_name(
+        const std::filesystem::path& image_path,
+        const std::string& image_name,
+        const std::filesystem::path& norm_dataset_root) {
+        if (!image_name.empty() &&
+            (image_name.find('/') != std::string::npos ||
+             image_name.find('\\') != std::string::npos)) {
+            return image_name;
+        }
+
+        auto relative = detail::strictly_relative_to(
+            detail::normalize_absolute_file_path(image_path), norm_dataset_root);
+        if (relative.empty()) {
+            return !image_name.empty()
+                       ? image_name
+                       : lfs::core::path_to_utf8(image_path.filename());
+        }
+        if (detail::normalize_lookup_key(*relative.begin()) == "images") {
+            relative = relative.lexically_relative(*relative.begin());
+        }
+        return lfs::core::path_to_utf8(relative);
+    }
+
+    [[nodiscard]] inline FileLookupResult lookup_dataset_mask_normalized(
+        const MaskDirCache& cache,
+        const std::filesystem::path& image_path,
+        const std::string& image_name,
+        const std::filesystem::path& norm_dataset_root) {
+        return cache.lookup(dataset_mask_lookup_name(image_path, image_name, norm_dataset_root));
     }
 
     inline bool paths_equivalent_or_lexically_equal(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {

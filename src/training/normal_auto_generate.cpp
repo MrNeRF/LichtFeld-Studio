@@ -39,13 +39,6 @@ namespace lfs::training {
             }
         }
 
-        [[nodiscard]] std::filesystem::path resolve_dataset_root(const std::filesystem::path& data_path) {
-            auto root = lfs::io::normalize_absolute_dir_path(data_path);
-            if (lfs::io::safe_is_regular_file(root))
-                root = lfs::io::normalize_dir_path(root.parent_path());
-            return root;
-        }
-
         [[nodiscard]] std::string training_images_folder(
             const lfs::core::param::TrainingParameters& params) {
             return params.dataset.images.empty()
@@ -337,7 +330,7 @@ namespace lfs::training {
             return outcome;
         }
 
-        const auto dataset_root = resolve_dataset_root(params.dataset.data_path);
+        const auto dataset_root = lfs::io::resolve_dataset_root(params.dataset.data_path);
         const auto training_folder = training_images_folder(params);
         const auto source_folder = resolve_generation_images_folder(dataset_root, training_folder);
         const auto source_images_dir = lfs::io::normalize_dir_path(

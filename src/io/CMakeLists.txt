@@ -260,6 +260,8 @@ add_library(lfs_io STATIC
         loader_registry.hpp
         loader_service.hpp
         loader_service.cpp
+        include/io/sidecar_discovery.hpp
+        sidecar_discovery.cpp
 
         # Format implementations (load + save)
         formats/ply.hpp
