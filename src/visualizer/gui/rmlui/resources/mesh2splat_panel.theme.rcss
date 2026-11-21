@@ -1,3 +1,9 @@
+/* Shared border roles and shape scale. */
+
+.m2s-chip {
+    border-radius: @{radius.round}dp;
+}
+
 /* Mesh2Splat panel theme overrides. */
 
 .m2s-section-title,

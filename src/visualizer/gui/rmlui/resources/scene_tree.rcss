@@ -13,7 +13,7 @@ body {
     flex-direction: column;
     box-sizing: border-box;
     border-width: 1dp;
-    border-radius: 5dp;
+
     overflow: hidden;
 }
 
@@ -52,11 +52,8 @@ body {
     color: #f5f7ff;
     background-color: rgba(137, 180, 250, 28);
     border-width: 1dp;
-    border-color: rgba(137, 180, 250, 132);
+
     border-bottom-width: 2dp;
-    border-bottom-color: rgba(137, 180, 250, 255);
-    border-top-left-radius: 4dp;
-    border-top-right-radius: 4dp;
 }
 
 .scene-chip-row {
@@ -74,13 +71,11 @@ body {
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
 }
 
 .scene-chip--accent {
     color: #f5f7ff;
     background-color: rgba(137, 180, 250, 72);
-    border-color: rgba(137, 180, 250, 150);
 }
 
 /* Search container */
@@ -92,7 +87,6 @@ body {
     margin-bottom: 4dp;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #45475a;
 }
 
 #scene-view {
@@ -172,8 +166,6 @@ scene-graph,
     border-top-width: 0;
 }
 
-
-
 .tree-row {
     display: block;
     position: absolute;
@@ -184,7 +176,7 @@ scene-graph,
     box-sizing: border-box;
     padding: 1dp 4dp;
     border-left-width: 2dp;
-    border-left-color: rgba(0, 0, 0, 0);
+
     cursor: pointer;
     overflow: hidden;
     transition: top 0.15s quadratic-out, background-color 0.12s quadratic-out,
@@ -202,7 +194,6 @@ scene-graph,
 
 .tree-row:hover {
     background-color: rgba(137, 180, 250, 28);
-    border-left-color: rgba(137, 180, 250, 255);
 }
 
 .tree-row.even {
@@ -220,12 +211,11 @@ scene-graph,
 
 .tree-row.selected:hover {
     background-color: rgba(137, 180, 250, 97);
-    border-left-color: rgba(180, 208, 251, 255);
 }
 
 .tree-row.drop-target {
     border-width: 1dp;
-    border-color: #89b4fa;
+
     background-color: rgba(137, 180, 250, 48);
 }
 
@@ -245,8 +235,7 @@ scene-graph,
     padding: 3dp 10dp;
     background-color: rgba(49, 50, 68, 242);
     border-width: 1dp;
-    border-color: #89b4fa;
-    border-radius: 4dp;
+
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
@@ -258,7 +247,7 @@ scene-graph,
 }
 
 .tree-drag-ghost.invalid {
-    border-color: rgba(243, 139, 168, 255);
+
     color: rgba(243, 139, 168, 220);
     opacity: 0.65;
 }
@@ -280,7 +269,7 @@ scene-graph,
     height: 2dp;
     right: 4dp;
     background-color: #89b4fa;
-    border-radius: 1dp;
+
     pointer-events: none;
     transition: top 0.08s quadratic-out;
 }
@@ -291,7 +280,7 @@ scene-graph,
     top: -2dp;
     width: 6dp;
     height: 6dp;
-    border-radius: 3dp;
+
     background-color: #89b4fa;
 }
 
@@ -370,7 +359,6 @@ scene-graph,
     image-color: rgba(180, 120, 120, 220);
 }
 
-
 /* Colored dot — replaces type icons for a cleaner row */
 .row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }
 .row-icon.type-icon.group        { image-color: rgba(178, 178, 178, 204); }
@@ -396,7 +384,6 @@ scene-graph,
 .node-icon.keyframe_group { color: rgba(230, 178, 77, 204); }
 .node-icon.keyframe       { color: rgba(255, 204, 51, 230); }
 
-
 .row-icon.trash-icon {
     width: 14dp;
     height: 14dp;
@@ -408,7 +395,6 @@ scene-graph,
 
 .tree-row.keyboard-cursor {
     border-left-width: 2dp;
-    border-left-color: rgba(245, 194, 107, 210);
 }
 
 .tree-checkbox {
@@ -420,8 +406,7 @@ scene-graph,
     height: 9dp;
     box-sizing: border-box;
     border-width: 1dp;
-    border-color: rgba(166, 173, 200, 90);
-    border-radius: 5dp;
+
     background-color: rgba(166, 173, 200, 10);
     color: rgba(166, 173, 200, 150);
     font-size: 8dp;
@@ -433,17 +418,17 @@ scene-graph,
 }
 
 .tree-checkbox:hover {
-    border-color: rgba(137, 180, 250, 155);
+
     background-color: rgba(137, 180, 250, 35);
 }
 
 .tree-checkbox.checked {
-    border-color: rgba(137, 180, 250, 185);
+
     background-color: rgba(137, 180, 250, 145);
 }
 
 .tree-checkbox.mixed {
-    border-color: rgba(137, 180, 250, 145);
+
     background-color: rgba(137, 180, 250, 24);
 }
 
@@ -499,7 +484,6 @@ scene-graph,
     cursor: default;
 }
 
-
 .row-actions {
     display: flex;
     align-items: center;
@@ -539,7 +523,7 @@ scene-graph,
     bottom: 3dp;
     width: 6dp;
     height: 2dp;
-    border-radius: 1dp;
+
     pointer-events: none;
 }
 
@@ -566,7 +550,6 @@ scene-graph,
     color: #a6adc8;
 }
 
-
 /* Inline rename input */
 .rename-input {
     display: inline;
@@ -579,7 +562,6 @@ scene-graph,
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
-    border-color: #89b4fa;
 }
 
 /* Scene tree overrides section-header to block display with different padding */

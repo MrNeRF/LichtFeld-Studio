@@ -212,18 +212,34 @@ namespace lfs::vis::gui {
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
 
-        if (!base_rcss_loaded_) {
+        if (!stylesheets_loaded_) {
+            panel_theme_rcss_ = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
             try {
                 const auto document_path = resolveDocumentPath(rml_path_);
-                std::unordered_set<std::string> loaded_rcss;
-                for (const auto& linked_rcss :
-                     rml_documents::loadLinkedStylesheetPaths(document_path)) {
-                    appendBaseRCSS(base_rcss_, loaded_rcss, linked_rcss);
-                }
+                const auto linked_rcss = rml_documents::loadLinkedStylesheetPaths(document_path);
+                std::unordered_set<std::string> loaded_base;
+                for (const auto& path : linked_rcss)
+                    appendBaseRCSS(base_rcss_, loaded_base, path);
 
                 auto sibling_rcss = document_path;
                 sibling_rcss.replace_extension(".rcss");
-                appendBaseRCSS(base_rcss_, loaded_rcss, sibling_rcss);
+                appendBaseRCSS(base_rcss_, loaded_base, sibling_rcss);
+
+                std::unordered_set<std::string> loaded_themes;
+                const auto append_theme = [&](std::filesystem::path path) {
+                    if (isThemeProvidedStaticStylesheet(path))
+                        return;
+                    path.replace_extension(".theme.rcss");
+                    // The widget theme is shared by immediate and hybrid panels.
+                    if (path.filename() == "im_mode_panel.theme.rcss" &&
+                        path.lexically_normal() == lfs::vis::getAssetPath("rmlui/im_mode_panel.theme.rcss").lexically_normal())
+                        return;
+                    appendBaseRCSS(panel_theme_rcss_, loaded_themes, path);
+                };
+                // Shared linked theme rules precede the document-specific overrides.
+                for (const auto& path : linked_rcss)
+                    append_theme(path);
+                append_theme(document_path);
             } catch (const std::exception& e) {
                 LOG_INFO("RCSS load failed for '{}': {}", rml_path_, e.what());
             }
@@ -232,25 +248,11 @@ namespace lfs::vis::gui {
                     base_rcss_ += "\n";
                 base_rcss_ += inline_rcss_;
             }
-            base_rcss_loaded_ = true;
-        }
-
-        std::string panel_theme = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
-        try {
-            auto theme_path = resolveDocumentPath(rml_path_);
-            theme_path.replace_extension(".theme.rcss");
-            std::error_code ec;
-            if (lfs::core::native_fs::exists(theme_path, ec)) {
-                if (!panel_theme.empty())
-                    panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
-            }
-        } catch (const std::exception&) {
-            // Sibling theme files are optional; missing ones should not produce startup noise.
+            stylesheets_loaded_ = true;
         }
 
         LOG_TIMER_THRESHOLD(context_name_ + ".rml_theme_apply", 2.0);
-        rml_theme::applyTheme(document_, base_rcss_, panel_theme);
+        rml_theme::applyTheme(document_, base_rcss_, panel_theme_rcss_);
         content_dirty_ = true;
         direct_cache_dirty_ = true;
         return true;
@@ -341,7 +343,8 @@ namespace lfs::vis::gui {
         content_el_ = nullptr;
         scroll_el_ = nullptr;
         base_rcss_.clear();
-        base_rcss_loaded_ = false;
+        panel_theme_rcss_.clear();
+        stylesheets_loaded_ = false;
         has_text_focus_ = false;
         wants_keyboard_ = false;
         has_theme_signature_ = false;

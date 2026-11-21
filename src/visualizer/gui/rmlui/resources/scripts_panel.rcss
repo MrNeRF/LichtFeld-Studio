@@ -46,7 +46,7 @@
 }
 
 .sp-meta-label {
-    font-weight: bold;
+    font-weight: 600;
 }
 
 .sp-error {
